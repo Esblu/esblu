@@ -29,7 +29,7 @@ export default function TermsPage() {
   return (
     <PublicLegalLayout
       titleKey="legal.titles.terms"
-      updatedAt={`21. júla 2026 (verzia ${legalConfig.termsVersion})`}
+      updatedAt={`9. septembra 2026 (verzia ${legalConfig.termsVersion})`}
     >
       <LegalMarkdownLocalized variants={markdownByLocale} />
     </PublicLegalLayout>

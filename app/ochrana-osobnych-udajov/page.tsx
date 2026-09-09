@@ -21,7 +21,7 @@ export default function PrivacyPolicyPage() {
   return (
     <PublicLegalLayout
       titleKey="legal.titles.privacy"
-      updatedAt={`16. augusta 2026 (verzia ${legalConfig.privacyPolicyVersion})`}
+      updatedAt={`9. septembra 2026 (verzia ${legalConfig.privacyPolicyVersion})`}
     >
       <LegalMarkdownLocalized variants={markdownByLocale} />
     </PublicLegalLayout>

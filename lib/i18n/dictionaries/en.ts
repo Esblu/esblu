@@ -1309,7 +1309,7 @@ const en = {
     },
     contactPage: {
       intro:
-        "Esblu is a free trial version of a business record-keeping service. The controller is Jaroslav Juriš, Slovak Republic.",
+        "Esblu is a free trial version of a business record-keeping service. The controller is Esblu s. r. o., with its registered seat at Karpatské námestie 10A, 831 06 Bratislava – Rača, Slovak Republic, Company ID (IČO): 57 815 941.",
       generalTitle: "General questions and support",
       generalText: "Write to us at",
       privacyTitle: "Privacy",

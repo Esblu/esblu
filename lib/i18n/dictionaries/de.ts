@@ -1325,7 +1325,7 @@ const de = {
     },
     contactPage: {
       intro:
-        "Esblu ist eine kostenlose Testversion eines Dienstes zur Firmenerfassung. Verantwortlicher ist Jaroslav Juriš, Slowakische Republik.",
+        "Esblu ist eine kostenlose Testversion eines Dienstes zur Firmenerfassung. Verantwortlicher ist die Gesellschaft Esblu s. r. o. mit Sitz in Karpatské námestie 10A, 831 06 Bratislava – Stadtteil Rača, Slowakische Republik, Handelsregisternummer (IČO): 57 815 941.",
       generalTitle: "Allgemeine Fragen und Support",
       generalText: "Schreiben Sie uns an",
       privacyTitle: "Datenschutz",

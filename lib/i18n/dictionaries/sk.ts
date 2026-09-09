@@ -1321,7 +1321,7 @@ const sk = {
     },
     contactPage: {
       intro:
-        "Esblu je bezplatná testovacia verzia služby na firemnú evidenciu. Prevádzkovateľom je Jaroslav Juriš, Slovenská republika.",
+        "Esblu je bezplatná testovacia verzia služby na firemnú evidenciu. Prevádzkovateľom je spoločnosť Esblu s. r. o., so sídlom Karpatské námestie 10A, 831 06 Bratislava – mestská časť Rača, Slovenská republika, IČO: 57 815 941.",
       generalTitle: "Všeobecné otázky a podpora",
       generalText: "Napíšte nám na",
       privacyTitle: "Ochrana osobných údajov",

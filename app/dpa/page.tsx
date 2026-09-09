@@ -20,7 +20,7 @@ export default function DpaPage() {
   return (
     <PublicLegalLayout
       titleKey="legal.titles.dpa"
-      updatedAt={`15. augusta 2026 (verzia ${legalConfig.dpaVersion})`}
+      updatedAt={`9. septembra 2026 (verzia ${legalConfig.dpaVersion})`}
     >
       <LegalMarkdownLocalized variants={markdownByLocale} />
     </PublicLegalLayout>
