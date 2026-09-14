@@ -75,6 +75,63 @@ export type VehicleDocumentEntry = {
   linkKind: VehicleDocumentLinkKind;
 };
 
+// -----------------------------------------------------------------------------
+// Odkazy na KONKRÉTNY dokument (nie iba na vozidlo) — oprava produkčného
+// smoke-testu: klik na "28347.webp" mal otvoriť vozidlo namiesto bločka
+// samotného. Audit existujúceho detail/preview flow (app/ai-evidencia,
+// app/vozidla/VehicleDetailView.tsx) potvrdil, že appka NEMÁ samostatnú
+// routu pre jeden dokument — detail sa dnes VŽDY otvára ako modal cez
+// lokálny React state (setSelectedOtherDocument/setSelectedRecord v
+// app/ai-evidencia/page.tsx, resp. signedUrl+"Otvoriť" tlačidlo priamo v
+// zozname na app/vozidla/[id]), naplnený z už načítaného zoznamu — NIKDY z
+// URL/query parametra. Namiesto vytvárania NOVÉHO paralelného vieweru preto
+// appka (app/ai-evidencia/page.tsx a VehicleDetailView.tsx) dostala malé,
+// bezpečné rozšírenie: `?openDocument=<documents.id>` /
+// `?openEvidence=<ai_evidence.id>` query parameter, ktorý po načítaní
+// príslušného zoznamu automaticky otvorí TEN ISTÝ, už existujúci modal —
+// žiadny nový viewer, žiadny nový bezpečnostný kód (RLS/user-scoped klient
+// zostávajú úplne nezmenené, appka iba automatizuje klik, ktorý by
+// používateľ inak urobil ručne).
+//
+// KRITICKÉ zistenie z auditu: `public.documents.archived_from_inbox_at` —
+// keď PZP/TP dokument appka "finalizuje" k vozidlu
+// (esblu_finalize_vehicle_document), tento stĺpec sa nastaví A appka ho
+// odvtedy VYRADÍ z Inbox zoznamu (app/ai-evidencia/page.tsx#loadOtherDocuments
+// filtruje `archived_from_inbox_at IS NULL`) — jeho "domovom" je odteraz
+// VÝHRADNE detail vozidla (VehicleDetailView.tsx#loadLinkedDocuments, ktorá
+// navyše dokumenty filtruje na `document_type IN (insurance,
+// vehicle_registration)` a KAŽDÉMU z nich už dnes natívne stavia signedUrl +
+// "Otvoriť" tlačidlo). Bloček/faktúra/iný typ nikdy `archived_from_inbox_at`
+// nedostane — zostáva v Inbox zozname natrvalo. Odkaz na konkrétny dokument
+// preto MUSÍ vetviť podľa tejto reálnej DB hodnoty (nie podľa uhádnutého
+// zoznamu document_type), inak appka odkáže na stránku, ktorá daný dokument
+// vôbec nezobrazuje (presne pôvodný bug).
+// -----------------------------------------------------------------------------
+
+function appendQueryParam(href: string, key: string, value: string): string {
+  const separator = href.includes("?") ? "&" : "?";
+  return `${href}${separator}${key}=${encodeURIComponent(value)}`;
+}
+
+/** Odkaz na konkrétny ai_evidence záznam (vážny lístok/dodací list) — vždy
+ * v Inbox module, kde `records` zoznam appka nikdy neexcluduje. */
+export function evidenceDetailHref(evidenceId: string): string {
+  return appendQueryParam("/ai-evidencia", "openEvidence", evidenceId);
+}
+
+/** Odkaz na konkrétny `documents` riadok — vetví podľa reálnej
+ * `archived_from_inbox_at` hodnoty (pozri komentár vyššie). */
+export function generalDocumentDetailHref(
+  vehicleId: string | null,
+  documentId: string,
+  archived: boolean
+): string {
+  if (archived && vehicleId) {
+    return appendQueryParam(vehicleDetailHref(vehicleId), "openDocument", documentId);
+  }
+  return appendQueryParam("/ai-evidencia", "openDocument", documentId);
+}
+
 function readExtractedDate(fields: Record<string, unknown> | null): string | null {
   if (!fields) return null;
   for (const key of [
@@ -98,7 +155,7 @@ async function fetchLinkedGeneralDocuments(
   const { data, error } = await supabase
     .from("documents")
     .select(
-      "id, document_type, original_filename, extracted_fields, created_at, document_links!inner(vehicle_id)"
+      "id, document_type, original_filename, extracted_fields, created_at, archived_from_inbox_at, document_links!inner(vehicle_id)"
     )
     .eq("document_links.vehicle_id", vehicleId)
     .is("deleted_at", null)
@@ -116,6 +173,7 @@ async function fetchLinkedGeneralDocuments(
       original_filename: string | null;
       extracted_fields: Record<string, unknown> | null;
       created_at: string;
+      archived_from_inbox_at: string | null;
     }[]) || [];
 
   return rows.map((doc) => ({
@@ -124,7 +182,7 @@ async function fetchLinkedGeneralDocuments(
     documentType: doc.document_type,
     date: readExtractedDate(doc.extracted_fields),
     label: doc.original_filename || "",
-    href: vehicleDetailHref(vehicleId),
+    href: generalDocumentDetailHref(vehicleId, doc.id, Boolean(doc.archived_from_inbox_at)),
     linkKind: "direct" as const,
   }));
 }
@@ -173,7 +231,7 @@ async function fetchSpzMatchedEvidence(
       documentType: row.document_type || "",
       date: row.document_date,
       label: row.document_number || "",
-      href: "/ai-evidencia",
+      href: evidenceDetailHref(row.id),
       linkKind: (row.vehicle_id === vehicle.id ? "direct" : "spz_match") as VehicleDocumentLinkKind,
     }));
 }

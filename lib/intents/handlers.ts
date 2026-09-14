@@ -20,7 +20,12 @@ import {
   type MinimalServiceRecord,
 } from "@/lib/deadlines";
 import { buildVehicleReport, buildMachineReport } from "@/lib/vehicle-report";
-import { fetchVehicleDocuments, type VehicleDocumentEntry } from "@/lib/vehicle-documents";
+import {
+  fetchVehicleDocuments,
+  generalDocumentDetailHref,
+  evidenceDetailHref,
+  type VehicleDocumentEntry,
+} from "@/lib/vehicle-documents";
 import { vehicleDetailHref, machineDetailHref, inventoryItemDetailHref } from "@/lib/entity-links";
 import type { VehicleVignette } from "@/lib/vehicle-vignettes";
 import { formatDate } from "@/lib/i18n/format";
@@ -601,10 +606,13 @@ export async function handleOpenOrSearchInventoryItem(
 }
 
 // -----------------------------------------------------------------------------
-// Dokumenty (SEARCH_DOCUMENTS) — jednoduché textové vyhľadávanie nad
-// public.documents (RLS-scoped), bez per-dokument detailu (appka dnes
-// nemá samostatnú route pre jeden dokument) — výsledky preto smerujú na
-// existujúci Inbox (/ai-evidencia), kde sa dá dokument nájsť/otvoriť.
+// Dokumenty (SEARCH_DOCUMENTS) — jednoduché textové vyhľadávanie nad OBOMA
+// existujúcimi systémami dokumentov (pozri lib/vehicle-documents.ts pre
+// plný audit). Odkaz na KAŽDÝ výsledok vedie na KONKRÉTNY dokument (nie iba
+// na Inbox/vozidlo vo všeobecnosti) — rovnaké `generalDocumentDetailHref`/
+// `evidenceDetailHref` helpery, aké používa SHOW_VEHICLE_DOCUMENTS nižšie,
+// vrátane vetvenia podľa `archived_from_inbox_at` (finalizované PZP/TP majú
+// domov na detaile vozidla, všetko ostatné v Inboxe).
 // -----------------------------------------------------------------------------
 
 export async function handleSearchDocuments(
@@ -615,15 +623,16 @@ export async function handleSearchDocuments(
   if (!query) return notFound(locale, "search.errors.missingQuery");
 
   // Voľné textové vyhľadávanie prehľadáva OBA existujúce systémy
-  // ukladania dokumentov (pozri lib/vehicle-documents.ts pre plný audit) —
-  // toto je všeobecný, nie vozidlo-špecifický príkaz (na rozdiel od
-  // SHOW_VEHICLE_DOCUMENTS vyššie), preto tu plain ILIKE zhoda na textové
-  // polia (nie na ŠPZ väzbu) zostáva primeraná, presne ako pôvodné
-  // správanie pre `documents`.
+  // ukladania dokumentov — toto je všeobecný, nie vozidlo-špecifický
+  // príkaz (na rozdiel od SHOW_VEHICLE_DOCUMENTS vyššie), preto tu plain
+  // ILIKE zhoda na textové polia (nie na ŠPZ väzbu) zostáva primeraná,
+  // presne ako pôvodné správanie pre `documents`.
   const [documentsResult, evidenceResult] = await Promise.all([
     supabase
       .from("documents")
-      .select("id, document_type, original_filename, note, created_at")
+      .select(
+        "id, document_type, original_filename, note, created_at, archived_from_inbox_at, document_links(vehicle_id)"
+      )
       .is("deleted_at", null)
       .or(`original_filename.ilike.%${query}%,note.ilike.%${query}%`)
       .order("created_at", { ascending: false })
@@ -645,7 +654,18 @@ export async function handleSearchDocuments(
     console.error("handleSearchDocuments (ai_evidence) zlyhalo:", evidenceResult.error.message);
   }
 
-  const documents = documentsResult.data || [];
+  const documents =
+    (documentsResult.data as
+      | {
+          id: string;
+          document_type: string;
+          original_filename: string | null;
+          note: string | null;
+          created_at: string;
+          archived_from_inbox_at: string | null;
+          document_links: { vehicle_id: string | null }[] | null;
+        }[]
+      | null) || [];
   const evidence = evidenceResult.data || [];
 
   if (documents.length === 0 && evidence.length === 0) {
@@ -653,17 +673,24 @@ export async function handleSearchDocuments(
   }
 
   const items: EntityRef[] = [
-    ...documents.map((doc) => ({
-      type: "document" as const,
-      id: doc.id,
-      label: doc.original_filename || doc.document_type,
-      href: "/ai-evidencia",
-    })),
+    ...documents.map((doc) => {
+      const linkedVehicleId = doc.document_links?.[0]?.vehicle_id ?? null;
+      return {
+        type: "document" as const,
+        id: doc.id,
+        label: doc.original_filename || doc.document_type,
+        href: generalDocumentDetailHref(
+          linkedVehicleId,
+          doc.id,
+          Boolean(doc.archived_from_inbox_at)
+        ),
+      };
+    }),
     ...evidence.map((row) => ({
       type: "document" as const,
       id: row.id,
       label: row.document_number || row.document_type || row.id,
-      href: "/ai-evidencia",
+      href: evidenceDetailHref(row.id),
     })),
   ];
 

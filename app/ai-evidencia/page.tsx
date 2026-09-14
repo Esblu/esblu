@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { apiUrl } from "@/lib/api-url";
 import { openExternalUrl, downloadBlob } from "@/lib/file-actions";
@@ -545,6 +546,38 @@ function Info({ title, value }: { title: string; value: any }) {
     </div>
   );
 }
+// -----------------------------------------------------------------------------
+// Otvorenie KONKRÉTNEHO dokumentu cez ?openDocument=<documents.id> alebo
+// ?openEvidence=<ai_evidence.id> (Intent Engine "ukáž dokumenty vozidla..."
+// výsledky, lib/vehicle-documents.ts) — automatizuje presne ten istý klik,
+// aký by používateľ urobil ručne v existujúcom zozname nižšie (žiadny nový
+// viewer, žiadna nová bezpečnostná logika). Next.js vyžaduje, aby
+// useSearchParams() bol obalený v <Suspense> (inak mobile static export
+// build zlyhá — rovnaký, už zavedený vzor ako
+// mobile/app/vozidla/detail/page.tsx) — vyčlenené do malej samostatnej
+// komponenty, aby Suspense fallback nezablokoval vykreslenie CELEJ (veľkej)
+// Inbox stránky.
+// -----------------------------------------------------------------------------
+function OpenFromQueryParam({
+  onOpenDocument,
+  onOpenEvidence,
+}: {
+  onOpenDocument: (id: string) => void;
+  onOpenEvidence: (id: string) => void;
+}) {
+  const searchParams = useSearchParams();
+
+  useEffect(() => {
+    const openDocument = searchParams.get("openDocument");
+    const openEvidence = searchParams.get("openEvidence");
+    if (openDocument) onOpenDocument(openDocument);
+    if (openEvidence) onOpenEvidence(openEvidence);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
+  return null;
+}
+
 export default function AiEvidenciaPage() {
   const { locale, t, tCount } = useLocale();
   const documentTypeLabels = getDocumentTypeLabels(t);
@@ -610,6 +643,13 @@ export default function AiEvidenciaPage() {
   const [otherDocuments, setOtherDocuments] = useState<OtherDocumentRow[]>([]);
   const [selectedOtherDocument, setSelectedOtherDocument] =
     useState<OtherDocumentRow | null>(null);
+  // ?openDocument=<id> / ?openEvidence=<id> — čaká na to, kým príslušný
+  // zoznam dotiahne dáta (asynchrónne, pozri loadOtherDocuments/loadRecords
+  // nižšie), potom automaticky otvorí TEN ISTÝ existujúci modal, aký by
+  // otvoril ručný klik na riadok v zozname (pozri OpenFromQueryParam
+  // vyššie).
+  const [pendingOpenDocumentId, setPendingOpenDocumentId] = useState<string | null>(null);
+  const [pendingOpenEvidenceId, setPendingOpenEvidenceId] = useState<string | null>(null);
   // Poznámka pri bločku/faktúre — voliteľné pole vyplnené pred uložením
   // (bod 2 zadania). Vážneho lístka/dodacieho listu sa netýka.
   const [documentNote, setDocumentNote] = useState("");
@@ -2122,6 +2162,38 @@ useEffect(() => {
   syncAttachmentsForSelectedDocument();
 }, [selectedOtherDocument?.id, selectedOtherDocument?.document_type]);
 
+// ?openDocument=<id> (pozri OpenFromQueryParam) — akonáhle otherDocuments
+// dotiahne dáta, nájde zodpovedajúci riadok a otvorí ho PRESNE tak, ako by
+// to urobil ručný klik (onClick={() => setSelectedOtherDocument(doc)}
+// nižšie). Ak sa zhoda nenájde (zmazaný/archivovaný dokument), appka
+// jednoducho nič neurobí — bezpečný no-op, žiadna chyba.
+useEffect(() => {
+  if (!pendingOpenDocumentId) return;
+  const match = otherDocuments.find((doc) => doc.id === pendingOpenDocumentId);
+  if (!match) return;
+  // setState je zámerne v setTimeout callbacku, nie synchrónne v tele
+  // efektu — react-hooks/set-state-in-effect (rovnaký vzor ako debounced
+  // Intent Engine efekt v app/components/Dashboard.tsx).
+  const timer = setTimeout(() => {
+    setSelectedOtherDocument(match);
+    setPendingOpenDocumentId(null);
+  }, 0);
+  return () => clearTimeout(timer);
+}, [pendingOpenDocumentId, otherDocuments]);
+
+// ?openEvidence=<id> — rovnaký princíp pre vážny lístok/dodací list
+// (public.ai_evidence, `records` zoznam).
+useEffect(() => {
+  if (!pendingOpenEvidenceId) return;
+  const match = records.find((record) => record.id === pendingOpenEvidenceId);
+  if (!match) return;
+  const timer = setTimeout(() => {
+    setSelectedRecord(match);
+    setPendingOpenEvidenceId(null);
+  }, 0);
+  return () => clearTimeout(timer);
+}, [pendingOpenEvidenceId, records]);
+
 useEffect(() => {
   async function initialize() {
     const activeCompanyId = await loadMembership();
@@ -2224,6 +2296,12 @@ function formatDocDate(value: unknown): string {
 
   return (
     <main className="app-shell-bg min-h-screen p-4 sm:p-6 lg:p-10">
+      <Suspense fallback={null}>
+        <OpenFromQueryParam
+          onOpenDocument={setPendingOpenDocumentId}
+          onOpenEvidence={setPendingOpenEvidenceId}
+        />
+      </Suspense>
       <div className="mx-auto max-w-3xl">
         <BackLink href="/" label={t("inbox.backToMenu")} className="mb-4" />
 

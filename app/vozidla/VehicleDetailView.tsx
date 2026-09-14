@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { openExternalUrl } from "@/lib/file-actions";
 import BackLink from "@/app/components/BackLink";
@@ -144,6 +145,34 @@ async function compressVehiclePhoto(
 }
 
 // -----------------------------------------------------------------------------
+// Otvorenie KONKRÉTNEHO priradeného dokumentu (PZP/TP) cez
+// ?openDocument=<documents.id> — Intent Engine "ukáž dokumenty vozidla..."
+// výsledok (lib/vehicle-documents.ts) pre dokument, ktorého "domovom" je
+// TÁTO stránka (archived_from_inbox_at je nastavené, pozri komentár tam).
+// Automatizuje presne to isté "Otvoriť" tlačidlo, ktoré appka už dnes
+// stavia pre KAŽDÝ linkedDocuments riadok (signedUrl + openExternalUrl
+// nižšie) — žiadny nový viewer. Next.js vyžaduje, aby useSearchParams() bol
+// obalený v <Suspense> (rovnaký, už zavedený vzor ako
+// mobile/app/vozidla/detail/page.tsx) — vyčlenené do malej samostatnej
+// komponenty, nech Suspense fallback neblokuje vykreslenie celej stránky.
+// -----------------------------------------------------------------------------
+function OpenLinkedDocumentFromQueryParam({
+  onOpenDocument,
+}: {
+  onOpenDocument: (id: string) => void;
+}) {
+  const searchParams = useSearchParams();
+
+  useEffect(() => {
+    const openDocument = searchParams.get("openDocument");
+    if (openDocument) onOpenDocument(openDocument);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
+  return null;
+}
+
+// -----------------------------------------------------------------------------
 // Zdieľaný detail vozidla — VŠETKA business logika, Supabase queries a JSX pre
 // detail vozidla žijú VÝHRADNE tu. Web aj mobile routa sú iba tenké wrappery,
 // ktoré si vlastným (presne jedným) hookom zistia ID vozidla a odovzdajú ho
@@ -176,6 +205,14 @@ export default function VehicleDetailView({
   >([]);
   const [linkedDocumentsLoading, setLinkedDocumentsLoading] = useState(false);
   const [deletingDocumentId, setDeletingDocumentId] = useState<string | null>(
+    null
+  );
+  // ?openDocument=<id> (pozri OpenLinkedDocumentFromQueryParam vyššie) —
+  // čaká na to, kým linkedDocuments dotiahne dáta VRÁTANE signedUrl, potom
+  // automaticky spustí presne to isté otvorenie, aké robí "Otvoriť"
+  // tlačidlo nižšie. Ak sa zhoda nenájde alebo dokument nemá signedUrl
+  // (chýbajúci storage súbor), appka bezpečne nič neurobí.
+  const [pendingOpenDocumentId, setPendingOpenDocumentId] = useState<string | null>(
     null
   );
 
@@ -225,6 +262,33 @@ export default function VehicleDetailView({
     loadMembership();
     loadVignettes();
   }, []);
+
+  // ?openDocument=<id> — akonáhle linkedDocuments dotiahne dáta (vrátane
+  // signedUrl, pozri loadLinkedDocuments nižšie), otvorí zodpovedajúci
+  // dokument presne tak, ako by to urobil ručný klik na "Otvoriť".
+  useEffect(() => {
+    if (!pendingOpenDocumentId) return;
+    const match = linkedDocuments.find((doc) => doc.id === pendingOpenDocumentId);
+    if (!match) return;
+
+    // setState/openExternalUrl je zámerne v setTimeout callbacku, nie
+    // synchrónne v tele efektu — react-hooks/set-state-in-effect.
+    if (match.signedUrl) {
+      const signedUrl = match.signedUrl;
+      const timer = setTimeout(() => {
+        openExternalUrl(signedUrl);
+        setPendingOpenDocumentId(null);
+      }, 0);
+      return () => clearTimeout(timer);
+    }
+
+    if (!linkedDocumentsLoading) {
+      // Zhoda existuje, ale nemá signedUrl (chýbajúci storage súbor) a
+      // načítanie už skončilo — nemá zmysel ďalej čakať.
+      const timer = setTimeout(() => setPendingOpenDocumentId(null), 0);
+      return () => clearTimeout(timer);
+    }
+  }, [pendingOpenDocumentId, linkedDocuments, linkedDocumentsLoading]);
 
   async function loadMembership() {
     const {
@@ -895,6 +959,9 @@ export default function VehicleDetailView({
 
   return (
     <main className="app-shell-bg min-h-screen p-10">
+      <Suspense fallback={null}>
+        <OpenLinkedDocumentFromQueryParam onOpenDocument={setPendingOpenDocumentId} />
+      </Suspense>
       <BackLink href="/vozidla" label={t("nav.vehicles")} className="mb-4" />
 
       <h1 className="text-4xl font-bold">
