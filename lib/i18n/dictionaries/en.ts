@@ -135,6 +135,7 @@ const en = {
       vignetteSummary: "Vignettes for {{entity}}: {{list}}.",
       vignetteExpiredSuffix: " (expired)",
       costSummary: "Service costs for {{entity}} in {{year}}: {{amount}} €.",
+      noVehicleDocuments: "No documents are on file for vehicle {{entity}}.",
     },
     report: {
       notTracked: "Not tracked",
@@ -156,6 +157,9 @@ const en = {
     results: {
       documentsTitle: "Documents found",
       deadlinesTitle: "Upcoming and overdue deadlines",
+      vehicleDocumentsTitle: "Documents for vehicle {{entity}}",
+      documentLinkDirect: "Linked document",
+      documentLinkBySpz: "Matched by plate",
     },
     deadlineTypeLabels: {
       vehicleService: "Vehicle service",
@@ -172,6 +176,25 @@ const en = {
       openAction: "Open",
       loading: "Searching…",
       noDeadlines: "You currently have no upcoming or overdue deadlines.",
+    },
+    voice: {
+      ui: {
+        startRecording: "Start voice search",
+        recording: "Recording…",
+        stop: "Stop recording",
+        cancel: "Cancel",
+        processing: "Processing voice…",
+        transcript: "Transcript",
+      },
+      errors: {
+        noAudio: "No audio was recorded.",
+        micNotAllowed: "Microphone access was not permitted.",
+        notSupported: "Voice search is not supported on this device.",
+        recordingTooLong: "The recording is too long. Try a shorter command.",
+        unsupportedFormat: "Unsupported audio format.",
+        transcriptionFailed: "Voice transcription failed. Please try again.",
+        tryAgain: "Try speaking again.",
+      },
     },
   },
 

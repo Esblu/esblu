@@ -74,7 +74,9 @@ const OPEN_WORDS = [
   "offne",
 ];
 
-const DOCUMENTS_WORDS = ["dokument", "document", "dokumenty"];
+// "doklad" pokrýva "doklady"/"dokladu"/"dokladov" atď. ("ukáž doklady k
+// TT123AB" — jeden z explicitných príkladov v zadaní, sekcia A/C).
+const DOCUMENTS_WORDS = ["dokument", "document", "dokumenty", "doklad"];
 const SERVICE_WORDS = ["servis", "service", "wartung"];
 const REPORT_WORDS = ["report", "bericht"];
 const COST_WORDS = [

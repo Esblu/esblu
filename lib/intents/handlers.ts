@@ -20,6 +20,7 @@ import {
   type MinimalServiceRecord,
 } from "@/lib/deadlines";
 import { buildVehicleReport, buildMachineReport } from "@/lib/vehicle-report";
+import { fetchVehicleDocuments, type VehicleDocumentEntry } from "@/lib/vehicle-documents";
 import { vehicleDetailHref, machineDetailHref, inventoryItemDetailHref } from "@/lib/entity-links";
 import type { VehicleVignette } from "@/lib/vehicle-vignettes";
 import { formatDate } from "@/lib/i18n/format";
@@ -97,6 +98,29 @@ function disambiguateMachines(candidates: SearchedMachine[]): IntentResult {
   return { kind: "disambiguate", candidates: candidates.map(machineRef) };
 }
 
+// Stabilné interné kľúče document_type z public.documents (pozri
+// inbox.documentTypes.* preklady v lib/i18n/dictionaries) — VehicleDocumentEntry
+// zo zdroja "ai_evidence" má v documentType už hotový, človekom čitateľný
+// text (napr. "vážny lístok"), ktorý sa preto NIKDY neprekladá cez tento
+// zoznam (pozri komentár v lib/vehicle-documents.ts).
+const KNOWN_DOCUMENT_TYPE_KEYS = new Set([
+  "weigh_ticket",
+  "delivery_note",
+  "invoice",
+  "receipt",
+  "insurance",
+  "service_document",
+  "vehicle_registration",
+  "other",
+]);
+
+function documentTypeLabel(locale: Locale, doc: VehicleDocumentEntry): string {
+  if (doc.source === "documents" && KNOWN_DOCUMENT_TYPE_KEYS.has(doc.documentType)) {
+    return translate(locale, `inbox.documentTypes.${doc.documentType}`);
+  }
+  return doc.documentType || translate(locale, "inbox.documentTypes.other");
+}
+
 // -----------------------------------------------------------------------------
 // Vozidlá
 // -----------------------------------------------------------------------------
@@ -134,11 +158,40 @@ export async function handleShowVehicleDocuments(
       ? disambiguateVehicles(candidates)
       : notFound(locale, "search.errors.vehicleNotFound", query);
   }
-  // Dokumenty vozidla sa dnes zobrazujú priamo na detaile vozidla
-  // (VehicleDetailView.tsx#loadLinkedDocuments) — Intent Engine preto
-  // NEDUPLIKUJE túto UI, iba tam nasmeruje (bod "navigácia" zo zadania,
-  // bod 13).
-  return { kind: "navigate", entity: vehicleRef(vehicle) };
+
+  const entity = vehicleRef(vehicle);
+  // Naprieč OBOMA existujúcimi systémami ukladania dokumentov
+  // (documents+document_links a ai_evidence) — pozri
+  // lib/vehicle-documents.ts pre plný audit a odôvodnenie. Nikdy sa
+  // nehádá: ak DB dáta nepotvrdia väzbu na toto vozidlo, dokument sa sem
+  // nedostane.
+  const documents = await fetchVehicleDocuments(supabase, { id: vehicle.id, spz: vehicle.spz });
+
+  if (documents.length === 0) {
+    return {
+      kind: "answer",
+      text: translate(locale, "search.answers.noVehicleDocuments", { entity: entity.label }),
+      entity,
+    };
+  }
+
+  return {
+    kind: "document_list",
+    title: translate(locale, "search.results.vehicleDocumentsTitle", { entity: entity.label }),
+    entity,
+    items: documents.map((doc) => ({
+      typeLabel: documentTypeLabel(locale, doc),
+      dateLabel: doc.date ? formatDate(doc.date, locale) : null,
+      label: doc.label || documentTypeLabel(locale, doc),
+      href: doc.href,
+      linkLabel: translate(
+        locale,
+        doc.linkKind === "direct"
+          ? "search.results.documentLinkDirect"
+          : "search.results.documentLinkBySpz"
+      ),
+    })),
+  };
 }
 
 export async function handleShowVehicleService(
@@ -561,30 +614,58 @@ export async function handleSearchDocuments(
 ): Promise<IntentResult> {
   if (!query) return notFound(locale, "search.errors.missingQuery");
 
-  const { data, error } = await supabase
-    .from("documents")
-    .select("id, document_type, original_filename, note, created_at")
-    .is("deleted_at", null)
-    .or(`original_filename.ilike.%${query}%,note.ilike.%${query}%`)
-    .order("created_at", { ascending: false })
-    .limit(20);
+  // Voľné textové vyhľadávanie prehľadáva OBA existujúce systémy
+  // ukladania dokumentov (pozri lib/vehicle-documents.ts pre plný audit) —
+  // toto je všeobecný, nie vozidlo-špecifický príkaz (na rozdiel od
+  // SHOW_VEHICLE_DOCUMENTS vyššie), preto tu plain ILIKE zhoda na textové
+  // polia (nie na ŠPZ väzbu) zostáva primeraná, presne ako pôvodné
+  // správanie pre `documents`.
+  const [documentsResult, evidenceResult] = await Promise.all([
+    supabase
+      .from("documents")
+      .select("id, document_type, original_filename, note, created_at")
+      .is("deleted_at", null)
+      .or(`original_filename.ilike.%${query}%,note.ilike.%${query}%`)
+      .order("created_at", { ascending: false })
+      .limit(20),
+    supabase
+      .from("ai_evidence")
+      .select("id, document_type, document_number, supplier, customer, material, spz, created_at")
+      .or(
+        `document_number.ilike.%${query}%,supplier.ilike.%${query}%,customer.ilike.%${query}%,material.ilike.%${query}%,spz.ilike.%${query}%`
+      )
+      .order("created_at", { ascending: false })
+      .limit(20),
+  ]);
 
-  if (error) {
-    console.error("handleSearchDocuments zlyhalo:", error.message);
-    return { kind: "error", text: translate(locale, "search.errors.generic") };
+  if (documentsResult.error) {
+    console.error("handleSearchDocuments (documents) zlyhalo:", documentsResult.error.message);
+  }
+  if (evidenceResult.error) {
+    console.error("handleSearchDocuments (ai_evidence) zlyhalo:", evidenceResult.error.message);
   }
 
-  const documents = data || [];
-  if (documents.length === 0) {
+  const documents = documentsResult.data || [];
+  const evidence = evidenceResult.data || [];
+
+  if (documents.length === 0 && evidence.length === 0) {
     return notFound(locale, "search.errors.documentsNotFound", query);
   }
 
-  const items: EntityRef[] = documents.map((doc) => ({
-    type: "document" as const,
-    id: doc.id,
-    label: doc.original_filename || doc.document_type,
-    href: "/ai-evidencia",
-  }));
+  const items: EntityRef[] = [
+    ...documents.map((doc) => ({
+      type: "document" as const,
+      id: doc.id,
+      label: doc.original_filename || doc.document_type,
+      href: "/ai-evidencia",
+    })),
+    ...evidence.map((row) => ({
+      type: "document" as const,
+      id: row.id,
+      label: row.document_number || row.document_type || row.id,
+      href: "/ai-evidencia",
+    })),
+  ];
 
   return { kind: "list", title: translate(locale, "search.results.documentsTitle"), items };
 }

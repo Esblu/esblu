@@ -139,6 +139,7 @@ const sk = {
       vignetteSummary: "Diaľničné známky vozidla {{entity}}: {{list}}.",
       vignetteExpiredSuffix: " (po termíne)",
       costSummary: "Servisné náklady vozidla {{entity}} za rok {{year}}: {{amount}} €.",
+      noVehicleDocuments: "Pre vozidlo {{entity}} nie sú evidované žiadne dokumenty.",
     },
     report: {
       notTracked: "Nie je evidované",
@@ -160,6 +161,9 @@ const sk = {
     results: {
       documentsTitle: "Nájdené dokumenty",
       deadlinesTitle: "Blížiace sa a prekročené termíny",
+      vehicleDocumentsTitle: "Dokumenty vozidla {{entity}}",
+      documentLinkDirect: "Priradený dokument",
+      documentLinkBySpz: "Nájdené podľa ŠPZ",
     },
     deadlineTypeLabels: {
       vehicleService: "Servis vozidla",
@@ -176,6 +180,28 @@ const sk = {
       openAction: "Otvoriť",
       loading: "Hľadám…",
       noDeadlines: "Momentálne nemáte žiadne blížiace sa ani prekročené termíny.",
+    },
+    // Hlasové vyhľadávanie (zadanie, sekcia B/C/H) — tenká vstupná vrstva
+    // nad rovnakým textovým poľom/Intent Enginom vyššie, nikdy nový
+    // paralelný systém.
+    voice: {
+      ui: {
+        startRecording: "Spustiť hlasové vyhľadávanie",
+        recording: "Nahrávam…",
+        stop: "Zastaviť nahrávanie",
+        cancel: "Zrušiť",
+        processing: "Spracúvam hlas…",
+        transcript: "Prepis",
+      },
+      errors: {
+        noAudio: "Nenahral sa žiadny zvukový záznam.",
+        micNotAllowed: "Prístup k mikrofónu nebol povolený.",
+        notSupported: "Hlasové vyhľadávanie nie je na tomto zariadení podporované.",
+        recordingTooLong: "Nahrávka je príliš dlhá. Skúste kratší príkaz.",
+        unsupportedFormat: "Nepodporovaný formát zvukového záznamu.",
+        transcriptionFailed: "Prepis hlasu zlyhal. Skúste to prosím znova.",
+        tryAgain: "Skúste hovoriť znova.",
+      },
     },
   },
 

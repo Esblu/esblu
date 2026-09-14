@@ -134,6 +134,7 @@ const de = {
       vignetteSummary: "Vignetten für {{entity}}: {{list}}.",
       vignetteExpiredSuffix: " (abgelaufen)",
       costSummary: "Servicekosten für {{entity}} im Jahr {{year}}: {{amount}} €.",
+      noVehicleDocuments: "Für Fahrzeug {{entity}} sind keine Dokumente hinterlegt.",
     },
     report: {
       notTracked: "Nicht erfasst",
@@ -155,6 +156,9 @@ const de = {
     results: {
       documentsTitle: "Gefundene Dokumente",
       deadlinesTitle: "Anstehende und überfällige Fristen",
+      vehicleDocumentsTitle: "Dokumente für Fahrzeug {{entity}}",
+      documentLinkDirect: "Verknüpftes Dokument",
+      documentLinkBySpz: "Gefunden über Kennzeichen",
     },
     deadlineTypeLabels: {
       vehicleService: "Fahrzeugservice",
@@ -171,6 +175,25 @@ const de = {
       openAction: "Öffnen",
       loading: "Suche…",
       noDeadlines: "Sie haben aktuell keine anstehenden oder überfälligen Fristen.",
+    },
+    voice: {
+      ui: {
+        startRecording: "Sprachsuche starten",
+        recording: "Aufnahme läuft…",
+        stop: "Aufnahme beenden",
+        cancel: "Abbrechen",
+        processing: "Sprache wird verarbeitet…",
+        transcript: "Transkript",
+      },
+      errors: {
+        noAudio: "Es wurde keine Audioaufnahme aufgezeichnet.",
+        micNotAllowed: "Der Mikrofonzugriff wurde nicht erlaubt.",
+        notSupported: "Die Sprachsuche wird auf diesem Gerät nicht unterstützt.",
+        recordingTooLong: "Die Aufnahme ist zu lang. Versuchen Sie einen kürzeren Befehl.",
+        unsupportedFormat: "Nicht unterstütztes Audioformat.",
+        transcriptionFailed: "Die Sprachübertragung ist fehlgeschlagen. Bitte versuchen Sie es erneut.",
+        tryAgain: "Sprechen Sie noch einmal.",
+      },
     },
   },
 

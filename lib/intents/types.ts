@@ -120,6 +120,26 @@ export type IntentResult =
         dueDateLabel: string;
       }[];
     }
+  | {
+      // SHOW_VEHICLE_DOCUMENTS (zadanie, sekcia A) — obohatený zoznam
+      // dokumentov PREUKÁZANE priradených ku KONKRÉTNEMU vozidlu (naprieč
+      // documents+document_links a ai_evidence, pozri
+      // lib/vehicle-documents.ts). Odlišné od "list" (EntityRef[]), lebo UX
+      // špecifikácia vyžaduje na jednom riadku typ dokumentu, dátum (ak
+      // existuje), názov/identifikátor AJ spôsob väzby na vozidlo —
+      // rovnaký precedens ako "deadline_list" vyššie (nová špecializovaná
+      // list-varianta, nie paralelný systém).
+      kind: "document_list";
+      title: string;
+      entity: EntityRef;
+      items: {
+        typeLabel: string;
+        dateLabel: string | null;
+        label: string;
+        href: string;
+        linkLabel: string;
+      }[];
+    }
   | { kind: "disambiguate"; candidates: EntityRef[] }
   | { kind: "not_found"; text: string }
   | { kind: "error"; text: string };

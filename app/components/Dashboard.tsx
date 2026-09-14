@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
@@ -14,6 +14,7 @@ import { vehicleDetailHref } from "@/lib/entity-links";
 import { buildLegacyDashboardAlerts } from "@/lib/deadlines";
 import { apiUrl } from "@/lib/api-url";
 import { REQUEST_LOCALE_HEADER } from "@/lib/i18n/request-locale";
+import { MAX_RECORDING_SECONDS } from "@/lib/voice-config";
 import type { IntentResult } from "@/lib/intents/types";
 
 function getGreeting(t: (key: string) => string) {
@@ -49,6 +50,23 @@ export default function Dashboard() {
   // vrstvy výsledkov, žiadna duplicitná UI).
   const [intentResult, setIntentResult] = useState<IntentResult | null>(null);
   const [intentLoading, setIntentLoading] = useState(false);
+  // Hlasové vyhľadávanie (zadanie, sekcia B/C) — TENKÁ vstupná vrstva NAD
+  // existujúcim Intent Enginom vyššie: mikrofón iba naplní `search` presne
+  // tak, ako keby používateľ text napísal (spustí ten istý debounced efekt
+  // nižšie), nikdy nevolá vlastný parser/handler. "processing" = záznam sa
+  // odosiela na prepis (app/api/assistant/transcribe), nie na Intent
+  // Engine — tam sa transkript posiela až AKO OBYČAJNÝ TEXT.
+  const [voiceState, setVoiceState] = useState<"idle" | "recording" | "processing" | "error">(
+    "idle"
+  );
+  const [voiceError, setVoiceError] = useState<string | null>(null);
+  // Naposledy vložený prepis — zobrazí sa ako krátka "Prepis: …" poznámka
+  // (bod C zadania: "zobraz prepis po spracovaní"), zmizne hneď, ako
+  // používateľ pole ručne upraví (pozri onChange pri <input> nižšie).
+  const [voiceTranscript, setVoiceTranscript] = useState<string | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const recordingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // KOREKCIA (dashboard v2): mobil už nemá permanentný sidebar ani priamy
   // odkaz na Nastavenia namiesto menu — hamburger teraz otvára skutočné
   // výsuvné menu s rovnakou navigáciou ako desktop sidebar. Čisto UI stav,
@@ -319,6 +337,214 @@ export default function Dashboard() {
     };
   }, [search, locale]);
 
+  // Bezpečné zastavenie mikrofónu pri odmountovaní komponentu (napr. odchod
+  // zo stránky počas nahrávania) — nikdy nenecháva otvorený audio stream na
+  // pozadí (bod D zadania: žiadne "visiace" nahrávanie).
+  useEffect(() => {
+    return () => {
+      if (recordingTimeoutRef.current) clearTimeout(recordingTimeoutRef.current);
+      const recorder = mediaRecorderRef.current;
+      if (recorder && recorder.state !== "inactive") {
+        recorder.stream.getTracks().forEach((track) => track.stop());
+        recorder.stop();
+      }
+    };
+  }, []);
+
+  // -----------------------------------------------------------------------------
+  // Hlasové vyhľadávanie (zadanie, sekcia B/C/D/E/G) — READ-ONLY, prvá
+  // verzia: VOICE → audio → prepis (server) → PRESNE TEN ISTÝ text ako pri
+  // písaní → ten istý debounced Intent Engine efekt vyššie. Žiadny nový
+  // parser, žiadny nový handler, žiadne automatické spúšťanie akcie bez
+  // spoľahlivého prepisu.
+  //
+  // Web API (getUserMedia/MediaRecorder) — funguje rovnako na desktop webe
+  // aj mobile browseri; v Android Capacitor WebView appke (mobile/) funguje
+  // BEZO ZMENY vďaka tomu, že mobile/app/* sú čisté re-exporty root app/*
+  // (pozri mobile/tsconfig.json `"@/*": ["../*"]`) — jediná potrebná
+  // natívna zmena je android.permission.RECORD_AUDIO v AndroidManifest.xml
+  // (Capacitor WebView beží nad lokálnym https://localhost schémou, takže
+  // getUserMedia už dnes beží v bezpečnom kontexte bez ďalšej konfigurácie
+  // — pozri report, sekcia E).
+  // -----------------------------------------------------------------------------
+
+  async function startVoiceRecording() {
+    setVoiceError(null);
+    setVoiceTranscript(null);
+
+    if (
+      typeof window === "undefined" ||
+      !navigator.mediaDevices?.getUserMedia ||
+      typeof MediaRecorder === "undefined"
+    ) {
+      setVoiceState("error");
+      setVoiceError(t("search.voice.errors.notSupported"));
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const preferredMimeType = ["audio/webm", "audio/mp4", "audio/ogg"].find(
+        (type) =>
+          typeof MediaRecorder.isTypeSupported === "function" &&
+          MediaRecorder.isTypeSupported(type)
+      );
+      const recorder = preferredMimeType
+        ? new MediaRecorder(stream, { mimeType: preferredMimeType })
+        : new MediaRecorder(stream);
+
+      audioChunksRef.current = [];
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) audioChunksRef.current.push(event.data);
+      };
+      mediaRecorderRef.current = recorder;
+      recorder.start();
+      setVoiceState("recording");
+
+      // Klientska poistka pre max dĺžku nahrávky (bod D zadania) — po
+      // uplynutí limitu appka záznam ZAHODÍ (neposiela na prepis) a ukáže
+      // jasnú chybu, namiesto tichého odoslania orezanej nahrávky.
+      recordingTimeoutRef.current = setTimeout(() => {
+        handleRecordingTooLong();
+      }, MAX_RECORDING_SECONDS * 1000);
+    } catch (error) {
+      console.error("Nahrávanie hlasu zlyhalo:", error);
+      setVoiceState("error");
+      setVoiceError(t("search.voice.errors.micNotAllowed"));
+    }
+  }
+
+  function stopMediaRecorderTracks(recorder: MediaRecorder) {
+    recorder.stream.getTracks().forEach((track) => track.stop());
+  }
+
+  function handleRecordingTooLong() {
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state !== "inactive") {
+      recorder.onstop = () => stopMediaRecorderTracks(recorder);
+      recorder.stop();
+    }
+    audioChunksRef.current = [];
+    mediaRecorderRef.current = null;
+    recordingTimeoutRef.current = null;
+    setVoiceState("error");
+    setVoiceError(t("search.voice.errors.recordingTooLong"));
+  }
+
+  function cancelVoiceRecording() {
+    if (recordingTimeoutRef.current) {
+      clearTimeout(recordingTimeoutRef.current);
+      recordingTimeoutRef.current = null;
+    }
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state !== "inactive") {
+      // Zrušenie zámerne NEPOSIELA žiadny transkript — iba zastaví
+      // nahrávanie a zahodí zvuk (bod C zadania: "umožni stop/cancel").
+      recorder.onstop = () => stopMediaRecorderTracks(recorder);
+      recorder.stop();
+    }
+    audioChunksRef.current = [];
+    mediaRecorderRef.current = null;
+    setVoiceState("idle");
+  }
+
+  async function stopVoiceRecording() {
+    if (recordingTimeoutRef.current) {
+      clearTimeout(recordingTimeoutRef.current);
+      recordingTimeoutRef.current = null;
+    }
+    const recorder = mediaRecorderRef.current;
+    if (!recorder || recorder.state === "inactive") return;
+
+    setVoiceState("processing");
+
+    const stopped = new Promise<void>((resolve) => {
+      recorder.addEventListener(
+        "stop",
+        () => {
+          stopMediaRecorderTracks(recorder);
+          resolve();
+        },
+        { once: true }
+      );
+    });
+    recorder.stop();
+    await stopped;
+
+    const mimeType = recorder.mimeType || "audio/webm";
+    const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
+    audioChunksRef.current = [];
+    mediaRecorderRef.current = null;
+
+    if (audioBlob.size === 0) {
+      setVoiceState("error");
+      setVoiceError(t("search.voice.errors.noAudio"));
+      return;
+    }
+
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!session) {
+        setVoiceState("error");
+        setVoiceError(t("search.voice.errors.transcriptionFailed"));
+        return;
+      }
+
+      const extension = mimeType.includes("mp4")
+        ? "mp4"
+        : mimeType.includes("ogg")
+          ? "ogg"
+          : mimeType.includes("wav")
+            ? "wav"
+            : "webm";
+      const voiceFormData = new FormData();
+      voiceFormData.append("audio", audioBlob, `voice-command.${extension}`);
+
+      const response = await fetch(apiUrl("/api/assistant/transcribe"), {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+          [REQUEST_LOCALE_HEADER]: locale,
+        },
+        body: voiceFormData,
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data?.success || typeof data.text !== "string" || !data.text) {
+        setVoiceState("error");
+        setVoiceError(
+          typeof data?.error === "string"
+            ? data.error
+            : t("search.voice.errors.transcriptionFailed")
+        );
+        return;
+      }
+
+      // Transkript sa vloží do PRESNE TOHO ISTÉHO textového poľa ako pri
+      // písaní (zadanie, sekcia G) — spustí ten istý debounced Intent
+      // Engine efekt vyššie, žiadna samostatná hlasová logika.
+      setSearch(data.text);
+      setVoiceTranscript(data.text);
+      setVoiceState("idle");
+    } catch (error) {
+      console.error("Prepis hlasu zlyhal:", error);
+      setVoiceState("error");
+      setVoiceError(t("search.voice.errors.transcriptionFailed"));
+    }
+  }
+
+  function handleMicButtonClick() {
+    if (voiceState === "recording") {
+      stopVoiceRecording();
+    } else if (voiceState === "idle" || voiceState === "error") {
+      startVoiceRecording();
+    }
+  }
+
   // ZVÄČŠENIE IKON (KOREKCIA v5): imageZoom kompenzuje vnútorný priehľadný
   // okraj rastrových produktových fotiek (van/excavator/warehouse), aby po
   // novej výraznejšej Inbox SVG ikone pôsobili moduly vizuálne vyvážene —
@@ -514,6 +740,31 @@ export default function Dashboard() {
           </div>
         );
 
+      case "document_list":
+        return (
+          <div className="space-y-2.5">
+            <p className="text-xs font-bold uppercase tracking-wide text-muted-esblu">
+              {intentResult.title}
+            </p>
+            {intentResult.items.map((item, index) => (
+              <Link key={`${item.href}-${index}`} href={item.href} className={cardClass}>
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-bold text-primary">{item.label}</p>
+                    <p className="text-xs text-secondary">
+                      {item.typeLabel}
+                      {item.dateLabel ? ` — ${item.dateLabel}` : ""}
+                    </p>
+                  </div>
+                  <span className="shrink-0 rounded-full bg-accent-cyan/12 px-2.5 py-1 text-[11px] font-bold text-accent-cyan">
+                    {item.linkLabel}
+                  </span>
+                </div>
+              </Link>
+            ))}
+          </div>
+        );
+
       case "disambiguate":
         return (
           <div className="space-y-2.5">
@@ -693,11 +944,68 @@ export default function Dashboard() {
             <SearchIcon />
             <input
               value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              onChange={(e) => {
+                setSearch(e.target.value);
+                setVoiceTranscript(null);
+              }}
               placeholder={t("dashboard.searchPlaceholder")}
               className="w-full min-w-0 bg-transparent text-base text-primary outline-none placeholder:text-muted-esblu"
             />
+            {voiceState === "recording" && (
+              <button
+                type="button"
+                onClick={cancelVoiceRecording}
+                className="shrink-0 text-xs font-bold uppercase tracking-wide text-muted-esblu hover:text-primary"
+              >
+                {t("search.voice.ui.cancel")}
+              </button>
+            )}
+            <button
+              type="button"
+              aria-label={
+                voiceState === "recording"
+                  ? t("search.voice.ui.stop")
+                  : t("search.voice.ui.startRecording")
+              }
+              onClick={handleMicButtonClick}
+              disabled={voiceState === "processing"}
+              className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition disabled:opacity-50 ${
+                voiceState === "recording"
+                  ? "bg-red-500/15 text-red-400"
+                  : "text-muted-esblu hover:text-primary"
+              }`}
+            >
+              <MicrophoneIcon />
+            </button>
           </div>
+
+          {voiceState === "recording" && (
+            <p className="mt-2 flex items-center gap-2 text-xs font-semibold text-red-400">
+              <span className="h-2 w-2 animate-pulse rounded-full bg-red-400" />
+              {t("search.voice.ui.recording")}
+            </p>
+          )}
+          {voiceState === "processing" && (
+            <p className="mt-2 text-xs font-medium text-muted-esblu">
+              {t("search.voice.ui.processing")}
+            </p>
+          )}
+          {voiceState === "error" && voiceError && (
+            <p className="mt-2 text-xs font-medium text-red-400">
+              {voiceError}
+              {/* "Skúste hovoriť znova" nemá zmysel pri principiálnej
+                  nepodpore zariadenia (notSupported) — appka ho preto
+                  pripája len pri chybách, kde opakovanie reálne pomôže. */}
+              {voiceError !== t("search.voice.errors.notSupported")
+                ? ` ${t("search.voice.errors.tryAgain")}`
+                : ""}
+            </p>
+          )}
+          {voiceState === "idle" && voiceTranscript && search === voiceTranscript && (
+            <p className="mt-2 text-[11px] text-muted-esblu">
+              {t("search.voice.ui.transcript")}: „{voiceTranscript}“
+            </p>
+          )}
 
           {query && (
             <div className="mt-3 space-y-2.5">
@@ -934,6 +1242,17 @@ function SearchIcon() {
     <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 text-secondary">
       <circle cx="11" cy="11" r="7" />
       <path d="M21 21l-4.3-4.3" />
+    </svg>
+  );
+}
+
+function MicrophoneIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0">
+      <rect x="9" y="2" width="6" height="12" rx="3" />
+      <path d="M5 10a7 7 0 0 0 14 0" />
+      <path d="M12 19v3" />
+      <path d="M8 22h8" />
     </svg>
   );
 }

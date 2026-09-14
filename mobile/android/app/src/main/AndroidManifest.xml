@@ -111,4 +111,28 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+
+    <!--
+      RECORD_AUDIO — hlasové vyhľadávanie (zadanie, sekcia B/C/E: mikrofón
+      v existujúcom centrálnom search poli, ako tenká vstupná vrstva nad
+      Intent Enginom). Bez tohto manifest záznamu Android runtime permission
+      dialóg pre getUserMedia({ audio: true }) v Capacitor WebView vôbec
+      nezobrazí a nahrávanie by v natívnej appke vždy zlyhalo (na rozdiel od
+      mobilného webu/PWA, kde permission rieši samotný prehliadač).
+
+      Žiadny nový Capacitor plugin nie je potrebný — Capacitor Android
+      štandardne (od Capacitor 3+) prepája WebView
+      onPermissionRequest/PermissionRequest udalosti na natívny Android
+      runtime-permission dialóg pre médiá (kameru aj mikrofón) sám, pokiaľ
+      je príslušné <uses-permission> deklarované v manifeste (presne ako
+      appka dnes už robí pre kameru cez natívny súborový picker/FileProvider
+      vyššie) — appka preto NEPOTREBUJE vlastný natívny plugin ani ručné
+      volanie Capacitor Permissions API iba kvôli tomuto jednému
+      getUserMedia() volaniu v štandardnom WebView `<input>`/JS flow.
+      capacitor.config.ts nemá nastavený `server.url` (appka beží nad
+      lokálne zabalenými assetmi vlastnej https://localhost schémy), takže
+      getUserMedia už dnes beží v bezpečnom (HTTPS-ekvivalentnom) kontexte
+      bez ďalšej konfigurácie — pozri report, sekcia E.
+    -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
 </manifest>
