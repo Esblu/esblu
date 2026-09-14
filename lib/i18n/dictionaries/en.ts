@@ -900,6 +900,8 @@ const en = {
     vehicleGroupLabel: "Vehicle",
     noImportShort: "No imports.",
     noExportShort: "No exports.",
+    unknownLabel: "Unspecified",
+    unknownMovementHint: "Import or export is not specified.",
     savedDocumentsTitle: "Saved documents",
     open: "Open",
     backToAllPlates: "← Back to all plates",

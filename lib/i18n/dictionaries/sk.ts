@@ -914,6 +914,8 @@ const sk = {
     vehicleGroupLabel: "Vozidlo",
     noImportShort: "Žiadny dovoz.",
     noExportShort: "Žiadny vývoz.",
+    unknownLabel: "Neurčené",
+    unknownMovementHint: "Dovoz alebo vývoz nie je určený.",
     savedDocumentsTitle: "Uložené doklady",
     open: "Otvoriť",
     backToAllPlates: "← Späť na všetky ŠPZ",

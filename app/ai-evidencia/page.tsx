@@ -14,6 +14,7 @@ import InboxDocumentIcon from "@/app/components/icons/InboxDocumentIcon";
 import { compressImage, normalizeRotation } from "@/lib/image-compress";
 import {
   exportAiEvidenceToExcel,
+  normalizeMovementType,
   type AiEvidenceExcelRecord,
 } from "@/lib/export-ai-evidence-excel";
 import {
@@ -438,35 +439,63 @@ function formatRecordWeight(
 }
 
 type EvidenceSummary = {
+  // Po\u010det dokladov v tejto \u0160PZ skupine \u2014 NEZ\u00c1VIS\u00cd od toho, \u010di je
+  // movement_type ur\u010den\u00fd. Ka\u017ed\u00fd doklad so spr\u00e1vnou \u0160PZ sa po\u010d\u00edta pr\u00e1ve raz
+  // (bod 3 zadania: doklady bez Dovoz/V\u00fdvoz sa nesm\u00fa strati\u0165 zo s\u00fahrnu).
+  documentsCount: number;
   totalImport: number;
   totalExport: number;
+  // S\u00fa\u010det ton dokladov, kde movement_type nie je spo\u013eahlivo ur\u010den\u00fd (null
+  // alebo hodnota, ktor\u00fa normalizeMovementType nevie priradi\u0165 k
+  // dovozu/v\u00fdvozu) \u2014 nikdy sa nezapo\u010d\u00edta do totalImport/totalExport.
+  totalUnknown: number;
   importCount: number;
   exportCount: number;
+  unknownCount: number;
   importByMaterial: Record<string, number>;
   exportByMaterial: Record<string, number>;
+  unknownByMaterial: Record<string, number>;
 };
 
 function createEmptySummary(): EvidenceSummary {
   return {
+    documentsCount: 0,
     totalImport: 0,
     totalExport: 0,
+    totalUnknown: 0,
     importCount: 0,
     exportCount: 0,
+    unknownCount: 0,
     importByMaterial: {},
     exportByMaterial: {},
+    unknownByMaterial: {},
   };
 }
 
+// Bugfix (Preh\u013ead pod\u013ea \u0160PZ ukazoval "0 dokladov" pre doklady bez ur\u010den\u00e9ho
+// Dovoz/V\u00fdvoz): documentsCount sa po\u010d\u00edta pre KA\u017dD\u00dd doklad v tejto \u0160PZ
+// skupine, \u00faplne nez\u00e1visle od movement_type \u2014 predt\u00fdm sa v UI zobrazoval
+// s\u00fa\u010det importCount + exportCount, tak\u017ee doklad s movement_type = null
+// (napr. v\u00e1\u017eny l\u00edstok, kde AI smer pohybu spo\u013eahlivo nezistila) sa
+// nezapo\u010d\u00edtal v\u00f4bec nikam a p\u00f4sobil, akoby vo vozidle neexistoval \u017eiadny
+// doklad. Smer pohybu (dovoz/v\u00fdvoz/neur\u010den\u00e9) sa na\u010falej rie\u0161i oddelene a
+// ovplyv\u0148uje iba Dovoz/V\u00fdvoz/Neur\u010den\u00e9 ton\u00e1\u017e, nikdy documentsCount.
+//
+// normalizeMovementType (lib/export-ai-evidence-excel.ts) sa reuse-uje
+// namiesto vlastnej normaliz\u00e1cie priamo tu \u2014 predt\u00fdm t\u00e1to funkcia
+// rozpozn\u00e1vala iba presne "dovoz"/"vyvoz" po odstr\u00e1nen\u00ed diakritiky, zatia\u013e
+// \u010do Excel export u\u017e uzn\u00e1val aj synonym\u00e1 (import/export/prijem/odvoz).
+// T\u00e1to nekonzistencia by mohla sp\u00f4sobi\u0165 rovnak\u00fd "0 dokladov" jav aj pri
+// movement_type, ktor\u00fd JE ur\u010den\u00fd, len in\u00fdm slovom \u2014 teraz maj\u00fa UI aj
+// export presne rovnak\u00fa defin\u00edciu "ur\u010den\u00e9ho" smeru.
 function addRecordToSummary(
   summary: EvidenceSummary,
   record: AiEvidenceExcelRecord,
   otherMaterialLabel: string
 ) {
-  const movementType = (record.movement_type || "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .trim();
+  summary.documentsCount += 1;
+
+  const direction = normalizeMovementType(record.movement_type);
   const category =
     record.material_category ||
     record.material_original ||
@@ -477,22 +506,34 @@ function addRecordToSummary(
     record.unit
   );
 
-  if (movementType === "dovoz") {
+  if (direction === "import") {
     summary.importCount += 1;
     if (weightInTons !== null) {
       summary.totalImport += weightInTons;
       summary.importByMaterial[category] =
         (summary.importByMaterial[category] || 0) + weightInTons;
     }
+    return;
   }
 
-  if (movementType === "vyvoz") {
+  if (direction === "export") {
     summary.exportCount += 1;
     if (weightInTons !== null) {
       summary.totalExport += weightInTons;
       summary.exportByMaterial[category] =
         (summary.exportByMaterial[category] || 0) + weightInTons;
     }
+    return;
+  }
+
+  // movement_type nie je spo\u013eahlivo ur\u010den\u00fd \u2014 doklad sa napriek tomu mus\u00ed
+  // zobrazi\u0165 v s\u00fahrne (documentsCount vy\u0161\u0161ie), iba sa nezapo\u010d\u00edta do
+  // Dovoz/V\u00fdvoz s\u00fa\u010dtu. Nikdy neh\u00e1dame smer namiesto AI/pou\u017e\u00edvate\u013ea.
+  summary.unknownCount += 1;
+  if (weightInTons !== null) {
+    summary.totalUnknown += weightInTons;
+    summary.unknownByMaterial[category] =
+      (summary.unknownByMaterial[category] || 0) + weightInTons;
   }
 }
 
@@ -2669,10 +2710,10 @@ function formatDocDate(value: unknown): string {
               </div>
 
               <p className="text-sm text-muted-esblu">
-                {vehicleSummary.importCount + vehicleSummary.exportCount}{" "}
+                {vehicleSummary.documentsCount}{" "}
                 {tCount(
                   "inbox.documentsCountSuffix",
-                  vehicleSummary.importCount + vehicleSummary.exportCount
+                  vehicleSummary.documentsCount
                 )}
               </p>
             </div>
@@ -2752,6 +2793,46 @@ function formatDocDate(value: unknown): string {
                 </div>
               </div>
             </div>
+
+            {vehicleSummary.unknownCount > 0 && (
+              <div className="mt-4 rounded-2xl bg-surface-2 p-5">
+                <p className="text-sm font-bold uppercase text-secondary">
+                  {t("inbox.unknownLabel")}
+                </p>
+
+                <p className="mt-2 text-3xl font-black text-primary">
+                  {vehicleSummary.totalUnknown.toFixed(2)} t
+                </p>
+
+                <p className="mt-1 text-sm text-muted-esblu">
+                  {vehicleSummary.unknownCount}{" "}
+                  {tCount(
+                    "inbox.documentsCountSuffix",
+                    vehicleSummary.unknownCount
+                  )}{" "}
+                  — {t("inbox.unknownMovementHint")}
+                </p>
+
+                <div className="mt-4 space-y-2">
+                  {Object.entries(
+                    vehicleSummary.unknownByMaterial
+                  ).map(([material, weight]) => (
+                    <div
+                      key={material}
+                      className="flex justify-between rounded-xl bg-surface-1 px-3 py-2"
+                    >
+                      <span className="font-semibold text-secondary">
+                        {material}
+                      </span>
+
+                      <span className="font-black text-secondary">
+                        {Number(weight).toFixed(2)} t
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )
       )}

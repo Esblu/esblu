@@ -912,6 +912,8 @@ const de = {
     vehicleGroupLabel: "Fahrzeug",
     noImportShort: "Kein Import.",
     noExportShort: "Kein Export.",
+    unknownLabel: "Nicht festgelegt",
+    unknownMovementHint: "Ein- oder Ausfuhr ist nicht festgelegt.",
     savedDocumentsTitle: "Gespeicherte Belege",
     open: "Öffnen",
     backToAllPlates: "← Zurück zu allen Kennzeichen",
