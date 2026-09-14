@@ -116,6 +116,69 @@ const sk = {
     alertDueSoon: "{{type}} končí o {{days}} dní: {{name}} ({{spz}})",
   },
 
+  // Intent Engine / inteligentné textové vyhľadávanie (app/api/assistant/
+  // intent/route.ts, lib/intents/*, rozšírenie search poľa v Dashboard.tsx).
+  search: {
+    errors: {
+      missingQuery: "Napíšte prosím, čo hľadáte.",
+      vehicleNotFound: "Vozidlo „{{query}}“ sa nenašlo.",
+      machineNotFound: "Stroj „{{query}}“ sa nenašiel.",
+      inventoryNotFound: "Skladová položka „{{query}}“ sa nenašla.",
+      documentsNotFound: "Žiadne dokumenty pre „{{query}}“ sa nenašli.",
+      noActiveCompany: "Nemáte aktívne členstvo v žiadnej firme.",
+      textTooLong: "Text je príliš dlhý.",
+      commandNotUnderstood: "Tomuto príkazu som nerozumel.",
+      generic: "Vyhľadávanie momentálne zlyhalo. Skúste to prosím znova.",
+    },
+    answers: {
+      dateNotTracked: "{{type}} pre {{entity}} nie je evidované.",
+      dateFuture: "{{type}} vozidla {{entity}} platí do {{date}}.",
+      dateOverdue: "{{type}} vozidla {{entity}} je po termíne {{days}} dní (platnosť do {{date}}).",
+      dateDueSoon: "{{type}} vozidla {{entity}} končí o {{days}} dní ({{date}}).",
+      vignetteNotTracked: "Diaľničná známka pre {{entity}} nie je evidovaná.",
+      vignetteSummary: "Diaľničné známky vozidla {{entity}}: {{list}}.",
+      vignetteExpiredSuffix: " (po termíne)",
+      costSummary: "Servisné náklady vozidla {{entity}} za rok {{year}}: {{amount}} €.",
+    },
+    report: {
+      notTracked: "Nie je evidované",
+      plate: "ŠPZ",
+      vin: "VIN",
+      brandModel: "Značka a model",
+      insurance: "PZP — platnosť do",
+      registrationDocument: "Technický preukaz",
+      present: "priradený",
+      serialNumber: "Sériové číslo",
+      lastService: "Posledný servis",
+      nextService: "Ďalší servis",
+      totalCostThisYear: "Náklady na servis (tento rok)",
+      totalCostAllTime: "Náklady na servis (celkovo)",
+      sectionBasic: "Základné údaje",
+      sectionCompliance: "STK / EK / PZP / známky",
+      sectionService: "Servis a náklady",
+    },
+    results: {
+      documentsTitle: "Nájdené dokumenty",
+      deadlinesTitle: "Blížiace sa a prekročené termíny",
+    },
+    deadlineTypeLabels: {
+      vehicleService: "Servis vozidla",
+      machineService: "Servis stroja",
+    },
+    deadlineSeverity: {
+      overdue: "Po termíne",
+      urgent: "Naliehavé",
+      due_soon: "Čoskoro",
+      upcoming: "Nadchádzajúce",
+    },
+    ui: {
+      multipleMatches: "Našiel som viac zhôd. Ktorú myslíte?",
+      openAction: "Otvoriť",
+      loading: "Hľadám…",
+      noDeadlines: "Momentálne nemáte žiadne blížiace sa ani prekročené termíny.",
+    },
+  },
+
   landing: {
     nav: {
       features: "Funkcie",

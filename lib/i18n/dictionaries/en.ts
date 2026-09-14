@@ -114,6 +114,67 @@ const en = {
     alertDueSoon: "{{type}} expires in {{days}} days: {{name}} ({{spz}})",
   },
 
+  search: {
+    errors: {
+      missingQuery: "Please enter what you're looking for.",
+      vehicleNotFound: "Vehicle \"{{query}}\" was not found.",
+      machineNotFound: "Machine \"{{query}}\" was not found.",
+      inventoryNotFound: "Inventory item \"{{query}}\" was not found.",
+      documentsNotFound: "No documents found for \"{{query}}\".",
+      noActiveCompany: "You don't have an active membership in any company.",
+      textTooLong: "The text is too long.",
+      commandNotUnderstood: "I didn't understand that command.",
+      generic: "Search failed right now. Please try again.",
+    },
+    answers: {
+      dateNotTracked: "{{type}} for {{entity}} is not tracked.",
+      dateFuture: "{{type}} of {{entity}} is valid until {{date}}.",
+      dateOverdue: "{{type}} of {{entity}} is {{days}} days overdue (valid until {{date}}).",
+      dateDueSoon: "{{type}} of {{entity}} expires in {{days}} days ({{date}}).",
+      vignetteNotTracked: "No vignette is tracked for {{entity}}.",
+      vignetteSummary: "Vignettes for {{entity}}: {{list}}.",
+      vignetteExpiredSuffix: " (expired)",
+      costSummary: "Service costs for {{entity}} in {{year}}: {{amount}} €.",
+    },
+    report: {
+      notTracked: "Not tracked",
+      plate: "Plate",
+      vin: "VIN",
+      brandModel: "Brand and model",
+      insurance: "Insurance — valid until",
+      registrationDocument: "Registration document",
+      present: "on file",
+      serialNumber: "Serial number",
+      lastService: "Last service",
+      nextService: "Next service",
+      totalCostThisYear: "Service costs (this year)",
+      totalCostAllTime: "Service costs (all time)",
+      sectionBasic: "Basic details",
+      sectionCompliance: "Inspection / emissions / insurance / vignettes",
+      sectionService: "Service and costs",
+    },
+    results: {
+      documentsTitle: "Documents found",
+      deadlinesTitle: "Upcoming and overdue deadlines",
+    },
+    deadlineTypeLabels: {
+      vehicleService: "Vehicle service",
+      machineService: "Machine service",
+    },
+    deadlineSeverity: {
+      overdue: "Overdue",
+      urgent: "Urgent",
+      due_soon: "Due soon",
+      upcoming: "Upcoming",
+    },
+    ui: {
+      multipleMatches: "I found more than one match. Which one did you mean?",
+      openAction: "Open",
+      loading: "Searching…",
+      noDeadlines: "You currently have no upcoming or overdue deadlines.",
+    },
+  },
+
   landing: {
     nav: {
       features: "Features",

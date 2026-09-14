@@ -113,6 +113,67 @@ const de = {
     alertDueSoon: "{{type}} läuft in {{days}} Tagen ab: {{name}} ({{spz}})",
   },
 
+  search: {
+    errors: {
+      missingQuery: "Bitte geben Sie ein, wonach Sie suchen.",
+      vehicleNotFound: "Fahrzeug „{{query}}“ wurde nicht gefunden.",
+      machineNotFound: "Maschine „{{query}}“ wurde nicht gefunden.",
+      inventoryNotFound: "Lagerartikel „{{query}}“ wurde nicht gefunden.",
+      documentsNotFound: "Keine Dokumente für „{{query}}“ gefunden.",
+      noActiveCompany: "Sie sind aktuell in keiner Firma aktives Mitglied.",
+      textTooLong: "Der Text ist zu lang.",
+      commandNotUnderstood: "Diesen Befehl habe ich nicht verstanden.",
+      generic: "Die Suche ist gerade fehlgeschlagen. Bitte versuchen Sie es erneut.",
+    },
+    answers: {
+      dateNotTracked: "{{type}} für {{entity}} ist nicht erfasst.",
+      dateFuture: "{{type}} von {{entity}} ist gültig bis {{date}}.",
+      dateOverdue: "{{type}} von {{entity}} ist seit {{days}} Tagen überfällig (gültig bis {{date}}).",
+      dateDueSoon: "{{type}} von {{entity}} läuft in {{days}} Tagen ab ({{date}}).",
+      vignetteNotTracked: "Für {{entity}} ist keine Vignette erfasst.",
+      vignetteSummary: "Vignetten für {{entity}}: {{list}}.",
+      vignetteExpiredSuffix: " (abgelaufen)",
+      costSummary: "Servicekosten für {{entity}} im Jahr {{year}}: {{amount}} €.",
+    },
+    report: {
+      notTracked: "Nicht erfasst",
+      plate: "Kennzeichen",
+      vin: "FIN",
+      brandModel: "Marke und Modell",
+      insurance: "Versicherung — gültig bis",
+      registrationDocument: "Fahrzeugschein",
+      present: "hinterlegt",
+      serialNumber: "Seriennummer",
+      lastService: "Letzter Service",
+      nextService: "Nächster Service",
+      totalCostThisYear: "Servicekosten (dieses Jahr)",
+      totalCostAllTime: "Servicekosten (gesamt)",
+      sectionBasic: "Grunddaten",
+      sectionCompliance: "HU / AU / Versicherung / Vignetten",
+      sectionService: "Service und Kosten",
+    },
+    results: {
+      documentsTitle: "Gefundene Dokumente",
+      deadlinesTitle: "Anstehende und überfällige Fristen",
+    },
+    deadlineTypeLabels: {
+      vehicleService: "Fahrzeugservice",
+      machineService: "Maschinenservice",
+    },
+    deadlineSeverity: {
+      overdue: "Überfällig",
+      urgent: "Dringend",
+      due_soon: "Bald fällig",
+      upcoming: "Bevorstehend",
+    },
+    ui: {
+      multipleMatches: "Ich habe mehrere Treffer gefunden. Welchen meinen Sie?",
+      openAction: "Öffnen",
+      loading: "Suche…",
+      noDeadlines: "Sie haben aktuell keine anstehenden oder überfälligen Fristen.",
+    },
+  },
+
   landing: {
     nav: {
       features: "Funktionen",

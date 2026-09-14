@@ -6,6 +6,7 @@ import BackLink from "@/app/components/BackLink";
 import { getMyActiveMembership } from "@/lib/company";
 import { useCompanyDpaLegalHold } from "@/app/components/CompanyDpaGate";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
+import { computeDeadlineStatus } from "@/lib/deadlines";
 
 type MachineService = {
   id: string;
@@ -577,6 +578,45 @@ export default function MachineDetailView({
       <BackLink href="/stroje" label={t("nav.machines")} className="mb-4" />
 
       <h1 className="text-4xl font-bold">🚜 {machine.name}</h1>
+
+      {/* Upozornenie na ďalší servis — Intent Engine / Deadline Engine
+          (zadanie, bod 9B: "Detail vozidla/stroja — relevantné upozornenie
+          pri konkrétnej entite"). Číta VÝLUČNE už načítané `services`
+          (žiadny nový dopyt) — `services[0]` je najnovší servis (zoradené
+          service_date DESC pri loadServices()), presne rovnaká
+          "posledný servis → jeho next_service_date" logika, akú používa
+          zdieľaný lib/deadlines.ts pre Dashboard aj Intent Engine. */}
+      {(() => {
+        const nextServiceDate = services[0]?.next_service_date;
+        const status = computeDeadlineStatus(nextServiceDate);
+        if (!status) return null;
+
+        const isOverdue = status.severity === "overdue";
+
+        return (
+          <div
+            className={`mt-4 rounded-2xl border px-4 py-3 text-sm font-medium ${
+              isOverdue
+                ? "border-red-400/30 bg-red-400/10 text-red-400"
+                : "border-amber-400/30 bg-amber-400/10 text-amber-400"
+            }`}
+          >
+            {isOverdue
+              ? t("search.answers.dateOverdue", {
+                  type: t("search.deadlineTypeLabels.machineService"),
+                  entity: machine.name || "",
+                  date: new Date(nextServiceDate as string).toLocaleDateString(),
+                  days: Math.abs(status.daysRemaining),
+                })
+              : t("search.answers.dateDueSoon", {
+                  type: t("search.deadlineTypeLabels.machineService"),
+                  entity: machine.name || "",
+                  date: new Date(nextServiceDate as string).toLocaleDateString(),
+                  days: status.daysRemaining,
+                })}
+          </div>
+        );
+      })()}
 
       <div className="surface-card mt-8 p-8">
         <div className="grid grid-cols-2 gap-5">

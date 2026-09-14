@@ -9,11 +9,12 @@ import { getCompanyProfile, getMyActiveMembership } from "@/lib/company";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import ModuleCard, { type ModuleAccent } from "./ModuleCard";
 import InboxDocumentIcon from "./icons/InboxDocumentIcon";
-import {
-  vignetteCountryLabel,
-  type VehicleVignette,
-} from "@/lib/vehicle-vignettes";
+import type { VehicleVignette } from "@/lib/vehicle-vignettes";
 import { vehicleDetailHref } from "@/lib/entity-links";
+import { buildLegacyDashboardAlerts } from "@/lib/deadlines";
+import { apiUrl } from "@/lib/api-url";
+import { REQUEST_LOCALE_HEADER } from "@/lib/i18n/request-locale";
+import type { IntentResult } from "@/lib/intents/types";
 
 function getGreeting(t: (key: string) => string) {
   const hour = new Date().getHours();
@@ -35,11 +36,19 @@ export default function Dashboard() {
   // Diaľničné známky (vehicle_vignettes) — jedno vozidlo môže mať viac
   // riadkov (jeden na krajinu), pozri migráciu 20260823090000. Načítané
   // raz pre celú firmu (rovnaký vzor ako vehicles/machines/items vyššie) a
-  // v createAlerts() nižšie priradené k vozidlu cez vehicle_id.
+  // v buildLegacyDashboardAlerts() (lib/deadlines.ts) priradené k vozidlu
+  // cez vehicle_id.
   const [vignettes, setVignettes] = useState<VehicleVignette[]>([]);
   const [companyName, setCompanyName] = useState("ESBLU");
   const [companyLogoUrl, setCompanyLogoUrl] = useState("");
   const [search, setSearch] = useState("");
+  // Intent Engine (app/api/assistant/intent) — samostatný stav od
+  // existujúceho plain-substring searchResults nižšie, aby sa pri
+  // nerozpoznanom texte appka bezo zmeny vrátila na pôvodné správanie
+  // (zadanie: "Search UX preferujúci centrálne pole" — JEDNO pole, dve
+  // vrstvy výsledkov, žiadna duplicitná UI).
+  const [intentResult, setIntentResult] = useState<IntentResult | null>(null);
+  const [intentLoading, setIntentLoading] = useState(false);
   // KOREKCIA (dashboard v2): mobil už nemá permanentný sidebar ani priamy
   // odkaz na Nastavenia namiesto menu — hamburger teraz otvára skutočné
   // výsuvné menu s rovnakou navigáciou ako desktop sidebar. Čisto UI stav,
@@ -160,84 +169,15 @@ export default function Dashboard() {
     setVignettes(vignetteData || []);
   }
 
-  function createAlerts() {
-    const today = new Date();
-    const next30Days = new Date();
-    next30Days.setDate(today.getDate() + 30);
-
-    const result: {
-      level: string;
-      type: string;
-      message: string;
-      vehicleId: string;
-    }[] = [];
-
-    vehicles.forEach((car) => {
-      checkDate(result, car, t("dashboard.stkLabel"), car.stk, today, next30Days);
-      checkDate(result, car, t("dashboard.ekLabel"), car.ek, today, next30Days);
-
-      // Diaľničné známky — každá krajina/riadok sa sleduje SAMOSTATNE
-      // (rovnaká checkDate funkcia, rovnaký 30-dňový prah a rovnaké
-      // red/orange farby ako STK/EK vyššie — žiadny nový mechanizmus).
-      // NULL/chýbajúci riadok pre danú krajinu jednoducho nevygeneruje
-      // žiadny alert, presne ako pri STK/EK bez vyplneného dátumu.
-      vignettes
-        .filter((v) => v.vehicle_id === car.id)
-        .forEach((v) => {
-          const vignetteType = `${t("dashboard.vignetteLabel")} (${vignetteCountryLabel(
-            v.country_code,
-            locale
-          )})`;
-          checkDate(result, car, vignetteType, v.valid_until, today, next30Days);
-        });
-    });
-
-    return result;
-  }
-
-  function checkDate(
-    result: {
-      level: string;
-      type: string;
-      message: string;
-      vehicleId: string;
-    }[],
-    car: any,
-    type: string,
-    value: string | null,
-    today: Date,
-    next30Days: Date
-  ) {
-    if (!value) return;
-
-    const date = new Date(value);
-    const diffDays = Math.ceil(
-      (date.getTime() - today.getTime()) / (1000 * 60 * 60 * 24)
-    );
-
-    const name =
-      `${car.znacka || ""} ${car.model || ""}`.trim() ||
-      t("dashboard.vehicleFallbackName");
-    const spz = car.spz || t("dashboard.noPlate");
-
-    if (date < today) {
-      result.push({
-        level: "red",
-        type,
-        message: t("dashboard.alertOverdue", { type, name, spz }),
-        vehicleId: car.id,
-      });
-    } else if (date <= next30Days) {
-      result.push({
-        level: "orange",
-        type,
-        message: t("dashboard.alertDueSoon", { type, name, spz, days: diffDays }),
-        vehicleId: car.id,
-      });
-    }
-  }
-
-  const alerts = createAlerts();
+  // Upozornenia na STK/EK/diaľničné známky — logika je teraz v zdieľanom
+  // lib/deadlines.ts (buildLegacyDashboardAlerts), NIE inline v tejto
+  // komponente. Tento wrapper existuje iba preto, aby zostal presne
+  // rovnaký `alerts` tvar/farby/texty, aké Dashboard vždy zobrazoval
+  // (level "red"/"orange", rovnaké i18n kľúče dashboard.alertOverdue /
+  // dashboard.alertDueSoon) — nulová vizuálna regresia. next_service_date
+  // (nové v tejto úlohe) sa do TOHOTO panelu zámerne nepremieta, pozri
+  // komentár priamo v buildLegacyDashboardAlerts().
+  const alerts = buildLegacyDashboardAlerts(vehicles, vignettes, locale);
   const query = search.toLowerCase().trim();
 
   const searchResults = query
@@ -290,6 +230,80 @@ export default function Dashboard() {
           })),
       ]
     : [];
+
+  // Intent Engine (app/api/assistant/intent) — beží NAD tým istým `search`
+  // poľom ako existujúci plain-substring searchResults vyššie (zadanie,
+  // bod 13: "jedno centrálne pole"), ale ako samostatná, debounced vrstva.
+  // Pri nerozpoznanom texte (recognized: false) appka jednoducho ukáže
+  // pôvodné searchResults bezo zmeny — toto rozšírenie preto nemôže
+  // regresovať existujúce substring vyhľadávanie, iba ho DOPĹŇA o
+  // rozpoznané príkazy/otázky (STK, dokumenty, report, termíny...).
+  useEffect(() => {
+    const trimmed = search.trim();
+
+    // Krátky/prázdny text: panel sa už aj tak skryje na render-time podľa
+    // `query.length >= 2` nižšie (žiadne synchronné setState priamo v tele
+    // efektu pri early-return — react-hooks/set-state-in-effect), takže tu
+    // stačí jednoducho nenaplánovať fetch.
+    if (trimmed.length < 2) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const timer = setTimeout(async () => {
+      // `setIntentLoading(true)` je zámerne až TU (v callbacku setTimeout),
+      // nie synchrónne v tele efektu — react-hooks/set-state-in-effect;
+      // navyše správne UX-y: počas 400ms debounce sa loading indikátor
+      // nemihne pri rýchlom písaní.
+      if (!cancelled) setIntentLoading(true);
+
+      try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+
+        if (!session) {
+          if (!cancelled) setIntentLoading(false);
+          return;
+        }
+
+        const response = await fetch(apiUrl("/api/assistant/intent"), {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${session.access_token}`,
+            [REQUEST_LOCALE_HEADER]: locale,
+          },
+          body: JSON.stringify({ text: trimmed }),
+        });
+
+        const data = await response.json();
+
+        if (cancelled) return;
+
+        if (response.ok && data.success && data.recognized) {
+          setIntentResult(data.result as IntentResult);
+        } else {
+          setIntentResult(null);
+        }
+      } catch (error) {
+        // Sieťová/serverová chyba pri rozpoznávaní príkazu NIKDY nesmie
+        // rozbiť existujúce substring vyhľadávanie nižšie — appka iba
+        // potichu nezobrazí rozpoznaný-príkaz panel a spolieha sa na
+        // searchResults ako doteraz.
+        console.error("Intent Engine dopyt zlyhal:", error);
+        if (!cancelled) setIntentResult(null);
+      } finally {
+        if (!cancelled) setIntentLoading(false);
+      }
+    }, 400);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [search, locale]);
 
   // ZVÄČŠENIE IKON (KOREKCIA v5): imageZoom kompenzuje vnútorný priehľadný
   // okraj rastrových produktových fotiek (van/excavator/warehouse), aby po
@@ -371,6 +385,143 @@ export default function Dashboard() {
     { href: "/sklad", label: t("nav.inventory"), image: "/images/warehouse.png" },
     { href: "/nastavenia", label: t("nav.settings"), image: "/images/settings.png" },
   ];
+
+  // Kompaktný panel pre rozpoznaný Intent Engine výsledok (zadanie, bod 13:
+  // "Ak intent znamená navigáciu → naviguj [na klik, nie automaticky pri
+  // písaní]. Ak ide o odpoveď → zobraz compact result panel. Ak je
+  // nejednoznačné → výber. Ak permission denied → jasná bezpečná chyba.").
+  // Vracia null, ak niet čo zobraziť — volajúci potom padne na existujúci
+  // plain-substring searchResults panel bezo zmeny.
+  function renderIntentResult() {
+    if (!intentResult) return null;
+
+    const cardClass =
+      "surface-card-hover block rounded-2xl border border-subtle bg-surface-1/60 p-4 transition";
+    const boxClass =
+      "rounded-2xl border border-subtle bg-surface-1/60 p-4 text-sm text-secondary";
+
+    switch (intentResult.kind) {
+      case "navigate":
+        return (
+          <Link href={intentResult.entity.href} className={cardClass}>
+            <p className="text-xs font-bold uppercase tracking-wide text-accent-cyan">
+              {t("search.ui.openAction")}
+            </p>
+            <p className="mt-1 text-base font-bold text-primary">
+              {intentResult.entity.label}
+            </p>
+          </Link>
+        );
+
+      case "answer":
+        return (
+          <div className={boxClass}>
+            <p className="text-sm font-medium text-primary">{intentResult.text}</p>
+            {intentResult.entity && (
+              <Link
+                href={intentResult.entity.href}
+                className="mt-2 inline-block text-xs font-bold uppercase tracking-wide text-accent-cyan"
+              >
+                {intentResult.entity.label} →
+              </Link>
+            )}
+          </div>
+        );
+
+      case "report":
+        return (
+          <div className="rounded-2xl border border-subtle bg-surface-1/60 p-4">
+            <Link
+              href={intentResult.entity.href}
+              className="text-xs font-bold uppercase tracking-wide text-accent-cyan"
+            >
+              {intentResult.entity.label} →
+            </Link>
+            <div className="mt-3 space-y-4">
+              {intentResult.sections.map((section) => (
+                <div key={section.title}>
+                  <p className="text-xs font-bold uppercase tracking-wide text-muted-esblu">
+                    {section.title}
+                  </p>
+                  <div className="mt-1.5 space-y-1">
+                    {section.rows.map((row) => (
+                      <div key={row.label} className="flex items-center justify-between gap-3 text-sm">
+                        <span className="text-secondary">{row.label}</span>
+                        <span className="font-semibold text-primary">{row.value}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+
+      case "list":
+        return (
+          <div className="space-y-2.5">
+            <p className="text-xs font-bold uppercase tracking-wide text-muted-esblu">
+              {intentResult.title}
+            </p>
+            {intentResult.items.map((item) => (
+              <Link key={item.id} href={item.href} className={cardClass}>
+                <p className="text-base font-bold text-primary">{item.label}</p>
+              </Link>
+            ))}
+          </div>
+        );
+
+      case "deadline_list":
+        if (intentResult.items.length === 0) {
+          return <p className={boxClass}>{t("search.ui.noDeadlines")}</p>;
+        }
+        return (
+          <div className="space-y-2.5">
+            <p className="text-xs font-bold uppercase tracking-wide text-muted-esblu">
+              {intentResult.title}
+            </p>
+            {intentResult.items.map((item, index) => (
+              <Link key={`${item.entity.id}-${index}`} href={item.entity.href} className={cardClass}>
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-bold text-primary">
+                      {item.entity.label}
+                    </p>
+                    <p className="text-xs text-secondary">
+                      {item.typeLabel} — {item.dueDateLabel}
+                    </p>
+                  </div>
+                  <span className="shrink-0 rounded-full bg-amber-400/12 px-2.5 py-1 text-[11px] font-bold text-amber-400">
+                    {item.severityLabel}
+                  </span>
+                </div>
+              </Link>
+            ))}
+          </div>
+        );
+
+      case "disambiguate":
+        return (
+          <div className="space-y-2.5">
+            <p className="text-xs font-bold uppercase tracking-wide text-muted-esblu">
+              {t("search.ui.multipleMatches")}
+            </p>
+            {intentResult.candidates.map((candidate) => (
+              <Link key={candidate.id} href={candidate.href} className={cardClass}>
+                <p className="text-base font-bold text-primary">{candidate.label}</p>
+              </Link>
+            ))}
+          </div>
+        );
+
+      case "not_found":
+      case "error":
+        return <p className={boxClass}>{intentResult.text}</p>;
+
+      default:
+        return null;
+    }
+  }
 
   return (
     <main className="app-shell-bg relative min-h-screen">
@@ -536,6 +687,18 @@ export default function Dashboard() {
 
           {query && (
             <div className="mt-3 space-y-2.5">
+              {/* Intent Engine panel — čisto PRÍDAVNÝ nad existujúcim
+                  substring zoznamom nižšie, nikdy ho nenahrádza ani
+                  neblokuje (žiadne "loading" prekrytie existujúcich
+                  výsledkov) — bezregresné rozšírenie search poľa. */}
+              {query.length >= 2 && intentResult ? (
+                renderIntentResult()
+              ) : query.length >= 2 && intentLoading ? (
+                <p className="text-xs font-medium text-muted-esblu">
+                  {t("search.ui.loading")}
+                </p>
+              ) : null}
+
               {searchResults.length === 0 ? (
                 <p className="rounded-2xl border border-subtle bg-surface-1/60 p-4 text-sm text-secondary">
                   {t("dashboard.noResults")}
@@ -580,32 +743,28 @@ export default function Dashboard() {
 
           {/* STK/EK panel — KOREKCIA v3: tmavý status panel s malými
               riadkami (ikona + text + drobný badge vpravo), farba je iba
-              akcent na ikone/badge, nie výplň celej položky. */}
-          <div className="surface-card mt-6 p-5 sm:p-6 lg:mt-8 lg:p-8">
-            <div className="flex items-center justify-between gap-4">
-              <div>
-                <h3 className="text-lg font-bold text-primary sm:text-xl">
-                  {t("dashboard.stkEkTitle")}
-                </h3>
-                <p className="mt-1 text-xs text-muted-esblu">
-                  {t("dashboard.stkEkDescription")}
-                </p>
+              akcent na ikone/badge, nie výplň celej položky.
+              ZMENA (Intent Engine + automatické upozornenia, bod 9A):
+              "žiadny prázdny box, ak nič nehrozí" — panel sa teraz
+              renderuje IBA keď existuje aspoň 1 aktívne upozornenie;
+              predtým sa vždy zobrazoval aj s "0"/"žiadne upozornenia". */}
+          {alerts.length > 0 && (
+            <div className="surface-card mt-6 p-5 sm:p-6 lg:mt-8 lg:p-8">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <h3 className="text-lg font-bold text-primary sm:text-xl">
+                    {t("dashboard.stkEkTitle")}
+                  </h3>
+                  <p className="mt-1 text-xs text-muted-esblu">
+                    {t("dashboard.stkEkDescription")}
+                  </p>
+                </div>
+
+                <span className="shrink-0 rounded-full px-2.5 py-1 text-xs font-bold badge-danger">
+                  {alerts.length}
+                </span>
               </div>
 
-              <span
-                className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-bold ${
-                  alerts.length > 0 ? "badge-danger" : "badge-success"
-                }`}
-              >
-                {alerts.length}
-              </span>
-            </div>
-
-            {alerts.length === 0 ? (
-              <p className="mt-5 text-sm text-secondary">
-                {t("dashboard.stkEkNone")}
-              </p>
-            ) : (
               <div className="mt-4 divide-y divide-[color:var(--color-border-subtle)]">
                 {alerts.map((alert, index) => {
                   const isOverdue = alert.level === "red";
@@ -644,8 +803,8 @@ export default function Dashboard() {
                   );
                 })}
               </div>
-            )}
-          </div>
+            </div>
+          )}
         </section>
       </div>
     </main>

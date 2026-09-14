@@ -19,6 +19,10 @@ import {
   vignetteCountryLabel,
   type VehicleVignette,
 } from "@/lib/vehicle-vignettes";
+import {
+  buildVehicleDeadlines,
+  deadlineTypeLabel,
+} from "@/lib/deadlines";
 
 // Dokumenty priradené k vozidlu z AI Inboxu (PZP, technický preukaz) —
 // bod 2/3 zadania: po potvrdení v Inboxe majú tieto dokumenty "skončiť"
@@ -896,6 +900,62 @@ export default function VehicleDetailView({
       <h1 className="text-4xl font-bold">
         {vehicle.znacka} {vehicle.model}
       </h1>
+
+      {/* Upozornenia na STK/EK/diaľničné známky pre TOTO KONKRÉTNE vozidlo
+          (zadanie, bod 9B: "Detail vozidla/stroja — relevantné upozornenie
+          pri konkrétnej entite"). Číta VÝHRADNE už načítané `vehicle` a
+          `vignettes` (žiadny nový dopyt) cez ten istý zdieľaný
+          lib/deadlines.ts, aký používa Dashboard aj Intent Engine — jedna
+          definícia prahov/farieb na celú appku (bod 8 a 17 zadania).
+          next_service_date sem zámerne NEPATRÍ (servisná sekcia nižšie má
+          vlastný, podrobnejší zoznam) — iba časovo-kritické STK/EK/známky. */}
+      {(() => {
+        const activeDeadlines = buildVehicleDeadlines(
+          [vehicle],
+          vignettes,
+          [],
+          locale
+        ).filter((item) => item.deadlineType !== "vehicle_service");
+
+        if (activeDeadlines.length === 0) return null;
+
+        return (
+          <div className="mt-4 space-y-2">
+            {activeDeadlines.map((item, index) => {
+              const isOverdue = item.severity === "overdue";
+              const label = deadlineTypeLabel(
+                item.deadlineType,
+                locale,
+                item.vignetteCountryCode
+              );
+
+              return (
+                <div
+                  key={`${item.deadlineType}-${index}`}
+                  className={`rounded-2xl border px-4 py-3 text-sm font-medium ${
+                    isOverdue
+                      ? "border-red-400/30 bg-red-400/10 text-red-400"
+                      : "border-amber-400/30 bg-amber-400/10 text-amber-400"
+                  }`}
+                >
+                  {isOverdue
+                    ? t("dashboard.alertOverdue", {
+                        type: label,
+                        name: `${vehicle.znacka || ""} ${vehicle.model || ""}`.trim(),
+                        spz: vehicle.spz || t("dashboard.noPlate"),
+                      })
+                    : t("dashboard.alertDueSoon", {
+                        type: label,
+                        name: `${vehicle.znacka || ""} ${vehicle.model || ""}`.trim(),
+                        spz: vehicle.spz || t("dashboard.noPlate"),
+                        days: item.daysRemaining,
+                      })}
+                </div>
+              );
+            })}
+          </div>
+        );
+      })()}
 
       <div className="surface-card mt-8 p-8">
         <div className="grid grid-cols-2 gap-5">
