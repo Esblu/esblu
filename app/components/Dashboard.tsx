@@ -180,6 +180,20 @@ export default function Dashboard() {
   const alerts = buildLegacyDashboardAlerts(vehicles, vignettes, locale);
   const query = search.toLowerCase().trim();
 
+  // Bug (produkčný smoke test 2026-09-14): keď Intent Engine úspešne
+  // odpovie (napr. "Kedy končí STK AA123BB" → kind "answer"), pod jeho
+  // odpoveďou sa súčasne zobrazoval aj legacy "Nič sa nenašlo" z
+  // nezávislého plain-substring searchResults nižšie — kontradiktórne UX.
+  // `not_found`/`error` NIE sú "použiteľný výsledok" (Intent Engine sám
+  // hovorí "nenašlo sa"/chyba) — v týchto prípadoch zámerne padáme na
+  // legacy vyhľadávanie presne ako predtým (bod 2 opravy), takže legacy
+  // substring zhoda (ak nejaká existuje) má stále šancu niečo nájsť.
+  const hasUsableIntentResult =
+    query.length >= 2 &&
+    !!intentResult &&
+    intentResult.kind !== "not_found" &&
+    intentResult.kind !== "error";
+
   const searchResults = query
     ? [
         ...vehicles
@@ -687,11 +701,14 @@ export default function Dashboard() {
 
           {query && (
             <div className="mt-3 space-y-2.5">
-              {/* Intent Engine panel — čisto PRÍDAVNÝ nad existujúcim
-                  substring zoznamom nižšie, nikdy ho nenahrádza ani
-                  neblokuje (žiadne "loading" prekrytie existujúcich
-                  výsledkov) — bezregresné rozšírenie search poľa. */}
-              {query.length >= 2 && intentResult ? (
+              {/* Intent Engine panel — beží NAD existujúcim substring
+                  zoznamom nižšie (žiadne "loading" prekrytie existujúcich
+                  výsledkov), ale keď má POUŽITEĽNÝ výsledok (nie
+                  not_found/error), legacy panel pod ním sa vôbec
+                  nevyrenderuje — pozri `hasUsableIntentResult` vyššie —
+                  aby appka nikdy súčasne netvrdila "našlo sa" aj "nič sa
+                  nenašlo". */}
+              {hasUsableIntentResult ? (
                 renderIntentResult()
               ) : query.length >= 2 && intentLoading ? (
                 <p className="text-xs font-medium text-muted-esblu">
@@ -699,27 +716,28 @@ export default function Dashboard() {
                 </p>
               ) : null}
 
-              {searchResults.length === 0 ? (
-                <p className="rounded-2xl border border-subtle bg-surface-1/60 p-4 text-sm text-secondary">
-                  {t("dashboard.noResults")}
-                </p>
-              ) : (
-                searchResults.map((result, index) => (
-                  <Link
-                    key={index}
-                    href={result.href}
-                    className="surface-card-hover block rounded-2xl border border-subtle bg-surface-1/60 p-4 transition"
-                  >
-                    <p className="text-xs font-bold uppercase tracking-wide text-accent-cyan">
-                      {result.type}
-                    </p>
-                    <p className="mt-1 text-base font-bold text-primary">
-                      {result.title}
-                    </p>
-                    <p className="text-sm text-secondary">{result.subtitle}</p>
-                  </Link>
-                ))
-              )}
+              {!hasUsableIntentResult &&
+                (searchResults.length === 0 ? (
+                  <p className="rounded-2xl border border-subtle bg-surface-1/60 p-4 text-sm text-secondary">
+                    {t("dashboard.noResults")}
+                  </p>
+                ) : (
+                  searchResults.map((result, index) => (
+                    <Link
+                      key={index}
+                      href={result.href}
+                      className="surface-card-hover block rounded-2xl border border-subtle bg-surface-1/60 p-4 transition"
+                    >
+                      <p className="text-xs font-bold uppercase tracking-wide text-accent-cyan">
+                        {result.type}
+                      </p>
+                      <p className="mt-1 text-base font-bold text-primary">
+                        {result.title}
+                      </p>
+                      <p className="text-sm text-secondary">{result.subtitle}</p>
+                    </Link>
+                  ))
+                ))}
             </div>
           )}
 
