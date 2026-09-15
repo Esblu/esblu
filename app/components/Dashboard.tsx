@@ -67,6 +67,23 @@ export default function Dashboard() {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const recordingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // RUNTIME BUG FIX (max recording duration audit): ID aktuálne prebiehajúcej
+  // nahrávky. Každé volanie startVoiceRecording() si vytvorí VLASTNÉ ID a
+  // uzavrie ho v closure svojho 20 s časovača aj svojho getUserMedia
+  // pokračovania. Predtým, ak by (napr. rýchly dvojklik na mikrofón, kým
+  // prehliadač ešte čakal na povolenie mikrofónu) vznikli dve prekrývajúce
+  // sa nahrávky, druhá by potichu PREPÍSALA recordingTimeoutRef/
+  // mediaRecorderRef prvej — časovač prvej nahrávky by tak "osirel" a mohol
+  // by neskôr chybne ukončiť aktuálnu (aj krátku) nahrávku ako "príliš
+  // dlhú". Kontrola ID namiesto spoliehania sa na to, že clearTimeout()
+  // vždy prebehne na správnom mieste, zaručuje, že STARÝ časovač/callback
+  // NIKDY nezasiahne NOVŠIU nahrávku, aj keby nejaký clearTimeout() volanie
+  // niekde chýbalo.
+  const recordingSessionIdRef = useRef(0);
+  // Čisto diagnostický (bod 7 zadania) — ukladá DÔVOD posledného ukončenia
+  // nahrávky pre bezpečné console.log ladenie, nikdy sa nepoužíva na
+  // rozhodovanie o stave.
+  const lastStopReasonRef = useRef<"manual" | "timeout" | "cancel" | "unmount" | null>(null);
   // KOREKCIA (dashboard v2): mobil už nemá permanentný sidebar ani priamy
   // odkaz na Nastavenia namiesto menu — hamburger teraz otvára skutočné
   // výsuvné menu s rovnakou navigáciou ako desktop sidebar. Čisto UI stav,
@@ -342,7 +359,10 @@ export default function Dashboard() {
   // pozadí (bod D zadania: žiadne "visiace" nahrávanie).
   useEffect(() => {
     return () => {
+      recordingSessionIdRef.current += 1;
+      lastStopReasonRef.current = "unmount";
       if (recordingTimeoutRef.current) clearTimeout(recordingTimeoutRef.current);
+      recordingTimeoutRef.current = null;
       const recorder = mediaRecorderRef.current;
       if (recorder && recorder.state !== "inactive") {
         recorder.stream.getTracks().forEach((track) => track.stop());
@@ -368,6 +388,31 @@ export default function Dashboard() {
   // — pozri report, sekcia E).
   // -----------------------------------------------------------------------------
 
+  function stopMediaRecorderTracks(recorder: MediaRecorder) {
+    recorder.stream.getTracks().forEach((track) => track.stop());
+  }
+
+  // Spoločné vyčistenie refs pre KAŽDÉ ukončenie nahrávky (manuálny stop,
+  // cancel, timeout, unmount) — jedno miesto namiesto duplicitnej logiky na
+  // 4 rôznych miestach, aby sa nemohlo stať, že niektorá cesta vynechá
+  // clearTimeout()/vynulovanie refs (bod zadania: "či sa duration nemeria
+  // chybne cez stale state", "či sa 'too long' flag neuchováva medzi
+  // nahrávkami").
+  function resetVoiceRecordingRefs(reason: "manual" | "timeout" | "cancel") {
+    lastStopReasonRef.current = reason;
+    // Zvýšenie ID okamžite zneplatní AKÝKOĽVEK inak naplánovaný 20s
+    // časovač patriaci tejto (teraz končiacej) nahrávke — aj v
+    // hypotetickom prípade, že by nižšie clearTimeout() z nejakého dôvodu
+    // nezasiahol správny timer.
+    recordingSessionIdRef.current += 1;
+    if (recordingTimeoutRef.current) {
+      clearTimeout(recordingTimeoutRef.current);
+      recordingTimeoutRef.current = null;
+    }
+    audioChunksRef.current = [];
+    mediaRecorderRef.current = null;
+  }
+
   async function startVoiceRecording() {
     setVoiceError(null);
     setVoiceTranscript(null);
@@ -382,8 +427,35 @@ export default function Dashboard() {
       return;
     }
 
+    // RUNTIME BUG FIX (max recording duration audit): ak by tu z nejakého
+    // dôvodu ešte "visela" predchádzajúca nahrávka/časovač (napr. rýchly
+    // dvojklik na mikrofón, kým prehliadač ešte čakal na povolenie
+    // mikrofónu pre PRVÝ klik), táto nová nahrávka ju najprv čisto ukončí
+    // — inak by starý 20s časovač mohol neskôr omylom ukončiť TÚTO
+    // (aj krátku) nahrávku ako "príliš dlhú".
+    if (mediaRecorderRef.current || recordingTimeoutRef.current) {
+      resetVoiceRecordingRefs("cancel");
+    }
+
+    // Každá nahrávka dostane VLASTNÉ ID — 20s časovač aj pokračovanie po
+    // getUserMedia si ho uzavrú v closure a pred akoukoľvek zmenou stavu
+    // overia, že toto ID je STÁLE aktuálne (nespolieha sa na React state,
+    // ktorý môže byť v momente async pokračovania už stale — bod zadania).
+    const sessionId = ++recordingSessionIdRef.current;
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+      // Medzičasom (kým prehliadač čakal na povolenie mikrofónu) mohol
+      // používateľ túto nahrávku stihnúť zrušiť alebo spustiť inú novšiu —
+      // ak toto ID už nie je aktuálne, táto oneskorená vetva sa potichu
+      // vzdá namiesto toho, aby prevzala kontrolu nad stavom novšej
+      // nahrávky.
+      if (recordingSessionIdRef.current !== sessionId) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+
       const preferredMimeType = ["audio/webm", "audio/mp4", "audio/ogg"].find(
         (type) =>
           typeof MediaRecorder.isTypeSupported === "function" &&
@@ -405,17 +477,25 @@ export default function Dashboard() {
       // uplynutí limitu appka záznam ZAHODÍ (neposiela na prepis) a ukáže
       // jasnú chybu, namiesto tichého odoslania orezanej nahrávky.
       recordingTimeoutRef.current = setTimeout(() => {
+        // Poistka proti "osirelému" časovaču: ak medzitým prebehol
+        // manuálny stop/cancel (čo VŽDY zvýši recordingSessionIdRef cez
+        // resetVoiceRecordingRefs) alebo dokonca začala celkom NOVÁ
+        // nahrávka, toto ID už nie je aktuálne — starý časovač sa NESMIE
+        // dotknúť aktuálneho stavu.
+        if (recordingSessionIdRef.current !== sessionId) {
+          console.log("[voice] osirelý 20s časovač ignorovaný (nahrávka už skončila inak)");
+          return;
+        }
+        console.log("[voice] 20s limit dosiahnutý, nahrávka sa zahadzuje");
         handleRecordingTooLong();
       }, MAX_RECORDING_SECONDS * 1000);
     } catch (error) {
-      console.error("Nahrávanie hlasu zlyhalo:", error);
-      setVoiceState("error");
-      setVoiceError(t("search.voice.errors.micNotAllowed"));
+      if (recordingSessionIdRef.current === sessionId) {
+        console.error("Nahrávanie hlasu zlyhalo:", error);
+        setVoiceState("error");
+        setVoiceError(t("search.voice.errors.micNotAllowed"));
+      }
     }
-  }
-
-  function stopMediaRecorderTracks(recorder: MediaRecorder) {
-    recorder.stream.getTracks().forEach((track) => track.stop());
   }
 
   function handleRecordingTooLong() {
@@ -424,18 +504,12 @@ export default function Dashboard() {
       recorder.onstop = () => stopMediaRecorderTracks(recorder);
       recorder.stop();
     }
-    audioChunksRef.current = [];
-    mediaRecorderRef.current = null;
-    recordingTimeoutRef.current = null;
+    resetVoiceRecordingRefs("timeout");
     setVoiceState("error");
     setVoiceError(t("search.voice.errors.recordingTooLong"));
   }
 
   function cancelVoiceRecording() {
-    if (recordingTimeoutRef.current) {
-      clearTimeout(recordingTimeoutRef.current);
-      recordingTimeoutRef.current = null;
-    }
     const recorder = mediaRecorderRef.current;
     if (recorder && recorder.state !== "inactive") {
       // Zrušenie zámerne NEPOSIELA žiadny transkript — iba zastaví
@@ -443,12 +517,18 @@ export default function Dashboard() {
       recorder.onstop = () => stopMediaRecorderTracks(recorder);
       recorder.stop();
     }
-    audioChunksRef.current = [];
-    mediaRecorderRef.current = null;
+    resetVoiceRecordingRefs("cancel");
     setVoiceState("idle");
   }
 
   async function stopVoiceRecording() {
+    // Timer sa ruší HNEĎ na začiatku, PRED čímkoľvek iným — a session ID sa
+    // zvyšuje zároveň, takže aj v hypotetickom prípade, že by clearTimeout()
+    // z nejakého dôvodu nestihol/nezasiahol správny timer, samotný 20s
+    // callback nižšie (pozri startVoiceRecording) by sa aj tak sám odmietol
+    // spustiť, lebo by už nesedelo jeho zachytené ID.
+    lastStopReasonRef.current = "manual";
+    recordingSessionIdRef.current += 1;
     if (recordingTimeoutRef.current) {
       clearTimeout(recordingTimeoutRef.current);
       recordingTimeoutRef.current = null;
@@ -490,6 +570,7 @@ export default function Dashboard() {
       // Bezpečný diagnostický log (zadanie, bod 7) — VÝHRADNE metadáta
       // nahrávky, NIKDY obsah audia/prepisu.
       console.log("[voice] nahrávka ukončená:", {
+        stopReason: lastStopReasonRef.current,
         mimeType: recorder.mimeType,
         blobSize: audioBlob.size,
         blobType: audioBlob.type,
