@@ -87,40 +87,65 @@ function resolveAllowedMimeType(file: File): string | null {
 
 export async function POST(req: Request) {
   const locale = getRequestLocale(req);
+  // [DIAG-D] — dočasná runtime diagnostika (na žiadosť: "nehádaj ďalšiu
+  // opravu, over presne KDE sa produkčný flow pokazí"). VÝHRADNE technické
+  // metadáta nižšie — nikdy audio obsah, transcript text, secrets.
+  const requestReceivedAt = Date.now();
+  const requestId = Math.random().toString(36).slice(2, 10);
+  console.log("[voice][D][server] POST /api/assistant/transcribe — request prijatý", {
+    requestId,
+    ts: requestReceivedAt,
+  });
 
   try {
     // 1) Autentifikácia MUSÍ prebehnúť pred akýmkoľvek OpenAI volaním
     //    (rovnaký vzor ako app/api/scan-document, app/api/assistant/intent).
     const { user, error: authError } = await verifyRequestUser(req, locale);
     if (authError || !user) {
+      console.log("[voice][D][server] autentifikácia zlyhala", { requestId, authError });
       return Response.json({ success: false, error: authError }, { status: 401 });
     }
 
     // 2) Validácia vstupu — až po overení používateľa.
-    const formData = await req.formData().catch(() => null);
+    const formData = await req.formData().catch((formDataError) => {
+      console.error("[voice][D][server] req.formData() zlyhalo", {
+        requestId,
+        errorMessage: formDataError instanceof Error ? formDataError.message : String(formDataError),
+      });
+      return null;
+    });
     const audioValue = formData?.get("audio");
 
     if (!(audioValue instanceof File)) {
+      console.log("[voice][D][server] chýba 'audio' File v FormData", {
+        requestId,
+        formDataParsed: formData !== null,
+      });
       return Response.json(
         { success: false, error: translate(locale, "search.voice.errors.noAudio") },
         { status: 400 }
       );
     }
 
-    // Bezpečný diagnostický log (zadanie, bod 7) — VÝHRADNE metadáta
-    // (MIME, veľkosť), NIKDY obsah audia.
-    console.log("api/assistant/transcribe: prijaté audio:", {
+    // [DIAG-D] presne body A/D zadania: received file.size, raw MIME,
+    // normalized MIME, filename — VŠETKO čo treba na zistenie, či appka na
+    // mobile posiela iný MIME/veľkosť než sa očakáva.
+    console.log("[voice][D][server] prijaté audio — metadáta:", {
+      requestId,
+      filename: audioValue.name,
       rawMimeType: audioValue.type,
       normalizedMimeType: baseMimeType(audioValue.type),
-      size: audioValue.size,
+      sizeBytes: audioValue.size,
+      maxAllowedSizeBytes: MAX_AUDIO_SIZE_BYTES,
     });
 
     const resolvedMimeType = resolveAllowedMimeType(audioValue);
     if (!resolvedMimeType) {
-      console.warn(
-        "api/assistant/transcribe: nepodporovaný MIME typ po normalizácii:",
-        baseMimeType(audioValue.type) || "(prázdny)"
-      );
+      console.warn("[voice][C][server] nepodporovaný MIME typ po normalizácii — appka vracia 'unsupportedFormat', NIE 'recordingTooLong'", {
+        requestId,
+        normalizedMimeType: baseMimeType(audioValue.type) || "(prázdny)",
+        filename: audioValue.name,
+      });
       return Response.json(
         { success: false, error: translate(locale, "search.voice.errors.unsupportedFormat") },
         { status: 400 }
@@ -128,6 +153,7 @@ export async function POST(req: Request) {
     }
 
     if (audioValue.size === 0) {
+      console.log("[voice][C][server] audio má 0 bajtov — appka vracia 'transcriptionFailed', NIE 'recordingTooLong'", { requestId });
       return Response.json(
         { success: false, error: translate(locale, "search.voice.errors.transcriptionFailed") },
         { status: 400 }
@@ -135,6 +161,16 @@ export async function POST(req: Request) {
     }
 
     if (audioValue.size > MAX_AUDIO_SIZE_BYTES) {
+      // [DIAG-C] — TOTO je jediné miesto na SERVERI, ktoré môže vrátiť
+      // presne "recordingTooLong" (413). Pre krátku nahrávku (rádovo
+      // desiatky/stovky KB) je tento stav prakticky nedosiahnuteľný — log
+      // tu jednoznačne potvrdí/vyvráti, či produkčný bug prechádza TÝMTO
+      // konkrétnym vetvením.
+      console.warn("[voice][C][server] KRITICKÉ: audio.size prekročilo MAX_AUDIO_SIZE_BYTES — server vracia 413 'recordingTooLong'", {
+        requestId,
+        sizeBytes: audioValue.size,
+        maxAllowedSizeBytes: MAX_AUDIO_SIZE_BYTES,
+      });
       return Response.json(
         { success: false, error: translate(locale, "search.voice.errors.recordingTooLong") },
         { status: 413 }
@@ -148,18 +184,33 @@ export async function POST(req: Request) {
     //    preto sa vždy posiela aktuálny locale appky (rovnaký princíp ako
     //    getRequestLocale() pre textový Intent Engine) — `locale` je vždy
     //    "sk"/"de"/"en" (lib/i18n/locales.ts), teda platný ISO-639-1 hint.
+    console.log("[voice][D][server] status pred OpenAI requestom: validácia OK, volám OpenAI transcriptions.create", {
+      requestId,
+      resolvedMimeType,
+      language: locale,
+      msSinceRequestReceived: Date.now() - requestReceivedAt,
+    });
+
     let transcription: { text: string };
+    const openAiStartedAt = Date.now();
     try {
       transcription = await client.audio.transcriptions.create({
         file: audioValue,
         model: "gpt-4o-mini-transcribe",
         language: locale,
       });
+      console.log("[voice][D][server] OpenAI transcriptions.create — success", {
+        requestId,
+        openAiDurationMs: Date.now() - openAiStartedAt,
+      });
     } catch (transcriptionError) {
-      console.error(
-        "api/assistant/transcribe: OpenAI volanie zlyhalo:",
-        transcriptionError instanceof Error ? transcriptionError.message : transcriptionError
-      );
+      console.error("[voice][D][server] OpenAI transcriptions.create — error", {
+        requestId,
+        openAiDurationMs: Date.now() - openAiStartedAt,
+        errorName: transcriptionError instanceof Error ? transcriptionError.name : typeof transcriptionError,
+        errorMessage:
+          transcriptionError instanceof Error ? transcriptionError.message : String(transcriptionError),
+      });
       return Response.json(
         { success: false, error: translate(locale, "search.voice.errors.transcriptionFailed") },
         { status: 502 }
@@ -168,8 +219,10 @@ export async function POST(req: Request) {
 
     const text = transcription.text?.trim() || "";
 
-    console.log("api/assistant/transcribe: prepis dokončený:", {
+    console.log("[voice][D][server] prepis dokončený (transcript OBSAH sa NEloguje)", {
+      requestId,
       textLength: text.length,
+      totalRequestDurationMs: Date.now() - requestReceivedAt,
     });
 
     // Nespoľahlivý/prázdny prepis NIKDY automaticky nespúšťa žiadny intent
@@ -178,18 +231,25 @@ export async function POST(req: Request) {
     // spoľahlivého transkriptu") — appka iba vráti bezpečnú chybu, klient
     // (Dashboard.tsx) potom nič nevloží do search poľa.
     if (!text) {
+      console.log("[voice][C][server] prázdny transcript — appka vracia 'transcriptionFailed', NIE 'recordingTooLong'", { requestId });
       return Response.json(
         { success: false, error: translate(locale, "search.voice.errors.transcriptionFailed") },
         { status: 422 }
       );
     }
 
+    console.log("[voice][D][server] POST /api/assistant/transcribe — 200 OK", {
+      requestId,
+      totalRequestDurationMs: Date.now() - requestReceivedAt,
+    });
     return Response.json({ success: true, text });
   } catch (error) {
-    console.error(
-      "api/assistant/transcribe: neočakávaná chyba:",
-      error instanceof Error ? error.message : error
-    );
+    console.error("[voice][D][server] neočakávaná chyba (vonkajší catch)", {
+      requestId,
+      totalRequestDurationMs: Date.now() - requestReceivedAt,
+      errorName: error instanceof Error ? error.name : typeof error,
+      errorMessage: error instanceof Error ? error.message : String(error),
+    });
     return Response.json(
       { success: false, error: translate(locale, "search.voice.errors.transcriptionFailed") },
       { status: 500 }
