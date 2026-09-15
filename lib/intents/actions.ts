@@ -903,7 +903,17 @@ async function executeAssignDocuments(
   }
 
   const updatedCount = (data as { id: string }[] | null)?.length ?? 0;
-  if (updatedCount === 0) {
+
+  // PRODUKČNÝ BUG FIX (bod 6 zadania) — pôvodne appka hlásila úspech už pri
+  // `updatedCount > 0`, aj keby `updatedCount` bol MENŠÍ než `ids.length`
+  // (napr. RLS/DB ticho odmietla časť riadkov, alebo dokument medzičasom
+  // zmizol). Čiastočný update je rovnako "neočakávaný stav" ako 0 riadkov —
+  // appka teraz vyžaduje PRESNÚ zhodu, inak fail closed, žiadny falošný
+  // "úspech" so zavádzajúco nižším počtom, než aký si používateľ potvrdil.
+  if (updatedCount !== ids.length) {
+    console.error(
+      `executeAssignDocuments: updatedCount (${updatedCount}) sa nezhoduje s počtom dokumentov na priradenie (${ids.length}) — fail closed, žiadny "úspech".`
+    );
     return actionResult(false, translate(locale, "search.errors.generic"));
   }
 

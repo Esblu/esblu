@@ -39,6 +39,10 @@ import {
   parseWeightValue,
 } from "@/lib/weight-utils";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
+import {
+  listCompanyCustomCategories,
+  type CustomDocumentCategory,
+} from "@/lib/custom-document-categories";
 
 type ScanDocumentType =
   | "weigh_ticket"
@@ -87,6 +91,12 @@ type OtherDocumentRow = {
   original_filename: string | null;
   note: string | null;
   document_links?: { vehicle_id: string | null; machine_id: string | null }[];
+  // Voliteľné priradenie k firemnej vlastnej kategórii (Intent Engine
+  // ASSIGN_DOCUMENTS_TO_CATEGORY, pozri lib/intents/actions.ts). Stĺpec
+  // v DB existuje už od 20260914120000_add_custom_document_categories a
+  // `.select("*", ...)` nižšie ho teda vždy vracal — chýbal iba tu v type
+  // definícii aj v samotnom UI (pozri custom category sekciu nižšie).
+  custom_category_id: string | null;
 };
 
 // Riadok public.document_attachments — jednoduché prílohy k dokumentu
@@ -120,6 +130,17 @@ function getAttachmentTypeLabels(
 function isDocumentAssigned(doc: OtherDocumentRow): boolean {
   const link = Array.isArray(doc?.document_links) ? doc.document_links[0] : null;
   return Boolean(link && (link.vehicle_id || link.machine_id));
+}
+
+// Rovnaký princíp ako isDocumentAssigned() vyššie, ale pre priradenie k
+// firemnej vlastnej kategórii (custom_document_categories) namiesto
+// vozidla/stroja — dokument priradený do vlastnej zložky má odteraz SVOJ
+// vlastný "domov" (tú zložku, pozri sekciu "Vlastné zložky" nižšie), takže
+// sa už nezobrazuje ani v nepriradených Bločky/Faktúry zložkách, ani v
+// plochom zozname "Ostatné dokumenty" — presne rovnaké pravidlo "nikdy
+// nezobrazený na dvoch miestach naraz" ako pri vozidle/stroji.
+function hasCustomCategoryAssignment(doc: OtherDocumentRow): boolean {
+  return Boolean(doc.custom_category_id);
 }
 
 // SK popisky polí pre zobrazenie/editáciu v UI aj pre detail uloženého
@@ -658,6 +679,14 @@ export default function AiEvidenciaPage() {
   );
   // Zložky "Bločky"/"Faktúry" pre nepriradené dokumenty (bod 4 zadania).
   const [openFolder, setOpenFolder] = useState<AiInboxFolderKind | null>(null);
+  // Firemné vlastné kategórie (Intent Engine Action Engine) — samostatný
+  // state od `openFolder`, keďže AiInboxFolderKind je pevný "receipt"|
+  // "invoice" enum a vlastných kategórií môže byť ľubovoľne veľa/premenné
+  // množstvo. `openCustomCategoryId`/`setOpenCustomCategoryId(null)` sa
+  // navzájom vylučujú s `openFolder` (pozri handleOpenFolder/
+  // handleOpenCustomCategory nižšie) — appka nikdy nezobrazuje oba naraz.
+  const [customCategories, setCustomCategories] = useState<CustomDocumentCategory[]>([]);
+  const [openCustomCategoryId, setOpenCustomCategoryId] = useState<string | null>(null);
   const [folderExportLoading, setFolderExportLoading] = useState(false);
   const [folderExportFeedback, setFolderExportFeedback] = useState<{
     type: "success" | "error";
@@ -728,22 +757,35 @@ const summaryBySpz = records.reduce<Record<string, EvidenceSummary>>((groups, re
 }, {});
 
 // Zložky "Bločky"/"Faktúry" (bod 4/6 zadania) — iba dokumenty BEZ priradenia
-// k vozidlu/stroju. Priradené bločky/faktúry ostávajú v "Ostatné dokumenty"
-// nižšie (so svojou väzbou viditeľnou), aby sa nikde nezobrazovali duplicitne.
+// k vozidlu/stroju ANI k vlastnej kategórii. Priradené bločky/faktúry
+// ostávajú v "Ostatné dokumenty" nižšie (so svojou väzbou viditeľnou);
+// dokumenty priradené do vlastnej kategórie majú vlastnú zložku (pozri
+// "Vlastné zložky" nižšie) — v oboch prípadoch nikdy nie duplicitne.
 const unassignedReceipts = otherDocuments.filter(
-  (doc) => doc.document_type === "receipt" && !isDocumentAssigned(doc)
+  (doc) =>
+    doc.document_type === "receipt" &&
+    !isDocumentAssigned(doc) &&
+    !hasCustomCategoryAssignment(doc)
 );
 const unassignedInvoices = otherDocuments.filter(
-  (doc) => doc.document_type === "invoice" && !isDocumentAssigned(doc)
+  (doc) =>
+    doc.document_type === "invoice" &&
+    !isDocumentAssigned(doc) &&
+    !hasCustomCategoryAssignment(doc)
 );
 // PZP a technický preukaz potvrdené a priradené k vozidlu už vôbec nie sú
 // súčasťou `otherDocuments` (loadOtherDocuments filtruje
 // archived_from_inbox_at IS NULL priamo v dopyte — dátovo definovaný stav,
 // pozri 20260820090000_add_documents_vehicle_archive.sql), takže tu už nie
-// je čo dodatočne skrývať. Jediný zvyšný klientský filter je pôvodný —
-// nepriradené bločky/faktúry sa zobrazujú iba v zložkách vyššie, nie
-// duplicitne aj v plochom zozname.
+// je čo dodatočne skrývať. Zvyšné klientské filtre: nepriradené bločky/
+// faktúry sa zobrazujú iba v zložkách vyššie a dokumenty priradené do
+// vlastnej kategórie iba v tej kategórii — nie duplicitne aj v plochom
+// zozname.
 const otherDocumentsFlatList = otherDocuments.filter((doc) => {
+  if (hasCustomCategoryAssignment(doc)) {
+    return false;
+  }
+
   if (
     (doc.document_type === "receipt" || doc.document_type === "invoice") &&
     !isDocumentAssigned(doc)
@@ -759,6 +801,26 @@ const openFolderDocuments =
     : openFolder === "invoice"
       ? unassignedInvoices
       : [];
+
+// "Vlastné zložky" (Intent Engine CREATE/RENAME/ASSIGN_DOCUMENTS_TO_CATEGORY,
+// pozri lib/intents/actions.ts) — dokumenty zoskupené podľa
+// documents.custom_category_id, rovnaký princíp ako openFolderDocuments
+// vyššie, len nad `customCategories` namiesto pevného receipt/invoice páru.
+const customCategoryDocumentCounts = new Map<string, number>();
+for (const doc of otherDocuments) {
+  if (doc.custom_category_id) {
+    customCategoryDocumentCounts.set(
+      doc.custom_category_id,
+      (customCategoryDocumentCounts.get(doc.custom_category_id) || 0) + 1
+    );
+  }
+}
+const openCustomCategory = openCustomCategoryId
+  ? customCategories.find((category) => category.id === openCustomCategoryId) ?? null
+  : null;
+const openCustomCategoryDocuments = openCustomCategoryId
+  ? otherDocuments.filter((doc) => doc.custom_category_id === openCustomCategoryId)
+  : [];
 
   function revokePreviewObjectUrl() {
     if (previewObjectUrlRef.current) {
@@ -824,6 +886,23 @@ const openFolderDocuments =
     } finally {
       setExportLoading(false);
     }
+  }
+  // openFolder ("receipt"/"invoice") a openCustomCategoryId sa navzájom
+  // vylučujú — appka nikdy nezobrazuje oba naraz (pozri render sekciu
+  // "Vlastné zložky"/"Zložky" nižšie, obe podmienené `!openFolder &&
+  // !openCustomCategoryId`).
+  function handleOpenFolder(kind: AiInboxFolderKind) {
+    setOpenCustomCategoryId(null);
+    setOpenFolder(kind);
+  }
+  function handleOpenCustomCategory(categoryId: string) {
+    setOpenFolder(null);
+    setOpenCustomCategoryId(categoryId);
+  }
+  function handleBackToFolders() {
+    setOpenFolder(null);
+    setOpenCustomCategoryId(null);
+    setFolderExportFeedback(null);
   }
   async function handleExportFolder(kind: AiInboxFolderKind) {
     if (folderExportLoading) return;
@@ -2103,6 +2182,23 @@ async function loadOtherDocuments(currentCompanyId: string = companyId) {
   }
 }
 
+// Firemné vlastné kategórie (Intent Engine, pozri lib/custom-document-
+// categories.ts) — RLS company-scoped (esblu_my_active_company_id()), teda
+// bez potreby p_company_id parametra, rovnaký vzor ako listCompanyCustomCategories()
+// dokumentuje pre review UI. `currentCompanyId` je tu iba lacný guard proti
+// zbytočnému volaniu skôr, než appka vie, či vôbec existuje aktívna firma
+// (rovnaký vzor ako loadRecords/loadOtherDocuments vyššie) — samotný dopyt
+// filter nepotrebuje, RLS ho aj tak vynúti nezávisle.
+async function loadCustomCategories(currentCompanyId: string = companyId) {
+  if (!currentCompanyId) {
+    setCustomCategories([]);
+    return;
+  }
+
+  const categories = await listCompanyCustomCategories(supabase);
+  setCustomCategories(categories);
+}
+
 useEffect(() => {
   async function loadDocumentPhoto() {
     setDocumentPhotoUrl(null);
@@ -2202,6 +2298,7 @@ useEffect(() => {
       loadRecords(activeCompanyId || ""),
       loadVehicleAndMachineOptions(activeCompanyId || ""),
       loadOtherDocuments(activeCompanyId || ""),
+      loadCustomCategories(activeCompanyId || ""),
     ]);
   }
 
@@ -3063,7 +3160,7 @@ function formatDocDate(value: unknown): string {
     )}
 
     {/* Zložky "Bločky"/"Faktúry" — nepriradené dokumenty (bod 4 zadania). */}
-    {!openFolder && (
+    {!openFolder && !openCustomCategoryId && (
       <div className="mt-10">
         <h2 className="text-2xl font-black text-primary">
           {t("inbox.foldersTitle")}
@@ -3072,7 +3169,7 @@ function formatDocDate(value: unknown): string {
         <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
           <button
             type="button"
-            onClick={() => setOpenFolder("receipt")}
+            onClick={() => handleOpenFolder("receipt")}
             className="rounded-3xl border border-subtle bg-surface-1 p-5 text-left shadow-sm transition hover:border-blue-300"
           >
             <p className="text-3xl">🧾</p>
@@ -3085,7 +3182,7 @@ function formatDocDate(value: unknown): string {
 
           <button
             type="button"
-            onClick={() => setOpenFolder("invoice")}
+            onClick={() => handleOpenFolder("invoice")}
             className="rounded-3xl border border-subtle bg-surface-1 p-5 text-left shadow-sm transition hover:border-blue-300"
           >
             <p className="text-3xl">📃</p>
@@ -3099,13 +3196,125 @@ function formatDocDate(value: unknown): string {
       </div>
     )}
 
+    {/* "Vlastné zložky" — firemné vlastné kategórie (Intent Engine Action
+        Engine CREATE/RENAME/ASSIGN_DOCUMENTS_TO_CATEGORY). Rovnaký tile
+        layout ako Bločky/Faktúry vyššie (bod 4 zadania: "Reuse existujúci
+        Inbox/category layout. Nevytváraj paralelný modul."). Sekcia sa
+        zámerne vôbec nezobrazí, kým firma nemá žiadnu vlastnú kategóriu —
+        žiadny prázdny "0 zložiek" blok. */}
+    {!openFolder && !openCustomCategoryId && customCategories.length > 0 && (
+      <div className="mt-10">
+        <h2 className="text-2xl font-black text-primary">
+          {t("inbox.customCategoriesTitle")}
+        </h2>
+
+        <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+          {customCategories.map((category) => {
+            const count = customCategoryDocumentCounts.get(category.id) || 0;
+            return (
+              <button
+                key={category.id}
+                type="button"
+                onClick={() => handleOpenCustomCategory(category.id)}
+                className="rounded-3xl border border-subtle bg-surface-1 p-5 text-left shadow-sm transition hover:border-blue-300"
+              >
+                <p className="text-3xl">🗂️</p>
+                <h3 className="mt-2 text-xl font-black text-primary">{category.name}</h3>
+                <p className="mt-1 text-sm text-secondary">
+                  {count} {tCount("inbox.customCategoryDocumentsCount", count)}
+                </p>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    )}
+
+    {openCustomCategory && (
+      <div className="mt-10">
+        <button
+          onClick={handleBackToFolders}
+          className="mb-4 rounded-2xl bg-surface-2 px-4 py-3 font-bold text-secondary"
+        >
+          {t("inbox.backToFolders")}
+        </button>
+
+        <div className="flex flex-col gap-4 rounded-3xl border border-subtle bg-surface-1 p-5 shadow-sm sm:flex-row sm:items-center sm:justify-between sm:p-6">
+          <div>
+            <h2 className="text-2xl font-black text-primary">
+              {`🗂️ ${openCustomCategory.name}`}
+            </h2>
+            <p className="mt-1 text-sm text-secondary">
+              {openCustomCategoryDocuments.length}{" "}
+              {tCount("inbox.customCategoryDocumentsCount", openCustomCategoryDocuments.length)}
+            </p>
+          </div>
+        </div>
+
+        {openCustomCategoryDocuments.length === 0 ? (
+          <p className="mt-4 rounded-xl bg-surface-2 px-4 py-3 text-sm text-secondary">
+            {t("inbox.noCustomCategoryDocuments")}
+          </p>
+        ) : (
+          <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+            {/* Rovnaká karta ako "Ostatné dokumenty" nižšie (summarizeDocument/
+                describeDocumentAssignment) — vlastná kategória môže obsahovať
+                ľubovoľný document_type (bločky, faktúry, "other", ...), takže
+                sa reuseuje typovo-neutrálna karta, nie receipt/invoice-
+                špecifická z openFolder sekcie vyššie. */}
+            {openCustomCategoryDocuments.map((doc) => (
+              <div
+                key={doc.id}
+                className="rounded-3xl border border-subtle bg-surface-1 p-5 shadow-sm"
+              >
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <p className="text-xs font-black uppercase tracking-wide text-blue-600">
+                      📄{" "}
+                      {documentTypeLabels[doc.document_type as ScanDocumentType] ||
+                        doc.document_type ||
+                        t("inbox.documentFallback")}
+                    </p>
+
+                    <h3 className="mt-2 text-lg font-black text-primary">
+                      {summarizeDocument(doc)}
+                    </h3>
+                  </div>
+
+                  {doc.status === "needs_review" && (
+                    <span className="rounded-full bg-warning-soft px-3 py-1 text-xs font-bold text-amber-400">
+                      {t("inbox.needsReview")}
+                    </span>
+                  )}
+                </div>
+
+                <div className="mt-4 space-y-2 text-sm text-secondary">
+                  <p>🔗 {describeDocumentAssignment(doc)}</p>
+                  <p>
+                    📅{" "}
+                    {doc.created_at
+                      ? formatDate(doc.created_at, locale)
+                      : t("inbox.noDate")}
+                  </p>
+                </div>
+
+                <button
+                  onClick={() => setSelectedOtherDocument(doc)}
+                  className="mt-5 w-full rounded-2xl bg-blue-600 px-4 py-3 font-bold text-white hover:bg-blue-700"
+                >
+                  {t("inbox.openDetail")}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    )}
+
     {openFolder && (
       <div className="mt-10">
         <button
-          onClick={() => {
-            setOpenFolder(null);
-            setFolderExportFeedback(null);
-          }}
+          onClick={handleBackToFolders}
           className="mb-4 rounded-2xl bg-surface-2 px-4 py-3 font-bold text-secondary"
         >
           {t("inbox.backToFolders")}
