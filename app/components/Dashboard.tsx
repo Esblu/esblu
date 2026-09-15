@@ -27,16 +27,6 @@ function getGreeting(t: (key: string) => string) {
   return t("dashboard.greetingNight");
 }
 
-// Pomocná funkcia MIMO komponentu (bod H zadania: eslint musí byť čistý) —
-// react-hooks/purity flaguje priame volania Date.now() vnútri komponentu
-// ako potenciálne nečisté render-time volanie. Tieto Date.now() volania sú
-// VÝHRADNE dočasná diagnostika (timestampy pre voice-flow logy, nikdy
-// render-time stav), preto sa presunuli do samostatnej funkcie mimo
-// komponentu, presne ako existujúci precedens getGreeting() vyššie.
-function nowMs(): number {
-  return Date.now();
-}
-
 export default function Dashboard() {
   const router = useRouter();
   const { locale, t } = useLocale();
@@ -90,20 +80,6 @@ export default function Dashboard() {
   // NIKDY nezasiahne NOVŠIU nahrávku, aj keby nejaký clearTimeout() volanie
   // niekde chýbalo.
   const recordingSessionIdRef = useRef(0);
-  // Čisto diagnostický (bod 7 zadania) — ukladá DÔVOD posledného ukončenia
-  // nahrávky pre bezpečné console.log ladenie, nikdy sa nepoužíva na
-  // rozhodovanie o stave.
-  const lastStopReasonRef = useRef<"manual" | "timeout" | "cancel" | "unmount" | null>(null);
-  // -----------------------------------------------------------------------------
-  // DOČASNÁ RUNTIME DIAGNOSTIKA (na žiadosť: "nehádaj ďalšiu opravu, over
-  // presne KDE sa produkčný flow pokazí"). Tieto refs NEOVPLYVŇUJÚ žiadne
-  // rozhodnutie o stave — slúžia VÝHRADNE na bezpečné console.log ladenie
-  // (nikdy audio obsah, transcript, secrets). Po potvrdení koreňa príčiny na
-  // reálnom mobile ich možno odstrániť/zredukovať.
-  // -----------------------------------------------------------------------------
-  const recordingStartedAtRef = useRef<number | null>(null);
-  const dataAvailableCountRef = useRef(0);
-  const stopEventFiredRef = useRef(false);
   // KOREKCIA (dashboard v2): mobil už nemá permanentný sidebar ani priamy
   // odkaz na Nastavenia namiesto menu — hamburger teraz otvára skutočné
   // výsuvné menu s rovnakou navigáciou ako desktop sidebar. Čisto UI stav,
@@ -380,7 +356,6 @@ export default function Dashboard() {
   useEffect(() => {
     return () => {
       recordingSessionIdRef.current += 1;
-      lastStopReasonRef.current = "unmount";
       if (recordingTimeoutRef.current) clearTimeout(recordingTimeoutRef.current);
       recordingTimeoutRef.current = null;
       const recorder = mediaRecorderRef.current;
@@ -392,20 +367,17 @@ export default function Dashboard() {
   }, []);
 
   // -----------------------------------------------------------------------------
-  // Hlasové vyhľadávanie (zadanie, sekcia B/C/D/E/G) — READ-ONLY, prvá
-  // verzia: VOICE → audio → prepis (server) → PRESNE TEN ISTÝ text ako pri
-  // písaní → ten istý debounced Intent Engine efekt vyššie. Žiadny nový
-  // parser, žiadny nový handler, žiadne automatické spúšťanie akcie bez
-  // spoľahlivého prepisu.
+  // Hlasové vyhľadávanie (zadanie, sekcia B/C/D/E/G) — READ-ONLY: VOICE →
+  // audio → prepis (server) → PRESNE TEN ISTÝ text ako pri písaní → ten
+  // istý debounced Intent Engine efekt vyššie. Žiadny nový parser, žiadny
+  // nový handler, žiadne automatické spúšťanie akcie bez spoľahlivého
+  // prepisu.
   //
   // Web API (getUserMedia/MediaRecorder) — funguje rovnako na desktop webe
   // aj mobile browseri; v Android Capacitor WebView appke (mobile/) funguje
   // BEZO ZMENY vďaka tomu, že mobile/app/* sú čisté re-exporty root app/*
   // (pozri mobile/tsconfig.json `"@/*": ["../*"]`) — jediná potrebná
-  // natívna zmena je android.permission.RECORD_AUDIO v AndroidManifest.xml
-  // (Capacitor WebView beží nad lokálnym https://localhost schémou, takže
-  // getUserMedia už dnes beží v bezpečnom kontexte bez ďalšej konfigurácie
-  // — pozri report, sekcia E).
+  // natívna zmena je android.permission.RECORD_AUDIO v AndroidManifest.xml.
   // -----------------------------------------------------------------------------
 
   function stopMediaRecorderTracks(recorder: MediaRecorder) {
@@ -415,15 +387,14 @@ export default function Dashboard() {
   // Spoločné vyčistenie refs pre KAŽDÉ ukončenie nahrávky (manuálny stop,
   // cancel, timeout, unmount) — jedno miesto namiesto duplicitnej logiky na
   // 4 rôznych miestach, aby sa nemohlo stať, že niektorá cesta vynechá
-  // clearTimeout()/vynulovanie refs (bod zadania: "či sa duration nemeria
-  // chybne cez stale state", "či sa 'too long' flag neuchováva medzi
-  // nahrávkami").
-  function resetVoiceRecordingRefs(reason: "manual" | "timeout" | "cancel") {
-    lastStopReasonRef.current = reason;
+  // clearTimeout()/vynulovanie refs.
+  function resetVoiceRecordingRefs() {
     // Zvýšenie ID okamžite zneplatní AKÝKOĽVEK inak naplánovaný 20s
     // časovač patriaci tejto (teraz končiacej) nahrávke — aj v
     // hypotetickom prípade, že by nižšie clearTimeout() z nejakého dôvodu
-    // nezasiahol správny timer.
+    // nezasiahol správny timer (runtime bug fix z predchádzajúceho auditu:
+    // "osirelý" časovač z prekrývajúcej sa nahrávky nesmie zasiahnuť
+    // novšiu, aj krátku, nahrávku).
     recordingSessionIdRef.current += 1;
     if (recordingTimeoutRef.current) {
       clearTimeout(recordingTimeoutRef.current);
@@ -447,28 +418,18 @@ export default function Dashboard() {
       return;
     }
 
-    // RUNTIME BUG FIX (max recording duration audit): ak by tu z nejakého
-    // dôvodu ešte "visela" predchádzajúca nahrávka/časovač (napr. rýchly
-    // dvojklik na mikrofón, kým prehliadač ešte čakal na povolenie
-    // mikrofónu pre PRVÝ klik), táto nová nahrávka ju najprv čisto ukončí
-    // — inak by starý 20s časovač mohol neskôr omylom ukončiť TÚTO
-    // (aj krátku) nahrávku ako "príliš dlhú".
+    // Ak by tu z nejakého dôvodu ešte "visela" predchádzajúca
+    // nahrávka/časovač (napr. rýchly dvojklik na mikrofón, kým prehliadač
+    // ešte čakal na povolenie mikrofónu pre PRVÝ klik), táto nová nahrávka
+    // ju najprv čisto ukončí.
     if (mediaRecorderRef.current || recordingTimeoutRef.current) {
-      resetVoiceRecordingRefs("cancel");
+      resetVoiceRecordingRefs();
     }
 
     // Každá nahrávka dostane VLASTNÉ ID — 20s časovač aj pokračovanie po
     // getUserMedia si ho uzavrú v closure a pred akoukoľvek zmenou stavu
-    // overia, že toto ID je STÁLE aktuálne (nespolieha sa na React state,
-    // ktorý môže byť v momente async pokračovania už stale — bod zadania).
+    // overia, že toto ID je STÁLE aktuálne.
     const sessionId = ++recordingSessionIdRef.current;
-    // [DIAG-A] presný čas vytvorenia session (pred getUserMedia, ktorý môže
-    // na reálnom mobile trvať rôzne dlho kým používateľ povolí mikrofón).
-    const startRequestedAt = nowMs();
-    console.log("[voice][A] startVoiceRecording() zavolané", {
-      sessionId,
-      ts: startRequestedAt,
-    });
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -479,10 +440,6 @@ export default function Dashboard() {
       // vzdá namiesto toho, aby prevzala kontrolu nad stavom novšej
       // nahrávky.
       if (recordingSessionIdRef.current !== sessionId) {
-        console.log("[voice][A] getUserMedia vyriešené PO tom, čo túto session nahradila novšia — zahadzujem", {
-          sessionId,
-          currentSessionId: recordingSessionIdRef.current,
-        });
         stream.getTracks().forEach((track) => track.stop());
         return;
       }
@@ -497,72 +454,23 @@ export default function Dashboard() {
         : new MediaRecorder(stream);
 
       audioChunksRef.current = [];
-      // [DIAG-B] reset počítadiel pre TÚTO konkrétnu nahrávku.
-      dataAvailableCountRef.current = 0;
-      stopEventFiredRef.current = false;
       recorder.ondataavailable = (event) => {
-        dataAvailableCountRef.current += 1;
-        console.log("[voice][B] dataavailable", {
-          sessionId,
-          eventNumber: dataAvailableCountRef.current,
-          chunkBytes: event.data.size,
-        });
         if (event.data.size > 0) audioChunksRef.current.push(event.data);
       };
       mediaRecorderRef.current = recorder;
       recorder.start();
-      recordingStartedAtRef.current = nowMs();
       setVoiceState("recording");
-
-      // [DIAG-A/B] presný čas reálneho spustenia nahrávania (po
-      // getUserMedia/recorder.start(), NIE čas kliknutia) — od tohto
-      // momentu sa počíta skutočná dĺžka nahrávky pre 20s limit aj pre
-      // manuálny stop.
-      console.log("[voice][A][B] nahrávanie reálne spustené", {
-        sessionId,
-        ts: recordingStartedAtRef.current,
-        msSinceButtonClick: recordingStartedAtRef.current - startRequestedAt,
-        mimeType: recorder.mimeType,
-        recorderStateAtStart: recorder.state,
-      });
 
       // Klientska poistka pre max dĺžku nahrávky (bod D zadania) — po
       // uplynutí limitu appka záznam ZAHODÍ (neposiela na prepis) a ukáže
       // jasnú chybu, namiesto tichého odoslania orezanej nahrávky.
       recordingTimeoutRef.current = setTimeout(() => {
-        // [DIAG-A] — KRITICKÉ: toto je JEDINÝ klientsky kód, ktorý dokáže
-        // vyvolať "recordingTooLong" ako priamy dôsledok časovača. Log tu
-        // jednoznačne preukáže, či tento callback bol REÁLNE spustený a po
-        // koľkých ms od skutočného štartu nahrávania.
-        const elapsedMs = recordingStartedAtRef.current
-          ? nowMs() - recordingStartedAtRef.current
-          : null;
-        if (recordingSessionIdRef.current !== sessionId) {
-          console.log("[voice][A] 20s časovač vypršal, ALE session je už neaktuálna — ignorujem (nie je to osirelý bug, iba potvrdenie že guard funguje)", {
-            sessionId,
-            currentSessionId: recordingSessionIdRef.current,
-            elapsedMs,
-          });
-          return;
-        }
-        console.log("[voice][A] KRITICKÉ: 20s časovač callback SA REÁLNE VYKONAL a je stále platný pre aktuálnu session — nastavujem recordingTooLong", {
-          sessionId,
-          elapsedMs,
-          maxRecordingMs: MAX_RECORDING_SECONDS * 1000,
-        });
+        if (recordingSessionIdRef.current !== sessionId) return;
         handleRecordingTooLong();
       }, MAX_RECORDING_SECONDS * 1000);
-      console.log("[voice][A] 20s časovač naplánovaný", {
-        sessionId,
-        delayMs: MAX_RECORDING_SECONDS * 1000,
-      });
     } catch (error) {
       if (recordingSessionIdRef.current === sessionId) {
-        console.error("[voice][A] Nahrávanie hlasu zlyhalo (getUserMedia/MediaRecorder throw):", {
-          sessionId,
-          errorName: error instanceof Error ? error.name : typeof error,
-          errorMessage: error instanceof Error ? error.message : String(error),
-        });
+        console.error("Nahrávanie hlasu zlyhalo:", error instanceof Error ? error.message : error);
         setVoiceState("error");
         setVoiceError(t("search.voice.errors.micNotAllowed"));
       }
@@ -570,160 +478,71 @@ export default function Dashboard() {
   }
 
   function handleRecordingTooLong() {
-    // [DIAG-A] — toto je JEDINÝ miesto v celej appke (spolu so server-side
-    // 413 pri príliš veľkom súbore, pozri app/api/assistant/transcribe),
-    // ktoré nastavuje presne text "recordingTooLong". Tento log potvrdzuje
-    // s akým session id, po koľkých ms a v akom recorder.state bola táto
-    // funkcia reálne zavolaná.
     const recorder = mediaRecorderRef.current;
-    const elapsedMs = recordingStartedAtRef.current
-      ? nowMs() - recordingStartedAtRef.current
-      : null;
-    console.log("[voice][A][C] handleRecordingTooLong() VOLANÉ — nastaví sa 'recordingTooLong'", {
-      sessionId: recordingSessionIdRef.current,
-      elapsedMs,
-      recorderState: recorder?.state ?? "(žiadny recorder)",
-      dataAvailableCount: dataAvailableCountRef.current,
-      timerWasPendingBeforeClear: recordingTimeoutRef.current !== null,
-    });
     if (recorder && recorder.state !== "inactive") {
       recorder.onstop = () => stopMediaRecorderTracks(recorder);
       recorder.stop();
     }
-    resetVoiceRecordingRefs("timeout");
+    resetVoiceRecordingRefs();
     setVoiceState("error");
     setVoiceError(t("search.voice.errors.recordingTooLong"));
   }
 
   function cancelVoiceRecording() {
     const recorder = mediaRecorderRef.current;
-    const elapsedMs = recordingStartedAtRef.current
-      ? nowMs() - recordingStartedAtRef.current
-      : null;
-    console.log("[voice][A] cancelVoiceRecording() zavolané", {
-      sessionId: recordingSessionIdRef.current,
-      elapsedMs,
-      recorderState: recorder?.state ?? "(žiadny recorder)",
-    });
     if (recorder && recorder.state !== "inactive") {
       // Zrušenie zámerne NEPOSIELA žiadny transkript — iba zastaví
       // nahrávanie a zahodí zvuk (bod C zadania: "umožni stop/cancel").
       recorder.onstop = () => stopMediaRecorderTracks(recorder);
       recorder.stop();
     }
-    resetVoiceRecordingRefs("cancel");
+    resetVoiceRecordingRefs();
     setVoiceState("idle");
   }
 
   async function stopVoiceRecording() {
-    const manualStopAt = nowMs();
-    const elapsedSinceStartMs = recordingStartedAtRef.current
-      ? manualStopAt - recordingStartedAtRef.current
-      : null;
-    // [DIAG-A] Timer sa ruší HNEĎ na začiatku, PRED čímkoľvek iným — a
-    // session ID sa zvyšuje zároveň, takže aj v hypotetickom prípade, že by
-    // clearTimeout() z nejakého dôvodu nestihol/nezasiahol správny timer,
-    // samotný 20s callback nižšie (pozri startVoiceRecording) by sa aj tak
-    // sám odmietol spustiť, lebo by už nesedelo jeho zachytené ID.
-    const timerWasPending = recordingTimeoutRef.current !== null;
-    lastStopReasonRef.current = "manual";
+    // Timer sa ruší HNEĎ na začiatku, PRED čímkoľvek iným — a session ID sa
+    // zvyšuje zároveň, takže aj v hypotetickom prípade, že by clearTimeout()
+    // z nejakého dôvodu nestihol/nezasiahol správny timer, samotný 20s
+    // callback (pozri startVoiceRecording) by sa aj tak sám odmietol
+    // spustiť, lebo by už nesedelo jeho zachytené ID.
     recordingSessionIdRef.current += 1;
     if (recordingTimeoutRef.current) {
       clearTimeout(recordingTimeoutRef.current);
       recordingTimeoutRef.current = null;
     }
-    console.log("[voice][A] stopVoiceRecording() — MANUÁLNY STOP zavolaný", {
-      ts: manualStopAt,
-      elapsedSinceStartMs,
-      timerWasPendingBeforeClear: timerWasPending,
-    });
     const recorder = mediaRecorderRef.current;
-    if (!recorder || recorder.state === "inactive") {
-      console.log("[voice][A] stopVoiceRecording() — žiadny aktívny recorder, nič sa nedeje", {
-        recorderExists: !!recorder,
-        recorderState: recorder?.state ?? null,
-      });
-      return;
-    }
+    if (!recorder || recorder.state === "inactive") return;
 
     setVoiceState("processing");
 
-    // RUNTIME BUG FIX: celý zvyšok tejto funkcie (predtým iba časť od
-    // fetch nižšie) je teraz v try/catch. Predtým, ak `recorder.stop()`
-    // alebo čakanie na "stop" event zlyhalo/vyhodilo výnimku, appka
-    // zostala navždy "zamrznutá" v stave "processing" — search pole sa
-    // nenaplnilo A ZÁROVEŇ sa nezobrazila žiadna chyba, presne ako v
-    // nahlásenom produkčnom bugu.
+    // Celý zvyšok tejto funkcie beží v try/catch — ak by `recorder.stop()`
+    // alebo čakanie na "stop" event vyhodilo výnimku, appka nesmie zostať
+    // "zamrznutá" v stave "processing" bez viditeľnej chyby.
     try {
-      // [DIAG-E-1/E-2] stav TESNE PRED recorder.stop() a registrácia
-      // "stop" event listenera.
-      console.log("[voice][B] recorder.state PRED stop()", {
-        state: recorder.state,
-        mimeType: recorder.mimeType,
-      });
-
-      // Na časti reálnych mobilných prehliadačov (najmä staršie
-      // Android WebView) sa stáva, že MediaRecorder po stop() nikdy
-      // nevyšle "stop" event (napr. keď OS medzitým ukončí audio
-      // stream na pozadí). Bez časového limitu by appka na tento
-      // event čakala navždy. Ak limit vyprší, pokračuje sa s chunkami,
-      // ktoré už prišli cez ondataavailable (recorder.stop() finálny
-      // dataavailable vyžiada ešte pred vypršaním tohto limitu).
+      // Na časti reálnych mobilných prehliadačov (najmä staršie Android
+      // WebView) sa stáva, že MediaRecorder po stop() nikdy nevyšle "stop"
+      // event (napr. keď OS medzitým ukončí audio stream na pozadí). Bez
+      // časového limitu by appka na tento event čakala navždy — preto sa
+      // čaká maximálne 4s (nesúvisí s 20s max-recording-duration limitom
+      // vyššie), potom sa pokračuje s chunkami, ktoré už prišli cez
+      // ondataavailable.
       const stopped = new Promise<void>((resolve) => {
-        recorder.addEventListener(
-          "stop",
-          () => {
-            stopEventFiredRef.current = true;
-            console.log("[voice][B] 'stop' event REÁLNE prišiel z MediaRecorder");
-            resolve();
-          },
-          { once: true }
-        );
+        recorder.addEventListener("stop", () => resolve(), { once: true });
       });
       recorder.stop();
-      const stopWaitStartedAt = nowMs();
-      const raceResult = await Promise.race([
-        stopped.then(() => "stop-event" as const),
-        new Promise<"fallback-timeout">((resolve) =>
-          setTimeout(() => resolve("fallback-timeout"), 4000)
-        ),
+      await Promise.race([
+        stopped,
+        new Promise<void>((resolve) => setTimeout(resolve, 4000)),
       ]);
-      // [DIAG-E-2] — presne toto rozlišuje "stop event prišiel normálne" od
-      // "4s fallback timeout zasiahol" (bod E zadania: nezamieňať s 20s
-      // limitom — toto je úplne iný, kratší časovač).
-      console.log("[voice][B] čakanie na 'stop' event ukončené", {
-        raceResult,
-        waitedMs: nowMs() - stopWaitStartedAt,
-        stopEventActuallyFired: stopEventFiredRef.current,
-        recorderStateAfterRace: recorder.state,
-        dataAvailableCount: dataAvailableCountRef.current,
-      });
       stopMediaRecorderTracks(recorder);
 
-      // [DIAG-E-3] stav TESNE PRED zostavením Blob — toto je presne bod,
-      // kde by appka mohla "zamrznúť", ak by dataavailable nikdy neprišiel.
       const mimeType = recorder.mimeType || "audio/webm";
       const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
-      const chunkCountUsed = audioChunksRef.current.length;
       audioChunksRef.current = [];
       mediaRecorderRef.current = null;
 
-      // Bezpečný diagnostický log (zadanie, bod 7) — VÝHRADNE metadáta
-      // nahrávky, NIKDY obsah audia/prepisu.
-      console.log("[voice][A][B] nahrávka ukončená — zhrnutie:", {
-        stopReason: lastStopReasonRef.current,
-        elapsedSinceStartMs,
-        mimeType: recorder.mimeType,
-        recorderStateAfterStop: recorder.state,
-        dataAvailableCount: dataAvailableCountRef.current,
-        chunkCountUsedInBlob: chunkCountUsed,
-        blobSize: audioBlob.size,
-        blobType: audioBlob.type,
-        stopEventActuallyFired: stopEventFiredRef.current,
-      });
-
       if (audioBlob.size === 0) {
-        console.log("[voice][E-3] Blob je PRÁZDNY (0 bajtov) — appka to hlási ako 'noAudio', NIE 'recordingTooLong'.");
         setVoiceState("error");
         setVoiceError(t("search.voice.errors.noAudio"));
         return;
@@ -734,7 +553,6 @@ export default function Dashboard() {
       } = await supabase.auth.getSession();
 
       if (!session) {
-        console.log("[voice] chýba Supabase session — appka to hlási ako 'transcriptionFailed', NIE 'recordingTooLong'.");
         setVoiceState("error");
         setVoiceError(t("search.voice.errors.transcriptionFailed"));
         return;
@@ -750,16 +568,6 @@ export default function Dashboard() {
       const voiceFormData = new FormData();
       voiceFormData.append("audio", audioBlob, `voice-command.${extension}`);
 
-      // [DIAG-D] presný okamih odoslania requestu — spolu s HTTP statusom
-      // nižšie dá presnú dobu trvania requestu.
-      const requestStartedAt = nowMs();
-      console.log("[voice][D] POST /api/assistant/transcribe started", {
-        ts: requestStartedAt,
-        filename: `voice-command.${extension}`,
-        blobSize: audioBlob.size,
-        blobType: audioBlob.type,
-      });
-
       const response = await fetch(apiUrl("/api/assistant/transcribe"), {
         method: "POST",
         headers: {
@@ -768,26 +576,12 @@ export default function Dashboard() {
         },
         body: voiceFormData,
       });
-      const requestDurationMs = nowMs() - requestStartedAt;
 
       // `.json()` môže zlyhať, ak server vráti neočakávané telo (napr.
-      // platformová HTML chybová stránka pri 5xx) — bez `.catch` by táto
-      // výnimka predtým unikla mimo vonkajší try/catch a appka by opäť
-      // ostala ticho "zamrznutá".
+      // platformová HTML chybová stránka pri 5xx).
       const data = await response.json().catch(() => null);
 
-      // [DIAG-D] — NIKDY neloguje data.text (transcript obsah), iba status
-      // a chybový kód.
-      console.log("[voice][D] POST /api/assistant/transcribe odpoveď", {
-        status: response.status,
-        requestDurationMs,
-        success: data?.success,
-        errorCode: data?.success ? undefined : data?.error,
-        responseParsedOk: data !== null,
-      });
-
       if (!response.ok || !data?.success || typeof data.text !== "string" || !data.text) {
-        console.log("[voice][C] appka nastavuje chybu z /api/assistant/transcribe odpovede (NIE priamo 'recordingTooLong' string, ale generický data.error z JSON odpovede — pozri log vyššie pre presný errorCode)");
         setVoiceState("error");
         setVoiceError(
           typeof data?.error === "string"
@@ -799,18 +593,19 @@ export default function Dashboard() {
 
       // Transkript sa vloží do PRESNE TOHO ISTÉHO textového poľa ako pri
       // písaní (zadanie, sekcia G) — spustí ten istý debounced Intent
-      // Engine efekt vyššie, žiadna samostatná hlasová logika.
+      // Engine efekt vyššie, žiadna samostatná hlasová logika. Transcript
+      // ostáva VIDITEĽNÝ v search poli (zadanie, bod 5) — ak transkripcia
+      // zle rozpozná ŠPZ/výraz, používateľ to hneď vidí a môže text ručne
+      // opraviť predtým, než sa spustí Intent Engine handler.
       setSearch(data.text);
       setVoiceTranscript(data.text);
       setVoiceState("idle");
     } catch (error) {
-      // [DIAG-E] — ak appka spadne SEM, problém je niekde medzi stop() a
-      // spracovaním odpovede (výnimka), NIE v 20s timeri ani v serverovej
-      // MIME validácii. Chybu tu NIKDY nehlásime ako 'recordingTooLong'.
-      console.error("[voice][E] Prepis hlasu zlyhal (catch blok) — appka hlási 'transcriptionFailed', NIE 'recordingTooLong':", {
-        errorName: error instanceof Error ? error.name : typeof error,
-        errorMessage: error instanceof Error ? error.message : String(error),
-      });
+      // Production-safe error log — NIKDY audio obsah ani transcript text.
+      console.error(
+        "Prepis hlasu zlyhal:",
+        error instanceof Error ? error.message : error
+      );
       setVoiceState("error");
       setVoiceError(t("search.voice.errors.transcriptionFailed"));
     }
