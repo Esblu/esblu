@@ -6,6 +6,9 @@ import {
   searchVehicles,
   searchMachines,
   searchInventoryItems,
+  fetchCompanyVehicles,
+  fetchCompanyMachines,
+  fetchCompanyInventoryItems,
   type SearchedVehicle,
   type SearchedMachine,
   type SearchedInventoryItem,
@@ -17,6 +20,7 @@ import {
   deadlineSeverityLabel,
   computeDeadlineStatus,
   DEADLINE_THRESHOLD_DAYS,
+  type DeadlineType,
   type MinimalServiceRecord,
 } from "@/lib/deadlines";
 import { buildVehicleReport, buildMachineReport } from "@/lib/vehicle-report";
@@ -32,6 +36,7 @@ import type { VehicleVignette } from "@/lib/vehicle-vignettes";
 import { formatDate } from "@/lib/i18n/format";
 import {
   DOCUMENT_TYPE_FILTERS,
+  type DeadlineTypeFilter,
   type DocumentTypeFilter,
   type EntityRef,
   type IntentResult,
@@ -166,8 +171,25 @@ export async function handleOpenOrSearchVehicle(
   supabase: SupabaseClient,
   locale: Locale,
   query: string | undefined,
-  forceList: boolean
+  forceList: boolean,
+  listAll?: boolean
 ): Promise<IntentResult> {
+  // "Ukáž všetky vozidlá.", "Aké vozidlá máme?" — VŽDY zoznam VŠETKÝCH
+  // RLS-scoped vozidiel firmy, nikdy textové vyhľadávanie s query="všetky"
+  // a nikdy auto-navigácia, aj keby firma mala iba jedno vozidlo (used
+  // explicitne vyžiadal ZOZNAM, nie "otvor mi to jedno").
+  if (listAll) {
+    const vehicles = await fetchCompanyVehicles(supabase);
+    if (vehicles.length === 0) {
+      return { kind: "not_found", text: translate(locale, "search.errors.noVehicles") };
+    }
+    return {
+      kind: "list",
+      title: translate(locale, "search.results.vehiclesListTitle"),
+      items: vehicles.map(vehicleRef),
+    };
+  }
+
   if (!query) return notFound(locale, "search.errors.missingQuery");
 
   const { vehicle, candidates } = await resolveOneVehicle(supabase, query);
@@ -531,8 +553,23 @@ export async function handleOpenOrSearchMachine(
   supabase: SupabaseClient,
   locale: Locale,
   query: string | undefined,
-  forceList: boolean
+  forceList: boolean,
+  listAll?: boolean
 ): Promise<IntentResult> {
+  // "Ukáž všetky stroje.", "Aké stroje máme?" — pozri komentár pri
+  // handleOpenOrSearchVehicle vyššie, rovnaký princíp.
+  if (listAll) {
+    const machines = await fetchCompanyMachines(supabase);
+    if (machines.length === 0) {
+      return { kind: "not_found", text: translate(locale, "search.errors.noMachines") };
+    }
+    return {
+      kind: "list",
+      title: translate(locale, "search.results.machinesListTitle"),
+      items: machines.map(machineRef),
+    };
+  }
+
   if (!query) return notFound(locale, "search.errors.missingQuery");
 
   const { machine, candidates } = await resolveOneMachine(supabase, query);
@@ -635,9 +672,24 @@ export async function handleOpenOrSearchInventoryItem(
   query: string | undefined,
   // Ponechané kvôli symetrickému API s handleOpenOrSearchVehicle/Machine
   // (OPEN_* vs. SEARCH_* volajú s rôznou hodnotou), pozri komentár nižšie.
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  _forceList: boolean
+  // Prefix "_" postačuje na potlačenie no-unused-vars (argsIgnorePattern).
+  _forceList: boolean,
+  listAll?: boolean
 ): Promise<IntentResult> {
+  // "Ukáž sklad.", "Ukáž všetky skladové položky." — pozri komentár pri
+  // handleOpenOrSearchVehicle vyššie, rovnaký princíp.
+  if (listAll) {
+    const items = await fetchCompanyInventoryItems(supabase);
+    if (items.length === 0) {
+      return { kind: "not_found", text: translate(locale, "search.errors.noInventoryItems") };
+    }
+    return {
+      kind: "list",
+      title: translate(locale, "search.results.inventoryItemsListTitle"),
+      items: items.map(inventoryRef),
+    };
+  }
+
   if (!query) return notFound(locale, "search.errors.missingQuery");
 
   const matches = await searchInventoryItems(supabase, query);
@@ -835,11 +887,24 @@ export async function handleSearchDocuments(
 // Deadline dotazy ("čo mi končí tento mesiac", "aké termíny treba riešiť")
 // -----------------------------------------------------------------------------
 
+// Mapovanie z priateľského, hlasom/textom rozpoznateľného filtra
+// (lib/intents/types.ts#DeadlineTypeFilter) na interný lib/deadlines.ts#DeadlineType.
+// Jediné miesto tohto mapovania — parser aj handler ho zdieľajú cez tento
+// typ, nikdy sa nekopíruje.
+const DEADLINE_TYPE_FILTER_MAP: Record<DeadlineTypeFilter, DeadlineType> = {
+  STK: "vehicle_stk",
+  EK: "vehicle_ek",
+  VIGNETTE: "vehicle_vignette",
+  VEHICLE_SERVICE: "vehicle_service",
+  MACHINE_SERVICE: "machine_service",
+};
+
 export async function handleUpcomingDeadlines(
   supabase: SupabaseClient,
   locale: Locale,
   withinDays: number | undefined,
-  onlyOverdue: boolean | undefined
+  onlyOverdue: boolean | undefined,
+  deadlineTypes?: DeadlineTypeFilter[]
 ): Promise<IntentResult> {
   const [vehiclesResult, machinesResult, vignettesResult, vehicleServicesResult, machineServicesResult] =
     await Promise.all([
@@ -877,8 +942,18 @@ export async function handleUpcomingDeadlines(
     (machineServicesResult.data as MinimalServiceRecord[]) || []
   );
 
+  // "Ktoré vozidlá majú po splatnosti STK a EK?" — explicitný typový
+  // filter (ak je prítomný) sa aplikuje AKO PRVÝ, striktný AND krok, PRED
+  // závažnosťou/oknom nižšie — inak by napr. diaľničná známka po termíne
+  // "prepašovala" do odpovede na otázku výslovne iba o STK/EK (presný
+  // nahlásený produkčný bug).
+  const allowedDeadlineTypes = deadlineTypes?.length
+    ? new Set(deadlineTypes.map((t) => DEADLINE_TYPE_FILTER_MAP[t]))
+    : null;
+
   const window = withinDays ?? DEADLINE_THRESHOLD_DAYS.dueSoon;
   const all = [...vehicleDeadlines, ...machineDeadlines].filter((item) => {
+    if (allowedDeadlineTypes && !allowedDeadlineTypes.has(item.deadlineType)) return false;
     if (onlyOverdue) return item.severity === "overdue";
     return item.severity === "overdue" || item.daysRemaining <= window;
   });
@@ -916,7 +991,13 @@ export async function executeIntent(
     case "OPEN_VEHICLE":
       return handleOpenOrSearchVehicle(supabase, locale, intent.args.query, false);
     case "SEARCH_VEHICLE":
-      return handleOpenOrSearchVehicle(supabase, locale, intent.args.query, true);
+      return handleOpenOrSearchVehicle(
+        supabase,
+        locale,
+        intent.args.query,
+        true,
+        intent.args.listAll
+      );
     case "SHOW_VEHICLE_DOCUMENTS":
       return handleShowVehicleDocuments(
         supabase,
@@ -941,7 +1022,13 @@ export async function executeIntent(
     case "OPEN_MACHINE":
       return handleOpenOrSearchMachine(supabase, locale, intent.args.query, false);
     case "SEARCH_MACHINE":
-      return handleOpenOrSearchMachine(supabase, locale, intent.args.query, true);
+      return handleOpenOrSearchMachine(
+        supabase,
+        locale,
+        intent.args.query,
+        true,
+        intent.args.listAll
+      );
     case "SHOW_MACHINE_SERVICE":
       return handleShowMachineService(supabase, locale, intent.args.query);
     case "MACHINE_REPORT":
@@ -949,7 +1036,13 @@ export async function executeIntent(
     case "OPEN_INVENTORY_ITEM":
       return handleOpenOrSearchInventoryItem(supabase, locale, intent.args.query, false);
     case "SEARCH_INVENTORY_ITEM":
-      return handleOpenOrSearchInventoryItem(supabase, locale, intent.args.query, true);
+      return handleOpenOrSearchInventoryItem(
+        supabase,
+        locale,
+        intent.args.query,
+        true,
+        intent.args.listAll
+      );
     case "SEARCH_DOCUMENTS":
       return handleSearchDocuments(supabase, locale, {
         query: intent.args.query,
@@ -963,7 +1056,8 @@ export async function executeIntent(
         supabase,
         locale,
         intent.args.withinDays,
-        intent.args.onlyOverdue
+        intent.args.onlyOverdue,
+        intent.args.deadlineTypes
       );
     default:
       // Nedosiahnuteľné, ak registry.ts a types.ts zostanú v súlade — pozri

@@ -83,6 +83,33 @@ export function isDocumentTypeFilter(value: unknown): value is DocumentTypeFilte
   );
 }
 
+// Jediný zdroj pravdy pre "aký termín" filter na UPCOMING_DEADLINES
+// ("Ktoré vozidlá majú po splatnosti STK a EK?" → deadlineTypes=["STK",
+// "EK"], NIKDY nesmie vrátiť aj diaľničnú známku/iný typ). Zámerne
+// PRIATEĽSKÉ, nie interné hodnoty (`lib/deadlines.ts#DeadlineType` používa
+// "vehicle_stk"/"vehicle_ek"/... — handler medzi nimi mapuje, pozri
+// handlers.ts#DEADLINE_TYPE_FILTER_MAP). PZP tu ZÁMERNE chýba — Esblu
+// dnes nemá štruktúrovaný dátum platnosti PZP na vozidle (žiadny stĺpec),
+// preto PZP nie je a nemôže byť súčasťou Deadline Enginu vôbec (pozri
+// komentár v lib/deadlines.ts) — pridanie by znamenalo hádať/domýšľať dáta,
+// čo appka nikdy nerobí.
+export const DEADLINE_TYPE_FILTERS = [
+  "STK",
+  "EK",
+  "VIGNETTE",
+  "VEHICLE_SERVICE",
+  "MACHINE_SERVICE",
+] as const;
+
+export type DeadlineTypeFilter = (typeof DEADLINE_TYPE_FILTERS)[number];
+
+export function isDeadlineTypeFilter(value: unknown): value is DeadlineTypeFilter {
+  return (
+    typeof value === "string" &&
+    (DEADLINE_TYPE_FILTERS as readonly string[]).includes(value)
+  );
+}
+
 // Argumenty sú zámerne "plochý" string/number/boolean záznam — žiadne
 // vnorené objekty, žiadny raw SQL/JS fragment, žiadny slobodný "query"
 // objekt, ktorý by appka priamo posunula do DB dopytu bez validácie
@@ -116,6 +143,19 @@ export type IntentArgs = {
   // Suma v EUR z fráz ako "za 86 eur" — porovnáva sa s extracted_fields
   // totalAmount (bloček/faktúra) s malou toleranciou zaokrúhlenia.
   amount?: number;
+  // "Ukáž všetky stroje.", "Aké vozidlá máme?", "Ukáž sklad." — explicitná
+  // požiadavka na ZOZNAM VŠETKÝCH firemných entít daného typu (SEARCH_VEHICLE/
+  // SEARCH_MACHINE/SEARCH_INVENTORY_ITEM), NIKDY textové vyhľadávanie s
+  // query="všetky"/"". Keď je true, `query` sa ignoruje a handler vždy
+  // vráti `list` so VŠETKÝMI RLS-scoped entitami firmy (aj keby bola iba
+  // jedna — nikdy sa "všetky" nezredukuje na auto-navigáciu na jedinú
+  // existujúcu entitu, lebo používateľ si explicitne vyžiadal ZOZNAM).
+  listAll?: boolean;
+  // UPCOMING_DEADLINES — voliteľný filter na KONKRÉTNE typy termínov
+  // ("Ktoré vozidlá majú po splatnosti STK a EK?" → nesmie vrátiť
+  // diaľničnú známku). Bez hodnoty (undefined/prázdne pole) sa správa
+  // presne ako doteraz — všetky typy.
+  deadlineTypes?: DeadlineTypeFilter[];
 };
 
 export type ParsedIntent = {

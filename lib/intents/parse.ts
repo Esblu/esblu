@@ -1,6 +1,12 @@
 import { normalizeSpz } from "@/lib/normalize-spz";
 import { DEADLINE_THRESHOLD_DAYS } from "@/lib/deadlines";
-import type { DocumentTypeFilter, IntentArgs, IntentName, ParsedIntent } from "@/lib/intents/types";
+import type {
+  DeadlineTypeFilter,
+  DocumentTypeFilter,
+  IntentArgs,
+  IntentName,
+  ParsedIntent,
+} from "@/lib/intents/types";
 
 // =============================================================================
 // Esblu — Intent Engine: deterministický parser prirodzeného jazyka
@@ -83,12 +89,45 @@ function stripWholeWordsStartingWith(text: string, stems: string[]): string {
   return kept.join(" ").trim();
 }
 
-// Holé slovesné kmene ("ukáž"/"nájdi"/... BEZ nasledujúceho "mi"/"me"/
-// "mir") — použité VÝHRADNE pri stripWholeWordsStartingWith() na
-// vyčistenie voľného textu query (nie pri detekcii OPEN_WORDS vyššie,
-// ktorá zostáva nezmenená, aby sa nezmenilo, KTORÉ vety spúšťajú branch 7).
+/**
+ * Odstráni z textu CELÉ tokeny, ktoré sa PRESNE (po odstránení interpunkcie)
+ * zhodujú s niektorým z "výplňových" slov (predložky ako "v"/"na"/"pre"/
+ * "in"/"im"/"für"). Na rozdiel od stripWholeWordsStartingWith() vyššie
+ * (prefix zhoda, vhodná pre skloňované kmene podstatných mien) tu MUSÍ ísť
+ * o PRESNÚ zhodu — inak by prefix zhoda nechtiac odstránila aj skutočné
+ * hľadané slová začínajúce na tie isté písmená (napr. "v" ako prefix by
+ * odstránilo aj "vozidlo"). Rieši napr. "Spray v sklade." → po odstránení
+ * kmeňa "sklad" by bez tohto kroku zostalo query="spray v" (osamotená
+ * predložka), doplnenie zadania, úloha 2.
+ */
+function stripExactFillerWords(text: string, fillers: string[]): string {
+  const tokens = text.split(/\s+/).filter(Boolean);
+  const kept = tokens.filter((token) => {
+    const clean = token.replace(/[.?!,;:]+$/, "");
+    return !fillers.includes(clean);
+  });
+  return kept.join(" ").trim();
+}
+
+const QUERY_FILLER_WORDS = ["v", "vo", "na", "pre", "in", "im", "fur"];
+
+/** stripWholeWordsStartingWith() + stripExactFillerWords() v jednom kroku —
+ * jediné miesto, cez ktoré prechádza extrakcia voľného `query` textu pre
+ * stroje/sklad/vozidlá (branch 5/7/8 nižšie), aby žiadna z dvoch úprav
+ * nechýbala na niektorom mieste použitia. */
+function extractFreeQuery(text: string, stemWords: string[]): string {
+  return stripExactFillerWords(stripWholeWordsStartingWith(text, stemWords), QUERY_FILLER_WORDS);
+}
+
+// Holé slovesné kmene ("ukáž"/"zobraz"/"nájdi"/... BEZ nasledujúceho "mi"/
+// "me"/"mir") — použité VÝHRADNE pri stripWholeWordsStartingWith() na
+// vyčistenie voľného textu query (nie pri detekcii OPEN_WORDS nižšie, ktorá
+// je teraz zámerne ROVNAKÁ množina holých slovies — pozri komentár pri
+// OPEN_WORDS nižšie, prečo boli bez "mi"/"me"/"mir" varianty doteraz
+// chýbajúcim zdrojom bugu 1 doplnenia zadania).
 const OPEN_VERB_STEMS = [
   "ukaz",
+  "zobraz",
   "najdi",
   "otvor",
   "find",
@@ -100,16 +139,27 @@ const OPEN_VERB_STEMS = [
   "show",
 ];
 
+// "Ukáž všetky stroje." (bez "mi") predtým vôbec nespúšťalo OPEN_WORDS
+// vetvu (branch 7), lebo tam bolo iba "ukaz mi" — v bežnej slovenčine sa
+// "ukáž" ako príkaz používa aj úplne samostatne, bez zvratného "mi" (TOTO
+// bol koreňový bug 1 z produkčného testu). Pridané holé tvary "ukaz"/
+// "zobraz"/"zeige"/"show" popri pôvodných frázach s "mi"/"me"/"mir"
+// (ponechané zámerne, sú to podmnožinou nových holých tvarov, takže
+// duplicita neškodí — containsAny je OR).
 const OPEN_WORDS = [
   "najdi",
   "otvor",
   "ukaz mi",
+  "ukaz",
+  "zobraz",
   "find",
   "open",
   "show me",
+  "show",
   "finde",
   "suche",
   "zeige mir",
+  "zeige",
   "offne",
 ];
 
@@ -142,14 +192,36 @@ const VIGNETTE_WORDS = [
 // "bager" tieto tvary vôbec nezachytí ("Ukáž servis bagra CAT 302." —
 // jeden z explicitných príkladov doplnenia zadania, bod 3).
 const MACHINE_CONTEXT_WORDS = ["stroj", "bager", "bagr", "machine", "maschine", "bagger"];
+// "vozidl" pokrýva "vozidlo"/"vozidlá"/"vozidiel"/"vozidlám" a pod. —
+// doteraz NEEXISTOVAL žiadny samostatný kontextový slovník pre vozidlá (na
+// rozdiel od strojov/skladu), takže vety typu "Ukáž všetky vozidlá."/"Aké
+// vozidlá máme?" nemali ako spustiť LIST vetvu nižšie (doplnenie zadania,
+// úloha 1).
+const VEHICLE_CONTEXT_WORDS = ["vozidl", "fahrzeug", "vehicle"];
 const INVENTORY_CONTEXT_WORDS = ["sklad", "inventory", "lager", "skladov"];
 // Doplnkový kmeň pre generické podstatné meno "položka" ("skladová
-// položka") — použitý VÝHRADNE pri čistení voľného textu query (nie pri
-// detekcii hasInventoryContext vyššie), rovnaký dôvod ako pri "bagr" nižšie.
+// položka spray", "položku spray") — TERAZ použitý AJ pri detekcii
+// hasInventoryContext (nie iba pri čistení voľného textu query ako
+// predtým) — predtým bola detekcia "je táto veta o sklade" viazaná
+// výhradne na slovo "sklad", takže samotné "Položku spray." (bez slova
+// "sklad" kdekoľvek vo vete) nebolo vôbec rozpoznané ako dotaz na skladovú
+// položku a padlo až na `return null` (TOTO bol koreňový bug 2 z
+// produkčného testu).
 const INVENTORY_ITEM_NOISE_WORDS = ["polozk"];
 const DOCUMENT_SEARCH_WORDS = ["faktur", "invoice", "rechnung", "blocek", "receipt", "beleg"];
 
-const OVERDUE_WORDS = ["po lehote", "overdue", "uberfallig", "nach frist"];
+// "po splatnosti"/"po termine" sú bežné synonymá k "po lehote" — predtým
+// chýbali, takže "Ktoré vozidlá majú po splatnosti STK a EK?"/"Čo je po
+// termíne?" vôbec nespustili deadline vetvu (súčasť koreňovej príčiny
+// bugu 3 z produkčného testu).
+const OVERDUE_WORDS = [
+  "po lehote",
+  "po splatnosti",
+  "po termine",
+  "overdue",
+  "uberfallig",
+  "nach frist",
+];
 const DEADLINE_QUERY_WORDS = [
   "co mi konci",
   "co konci",
@@ -161,6 +233,36 @@ const DEADLINE_QUERY_WORDS = [
   "was lauft ab",
   "welche fristen",
 ];
+// "Ktorým vozidlám končí diaľničná známka?" — sloveso "končí" BEZ frázy
+// "čo mi končí"/"čo končí" (DEADLINE_QUERY_WORDS vyššie tieto konkrétne
+// frázy nezachytáva, keď je na začiatku vety iný podmet, napr. "vozidlám").
+// Zámerne úzko orezané (nižšie sa používa iba spolu s explicitným STK/EK/
+// VIGNETTE slovom a `!plate`) — samotné "končí" v spojení so servisom bez
+// vozidla/termínového slova má prednostne ísť do branch 5 (SHOW_*_SERVICE
+// pre KONKRÉTNY stroj/vozidlo), nie sem.
+const DEADLINE_EXPIRY_WORDS = ["konci", "koncia", "expire", "expires", "lauft ab", "auslauft"];
+
+// Kvantifikátory "všetko/všetky" naznačujúce LIST operáciu (chce ZOZNAM
+// VŠETKÝCH záznamov danej entity firmy), nie textové vyhľadávanie s
+// query="všetky"/"" — presne koreňová príčina bugu 1 z produkčného testu
+// ("Ukáž všetky stroje." → predtým sa "všetky" bralo ako doslovný
+// vyhľadávací text, ktorý sa nikdy nezhoduje so žiadnym reálnym názvom).
+const LIST_ALL_QUANTIFIER_WORDS = ["vsetky", "vsetko", "vsetkych", "alle", "all"];
+// "Aké stroje máme?"/"Was haben wir an Maschinen?"/"What machines do we
+// have?" — opytovacia forma, sémanticky rovnaká LIST požiadavka ako
+// "vsetky"/"alle" vyššie, bez explicitného kvantifikátora.
+const WHAT_DO_WE_HAVE_REGEX = /\bake\b[\s\S]*\bmame\b/;
+const WHAT_DO_WE_HAVE_PHRASES = [
+  "was haben wir",
+  "what do we have",
+  "what machines do we have",
+  "what vehicles do we have",
+  "what inventory do we have",
+];
+
+function matchesWhatDoWeHavePattern(text: string): boolean {
+  return WHAT_DO_WE_HAVE_REGEX.test(text) || containsAny(text, WHAT_DO_WE_HAVE_PHRASES);
+}
 const THIS_MONTH_WORDS = ["tento mesiac", "this month", "diesen monat"];
 const THIS_YEAR_WORDS = ["tento rok", "tohto roku", "this year", "dieses jahr"];
 
@@ -226,6 +328,25 @@ function detectDocumentType(
     if (matchedWord) return { type: entry.type, matchedWord };
   }
   return undefined;
+}
+
+/**
+ * Vytiahne KONKRÉTNE typy termínov spomenuté v texte ("STK a EK" →
+ * ["STK","EK"]) — znovupoužíva rovnaké STK_WORDS/EK_WORDS/VIGNETTE_WORDS/
+ * SERVICE_WORDS slovníky ako branch 6/5 nižšie (jeden zdroj pravdy na
+ * detekciu daného typu, nie duplicitný zoznam). Prázdne pole (žiadny
+ * konkrétny typ nespomenutý) → handler nefiltruje, správa sa presne ako
+ * doteraz (všetky typy) — nikdy sa nehádaní žiadny typ navyše.
+ */
+function detectDeadlineTypes(text: string, hasMachineContextFlag: boolean): DeadlineTypeFilter[] {
+  const types: DeadlineTypeFilter[] = [];
+  if (containsAny(text, STK_WORDS)) types.push("STK");
+  if (containsAny(text, EK_WORDS)) types.push("EK");
+  if (containsAny(text, VIGNETTE_WORDS)) types.push("VIGNETTE");
+  if (containsAny(text, SERVICE_WORDS)) {
+    types.push(hasMachineContextFlag ? "MACHINE_SERVICE" : "VEHICLE_SERVICE");
+  }
+  return types;
 }
 
 // Mesiace SK/CZ/DE/EN, normalizované (bez diakritiky) — použité pre "za
@@ -346,16 +467,52 @@ export function parseIntentDeterministic(rawText: string): ParsedIntent | null {
 
   const plate = extractPlateCandidate(rawText);
   const hasMachineContext = containsAny(text, MACHINE_CONTEXT_WORDS);
-  const hasInventoryContext = containsAny(text, INVENTORY_CONTEXT_WORDS);
+  const hasVehicleContext = containsAny(text, VEHICLE_CONTEXT_WORDS);
+  const hasInventoryContext =
+    containsAny(text, INVENTORY_CONTEXT_WORDS) || containsAny(text, INVENTORY_ITEM_NOISE_WORDS);
 
   // 1) Deadline-dotazy ("čo mi končí", "aké termíny treba riešiť", "čo je
-  //    po lehote") — nemajú ŠPZ, sú to dotazy na CELÚ firmu, nie na jednu
+  //    po lehote/splatnosti/termíne", "ktorým vozidlám končí diaľničná
+  //    známka") — nemajú ŠPZ, sú to dotazy na CELÚ firmu, nie na jednu
   //    entitu, preto sa vyhodnocujú PRED vozidlovými pravidlami nižšie.
-  if (containsAny(text, DEADLINE_QUERY_WORDS) || containsAny(text, OVERDUE_WORDS)) {
+  //    `expiryTrigger` je zámerne úzky (DEADLINE_EXPIRY_WORDS samo osebe
+  //    NESTAČÍ) — vyžaduje AJ explicitné STK/EK/VIGNETTE slovo a chýbajúcu
+  //    ŠPZ, aby napr. "Kedy končí servis bagra CAT 302?" (jeden konkrétny
+  //    stroj, žiadny STK/EK/VIGNETTE) naďalej padol do branch 5
+  //    (SHOW_MACHINE_SERVICE), nie sem.
+  const expiryTrigger =
+    containsAny(text, DEADLINE_EXPIRY_WORDS) &&
+    !plate &&
+    (containsAny(text, STK_WORDS) || containsAny(text, EK_WORDS) || containsAny(text, VIGNETTE_WORDS));
+  if (containsAny(text, DEADLINE_QUERY_WORDS) || containsAny(text, OVERDUE_WORDS) || expiryTrigger) {
+    const deadlineTypes = detectDeadlineTypes(text, hasMachineContext);
     return build("UPCOMING_DEADLINES", {
       onlyOverdue: containsAny(text, OVERDUE_WORDS),
       withinDays: parseWithinDays(text),
+      deadlineTypes: deadlineTypes.length > 0 ? deadlineTypes : undefined,
     });
+  }
+
+  // 1b) LIST požiadavky ("Ukáž všetky stroje.", "Aké vozidlá máme?", "Ukáž
+  //     všetky skladové položky.") — používateľ chce ZOZNAM VŠETKÝCH
+  //     záznamov danej entity, nie textové vyhľadávanie. MUSÍ bežať PRED
+  //     vetvami 7/8 nižšie (voľné vyhľadávanie strojov/skladu/vozidiel),
+  //     inak by "všetky"/"aké...máme" skončilo ako doslovný query text,
+  //     ktorý sa nikdy nezhoduje so žiadnym reálnym názvom (presne bug 1 z
+  //     produkčného testu). Rozlíšenie vozidlo/stroj/sklad je podľa toho,
+  //     KTORÝ JEDEN kontextový slovník sa vo vete našiel — ak je viac než
+  //     jeden, alebo žiadny, táto vetva zámerne nič nevráti (fail-closed,
+  //     zadanie bod 6 — radšej padne na AI fallback/otázku, než aby hádala).
+  const isListQuantified = containsAny(text, LIST_ALL_QUANTIFIER_WORDS) || matchesWhatDoWeHavePattern(text);
+  if (isListQuantified) {
+    const matchedContexts = [hasVehicleContext && !plate, hasMachineContext, hasInventoryContext].filter(
+      Boolean
+    ).length;
+    if (matchedContexts === 1) {
+      if (hasVehicleContext && !plate) return build("SEARCH_VEHICLE", { listAll: true });
+      if (hasMachineContext) return build("SEARCH_MACHINE", { listAll: true });
+      if (hasInventoryContext) return build("SEARCH_INVENTORY_ITEM", { listAll: true });
+    }
   }
 
   // 2) Report ("urob report vozidla TT123AB", "report für Fahrzeug").
@@ -452,7 +609,7 @@ export function parseIntentDeterministic(rawText: string): ParsedIntent | null {
   //    vyššie).
   if (containsAny(text, SERVICE_WORDS)) {
     if (hasMachineContext) {
-      const query = stripWholeWordsStartingWith(text, [
+      const query = extractFreeQuery(text, [
         ...SERVICE_WORDS,
         ...MACHINE_CONTEXT_WORDS,
         ...OPEN_VERB_STEMS,
@@ -473,38 +630,52 @@ export function parseIntentDeterministic(rawText: string): ParsedIntent | null {
     return build("VEHICLE_VIGNETTE_STATUS", { query: plate });
   }
 
-  // 7) Explicitné "nájdi/otvor/find/show me/finde" — rozhoduje kontext.
+  // 7) Explicitné "nájdi/otvor/ukáž/zobraz/find/show/finde" — rozhoduje
+  //    kontext. Ak po odstránení kontextového slovníka NEZOSTANE žiadny
+  //    voľný text (napr. "Ukáž sklad."/"Ukáž stroje." — iba príkaz +
+  //    kontextové slovo, žiadny konkrétny identifikátor), ide sémanticky o
+  //    LIST požiadavku (rovnaká logika ako branch 1b vyššie, iba bez
+  //    explicitného "všetky"), nie o vyhľadávanie prázdneho reťazca.
   if (containsAny(text, OPEN_WORDS)) {
     const query = stripKeywords(text, OPEN_WORDS);
     if (hasInventoryContext) {
-      return build("OPEN_INVENTORY_ITEM", {
-        query: stripWholeWordsStartingWith(query, [
-          ...INVENTORY_CONTEXT_WORDS,
-          ...INVENTORY_ITEM_NOISE_WORDS,
-        ]),
-      });
+      const itemQuery = extractFreeQuery(query, [
+        ...INVENTORY_CONTEXT_WORDS,
+        ...INVENTORY_ITEM_NOISE_WORDS,
+      ]);
+      if (!itemQuery) return build("SEARCH_INVENTORY_ITEM", { listAll: true });
+      return build("OPEN_INVENTORY_ITEM", { query: itemQuery });
     }
     if (hasMachineContext) {
-      return build("OPEN_MACHINE", {
-        query: stripWholeWordsStartingWith(query, MACHINE_CONTEXT_WORDS),
-      });
+      const machineQuery = extractFreeQuery(query, MACHINE_CONTEXT_WORDS);
+      if (!machineQuery) return build("SEARCH_MACHINE", { listAll: true });
+      return build("OPEN_MACHINE", { query: machineQuery });
+    }
+    if (hasVehicleContext && !plate) {
+      const vehicleQuery = extractFreeQuery(query, VEHICLE_CONTEXT_WORDS);
+      if (!vehicleQuery) return build("SEARCH_VEHICLE", { listAll: true });
     }
     if (plate) return build("OPEN_VEHICLE", { query: plate });
     if (query) return build("OPEN_VEHICLE", { query });
   }
 
-  // 8) Voľné vyhľadávanie strojov/skladu bez "nájdi" ("bager CAT 302",
-  //    "skladová položka X").
+  // 8) Voľné vyhľadávanie vozidiel/strojov/skladu bez "nájdi" ("bager CAT
+  //    302", "skladová položka spray", "spray v sklade") — rovnaká
+  //    prázdna-query→listAll logika ako branch 7 vyššie ("Sklad."/
+  //    "Stroje." samostatne = LIST, nie vyhľadávanie prázdneho textu).
   if (hasInventoryContext) {
-    const query = stripWholeWordsStartingWith(text, [
-      ...INVENTORY_CONTEXT_WORDS,
-      ...INVENTORY_ITEM_NOISE_WORDS,
-    ]);
+    const query = extractFreeQuery(text, [...INVENTORY_CONTEXT_WORDS, ...INVENTORY_ITEM_NOISE_WORDS]);
     if (query) return build("SEARCH_INVENTORY_ITEM", { query });
+    return build("SEARCH_INVENTORY_ITEM", { listAll: true });
   }
   if (hasMachineContext) {
-    const query = stripWholeWordsStartingWith(text, MACHINE_CONTEXT_WORDS);
+    const query = extractFreeQuery(text, MACHINE_CONTEXT_WORDS);
     if (query) return build("SEARCH_MACHINE", { query });
+    return build("SEARCH_MACHINE", { listAll: true });
+  }
+  if (hasVehicleContext && !plate) {
+    const query = extractFreeQuery(text, VEHICLE_CONTEXT_WORDS);
+    if (!query) return build("SEARCH_VEHICLE", { listAll: true });
   }
 
   // 9) Samostatná ŠPZ bez ďalších slov ("TT123AB") → priamo OPEN_VEHICLE.

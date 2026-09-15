@@ -72,8 +72,13 @@ function textIncludes(haystack: string, needle: string): boolean {
  * "fetch all + filtruj v appke" (rovnaký vzor ako app/vozidla/page.tsx a
  * app/components/Dashboard.tsx) je tu bezpečné aj efektívne (jedna query,
  * žiadny N+1 — bod 17 zadania).
+ *
+ * Exportované aj priamo (nie iba cez search*) — Intent Engine ho použije
+ * pre `listAll` ("Ukáž všetky vozidlá/stroje/skladové položky.", doplnenie
+ * zadania, úloha 1) — presne tá istá RLS-scoped query ako pri vyhľadávaní,
+ * iba bez následného filtrovania.
  */
-async function fetchCompanyVehicles(
+export async function fetchCompanyVehicles(
   supabase: SupabaseClient
 ): Promise<SearchedVehicle[]> {
   const { data, error } = await supabase.from("vehicles").select(VEHICLE_COLUMNS);
@@ -84,7 +89,7 @@ async function fetchCompanyVehicles(
   return (data as SearchedVehicle[]) || [];
 }
 
-async function fetchCompanyMachines(
+export async function fetchCompanyMachines(
   supabase: SupabaseClient
 ): Promise<SearchedMachine[]> {
   const { data, error } = await supabase.from("machines").select(MACHINE_COLUMNS);
@@ -95,7 +100,7 @@ async function fetchCompanyMachines(
   return (data as SearchedMachine[]) || [];
 }
 
-async function fetchCompanyInventoryItems(
+export async function fetchCompanyInventoryItems(
   supabase: SupabaseClient
 ): Promise<SearchedInventoryItem[]> {
   const { data, error } = await supabase

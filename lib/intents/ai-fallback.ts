@@ -1,7 +1,9 @@
 import OpenAI from "openai";
 import {
+  DEADLINE_TYPE_FILTERS,
   DOCUMENT_TYPE_FILTERS,
   INTENT_NAMES,
+  isDeadlineTypeFilter,
   isDocumentTypeFilter,
   type IntentName,
   type ParsedIntent,
@@ -57,6 +59,17 @@ const INTENT_CLASSIFICATION_SCHEMA = {
     dateFrom: { type: ["string", "null"] },
     dateTo: { type: ["string", "null"] },
     amount: { type: ["number", "null"] },
+    // "Ukáž všetky stroje.", "Aké vozidlá máme?" — LIST požiadavka na
+    // SEARCH_VEHICLE/SEARCH_MACHINE/SEARCH_INVENTORY_ITEM (doplnenie
+    // zadania, úloha 1). `query` sa v tom prípade ignoruje.
+    listAll: { type: ["boolean", "null"] },
+    // UPCOMING_DEADLINES — striktný enum (rovnaký allowlist ako v DB), AI
+    // teda ani tu nemôže vrátiť nič mimo povolených typov (doplnenie
+    // zadania, úloha 3).
+    deadlineTypes: {
+      type: ["array", "null"],
+      items: { type: "string", enum: [...DEADLINE_TYPE_FILTERS] },
+    },
   },
   required: [
     "intent",
@@ -68,6 +81,8 @@ const INTENT_CLASSIFICATION_SCHEMA = {
     "dateFrom",
     "dateTo",
     "amount",
+    "listAll",
+    "deadlineTypes",
   ],
 } as const;
 
@@ -82,6 +97,10 @@ ${INTENT_NAMES.map((n) => `- ${n}`).join("\n")}
 
 Povolené hodnoty pre "documentType" (presne ako v databáze, nič iné):
 ${DOCUMENT_TYPE_FILTERS.map((t) => `- ${t}`).join("\n")}
+
+Povolené hodnoty pre "deadlineTypes" (pole, nič iné — PZP tu zámerne
+chýba, appka nemá štruktúrovaný dátum platnosti PZP):
+${DEADLINE_TYPE_FILTERS.map((t) => `- ${t}`).join("\n")}
 
 Pravidlá:
 - NIKDY nevracaj intent mimo tohto zoznamu.
@@ -100,6 +119,17 @@ Pravidlá:
   null.
 - "amount" nastav LEN ak text obsahuje konkrétnu sumu v eurách (napr. "za
   86 eur" → 86). Inak null.
+- "listAll" nastav na true LEN pre SEARCH_VEHICLE/SEARCH_MACHINE/
+  SEARCH_INVENTORY_ITEM, keď používateľ chce ZOZNAM VŠETKÝCH záznamov
+  danej entity ("Ukáž všetky stroje.", "Aké vozidlá máme?", "Ukáž sklad.")
+  — NIE vyhľadávanie konkrétneho textu. Keď je listAll true, "query" nechaj
+  null (ignoruje sa). Inak null.
+- "deadlineTypes" (iba pre UPCOMING_DEADLINES) nastav LEN na typy, ktoré
+  text VÝSLOVNE pomenúva (napr. "STK a EK" → ["STK","EK"]; "diaľničná
+  známka" → ["VIGNETTE"]) — NIKDY nepridávaj typ, ktorý text nespomína
+  (napr. otázka o STK sa NESMIE preložiť aj na VIGNETTE). Ak text pýta na
+  všetky termíny bez konkrétneho typu ("čo mi končí", "čo je po termíne"),
+  nechaj null/prázdne pole (handler potom vráti všetky typy).
 - Ak text nie je jednoznačne príkaz/otázka o vozidle, stroji, sklade,
   dokumente alebo blížiacich sa termínoch, vráť intent: null.
 - Text môže byť v ktoromkoľvek zo 4 jazykov — jazyk NEOVPLYVŇUJE, ktorý
@@ -145,6 +175,8 @@ export async function classifyIntentWithAi(
       dateFrom: string | null;
       dateTo: string | null;
       amount: number | null;
+      listAll: boolean | null;
+      deadlineTypes: string[] | null;
     };
 
     if (!parsed.intent || !(INTENT_NAMES as readonly string[]).includes(parsed.intent)) {
@@ -166,6 +198,14 @@ export async function classifyIntentWithAi(
         dateFrom: parsed.dateFrom ?? undefined,
         dateTo: parsed.dateTo ?? undefined,
         amount: parsed.amount ?? undefined,
+        listAll: parsed.listAll ?? undefined,
+        // Rovnaký fail-closed princíp ako pri documentType vyššie — druhá,
+        // nezávislá kontrola oproti json_schema enumu, a KAŽDÁ jednotlivá
+        // hodnota poľa sa overuje samostatne (nikdy sa neverí, že celé pole
+        // je validné len preto, že json_schema ho takto vrátilo).
+        deadlineTypes: Array.isArray(parsed.deadlineTypes)
+          ? parsed.deadlineTypes.filter(isDeadlineTypeFilter)
+          : undefined,
       },
       source: "ai",
     };
