@@ -45,6 +45,46 @@ const client = new OpenAI({
 
 const ALLOWED_AUDIO_MIME_TYPES = new Set<string>(ALLOWED_VOICE_AUDIO_MIME_TYPES);
 
+// RUNTIME BUG FIX: reálne prehliadače (najmä Chrome na Androide) bežne
+// hlásia MediaRecorder.mimeType/Blob.type S codec parametrom, napr.
+// "audio/webm;codecs=opus" namiesto holého "audio/webm". Pôvodný kód tu
+// robil PRESNÉ porovnanie (`Set.has(audioValue.type)`), takže takéto
+// bežné, plne legitímne audio bolo vždy zamietnuté ako "unsupportedFormat"
+// — to bol koreň nahláseného bugu. Preto sa pred validáciou MIME typ vždy
+// normalizuje na "base" tvar (časť pred prvým ";").
+function baseMimeType(rawType: string): string {
+  return rawType.split(";")[0]?.trim().toLowerCase() ?? "";
+}
+
+// Druhotná, bezpečná poistka: ak by Content-Type Blobu z nejakého dôvodu
+// chýbal/bol neznámy (zriedkavé, ale pozorované na niektorých mobilných
+// WebView), appka na strane klienta VŽDY sama nastavuje príponu súboru
+// podľa toho, čo skutočne nahrala (Dashboard.tsx: `voice-command.<ext>`).
+// Táto prípona je preto spoľahlivejší signál než chýbajúci/nejasný MIME —
+// použije sa iba ak samotný MIME typ nie je v allowliste.
+const EXTENSION_TO_MIME_TYPE: Record<string, string> = {
+  webm: "audio/webm",
+  mp4: "audio/mp4",
+  m4a: "audio/mp4",
+  mp3: "audio/mpeg",
+  mpga: "audio/mpeg",
+  wav: "audio/wav",
+  ogg: "audio/ogg",
+};
+
+function resolveAllowedMimeType(file: File): string | null {
+  const normalized = baseMimeType(file.type);
+  if (ALLOWED_AUDIO_MIME_TYPES.has(normalized)) return normalized;
+
+  const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
+  const fromExtension = EXTENSION_TO_MIME_TYPE[extension];
+  if (fromExtension && ALLOWED_AUDIO_MIME_TYPES.has(fromExtension)) {
+    return fromExtension;
+  }
+
+  return null;
+}
+
 export async function POST(req: Request) {
   const locale = getRequestLocale(req);
 
@@ -67,7 +107,20 @@ export async function POST(req: Request) {
       );
     }
 
-    if (!ALLOWED_AUDIO_MIME_TYPES.has(audioValue.type)) {
+    // Bezpečný diagnostický log (zadanie, bod 7) — VÝHRADNE metadáta
+    // (MIME, veľkosť), NIKDY obsah audia.
+    console.log("api/assistant/transcribe: prijaté audio:", {
+      rawMimeType: audioValue.type,
+      normalizedMimeType: baseMimeType(audioValue.type),
+      size: audioValue.size,
+    });
+
+    const resolvedMimeType = resolveAllowedMimeType(audioValue);
+    if (!resolvedMimeType) {
+      console.warn(
+        "api/assistant/transcribe: nepodporovaný MIME typ po normalizácii:",
+        baseMimeType(audioValue.type) || "(prázdny)"
+      );
       return Response.json(
         { success: false, error: translate(locale, "search.voice.errors.unsupportedFormat") },
         { status: 400 }
@@ -114,6 +167,10 @@ export async function POST(req: Request) {
     }
 
     const text = transcription.text?.trim() || "";
+
+    console.log("api/assistant/transcribe: prepis dokončený:", {
+      textLength: text.length,
+    });
 
     // Nespoľahlivý/prázdny prepis NIKDY automaticky nespúšťa žiadny intent
     // (zadanie, sekcia F: "ak transkripcia zlyhá... žiadny fallback, ktorý

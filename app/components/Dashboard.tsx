@@ -458,31 +458,49 @@ export default function Dashboard() {
 
     setVoiceState("processing");
 
-    const stopped = new Promise<void>((resolve) => {
-      recorder.addEventListener(
-        "stop",
-        () => {
-          stopMediaRecorderTracks(recorder);
-          resolve();
-        },
-        { once: true }
-      );
-    });
-    recorder.stop();
-    await stopped;
-
-    const mimeType = recorder.mimeType || "audio/webm";
-    const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
-    audioChunksRef.current = [];
-    mediaRecorderRef.current = null;
-
-    if (audioBlob.size === 0) {
-      setVoiceState("error");
-      setVoiceError(t("search.voice.errors.noAudio"));
-      return;
-    }
-
+    // RUNTIME BUG FIX: celý zvyšok tejto funkcie (predtým iba časť od
+    // fetch nižšie) je teraz v try/catch. Predtým, ak `recorder.stop()`
+    // alebo čakanie na "stop" event zlyhalo/vyhodilo výnimku, appka
+    // zostala navždy "zamrznutá" v stave "processing" — search pole sa
+    // nenaplnilo A ZÁROVEŇ sa nezobrazila žiadna chyba, presne ako v
+    // nahlásenom produkčnom bugu.
     try {
+      // Na časti reálnych mobilných prehliadačov (najmä staršie
+      // Android WebView) sa stáva, že MediaRecorder po stop() nikdy
+      // nevyšle "stop" event (napr. keď OS medzitým ukončí audio
+      // stream na pozadí). Bez časového limitu by appka na tento
+      // event čakala navždy. Ak limit vyprší, pokračuje sa s chunkami,
+      // ktoré už prišli cez ondataavailable (recorder.stop() finálny
+      // dataavailable vyžiada ešte pred vypršaním tohto limitu).
+      const stopped = new Promise<void>((resolve) => {
+        recorder.addEventListener("stop", () => resolve(), { once: true });
+      });
+      recorder.stop();
+      await Promise.race([
+        stopped,
+        new Promise<void>((resolve) => setTimeout(resolve, 4000)),
+      ]);
+      stopMediaRecorderTracks(recorder);
+
+      const mimeType = recorder.mimeType || "audio/webm";
+      const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
+      audioChunksRef.current = [];
+      mediaRecorderRef.current = null;
+
+      // Bezpečný diagnostický log (zadanie, bod 7) — VÝHRADNE metadáta
+      // nahrávky, NIKDY obsah audia/prepisu.
+      console.log("[voice] nahrávka ukončená:", {
+        mimeType: recorder.mimeType,
+        blobSize: audioBlob.size,
+        blobType: audioBlob.type,
+      });
+
+      if (audioBlob.size === 0) {
+        setVoiceState("error");
+        setVoiceError(t("search.voice.errors.noAudio"));
+        return;
+      }
+
       const {
         data: { session },
       } = await supabase.auth.getSession();
@@ -512,7 +530,17 @@ export default function Dashboard() {
         body: voiceFormData,
       });
 
-      const data = await response.json();
+      // `.json()` môže zlyhať, ak server vráti neočakávané telo (napr.
+      // platformová HTML chybová stránka pri 5xx) — bez `.catch` by táto
+      // výnimka predtým unikla mimo vonkajší try/catch a appka by opäť
+      // ostala ticho "zamrznutá".
+      const data = await response.json().catch(() => null);
+
+      console.log("[voice] odpoveď prepisu:", {
+        status: response.status,
+        success: data?.success,
+        errorCode: data?.success ? undefined : data?.error,
+      });
 
       if (!response.ok || !data?.success || typeof data.text !== "string" || !data.text) {
         setVoiceState("error");
