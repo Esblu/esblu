@@ -43,7 +43,8 @@ export const INTENT_REGISTRY: Record<IntentName, IntentDefinition> = {
     name: "SHOW_VEHICLE_DOCUMENTS",
     readOnly: true,
     requiresConfirmation: false,
-    description: "Zobraz dokumenty priradené k vozidlu.",
+    description:
+      "Zobraz dokumenty priradené k vozidlu, voliteľne filtrované podľa typu dokumentu a/alebo dátumového rozsahu.",
   },
   SHOW_VEHICLE_SERVICE: {
     name: "SHOW_VEHICLE_SERVICE",
@@ -121,7 +122,8 @@ export const INTENT_REGISTRY: Record<IntentName, IntentDefinition> = {
     name: "SEARCH_DOCUMENTS",
     readOnly: true,
     requiresConfirmation: false,
-    description: "Nájdi AI dokumenty podľa textu.",
+    description:
+      "Nájdi dokumenty podľa voľného textu a/alebo filtrov (typ dokumentu, dátumový rozsah, suma).",
   },
   UPCOMING_DEADLINES: {
     name: "UPCOMING_DEADLINES",

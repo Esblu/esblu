@@ -1,5 +1,11 @@
 import OpenAI from "openai";
-import { INTENT_NAMES, type IntentName, type ParsedIntent } from "@/lib/intents/types";
+import {
+  DOCUMENT_TYPE_FILTERS,
+  INTENT_NAMES,
+  isDocumentTypeFilter,
+  type IntentName,
+  type ParsedIntent,
+} from "@/lib/intents/types";
 
 // =============================================================================
 // Esblu — Intent Engine: AI fallback pre text, ktorý deterministický parser
@@ -42,8 +48,27 @@ const INTENT_CLASSIFICATION_SCHEMA = {
     year: { type: ["number", "null"] },
     withinDays: { type: ["number", "null"] },
     onlyOverdue: { type: ["boolean", "null"] },
+    // Nasledujúce 4 polia patria k SEARCH_DOCUMENTS/SHOW_VEHICLE_DOCUMENTS
+    // (bod 4 doplnenia zadania — parametrizovaný filter namiesto desiatok
+    // samostatných intentov). `documentType` je striktný enum (rovnaký
+    // allowlist ako CHECK v produkčnej DB, lib/intents/types.ts), takže AI
+    // ani tu nemôže vrátiť nič mimo povolených hodnôt.
+    documentType: { type: ["string", "null"], enum: [...DOCUMENT_TYPE_FILTERS, null] },
+    dateFrom: { type: ["string", "null"] },
+    dateTo: { type: ["string", "null"] },
+    amount: { type: ["number", "null"] },
   },
-  required: ["intent", "query", "year", "withinDays", "onlyOverdue"],
+  required: [
+    "intent",
+    "query",
+    "year",
+    "withinDays",
+    "onlyOverdue",
+    "documentType",
+    "dateFrom",
+    "dateTo",
+    "amount",
+  ],
 } as const;
 
 const INTENT_CLASSIFICATION_PROMPT = `
@@ -55,11 +80,26 @@ vrátiť null, ak text jednoznačne nezodpovedá žiadnemu z nich.
 Povolené intenty:
 ${INTENT_NAMES.map((n) => `- ${n}`).join("\n")}
 
+Povolené hodnoty pre "documentType" (presne ako v databáze, nič iné):
+${DOCUMENT_TYPE_FILTERS.map((t) => `- ${t}`).join("\n")}
+
 Pravidlá:
 - NIKDY nevracaj intent mimo tohto zoznamu.
-- NIKDY si nevymýšľaj ŠPZ, názov vozidla/stroja ani žiadnu inú hodnotu,
-  ktorá sa v texte doslova nenachádza. "query" je vždy iba to, čo je v
-  texte skutočne napísané (napr. ŠPZ, časť názvu).
+- NIKDY si nevymýšľaj ŠPZ, názov vozidla/stroja, typ dokumentu, dátum ani
+  sumu — žiadnu hodnotu, ktorá sa v texte doslova nenachádza alebo z neho
+  jednoznačne nevyplýva. "query" je vždy iba to, čo je v texte skutočne
+  napísané (napr. ŠPZ, časť názvu, meno dodávateľa).
+- "documentType" nastav LEN ak text jednoznačne pomenúva konkrétny typ
+  dokumentu (napr. "bločky" → receipt, "faktúry" → invoice, "vážne
+  lístky" → weigh_ticket, "dodacie listy" → delivery_note, "PZP" →
+  insurance, "technický preukaz" → vehicle_registration). Inak nechaj
+  null — NIKDY nehádaj typ, ktorý text nespomína.
+- "dateFrom"/"dateTo" (formát "YYYY-MM-DD") nastav LEN ak text obsahuje
+  jednoznačný časový rozsah (napr. "za august", "tento mesiac", "tento
+  rok") — rok, ak nie je v texte, je vždy aktuálny kalendárny rok. Inak
+  null.
+- "amount" nastav LEN ak text obsahuje konkrétnu sumu v eurách (napr. "za
+  86 eur" → 86). Inak null.
 - Ak text nie je jednoznačne príkaz/otázka o vozidle, stroji, sklade,
   dokumente alebo blížiacich sa termínoch, vráť intent: null.
 - Text môže byť v ktoromkoľvek zo 4 jazykov — jazyk NEOVPLYVŇUJE, ktorý
@@ -101,6 +141,10 @@ export async function classifyIntentWithAi(
       year: number | null;
       withinDays: number | null;
       onlyOverdue: boolean | null;
+      documentType: string | null;
+      dateFrom: string | null;
+      dateTo: string | null;
+      amount: number | null;
     };
 
     if (!parsed.intent || !(INTENT_NAMES as readonly string[]).includes(parsed.intent)) {
@@ -114,6 +158,14 @@ export async function classifyIntentWithAi(
         year: parsed.year ?? undefined,
         withinDays: parsed.withinDays ?? undefined,
         onlyOverdue: parsed.onlyOverdue ?? undefined,
+        // isDocumentTypeFilter je druhá, nezávislá kontrola oproti
+        // json_schema enumu vyššie (rovnaký fail-closed princíp ako
+        // isRegisteredReadOnlyIntent pre `intent` — nikdy sa neverí iba
+        // jednej vrstve validácie modelového výstupu).
+        documentType: isDocumentTypeFilter(parsed.documentType) ? parsed.documentType : undefined,
+        dateFrom: parsed.dateFrom ?? undefined,
+        dateTo: parsed.dateTo ?? undefined,
+        amount: parsed.amount ?? undefined,
       },
       source: "ai",
     };

@@ -24,12 +24,19 @@ import {
   fetchVehicleDocuments,
   generalDocumentDetailHref,
   evidenceDetailHref,
+  readExtractedDate,
   type VehicleDocumentEntry,
 } from "@/lib/vehicle-documents";
 import { vehicleDetailHref, machineDetailHref, inventoryItemDetailHref } from "@/lib/entity-links";
 import type { VehicleVignette } from "@/lib/vehicle-vignettes";
 import { formatDate } from "@/lib/i18n/format";
-import type { EntityRef, IntentResult, ParsedIntent } from "@/lib/intents/types";
+import {
+  DOCUMENT_TYPE_FILTERS,
+  type DocumentTypeFilter,
+  type EntityRef,
+  type IntentResult,
+  type ParsedIntent,
+} from "@/lib/intents/types";
 
 // =============================================================================
 // Esblu — Intent Engine handlery (zadanie, bod 2, 4, 5, 12, 14).
@@ -108,16 +115,41 @@ function disambiguateMachines(candidates: SearchedMachine[]): IntentResult {
 // zo zdroja "ai_evidence" má v documentType už hotový, človekom čitateľný
 // text (napr. "vážny lístok"), ktorý sa preto NIKDY neprekladá cez tento
 // zoznam (pozri komentár v lib/vehicle-documents.ts).
-const KNOWN_DOCUMENT_TYPE_KEYS = new Set([
-  "weigh_ticket",
-  "delivery_note",
-  "invoice",
-  "receipt",
-  "insurance",
-  "service_document",
-  "vehicle_registration",
-  "other",
-]);
+const KNOWN_DOCUMENT_TYPE_KEYS = new Set<string>(DOCUMENT_TYPE_FILTERS);
+
+// ai_evidence.document_type je pre tieto dva typy hotový, ľudsky čitateľný
+// SK text (nie stabilný interný kľúč) — hodnoty overené priamo v produkčnej
+// DB (`select distinct document_type from ai_evidence`), nie odhadnuté.
+// Použité pri filtrovaní podľa `documentType` (SHOW_VEHICLE_DOCUMENTS/
+// SEARCH_DOCUMENTS) nad záznammi z ai_evidence.
+const AI_EVIDENCE_DOCUMENT_TYPE_LABEL: Partial<Record<DocumentTypeFilter, string>> = {
+  weigh_ticket: "vážny lístok",
+  delivery_note: "dodací list",
+};
+
+/** Zhoduje sa VehicleDocumentEntry s požadovaným `documentType` filtrom? */
+function matchesDocumentTypeFilter(
+  doc: VehicleDocumentEntry,
+  filter: DocumentTypeFilter
+): boolean {
+  if (doc.source === "documents") return doc.documentType === filter;
+  return doc.documentType === AI_EVIDENCE_DOCUMENT_TYPE_LABEL[filter];
+}
+
+/** Zhoduje sa dátum dokumentu (ak je známy) s [dateFrom, dateTo] rozsahom?
+ * Dokument bez známeho dátumu sa pri aktívnom dátumovom filtri NIKDY
+ * nezahrnie (nehádame, že "asi" patrí do rozsahu). */
+function matchesDateRange(
+  date: string | null,
+  dateFrom: string | undefined,
+  dateTo: string | undefined
+): boolean {
+  if (!dateFrom && !dateTo) return true;
+  if (!date) return false;
+  if (dateFrom && date < dateFrom) return false;
+  if (dateTo && date > dateTo) return false;
+  return true;
+}
 
 function documentTypeLabel(locale: Locale, doc: VehicleDocumentEntry): string {
   if (doc.source === "documents" && KNOWN_DOCUMENT_TYPE_KEYS.has(doc.documentType)) {
@@ -155,7 +187,10 @@ export async function handleOpenOrSearchVehicle(
 export async function handleShowVehicleDocuments(
   supabase: SupabaseClient,
   locale: Locale,
-  query: string | undefined
+  query: string | undefined,
+  documentType?: DocumentTypeFilter,
+  dateFrom?: string,
+  dateTo?: string
 ): Promise<IntentResult> {
   const { vehicle, candidates } = await resolveOneVehicle(supabase, query);
   if (!vehicle) {
@@ -170,7 +205,17 @@ export async function handleShowVehicleDocuments(
   // lib/vehicle-documents.ts pre plný audit a odôvodnenie. Nikdy sa
   // nehádá: ak DB dáta nepotvrdia väzbu na toto vozidlo, dokument sa sem
   // nedostane.
-  const documents = await fetchVehicleDocuments(supabase, { id: vehicle.id, spz: vehicle.spz });
+  const allDocuments = await fetchVehicleDocuments(supabase, { id: vehicle.id, spz: vehicle.spz });
+
+  // Nepovinný filter podľa typu dokumentu ("Ukáž vážne lístky pre AB698CT")
+  // a/alebo dátumového rozsahu — aplikuje sa NAD už deterministicky
+  // priradeným zoznamom vyššie, nikdy nemení, ČO sa považuje za priradené
+  // k vozidlu (žiadny nový spôsob priradenia, iba doplnkový filter).
+  const documents = allDocuments.filter((doc) => {
+    if (documentType && !matchesDocumentTypeFilter(doc, documentType)) return false;
+    if (!matchesDateRange(doc.date, dateFrom, dateTo)) return false;
+    return true;
+  });
 
   if (documents.length === 0) {
     return {
@@ -615,36 +660,113 @@ export async function handleOpenOrSearchInventoryItem(
 // domov na detaile vozidla, všetko ostatné v Inboxe).
 // -----------------------------------------------------------------------------
 
+export type SearchDocumentsFilters = {
+  query?: string;
+  documentType?: DocumentTypeFilter;
+  dateFrom?: string;
+  dateTo?: string;
+  amount?: number;
+};
+
+function extractedTotalAmount(fields: Record<string, unknown> | null): number | null {
+  if (!fields) return null;
+  const raw = (fields as Record<string, unknown>).totalAmount;
+  if (typeof raw === "number" && Number.isFinite(raw)) return raw;
+  if (typeof raw === "string" && raw.trim() !== "") {
+    const parsed = Number(raw.replace(",", "."));
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function amountMatches(fields: Record<string, unknown> | null, target: number): boolean {
+  const value = extractedTotalAmount(fields);
+  return value !== null && Math.abs(value - target) < 0.01;
+}
+
+/** Text pre "žiadne dokumenty nenájdené" hlásenie, aj keď príkaz bol iba
+ * typ/dátum/suma filter bez voľného textu (nikdy nenechá v hláške
+ * nedosadenú "{{query}}" šablónu). */
+function describeSearchForNotFound(locale: Locale, filters: SearchDocumentsFilters): string {
+  if (filters.query) return filters.query;
+  const parts: string[] = [];
+  if (filters.documentType) {
+    parts.push(translate(locale, `inbox.documentTypes.${filters.documentType}`));
+  }
+  if (filters.dateFrom || filters.dateTo) {
+    parts.push(`${filters.dateFrom ?? "…"} – ${filters.dateTo ?? "…"}`);
+  }
+  if (filters.amount !== undefined) parts.push(`${filters.amount} €`);
+  return parts.join(", ") || translate(locale, "search.results.documentsTitle");
+}
+
 export async function handleSearchDocuments(
   supabase: SupabaseClient,
   locale: Locale,
-  query: string | undefined
+  filters: SearchDocumentsFilters
 ): Promise<IntentResult> {
-  if (!query) return notFound(locale, "search.errors.missingQuery");
+  const { query, documentType, dateFrom, dateTo, amount } = filters;
+
+  if (!query && !documentType && !dateFrom && !dateTo && amount === undefined) {
+    return notFound(locale, "search.errors.missingQuery");
+  }
+
+  // ai_evidence pozná VÝHRADNE weigh_ticket/delivery_note (overené v
+  // produkčnej DB) a nemá koncept peňažnej sumy — ak je aktívny amount
+  // filter, alebo je documentType iný typ, ai_evidence sa vôbec
+  // nedotazuje (nemohla by tam nič zodpovedať, netreba zbytočný dopyt).
+  const aiEvidenceTypeLabel = documentType
+    ? AI_EVIDENCE_DOCUMENT_TYPE_LABEL[documentType]
+    : undefined;
+  const shouldQueryEvidence = amount === undefined && (!documentType || Boolean(aiEvidenceTypeLabel));
 
   // Voľné textové vyhľadávanie prehľadáva OBA existujúce systémy
   // ukladania dokumentov — toto je všeobecný, nie vozidlo-špecifický
-  // príkaz (na rozdiel od SHOW_VEHICLE_DOCUMENTS vyššie), preto tu plain
-  // ILIKE zhoda na textové polia (nie na ŠPZ väzbu) zostáva primeraná,
-  // presne ako pôvodné správanie pre `documents`.
+  // príkaz (na rozdiel od SHOW_VEHICLE_DOCUMENTS vyššie). `documentType`/
+  // `dateFrom`/`dateTo`/`amount` sú VŽDY iba doplnkový, presne definovaný
+  // filter nad existujúcimi stĺpcami — nikdy surový SQL/text fragment od
+  // AI (bod 2 zadania).
+  let documentsQuery = supabase
+    .from("documents")
+    .select(
+      "id, document_type, original_filename, note, extracted_fields, created_at, archived_from_inbox_at, document_links(vehicle_id)"
+    )
+    .is("deleted_at", null);
+
+  if (documentType) {
+    documentsQuery = documentsQuery.eq("document_type", documentType);
+  }
+  if (query) {
+    documentsQuery = documentsQuery.or(
+      `original_filename.ilike.%${query}%,note.ilike.%${query}%,extracted_fields->>supplier.ilike.%${query}%,extracted_fields->>customer.ilike.%${query}%,extracted_fields->>merchant.ilike.%${query}%`
+    );
+  }
+  documentsQuery = documentsQuery.order("created_at", { ascending: false }).limit(50);
+
+  const evidenceQueryBuilder = shouldQueryEvidence
+    ? (() => {
+        let evidenceQuery = supabase
+          .from("ai_evidence")
+          .select(
+            "id, document_type, document_number, supplier, customer, material, spz, document_date, created_at"
+          );
+        if (aiEvidenceTypeLabel) {
+          evidenceQuery = evidenceQuery.eq("document_type", aiEvidenceTypeLabel);
+        }
+        if (query) {
+          evidenceQuery = evidenceQuery.or(
+            `document_number.ilike.%${query}%,supplier.ilike.%${query}%,customer.ilike.%${query}%,material.ilike.%${query}%,spz.ilike.%${query}%`
+          );
+        }
+        if (dateFrom) evidenceQuery = evidenceQuery.gte("document_date", dateFrom);
+        if (dateTo) evidenceQuery = evidenceQuery.lte("document_date", dateTo);
+        return evidenceQuery.order("created_at", { ascending: false }).limit(50);
+      })()
+    : null;
+
   const [documentsResult, evidenceResult] = await Promise.all([
-    supabase
-      .from("documents")
-      .select(
-        "id, document_type, original_filename, note, created_at, archived_from_inbox_at, document_links(vehicle_id)"
-      )
-      .is("deleted_at", null)
-      .or(`original_filename.ilike.%${query}%,note.ilike.%${query}%`)
-      .order("created_at", { ascending: false })
-      .limit(20),
-    supabase
-      .from("ai_evidence")
-      .select("id, document_type, document_number, supplier, customer, material, spz, created_at")
-      .or(
-        `document_number.ilike.%${query}%,supplier.ilike.%${query}%,customer.ilike.%${query}%,material.ilike.%${query}%,spz.ilike.%${query}%`
-      )
-      .order("created_at", { ascending: false })
-      .limit(20),
+    documentsQuery,
+    evidenceQueryBuilder ?? Promise.resolve({ data: [], error: null }),
   ]);
 
   if (documentsResult.error) {
@@ -654,13 +776,14 @@ export async function handleSearchDocuments(
     console.error("handleSearchDocuments (ai_evidence) zlyhalo:", evidenceResult.error.message);
   }
 
-  const documents =
+  const documentsRaw =
     (documentsResult.data as
       | {
           id: string;
           document_type: string;
           original_filename: string | null;
           note: string | null;
+          extracted_fields: Record<string, unknown> | null;
           created_at: string;
           archived_from_inbox_at: string | null;
           document_links: { vehicle_id: string | null }[] | null;
@@ -668,8 +791,19 @@ export async function handleSearchDocuments(
       | null) || [];
   const evidence = evidenceResult.data || [];
 
+  // Dátum/suma nemajú vlastný DB stĺpec pre `documents` (sú v
+  // extracted_fields, ktorého tvar sa líši podľa typu) — filtrujú sa preto
+  // rovnakým "fetch small scoped set → filter v appke" vzorom, aký už
+  // appka používa pre ŠPZ (lib/entity-search.ts) aj dátum priradeného
+  // dokumentu (lib/vehicle-documents.ts#readExtractedDate).
+  const documents = documentsRaw.filter((doc) => {
+    if (!matchesDateRange(readExtractedDate(doc.extracted_fields), dateFrom, dateTo)) return false;
+    if (amount !== undefined && !amountMatches(doc.extracted_fields, amount)) return false;
+    return true;
+  });
+
   if (documents.length === 0 && evidence.length === 0) {
-    return notFound(locale, "search.errors.documentsNotFound", query);
+    return notFound(locale, "search.errors.documentsNotFound", describeSearchForNotFound(locale, filters));
   }
 
   const items: EntityRef[] = [
@@ -784,7 +918,14 @@ export async function executeIntent(
     case "SEARCH_VEHICLE":
       return handleOpenOrSearchVehicle(supabase, locale, intent.args.query, true);
     case "SHOW_VEHICLE_DOCUMENTS":
-      return handleShowVehicleDocuments(supabase, locale, intent.args.query);
+      return handleShowVehicleDocuments(
+        supabase,
+        locale,
+        intent.args.query,
+        intent.args.documentType,
+        intent.args.dateFrom,
+        intent.args.dateTo
+      );
     case "SHOW_VEHICLE_SERVICE":
       return handleShowVehicleService(supabase, locale, intent.args.query);
     case "VEHICLE_STK_STATUS":
@@ -810,7 +951,13 @@ export async function executeIntent(
     case "SEARCH_INVENTORY_ITEM":
       return handleOpenOrSearchInventoryItem(supabase, locale, intent.args.query, true);
     case "SEARCH_DOCUMENTS":
-      return handleSearchDocuments(supabase, locale, intent.args.query);
+      return handleSearchDocuments(supabase, locale, {
+        query: intent.args.query,
+        documentType: intent.args.documentType,
+        dateFrom: intent.args.dateFrom,
+        dateTo: intent.args.dateTo,
+        amount: intent.args.amount,
+      });
     case "UPCOMING_DEADLINES":
       return handleUpcomingDeadlines(
         supabase,

@@ -55,6 +55,34 @@ export function isKnownIntentName(value: unknown): value is IntentName {
   );
 }
 
+// Jediný zdroj pravdy pre povolené hodnoty `documents.document_type` —
+// zhodné s CHECK (documents_document_type_check) v produkčnej DB (overené
+// priamo cez Supabase MCP, nie odhadnuté). Zdieľané medzi parserom
+// (lib/intents/parse.ts, rozpoznávanie "bločky"/"faktúry"/"vážne lístky"
+// a pod. z prirodzeného textu), AI fallbackom (lib/intents/ai-fallback.ts)
+// a handlermi (lib/intents/handlers.ts) — presne bod zadania "voice must
+// NOT be designed around a handful of hardcoded phrases", tu implementovaný
+// ako JEDEN allowlist typu, nie duplicitne na troch miestach.
+export const DOCUMENT_TYPE_FILTERS = [
+  "weigh_ticket",
+  "delivery_note",
+  "invoice",
+  "receipt",
+  "insurance",
+  "service_document",
+  "vehicle_registration",
+  "other",
+] as const;
+
+export type DocumentTypeFilter = (typeof DOCUMENT_TYPE_FILTERS)[number];
+
+export function isDocumentTypeFilter(value: unknown): value is DocumentTypeFilter {
+  return (
+    typeof value === "string" &&
+    (DOCUMENT_TYPE_FILTERS as readonly string[]).includes(value)
+  );
+}
+
 // Argumenty sú zámerne "plochý" string/number/boolean záznam — žiadne
 // vnorené objekty, žiadny raw SQL/JS fragment, žiadny slobodný "query"
 // objekt, ktorý by appka priamo posunula do DB dopytu bez validácie
@@ -73,6 +101,21 @@ export type IntentArgs = {
   // použije DEADLINE_THRESHOLD_DAYS.dueSoon (30) z lib/deadlines.ts.
   withinDays?: number;
   onlyOverdue?: boolean;
+  // Nasledujúce 4 polia rozširujú SEARCH_DOCUMENTS a SHOW_VEHICLE_DOCUMENTS
+  // o parametrizované filtre (namiesto desiatok samostatných intentov —
+  // "Ukáž bločky za august", "Ukáž faktúry od dodávateľa X", "Nájdi bloček
+  // za 86 eur"). Handler ich VŽDY interpretuje iba ako doplnkový, presne
+  // definovaný filter nad existujúcimi tabuľkami — nikdy ako surový
+  // SQL/text fragment.
+  documentType?: DocumentTypeFilter;
+  // ISO dátum "YYYY-MM-DD" (vrátane) — dolná/horná hranica dátumu
+  // DOKUMENTU (nie dátumu nahratia). Obe strany vypočíta VÝHRADNE parser
+  // (kalendárny mesiac/rok), nikdy sa nehádajú čiastkové hodnoty.
+  dateFrom?: string;
+  dateTo?: string;
+  // Suma v EUR z fráz ako "za 86 eur" — porovnáva sa s extracted_fields
+  // totalAmount (bloček/faktúra) s malou toleranciou zaokrúhlenia.
+  amount?: number;
 };
 
 export type ParsedIntent = {

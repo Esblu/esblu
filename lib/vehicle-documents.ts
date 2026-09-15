@@ -132,7 +132,12 @@ export function generalDocumentDetailHref(
   return appendQueryParam("/ai-evidencia", "openDocument", documentId);
 }
 
-function readExtractedDate(fields: Record<string, unknown> | null): string | null {
+// Exportované aj pre lib/intents/handlers.ts#handleSearchDocuments — rovnaká
+// logika "aký je dátum TOHTO dokumentu" sa nesmie duplikovať na dvoch
+// miestach (vozidlo-scoped zoznam tu, celofiremné SEARCH_DOCUMENTS tam), inak
+// by sa filtrovanie podľa dátumu ("za august", "tento mesiac") mohlo v
+// jednom z dvoch miest ticho rozísť od druhého.
+export function readExtractedDate(fields: Record<string, unknown> | null): string | null {
   if (!fields) return null;
   for (const key of [
     "issueDate",

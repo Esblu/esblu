@@ -67,17 +67,22 @@ const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY!,
 });
 
-// Krátky, bezpečný doménový kontext pre OpenAI transcription `prompt`
-// parameter (zadanie, bod 3) — VÝHRADNE všeobecné výrazy appky, ŽIADNE
-// konkrétne SPZ/mená firiem/používateľské dáta. Podľa OpenAI SDK
-// dokumentácie by mal prompt zodpovedať jazyku audia, preto je per-locale.
-// Cieľ: aby model rozpoznal doménové skratky (STK/EK/PZP/ŠPZ, HU/AU,
-// inspection/registration) a bežné výrazy appky namiesto ich domýšľania
-// ako iné, foneticky podobné slová.
+// Prompt pre OpenAI transcription `prompt` parameter (zadanie, dodatok bod
+// 7) — PRIMÁRNY cieľ je explicitne vynútiť ÚPLNÝ, doslovný prepis celej
+// vety, NIE extrakciu kľúčových slov. Toto je zámerne PRVÁ vec v prompte:
+// speech-to-text vrstva NIE JE intent classifier (dodatok bod 1) — o tom,
+// čo transcript ZNAMENÁ, rozhoduje výhradne existujúci Intent Engine
+// (parser + AI fallback klasifikátor), nikdy transkripčný model. Doménový
+// slovník je zámerne AŽ DRUHÁ, kratšia časť a je formulovaný ako zoznam
+// výrazov, ktoré sa MÔŽU vyskytnúť — nie ako inštrukcia vynechávať iné
+// slová (dodatok bod 7: "slovník nesmie tlačiť model k vypusteniu ostatných
+// slov"). VÝHRADNE všeobecné výrazy appky, ŽIADNE konkrétne
+// SPZ/mená/používateľské dáta. Podľa OpenAI SDK dokumentácie by mal prompt
+// zodpovedať jazyku audia, preto je per-locale.
 const DOMAIN_CONTEXT_PROMPT_BY_LOCALE: Record<"sk" | "de" | "en", string> = {
-  sk: "Esblu je firemná aplikácia pre vozidlá, stroje, sklad a dokumenty. Časté výrazy: STK, EK, PZP, EČV, ŠPZ, vozidlo, servis, dokument, doklady, faktúra, bloček, technický preukaz, vážny lístok, stroj, bager, sklad.",
-  de: "Esblu ist eine Firmenanwendung für Fahrzeuge, Baumaschinen, Lager und Dokumente. Häufige Begriffe: HU, AU, Kennzeichen, Fahrzeug, Service, Dokument, Rechnung, Beleg, Fahrzeugschein, Bagger, Lager.",
-  en: "Esblu is a company app for vehicles, machines, inventory and documents. Common terms: inspection, registration, license plate, vehicle, service, document, invoice, receipt, vehicle registration, excavator, warehouse.",
+  sk: "Prepíš celý hovorený príkaz presne a úplne, slovo po slove. Nevynechávaj žiadne slová ani časti vety, nezjednodušuj a neredukuj vetu iba na kľúčové slová alebo identifikátory. Zachovaj celé znenie vrátane čísel, názvov, skratiek a identifikátorov. Ide o firemnú aplikáciu Esblu pre vozidlá, stroje, sklad a dokumenty; v reči sa môžu vyskytnúť výrazy ako STK, EK, PZP, EČV, ŠPZ, vozidlo, stroj, bager, servis, sklad, bloček, faktúra, vážny lístok, dodací list, technický preukaz, dokument, report, export.",
+  de: "Transkribiere den gesamten gesprochenen Befehl genau und vollständig, Wort für Wort. Lasse keine Wörter oder Satzteile aus und kürze den Satz nicht auf Schlüsselwörter oder Kennungen. Erhalte den vollständigen Wortlaut einschließlich Zahlen, Namen, Abkürzungen und Kennungen. Es handelt sich um die Firmenanwendung Esblu für Fahrzeuge, Baumaschinen, Lager und Dokumente; es können Begriffe wie HU, AU, Kennzeichen, Fahrzeug, Baumaschine, Bagger, Service, Lager, Rechnung, Beleg, Fahrzeugschein, Dokument, Bericht, Export vorkommen.",
+  en: "Transcribe the entire spoken command exactly and completely, word for word. Do not omit any words or parts of the sentence, and do not shorten it to just keywords or identifiers. Preserve the full wording including numbers, names, abbreviations and identifiers. This is the Esblu company app for vehicles, machines, inventory and documents; terms like inspection, registration, license plate, vehicle, machine, excavator, service, warehouse, invoice, receipt, vehicle registration, document, report, export may occur.",
 };
 
 const ALLOWED_AUDIO_MIME_TYPES = new Set<string>(ALLOWED_VOICE_AUDIO_MIME_TYPES);
