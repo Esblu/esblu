@@ -66,6 +66,49 @@ function textIncludes(haystack: string, needle: string): boolean {
   );
 }
 
+// Minimálna dĺžka KRATŠIEHO z dvoch porovnávaných slov, aby sa prefix-zhoda
+// vôbec zvážila — zabraňuje falošným zhodám na krátkych časticiach/
+// predložkách (napr. "na" by inak bolo prefixom desiatok slov).
+const STEM_MATCH_MIN_LENGTH = 3;
+
+/**
+ * Deterministický, auditovateľný fallback pre slovenskú/českú deklináciu
+ * ("spreja"/"sprejom"/"sprejov" ↔ DB názov "Sprej") — ŽIADNY fuzzy/
+ * Levenshtein matching, iba explicitné, vysvetliteľné pravidlo: dve
+ * normalizované slová sa považujú za rovnaký "stem", ak jedno je presným
+ * prefixom druhého A kratšie z nich má aspoň STEM_MATCH_MIN_LENGTH
+ * znakov. Volá sa VÝHRADNE ako fallback, keď presná substring zhoda
+ * (textIncludes) nenájde nič — nikdy ju nenahrádza, iba ju dopĺňa (fail
+ * closed princíp "nikdy nehádaj": toto je stále striktné pravidlo, nie
+ * štatistický odhad).
+ */
+function tokensShareStem(a: string, b: string): boolean {
+  if (!a || !b) return false;
+  const shorter = a.length <= b.length ? a : b;
+  const longer = a.length <= b.length ? b : a;
+  if (shorter.length < STEM_MATCH_MIN_LENGTH) return false;
+  return longer.startsWith(shorter);
+}
+
+/** `textIncludes` doplnené o `tokensShareStem` fallback nad jednotlivými
+ * slovami dopytu — KAŽDÉ slovo dopytu musí mať zhodu (stem alebo presnú)
+ * v haystacku, aby fallback nenachádzal príliš voľné zhody pri
+ * viacslovných dopytoch. */
+function textIncludesWithStemFallback(haystack: string, needle: string): boolean {
+  if (!needle) return false;
+  if (textIncludes(haystack, needle)) return true;
+
+  const haystackTokens = normalizeForFreeTextMatch(haystack)
+    .split(/\s+/)
+    .filter(Boolean);
+  const needleTokens = normalizeForFreeTextMatch(needle)
+    .split(/\s+/)
+    .filter(Boolean);
+  if (needleTokens.length === 0) return false;
+
+  return needleTokens.every((nt) => haystackTokens.some((ht) => tokensShareStem(ht, nt)));
+}
+
 /**
  * Všetky vozidlá aktívnej firmy (RLS-scoped). Volá sa raz na vyhľadávaciu
  * požiadavku — firma má rádovo desiatky/stovky vozidiel, nie milióny, takže
@@ -172,7 +215,16 @@ export async function searchInventoryItems(
   queryText: string
 ): Promise<SearchedInventoryItem[]> {
   const items = await fetchCompanyInventoryItems(supabase);
-  return items.filter((i) =>
-    textIncludes(`${i.name || ""} ${i.category || ""} ${i.location || ""}`, queryText)
-  );
+  const haystackOf = (i: SearchedInventoryItem) =>
+    `${i.name || ""} ${i.category || ""} ${i.location || ""}`;
+
+  const exact = items.filter((i) => textIncludes(haystackOf(i), queryText));
+  if (exact.length > 0) return exact;
+
+  // Fallback pre slovenskú deklináciu ("Aký máme zostatok pre položku
+  // spreja?" musí nájsť DB položku "Sprej") — pozri
+  // textIncludesWithStemFallback vyššie. Zapína sa IBA keď presná zhoda
+  // vráti 0 výsledkov (root cause opravy inventory-status bugu, doplnenie
+  // zadania bod 2).
+  return items.filter((i) => textIncludesWithStemFallback(haystackOf(i), queryText));
 }

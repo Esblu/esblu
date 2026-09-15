@@ -143,6 +143,8 @@ const sk = {
       vignetteExpiredSuffix: " (po termíne)",
       costSummary: "Servisné náklady vozidla {{entity}} za rok {{year}}: {{amount}} €.",
       noVehicleDocuments: "Pre vozidlo {{entity}} nie sú evidované žiadne dokumenty.",
+      inventoryStatus: "{{entity}}: {{quantity}} {{unit}}",
+      inventoryQuantityNotTracked: "Množstvo pre {{entity}} nie je evidované.",
     },
     report: {
       notTracked: "Nie je evidované",
@@ -186,6 +188,54 @@ const sk = {
       openAction: "Otvoriť",
       loading: "Hľadám…",
       noDeadlines: "Momentálne nemáte žiadne blížiace sa ani prekročené termíny.",
+    },
+    // Action Engine (doplnenie zadania, bod 6/23) — WRITE intenty
+    // (EXPORT_DOCUMENTS/CREATE_DOCUMENT_CATEGORY/RENAME_DOCUMENT_CATEGORY/
+    // ASSIGN_DOCUMENTS_TO_CATEGORY) — preview/potvrdenie/výsledok texty.
+    actions: {
+      cancelLabel: "Zrušiť",
+      errors: {
+        ownerOrAdminOnly: "Túto akciu môže vykonať iba vlastník alebo správca firmy.",
+      },
+      // Server-side confirmation-table hardening (bezpečnostné review) —
+      // fail-closed hlášky pre execute krok, ktoré appka zámerne nerozlišuje
+      // podľa presného dôvodu (cudzia/expirovaná/použitá/neexistujúca
+      // confirmation) smerom ku klientovi — pozri lib/intents/actions.ts.
+      confirmation: {
+        invalidOrExpired: "Toto potvrdenie už nie je platné. Skúste príkaz zadať znova.",
+        dataChanged: "Dotknuté dokumenty sa medzičasom zmenili. Skúste príkaz zadať znova, aby appka pripravila nový náhľad.",
+      },
+      export: {
+        unsupportedType: "Export pre typ dokumentu „{{types}}“ zatiaľ nepodporujem.",
+        partiallyUnsupported: "(Typ „{{types}}“ sa exportovať nedá a bol vynechaný.)",
+        noDocuments: "Nenašli sa žiadne dokumenty na export.",
+        countReceipts: "{{count}} bločkov",
+        countInvoices: "{{count}} faktúr",
+        countEvidence: "{{count}} ostatných dokumentov",
+        summary: "Našiel som {{total}} dokumentov: {{breakdown}}. Exportovať do XLSX?",
+        confirmLabel: "Exportovať",
+        done: "Export bol pripravený ({{count}} dokumentov).",
+      },
+      category: {
+        missingName: "Napíšte názov novej zložky.",
+        alreadyExists: "Zložka „{{name}}“ už existuje.",
+        createSummary: "Vytvoriť novú zložku „{{name}}“?",
+        createConfirmLabel: "Vytvoriť",
+        createSuccess: "Zložka „{{name}}“ bola vytvorená.",
+        missingRenameArgs: "Napíšte, ktorú zložku a na aký nový názov chcete premenovať.",
+        notFound: "Zložka „{{name}}“ sa nenašla.",
+        renameSummary: "Premenovať zložku „{{from}}“ na „{{to}}“?",
+        renameConfirmLabel: "Premenovať",
+        renameSuccess: "Zložka „{{from}}“ bola premenovaná na „{{to}}“.",
+      },
+      assign: {
+        missingTarget: "Napíšte, do ktorej zložky chcete dokumenty priradiť.",
+        targetNotFound: "Zložka „{{name}}“ neexistuje. Najprv ju vytvorte príkazom „Vytvor zložku {{name}}.“",
+        noDocuments: "Nenašli sa žiadne dokumenty na priradenie.",
+        summary: "Našiel som {{count}} dokumentov. Priradiť ich do zložky „{{category}}“?",
+        confirmLabel: "Priradiť",
+        success: "{{count}} dokumentov bolo priradených do zložky „{{category}}“.",
+      },
     },
     // Hlasové vyhľadávanie (zadanie, sekcia B/C/H) — tenká vstupná vrstva
     // nad rovnakým textovým poľom/Intent Enginom vyššie, nikdy nový

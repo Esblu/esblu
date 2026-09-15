@@ -1,4 +1,4 @@
-import { supabase } from "@/lib/supabase";
+import type { SupabaseClient } from "@supabase/supabase-js";
 
 // =============================================================================
 // Esblu — firemné vlastné kategórie AI dokumentov (Fáza 2/4 zadania
@@ -22,6 +22,14 @@ import { supabase } from "@/lib/supabase";
 // nikdy nepotrebuje service_role — bežný user-scoped `supabase` klient s
 // company-scoped RLS je jediná a postačujúca autorizácia (Fáza 11 princíp:
 // user-scoped Supabase/RLS všade, kde je to možné).
+//
+// Každá funkcia dostáva `supabase: SupabaseClient` ako explicitný parameter
+// (namiesto browser singletonu z lib/supabase) — tento modul je teraz
+// volaný aj zo server-side Intent Engine akcií (lib/intents/actions.ts),
+// ktoré majú user-scoped klienta postaveného z Bearer tokenu (pozri
+// lib/server-supabase-user-client.ts), nikdy nie browser singleton. K dátumu
+// tohto refaktoru nemal tento modul ŽIADNEHO existujúceho volajúceho v UI
+// (overené repo-wide vyhľadávaním), zmena signatúry je preto bezpečná.
 // =============================================================================
 
 export type CustomDocumentCategory = {
@@ -65,9 +73,9 @@ export function normalizeCanonicalCategorySlug(value: unknown): string | null {
  * rovnakým významom pod iným menom (bod zadania "Nedovoľ AI vytvárať
  * stovky duplicitných kategórií").
  */
-export async function listCompanyCustomCategories(): Promise<
-  CustomDocumentCategory[]
-> {
+export async function listCompanyCustomCategories(
+  supabase: SupabaseClient
+): Promise<CustomDocumentCategory[]> {
   const { data, error } = await supabase
     .from("custom_document_categories")
     .select("*")
@@ -111,9 +119,12 @@ export type CreateCustomCategoryError =
 
 /**
  * Založí novú vlastnú kategóriu — volať VÝHRADNE po explicitnom potvrdení
- * používateľom (review UI "POTVRDIŤ / UPRAVIŤ / ZRUŠIŤ", nikdy automaticky
- * po AI analýze). created_by sa nastavuje na auth.uid() (RLS with_check to
- * aj vynucuje), company_id na aktívnu firmu volajúceho.
+ * používateľom (review UI "POTVRDIŤ / UPRAVIŤ / ZRUŠIŤ", resp. Intent
+ * Engine ACTION PREVIEW → [Vytvoriť], nikdy automaticky). `userId` a
+ * `companyId` MUSÍ volajúci odvodiť server-side zo session JWT (pozri
+ * verifyRequestUser + company_members v app/api/assistant/intent/route.ts),
+ * NIKDY z tela requestu — created_by sa nastavuje na túto hodnotu (RLS
+ * with_check to aj nezávisle vynucuje).
  *
  * UNIQUE (company_id, canonical_slug) v DB je posledná poistka proti
  * duplicite aj pri súbežnom volaní (napr. dve zariadenia toho istého
@@ -122,7 +133,9 @@ export type CreateCustomCategoryError =
  * rovnaký, ako keby insert prebehol ako prvý.
  */
 export async function createCustomCategory(
+  supabase: SupabaseClient,
   companyId: string,
+  userId: string,
   name: string,
   description: string | null = null
 ): Promise<
@@ -136,14 +149,6 @@ export async function createCustomCategory(
     return { ok: false, error: "INVALID_NAME" };
   }
 
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
-
-  if (!session) {
-    return { ok: false, error: "UNKNOWN" };
-  }
-
   const { data, error } = await supabase
     .from("custom_document_categories")
     .insert({
@@ -151,7 +156,7 @@ export async function createCustomCategory(
       name: trimmedName,
       canonical_slug: canonicalSlug,
       description,
-      created_by: session.user.id,
+      created_by: userId,
     })
     .select("*")
     .single();
@@ -161,7 +166,7 @@ export async function createCustomCategory(
       // unique_violation (company_id, canonical_slug) — medzičasom už
       // vznikla (napr. súbežné potvrdenie na inom zariadení). Dohľadáme a
       // vrátime existujúci riadok namiesto chyby.
-      const existing = await listCompanyCustomCategories();
+      const existing = await listCompanyCustomCategories(supabase);
       const match = findMatchingCustomCategory(existing, trimmedName);
 
       if (match) {

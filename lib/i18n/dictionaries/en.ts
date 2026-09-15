@@ -139,6 +139,8 @@ const en = {
       vignetteExpiredSuffix: " (expired)",
       costSummary: "Service costs for {{entity}} in {{year}}: {{amount}} €.",
       noVehicleDocuments: "No documents are on file for vehicle {{entity}}.",
+      inventoryStatus: "{{entity}}: {{quantity}} {{unit}}",
+      inventoryQuantityNotTracked: "Quantity for {{entity}} is not tracked.",
     },
     report: {
       notTracked: "Not tracked",
@@ -182,6 +184,47 @@ const en = {
       openAction: "Open",
       loading: "Searching…",
       noDeadlines: "You currently have no upcoming or overdue deadlines.",
+    },
+    actions: {
+      cancelLabel: "Cancel",
+      errors: {
+        ownerOrAdminOnly: "Only the company owner or an admin can do this.",
+      },
+      confirmation: {
+        invalidOrExpired: "This confirmation is no longer valid. Please try the command again.",
+        dataChanged: "The matching documents have changed in the meantime. Please try the command again so the app can prepare a new preview.",
+      },
+      export: {
+        unsupportedType: "Exporting the document type \"{{types}}\" isn't supported yet.",
+        partiallyUnsupported: "(The type \"{{types}}\" can't be exported and was skipped.)",
+        noDocuments: "No documents were found to export.",
+        countReceipts: "{{count}} receipts",
+        countInvoices: "{{count}} invoices",
+        countEvidence: "{{count}} other documents",
+        summary: "I found {{total}} documents: {{breakdown}}. Export to XLSX?",
+        confirmLabel: "Export",
+        done: "Export ready ({{count}} documents).",
+      },
+      category: {
+        missingName: "Enter a name for the new folder.",
+        alreadyExists: "The folder \"{{name}}\" already exists.",
+        createSummary: "Create a new folder \"{{name}}\"?",
+        createConfirmLabel: "Create",
+        createSuccess: "Folder \"{{name}}\" was created.",
+        missingRenameArgs: "Tell me which folder and the new name to rename it to.",
+        notFound: "The folder \"{{name}}\" was not found.",
+        renameSummary: "Rename folder \"{{from}}\" to \"{{to}}\"?",
+        renameConfirmLabel: "Rename",
+        renameSuccess: "Folder \"{{from}}\" was renamed to \"{{to}}\".",
+      },
+      assign: {
+        missingTarget: "Tell me which folder to assign the documents to.",
+        targetNotFound: "The folder \"{{name}}\" doesn't exist yet. Create it first with \"Create folder {{name}}.\"",
+        noDocuments: "No documents were found to assign.",
+        summary: "I found {{count}} matching documents. Assign them to the folder \"{{category}}\"?",
+        confirmLabel: "Assign",
+        success: "{{count}} documents were assigned to the folder \"{{category}}\".",
+      },
     },
     voice: {
       ui: {

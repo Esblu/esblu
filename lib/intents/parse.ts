@@ -109,7 +109,7 @@ function stripExactFillerWords(text: string, fillers: string[]): string {
   return kept.join(" ").trim();
 }
 
-const QUERY_FILLER_WORDS = ["v", "vo", "na", "pre", "in", "im", "fur"];
+const QUERY_FILLER_WORDS = ["v", "vo", "na", "pre", "in", "im", "fur", "je"];
 
 /** stripWholeWordsStartingWith() + stripExactFillerWords() v jednom kroku —
  * jediné miesto, cez ktoré prechádza extrakcia voľného `query` textu pre
@@ -210,6 +210,51 @@ const INVENTORY_CONTEXT_WORDS = ["sklad", "inventory", "lager", "skladov"];
 const INVENTORY_ITEM_NOISE_WORDS = ["polozk"];
 const DOCUMENT_SEARCH_WORDS = ["faktur", "invoice", "rechnung", "blocek", "receipt", "beleg"];
 
+// "Aký máme zostatok pre položku sprej?", "Koľko máme spreja?", "Koľko
+// kusov spreja máme?", "Máme ešte sprej?", "Aký je stav položky sprej?" —
+// spúšťacie frázy pre INVENTORY_ITEM_STATUS (doplnenie zadania, sekcia 2 —
+// koreňová príčina produkčného bugu "Nič sa nenašlo." na tieto vety bola,
+// že appka vôbec NEROZPOZNALA zámer "opýtať sa na množstvo").
+const INVENTORY_STATUS_TRIGGER_WORDS = [
+  "zostatok",
+  "kolko mame",
+  "kolko este mame",
+  "kolko kusov",
+  "mame este",
+  "aky je stav",
+  "stav polozky",
+  "how much do we have",
+  "do we still have",
+  "wie viel haben wir",
+  "haben wir noch",
+];
+// Slová, ktoré sú súčasťou SAMOTNEJ OTÁZKY na stav ("Aký máme zostatok
+// pre...", "Koľko kusov... máme?"), nie súčasťou hľadaného NÁZVU položky —
+// odstraňujú sa z voľného textu presne tak isto ako kontextové slová
+// (extractFreeQuery), nikdy nezasahujú do mena samotného ("spray"/"sprej").
+const INVENTORY_STATUS_QUESTION_STEMS = [
+  "zostatok",
+  "kolko",
+  "kusov",
+  "mame",
+  "stav",
+  "este",
+  "aky",
+  "ake",
+  "aka",
+  "how",
+  "much",
+  "do",
+  "we",
+  "have",
+  "still",
+  "wie",
+  "viel",
+  "haben",
+  "wir",
+  "noch",
+];
+
 // "po splatnosti"/"po termine" sú bežné synonymá k "po lehote" — predtým
 // chýbali, takže "Ktoré vozidlá majú po splatnosti STK a EK?"/"Čo je po
 // termíne?" vôbec nespustili deadline vetvu (súčasť koreňovej príčiny
@@ -274,6 +319,69 @@ const THIS_YEAR_WORDS = ["tento rok", "tohto roku", "this year", "dieses jahr"];
 // lib/export-ai-evidence-excel.ts) funguje úplne nezmenené).
 const EXPORT_WORDS = ["vyexportuj", "exportuj", "export", "exportiere"];
 
+// Slovesné kmene pre príkazy, ktoré appka VEDOME nepodporuje (§16C/§24G
+// doplnenia zadania — mazanie, odoslanie dokumentu/faktúry, zmena
+// skladového množstva). MUSIA sa overiť ÚPLNE PRVÉ, pred akoukoľvek inou
+// vetvou nižšie — inak by napr. "Vymaž všetky faktúry." spadlo do branch 4
+// (SEARCH_DOCUMENTS, lebo "faktúry" je rozpoznaný typ dokumentu) a appka by
+// TICHO zamenila deštruktívny príkaz za neškodné vyhľadávanie namiesto
+// toho, aby ho jasne odmietla. Fail-closed: keď appka rozpozná niektorý z
+// týchto kmeňov, VŽDY vráti null priamo tu (nikdy sa nepokúša "zachrániť"
+// vetu iným intentom) — volajúci (route.ts) to ukáže ako "Tomuto príkazu
+// som nerozumel."/"Tento príkaz zatiaľ nepodporujem.".
+const UNSUPPORTED_ACTION_STEMS = [
+  "vymaz",
+  "zmaz",
+  "delete",
+  "loschen",
+  "loesch",
+  "posli",
+  "odosli",
+  "send",
+  "sende",
+  "odpocitaj",
+  "uprav mnozstvo",
+  "zmen mnozstvo",
+  "change quantity",
+  "add quantity",
+];
+
+// =============================================================================
+// Zložky dokumentov (custom_document_categories) — "Vytvor zložku X.",
+// "Premenuj zložku X na Y.", "Daj/Priraď [filter] do zložky X." (doplnenie
+// zadania, sekcie 7/10/12). Bežia PROTI PÔVODNÉMU `rawText` (nie
+// diakritiku-zbavenému `text`), aby zachytený názov zložky ostal presne
+// tak, ako ho používateľ napísal/vyslovil ("Reklamácie", nie "reklamacie")
+// — appka si nikdy nevymýšľa/neupravuje meno zložky. `i` flag pokrýva
+// veľké/malé písmená bez potreby normalizácie.
+// =============================================================================
+const CREATE_CATEGORY_REGEX = /(?:vytvor|vytvoriť)\s+zložku\s+(.+)$/i;
+const CREATE_CATEGORY_REGEX_EN = /create\s+(?:folder|category)\s+(.+)$/i;
+const CREATE_CATEGORY_REGEX_DE = /erstelle\s+(?:ordner|kategorie)\s+(.+)$/i;
+
+const RENAME_CATEGORY_REGEX = /premenuj\s+zložku\s+(.+?)\s+na\s+(.+)$/i;
+const RENAME_CATEGORY_REGEX_EN = /rename\s+(?:folder|category)\s+(.+?)\s+to\s+(.+)$/i;
+const RENAME_CATEGORY_REGEX_DE = /benenne\s+(?:ordner|kategorie)\s+(.+?)\s+(?:in|auf)\s+(.+?)\s*um$/i;
+
+// Zámerne NEVYŽADUJE konkrétne úvodné sloveso ("daj"/"priraď"/"assign"/
+// "put") — samotná fráza "do zložky X"/"into folder X" je dostatočne
+// jednoznačný signál ASSIGN zámeru (nekoliduje s CREATE/RENAME vzormi
+// vyššie, ktoré túto frázu neobsahujú), takže postačuje jeden all-purpose
+// regex namiesto zoznamu synoným pre sloveso.
+const ASSIGN_TO_CATEGORY_REGEX =
+  /^(.*?)(?:do\s+zložky|into\s+folder|to\s+folder|in\s+den\s+ordner|in\s+die\s+kategorie)\s+(.+)$/i;
+
+/** Orezanie zachyteného mena zložky (regex capture group) o koncovú
+ * interpunkciu vety — rovnaký princíp ako build() pre `query` nižšie,
+ * aplikovaný tu manuálne, lebo tieto 3 polia (categoryName/newCategoryName/
+ * targetCategoryName) cez build()'s existujúcu `args.query` logiku
+ * neprechádzajú. */
+function cleanCapturedName(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const trimmed = value.replace(/[.?!,;:]+\s*$/, "").trim();
+  return trimmed || undefined;
+}
+
 // Frázy naznačujúce "od dodávateľa/zákazníka X" — zvyšok textu za frázou sa
 // použije ako voľný `query` (ilike na supplier/customer stĺpce), nikdy sa
 // nehádá meno dodávateľa mimo toho, čo je v texte doslova napísané.
@@ -320,14 +428,23 @@ const DOCUMENT_TYPE_KEYWORDS: { type: DocumentTypeFilter; words: string[] }[] = 
   },
 ];
 
-function detectDocumentType(
-  text: string
-): { type: DocumentTypeFilter; matchedWord: string } | undefined {
+/**
+ * Vytiahne VŠETKY spomenuté typy dokumentov v texte ("Ukáž bločky a
+ * faktúry." → ["receipt","invoice"]) — doplnenie zadania, "multi-type
+ * filter": pôvodná verzia (detectDocumentType, jednotné číslo) vracala iba
+ * PRVÚ zhodu, takže kombinované vety ako "bločky a faktúry" alebo "PZP a
+ * technické preukazy" stratili druhý typ. Poradie zhody v texte sa
+ * nezachováva (nie je podstatné — handler filtruje `IN (...)`, nie podľa
+ * poradia), duplicity sa nikdy nepridajú dvakrát.
+ */
+function detectDocumentTypes(text: string): DocumentTypeFilter[] {
+  const types: DocumentTypeFilter[] = [];
   for (const entry of DOCUMENT_TYPE_KEYWORDS) {
-    const matchedWord = entry.words.find((w) => text.includes(w));
-    if (matchedWord) return { type: entry.type, matchedWord };
+    if (!types.includes(entry.type) && entry.words.some((w) => text.includes(w))) {
+      types.push(entry.type);
+    }
   }
-  return undefined;
+  return types;
 }
 
 /**
@@ -471,6 +588,14 @@ export function parseIntentDeterministic(rawText: string): ParsedIntent | null {
   const hasInventoryContext =
     containsAny(text, INVENTORY_CONTEXT_WORDS) || containsAny(text, INVENTORY_ITEM_NOISE_WORDS);
 
+  // 0) Vedome nepodporované príkazy (§16C/§24G doplnenia zadania) — MUSÍ
+  //    bežať PRED každou inou vetvou (pozri komentár pri
+  //    UNSUPPORTED_ACTION_STEMS vyššie), inak by sa deštruktívny/nepodporovaný
+  //    príkaz mohol tichým pádom zmeniť na iný, neúmyselný intent.
+  if (containsAny(text, UNSUPPORTED_ACTION_STEMS)) {
+    return null;
+  }
+
   // 1) Deadline-dotazy ("čo mi končí", "aké termíny treba riešiť", "čo je
   //    po lehote/splatnosti/termíne", "ktorým vozidlám končí diaľničná
   //    známka") — nemajú ŠPZ, sú to dotazy na CELÚ firmu, nie na jednu
@@ -515,6 +640,87 @@ export function parseIntentDeterministic(rawText: string): ParsedIntent | null {
     }
   }
 
+  // 1c) Stav skladovej položky ("Aký máme zostatok pre položku sprej?",
+  //     "Koľko máme spreja?", "Koľko kusov spreja máme?", "Máme ešte
+  //     sprej?", "Aký je stav položky sprej?") — vracia PRIAMU odpoveď s
+  //     reálnym množstvom/jednotkou (INVENTORY_ITEM_STATUS), nie zoznam
+  //     odkazov ako SEARCH_INVENTORY_ITEM nižšie. Scope zámerne úzky: iba
+  //     keď vo vete NIE JE vozidlový ani strojový kontext ("zostatok"/
+  //     "koľko máme" dáva v Esblu zmysel iba pre skladovú zásobu — vozidlá
+  //     a stroje sú jednotlivo evidované kusy, nie sklad), inak fail-closed
+  //     (nič sa tu nevráti, padne ďalej/na AI fallback).
+  const isInventoryStatusQuery =
+    containsAny(text, INVENTORY_STATUS_TRIGGER_WORDS) && !hasVehicleContext && !hasMachineContext;
+  if (isInventoryStatusQuery) {
+    const query = extractFreeQuery(text, [
+      ...INVENTORY_STATUS_QUESTION_STEMS,
+      ...INVENTORY_CONTEXT_WORDS,
+      ...INVENTORY_ITEM_NOISE_WORDS,
+    ]);
+    if (query) return build("INVENTORY_ITEM_STATUS", { query });
+  }
+
+  // 1d) Vytvorenie zložky dokumentov ("Vytvor zložku Reklamácie.") — WRITE
+  //     intent, vracia iba `action_preview` (potvrdenie v UI pred zápisom,
+  //     pozri lib/intents/actions.ts).
+  const createCategoryMatch =
+    rawText.match(CREATE_CATEGORY_REGEX) ||
+    rawText.match(CREATE_CATEGORY_REGEX_EN) ||
+    rawText.match(CREATE_CATEGORY_REGEX_DE);
+  if (createCategoryMatch) {
+    const categoryName = cleanCapturedName(createCategoryMatch[1]);
+    if (categoryName) return build("CREATE_DOCUMENT_CATEGORY", { categoryName });
+  }
+
+  // 1e) Premenovanie zložky ("Premenuj zložku Servis na Servis 2026.") —
+  //     WRITE intent, owner/admin only (vynucuje handler/RLS, pozri
+  //     lib/intents/actions.ts), vracia iba `action_preview`.
+  const renameCategoryMatch =
+    rawText.match(RENAME_CATEGORY_REGEX) ||
+    rawText.match(RENAME_CATEGORY_REGEX_EN) ||
+    rawText.match(RENAME_CATEGORY_REGEX_DE);
+  if (renameCategoryMatch) {
+    const categoryName = cleanCapturedName(renameCategoryMatch[1]);
+    const newCategoryName = cleanCapturedName(renameCategoryMatch[2]);
+    if (categoryName && newCategoryName) {
+      return build("RENAME_DOCUMENT_CATEGORY", { categoryName, newCategoryName });
+    }
+  }
+
+  // 1f) Hromadné priradenie dokumentov do zložky ("Daj všetky bločky za
+  //     august do zložky August.", "Priraď faktúry do zložky Servis.") —
+  //     WRITE intent, vracia iba `action_preview` (server pri potvrdení
+  //     VŽDY prepočíta dotknuté dokumenty nanovo z týchto filtrov — nikdy
+  //     sa neverí zoznamu ID od klienta, pozri lib/intents/actions.ts).
+  //     Vozidlo/stroj filter v tejto fáze zámerne NIE JE podporovaný — ak
+  //     veta obsahuje rozpoznanú ŠPZ, radšej nič nevrátime (fail-closed),
+  //     než aby appka hromadne priradila VIAC dokumentov, než používateľ
+  //     mal na mysli (bod 6 doplnenia zadania).
+  const assignToCategoryMatch = rawText.match(ASSIGN_TO_CATEGORY_REGEX);
+  if (assignToCategoryMatch) {
+    if (plate) {
+      // Fail-closed: veta jednoznačne znie ako ASSIGN príkaz ("...do zložky
+      // X"), ale obsahuje aj ŠPZ, ktorú ASSIGN_DOCUMENTS_TO_CATEGORY v tejto
+      // fáze nepodporuje (komentár vyššie) — appka to NIKDY nesmie tichým
+      // pádom do inej vetvy (napr. branch 4 nižšie) zmeniť na iný,
+      // neúmyselný príkaz (napr. obyčajné zobrazenie dokumentov vozidla),
+      // preto sa vracia null priamo tu namiesto pokračovania ďalej.
+      return null;
+    }
+    const targetCategoryName = cleanCapturedName(assignToCategoryMatch[2]);
+    const filterText = normalizeText(assignToCategoryMatch[1] || "");
+    const filterDocumentTypes = detectDocumentTypes(filterText);
+    const filterDateRange = extractDateRange(filterText);
+    if (targetCategoryName && (filterDocumentTypes.length > 0 || filterDateRange)) {
+      return build("ASSIGN_DOCUMENTS_TO_CATEGORY", {
+        documentTypes: filterDocumentTypes.length > 0 ? filterDocumentTypes : undefined,
+        dateFrom: filterDateRange?.dateFrom,
+        dateTo: filterDateRange?.dateTo,
+        targetCategoryName,
+      });
+    }
+  }
+
   // 2) Report ("urob report vozidla TT123AB", "report für Fahrzeug").
   if (containsAny(text, REPORT_WORDS)) {
     if (hasMachineContext && !plate) {
@@ -538,31 +744,35 @@ export function parseIntentDeterministic(rawText: string): ParsedIntent | null {
   }
 
   // 4) Dokumenty — "ukáž dokumenty TT123AB" (DE/EN ekvivalenty), ALE aj
-  //    celé prirodzené vety s konkrétnym typom dokumentu/dátumovým
-  //    rozsahom/dodávateľom/sumou ("Ukáž bločky za august.", "Ukáž vážne
-  //    lístky pre AB698CT.", "Ukáž faktúry od dodávateľa X.", "Nájdi
-  //    bloček za 86 eur.", "Vyexportuj faktúry za august." — export sa
-  //    NIKDY nevykoná automaticky, iba nájde presne tie isté výsledky ako
-  //    zodpovedajúce "ukáž", pozri komentár pri EXPORT_WORDS vyššie).
+  //    celé prirodzené vety s KOMBINÁCIOU typov dokumentu/dátumovým
+  //    rozsahom/dodávateľom/sumou ("Ukáž bločky za august.", "Ukáž bločky
+  //    a faktúry.", "Ukáž PZP a technické preukazy.", "Ukáž faktúry od
+  //    dodávateľa X.", "Nájdi bloček za 86 eur.", "Exportuj bločky a
+  //    faktúry za august." — `isExportRequest` iba PREPÍNA výsledný
+  //    intent na EXPORT_DOCUMENTS namiesto SEARCH_DOCUMENTS, filtre sú
+  //    úplne rovnaké; export sa NIKDY nevykoná automaticky — vracia iba
+  //    `action_preview`, pozri lib/intents/actions.ts).
   //    So ŠPZ ide vždy o SHOW_VEHICLE_DOCUMENTS (dokumenty JEDNÉHO
-  //    vozidla); bez ŠPZ ide o celofiremné SEARCH_DOCUMENTS.
+  //    vozidla, bez EXPORT_DOCUMENTS varianty v tejto fáze — pozri report);
+  //    bez ŠPZ ide o celofiremné SEARCH_DOCUMENTS/EXPORT_DOCUMENTS.
   {
-    const documentType = detectDocumentType(text);
+    const documentTypes = detectDocumentTypes(text);
     const dateRange = extractDateRange(text);
     const amount = extractAmount(text);
     const supplier = extractSupplierQuery(text);
+    const isExportRequest = containsAny(text, EXPORT_WORDS);
 
     const triggered =
       containsAny(text, DOCUMENTS_WORDS) ||
       containsAny(text, DOCUMENT_SEARCH_WORDS) ||
-      containsAny(text, EXPORT_WORDS) ||
-      Boolean(documentType);
+      isExportRequest ||
+      documentTypes.length > 0;
 
     if (triggered) {
       if (plate) {
         return build("SHOW_VEHICLE_DOCUMENTS", {
           query: plate,
-          documentType: documentType?.type,
+          documentTypes: documentTypes.length > 0 ? documentTypes : undefined,
           dateFrom: dateRange?.dateFrom,
           dateTo: dateRange?.dateTo,
         });
@@ -580,7 +790,7 @@ export function parseIntentDeterministic(rawText: string): ParsedIntent | null {
       let freeText: string | undefined;
       if (supplier) {
         freeText = supplier.query;
-      } else if (!documentType && !dateRange && !amount) {
+      } else if (documentTypes.length === 0 && !dateRange && !amount) {
         const remainder = stripKeywords(text, [
           ...DOCUMENTS_WORDS,
           ...DOCUMENT_SEARCH_WORDS,
@@ -592,14 +802,14 @@ export function parseIntentDeterministic(rawText: string): ParsedIntent | null {
 
       const args: IntentArgs = {
         query: freeText,
-        documentType: documentType?.type,
+        documentTypes: documentTypes.length > 0 ? documentTypes : undefined,
         dateFrom: dateRange?.dateFrom,
         dateTo: dateRange?.dateTo,
         amount: amount?.amount,
       };
 
-      if (args.query || args.documentType || args.dateFrom || args.amount !== undefined) {
-        return build("SEARCH_DOCUMENTS", args);
+      if (args.query || (args.documentTypes && args.documentTypes.length > 0) || args.dateFrom || args.amount !== undefined) {
+        return build(isExportRequest ? "EXPORT_DOCUMENTS" : "SEARCH_DOCUMENTS", args);
       }
     }
   }
@@ -705,6 +915,9 @@ function build(name: IntentName, args: ParsedIntent["args"]): ParsedIntent {
     const trimmed = cleanedArgs.query.replace(/[.?!,;:]+$/, "").trim();
     cleanedArgs.query = trimmed || undefined;
   }
+  cleanedArgs.categoryName = cleanCapturedName(cleanedArgs.categoryName);
+  cleanedArgs.newCategoryName = cleanCapturedName(cleanedArgs.newCategoryName);
+  cleanedArgs.targetCategoryName = cleanCapturedName(cleanedArgs.targetCategoryName);
   return { name, args: cleanedArgs, source: "deterministic" };
 }
 

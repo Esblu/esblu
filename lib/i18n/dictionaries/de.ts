@@ -138,6 +138,8 @@ const de = {
       vignetteExpiredSuffix: " (abgelaufen)",
       costSummary: "Servicekosten für {{entity}} im Jahr {{year}}: {{amount}} €.",
       noVehicleDocuments: "Für Fahrzeug {{entity}} sind keine Dokumente hinterlegt.",
+      inventoryStatus: "{{entity}}: {{quantity}} {{unit}}",
+      inventoryQuantityNotTracked: "Die Menge für {{entity}} wird nicht erfasst.",
     },
     report: {
       notTracked: "Nicht erfasst",
@@ -181,6 +183,47 @@ const de = {
       openAction: "Öffnen",
       loading: "Suche…",
       noDeadlines: "Sie haben aktuell keine anstehenden oder überfälligen Fristen.",
+    },
+    actions: {
+      cancelLabel: "Abbrechen",
+      errors: {
+        ownerOrAdminOnly: "Das kann nur der Firmeninhaber oder ein Administrator tun.",
+      },
+      confirmation: {
+        invalidOrExpired: "Diese Bestätigung ist nicht mehr gültig. Bitte versuchen Sie den Befehl erneut.",
+        dataChanged: "Die passenden Dokumente haben sich zwischenzeitlich geändert. Bitte versuchen Sie den Befehl erneut, damit die App eine neue Vorschau erstellen kann.",
+      },
+      export: {
+        unsupportedType: "Der Export für den Dokumenttyp „{{types}}“ wird noch nicht unterstützt.",
+        partiallyUnsupported: "(Der Typ „{{types}}“ kann nicht exportiert werden und wurde übersprungen.)",
+        noDocuments: "Es wurden keine Dokumente zum Export gefunden.",
+        countReceipts: "{{count}} Belege",
+        countInvoices: "{{count}} Rechnungen",
+        countEvidence: "{{count}} weitere Dokumente",
+        summary: "Ich habe {{total}} Dokumente gefunden: {{breakdown}}. Als XLSX exportieren?",
+        confirmLabel: "Exportieren",
+        done: "Export wurde vorbereitet ({{count}} Dokumente).",
+      },
+      category: {
+        missingName: "Bitte geben Sie einen Namen für den neuen Ordner ein.",
+        alreadyExists: "Der Ordner „{{name}}“ existiert bereits.",
+        createSummary: "Neuen Ordner „{{name}}“ erstellen?",
+        createConfirmLabel: "Erstellen",
+        createSuccess: "Ordner „{{name}}“ wurde erstellt.",
+        missingRenameArgs: "Bitte geben Sie an, welcher Ordner in welchen Namen umbenannt werden soll.",
+        notFound: "Der Ordner „{{name}}“ wurde nicht gefunden.",
+        renameSummary: "Ordner „{{from}}“ in „{{to}}“ umbenennen?",
+        renameConfirmLabel: "Umbenennen",
+        renameSuccess: "Ordner „{{from}}“ wurde in „{{to}}“ umbenannt.",
+      },
+      assign: {
+        missingTarget: "Bitte geben Sie an, welchem Ordner die Dokumente zugeordnet werden sollen.",
+        targetNotFound: "Der Ordner „{{name}}“ existiert noch nicht. Erstellen Sie ihn zuerst mit „Erstelle Ordner {{name}}.“",
+        noDocuments: "Es wurden keine passenden Dokumente gefunden.",
+        summary: "Ich habe {{count}} passende Dokumente gefunden. Diese dem Ordner „{{category}}“ zuordnen?",
+        confirmLabel: "Zuordnen",
+        success: "{{count}} Dokumente wurden dem Ordner „{{category}}“ zugeordnet.",
+      },
     },
     voice: {
       ui: {

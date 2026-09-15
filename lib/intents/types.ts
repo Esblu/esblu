@@ -35,8 +35,23 @@ export const INTENT_NAMES = [
 
   "OPEN_INVENTORY_ITEM",
   "SEARCH_INVENTORY_ITEM",
+  // "Aký máme zostatok pre položku sprej?", "Koľko máme spreja?", "Máme
+  // ešte sprej?" — na rozdiel od SEARCH_INVENTORY_ITEM (zoznam zhôd) tento
+  // READ intent vždy vracia PRIAMU odpoveď s reálnym množstvom/jednotkou
+  // (alebo "Množstvo nie je evidované.", ak DB stĺpec nemá hodnotu — nikdy
+  // sa nevymýšľa). Pridané ako samostatný intent (nie rozšírenie
+  // SEARCH_INVENTORY_ITEM), lebo výstupný TVAR je odlišný (answer s
+  // konkrétnym číslom, nie zoznam odkazov) — pozri lib/intents/handlers.ts.
+  "INVENTORY_ITEM_STATUS",
 
   "SEARCH_DOCUMENTS",
+  // "Exportuj bločky a faktúry.", "Exportuj bločky za august." — WRITE
+  // intent v zmysle "vykoná viditeľnú akciu" (stiahne/zdieľa súbor), ale
+  // nezapisuje nič do DB. Napriek tomu prechádza rovnakým
+  // preview→potvrdenie tokom ako ostatné write intenty nižšie (žiadny
+  // export sa nespustí len preto, že AI rozpoznala zámer) — pozri
+  // readOnly/requiresConfirmation v lib/intents/registry.ts.
+  "EXPORT_DOCUMENTS",
 
   // Nie je v pôvodnom zozname zo zadania (bod 2), ale zadanie ho EXPLICITNE
   // vyžaduje v bode 9C ("čo mi končí tento mesiac", "aké termíny treba
@@ -45,6 +60,21 @@ export const INTENT_NAMES = [
   // termínov → žiadny prázdny warning box"). Pridané ako plnohodnotný
   // allowlisted READ intent, rovnakej kategórie ako ostatné vyššie.
   "UPCOMING_DEADLINES",
+
+  // ---------------------------------------------------------------------
+  // WRITE intenty (doplnenie zadania — "Intent Engine ako bezpečný
+  // príkazový asistent nad celou aplikáciou"). KAŽDÝ z nich má v
+  // lib/intents/registry.ts readOnly:false + requiresConfirmation:true —
+  // spustenie vráti VÝHRADNE `action_preview` (lib/intents/types.ts#IntentResult),
+  // samotný zápis do DB robí AŽ samostatný endpoint (app/api/assistant/
+  // action/execute/route.ts) po explicitnom potvrdení v UI. Zámerne tu
+  // NIE JE žiadny DELETE_*/mazací intent (rovnaké pravidlo ako pri
+  // pôvodných READ intentoch vyššie — bezpečnejšie nemať mazací intent
+  // vôbec, než ho mať za "ešte prísnejším" potvrdením).
+  // ---------------------------------------------------------------------
+  "CREATE_DOCUMENT_CATEGORY",
+  "RENAME_DOCUMENT_CATEGORY",
+  "ASSIGN_DOCUMENTS_TO_CATEGORY",
 ] as const;
 
 export type IntentName = (typeof INTENT_NAMES)[number];
@@ -128,13 +158,19 @@ export type IntentArgs = {
   // použije DEADLINE_THRESHOLD_DAYS.dueSoon (30) z lib/deadlines.ts.
   withinDays?: number;
   onlyOverdue?: boolean;
-  // Nasledujúce 4 polia rozširujú SEARCH_DOCUMENTS a SHOW_VEHICLE_DOCUMENTS
-  // o parametrizované filtre (namiesto desiatok samostatných intentov —
-  // "Ukáž bločky za august", "Ukáž faktúry od dodávateľa X", "Nájdi bloček
-  // za 86 eur"). Handler ich VŽDY interpretuje iba ako doplnkový, presne
-  // definovaný filter nad existujúcimi tabuľkami — nikdy ako surový
-  // SQL/text fragment.
-  documentType?: DocumentTypeFilter;
+  // Nasledujúce polia rozširujú SEARCH_DOCUMENTS, SHOW_VEHICLE_DOCUMENTS,
+  // EXPORT_DOCUMENTS a ASSIGN_DOCUMENTS_TO_CATEGORY o parametrizované
+  // filtre (namiesto desiatok samostatných intentov — "Ukáž bločky za
+  // august", "Ukáž faktúry od dodávateľa X", "Nájdi bloček za 86 eur").
+  // Handler ich VŽDY interpretuje iba ako doplnkový, presne definovaný
+  // filter nad existujúcimi tabuľkami — nikdy ako surový SQL/text fragment.
+  //
+  // `documentTypes` je POLE (nie jedna hodnota) — doplnenie zadania,
+  // úloha "multi-type filter": "Ukáž bločky a faktúry." musí vedieť
+  // vrátiť OBA typy naraz (`documentTypes:["receipt","invoice"]`), nie iba
+  // jeden. Prázdne/chýbajúce pole = žiadny typový filter (všetky typy),
+  // presne ako predtým `documentType: undefined`.
+  documentTypes?: DocumentTypeFilter[];
   // ISO dátum "YYYY-MM-DD" (vrátane) — dolná/horná hranica dátumu
   // DOKUMENTU (nie dátumu nahratia). Obe strany vypočíta VÝHRADNE parser
   // (kalendárny mesiac/rok), nikdy sa nehádajú čiastkové hodnoty.
@@ -156,6 +192,18 @@ export type IntentArgs = {
   // diaľničnú známku). Bez hodnoty (undefined/prázdne pole) sa správa
   // presne ako doteraz — všetky typy.
   deadlineTypes?: DeadlineTypeFilter[];
+  // CREATE_DOCUMENT_CATEGORY: názov novej zložky. RENAME_DOCUMENT_CATEGORY:
+  // názov EXISTUJÚCEJ zložky, ktorá sa premenúva (zdroj). Vždy presne to,
+  // čo je v texte doslova napísané — nikdy sa nedomýšľa/nedopĺňa.
+  categoryName?: string;
+  // RENAME_DOCUMENT_CATEGORY: nový názov, na ktorý sa `categoryName`
+  // premenúva.
+  newCategoryName?: string;
+  // ASSIGN_DOCUMENTS_TO_CATEGORY: cieľová zložka, do ktorej sa priradia
+  // dokumenty vyhovujúce ostatným filtrom vyššie (documentTypes/dateFrom/
+  // dateTo/query). Musí existovať (appka ju NIKDY nezaloží automaticky v
+  // rámci priradenia — pozri lib/intents/actions.ts).
+  targetCategoryName?: string;
 };
 
 export type ParsedIntent = {
@@ -225,4 +273,86 @@ export type IntentResult =
     }
   | { kind: "disambiguate"; candidates: EntityRef[] }
   | { kind: "not_found"; text: string }
-  | { kind: "error"; text: string };
+  | { kind: "error"; text: string }
+  // ---------------------------------------------------------------------
+  // WRITE intent preview/výsledok (doplnenie zadania, sekcia 6/23; hardened
+  // podľa bezpečnostného review — pozri lib/intents/actions.ts a migráciu
+  // 20260915120000_add_assistant_action_confirmations.sql).
+  //
+  // `action_preview` sa vráti VŽDY namiesto priameho vykonania write
+  // intentu — appka tu ešte NIČ nezapísala do DB (EXPORT_DOCUMENTS
+  // výnimočne aj nič zapisovať nebude, pozri nižšie).
+  //
+  // KĽÚČOVÁ ZMENA: klient tu NIKDY nedostáva surové kanonické `args`, ktoré
+  // by mohol pri potvrdení ľubovoľne upraviť. Pre CREATE_DOCUMENT_CATEGORY/
+  // RENAME_DOCUMENT_CATEGORY/ASSIGN_DOCUMENTS_TO_CATEGORY appka namiesto
+  // toho vytvorí server-side "pending action" záznam
+  // (public.assistant_action_confirmations) a klient dostane iba jeho
+  // opaque `confirmationId` — TOTO (a NIČ iné) sa posiela na
+  // app/api/assistant/action/execute. Server si canonical args/company/
+  // user/expected count NAČÍTA sám z DB podľa confirmationId (nikdy z tela
+  // requestu) a potvrdenie spotrebuje presne raz (replay protection).
+  // ---------------------------------------------------------------------
+  | {
+      kind: "action_preview";
+      action: "EXPORT_DOCUMENTS" | "CREATE_DOCUMENT_CATEGORY" | "RENAME_DOCUMENT_CATEGORY" | "ASSIGN_DOCUMENTS_TO_CATEGORY";
+      summary: string;
+      confirmLabel: string;
+      cancelLabel: string;
+      // VÝHRADNE CREATE_DOCUMENT_CATEGORY/RENAME_DOCUMENT_CATEGORY/
+      // ASSIGN_DOCUMENTS_TO_CATEGORY — opaque referencia na server-side
+      // uložený pending action (assistant_action_confirmations.id).
+      // EXPORT_DOCUMENTS toto pole nemá (nezapisuje nič do DB, pozri
+      // exportPayload nižšie) a Dashboard.tsx ho preto pre EXPORT_DOCUMENTS
+      // nikdy nepoužije.
+      confirmationId?: string;
+      // Počet dotknutých entít, ak je pre daný intent zmysluplný
+      // (ASSIGN_DOCUMENTS_TO_CATEGORY: počet dokumentov; EXPORT_DOCUMENTS:
+      // celkový počet exportovaných záznamov) — čisto informačné pre UI,
+      // execute krok ho NIKDY neberie ako vstup, vždy ho revaliduje sám
+      // nanovo z DB.
+      affectedCount?: number;
+      // VÝHRADNE EXPORT_DOCUMENTS — export nezapisuje nič do DB (iba
+      // stiahne/zdieľa súbor cez už existujúci klientsky ExcelJS flow),
+      // takže server môže bezpečne poslať už teraz aj samotné riadky na
+      // export. Potvrdenie v UI tak iba spustí klientsky
+      // exportAiInboxFolderToExcel/exportAiEvidenceToExcel — BEZ ďalšieho
+      // network volania na /action/execute (to je vyhradené pre skutočné
+      // DB zápisy — CREATE/RENAME/ASSIGN vyššie, cez confirmationId).
+      exportPayload?: {
+        inboxDocuments: {
+          kind: "receipt" | "invoice";
+          records: {
+            id: string;
+            created_at: string | null;
+            note: string | null;
+            extracted_fields: Record<string, unknown> | null;
+          }[];
+        }[];
+        evidenceRecords: {
+          id: string;
+          spz: string | null;
+          document_type: string | null;
+          movement_type: string | null;
+          supplier: string | null;
+          customer: string | null;
+          document_number: string | null;
+          material: string | null;
+          material_original: string | null;
+          material_category: string | null;
+          document_date: string | null;
+          brutto: number | null;
+          tara: number | null;
+          netto: number | null;
+          unit: string | null;
+          construction_site: string | null;
+          source_location: string | null;
+          destination_location: string | null;
+          photo_url: string | null;
+          raw_text: string | null;
+          created_at: string | null;
+          quantity: number | null;
+        }[];
+      };
+    }
+  | { kind: "action_result"; success: boolean; text: string };

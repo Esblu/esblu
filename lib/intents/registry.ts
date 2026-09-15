@@ -8,21 +8,26 @@ import { INTENT_NAMES, type IntentName } from "@/lib/intents/types";
 // diagnostiku/report. app/api/assistant/intent/route.ts z tohto registry
 // vždy over, že:
 //   1) intent, ktorý handler chce vykonať, je naozaj v allowliste,
-//   2) `readOnly === true` (v tejto fáze VŠETKY sú readOnly — pozri
-//      lib/intents/types.ts),
-//   3) ak by `requiresConfirmation === true` (budúca write fáza), appka by
-//      musela najprv vrátiť návrh a čakať na explicitné potvrdenie — nikdy
-//      by sa nespustil priamo z parsovaného intentu.
+//   2) ak `readOnly === true`, appka ho môže vykonať priamo (executeIntent),
+//   3) ak `requiresConfirmation === true` (write intenty pridané nižšie),
+//      appka NAJPRV vráti iba návrh (action_preview, lib/intents/actions.ts)
+//      a čaká na explicitné potvrdenie — nikdy sa nevykoná priamo z
+//      parsovaného intentu, či už z deterministického parsera alebo z AI
+//      fallbacku (obe majú presne rovnakú dôveru — pozri ai-fallback.ts).
 //
 // Toto je teda zámerne DUPLICITNÁ, samostatná kontrola oproti
 // lib/intents/types.ts#isKnownIntentName — obe musia súhlasiť, inak
 // route vráti chybu namiesto spustenia čohokoľvek (fail closed).
+//
+// DELETE_* intent zámerne NEEXISTUJE v tomto registri ani v INTENT_NAMES —
+// bezpečnejšie je nemať deletovací intent vôbec, než ho mať za potvrdením,
+// ktoré by mohla obísť budúca chyba v implementácii.
 // =============================================================================
 
 export type IntentDefinition = {
   name: IntentName;
-  readOnly: true;
-  requiresConfirmation: false;
+  readOnly: boolean;
+  requiresConfirmation: boolean;
   description: string;
 };
 
@@ -118,18 +123,51 @@ export const INTENT_REGISTRY: Record<IntentName, IntentDefinition> = {
     requiresConfirmation: false,
     description: "Nájdi skladovú položku/y podľa názvu.",
   },
+  INVENTORY_ITEM_STATUS: {
+    name: "INVENTORY_ITEM_STATUS",
+    readOnly: true,
+    requiresConfirmation: false,
+    description:
+      "Priamo odpovedz na stav/zostatok jednej skladovej položky (napr. \"Aký máme zostatok pre položku sprej?\").",
+  },
   SEARCH_DOCUMENTS: {
     name: "SEARCH_DOCUMENTS",
     readOnly: true,
     requiresConfirmation: false,
     description:
-      "Nájdi dokumenty podľa voľného textu a/alebo filtrov (typ dokumentu, dátumový rozsah, suma).",
+      "Nájdi dokumenty podľa voľného textu a/alebo filtrov (typy dokumentov, dátumový rozsah, suma).",
+  },
+  EXPORT_DOCUMENTS: {
+    name: "EXPORT_DOCUMENTS",
+    readOnly: false,
+    requiresConfirmation: true,
+    description:
+      "Priprav export nájdených dokumentov do XLSX (žiadny zápis do DB, ale viditeľná akcia — vyžaduje potvrdenie).",
   },
   UPCOMING_DEADLINES: {
     name: "UPCOMING_DEADLINES",
     readOnly: true,
     requiresConfirmation: false,
     description: "Zoznam blížiacich sa/prekročených termínov (STK/EK/známky/servis).",
+  },
+  CREATE_DOCUMENT_CATEGORY: {
+    name: "CREATE_DOCUMENT_CATEGORY",
+    readOnly: false,
+    requiresConfirmation: true,
+    description: "Vytvor novú vlastnú zložku dokumentov (custom_document_categories).",
+  },
+  RENAME_DOCUMENT_CATEGORY: {
+    name: "RENAME_DOCUMENT_CATEGORY",
+    readOnly: false,
+    requiresConfirmation: true,
+    description: "Premenuj existujúcu vlastnú zložku dokumentov.",
+  },
+  ASSIGN_DOCUMENTS_TO_CATEGORY: {
+    name: "ASSIGN_DOCUMENTS_TO_CATEGORY",
+    readOnly: false,
+    requiresConfirmation: true,
+    description:
+      "Hromadne priraď nájdené dokumenty (podľa filtrov) do existujúcej vlastnej zložky.",
   },
 };
 
@@ -138,4 +176,23 @@ export function isRegisteredReadOnlyIntent(name: string): name is IntentName {
     (INTENT_NAMES as readonly string[]).includes(name) &&
     INTENT_REGISTRY[name as IntentName]?.readOnly === true
   );
+}
+
+// Write intenty — VŽDY vyžadujú requiresConfirmation === true (over sa
+// explicitne, nielen readOnly === false, aby budúci nový intent nemohol
+// omylom obísť potvrdzovací tok bez toho, aby to niekto všimol).
+export function isRegisteredWriteIntent(name: string): name is IntentName {
+  return (
+    (INTENT_NAMES as readonly string[]).includes(name) &&
+    INTENT_REGISTRY[name as IntentName]?.readOnly === false &&
+    INTENT_REGISTRY[name as IntentName]?.requiresConfirmation === true
+  );
+}
+
+// Ktorýkoľvek allowlistovaný intent (read alebo write) — použi LEN na
+// diagnostiku/UI rozhodovanie typu "poznám tento intent vôbec"; samotné
+// spustenie/potvrdenie sa vždy vetví cez isRegisteredReadOnlyIntent alebo
+// isRegisteredWriteIntent vyššie, nikdy len cez toto.
+export function isRegisteredIntent(name: string): name is IntentName {
+  return (INTENT_NAMES as readonly string[]).includes(name) && Boolean(INTENT_REGISTRY[name as IntentName]);
 }

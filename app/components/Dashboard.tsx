@@ -50,6 +50,14 @@ export default function Dashboard() {
   // vrstvy výsledkov, žiadna duplicitná UI).
   const [intentResult, setIntentResult] = useState<IntentResult | null>(null);
   const [intentLoading, setIntentLoading] = useState(false);
+  // Action Engine (doplnenie zadania, bod 6/23) — potvrdzovací tok pre WRITE
+  // intenty (EXPORT_DOCUMENTS/CREATE_DOCUMENT_CATEGORY/RENAME_DOCUMENT_CATEGORY/
+  // ASSIGN_DOCUMENTS_TO_CATEGORY). `intentResult` samo osebe nesie
+  // `action_preview`/`action_result` (pozri renderIntentResult nižšie) —
+  // toto je iba "prebieha potvrdenie" flag pre disabled stav tlačidiel počas
+  // volania (export/EXPORT_DOCUMENTS je klientske, ostatné idú na
+  // /api/assistant/action/execute).
+  const [actionSubmitting, setActionSubmitting] = useState(false);
   // Hlasové vyhľadávanie (zadanie, sekcia B/C) — TENKÁ vstupná vrstva NAD
   // existujúcim Intent Enginom vyššie: mikrofón iba naplní `search` presne
   // tak, ako keby používateľ text napísal (spustí ten istý debounced efekt
@@ -700,6 +708,105 @@ export default function Dashboard() {
     { href: "/nastavenia", label: t("nav.settings"), image: "/images/settings.png" },
   ];
 
+  // Action Engine — [Zrušiť]: jednoduchý no-op, appka nič nezapísala do DB
+  // (a pri EXPORT_DOCUMENTS ani nič nestiahla) — panel sa iba skryje, `search`
+  // ostáva bezo zmeny (bod 5/23 zadania: "Cancel = no-op").
+  function handleActionCancel() {
+    setIntentResult(null);
+  }
+
+  // Action Engine — [Potvrdiť]/[Vytvoriť]/[Premenovať]/[Priradiť]/[Exportovať].
+  // EXPORT_DOCUMENTS je VÝNIMKA: nevolá /api/assistant/action/execute vôbec
+  // (export nezapisuje nič do DB) — priamo spustí existujúci klientsky
+  // ExcelJS export flow z `exportPayload`, ktorý server už pripravil v
+  // preview kroku (pozri komentár pri IntentResult#exportPayload v
+  // lib/intents/types.ts). Ostatné 3 write intenty idú na samostatný
+  // endpoint — HARDENED (bezpečnostné review): appka posiela VÝHRADNE
+  // `confirmationId` (opaque referenciu na server-side uložený preview),
+  // NIKDY znova `args` — server si kanonické filtre/count sám nanovo
+  // načíta z assistant_action_confirmations, appka ich tu už nemá k
+  // dispozícii (typ `action_preview` pole `args` už neobsahuje).
+  async function handleActionConfirm() {
+    if (!intentResult || intentResult.kind !== "action_preview") return;
+    setActionSubmitting(true);
+
+    try {
+      if (intentResult.action === "EXPORT_DOCUMENTS") {
+        const payload = intentResult.exportPayload;
+        const hasAnything =
+          !!payload &&
+          (payload.inboxDocuments.some((group) => group.records.length > 0) ||
+            payload.evidenceRecords.length > 0);
+
+        if (!hasAnything) {
+          setIntentResult({
+            kind: "action_result",
+            success: false,
+            text: t("search.actions.export.noDocuments"),
+          });
+          return;
+        }
+
+        const [{ exportAiInboxFolderToExcel }, { exportAiEvidenceToExcel }] = await Promise.all([
+          import("@/lib/export-ai-inbox-documents-excel"),
+          import("@/lib/export-ai-evidence-excel"),
+        ]);
+
+        let exportedCount = 0;
+        for (const group of payload!.inboxDocuments) {
+          if (group.records.length === 0) continue;
+          const result = await exportAiInboxFolderToExcel(group.kind, group.records, t);
+          exportedCount += result.exportedCount;
+        }
+        if (payload!.evidenceRecords.length > 0) {
+          const result = await exportAiEvidenceToExcel(payload!.evidenceRecords, locale, t);
+          exportedCount += result.exportedCount;
+        }
+
+        setIntentResult({
+          kind: "action_result",
+          success: true,
+          text: t("search.actions.export.done", { count: exportedCount }),
+        });
+        return;
+      }
+
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!session) {
+        setIntentResult({ kind: "action_result", success: false, text: t("search.errors.generic") });
+        return;
+      }
+
+      const response = await fetch(apiUrl("/api/assistant/action/execute"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.access_token}`,
+          [REQUEST_LOCALE_HEADER]: locale,
+        },
+        body: JSON.stringify({ confirmationId: intentResult.confirmationId }),
+      });
+
+      const data = await response.json();
+
+      if (response.ok && data?.success && data?.result) {
+        setIntentResult(data.result as IntentResult);
+      } else {
+        setIntentResult({ kind: "action_result", success: false, text: t("search.errors.generic") });
+      }
+    } catch (error) {
+      // Rovnaký fail-closed princíp ako pri Intent Engine dopyte vyššie —
+      // appka pri sieťovej/neočakávanej chybe NIKDY nepredstiera úspech.
+      console.error("Action Engine potvrdenie zlyhalo:", error);
+      setIntentResult({ kind: "action_result", success: false, text: t("search.errors.generic") });
+    } finally {
+      setActionSubmitting(false);
+    }
+  }
+
   // Kompaktný panel pre rozpoznaný Intent Engine výsledok (zadanie, bod 13:
   // "Ak intent znamená navigáciu → naviguj [na klik, nie automaticky pri
   // písaní]. Ak ide o odpoveď → zobraz compact result panel. Ak je
@@ -856,6 +963,40 @@ export default function Dashboard() {
       case "not_found":
       case "error":
         return <p className={boxClass}>{intentResult.text}</p>;
+
+      case "action_preview":
+        return (
+          <div className={boxClass}>
+            <p className="text-sm font-medium text-primary">{intentResult.summary}</p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={handleActionConfirm}
+                disabled={actionSubmitting}
+                className="btn-primary px-4 py-2 text-xs font-bold uppercase tracking-wide disabled:opacity-60"
+              >
+                {intentResult.confirmLabel}
+              </button>
+              <button
+                type="button"
+                onClick={handleActionCancel}
+                disabled={actionSubmitting}
+                className="btn-secondary px-4 py-2 text-xs font-bold uppercase tracking-wide disabled:opacity-60"
+              >
+                {intentResult.cancelLabel}
+              </button>
+            </div>
+          </div>
+        );
+
+      case "action_result":
+        return (
+          <p className={boxClass}>
+            <span className={intentResult.success ? "text-primary" : "text-secondary"}>
+              {intentResult.text}
+            </span>
+          </p>
+        );
 
       default:
         return null;

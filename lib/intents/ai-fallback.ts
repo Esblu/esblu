@@ -50,12 +50,17 @@ const INTENT_CLASSIFICATION_SCHEMA = {
     year: { type: ["number", "null"] },
     withinDays: { type: ["number", "null"] },
     onlyOverdue: { type: ["boolean", "null"] },
-    // Nasledujúce 4 polia patria k SEARCH_DOCUMENTS/SHOW_VEHICLE_DOCUMENTS
-    // (bod 4 doplnenia zadania — parametrizovaný filter namiesto desiatok
-    // samostatných intentov). `documentType` je striktný enum (rovnaký
-    // allowlist ako CHECK v produkčnej DB, lib/intents/types.ts), takže AI
-    // ani tu nemôže vrátiť nič mimo povolených hodnôt.
-    documentType: { type: ["string", "null"], enum: [...DOCUMENT_TYPE_FILTERS, null] },
+    // Nasledujúce polia patria k SEARCH_DOCUMENTS/SHOW_VEHICLE_DOCUMENTS/
+    // EXPORT_DOCUMENTS/ASSIGN_DOCUMENTS_TO_CATEGORY (bod 4 a 18 doplnenia
+    // zadania — parametrizovaný filter namiesto desiatok samostatných
+    // intentov). `documentTypes` je POLE (multi-type filter — "bločky a
+    // faktúry" → oba typy naraz) so striktným enum (rovnaký allowlist ako
+    // CHECK v produkčnej DB, lib/intents/types.ts), takže AI ani tu nemôže
+    // vrátiť nič mimo povolených hodnôt.
+    documentTypes: {
+      type: ["array", "null"],
+      items: { type: "string", enum: [...DOCUMENT_TYPE_FILTERS] },
+    },
     dateFrom: { type: ["string", "null"] },
     dateTo: { type: ["string", "null"] },
     amount: { type: ["number", "null"] },
@@ -70,6 +75,13 @@ const INTENT_CLASSIFICATION_SCHEMA = {
       type: ["array", "null"],
       items: { type: "string", enum: [...DEADLINE_TYPE_FILTERS] },
     },
+    // CREATE_DOCUMENT_CATEGORY/RENAME_DOCUMENT_CATEGORY/
+    // ASSIGN_DOCUMENTS_TO_CATEGORY — voľný text presne tak, ako je v
+    // texte napísaný (nikdy sa nevymýšľa/nedopĺňa), pozri
+    // lib/intents/actions.ts pre skutočné spracovanie a potvrdzovací tok.
+    categoryName: { type: ["string", "null"] },
+    newCategoryName: { type: ["string", "null"] },
+    targetCategoryName: { type: ["string", "null"] },
   },
   required: [
     "intent",
@@ -77,12 +89,15 @@ const INTENT_CLASSIFICATION_SCHEMA = {
     "year",
     "withinDays",
     "onlyOverdue",
-    "documentType",
+    "documentTypes",
     "dateFrom",
     "dateTo",
     "amount",
     "listAll",
     "deadlineTypes",
+    "categoryName",
+    "newCategoryName",
+    "targetCategoryName",
   ],
 } as const;
 
@@ -95,7 +110,7 @@ vrátiť null, ak text jednoznačne nezodpovedá žiadnemu z nich.
 Povolené intenty:
 ${INTENT_NAMES.map((n) => `- ${n}`).join("\n")}
 
-Povolené hodnoty pre "documentType" (presne ako v databáze, nič iné):
+Povolené hodnoty pre "documentTypes" (pole, presne ako v databáze, nič iné):
 ${DOCUMENT_TYPE_FILTERS.map((t) => `- ${t}`).join("\n")}
 
 Povolené hodnoty pre "deadlineTypes" (pole, nič iné — PZP tu zámerne
@@ -108,11 +123,32 @@ Pravidlá:
   sumu — žiadnu hodnotu, ktorá sa v texte doslova nenachádza alebo z neho
   jednoznačne nevyplýva. "query" je vždy iba to, čo je v texte skutočne
   napísané (napr. ŠPZ, časť názvu, meno dodávateľa).
-- "documentType" nastav LEN ak text jednoznačne pomenúva konkrétny typ
-  dokumentu (napr. "bločky" → receipt, "faktúry" → invoice, "vážne
-  lístky" → weigh_ticket, "dodacie listy" → delivery_note, "PZP" →
-  insurance, "technický preukaz" → vehicle_registration). Inak nechaj
-  null — NIKDY nehádaj typ, ktorý text nespomína.
+- "documentTypes" nastav LEN na typy, ktoré text jednoznačne pomenúva
+  (napr. "bločky" → [receipt], "faktúry" → [invoice], "vážne lístky" →
+  [weigh_ticket], "dodacie listy" → [delivery_note], "PZP" → [insurance],
+  "technický preukaz" → [vehicle_registration]). Text môže pomenovať
+  VIACERO typov naraz (napr. "bločky a faktúry" → [receipt, invoice]) —
+  vtedy vráť všetky spomenuté typy v jednom poli. Inak nechaj null — NIKDY
+  nehádaj typ, ktorý text nespomína.
+- "categoryName" (pre CREATE_DOCUMENT_CATEGORY a ako prvý/zdrojový názov
+  pre RENAME_DOCUMENT_CATEGORY) nastav LEN na presný názov zložky tak, ako
+  je v texte napísaný (napr. "Vytvor zložku Reklamácie." → "Reklamácie").
+  "newCategoryName" (LEN pre RENAME_DOCUMENT_CATEGORY) je nový názov
+  ("Premenuj zložku Servis na Servis 2026." → categoryName: "Servis",
+  newCategoryName: "Servis 2026"). "targetCategoryName" (LEN pre
+  ASSIGN_DOCUMENTS_TO_CATEGORY) je názov cieľovej zložky, do ktorej sa
+  majú dokumenty priradiť ("Daj všetky bločky za august do zložky
+  August." → documentTypes: [receipt], dateFrom/dateTo: august,
+  targetCategoryName: "August"). NIKDY si nevymýšľaj názov zložky, ktorý
+  text neobsahuje — inak nechaj null.
+- Príkazy, ktoré appka zatiaľ nepodporuje, VŽDY klasifikuj ako intent:
+  null (NIKDY sa nesnaž vynútiť ich do najbližšieho povoleného intentu).
+  Sem patrí najmä: zmazanie dokumentu/zložky ("Vymaž všetky faktúry.",
+  "Zmaž zložku Servis."), odoslanie/poslanie dokumentu alebo emailu
+  ("Pošli faktúru zákazníkovi."), zmena skladového množstva ("Odpočítaj 5
+  kusov spreja.", "Pridaj 10 kusov."), úprava/vytvorenie vozidla alebo
+  stroja príkazom, a čokoľvek iné, čo by vyžadovalo zápis do databázy mimo
+  zoznamu povolených intentov vyššie.
 - "dateFrom"/"dateTo" (formát "YYYY-MM-DD") nastav LEN ak text obsahuje
   jednoznačný časový rozsah (napr. "za august", "tento mesiac", "tento
   rok") — rok, ak nie je v texte, je vždy aktuálny kalendárny rok. Inak
@@ -171,12 +207,15 @@ export async function classifyIntentWithAi(
       year: number | null;
       withinDays: number | null;
       onlyOverdue: boolean | null;
-      documentType: string | null;
+      documentTypes: string[] | null;
       dateFrom: string | null;
       dateTo: string | null;
       amount: number | null;
       listAll: boolean | null;
       deadlineTypes: string[] | null;
+      categoryName: string | null;
+      newCategoryName: string | null;
+      targetCategoryName: string | null;
     };
 
     if (!parsed.intent || !(INTENT_NAMES as readonly string[]).includes(parsed.intent)) {
@@ -193,19 +232,30 @@ export async function classifyIntentWithAi(
         // isDocumentTypeFilter je druhá, nezávislá kontrola oproti
         // json_schema enumu vyššie (rovnaký fail-closed princíp ako
         // isRegisteredReadOnlyIntent pre `intent` — nikdy sa neverí iba
-        // jednej vrstve validácie modelového výstupu).
-        documentType: isDocumentTypeFilter(parsed.documentType) ? parsed.documentType : undefined,
+        // jednej vrstve validácie modelového výstupu). KAŽDÁ jednotlivá
+        // hodnota poľa sa overuje samostatne.
+        documentTypes: Array.isArray(parsed.documentTypes)
+          ? parsed.documentTypes.filter(isDocumentTypeFilter)
+          : undefined,
         dateFrom: parsed.dateFrom ?? undefined,
         dateTo: parsed.dateTo ?? undefined,
         amount: parsed.amount ?? undefined,
         listAll: parsed.listAll ?? undefined,
-        // Rovnaký fail-closed princíp ako pri documentType vyššie — druhá,
+        // Rovnaký fail-closed princíp ako pri documentTypes vyššie — druhá,
         // nezávislá kontrola oproti json_schema enumu, a KAŽDÁ jednotlivá
         // hodnota poľa sa overuje samostatne (nikdy sa neverí, že celé pole
         // je validné len preto, že json_schema ho takto vrátilo).
         deadlineTypes: Array.isArray(parsed.deadlineTypes)
           ? parsed.deadlineTypes.filter(isDeadlineTypeFilter)
           : undefined,
+        // categoryName/newCategoryName/targetCategoryName — voľný text,
+        // presne tak, ako ho AI rozpoznala (nikdy sa nevymýšľa). Skutočná
+        // duplicitná kontrola/normalizácia prebieha až v
+        // lib/intents/actions.ts nad reálnymi dátami firmy (RLS-scoped) —
+        // rovnaký princíp ako pri `query` vyššie: AI iba naznačuje.
+        categoryName: parsed.categoryName ?? undefined,
+        newCategoryName: parsed.newCategoryName ?? undefined,
+        targetCategoryName: parsed.targetCategoryName ?? undefined,
       },
       source: "ai",
     };

@@ -4,9 +4,11 @@ import { getRequestLocale } from "@/lib/i18n/request-locale";
 import { translate } from "@/lib/i18n/translate";
 import { parseIntentDeterministic } from "@/lib/intents/parse";
 import { classifyIntentWithAi } from "@/lib/intents/ai-fallback";
-import { isRegisteredReadOnlyIntent } from "@/lib/intents/registry";
+import { isRegisteredReadOnlyIntent, isRegisteredWriteIntent } from "@/lib/intents/registry";
 import { executeIntent } from "@/lib/intents/handlers";
+import { buildActionPreview } from "@/lib/intents/actions";
 import type { ParsedIntent } from "@/lib/intents/types";
+import type { CompanyMemberRole } from "@/lib/company";
 
 // -----------------------------------------------------------------------------
 // POST /api/assistant/intent
@@ -25,16 +27,20 @@ import type { ParsedIntent } from "@/lib/intents/types";
 //      chýba — appka nikdy "nehádá" firmu).
 //   3) parseIntentDeterministic (lib/intents/parse.ts) → ak je null,
 //      classifyIntentWithAi (lib/intents/ai-fallback.ts) ako fallback.
-//   4) isRegisteredReadOnlyIntent (lib/intents/registry.ts) — DRUHÁ,
-//      nezávislá kontrola, že intent je naozaj v allowliste a readOnly.
-//   5) executeIntent (lib/intents/handlers.ts) — beží VÝHRADNE cez
-//      user-scoped Supabase klienta (getUserScopedSupabaseClient), takže
-//      RLS (company_id = esblu_my_active_company_id()) je posledná a
-//      jediná autorita nad tým, čo sa vráti (bod 12 zadania).
-//
-// Táto fáza je VÝHRADNE READ-ONLY (bod 14 zadania) — v lib/intents/types.ts
-// (INTENT_NAMES) dnes NEEXISTUJE ani jeden write/delete intent, takže krok
-// 4) ich ani teoreticky nemôže spustiť.
+//   4) isRegisteredReadOnlyIntent / isRegisteredWriteIntent (lib/intents/
+//      registry.ts) — DRUHÁ, nezávislá kontrola, že intent je naozaj v
+//      allowliste, a KTORÁ z dvoch ciest sa spustí.
+//   5a) READ intent → executeIntent (lib/intents/handlers.ts) — beží
+//      VÝHRADNE cez user-scoped Supabase klienta (getUserScopedSupabaseClient),
+//      takže RLS (company_id = esblu_my_active_company_id()) je posledná a
+//      jediná autorita nad tým, čo sa vráti (bod 12 zadania). Vykoná sa a
+//      vráti výsledok PRIAMO.
+//   5b) WRITE intent (EXPORT_DOCUMENTS/CREATE_DOCUMENT_CATEGORY/
+//      RENAME_DOCUMENT_CATEGORY/ASSIGN_DOCUMENTS_TO_CATEGORY) → NIKDY sa
+//      nespustí priamo tu — buildActionPreview (lib/intents/actions.ts)
+//      iba READ-only prepočíta, čo by sa stalo, a vráti `action_preview`
+//      (čaká na explicitné potvrdenie v UI cez samostatný endpoint
+//      app/api/assistant/action/execute) — pozri doplnenie zadania, bod 6.
 // -----------------------------------------------------------------------------
 
 const MAX_TEXT_LENGTH = 200;
@@ -79,7 +85,7 @@ export async function POST(req: Request) {
     // nebezpečné ticho-prázdne správanie namiesto explicitnej chyby).
     const { data: membership, error: membershipError } = await supabase
       .from("company_members")
-      .select("company_id")
+      .select("company_id, role")
       .eq("user_id", user.id)
       .eq("status", "active")
       .maybeSingle();
@@ -96,7 +102,7 @@ export async function POST(req: Request) {
       intent = await classifyIntentWithAi(rawText);
     }
 
-    if (!intent || !isRegisteredReadOnlyIntent(intent.name)) {
+    if (!intent || (!isRegisteredReadOnlyIntent(intent.name) && !isRegisteredWriteIntent(intent.name))) {
       return Response.json({
         success: true,
         recognized: false,
@@ -104,7 +110,22 @@ export async function POST(req: Request) {
       });
     }
 
-    const result = await executeIntent(supabase, locale, intent);
+    // READ intenty sa vykonajú PRIAMO — WRITE intenty NIKDY (bod 5/6
+    // zadania): vrátia iba `action_preview`/`action_result`/`not_found`
+    // z buildActionPreview, skutočný zápis do DB robí AŽ samostatný
+    // endpoint app/api/assistant/action/execute po explicitnom potvrdení.
+    const result = isRegisteredReadOnlyIntent(intent.name)
+      ? await executeIntent(supabase, locale, intent)
+      : await buildActionPreview(
+          supabase,
+          locale,
+          {
+            companyId: membership.company_id as string,
+            userId: user.id,
+            role: membership.role as CompanyMemberRole,
+          },
+          intent
+        );
 
     return Response.json({
       success: true,

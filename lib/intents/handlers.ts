@@ -127,7 +127,7 @@ const KNOWN_DOCUMENT_TYPE_KEYS = new Set<string>(DOCUMENT_TYPE_FILTERS);
 // DB (`select distinct document_type from ai_evidence`), nie odhadnuté.
 // Použité pri filtrovaní podľa `documentType` (SHOW_VEHICLE_DOCUMENTS/
 // SEARCH_DOCUMENTS) nad záznammi z ai_evidence.
-const AI_EVIDENCE_DOCUMENT_TYPE_LABEL: Partial<Record<DocumentTypeFilter, string>> = {
+export const AI_EVIDENCE_DOCUMENT_TYPE_LABEL: Partial<Record<DocumentTypeFilter, string>> = {
   weigh_ticket: "vážny lístok",
   delivery_note: "dodací list",
 };
@@ -141,10 +141,21 @@ function matchesDocumentTypeFilter(
   return doc.documentType === AI_EVIDENCE_DOCUMENT_TYPE_LABEL[filter];
 }
 
+/** Zhoduje sa VehicleDocumentEntry s KTORÝMKOĽVEK z požadovaných typov
+ * ("bločky a faktúry" → typ musí byť receipt ALEBO invoice)? Prázdny/chýbajúci
+ * zoznam filtrov = žiadny typový filter (rovnaké správanie ako predtým). */
+function matchesDocumentTypeFilters(
+  doc: VehicleDocumentEntry,
+  filters: DocumentTypeFilter[] | undefined
+): boolean {
+  if (!filters || filters.length === 0) return true;
+  return filters.some((filter) => matchesDocumentTypeFilter(doc, filter));
+}
+
 /** Zhoduje sa dátum dokumentu (ak je známy) s [dateFrom, dateTo] rozsahom?
  * Dokument bez známeho dátumu sa pri aktívnom dátumovom filtri NIKDY
  * nezahrnie (nehádame, že "asi" patrí do rozsahu). */
-function matchesDateRange(
+export function matchesDateRange(
   date: string | null,
   dateFrom: string | undefined,
   dateTo: string | undefined
@@ -210,7 +221,7 @@ export async function handleShowVehicleDocuments(
   supabase: SupabaseClient,
   locale: Locale,
   query: string | undefined,
-  documentType?: DocumentTypeFilter,
+  documentTypes?: DocumentTypeFilter[],
   dateFrom?: string,
   dateTo?: string
 ): Promise<IntentResult> {
@@ -229,12 +240,13 @@ export async function handleShowVehicleDocuments(
   // nedostane.
   const allDocuments = await fetchVehicleDocuments(supabase, { id: vehicle.id, spz: vehicle.spz });
 
-  // Nepovinný filter podľa typu dokumentu ("Ukáž vážne lístky pre AB698CT")
-  // a/alebo dátumového rozsahu — aplikuje sa NAD už deterministicky
-  // priradeným zoznamom vyššie, nikdy nemení, ČO sa považuje za priradené
-  // k vozidlu (žiadny nový spôsob priradenia, iba doplnkový filter).
+  // Nepovinný filter podľa typu/typov dokumentu ("Ukáž vážne lístky pre
+  // AB698CT.", "Ukáž bločky a faktúry pre AB698CT.") a/alebo dátumového
+  // rozsahu — aplikuje sa NAD už deterministicky priradeným zoznamom
+  // vyššie, nikdy nemení, ČO sa považuje za priradené k vozidlu (žiadny
+  // nový spôsob priradenia, iba doplnkový filter).
   const documents = allDocuments.filter((doc) => {
-    if (documentType && !matchesDocumentTypeFilter(doc, documentType)) return false;
+    if (!matchesDocumentTypeFilters(doc, documentTypes)) return false;
     if (!matchesDateRange(doc.date, dateFrom, dateTo)) return false;
     return true;
   });
@@ -702,6 +714,51 @@ export async function handleOpenOrSearchInventoryItem(
   return { kind: "disambiguate", candidates: matches.map(inventoryRef) };
 }
 
+// "Aký máme zostatok pre položku sprej?", "Koľko máme spreja?", "Máme ešte
+// sprej?", "Aký je stav položky sprej?" — priama ODPOVEĎ na množstvo/stav
+// JEDNEJ skladovej položky (na rozdiel od handleOpenOrSearchInventoryItem
+// vyššie, ktoré pri 1 zhode iba NAVIGUJE na detail). Samostatný intent
+// namiesto rozšírenia SEARCH_INVENTORY_ITEM, lebo výsledok je sémanticky
+// iná vec — "answer" (číslo/text), nie "navigate" (odkaz na detail) — pozri
+// audit poznámku v zadaní bod 2.
+export async function handleInventoryItemStatus(
+  supabase: SupabaseClient,
+  locale: Locale,
+  query: string | undefined
+): Promise<IntentResult> {
+  if (!query) return notFound(locale, "search.errors.missingQuery");
+
+  const matches = await searchInventoryItems(supabase, query);
+  if (matches.length === 0) return notFound(locale, "search.errors.inventoryNotFound", query);
+  if (matches.length > 1) {
+    return { kind: "disambiguate", candidates: matches.map(inventoryRef) };
+  }
+
+  const item = matches[0];
+  const entity = inventoryRef(item);
+
+  // Množstvo NIKDY nevymýšľame — ak DB stĺpec `quantity` nie je vyplnený,
+  // appka to explicitne povie ("Množstvo nie je evidované."), nikdy
+  // nedosadí 0 ani inú hádanú hodnotu (bod 2 zadania).
+  if (item.quantity === null || item.quantity === undefined || !Number.isFinite(item.quantity)) {
+    return {
+      kind: "answer",
+      text: translate(locale, "search.answers.inventoryQuantityNotTracked", { entity: entity.label }),
+      entity,
+    };
+  }
+
+  return {
+    kind: "answer",
+    text: translate(locale, "search.answers.inventoryStatus", {
+      entity: entity.label,
+      quantity: item.quantity,
+      unit: item.unit || "",
+    }),
+    entity,
+  };
+}
+
 // -----------------------------------------------------------------------------
 // Dokumenty (SEARCH_DOCUMENTS) — jednoduché textové vyhľadávanie nad OBOMA
 // existujúcimi systémami dokumentov (pozri lib/vehicle-documents.ts pre
@@ -714,13 +771,13 @@ export async function handleOpenOrSearchInventoryItem(
 
 export type SearchDocumentsFilters = {
   query?: string;
-  documentType?: DocumentTypeFilter;
+  documentTypes?: DocumentTypeFilter[];
   dateFrom?: string;
   dateTo?: string;
   amount?: number;
 };
 
-function extractedTotalAmount(fields: Record<string, unknown> | null): number | null {
+export function extractedTotalAmount(fields: Record<string, unknown> | null): number | null {
   if (!fields) return null;
   const raw = (fields as Record<string, unknown>).totalAmount;
   if (typeof raw === "number" && Number.isFinite(raw)) return raw;
@@ -731,7 +788,7 @@ function extractedTotalAmount(fields: Record<string, unknown> | null): number | 
   return null;
 }
 
-function amountMatches(fields: Record<string, unknown> | null, target: number): boolean {
+export function amountMatches(fields: Record<string, unknown> | null, target: number): boolean {
   const value = extractedTotalAmount(fields);
   return value !== null && Math.abs(value - target) < 0.01;
 }
@@ -742,8 +799,10 @@ function amountMatches(fields: Record<string, unknown> | null, target: number): 
 function describeSearchForNotFound(locale: Locale, filters: SearchDocumentsFilters): string {
   if (filters.query) return filters.query;
   const parts: string[] = [];
-  if (filters.documentType) {
-    parts.push(translate(locale, `inbox.documentTypes.${filters.documentType}`));
+  if (filters.documentTypes && filters.documentTypes.length > 0) {
+    parts.push(
+      filters.documentTypes.map((t) => translate(locale, `inbox.documentTypes.${t}`)).join(" + ")
+    );
   }
   if (filters.dateFrom || filters.dateTo) {
     parts.push(`${filters.dateFrom ?? "…"} – ${filters.dateTo ?? "…"}`);
@@ -757,27 +816,33 @@ export async function handleSearchDocuments(
   locale: Locale,
   filters: SearchDocumentsFilters
 ): Promise<IntentResult> {
-  const { query, documentType, dateFrom, dateTo, amount } = filters;
+  const { query, documentTypes, dateFrom, dateTo, amount } = filters;
+  const hasDocumentTypeFilter = Boolean(documentTypes && documentTypes.length > 0);
 
-  if (!query && !documentType && !dateFrom && !dateTo && amount === undefined) {
+  if (!query && !hasDocumentTypeFilter && !dateFrom && !dateTo && amount === undefined) {
     return notFound(locale, "search.errors.missingQuery");
   }
 
   // ai_evidence pozná VÝHRADNE weigh_ticket/delivery_note (overené v
   // produkčnej DB) a nemá koncept peňažnej sumy — ak je aktívny amount
-  // filter, alebo je documentType iný typ, ai_evidence sa vôbec
-  // nedotazuje (nemohla by tam nič zodpovedať, netreba zbytočný dopyt).
-  const aiEvidenceTypeLabel = documentType
-    ? AI_EVIDENCE_DOCUMENT_TYPE_LABEL[documentType]
-    : undefined;
-  const shouldQueryEvidence = amount === undefined && (!documentType || Boolean(aiEvidenceTypeLabel));
+  // filter, alebo ŽIADEN z požadovaných documentTypes nemá v ai_evidence
+  // zodpovedajúci label, ai_evidence sa vôbec nedotazuje (nemohla by tam
+  // nič zodpovedať, netreba zbytočný dopyt).
+  const aiEvidenceTypeLabels = hasDocumentTypeFilter
+    ? (documentTypes as DocumentTypeFilter[])
+        .map((t) => AI_EVIDENCE_DOCUMENT_TYPE_LABEL[t])
+        .filter((label): label is string => Boolean(label))
+    : [];
+  const shouldQueryEvidence =
+    amount === undefined && (!hasDocumentTypeFilter || aiEvidenceTypeLabels.length > 0);
 
   // Voľné textové vyhľadávanie prehľadáva OBA existujúce systémy
   // ukladania dokumentov — toto je všeobecný, nie vozidlo-špecifický
-  // príkaz (na rozdiel od SHOW_VEHICLE_DOCUMENTS vyššie). `documentType`/
+  // príkaz (na rozdiel od SHOW_VEHICLE_DOCUMENTS vyššie). `documentTypes`/
   // `dateFrom`/`dateTo`/`amount` sú VŽDY iba doplnkový, presne definovaný
   // filter nad existujúcimi stĺpcami — nikdy surový SQL/text fragment od
-  // AI (bod 2 zadania).
+  // AI (bod 2 zadania). `documentTypes` je pole — "bločky a faktúry"
+  // filtruje `.in(...)` namiesto `.eq(...)` (bod 3/18 doplnenia zadania).
   let documentsQuery = supabase
     .from("documents")
     .select(
@@ -785,8 +850,8 @@ export async function handleSearchDocuments(
     )
     .is("deleted_at", null);
 
-  if (documentType) {
-    documentsQuery = documentsQuery.eq("document_type", documentType);
+  if (hasDocumentTypeFilter) {
+    documentsQuery = documentsQuery.in("document_type", documentTypes as DocumentTypeFilter[]);
   }
   if (query) {
     documentsQuery = documentsQuery.or(
@@ -802,8 +867,8 @@ export async function handleSearchDocuments(
           .select(
             "id, document_type, document_number, supplier, customer, material, spz, document_date, created_at"
           );
-        if (aiEvidenceTypeLabel) {
-          evidenceQuery = evidenceQuery.eq("document_type", aiEvidenceTypeLabel);
+        if (aiEvidenceTypeLabels.length > 0) {
+          evidenceQuery = evidenceQuery.in("document_type", aiEvidenceTypeLabels);
         }
         if (query) {
           evidenceQuery = evidenceQuery.or(
@@ -1003,7 +1068,7 @@ export async function executeIntent(
         supabase,
         locale,
         intent.args.query,
-        intent.args.documentType,
+        intent.args.documentTypes,
         intent.args.dateFrom,
         intent.args.dateTo
       );
@@ -1043,10 +1108,12 @@ export async function executeIntent(
         true,
         intent.args.listAll
       );
+    case "INVENTORY_ITEM_STATUS":
+      return handleInventoryItemStatus(supabase, locale, intent.args.query);
     case "SEARCH_DOCUMENTS":
       return handleSearchDocuments(supabase, locale, {
         query: intent.args.query,
-        documentType: intent.args.documentType,
+        documentTypes: intent.args.documentTypes,
         dateFrom: intent.args.dateFrom,
         dateTo: intent.args.dateTo,
         amount: intent.args.amount,
