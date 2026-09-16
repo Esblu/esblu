@@ -10,6 +10,7 @@ import { useLocale } from "@/lib/i18n/LocaleProvider";
 import ModuleCard, { type ModuleAccent } from "./ModuleCard";
 import InboxDocumentIcon from "./icons/InboxDocumentIcon";
 import BusinessPartnersIcon from "./icons/BusinessPartnersIcon";
+import InvoicesIcon from "./icons/InvoicesIcon";
 import type { VehicleVignette } from "@/lib/vehicle-vignettes";
 import { vehicleDetailHref } from "@/lib/entity-links";
 import { buildLegacyDashboardAlerts } from "@/lib/deadlines";
@@ -683,6 +684,13 @@ export default function Dashboard() {
       accent: "blue",
     },
     {
+      title: t("nav.invoices"),
+      subtitle: t("dashboard.moduleInvoicesSubtitle"),
+      href: "/faktury",
+      icon: <InvoicesIcon size={56} className="h-11 w-11 sm:h-14 sm:w-14" />,
+      accent: "teal",
+    },
+    {
       title: t("nav.settings"),
       subtitle: t("dashboard.moduleSettingsSubtitle"),
       href: "/nastavenia",
@@ -691,14 +699,17 @@ export default function Dashboard() {
     },
   ];
 
-  // Finance Access Hardening — "Obchodní partneri" dlaždica sa filtruje
-  // (namiesto podmieneného push-u do allModules), aby poradie ostatných
-  // dlaždíc zostalo nezmenené bez ohľadu na finance access. allModules má
-  // explicitnú typovú anotáciu priamo na poli literálov (nutné pre
-  // ModuleAccent literal-union typovanie) — .filter() sa preto aplikuje až
-  // na už typovanú premennú, nie v rámci toho istého výrazu.
+  // Finance Access Hardening — "Obchodní partneri" aj "Faktúry" dlaždice sa
+  // filtrujú (namiesto podmieneného push-u do allModules), aby poradie
+  // ostatných dlaždíc zostalo nezmenené bez ohľadu na finance access.
+  // allModules má explicitnú typovú anotáciu priamo na poli literálov
+  // (nutné pre ModuleAccent literal-union typovanie) — .filter() sa preto
+  // aplikuje až na už typovanú premennú, nie v rámci toho istého výrazu.
+  // Faktúry používajú TOTOŽNÝ finance-gating ako obchodní partneri (obe sú
+  // finančné/účtovné dáta, esblu_my_finance_view() na DB strane).
   const modules = allModules.filter(
-    (module) => module.href !== "/obchodni-partneri" || financeAccess
+    (module) =>
+      (module.href !== "/obchodni-partneri" && module.href !== "/faktury") || financeAccess
   );
 
   // Spoločný zoznam navigačných položiek pre desktop sidebar AJ mobilné
@@ -719,9 +730,16 @@ export default function Dashboard() {
       label: t("nav.businessPartners"),
       icon: <BusinessPartnersIcon size={20} />,
     },
+    {
+      href: "/faktury",
+      label: t("nav.invoices"),
+      icon: <InvoicesIcon size={20} />,
+    },
     { href: "/nastavenia", label: t("nav.settings"), image: "/images/settings.png" },
     // Finance Access Hardening — rovnaký filter ako pri "modules" vyššie.
-  ].filter((item) => item.href !== "/obchodni-partneri" || financeAccess);
+  ].filter(
+    (item) => (item.href !== "/obchodni-partneri" && item.href !== "/faktury") || financeAccess
+  );
 
   // Action Engine — [Zrušiť]: jednoduchý no-op, appka nič nezapísala do DB
   // (a pri EXPORT_DOCUMENTS ani nič nestiahla) — panel sa iba skryje, `search`

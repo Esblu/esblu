@@ -25,3 +25,7 @@ export function machineDetailHref(id: string): string {
 export function inventoryItemDetailHref(id: string): string {
   return IS_MOBILE_BUILD ? `/sklad/detail?id=${id}` : `/sklad/${id}`;
 }
+
+export function invoiceDetailHref(id: string): string {
+  return IS_MOBILE_BUILD ? `/faktury/detail?id=${id}` : `/faktury/${id}`;
+}
