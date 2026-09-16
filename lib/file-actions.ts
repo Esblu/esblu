@@ -1,4 +1,7 @@
 import { IS_MOBILE_BUILD } from "@/lib/build-target";
+import { sanitizeFileName } from "@/lib/sanitize-filename";
+
+export { sanitizeFileName } from "@/lib/sanitize-filename";
 
 // -----------------------------------------------------------------------------
 // Zdieľaná vrstva pre "otvor dokument" / "stiahni súbor" akcie (web aj mobile).
@@ -56,30 +59,6 @@ import { IS_MOBILE_BUILD } from "@/lib/build-target";
 // a potichu ho ukončí ako úspech; každá iná chyba (skutočné zlyhanie
 // zápisu/zdieľania) sa naďalej vyhadzuje volajúcemu nezmenená.
 // -----------------------------------------------------------------------------
-
-/**
- * Sanitizuje meno súboru pred použitím ako Filesystem cesta (mobile) alebo
- * `<a download>` atribút (web). Odstraňuje path separátory a ".." sekvencie
- * (path traversal), riadiace znaky, a obmedzuje dĺžku. Nikdy nevráti prázdny
- * reťazec.
- */
-export function sanitizeFileName(rawName: string): string {
-  const fallback = "subor";
-
-  if (!rawName || typeof rawName !== "string") {
-    return fallback;
-  }
-
-  const withoutSeparators = rawName
-    .replace(/[\\/]+/g, "_")
-    .replace(/\.\.+/g, ".");
-
-  const withoutControlChars = withoutSeparators.replace(/[\x00-\x1f\x7f]/g, "");
-
-  const trimmed = withoutControlChars.trim().slice(0, 180);
-
-  return trimmed || fallback;
-}
 
 /**
  * Otvorí externú (typicky Supabase signed) URL na PREVIEW — dokument, PDF,

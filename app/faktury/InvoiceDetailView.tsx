@@ -43,6 +43,9 @@ import {
 } from "@/lib/invoices";
 import { listBusinessPartners, type BusinessPartner } from "@/lib/business-partners";
 import { getCompanyBillingProfile } from "@/lib/company-billing-profile";
+import { apiUrl } from "@/lib/api-url";
+import { REQUEST_LOCALE_HEADER } from "@/lib/i18n/request-locale";
+import { downloadBlob } from "@/lib/file-actions";
 
 const VAT_CATEGORIES: VatCategoryCode[] = ["S", "Z", "E", "AE"];
 const TODAY = new Date().toISOString().slice(0, 10);
@@ -108,6 +111,10 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
 
   const [finalizing, setFinalizing] = useState(false);
   const [finalizeError, setFinalizeError] = useState("");
+
+  // PDF (iba finalized) — pozri handleDownloadPdf, FÁZA 3A.
+  const [downloadingPdf, setDownloadingPdf] = useState(false);
+  const [pdfError, setPdfError] = useState("");
 
   // Payment form state (iba finalized).
   const [paymentAmount, setPaymentAmount] = useState("");
@@ -377,6 +384,57 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       alert(t("invoices.errors.deleteFailedPrefix", { message }));
+    }
+  }
+
+  /**
+   * Stiahnutie PDF finalizovanej faktúry — GET /api/invoices/[id]/pdf.
+   * Autorizácia (finance.view, finalized-only, cross-company) sa VŽDY
+   * nezávisle overuje na serveri (RLS + explicitné RPC re-check, pozri
+   * app/api/invoices/[id]/pdf/route.ts) — tento handler iba zavolá endpoint
+   * a stiahnutý súbor odovzdá zdieľanému downloadBlob() helperu (web aj
+   * mobile Capacitor Share sheet, pozri lib/file-actions.ts).
+   */
+  async function handleDownloadPdf() {
+    if (!invoice) return;
+    setPdfError("");
+    setDownloadingPdf(true);
+
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!session) {
+        throw new Error(t("invoices.errors.pdfNotAuthenticated"));
+      }
+
+      const response = await fetch(apiUrl(`/api/invoices/${invoice.id}/pdf`), {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+          [REQUEST_LOCALE_HEADER]: locale,
+        },
+      });
+
+      if (!response.ok) {
+        let message = t("invoices.errors.pdfGenerationFailed");
+        try {
+          const data = await response.json();
+          if (data?.error) message = data.error;
+        } catch {
+          // response bez JSON tela — ponechaj generickú hlášku.
+        }
+        throw new Error(message);
+      }
+
+      const blob = await response.blob();
+      await downloadBlob(blob, `${invoice.invoice_number ?? invoice.id}.pdf`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setPdfError(t("invoices.errors.pdfDownloadFailedPrefix", { message }));
+    } finally {
+      setDownloadingPdf(false);
     }
   }
 
@@ -753,16 +811,33 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
         <>
           <p className="mt-3 text-sm text-secondary">{t("invoices.detail.finalizedNotice")}</p>
 
-          {canEdit && (
-            <div className="mt-4">
+          {pdfError && (
+            <p className="mt-3 rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
+              {pdfError}
+            </p>
+          )}
+
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={handleDownloadPdf}
+              disabled={downloadingPdf}
+              className="min-h-11 rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:bg-gray-400"
+            >
+              {downloadingPdf
+                ? t("invoices.detail.downloadingPdf")
+                : t("invoices.detail.downloadPdfButton")}
+            </button>
+
+            {canEdit && (
               <Link
                 href={`/faktury/new?corrects=${invoice.id}`}
-                className="inline-block rounded-xl border px-4 py-2 text-sm font-semibold"
+                className="inline-flex min-h-11 items-center rounded-xl border px-4 py-2 text-sm font-semibold"
               >
                 {t("invoices.detail.createCorrectionButton")}
               </Link>
-            </div>
-          )}
+            )}
+          </div>
 
           <div className="mt-6 grid gap-4 sm:grid-cols-2">
             {seller && (
