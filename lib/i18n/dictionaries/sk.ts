@@ -1833,6 +1833,8 @@ const sk = {
       deleteFailedPrefix: "Vymazanie zlyhalo: {{message}}",
       deleteConfirmPrefix: "Naozaj chceš zmazať tento koncept faktúry?",
       missingIssueDate: "Zadajte dátum vystavenia.",
+      dueDateBeforeIssueDate: "Dátum splatnosti nesmie byť pred dátumom vystavenia.",
+      paymentTermsDaysNegative: "Splatnosť (dni) nesmie byť záporná.",
       missingBusinessPartner: "Vyberte odberateľa.",
       missingItems: "Faktúra musí mať aspoň jednu riadkovú položku.",
       missingCorrectsInvoice: "Dobropis/ťarchopis musí odkazovať na opravovanú faktúru.",

@@ -17,6 +17,8 @@ import { formatDate, formatNumber } from "@/lib/i18n/format";
 import type { Locale } from "@/lib/i18n/locales";
 import {
   addInvoicePayment,
+  computeDueDateFromTerms,
+  computePaymentTermsDaysFromDueDate,
   deleteDraftInvoice,
   finalizeInvoice,
   getInvoice,
@@ -200,6 +202,37 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
     setDraftItems((previous) => previous.filter((_, i) => i !== index));
   }
 
+  // -----------------------------------------------------------------------------
+  // Obojsmerná synchronizácia issue_date / payment_terms_days / due_date
+  // (Model B, podľa zadania) — identická logika ako v app/faktury/new/page.tsx,
+  // aby sa draft po uložení a opätovnom otvorení správal rovnako ako pri
+  // vytváraní novej faktúry (predtým tu chýbala akákoľvek synchronizácia).
+  // -----------------------------------------------------------------------------
+
+  function handleIssueDateChange(value: string) {
+    setIssueDate(value);
+    const parsedDays = Number(paymentTermsDays);
+    if (Number.isFinite(parsedDays) && parsedDays >= 0) {
+      const due = computeDueDateFromTerms(value, parsedDays);
+      if (due) setDueDate(due);
+    }
+  }
+
+  function handlePaymentTermsDaysChange(days: string) {
+    setPaymentTermsDays(days);
+    const parsedDays = Number(days);
+    if (Number.isFinite(parsedDays) && parsedDays >= 0) {
+      const due = computeDueDateFromTerms(issueDate, parsedDays);
+      if (due) setDueDate(due);
+    }
+  }
+
+  function handleDueDateChange(value: string) {
+    setDueDate(value);
+    const days = computePaymentTermsDaysFromDueDate(issueDate, value);
+    if (days !== null) setPaymentTermsDays(String(days));
+  }
+
   async function handleSaveDraft() {
     if (!invoice) return;
     setSaveNotice("");
@@ -237,6 +270,8 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
     const errors = validateDraftBeforeFinalize(
       {
         issue_date: issueDate,
+        due_date: dueDate || undefined,
+        payment_terms_days: paymentTermsDays !== "" ? Number(paymentTermsDays) : undefined,
         customer_business_partner_id: customerId || null,
         kind: invoice.kind,
         corrects_invoice_id: invoice.corrects_invoice_id,
@@ -450,7 +485,7 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
                   className="w-full rounded-xl border p-3"
                   value={issueDate}
                   disabled={!canEdit}
-                  onChange={(event) => setIssueDate(event.target.value)}
+                  onChange={(event) => handleIssueDateChange(event.target.value)}
                 />
               </div>
 
@@ -463,7 +498,7 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
                   className="w-full rounded-xl border p-3"
                   value={dueDate}
                   disabled={!canEdit}
-                  onChange={(event) => setDueDate(event.target.value)}
+                  onChange={(event) => handleDueDateChange(event.target.value)}
                 />
               </div>
 
@@ -475,7 +510,7 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
                   className="w-full rounded-xl border p-3"
                   value={paymentTermsDays}
                   disabled={!canEdit}
-                  onChange={(event) => setPaymentTermsDays(event.target.value)}
+                  onChange={(event) => handlePaymentTermsDaysChange(event.target.value)}
                 />
               </div>
 

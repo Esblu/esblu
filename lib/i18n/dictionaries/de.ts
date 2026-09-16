@@ -1826,6 +1826,8 @@ const de = {
       deleteFailedPrefix: "Löschen fehlgeschlagen: {{message}}",
       deleteConfirmPrefix: "Möchten Sie diesen Rechnungsentwurf wirklich löschen?",
       missingIssueDate: "Geben Sie das Ausstellungsdatum ein.",
+      dueDateBeforeIssueDate: "Das Fälligkeitsdatum darf nicht vor dem Ausstellungsdatum liegen.",
+      paymentTermsDaysNegative: "Die Zahlungsfrist (Tage) darf nicht negativ sein.",
       missingBusinessPartner: "Wählen Sie einen Kunden aus.",
       missingItems: "Die Rechnung muss mindestens eine Position enthalten.",
       missingCorrectsInvoice: "Die Gutschrift/Lastschrift muss auf die korrigierte Rechnung verweisen.",

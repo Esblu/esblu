@@ -12,7 +12,13 @@ import {
 import { useCompanyDpaLegalHold } from "@/app/components/CompanyDpaGate";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import { invoiceDetailHref } from "@/lib/entity-links";
-import { createDraftInvoice, getInvoice, type InvoiceKind } from "@/lib/invoices";
+import {
+  computeDueDateFromTerms,
+  computePaymentTermsDaysFromDueDate,
+  createDraftInvoice,
+  getInvoice,
+  type InvoiceKind,
+} from "@/lib/invoices";
 import { listBusinessPartners, type BusinessPartner } from "@/lib/business-partners";
 
 // Dobropis/ťarchopis sa zakladá z detailu opravovanej faktúry
@@ -110,14 +116,35 @@ export default function NewInvoicePage() {
     }
   }
 
-  function updatePaymentTermsAndDueDate(days: string) {
-    setPaymentTermsDays(days);
-    const parsed = Number(days);
-    if (Number.isFinite(parsed) && parsed >= 0) {
-      const due = new Date(issueDate);
-      due.setDate(due.getDate() + parsed);
-      setDueDate(due.toISOString().slice(0, 10));
+  // -----------------------------------------------------------------------------
+  // Obojsmerná synchronizácia issue_date / payment_terms_days / due_date
+  // (Model B, podľa zadania): zmena dní ALEBO dátumu vystavenia prepočíta
+  // dátum splatnosti; zmena dátumu splatnosti prepočíta počet dní. Nikdy sa
+  // nenecháva stav, kde by tieto tri hodnoty mohli byť navzájom nekonzistentné.
+  // -----------------------------------------------------------------------------
+
+  function handleIssueDateChange(value: string) {
+    setIssueDate(value);
+    const parsedDays = Number(paymentTermsDays);
+    if (Number.isFinite(parsedDays) && parsedDays >= 0) {
+      const due = computeDueDateFromTerms(value, parsedDays);
+      if (due) setDueDate(due);
     }
+  }
+
+  function handlePaymentTermsDaysChange(days: string) {
+    setPaymentTermsDays(days);
+    const parsedDays = Number(days);
+    if (Number.isFinite(parsedDays) && parsedDays >= 0) {
+      const due = computeDueDateFromTerms(issueDate, parsedDays);
+      if (due) setDueDate(due);
+    }
+  }
+
+  function handleDueDateChange(value: string) {
+    setDueDate(value);
+    const days = computePaymentTermsDaysFromDueDate(issueDate, value);
+    if (days !== null) setPaymentTermsDays(String(days));
   }
 
   async function handleSubmit() {
@@ -243,7 +270,7 @@ export default function NewInvoicePage() {
                 type="date"
                 className="w-full rounded-xl border p-3"
                 value={issueDate}
-                onChange={(event) => setIssueDate(event.target.value)}
+                onChange={(event) => handleIssueDateChange(event.target.value)}
               />
             </div>
 
@@ -254,7 +281,7 @@ export default function NewInvoicePage() {
               <input
                 className="w-full rounded-xl border p-3"
                 value={paymentTermsDays}
-                onChange={(event) => updatePaymentTermsAndDueDate(event.target.value)}
+                onChange={(event) => handlePaymentTermsDaysChange(event.target.value)}
               />
             </div>
 
@@ -266,7 +293,7 @@ export default function NewInvoicePage() {
                 type="date"
                 className="w-full rounded-xl border p-3"
                 value={dueDate}
-                onChange={(event) => setDueDate(event.target.value)}
+                onChange={(event) => handleDueDateChange(event.target.value)}
               />
             </div>
 

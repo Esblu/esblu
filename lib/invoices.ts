@@ -351,6 +351,49 @@ export function previewDraftTotals(items: DraftInvoiceItemInput[]) {
 }
 
 // -----------------------------------------------------------------------------
+// Splatnosť draftu — issue_date/payment_terms_days/due_date musia zostať
+// vzájomne synchronizované (nikdy dva nezávislé zdroje pravdy, ktoré sa môžu
+// rozísť). Čisté kalendárne celočíselné počítanie dní — ŽIADNA peňažná
+// matematika, takže decimal.js/VAT engine sa tu zámerne nepoužíva.
+// UTC-based Date konštrukcia/aritmetika (nie lokálny čas), aby sa predišlo
+// posunu o deň pri DST/timezone hraniciach.
+// -----------------------------------------------------------------------------
+
+function parseIsoDateUtc(value: string): Date | null {
+  if (!value) return null;
+  const date = new Date(`${value}T00:00:00Z`);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+/** issue_date + payment_terms_days (celé číslo, >= 0) -> due_date (YYYY-MM-DD).
+ *  null pri neplatnom/chýbajúcom vstupe. */
+export function computeDueDateFromTerms(
+  issueDate: string,
+  paymentTermsDays: number
+): string | null {
+  if (!Number.isFinite(paymentTermsDays) || paymentTermsDays < 0) return null;
+  const base = parseIsoDateUtc(issueDate);
+  if (!base) return null;
+  base.setUTCDate(base.getUTCDate() + Math.trunc(paymentTermsDays));
+  return base.toISOString().slice(0, 10);
+}
+
+/** issue_date + due_date (obe YYYY-MM-DD) -> payment_terms_days (celé číslo).
+ *  null ak je due_date pred issue_date alebo je vstup neplatný/chýbajúci —
+ *  volajúci by v tom prípade NEMAL prepísať existujúcu hodnotu payment_terms_days
+ *  (nechať pole prázdne a nech to zachytí validateDraftBeforeFinalize). */
+export function computePaymentTermsDaysFromDueDate(
+  issueDate: string,
+  dueDate: string
+): number | null {
+  const start = parseIsoDateUtc(issueDate);
+  const end = parseIsoDateUtc(dueDate);
+  if (!start || !end) return null;
+  const days = Math.round((end.getTime() - start.getTime()) / 86_400_000);
+  return days >= 0 ? days : null;
+}
+
+// -----------------------------------------------------------------------------
 // Validácia draftu pred finalizáciou (klientská, iba UX — DB má vlastnú,
 // autoritatívnu validáciu v esblu_finalize_invoice()).
 // -----------------------------------------------------------------------------
@@ -358,13 +401,29 @@ export function previewDraftTotals(items: DraftInvoiceItemInput[]) {
 export type DraftValidationError = { field: string; messageKey: string };
 
 export function validateDraftBeforeFinalize(
-  invoice: Pick<Invoice, "issue_date" | "customer_business_partner_id" | "kind" | "corrects_invoice_id">,
+  invoice: Pick<
+    Invoice,
+    "issue_date" | "customer_business_partner_id" | "kind" | "corrects_invoice_id"
+  > &
+    Partial<Pick<Invoice, "due_date" | "payment_terms_days">>,
   items: DraftInvoiceItemInput[]
 ): DraftValidationError[] {
   const errors: DraftValidationError[] = [];
 
   if (!invoice.issue_date) {
     errors.push({ field: "issue_date", messageKey: "missingIssueDate" });
+  }
+
+  if (
+    invoice.issue_date &&
+    invoice.due_date &&
+    computePaymentTermsDaysFromDueDate(invoice.issue_date, invoice.due_date) === null
+  ) {
+    errors.push({ field: "due_date", messageKey: "dueDateBeforeIssueDate" });
+  }
+
+  if (invoice.payment_terms_days != null && invoice.payment_terms_days < 0) {
+    errors.push({ field: "payment_terms_days", messageKey: "paymentTermsDaysNegative" });
   }
 
   if (!invoice.customer_business_partner_id) {

@@ -1810,6 +1810,8 @@ const en = {
       deleteFailedPrefix: "Delete failed: {{message}}",
       deleteConfirmPrefix: "Are you sure you want to delete this invoice draft?",
       missingIssueDate: "Enter the issue date.",
+      dueDateBeforeIssueDate: "The due date cannot be before the issue date.",
+      paymentTermsDaysNegative: "Payment terms (days) cannot be negative.",
       missingBusinessPartner: "Select a customer.",
       missingItems: "The invoice must have at least one line item.",
       missingCorrectsInvoice: "The credit note/debit note must reference the corrected invoice.",
