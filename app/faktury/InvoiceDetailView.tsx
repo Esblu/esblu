@@ -21,6 +21,7 @@ import {
   computePaymentTermsDaysFromDueDate,
   deleteDraftInvoice,
   finalizeInvoice,
+  findUnresolvedVatRateErrors,
   getInvoice,
   listInvoiceItems,
   listInvoiceParties,
@@ -41,18 +42,26 @@ import {
   type VatCategoryCode,
 } from "@/lib/invoices";
 import { listBusinessPartners, type BusinessPartner } from "@/lib/business-partners";
+import { getCompanyBillingProfile } from "@/lib/company-billing-profile";
 
 const VAT_CATEGORIES: VatCategoryCode[] = ["S", "Z", "E", "AE"];
 const TODAY = new Date().toISOString().slice(0, 10);
 
-function emptyItem(): DraftInvoiceItemInput {
+// Žiadny hardcoded country-specific universal VAT default (20/23/19/5 %
+// a pod.) — Esblu má byť použiteľné medzinárodne a nesmie samo rozhodovať,
+// aká sadzba je "správna". Nová S-kategória položka sa predvyplní iba
+// hodnotou company_billing_profile.default_vat_rate danej firmy; ak firma
+// default nemá nastavený, sadzba zostáva nerozlíšená (`NaN` sentinel — pozri
+// findUnresolvedVatRateErrors v lib/invoices.ts) a používateľ ju musí zadať
+// sám pred uložením/finalizáciou.
+function emptyItem(defaultVatRate: number | null): DraftInvoiceItemInput {
   return {
     description: "",
     quantity: 1,
     unit: "ks",
     unit_price: 0,
     vat_category_code: "S",
-    vat_rate: 20,
+    vat_rate: defaultVatRate ?? NaN,
   };
 }
 
@@ -80,6 +89,10 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
   const [taxBreakdowns, setTaxBreakdowns] = useState<InvoiceTaxBreakdown[]>([]);
   const [payments, setPayments] = useState<InvoicePayment[]>([]);
   const [partners, setPartners] = useState<BusinessPartner[]>([]);
+  // Firemný VAT default (company_billing_profile.default_vat_rate) — iba
+  // prefill zdroj pre NOVÉ S-kategórie položky, nikdy hardcoded universal
+  // fallback. null = firma default nemá nastavený (žiadny 20/23/19/5 % odhad).
+  const [companyDefaultVatRate, setCompanyDefaultVatRate] = useState<number | null>(null);
 
   // Draft edit state (iba kým document_status='draft').
   const [customerId, setCustomerId] = useState("");
@@ -147,10 +160,19 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
       setInvoice(inv);
 
       if (inv.document_status === "draft") {
-        const [items, partnerRows] = await Promise.all([
+        const [items, partnerRows, billingProfile] = await Promise.all([
           listInvoiceItems(inv.id),
           listBusinessPartners(inv.company_id),
+          getCompanyBillingProfile(inv.company_id).catch((error) => {
+            // Prefill je len pohodlie, nie kritická cesta — ak zlyhá (napr.
+            // firma ešte nemá billing profile riadok), nová položka jednoducho
+            // zostane s nerozlíšenou sadzbou, nič sa nehádaje.
+            console.error("Načítanie firemného VAT defaultu zlyhalo:", error);
+            return null;
+          }),
         ]);
+        const defaultVatRate = billingProfile?.default_vat_rate ?? null;
+        setCompanyDefaultVatRate(defaultVatRate);
         setCustomerId(inv.customer_business_partner_id ?? "");
         setIssueDate(inv.issue_date);
         setDueDate(inv.due_date ?? "");
@@ -167,7 +189,7 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
                 vat_category_code: item.vat_category_code,
                 vat_rate: item.vat_rate,
               }))
-            : [emptyItem()]
+            : [emptyItem(defaultVatRate)]
         );
         setPartners(partnerRows);
       } else {
@@ -194,8 +216,25 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
     );
   }
 
+  // Z/E/AE nikdy nemajú skutočnú percentuálnu sadzbu (pozri effectiveVatRate
+  // v lib/invoicing/vat-engine.ts) — pri prepnutí kategórie preč od S sa
+  // preto sadzba vynúti na 0 (input je pre tieto kategórie disabled, viď
+  // JSX nižšie). Pri prepnutí SPÄŤ na S sa sadzba predvyplní firemným
+  // defaultom, alebo zostane nerozlíšená (NaN), presne ako pri novej položke
+  // — nikdy sa nehádaje podľa krajiny/názvu/typu služby.
+  function handleVatCategoryChange(index: number, code: VatCategoryCode) {
+    updateDraftItem(index, {
+      vat_category_code: code,
+      vat_rate: code === "S" ? companyDefaultVatRate ?? NaN : 0,
+    });
+  }
+
+  function handleVatRateChange(index: number, rawValue: string) {
+    updateDraftItem(index, { vat_rate: rawValue === "" ? NaN : Number(rawValue) });
+  }
+
   function addDraftItem() {
-    setDraftItems((previous) => [...previous, emptyItem()]);
+    setDraftItems((previous) => [...previous, emptyItem(companyDefaultVatRate)]);
   }
 
   function removeDraftItem(index: number) {
@@ -236,6 +275,19 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
   async function handleSaveDraft() {
     if (!invoice) return;
     setSaveNotice("");
+
+    const cleanedItems = draftItems.filter((item) => item.description.trim().length > 0);
+
+    // Esblu nesmie nikdy zapísať do DB S-kategóriu položku s nerozlíšenou
+    // (nehádanou) sadzbou DPH — táto brána platí pred uložením AJ pred
+    // finalizáciou (zdieľaná s validateDraftBeforeFinalize), nielen pred
+    // finalizáciou, aby sa "prázdna" sadzba nikdy potichu nezapísala ako 0.
+    const vatRateErrors = findUnresolvedVatRateErrors(cleanedItems);
+    if (vatRateErrors.length > 0) {
+      setDraftErrors(vatRateErrors.map((error) => t(`invoices.errors.${error.messageKey}`)));
+      return;
+    }
+    setDraftErrors([]);
     setSavingDraft(true);
 
     try {
@@ -249,11 +301,10 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
         currency,
       });
 
-      const cleanedItems = draftItems.filter((item) => item.description.trim().length > 0);
       await replaceDraftInvoiceItems(invoice.id, cleanedItems);
 
       setInvoice(updated);
-      setDraftItems(cleanedItems.length > 0 ? cleanedItems : [emptyItem()]);
+      setDraftItems(cleanedItems.length > 0 ? cleanedItems : [emptyItem(companyDefaultVatRate)]);
       setSaveNotice(t("invoices.detail.draftSavedNotice"));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -425,7 +476,9 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
           </p>
         </div>
         <p className="text-2xl font-bold text-primary">
-          {formatMoney(invoice.total_amount, invoice.currency)}
+          {invoice.document_status === "draft"
+            ? formatMoney(Number(preview.totalAmount), invoice.currency)
+            : formatMoney(invoice.total_amount, invoice.currency)}
         </p>
       </div>
 
@@ -590,9 +643,7 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
                     value={item.vat_category_code}
                     disabled={!canEdit}
                     onChange={(event) =>
-                      updateDraftItem(index, {
-                        vat_category_code: event.target.value as VatCategoryCode,
-                      })
+                      handleVatCategoryChange(index, event.target.value as VatCategoryCode)
                     }
                   >
                     {VAT_CATEGORIES.map((code) => (
@@ -605,12 +656,25 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
                     type="number"
                     step="any"
                     className="rounded-lg border p-2 sm:col-span-1"
-                    placeholder={t("invoices.newInvoice.itemVatRateLabel")}
-                    value={item.vat_rate}
-                    disabled={!canEdit}
-                    onChange={(event) =>
-                      updateDraftItem(index, { vat_rate: Number(event.target.value) })
+                    placeholder={
+                      item.vat_category_code === "S"
+                        ? t("invoices.newInvoice.itemVatRateLabel")
+                        : undefined
                     }
+                    title={
+                      item.vat_category_code !== "S"
+                        ? t("invoices.newInvoice.vatRateNotPercentageHint")
+                        : undefined
+                    }
+                    value={
+                      item.vat_category_code === "S"
+                        ? Number.isFinite(item.vat_rate)
+                          ? item.vat_rate
+                          : ""
+                        : 0
+                    }
+                    disabled={!canEdit || item.vat_category_code !== "S"}
+                    onChange={(event) => handleVatRateChange(index, event.target.value)}
                   />
                   {canEdit && (
                     <button

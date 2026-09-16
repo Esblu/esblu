@@ -1775,6 +1775,7 @@ const de = {
       itemUnitPriceLabel: "Einzelpreis",
       itemVatCategoryLabel: "USt-Kategorie",
       itemVatRateLabel: "USt-Satz (%)",
+      vatRateNotPercentageHint: "Für diese Kategorie (Z/E/AE) ist der Satz kein Prozentsatz — der USt-Betrag ist immer 0.",
       vatCategory: {
         S: "S — Standardsatz",
         Z: "Z — Nullsatz",
@@ -1834,6 +1835,7 @@ const de = {
       itemDescriptionRequired: "Geben Sie eine Positionsbeschreibung ein.",
       itemQuantityInvalid: "Die Menge muss größer als 0 sein.",
       itemUnitPriceInvalid: "Der Einzelpreis darf nicht negativ sein.",
+      itemVatRateUnresolved: "Geben Sie für diese Position einen MwSt.-Satz ein (Kategorie S erfordert eine konkrete Zahl).",
       invalidPaymentAmount: "Der Zahlungsbetrag muss größer als 0 sein.",
       finalizeFailedPrefix: "Finalisierung fehlgeschlagen: {{message}}",
       paymentFailedPrefix: "Erfassen der Zahlung fehlgeschlagen: {{message}}",

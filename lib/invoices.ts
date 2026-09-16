@@ -400,6 +400,30 @@ export function computePaymentTermsDaysFromDueDate(
 
 export type DraftValidationError = { field: string; messageKey: string };
 
+// -----------------------------------------------------------------------------
+// VAT default (audit, Fáza 2 pokračovanie): Esblu nesmie samo hádať DPH
+// sadzbu (podľa krajiny, názvu položky, AI klasifikácie a pod.) — default
+// pre novú S-kategóriu položku pochádza VÝHRADNE z
+// company_billing_profile.default_vat_rate. Ak firma default nemá nastavený,
+// sadzba zostáva nerozlíšená (v UI reprezentovaná ako `NaN` — číselný typ
+// `number` sa preto NEMENÍ na `number | null` naprieč celým kódom, aby sa
+// nezasahovalo zbytočne do DraftInvoiceItemInput/DB kontraktu) a používateľ
+// ju musí zadať/potvrdiť pred uložením AJ finalizáciou draftu. Táto funkcia
+// je zdieľaná oboma bránami (save aj finalize), aby sa nerozlíšená S sadzba
+// nikdy nedostala do DB (invoice_items.vat_rate je NOT NULL, bez defaultu
+// špecifického pre krajinu — samotný DB default 0 je neutrálny fallback pre
+// stĺpec, nie "univerzálna sadzba").
+// -----------------------------------------------------------------------------
+export function findUnresolvedVatRateErrors(items: DraftInvoiceItemInput[]): DraftValidationError[] {
+  const errors: DraftValidationError[] = [];
+  items.forEach((item, index) => {
+    if (item.vat_category_code === "S" && !(Number.isFinite(item.vat_rate) && item.vat_rate >= 0)) {
+      errors.push({ field: `items.${index}.vat_rate`, messageKey: "itemVatRateUnresolved" });
+    }
+  });
+  return errors;
+}
+
 export function validateDraftBeforeFinalize(
   invoice: Pick<
     Invoice,
@@ -452,6 +476,8 @@ export function validateDraftBeforeFinalize(
       errors.push({ field: `items.${index}.unit_price`, messageKey: "itemUnitPriceInvalid" });
     }
   });
+
+  errors.push(...findUnresolvedVatRateErrors(items));
 
   return errors;
 }

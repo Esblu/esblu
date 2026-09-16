@@ -50,6 +50,19 @@ import Decimal from "decimal.js";
 // `invoice_items.line_vat_amount`/`line_gross_amount` (per riadok) preto
 // slúžia VÝHRADNE na UI zobrazenie toho konkrétneho riadku — nikdy nie sú
 // vstupom do VAT breakdown agregácie (pozri `computeInvoiceTotals` nižšie).
+//
+// DÔLEŽITÝ DODATOK (VAT category semantics audit): pre kategórie Z/E/AE je
+// vat_amount VŽDY 0, nezávisle od čísla vo `vatRate` (pozri `effectiveVatRate`
+// nižšie) — `vatRate` má reálny percentuálny význam iba pre S. Toto UŽ NIE JE
+// 1:1 identické s tým, čo by SQL `esblu_finalize_invoice` spočítalo, KEBY by
+// v riadku ostala nenulová `vat_rate` pri Z/E/AE (SQL RPC v súčasnosti stále
+// robí čisto `line_net * vat_rate / 100` bez ohľadu na kategóriu). Namiesto
+// zásahu do finalize RPC (vyžadovalo by migráciu — zámerne NEURENÉ, pozri
+// zadanie "STOP a najprv reportuj dôvod") je táto medzera uzavretá na UI
+// úrovni: `app/faktury/InvoiceDetailView.tsx` vynucuje `vat_rate = 0` a
+// disabled input pre každú Z/E/AE položku PRED uložením aj finalizáciou —
+// jediná existujúca cesta zápisu do DB teda vždy zapíše 0 pre tieto
+// kategórie, takže JS preview a SQL authoritative výpočet sa v praxi zhodujú.
 // -----------------------------------------------------------------------------
 
 Decimal.set({ rounding: Decimal.ROUND_HALF_UP });
@@ -91,15 +104,36 @@ function round2(value: Decimal): Decimal {
   return value.toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
 }
 
+// -----------------------------------------------------------------------------
+// VAT category semantics (audit, Fáza 2 pokračovanie): S (standard-rated) je
+// JEDINÁ kategória, kde má `vatRate` skutočný význam percentuálnej sadzby.
+// Z (zero rate), E (exempt) a AE (reverse charge) majú VAT amount VŽDY 0 —
+// to určuje samotná kategória, nie číslo v `vatRate` poli. AE nie je "0 % DPH"
+// v bežnom zmysle (je to presun daňovej povinnosti na odberateľa), ale pre
+// účely SUMY na tejto faktúre platí rovnaké pravidlo: vat_amount = 0.
+// Táto funkcia preto nikdy neinterpretuje `vatRate` ako percento mimo
+// kategórie S — a defenzívne ošetruje aj neplatnú/nerozlíšenú (NaN) sadzbu
+// pre S ako 0 pre účely PREVIEW zobrazenia (autoritatívna klientská aj DB
+// validácia pred uložením/finalizáciou nesmie nerozlíšenú S sadzbu vôbec
+// pripustiť — pozri validateDraftBeforeFinalize/findUnresolvedVatRateErrors
+// v lib/invoices.ts; toto je iba obranná poistka proti "NaN €" v live náhľade).
+// -----------------------------------------------------------------------------
+function effectiveVatRate(categoryCode: VatCategoryCode, rawRate: Decimal.Value): Decimal {
+  if (categoryCode !== "S") return new Decimal(0);
+  const rate = new Decimal(rawRate);
+  return rate.isFinite() ? rate : new Decimal(0);
+}
+
 /**
  * Prepočíta jeden riadok faktúry. line_net_amount = ROUND(quantity ×
- * unit_price, 2); line_vat_amount = ROUND(line_net_amount × rate / 100, 2)
+ * unit_price, 2); line_vat_amount = ROUND(line_net_amount × effective_rate / 100, 2)
  * (per-riadok, IBA na UI zobrazenie); line_gross_amount = net + vat.
+ * effective_rate je 0 pre všetky kategórie okrem S (pozri effectiveVatRate).
  */
 export function computeInvoiceLine(input: VatEngineLineInput): VatEngineLineResult {
   const quantity = new Decimal(input.quantity);
   const unitPrice = new Decimal(input.unitPrice);
-  const vatRate = new Decimal(input.vatRate);
+  const vatRate = effectiveVatRate(input.vatCategoryCode, input.vatRate);
 
   const lineNet = round2(quantity.times(unitPrice));
   const lineVat = round2(lineNet.times(vatRate).dividedBy(100));
@@ -129,7 +163,7 @@ export function computeInvoiceTotals(
   >();
 
   lines.forEach((line, index) => {
-    const rate = new Decimal(line.vatRate);
+    const rate = effectiveVatRate(line.vatCategoryCode, line.vatRate);
     const key = `${line.vatCategoryCode}:${rate.toFixed(4)}`;
     const net = new Decimal(computedLines[index].lineNetAmount);
     const existing = groups.get(key);

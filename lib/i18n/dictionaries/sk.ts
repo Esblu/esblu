@@ -1782,6 +1782,7 @@ const sk = {
       itemUnitPriceLabel: "Jednotková cena",
       itemVatCategoryLabel: "Kategória DPH",
       itemVatRateLabel: "Sadzba DPH (%)",
+      vatRateNotPercentageHint: "Pre túto kategóriu (Z/E/AE) nie je sadzba percento — suma DPH je vždy 0.",
       vatCategory: {
         S: "S — štandardná sadzba",
         Z: "Z — nulová sadzba",
@@ -1841,6 +1842,7 @@ const sk = {
       itemDescriptionRequired: "Zadajte popis položky.",
       itemQuantityInvalid: "Množstvo musí byť väčšie ako 0.",
       itemUnitPriceInvalid: "Jednotková cena nesmie byť záporná.",
+      itemVatRateUnresolved: "Zadajte sadzbu DPH pre túto položku (kategória S vyžaduje konkrétne číslo).",
       invalidPaymentAmount: "Suma platby musí byť väčšia ako 0.",
       finalizeFailedPrefix: "Finalizácia zlyhala: {{message}}",
       paymentFailedPrefix: "Zaznamenanie platby zlyhalo: {{message}}",

@@ -1759,6 +1759,7 @@ const en = {
       itemUnitPriceLabel: "Unit price",
       itemVatCategoryLabel: "VAT category",
       itemVatRateLabel: "VAT rate (%)",
+      vatRateNotPercentageHint: "For this category (Z/E/AE) the rate is not a percentage — the VAT amount is always 0.",
       vatCategory: {
         S: "S — standard rate",
         Z: "Z — zero rate",
@@ -1818,6 +1819,7 @@ const en = {
       itemDescriptionRequired: "Enter a description for the item.",
       itemQuantityInvalid: "Quantity must be greater than 0.",
       itemUnitPriceInvalid: "Unit price cannot be negative.",
+      itemVatRateUnresolved: "Enter a VAT rate for this item (category S requires a specific number).",
       invalidPaymentAmount: "Payment amount must be greater than 0.",
       finalizeFailedPrefix: "Finalization failed: {{message}}",
       paymentFailedPrefix: "Recording the payment failed: {{message}}",
