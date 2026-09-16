@@ -50,6 +50,7 @@ async function collectOwnerStorageTargets(
     inventoryPhotosRes,
     vehiclePhotosRes,
     settingsRes,
+    billingProfileRes,
   ] = await Promise.all([
     admin
       .from("documents")
@@ -84,6 +85,19 @@ async function collectOwnerStorageTargets(
       .select("logo_path")
       .eq("user_id", ownerUserId)
       .not("logo_path", "is", null),
+    // Fáza 1B: company_billing_profile.logo_path je teraz JEDINÝ živý zdroj
+    // aktuálneho firemného loga (settings.logo_path vyššie je legacy a od
+    // tejto fázy doň appka už nezapisuje — pozri lib/company-billing-
+    // profile.ts). Bez tohto riadku by zrušenie firmy nechalo osirelý
+    // Storage objekt vždy, keď logo naposledy nahral/zmenil ADMIN (nie
+    // owner) — company_billing_profile je company-scoped, nie user-scoped,
+    // takže presne túto latentnú medzeru (predtým: logo nahraté adminom sa
+    // pri zrušení firmy vôbec nekontrolovalo) zároveň opravuje.
+    admin
+      .from("company_billing_profile")
+      .select("logo_path")
+      .eq("company_id", companyId)
+      .not("logo_path", "is", null),
   ]);
 
   for (const [label, res] of [
@@ -94,6 +108,7 @@ async function collectOwnerStorageTargets(
     ["inventory_photos", inventoryPhotosRes],
     ["vehicle_photos", vehiclePhotosRes],
     ["settings", settingsRes],
+    ["company_billing_profile", billingProfileRes],
   ] as const) {
     if (res.error) {
       throw new Error(
@@ -139,6 +154,12 @@ async function collectOwnerStorageTargets(
   }
 
   for (const row of settingsRes.data ?? []) {
+    if (row.logo_path) {
+      targets.push({ bucket: "company-logos", path: row.logo_path });
+    }
+  }
+
+  for (const row of billingProfileRes.data ?? []) {
     if (row.logo_path) {
       targets.push({ bucket: "company-logos", path: row.logo_path });
     }

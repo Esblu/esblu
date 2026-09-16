@@ -9,6 +9,7 @@ import { getCompanyProfile, getMyActiveMembership } from "@/lib/company";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import ModuleCard, { type ModuleAccent } from "./ModuleCard";
 import InboxDocumentIcon from "./icons/InboxDocumentIcon";
+import BusinessPartnersIcon from "./icons/BusinessPartnersIcon";
 import type { VehicleVignette } from "@/lib/vehicle-vignettes";
 import { vehicleDetailHref } from "@/lib/entity-links";
 import { buildLegacyDashboardAlerts } from "@/lib/deadlines";
@@ -131,40 +132,22 @@ export default function Dashboard() {
   }
 
   // Firemný názov + logo pre AKTÍVNEHO ČLENA firmy (owner/admin/employee
-  // rovnako) — nie z vlastného, väčšinou prázdneho settings riadku
-  // prihláseného používateľa. Pozri lib/company.ts a
-  // supabase/migrations/20260814180000_add_company_profile_rpc.sql /
-  // 20260814190000_fix_company_profile_rpc.sql.
+  // rovnako) — z jediného living source-of-truth, public.company_billing_
+  // profile (Fáza 1B). Pozri lib/company.ts a
+  // supabase/migrations/20260916120000_add_company_billing_profile_and_
+  // business_partners.sql.
   //
-  // Bezpečnostná poistka proti regresii (pridané po nahlásenej chybe, kde
-  // fallback ESBLU videl aj owner): ak RPC z akéhokoľvek dôvodu (napr.
-  // migrácia ešte nie je aplikovaná na danom prostredí) nevráti žiadny
-  // profil, skús ako druhý krok priamo vlastný settings riadok
-  // prihláseného používateľa — presne to, čo appka robila PRED zavedením
-  // esblu_get_company_profile(). Pre ownera/admina, ktorí majú firemné
-  // údaje uložené vo svojom vlastnom riadku, sa tým hlavička obnoví aj bez
-  // funkčného RPC. Pre employee je vlastný riadok bežne prázdny, takže sa
-  // tu nič neprezradí — v tom prípade jednoducho ostane fallback.
+  // OPRAVA (Fáza 1B, 16.9.2026): predošlý fallback na VLASTNÝ settings
+  // riadok prihláseného používateľa bol odstránený. company_billing_profile
+  // je teraz jediný živý zdroj brandingu — settings.company_name/logo_path
+  // sú legacy a appka ich už nikdy nečíta (zadanie bod 5: "presne jeden
+  // živý source-of-truth", "žiadny dual-write"). Fallback bol pôvodne
+  // poistkou pre prechodný stav "RPC ešte nevidí dáta" — po tejto migrácii
+  // (backfill + bootstrap insert) má KAŽDÁ firma garantovane presne jeden
+  // company_billing_profile riadok, takže RPC vždy vráti profil (aj keď s
+  // prázdnymi poľami) a settings fallback už nie je potrebný.
   async function loadCompanyProfile() {
-    let profile = await getCompanyProfile();
-
-    if (!profile?.company_name && !profile?.logo_path) {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-
-      if (session) {
-        const { data: ownSettings } = await supabase
-          .from("settings")
-          .select("company_name, logo_path")
-          .eq("user_id", session.user.id)
-          .maybeSingle();
-
-        if (ownSettings?.company_name || ownSettings?.logo_path) {
-          profile = ownSettings;
-        }
-      }
-    }
+    const profile = await getCompanyProfile();
 
     if (profile?.company_name) {
       setCompanyName(profile.company_name);
@@ -684,6 +667,13 @@ export default function Dashboard() {
       accent: "teal",
     },
     {
+      title: t("nav.businessPartners"),
+      subtitle: t("dashboard.moduleBusinessPartnersSubtitle"),
+      href: "/obchodni-partneri",
+      icon: <BusinessPartnersIcon size={56} className="h-11 w-11 sm:h-14 sm:w-14" />,
+      accent: "blue",
+    },
+    {
       title: t("nav.settings"),
       subtitle: t("dashboard.moduleSettingsSubtitle"),
       href: "/nastavenia",
@@ -705,6 +695,11 @@ export default function Dashboard() {
     { href: "/vozidla", label: t("nav.vehicles"), image: "/images/van.png" },
     { href: "/stroje", label: t("nav.machines"), image: "/images/excavator.png" },
     { href: "/sklad", label: t("nav.inventory"), image: "/images/warehouse.png" },
+    {
+      href: "/obchodni-partneri",
+      label: t("nav.businessPartners"),
+      icon: <BusinessPartnersIcon size={20} />,
+    },
     { href: "/nastavenia", label: t("nav.settings"), image: "/images/settings.png" },
   ];
 

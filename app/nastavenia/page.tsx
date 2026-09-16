@@ -32,6 +32,16 @@ import {
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import { formatDateTime } from "@/lib/i18n/format";
 import LanguageSwitcher from "@/app/components/LanguageSwitcher";
+import {
+  EMPTY_COMPANY_BILLING_PROFILE_FORM,
+  billingProfileToForm,
+  getCompanyBillingProfile,
+  saveCompanyBillingProfileLogoPath,
+  upsertCompanyBillingProfile,
+  validateCompanyBillingProfileForm,
+  type CompanyBillingProfileForm,
+  type CompanyBillingProfileValidationError,
+} from "@/lib/company-billing-profile";
 
 function getMemberRoleLabels(t: (key: string) => string): Record<string, string> {
   return {
@@ -98,7 +108,18 @@ export default function NastaveniaPage() {
   const exportRequestMailto = getExportRequestMailto(t);
   const correctionRequestMailto = getCorrectionRequestMailto(t);
   const [userId, setUserId] = useState("");
-  const [companyName, setCompanyName] = useState("");
+  const [companyId, setCompanyId] = useState("");
+
+  // company_billing_profile (Fáza 1B) — jediný living source-of-truth pre
+  // firemné/fakturačné údaje. NAHRÁDZA predošlé settings.company_name/
+  // settings.logo_path (tie appka od tejto fázy ďalej nečíta/nezapisuje —
+  // pozri lib/company-billing-profile.ts).
+  const [billingProfile, setBillingProfile] = useState<CompanyBillingProfileForm>(
+    EMPTY_COMPANY_BILLING_PROFILE_FORM
+  );
+  const [billingProfileErrors, setBillingProfileErrors] = useState<
+    CompanyBillingProfileValidationError[]
+  >([]);
 
   const [logoPath, setLogoPath] = useState("");
   const [logoUrl, setLogoUrl] = useState("");
@@ -157,7 +178,7 @@ export default function NastaveniaPage() {
       const { data: ownMembership, error: ownMembershipError } =
         await supabase
           .from("company_members")
-          .select("role")
+          .select("role, company_id")
           .eq("user_id", currentUserId)
           .eq("status", "active")
           .maybeSingle();
@@ -168,6 +189,13 @@ export default function NastaveniaPage() {
 
       const role = ownMembership?.role ?? null;
       setMyRole(role);
+
+      const activeCompanyId = ownMembership?.company_id ?? "";
+      setCompanyId(activeCompanyId);
+
+      if (activeCompanyId) {
+        await loadBillingProfile(activeCompanyId);
+      }
 
       if (role === "owner" || role === "admin") {
         const [memberRows, inviteRows] = await Promise.all([
@@ -279,7 +307,12 @@ export default function NastaveniaPage() {
     }
 
     setUserId(session.user.id);
-    await loadSettings(session.user.id);
+    // companyId sa nastaví v loadCompanyUsers() (company_members riadok) —
+    // loadBillingProfile() sa odtiaľ zavolá hneď, keď je companyId známe
+    // (pozri loadCompanyUsers vyššie). Samotné company_billing_profile už
+    // NEZÁVISÍ od settings — settings sa od Fázy 1B na firemný branding
+    // ďalej nepoužíva (legacy stĺpce company_name/logo_path v settings
+    // appka odteraz ani nečíta, ani nezapisuje).
     await loadCompanyUsers(session.user.id);
     await loadAcceptances();
   }
@@ -291,117 +324,69 @@ export default function NastaveniaPage() {
     setAcceptancesLoading(false);
   }
 
-  async function loadSettings(currentUserId: string) {
-    const { data, error } = await supabase
-      .from("settings")
-      .select("*")
-      .eq("user_id", currentUserId)
-      .limit(1)
-      .maybeSingle();
+  async function loadBillingProfile(activeCompanyId: string) {
+    try {
+      const profile = await getCompanyBillingProfile(activeCompanyId);
 
-    if (error) {
-      console.error("Chyba pri načítaní nastavení:", error);
-      return;
-    }
+      setBillingProfile(billingProfileToForm(profile));
 
-    if (data) {
-      const savedLogoPath = data.logo_path || "";
-
-      setCompanyName(data.company_name || "");
+      const savedLogoPath = profile?.logo_path || "";
       setLogoPath(savedLogoPath);
-      setLogoUrl(getLogoPublicUrl(savedLogoPath));
+      setLogoUrl(savedLogoPath ? getLogoPublicUrl(savedLogoPath) : "");
+    } catch (error) {
+      console.error("Načítanie firemného profilu zlyhalo:", error);
     }
-  }
-
-  async function findSettingsRow() {
-    return await supabase
-      .from("settings")
-      .select("id, logo_path")
-      .eq("user_id", userId)
-      .limit(1)
-      .maybeSingle();
   }
 
   async function saveLogoPathToDatabase(path: string | null) {
-    const { data, error: findError } = await findSettingsRow();
-
-    if (findError) {
-      throw findError;
+    if (!companyId) {
+      throw new Error(t("settings.errors.notLoggedIn"));
     }
 
-    if (data) {
-      const { error } = await supabase
-        .from("settings")
-        .update({
-          logo_path: path,
-        })
-        .eq("id", data.id)
-        .eq("user_id", userId);
-
-      if (error) {
-        throw error;
-      }
-
-      return;
-    }
-
-    const { error } = await supabase.from("settings").insert({
-      user_id: userId,
-      company_name: companyName.trim(),
-      logo_path: path,
-    });
-
-    if (error) {
-      throw error;
-    }
+    await saveCompanyBillingProfileLogoPath(companyId, userId, path);
   }
 
   async function saveSettings() {
-    if (!userId) {
+    if (!userId || !companyId) {
       alert(t("settings.errors.notLoggedIn"));
+      return;
+    }
+
+    const { errors, payload } = validateCompanyBillingProfileForm(billingProfile);
+    setBillingProfileErrors(errors);
+
+    if (errors.length > 0 || !payload) {
+      alert(t("settings.errors.settingsSaveFailedPrefix", { message: t("settings.company.validationFailed") }));
       return;
     }
 
     setSettingsLoading(true);
 
-    const { data, error: findError } = await findSettingsRow();
-
-    if (findError) {
+    try {
+      // logoPath sa zámerne NEODOVZDÁVA (upsertCompanyBillingProfile ho pri
+      // undefined nemení) — logo má vlastný, samostatný Storage+DB flow
+      // (handleLogoChange/deleteLogo), uloženie textových polí formulára ho
+      // nikdy nesmie vedľajškovo prepísať.
+      await upsertCompanyBillingProfile(companyId, userId, payload);
       setSettingsLoading(false);
-      alert(t("settings.errors.settingsLoadFailed"));
-      return;
+      alert(t("settings.errors.settingsSaved"));
+    } catch (error) {
+      setSettingsLoading(false);
+      const message = error instanceof Error ? error.message : String(error);
+      alert(t("settings.errors.settingsSaveFailedPrefix", { message }));
     }
+  }
 
-    if (data) {
-      const { error } = await supabase
-        .from("settings")
-        .update({
-          company_name: companyName.trim(),
-        })
-        .eq("id", data.id)
-        .eq("user_id", userId);
+  function updateBillingProfileField(
+    field: keyof CompanyBillingProfileForm,
+    value: string
+  ) {
+    setBillingProfile((previous) => ({ ...previous, [field]: value }));
+  }
 
-      if (error) {
-        setSettingsLoading(false);
-        alert(t("settings.errors.settingsSaveFailedPrefix", { message: error.message }));
-        return;
-      }
-    } else {
-      const { error } = await supabase.from("settings").insert({
-        user_id: userId,
-        company_name: companyName.trim(),
-        logo_path: logoPath || null,
-      });
-
-      if (error) {
-        setSettingsLoading(false);
-        alert(t("settings.errors.settingsSaveFailedPrefix", { message: error.message }));
-        return;
-      }
-    }
-
-    setSettingsLoading(false);
-    alert(t("settings.errors.settingsSaved"));
+  function billingProfileFieldError(field: keyof CompanyBillingProfileForm): string {
+    const found = billingProfileErrors.find((error) => error.field === field);
+    return found ? t(`settings.company.errors.${found.messageKey}`) : "";
   }
 
   async function compressLogo(file: File): Promise<File> {
@@ -783,26 +768,109 @@ export default function NastaveniaPage() {
           </div>
         </section>
 
-        {isOwnerOrAdmin(myRole) && (
+        {myRole && (() => {
+          const canEditCompany = isOwnerOrAdmin(myRole);
+
+          function field(
+            fieldKey: keyof CompanyBillingProfileForm,
+            labelKey: string,
+            options?: { placeholder?: string; type?: string }
+          ) {
+            const errorText = billingProfileFieldError(fieldKey);
+
+            return (
+              <div>
+                <label className="mb-2 block text-sm font-semibold">
+                  {t(labelKey)}
+                </label>
+
+                <input
+                  className={`w-full rounded-xl border p-3 ${errorText ? "border-red-500" : ""}`}
+                  type={options?.type ?? "text"}
+                  placeholder={options?.placeholder}
+                  value={billingProfile[fieldKey]}
+                  onChange={(event) =>
+                    updateBillingProfileField(fieldKey, event.target.value)
+                  }
+                  disabled={!canEditCompany || settingsLoading}
+                />
+
+                {errorText && (
+                  <p className="mt-1 text-xs font-semibold text-red-600">{errorText}</p>
+                )}
+              </div>
+            );
+          }
+
+          return (
         <section className="rounded-3xl border border-subtle bg-surface-1 p-8 shadow-lg backdrop-blur-xl">
           <h2 className="text-2xl font-bold text-primary">
             {t("settings.company.title")}
           </h2>
 
-          <div className="mt-6">
-            <label className="mb-2 block font-semibold">
-              {t("settings.company.nameLabel")}
-            </label>
+          {!canEditCompany && (
+            <p className="mt-2 text-sm text-secondary">
+              {t("settings.company.readOnlyNotice")}
+            </p>
+          )}
 
-            <input
-              className="w-full rounded-xl border p-3"
-              placeholder={t("settings.company.namePlaceholder")}
-              value={companyName}
-              onChange={(event) =>
-                setCompanyName(event.target.value)
-              }
-              disabled={settingsLoading}
-            />
+          <div className="mt-6">
+            {field("legal_name", "settings.company.nameLabel", {
+              placeholder: t("settings.company.namePlaceholder"),
+            })}
+          </div>
+
+          <div className="mt-6 grid gap-4 sm:grid-cols-3">
+            {field("ico", "settings.company.icoLabel")}
+            {field("dic", "settings.company.dicLabel")}
+            {field("ic_dph", "settings.company.icDphLabel")}
+          </div>
+
+          <p className="mt-2 text-xs text-secondary">
+            {t("settings.company.icDphHint")}
+          </p>
+
+          <div className="mt-6 grid gap-4 sm:grid-cols-2">
+            {field("address_line1", "settings.company.addressLine1Label")}
+            {field("address_line2", "settings.company.addressLine2Label")}
+          </div>
+
+          <div className="mt-6 grid gap-4 sm:grid-cols-3">
+            {field("city", "settings.company.cityLabel")}
+            {field("postal_code", "settings.company.postalCodeLabel")}
+            {field("country_code", "settings.company.countryCodeLabel", {
+              placeholder: "SK",
+            })}
+          </div>
+
+          <div className="mt-6 grid gap-4 sm:grid-cols-2">
+            {field("iban", "settings.company.ibanLabel")}
+            {field("bic", "settings.company.bicLabel")}
+          </div>
+
+          <div className="mt-6">
+            {field("contact_email", "settings.company.contactEmailLabel", {
+              type: "email",
+            })}
+          </div>
+
+          <div className="mt-6 grid gap-4 sm:grid-cols-3">
+            {field("default_due_days", "settings.company.defaultDueDaysLabel", {
+              placeholder: "14",
+            })}
+            {field("default_currency", "settings.company.defaultCurrencyLabel", {
+              placeholder: "EUR",
+            })}
+            {field("default_vat_rate", "settings.company.defaultVatRateLabel", {
+              placeholder: "20",
+            })}
+          </div>
+
+          <div className="mt-6">
+            {field(
+              "invoice_numbering_prefix",
+              "settings.company.invoiceNumberingPrefixLabel"
+            )}
           </div>
 
           <div className="mt-6">
@@ -824,48 +892,55 @@ export default function NastaveniaPage() {
               </div>
             )}
 
-            <label className="btn-secondary inline-flex cursor-pointer px-6 py-3 font-semibold">
-              {logoLoading
-                ? t("settings.company.processingLogo")
-                : logoPath
-                  ? t("settings.company.changeLogo")
-                  : t("settings.company.addLogo")}
+            {canEditCompany && (
+              <>
+                <label className="btn-secondary inline-flex cursor-pointer px-6 py-3 font-semibold">
+                  {logoLoading
+                    ? t("settings.company.processingLogo")
+                    : logoPath
+                      ? t("settings.company.changeLogo")
+                      : t("settings.company.addLogo")}
 
-              <input
-                type="file"
-                accept="image/jpeg,image/png,image/webp"
-                onChange={handleLogoChange}
-                disabled={logoLoading}
-                className="hidden"
-              />
-            </label>
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp"
+                    onChange={handleLogoChange}
+                    disabled={logoLoading}
+                    className="hidden"
+                  />
+                </label>
 
-            {logoPath && (
-              <button
-                type="button"
-                onClick={deleteLogo}
-                disabled={logoLoading}
-                className="ml-3 rounded-xl bg-red-600 px-6 py-3 font-semibold text-white hover:bg-red-700 disabled:bg-gray-400"
-              >
-                {t("settings.company.deleteLogo")}
-              </button>
+                {logoPath && (
+                  <button
+                    type="button"
+                    onClick={deleteLogo}
+                    disabled={logoLoading}
+                    className="ml-3 rounded-xl bg-red-600 px-6 py-3 font-semibold text-white hover:bg-red-700 disabled:bg-gray-400"
+                  >
+                    {t("settings.company.deleteLogo")}
+                  </button>
+                )}
+
+                <p className="mt-3 text-sm text-secondary">
+                  {t("settings.company.logoHint")}
+                </p>
+              </>
             )}
-
-            <p className="mt-3 text-sm text-secondary">
-              {t("settings.company.logoHint")}
-            </p>
           </div>
 
-          <button
-            type="button"
-            onClick={saveSettings}
-            disabled={settingsLoading || logoLoading}
-            className="mt-8 rounded-xl bg-blue-600 px-6 py-3 text-white hover:bg-blue-700 disabled:bg-gray-400"
-          >
-            {settingsLoading ? t("settings.company.saving") : t("settings.company.save")}
-          </button>
+          {canEditCompany && (
+            <button
+              type="button"
+              onClick={saveSettings}
+              disabled={settingsLoading || logoLoading}
+              className="mt-8 rounded-xl bg-blue-600 px-6 py-3 text-white hover:bg-blue-700 disabled:bg-gray-400"
+            >
+              {settingsLoading ? t("settings.company.saving") : t("settings.company.save")}
+            </button>
+          )}
         </section>
-        )}
+          );
+        })()}
 
         {myRole && (
           <section className="rounded-3xl border border-subtle bg-surface-1 p-8 shadow-lg backdrop-blur-xl">
