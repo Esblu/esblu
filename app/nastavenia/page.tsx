@@ -551,6 +551,40 @@ export default function NastaveniaPage() {
     }
   }
 
+  async function sleep(ms: number) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  // Kompenzačný krok pre deleteLogo(): v tomto bode je Storage objekt UŽ
+  // nenávratne odstránený, takže vynechanie tohto zápisu by nechalo
+  // logo_path odkazovať na neexistujúci objekt (presne ten stav, ktorému sa
+  // má flow vyhnúť — DB a Storage nevie byť atomické naprieč dvoma rôznymi
+  // backendmi bez distribuovanej transakcie, preto aspoň bounded retry).
+  // Krátke oneskorenia (400ms/900ms) pokrývajú bežné prechodné zlyhania
+  // (výpadok siete, dočasná chyba DB) bez zámerného predlžovania flow pri
+  // trvalej chybe.
+  async function saveLogoPathToDatabaseWithRetry(
+    path: string | null,
+    attempts = 3
+  ) {
+    let lastError: unknown;
+
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      try {
+        await saveLogoPathToDatabase(path);
+        return;
+      } catch (error) {
+        lastError = error;
+
+        if (attempt < attempts) {
+          await sleep(attempt * 450);
+        }
+      }
+    }
+
+    throw lastError;
+  }
+
   async function deleteLogo() {
     if (!userId || !logoPath) {
       return;
@@ -581,13 +615,22 @@ export default function NastaveniaPage() {
     }
 
     try {
-      await saveLogoPathToDatabase(null);
+      await saveLogoPathToDatabaseWithRetry(null);
 
       setLogoPath("");
       setLogoUrl("");
 
       alert(t("settings.errors.logoDeleted"));
     } catch (error) {
+      // Storage objekt je už nenávratne preč (DELETE vyššie uspel), ale
+      // databázový logo_path sa napriek retry nepodarilo vynulovať — DB by
+      // inak odkazovala na neexistujúci objekt (rozbitý <img>). Preto sa
+      // lokálny stav zámerne vyčistí aj tu (UI prestane zobrazovať mŕtvy
+      // odkaz), a chybová hláška používateľa jasne vyzve na kontrolu/uloženie
+      // znova, keďže DB záznam môže byť dočasne nekonzistentný.
+      setLogoPath("");
+      setLogoUrl("");
+
       const message =
         error instanceof Error
           ? error.message
