@@ -799,7 +799,9 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
           </div>
 
           <h2 className="mt-8 text-lg font-bold text-primary">{t("invoices.detail.taxBreakdownTitle")}</h2>
-          <table className="mt-3 w-full text-sm">
+
+          {/* Desktop/tablet — klasická tabuľka, nezmenené. */}
+          <table className="mt-3 hidden w-full text-sm sm:table">
             <thead>
               <tr className="text-left text-secondary">
                 <th className="pb-2">{t("invoices.newInvoice.itemVatCategoryLabel")}</th>
@@ -819,6 +821,40 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
               ))}
             </tbody>
           </table>
+
+          {/* Mobile (< sm) — card/stack layout, rovnaký pattern ako pri
+              riadkových položkách vyššie. */}
+          <div className="mt-3 space-y-3 sm:hidden">
+            {taxBreakdowns.map((row) => (
+              <div key={row.id} className="rounded-2xl border border-subtle bg-surface-1 p-4">
+                <p className="text-xs font-semibold text-secondary">
+                  {t("invoices.newInvoice.itemVatCategoryLabel")}
+                </p>
+                <p className="text-sm font-semibold text-primary">
+                  {row.vat_category_code} ({formatNumber(row.vat_rate, locale)}%)
+                </p>
+
+                <div className="mt-3 grid grid-cols-2 gap-3">
+                  <div>
+                    <p className="text-xs font-semibold text-secondary">
+                      {t("invoices.detail.taxBreakdownTaxable")}
+                    </p>
+                    <p className="text-sm text-primary">
+                      {formatMoney(row.taxable_amount, invoice.currency)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-xs font-semibold text-secondary">
+                      {t("invoices.detail.taxBreakdownVat")}
+                    </p>
+                    <p className="text-sm font-semibold text-primary">
+                      {formatMoney(row.vat_amount, invoice.currency)}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
 
           <h2 className="mt-8 text-lg font-bold text-primary">{t("invoices.detail.paymentsTitle")}</h2>
 
@@ -941,34 +977,88 @@ function ItemsTableLoader({
   if (!loaded) return <p className="text-sm text-secondary">{t("invoices.loading")}</p>;
 
   return (
-    <table className="w-full text-sm">
-      <thead>
-        <tr className="text-left text-secondary">
-          <th className="pb-2">{t("invoices.newInvoice.itemDescriptionLabel")}</th>
-          <th className="pb-2 text-right">{t("invoices.newInvoice.itemQuantityLabel")}</th>
-          <th className="pb-2 text-right">{t("invoices.newInvoice.itemUnitPriceLabel")}</th>
-          <th className="pb-2 text-right">{t("invoices.newInvoice.totalLabel")}</th>
-        </tr>
-      </thead>
-      <tbody>
-        {items.map((item) => (
-          <tr key={item.id} className="border-t border-subtle">
-            <td className="py-2">{item.description}</td>
-            <td className="py-2 text-right">
-              {formatNumber(item.quantity, locale)} {item.unit}
-            </td>
-            <td className="py-2 text-right">
-              {formatNumber(item.unit_price, locale, { style: "currency", currency })}
-            </td>
-            <td className="py-2 text-right">
-              {formatNumber(item.line_gross_amount, locale, {
-                style: "currency",
-                currency,
-              })}
-            </td>
+    <>
+      {/* Desktop/tablet — klasická tabuľka, nezmenené. */}
+      <table className="hidden w-full text-sm sm:table">
+        <thead>
+          <tr className="text-left text-secondary">
+            <th className="pb-2">{t("invoices.newInvoice.itemDescriptionLabel")}</th>
+            <th className="pb-2 text-right">{t("invoices.newInvoice.itemQuantityLabel")}</th>
+            <th className="pb-2 text-right">{t("invoices.newInvoice.itemUnitPriceLabel")}</th>
+            <th className="pb-2 text-right">{t("invoices.newInvoice.totalLabel")}</th>
           </tr>
+        </thead>
+        <tbody>
+          {items.map((item) => (
+            <tr key={item.id} className="border-t border-subtle">
+              <td className="py-2">{item.description}</td>
+              <td className="py-2 text-right">
+                {formatNumber(item.quantity, locale)} {item.unit}
+              </td>
+              <td className="py-2 text-right">
+                {formatNumber(item.unit_price, locale, { style: "currency", currency })}
+              </td>
+              <td className="py-2 text-right">
+                {formatNumber(item.line_gross_amount, locale, {
+                  style: "currency",
+                  currency,
+                })}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      {/* Mobile (< sm) — card/stack layout namiesto 4 stĺpcov vedľa seba,
+          ktoré sa na cca 360–430 px zobrazovali prekryté/zlepené. */}
+      <div className="space-y-3 sm:hidden">
+        {items.map((item) => (
+          <div key={item.id} className="rounded-2xl border border-subtle bg-surface-1 p-4">
+            <p className="text-xs font-semibold text-secondary">
+              {t("invoices.newInvoice.itemDescriptionLabel")}
+            </p>
+            <p className="text-sm font-semibold text-primary">{item.description}</p>
+
+            <div className="mt-3 grid grid-cols-2 gap-3">
+              <div>
+                <p className="text-xs font-semibold text-secondary">
+                  {t("invoices.newInvoice.itemQuantityLabel")}
+                </p>
+                <p className="text-sm text-primary">
+                  {formatNumber(item.quantity, locale)} {item.unit}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs font-semibold text-secondary">
+                  {t("invoices.newInvoice.itemUnitPriceLabel")}
+                </p>
+                <p className="text-sm text-primary">
+                  {formatNumber(item.unit_price, locale, { style: "currency", currency })}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs font-semibold text-secondary">
+                  {t("invoices.detail.taxBreakdownVat")}
+                </p>
+                <p className="text-sm text-primary">
+                  {item.vat_category_code} ({formatNumber(item.vat_rate, locale)}%)
+                </p>
+              </div>
+              <div>
+                <p className="text-xs font-semibold text-secondary">
+                  {t("invoices.newInvoice.totalLabel")}
+                </p>
+                <p className="text-sm font-semibold text-primary">
+                  {formatNumber(item.line_gross_amount, locale, {
+                    style: "currency",
+                    currency,
+                  })}
+                </p>
+              </div>
+            </div>
+          </div>
         ))}
-      </tbody>
-    </table>
+      </div>
+    </>
   );
 }
