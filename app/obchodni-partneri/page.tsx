@@ -7,8 +7,9 @@ import { supabase } from "@/lib/supabase";
 import BackLink from "@/app/components/BackLink";
 import {
   getMyActiveMembership,
-  isOwnerOrAdmin,
-  type CompanyMemberRole,
+  hasFinanceManage,
+  hasFinanceView,
+  type MyActiveMembership,
 } from "@/lib/company";
 import { useCompanyDpaLegalHold } from "@/app/components/CompanyDpaGate";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
@@ -54,8 +55,15 @@ export default function ObchodniPartneriPage() {
 
   const [userId, setUserId] = useState("");
   const [companyId, setCompanyId] = useState("");
-  const [myRole, setMyRole] = useState<CompanyMemberRole | null>(null);
-  const canEdit = isOwnerOrAdmin(myRole);
+  // Finance Access Hardening — obchodní partneri sú finančné/billing dáta.
+  // canView/canEdit vychádzajú VÝHRADNE z permissions.finance.view/manage
+  // (+ owner vždy), NIE z role==='admin'. Toto je iba UI vrstva — reálne
+  // vynútenie je RLS (esblu_my_finance_view/manage()) na strane DB, takže
+  // priame otvorenie tejto URL bez oprávnenia aj tak nič nenačíta.
+  const [membership, setMembership] = useState<MyActiveMembership | null>(null);
+  const [membershipLoaded, setMembershipLoaded] = useState(false);
+  const canView = hasFinanceView(membership);
+  const canEdit = hasFinanceManage(membership);
 
   const [partners, setPartners] = useState<BusinessPartner[]>([]);
   const [loading, setLoading] = useState(true);
@@ -108,17 +116,25 @@ export default function ObchodniPartneriPage() {
 
     setUserId(session.user.id);
 
-    const membership = await getMyActiveMembership();
+    const activeMembership = await getMyActiveMembership();
+    setMembership(activeMembership);
+    setMembershipLoaded(true);
 
-    if (!membership) {
+    if (!activeMembership) {
       setLoading(false);
       return;
     }
 
-    setCompanyId(membership.company_id);
-    setMyRole(membership.role);
+    setCompanyId(activeMembership.company_id);
 
-    await loadPartners(membership.company_id);
+    if (!hasFinanceView(activeMembership)) {
+      // Bez finance view sú RLS na business_partners aj tak 0 riadkov —
+      // vynechávame zbytočný fetch a rovno zobrazíme "Nemáte oprávnenie".
+      setLoading(false);
+      return;
+    }
+
+    await loadPartners(activeMembership.company_id);
   }
 
   async function loadPartners(activeCompanyId: string) {
@@ -264,7 +280,7 @@ export default function ObchodniPartneriPage() {
           </div>
         </div>
 
-        {canEdit && (
+        {canView && canEdit && (
           <button
             type="button"
             onClick={openCreateForm}
@@ -276,16 +292,23 @@ export default function ObchodniPartneriPage() {
         )}
       </div>
 
-      {!canEdit && myRole && (
+      {!canView && membershipLoaded && (
+        <p className="mt-3 rounded-2xl border border-subtle bg-surface-1 p-6 text-center text-secondary">
+          {t("businessPartners.noFinanceAccess")}
+        </p>
+      )}
+
+      {canView && !canEdit && (
         <p className="mt-3 text-sm text-secondary">{t("businessPartners.readOnlyNotice")}</p>
       )}
 
-      {legalHold && canEdit && (
+      {canView && legalHold && canEdit && (
         <p className="mt-3 text-sm font-semibold text-amber-600">
           {t("businessPartners.legalHoldNotice")}
         </p>
       )}
 
+      {canView && (
       <div className="mt-6 flex flex-wrap gap-3">
         <input
           className="min-w-[240px] flex-1 rounded-xl border p-3"
@@ -305,8 +328,9 @@ export default function ObchodniPartneriPage() {
           <option value="both">{t("businessPartners.kind.both")}</option>
         </select>
       </div>
+      )}
 
-      {showForm && canEdit && (
+      {canView && showForm && canEdit && (
         <div className="mt-6 rounded-3xl border border-subtle bg-surface-1 p-6 shadow-lg">
           <h2 className="text-lg font-bold text-primary">
             {editingId
@@ -544,6 +568,7 @@ export default function ObchodniPartneriPage() {
         </div>
       )}
 
+      {canView && (
       <div className="mt-6">
         {loading ? (
           <p className="text-sm text-secondary">{t("businessPartners.loading")}</p>
@@ -595,6 +620,7 @@ export default function ObchodniPartneriPage() {
           </ul>
         )}
       </div>
+      )}
     </div>
   );
 }

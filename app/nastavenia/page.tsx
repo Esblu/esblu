@@ -6,14 +6,17 @@ import { supabase } from "@/lib/supabase";
 import BackLink from "@/app/components/BackLink";
 import {
   createCompanyInvite,
+  getCompanyProfile,
   getCreateInviteErrorMessage,
-  isOwnerOrAdmin,
+  hasFinanceManage,
+  hasFinanceView,
   listMyCompanyInvites,
   listMyCompanyMembers,
   type CompanyInviteRole,
   type CompanyInviteRow,
   type CompanyMemberRole,
   type CompanyMemberRow,
+  type MemberPermissions,
 } from "@/lib/company";
 import {
   listMyLegalAcceptances,
@@ -124,6 +127,18 @@ export default function NastaveniaPage() {
   const [logoPath, setLogoPath] = useState("");
   const [logoUrl, setLogoUrl] = useState("");
 
+  // Finance Access Hardening — billingProfile/logoPath/logoUrl vyššie sa
+  // napĺňajú IBA keď má prihlásený používateľ finance view/manage (pozri
+  // loadBillingProfile nižšie). Bez finance prístupu appka namiesto toho
+  // natiahne VÝHRADNE branding (názov+logo) cez bezpečnú
+  // esblu_get_company_profile() RPC (getCompanyProfile()) — tá NIKDY
+  // nevracia IČO/DIČ/IBAN a pod., takže citlivé billing polia sa do
+  // browseru pre non-finance používateľa vôbec nedostanú (obranná vrstva
+  // navyše, nezávislá od toho, čo appka v UI skryje/zobrazí).
+  const [brandingOnlyName, setBrandingOnlyName] = useState("");
+  const [brandingOnlyLogoUrl, setBrandingOnlyLogoUrl] = useState("");
+  const [myPermissions, setMyPermissions] = useState<MemberPermissions>({});
+
   const [newPassword, setNewPassword] = useState("");
   const [confirmNewPassword, setConfirmNewPassword] = useState("");
 
@@ -135,6 +150,11 @@ export default function NastaveniaPage() {
   const [invites, setInvites] = useState<CompanyInviteRow[]>([]);
   const [usersLoading, setUsersLoading] = useState(false);
   const [myRole, setMyRole] = useState<CompanyMemberRole | null>(null);
+  // Finance Access Hardening — owner vždy, inak iba explicitné
+  // permissions.finance.view/manage (nie role==='admin'). Iba UI vrstva —
+  // reálne vynútenie je RLS (esblu_my_finance_view/manage()).
+  const financeView = hasFinanceView({ role: myRole, permissions: myPermissions });
+  const financeManage = hasFinanceManage({ role: myRole, permissions: myPermissions });
 
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteRole, setInviteRole] = useState<CompanyInviteRole>("employee");
@@ -178,7 +198,7 @@ export default function NastaveniaPage() {
       const { data: ownMembership, error: ownMembershipError } =
         await supabase
           .from("company_members")
-          .select("role, company_id")
+          .select("role, company_id, permissions")
           .eq("user_id", currentUserId)
           .eq("status", "active")
           .maybeSingle();
@@ -190,11 +210,22 @@ export default function NastaveniaPage() {
       const role = ownMembership?.role ?? null;
       setMyRole(role);
 
+      const permissions = (ownMembership?.permissions ?? {}) as MemberPermissions;
+      setMyPermissions(permissions);
+
       const activeCompanyId = ownMembership?.company_id ?? "";
       setCompanyId(activeCompanyId);
 
       if (activeCompanyId) {
-        await loadBillingProfile(activeCompanyId);
+        if (hasFinanceView({ role, permissions })) {
+          await loadBillingProfile(activeCompanyId);
+        } else {
+          // Bez finance prístupu sa NIKDY nevolá priamy SELECT na
+          // company_billing_profile (RLS by aj tak vrátila 0 riadkov) —
+          // iba bezpečná branding-only RPC (legal_name/logo_path, žiadne
+          // IČO/DIČ/IBAN).
+          await loadBrandingOnly();
+        }
       }
 
       if (role === "owner" || role === "admin") {
@@ -335,6 +366,23 @@ export default function NastaveniaPage() {
       setLogoUrl(savedLogoPath ? getLogoPublicUrl(savedLogoPath) : "");
     } catch (error) {
       console.error("Načítanie firemného profilu zlyhalo:", error);
+    }
+  }
+
+  // Branding-only náčítanie pre používateľa BEZ finance prístupu — cez
+  // esblu_get_company_profile() (SECURITY DEFINER, obchádza RLS na
+  // company_billing_profile úplne), vracia iba legal_name/logo_path.
+  // billingProfile/logoPath state sa tu zámerne NEPOUŽÍVA — ostávajú
+  // prázdne, aby žiadne billing pole nebolo ani v pamäti prehliadača.
+  async function loadBrandingOnly() {
+    try {
+      const profile = await getCompanyProfile();
+      setBrandingOnlyName(profile?.company_name || "");
+      setBrandingOnlyLogoUrl(
+        profile?.logo_path ? getLogoPublicUrl(profile.logo_path) : ""
+      );
+    } catch (error) {
+      console.error("Načítanie firemného brandingu zlyhalo:", error);
     }
   }
 
@@ -768,8 +816,12 @@ export default function NastaveniaPage() {
           </div>
         </section>
 
-        {myRole && (() => {
-          const canEditCompany = isOwnerOrAdmin(myRole);
+        {/* Finance Access Hardening — plná sekcia "Firma" (vrátane billing
+            polí IČO/DIČ/IBAN/...) sa vykresľuje iba pre finance view/manage
+            (owner vždy). Bez finance prístupu appka o pár riadkov nižšie
+            zobrazí samostatnú branding-only sekciu (iba názov+logo). */}
+        {myRole && financeView && (() => {
+          const canEditCompany = financeManage;
 
           function field(
             fieldKey: keyof CompanyBillingProfileForm,
@@ -941,6 +993,53 @@ export default function NastaveniaPage() {
         </section>
           );
         })()}
+
+        {/* Finance Access Hardening — bez finance view (napr. bežný admin
+            alebo employee) appka NIKDY nenačítava/nezobrazuje billing polia
+            (IČO/DIČ/IBAN/...); táto sekcia ukazuje iba branding (názov+logo)
+            cez bezpečnú esblu_get_company_profile() RPC, čisto na čítanie.
+            Dashboard branding tým zostáva funkčný pre všetkých — pozri
+            loadBrandingOnly()/getCompanyProfile() vyššie. */}
+        {myRole && !financeView && (
+          <section className="rounded-3xl border border-subtle bg-surface-1 p-8 shadow-lg backdrop-blur-xl">
+            <h2 className="text-2xl font-bold text-primary">
+              {t("settings.company.title")}
+            </h2>
+
+            <p className="mt-2 text-sm text-secondary">
+              {t("settings.company.noFinanceAccessNotice")}
+            </p>
+
+            <div className="mt-6">
+              <label className="mb-2 block text-sm font-semibold">
+                {t("settings.company.nameLabel")}
+              </label>
+              <p className="text-primary">
+                {brandingOnlyName || t("settings.company.namePlaceholder")}
+              </p>
+            </div>
+
+            <div className="mt-6">
+              <label className="mb-2 block font-semibold">
+                {t("settings.company.logoLabel")}
+              </label>
+
+              {brandingOnlyLogoUrl ? (
+                <div className="flex min-h-40 items-center justify-center rounded-2xl border border-subtle bg-surface-2 p-4">
+                  <img
+                    src={brandingOnlyLogoUrl}
+                    alt={t("settings.company.logoAlt")}
+                    className="max-h-36 max-w-full object-contain"
+                  />
+                </div>
+              ) : (
+                <div className="flex min-h-40 items-center justify-center rounded-2xl border border-dashed border-slate-400 bg-surface-1 p-4 text-center text-secondary">
+                  {t("settings.company.noLogo")}
+                </div>
+              )}
+            </div>
+          </section>
+        )}
 
         {myRole && (
           <section className="rounded-3xl border border-subtle bg-surface-1 p-8 shadow-lg backdrop-blur-xl">

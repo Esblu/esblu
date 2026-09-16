@@ -19,10 +19,56 @@ export type CompanyMemberRow = {
   created_at: string;
 };
 
+// Finance Access Hardening — namespaced kľúče v company_members.permissions
+// jsonb (stĺpec existuje od Fázy 1B, prvá reálna konvencia zavedená touto
+// migráciou; pozri supabase/migrations/20260916140000_finance_access_
+// hardening.sql). "manage" implikuje "view" (rovnako ako na DB strane v
+// esblu_my_finance_view()/...manage()) — hasFinanceManage() teda netreba
+// kontrolovať popri hasFinanceView().
+export type FinancePermissions = {
+  view?: boolean;
+  manage?: boolean;
+};
+
+export type MemberPermissions = {
+  finance?: FinancePermissions;
+};
+
 export type MyActiveMembership = {
   company_id: string;
   role: CompanyMemberRole;
+  permissions: MemberPermissions;
 };
+
+/**
+ * Smie ČÍTAŤ finančné/billing dáta (company_billing_profile,
+ * business_partners, billing polia v Nastaveniach)? Owner vždy, inak iba
+ * explicitné permissions.finance.view/manage. role==='admin' SAMA OSEBE
+ * NESTAČÍ — toto je vedomé rozhodnutie (Finance Access Hardening), nie
+ * dočasný stav. Toto je iba UI vrstva (čo zobraziť/skryť) — skutočná
+ * autorizácia je vynútená RLS cez esblu_my_finance_view() na strane DB.
+ */
+type FinanceCheckInput = {
+  role: CompanyMemberRole | null;
+  permissions: MemberPermissions;
+};
+
+export function hasFinanceView(membership: FinanceCheckInput | null | undefined): boolean {
+  if (!membership) return false;
+  if (membership.role === "owner") return true;
+  return Boolean(membership.permissions?.finance?.view || membership.permissions?.finance?.manage);
+}
+
+/**
+ * Smie ZAPISOVAŤ (create/update/delete) finančné/billing dáta? Owner
+ * vždy, inak iba explicitné permissions.finance.manage. Rovnako iba UI
+ * vrstva — reálne vynútenie je esblu_my_finance_manage() v RLS.
+ */
+export function hasFinanceManage(membership: FinanceCheckInput | null | undefined): boolean {
+  if (!membership) return false;
+  if (membership.role === "owner") return true;
+  return Boolean(membership.permissions?.finance?.manage);
+}
 
 /**
  * Aktívny membership prihláseného používateľa (company_id + rola), priamo z
@@ -50,7 +96,7 @@ export async function getMyActiveMembership(): Promise<MyActiveMembership | null
 
   const { data, error } = await supabase
     .from("company_members")
-    .select("company_id, role")
+    .select("company_id, role, permissions")
     .eq("user_id", session.user.id)
     .eq("status", "active")
     .maybeSingle();
@@ -59,7 +105,17 @@ export async function getMyActiveMembership(): Promise<MyActiveMembership | null
     return null;
   }
 
-  return { company_id: data.company_id, role: data.role as CompanyMemberRole };
+  return {
+    company_id: data.company_id,
+    role: data.role as CompanyMemberRole,
+    // "permissions" je vlastný riadok používateľa (RLS company_members_
+    // select_own), takže toto nič neprezrádza o iných členoch. jsonb môže
+    // teoreticky prísť ako čokoľvek (stĺpec nemá DB-level tvar/CHECK) —
+    // typujeme ho ako MemberPermissions bez runtime validácie; hasFinance
+    // View/Manage() vyššie sú voči neplatnému/chýbajúcemu tvaru fail-safe
+    // (Boolean(...) na chýbajúcich kľúčoch vráti false, nikdy nespadne).
+    permissions: (data.permissions ?? {}) as MemberPermissions,
+  };
 }
 
 export function isOwnerOrAdmin(role: CompanyMemberRole | null | undefined) {

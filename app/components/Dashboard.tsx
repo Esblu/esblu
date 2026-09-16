@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
-import { getCompanyProfile, getMyActiveMembership } from "@/lib/company";
+import { getCompanyProfile, getMyActiveMembership, hasFinanceView } from "@/lib/company";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import ModuleCard, { type ModuleAccent } from "./ModuleCard";
 import InboxDocumentIcon from "./icons/InboxDocumentIcon";
@@ -43,6 +43,13 @@ export default function Dashboard() {
   const [vignettes, setVignettes] = useState<VehicleVignette[]>([]);
   const [companyName, setCompanyName] = useState("ESBLU");
   const [companyLogoUrl, setCompanyLogoUrl] = useState("");
+  // Finance Access Hardening — "Obchodní partneri" dlaždica/nav odkaz sa
+  // zobrazí iba ownerovi alebo členovi s explicitným finance view/manage
+  // oprávnením (pozri lib/company.ts hasFinanceView). Toto je iba UI
+  // vrstva — skutočné vynútenie je RLS (esblu_my_finance_view()) na
+  // strane DB, takže priame otvorenie URL bez oprávnenia aj tak nič
+  // nezobrazí.
+  const [financeAccess, setFinanceAccess] = useState(false);
   const [search, setSearch] = useState("");
   // Intent Engine (app/api/assistant/intent) — samostatný stav od
   // existujúceho plain-substring searchResults nižšie, aby sa pri
@@ -116,12 +123,14 @@ export default function Dashboard() {
       setMachines([]);
       setItems([]);
       setVignettes([]);
+      setFinanceAccess(false);
       // Bez aktívneho membershipu niet "firmy", ktorej branding by sa dal
       // načítať (esblu_get_company_profile by aj tak nič nevrátila) —
       // ostáva dnešný generický fallback ("ESBLU", žiadne logo).
       return;
     }
 
+    setFinanceAccess(hasFinanceView(membership));
     loadData(membership.company_id);
     loadCompanyProfile();
   }
@@ -622,7 +631,7 @@ export default function Dashboard() {
   // motívu vs. skutočne použitý orez má rezervu min. ~3 percentuálne
   // body). Nastavenia (settings.png) a Inbox (SVG icon) imageZoom nemajú —
   // ich vzhľad je nezmenený.
-  const modules: {
+  const allModules: {
     title: string;
     subtitle: string;
     stat?: string;
@@ -682,6 +691,16 @@ export default function Dashboard() {
     },
   ];
 
+  // Finance Access Hardening — "Obchodní partneri" dlaždica sa filtruje
+  // (namiesto podmieneného push-u do allModules), aby poradie ostatných
+  // dlaždíc zostalo nezmenené bez ohľadu na finance access. allModules má
+  // explicitnú typovú anotáciu priamo na poli literálov (nutné pre
+  // ModuleAccent literal-union typovanie) — .filter() sa preto aplikuje až
+  // na už typovanú premennú, nie v rámci toho istého výrazu.
+  const modules = allModules.filter(
+    (module) => module.href !== "/obchodni-partneri" || financeAccess
+  );
+
   // Spoločný zoznam navigačných položiek pre desktop sidebar AJ mobilné
   // výsuvné menu (jeden zdroj pravdy, žiadna duplicita odkazov/ciest).
   const navItems: {
@@ -701,7 +720,8 @@ export default function Dashboard() {
       icon: <BusinessPartnersIcon size={20} />,
     },
     { href: "/nastavenia", label: t("nav.settings"), image: "/images/settings.png" },
-  ];
+    // Finance Access Hardening — rovnaký filter ako pri "modules" vyššie.
+  ].filter((item) => item.href !== "/obchodni-partneri" || financeAccess);
 
   // Action Engine — [Zrušiť]: jednoduchý no-op, appka nič nezapísala do DB
   // (a pri EXPORT_DOCUMENTS ani nič nestiahla) — panel sa iba skryje, `search`

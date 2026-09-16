@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import BackLink from "@/app/components/BackLink";
-import { getMyActiveMembership, isOwnerOrAdmin, type CompanyMemberRole } from "@/lib/company";
+import { getMyActiveMembership, hasFinanceManage, type MyActiveMembership } from "@/lib/company";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import { formatDateTime } from "@/lib/i18n/format";
 import {
@@ -31,7 +31,13 @@ export default function ObchodnyPartnerDetailPage() {
   const { id } = useParams();
   const partnerId = String(id);
 
-  const [myRole, setMyRole] = useState<CompanyMemberRole | null>(null);
+  // Finance Access Hardening — canEdit teraz vychádza z finance manage
+  // (owner vždy, inak iba explicitné permissions.finance.manage), nie
+  // z role==='admin'. Bez finance VIEW vráti RLS pre tohto partnera 0
+  // riadkov (getBusinessPartner → null) — appka to zámerne nerozlišuje od
+  // "neexistuje" (pozri komentár nižšie), takže tu netreba samostatný
+  // "no permission" stav.
+  const [membership, setMembership] = useState<MyActiveMembership | null>(null);
   const [partner, setPartner] = useState<BusinessPartner | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
@@ -58,8 +64,8 @@ export default function ObchodnyPartnerDetailPage() {
       return;
     }
 
-    const membership = await getMyActiveMembership();
-    setMyRole(membership?.role ?? null);
+    const activeMembership = await getMyActiveMembership();
+    setMembership(activeMembership);
 
     try {
       const row = await getBusinessPartner(partnerId);
@@ -98,7 +104,7 @@ export default function ObchodnyPartnerDetailPage() {
     }
   }
 
-  const canEdit = isOwnerOrAdmin(myRole);
+  const canEdit = hasFinanceManage(membership);
 
   return (
     <div className="mx-auto max-w-2xl px-4 pb-24 pt-6 sm:px-6">
