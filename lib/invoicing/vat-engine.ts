@@ -1,0 +1,187 @@
+import Decimal from "decimal.js";
+
+// -----------------------------------------------------------------------------
+// Deterministický VAT engine (Fáza 2 — fakturačné jadro).
+//
+// KRITICKÉ PRAVIDLO (zadanie Fázy 2, bod 4/15/38): žiadna autoritatívna
+// peňažná matematika v JS floating point (number). Tento súbor preto
+// výhradne používa `decimal.js`.
+//
+// PREČO decimal.js (zdokumentovaný dôvod výberu, zadanie bod 4):
+// - Bezzávislostná (0 runtime dependencies), deterministická aritmetika s
+//   ľubovoľnou presnosťou — žiadne IEEE-754 zaokrúhľovacie chyby typu
+//   0.1 + 0.2 !== 0.3, ktoré by pri JS number mohli pri väčšom počte
+//   riadkov/vysokých množstvách nedeterministicky posunúť DPH súčet o cent.
+// - Explicitná kontrola zaokrúhľovacieho režimu (`ROUND_HALF_UP` — bežné
+//   "zaokrúhli 0.5 nahor" správanie, na rozdiel od default "round half to
+//   even"/bankárske zaokrúhlenie niektorých iných knižníc), čo zodpovedá
+//   bežnej slovenskej účtovnej praxi aj Fázy 0 rozhodnutiu.
+// - Široko používaná, dlhodobo udržiavaná (miliardy týždenných sťahovaní),
+//   funguje rovnako v Node (server RPC prípravné výpočty/validácia) aj v
+//   prehliadači (draft editor UI) bez natívnych bindingov — dôležité pre
+//   Next.js Edge/serverless kompatibilitu.
+// - Alternatívy zvážené a zamietnuté: `big.js` (menší, ale chudobnejšia
+//   dokumentácia/ekosystém, rovnaká funkcionalita by sa musela dolaďovať
+//   ručne); `dinero.js` (vnucuje vlastnú "Money" abstrakciu naviazanú na
+//   ISO menové kódy — Esblu už má menu ako samostatný `currency` stĺpec a
+//   explicitné `numeric(18,2)` v DB, netreba druhú vrstvu abstrakcie navyše).
+//
+// AUTORITATÍVNY VÝPOČET JE VŽDY V DB (migrácia
+// 20260916095000_add_invoicing_core_rpc.sql, `esblu_finalize_invoice`) —
+// tento súbor sa používa na klientský/server-side PREVIEW počas editácie
+// draftu (živé súčty v UI, priebežné ukladanie `invoice_items.line_*_amount`
+// polí), NIKDY sa mu naslepo neverí pri finalizácii. `esblu_finalize_invoice`
+// prepočíta úplne rovnaké vzorce nezávisle v SQL a je to, čo sa naozaj zapíše
+// ako finálne, immutable číslo — táto duplicita (JS aj SQL) je zámerná
+// (defense in depth), nie redundancia na odstránenie.
+//
+// EN16931 / Peppol BIS Billing 3.0 business rules (docs.peppol.eu, overené
+// web-researchom 16.9.2026), presne replikované aj v `esblu_finalize_invoice`:
+//   BR-CO-10/13: Invoice total net (BT-109) = Σ line net amount (BT-131).
+//   BR-CO-17: VAT category tax amount (BT-117)
+//             = ROUND(VAT category taxable amount (BT-116) × rate / 100, 2),
+//             kde BT-116 = SÚČET line net amounts danej kategórie/sadzby.
+//             DÔLEŽITÉ: sadzba sa aplikuje na už ZOSČÍTANÝ základ, nie na
+//             súčet už individuálne zaokrúhlených per-line DPH súm — to je
+//             bežná chyba, ktorá pri viacerých riadkoch tej istej sadzby
+//             môže dať iný výsledok, než Peppol/EN16931 validátor akceptuje.
+//   BR-CO-14: Invoice total VAT amount (BT-110) = Σ VAT category tax amount.
+//   BR-CO-15: Invoice total with VAT (BT-112) = BT-109 + BT-110.
+// `invoice_items.line_vat_amount`/`line_gross_amount` (per riadok) preto
+// slúžia VÝHRADNE na UI zobrazenie toho konkrétneho riadku — nikdy nie sú
+// vstupom do VAT breakdown agregácie (pozri `computeInvoiceTotals` nižšie).
+// -----------------------------------------------------------------------------
+
+Decimal.set({ rounding: Decimal.ROUND_HALF_UP });
+
+export type VatCategoryCode = "S" | "Z" | "E" | "AE";
+
+export const VAT_CATEGORY_CODES: readonly VatCategoryCode[] = ["S", "Z", "E", "AE"];
+
+export interface VatEngineLineInput {
+  quantity: number | string;
+  unitPrice: number | string;
+  vatCategoryCode: VatCategoryCode;
+  /** Percento, napr. 20 pre 20 %, nie 0.20. */
+  vatRate: number | string;
+}
+
+export interface VatEngineLineResult {
+  lineNetAmount: string;
+  lineVatAmount: string;
+  lineGrossAmount: string;
+}
+
+export interface VatBreakdownResult {
+  vatCategoryCode: VatCategoryCode;
+  vatRate: string;
+  taxableAmount: string;
+  vatAmount: string;
+}
+
+export interface VatEngineResult {
+  lines: VatEngineLineResult[];
+  breakdown: VatBreakdownResult[];
+  subtotalAmount: string;
+  vatTotalAmount: string;
+  totalAmount: string;
+}
+
+function round2(value: Decimal): Decimal {
+  return value.toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+}
+
+/**
+ * Prepočíta jeden riadok faktúry. line_net_amount = ROUND(quantity ×
+ * unit_price, 2); line_vat_amount = ROUND(line_net_amount × rate / 100, 2)
+ * (per-riadok, IBA na UI zobrazenie); line_gross_amount = net + vat.
+ */
+export function computeInvoiceLine(input: VatEngineLineInput): VatEngineLineResult {
+  const quantity = new Decimal(input.quantity);
+  const unitPrice = new Decimal(input.unitPrice);
+  const vatRate = new Decimal(input.vatRate);
+
+  const lineNet = round2(quantity.times(unitPrice));
+  const lineVat = round2(lineNet.times(vatRate).dividedBy(100));
+  const lineGross = lineNet.plus(lineVat);
+
+  return {
+    lineNetAmount: lineNet.toFixed(2),
+    lineVatAmount: lineVat.toFixed(2),
+    lineGrossAmount: lineGross.toFixed(2),
+  };
+}
+
+/**
+ * Prepočíta celú faktúru: riadky + normalizovaný VAT breakdown (EN16931
+ * BR-CO-17: sadzba aplikovaná na súčet základu danej kategórie/sadzby, nie
+ * na súčet už zaokrúhlených per-line súm) + súčty (BR-CO-10/14/15).
+ */
+export function computeInvoiceTotals(
+  lines: VatEngineLineInput[],
+  roundingAmount: number | string = 0
+): VatEngineResult {
+  const computedLines = lines.map(computeInvoiceLine);
+
+  const groups = new Map<
+    string,
+    { code: VatCategoryCode; rate: Decimal; taxable: Decimal }
+  >();
+
+  lines.forEach((line, index) => {
+    const rate = new Decimal(line.vatRate);
+    const key = `${line.vatCategoryCode}:${rate.toFixed(4)}`;
+    const net = new Decimal(computedLines[index].lineNetAmount);
+    const existing = groups.get(key);
+    if (existing) {
+      existing.taxable = existing.taxable.plus(net);
+    } else {
+      groups.set(key, { code: line.vatCategoryCode, rate, taxable: net });
+    }
+  });
+
+  const breakdown: VatBreakdownResult[] = Array.from(groups.values())
+    .sort((a, b) => a.code.localeCompare(b.code) || a.rate.comparedTo(b.rate))
+    .map((group) => {
+      const vatAmount = round2(group.taxable.times(group.rate).dividedBy(100));
+      return {
+        vatCategoryCode: group.code,
+        vatRate: group.rate.toFixed(4),
+        taxableAmount: group.taxable.toFixed(2),
+        vatAmount: vatAmount.toFixed(2),
+      };
+    });
+
+  const subtotal = computedLines.reduce(
+    (acc, line) => acc.plus(line.lineNetAmount),
+    new Decimal(0)
+  );
+  const vatTotal = breakdown.reduce(
+    (acc, entry) => acc.plus(entry.vatAmount),
+    new Decimal(0)
+  );
+  const total = subtotal.plus(vatTotal).plus(new Decimal(roundingAmount));
+
+  return {
+    lines: computedLines,
+    breakdown,
+    subtotalAmount: subtotal.toFixed(2),
+    vatTotalAmount: vatTotal.toFixed(2),
+    totalAmount: total.toFixed(2),
+  };
+}
+
+/** Overí, či je zadaná hodnota platný VAT category kód (S/Z/E/AE). */
+export function isVatCategoryCode(value: string): value is VatCategoryCode {
+  return (VAT_CATEGORY_CODES as readonly string[]).includes(value);
+}
+
+/**
+ * Odvodený (nie uložený) "po splatnosti" stav — presne podľa Fázy 0/zadania:
+ * overdue sa nikdy neukladá do DB, počíta sa vždy nanovo.
+ */
+export function isInvoiceOverdue(dueDate: string | null, paymentStatus: string): boolean {
+  if (!dueDate || paymentStatus === "paid") return false;
+  const today = new Date().toISOString().slice(0, 10);
+  return dueDate < today;
+}
