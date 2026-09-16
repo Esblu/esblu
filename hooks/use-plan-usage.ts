@@ -77,24 +77,54 @@ export function usePlanUsage(resource: PlanResource): PlanUsageResult {
       if (sessionError) throw sessionError;
       if (!session) throw new Error("Používateľ nie je prihlásený.");
 
-      const [settingsResult, usageResult] = await Promise.all([
+      // OPRAVA (BLOCKER A/B z Fázy 1A auditu, 15.9.2026): plán aj usage
+      // MUSIA byť company-scoped, nie user-scoped — inak owner/admin/
+      // employee tej istej firmy vidia rôzne (a pre non-ownerov typicky
+      // nesprávne, vždy 'free'/0) hodnoty, hoci server-side vynútenie
+      // (trigger esblu_enforce_plan_limit -> esblu_company_plan) je už
+      // dnes správne company-scoped. Najprv sa preto zistí AKTÍVNY
+      // company_id volajúceho (rovnaký zdroj pravdy ako všade inde v appke
+      // — company_members.status='active'), až potom sa naň naviaže plán
+      // (public.companies.plan, zdroj pravdy od
+      // 20260915190000_add_company_scoped_plan.sql — NIE settings.plan,
+      // ktoré je čisto per-user a od tejto migrácie už appkou nečítané) aj
+      // počet záznamov (`.eq("company_id", ...)`, nie `.eq("user_id", ...)`)
+      // — presne to isté kritérium, aké používa server-side trigger, takže
+      // UI zobrazenie je teraz vždy v zhode s tým, čo appka skutočne
+      // vynucuje.
+      const membershipResult = await supabase
+        .from("company_members")
+        .select("company_id")
+        .eq("user_id", session.user.id)
+        .eq("status", "active")
+        .limit(1)
+        .maybeSingle();
+
+      if (membershipResult.error) throw membershipResult.error;
+
+      const companyId = membershipResult.data?.company_id;
+
+      if (!companyId) {
+        throw new Error("Používateľ nemá aktívne členstvo v žiadnej firme.");
+      }
+
+      const [companyResult, usageResult] = await Promise.all([
         supabase
-          .from("settings")
+          .from("companies")
           .select("plan")
-          .eq("user_id", session.user.id)
-          .limit(1)
+          .eq("id", companyId)
           .maybeSingle(),
         supabase
           .from(resource)
           .select("id", { count: "exact", head: true })
-          .eq("user_id", session.user.id),
+          .eq("company_id", companyId),
       ]);
 
-      if (settingsResult.error) throw settingsResult.error;
+      if (companyResult.error) throw companyResult.error;
       if (usageResult.error) throw usageResult.error;
 
-      const loadedPlan = isPlan(settingsResult.data?.plan)
-        ? settingsResult.data.plan
+      const loadedPlan = isPlan(companyResult.data?.plan)
+        ? companyResult.data.plan
         : "free";
 
       const limitsResult = await supabase
