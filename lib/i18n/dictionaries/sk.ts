@@ -275,28 +275,28 @@ const sk = {
       mainNavAriaLabel: "Hlavná navigácia",
     },
     hero: {
-      badge: "Bezplatná testovacia verzia",
-      title:
-        "Firemná evidencia dokumentov, vozidiel, strojov a skladu na jednom mieste.",
+      badge: "Uzavretá beta",
+      title: "Firemná evidencia a fakturácia na jednom mieste.",
       subtitle:
-        "Esblu pomáha stavebným a servisným firmám spracovať dokumenty pomocou AI, evidovať techniku a udržať firemné údaje prehľadne usporiadané.",
+        "Esblu pomáha menším stavebným, servisným, dopravným a technickým firmám spravovať dokumenty, vozidlá, stroje, sklad, obchodných partnerov a faktúry v jednej aplikácii.",
       ctaPrimary: "Požiadať o beta prístup",
       ctaSecondary: "Prihlásiť sa",
       betaNotice:
-        "Esblu je momentálne v uzavretej beta verzii — nová registrácia je dostupná iba pre schválených testerov.",
-      cardKicker: "Firemná evidencia",
+        "Esblu je momentálne v uzavretej beta verzii. Nové účty sú dostupné len pre schválených testerov.",
+      cardKicker: "Firemná evidencia a fakturácia",
       cardTitle: "Všetko dôležité prehľadne",
       cardAiNote: "Menej ručného prepisovania dokumentov",
       moduleInboxDesc: "Dokumenty",
       moduleVehiclesDesc: "Technické údaje",
       moduleMachinesDesc: "Firemná technika",
       moduleInventoryDesc: "Položky a množstvo",
+      moduleBusinessPartnersDesc: "Zákazníci a dodávatelia",
+      moduleInvoicesDesc: "Fakturácia a úhrady",
     },
     features: {
-      kicker: "Jedna aplikácia, štyri prehľady",
+      kicker: "Šesť modulov, jedna aplikácia",
       title: "Čo Esblu dokáže",
-      subtitle:
-        "Základné firemné evidencie sú na jednom mieste a dostupné pod vlastným používateľským účtom.",
+      subtitle: "Všetko dôležité pre firemnú evidenciu na jednom mieste.",
       examplesAriaLabel: "Príklady dokumentov",
       inboxTitle: "Inbox",
       inboxDesc:
@@ -317,14 +317,19 @@ const sk = {
         "Prehľad firemných strojov a techniky vrátane základných údajov, fotografií a servisných záznamov.",
       inventoryTitle: "Sklad",
       inventoryDesc:
-        "Jednoduchá evidencia skladových položiek, množstva a fotografií.",
+        "Jednoduchá evidencia skladových položiek, množstva, minimálnych zásob, umiestnenia a fotografií.",
+      businessPartnersTitle: "Obchodní partneri",
+      businessPartnersDesc:
+        "Zákazníci a dodávatelia na jednom mieste. Fakturačné údaje obchodných partnerov môže firma používať pri vystavovaní faktúr, takže ich nemusí zadávať opakovane.",
+      invoicesTitle: "Faktúry",
+      invoicesDesc:
+        "Vystavovanie faktúr, evidencia úhrad a opravné doklady priamo v Esblu. Finalizované faktúry majú nemenné fakturačné údaje a je možné ich vytvoriť ako PDF.",
+      efakturaBadge: "eFaktúra — pripravujeme",
+      efakturaDesc:
+        "Pripravujeme podporu štruktúrovanej elektronickej fakturácie a budúce napojenie na eFaktúru / Peppol podľa platných technických a legislatívnych požiadaviek.",
       chatTitle: "Firemný chat",
       chatDesc:
         "Interná komunikácia medzi členmi vašej firmy priamo v Esblu. Správy v reálnom čase, prílohy a možnosť odkázať na konkrétne vozidlo, stroj, skladovú položku alebo dokument.",
-      chatExample1: "Správy v reálnom čase",
-      chatExample2: "Prílohy",
-      chatExample3: "Odkazy na vozidlá, stroje a sklad",
-      chatExample4: "Iba pre členov firmy",
     },
     ai: {
       kicker: "AI spracovanie",
@@ -369,7 +374,7 @@ const sk = {
       item5: "Pozvanie ďalších členov tímu",
       item6: "export dostupných údajov",
       cta: "Požiadať o beta prístup",
-      note: "Platená verzia s vyššími limitmi sa pripravuje. Esblu je momentálne v uzavretej beta verzii — noví používatelia sa do nej dostanú po individuálnom schválení, registrácia do bezplatnej verzie nezaručuje konkrétnu cenu ani funkcie budúcej platenej verzie.",
+      note: "Esblu je momentálne v uzavretej beta verzii. Nové účty sú dostupné len pre schválených testerov. Platená verzia s vyššími limitmi je v príprave — funkcie, limity aj cena sa môžu do komerčného spustenia zmeniť. Registrácia do bezplatnej beta verzie nezaručuje konkrétnu cenu ani rozsah funkcií budúcej platenej verzie.",
     },
     security: {
       kicker: "Dôvera a bezpečnosť",
@@ -384,12 +389,12 @@ const sk = {
     finalCta: {
       title: "Vyskúšajte, či vám Esblu zjednoduší firemnú evidenciu.",
       description:
-        "Esblu je momentálne v uzavretej beta verzii. Napíšte nám a po schválení vám radi otvoríme prístup zdarma.",
+        "Esblu je momentálne v uzavretej beta verzii. Nové účty sú dostupné len pre schválených testerov. Napíšte nám a po schválení vám radi otvoríme prístup zdarma.",
       ctaPrimary: "Požiadať o beta prístup",
       ctaSecondary: "Už mám účet",
     },
     footer: {
-      tagline: "Bezplatná testovacia verzia",
+      tagline: "Uzavretá beta — firemná evidencia a fakturácia",
       privacy: "Ochrana osobných údajov",
       terms: "Podmienky používania",
       cookies: "Cookies",

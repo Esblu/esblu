@@ -7,6 +7,8 @@ import { useLocale } from "@/lib/i18n/LocaleProvider";
 import LanguageSwitcher from "./LanguageSwitcher";
 import InboxDocumentIcon from "./icons/InboxDocumentIcon";
 import ChatBubbleIcon from "./icons/ChatBubbleIcon";
+import BusinessPartnersIcon from "./icons/BusinessPartnersIcon";
+import InvoicesIcon from "./icons/InvoicesIcon";
 
 // =============================================================================
 // PublicLandingPage — verejná marketingová stránka (neprihlásený návštevník
@@ -15,7 +17,18 @@ import ChatBubbleIcon from "./icons/ChatBubbleIcon";
 // btn-primary/btn-secondary, icon-glow-*, accent-cyan/blue/orange/teal) —
 // žiadne zmeny routov, logiky, dát ani business funkcií. Accent mapovanie
 // modulov je zámerne zhodné s app/components/Dashboard.tsx (modules[]):
-// Inbox = cyan, Vozidlá = blue, Stroje = orange, Sklad = teal.
+// Inbox = cyan, Vozidlá = blue, Stroje = orange, Sklad = teal, Obchodní
+// partneri = blue (rovnako ako Dashboard), Faktúry = teal (rovnako ako
+// Dashboard) — iba 4 accent farby existujú v dizajnovom systéme, preto sa
+// pri 6 moduloch prirodzene opakujú, presne ako na Dashboarde appky.
+//
+// AKTUALIZÁCIA (verejný landing podľa aktuálneho stavu appky): landing
+// predtým opisoval iba 4 moduly (Vozidlá/Stroje/Sklad + Inbox) — appka má
+// dnes reálne 6 hlavných modulov (Dashboard.tsx: Inbox, Vozidlá, Stroje,
+// Sklad, Obchodní partneri, Faktúry, mimo Nastavení). Firemný chat NIE JE
+// samostatný modul v appke (je to plávajúci FloatingChatWidget dostupný
+// naprieč appkou) — preto tu zostáva iba ako kratšia doplnková zmienka pod
+// hlavnou 6-dlaždicovou mriežkou, nie ako rovnocenná 7. karta modulu.
 // =============================================================================
 
 type FeatureAccent = "cyan" | "blue" | "orange" | "teal";
@@ -83,6 +96,11 @@ const featureCardDefs: {
   accent: FeatureAccent;
   exampleKeys?: string[];
   spanFull?: boolean;
+  // eFaktúra — jasne označená ako "pripravujeme" (bod 10 zadania), pripojená
+  // priamo ku karte Faktúry. Nikdy nesmie tvrdiť, že eFaktúra/Peppol je už
+  // podporovaná/dostupná — pozri i18n kľúč landing.features.efakturaDesc.
+  badgeTitleKey?: string;
+  badgeDescKey?: string;
 }[] = [
   {
     titleKey: "landing.features.inboxTitle",
@@ -122,17 +140,18 @@ const featureCardDefs: {
     accent: "teal",
   },
   {
-    titleKey: "landing.features.chatTitle",
-    descKey: "landing.features.chatDesc",
-    icon: <ChatBubbleIcon size={36} className="h-9 w-9" />,
-    accent: "cyan",
-    exampleKeys: [
-      "landing.features.chatExample1",
-      "landing.features.chatExample2",
-      "landing.features.chatExample3",
-      "landing.features.chatExample4",
-    ],
-    spanFull: true,
+    titleKey: "landing.features.businessPartnersTitle",
+    descKey: "landing.features.businessPartnersDesc",
+    icon: <BusinessPartnersIcon size={36} className="h-9 w-9" />,
+    accent: "blue",
+  },
+  {
+    titleKey: "landing.features.invoicesTitle",
+    descKey: "landing.features.invoicesDesc",
+    icon: <InvoicesIcon size={36} className="h-9 w-9" />,
+    accent: "teal",
+    badgeTitleKey: "landing.features.efakturaBadge",
+    badgeDescKey: "landing.features.efakturaDesc",
   },
 ];
 
@@ -357,6 +376,16 @@ export default function PublicLandingPage() {
                         t("landing.hero.moduleInventoryDesc"),
                         "teal",
                       ],
+                      [
+                        t("landing.features.businessPartnersTitle"),
+                        t("landing.hero.moduleBusinessPartnersDesc"),
+                        "blue",
+                      ],
+                      [
+                        t("landing.features.invoicesTitle"),
+                        t("landing.hero.moduleInvoicesDesc"),
+                        "teal",
+                      ],
                     ] as [string, string, FeatureAccent][]
                   ).map(([title, description, accent]) => (
                     <div
@@ -409,7 +438,7 @@ export default function PublicLandingPage() {
               </p>
             </div>
 
-            <div className="mt-10 grid gap-6 md:grid-cols-2">
+            <div className="mt-10 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
               {featureCardDefs.map((feature) => {
                 const styles = FEATURE_ACCENT_STYLES[feature.accent];
                 const title = t(feature.titleKey);
@@ -418,7 +447,7 @@ export default function PublicLandingPage() {
                   <article
                     key={feature.titleKey}
                     className={`surface-card surface-card-hover flex min-h-full flex-col p-6 transition sm:p-7 ${
-                      feature.spanFull ? "md:col-span-2" : ""
+                      feature.spanFull ? "sm:col-span-2 lg:col-span-3" : ""
                     }`}
                   >
                     <div
@@ -462,9 +491,41 @@ export default function PublicLandingPage() {
                         ))}
                       </ul>
                     )}
+                    {/* eFaktúra — "pripravujeme" info blok (bod 10 zadania).
+                        Zámerne vizuálne odlíšený (bordered box, nie chip) —
+                        musí byť jasné, že ide o budúcu/pripravovanú funkciu,
+                        nikdy nie o už dostupnú. */}
+                    {feature.badgeTitleKey && feature.badgeDescKey && (
+                      <div className="mt-5 rounded-xl border border-dashed border-subtle bg-surface-2 p-4">
+                        <p className="text-xs font-bold uppercase tracking-wide text-accent-cyan">
+                          {t(feature.badgeTitleKey)}
+                        </p>
+                        <p className="mt-1.5 text-sm leading-6 text-muted-esblu">
+                          {t(feature.badgeDescKey)}
+                        </p>
+                      </div>
+                    )}
                   </article>
                 );
               })}
+            </div>
+
+            {/* Firemný chat — doplnková funkcia appky (plávajúci
+                FloatingChatWidget), zámerne NIE je 7. rovnocenná karta
+                modulu (bod 11 zadania) — kompaktnejšia zmienka pod hlavnou
+                mriežkou 6 modulov. */}
+            <div className="mt-6 flex flex-col gap-4 rounded-2xl border border-subtle bg-surface-1 p-5 sm:flex-row sm:items-center">
+              <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-accent-cyan/14 text-accent-cyan">
+                <ChatBubbleIcon size={26} className="h-6 w-6" />
+              </span>
+              <div>
+                <p className="font-bold text-primary">
+                  {t("landing.features.chatTitle")}
+                </p>
+                <p className="mt-1 text-sm leading-6 text-secondary">
+                  {t("landing.features.chatDesc")}
+                </p>
+              </div>
             </div>
           </div>
         </section>

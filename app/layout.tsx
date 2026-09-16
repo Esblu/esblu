@@ -17,11 +17,34 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
+// Metadata (bod 17 zadania — sociálne zdieľanie/SEO): jediný statický
+// popis (SK) zámerne zhodný s existujúcou architektúrou tohto súboru —
+// appka dnes nemá per-locale metadata (SSR vždy vykresľuje DEFAULT_LOCALE,
+// pozri komentár pri <html lang> nižšie), preto title/description/OG/
+// Twitter ostávajú jeden spoločný (SK) text, nie nová i18n vrstva. Text
+// musí odzrkadľovať uzavretú beta a NESMIE tvrdiť, že eFaktúra je hotová
+// (bod 10 zadania) — PDF faktúr (FÁZA 3A) tu tiež nie je prezentované ako
+// eFaktúra.
+const LANDING_SOCIAL_TITLE = "Esblu — firemná evidencia a fakturácia";
+const LANDING_SOCIAL_DESCRIPTION =
+  "Esblu spája firemnú evidenciu dokumentov, vozidiel, strojov, skladu, obchodných partnerov a faktúr v jednej aplikácii. Aktuálne v uzavretej beta verzii.";
+
 export const metadata: Metadata = {
-  title: "ESBLU",
-  description:
-    "Firemná evidencia dokumentov, vozidiel, strojov a skladu na jednom mieste.",
+  title: LANDING_SOCIAL_TITLE,
+  description: LANDING_SOCIAL_DESCRIPTION,
   manifest: "/manifest.json",
+  openGraph: {
+    title: LANDING_SOCIAL_TITLE,
+    description: LANDING_SOCIAL_DESCRIPTION,
+    siteName: "Esblu",
+    locale: "sk_SK",
+    type: "website",
+  },
+  twitter: {
+    card: "summary",
+    title: LANDING_SOCIAL_TITLE,
+    description: LANDING_SOCIAL_DESCRIPTION,
+  },
 };
 
 export const viewport: Viewport = {

@@ -260,28 +260,29 @@ const de = {
       mainNavAriaLabel: "Hauptnavigation",
     },
     hero: {
-      badge: "Kostenlose Testversion",
-      title:
-        "Firmenverwaltung für Dokumente, Fahrzeuge, Maschinen und Lager an einem Ort.",
+      badge: "Geschlossene Beta",
+      title: "Firmenverwaltung und Rechnungsstellung an einem Ort.",
       subtitle:
-        "Esblu hilft Bau- und Servicefirmen, Dokumente mit KI zu verarbeiten, Technik zu erfassen und Unternehmensdaten übersichtlich zu organisieren.",
+        "Esblu hilft kleineren Bau-, Service-, Transport- und Technikfirmen, Dokumente, Fahrzeuge, Maschinen, Lager, Geschäftspartner und Rechnungen in einer Anwendung zu verwalten.",
       ctaPrimary: "Beta-Zugang anfragen",
       ctaSecondary: "Anmelden",
       betaNotice:
-        "Esblu befindet sich derzeit in einer geschlossenen Betaphase — eine Neuregistrierung ist nur für freigegebene Tester möglich.",
-      cardKicker: "Firmenverwaltung",
+        "Esblu befindet sich derzeit in einer geschlossenen Betaphase. Neue Konten sind nur für freigegebene Tester verfügbar.",
+      cardKicker: "Firmenverwaltung und Rechnungsstellung",
       cardTitle: "Alles Wichtige im Überblick",
       cardAiNote: "Weniger manuelles Abtippen von Dokumenten",
       moduleInboxDesc: "Dokumente",
       moduleVehiclesDesc: "Technische Daten",
       moduleMachinesDesc: "Firmentechnik",
       moduleInventoryDesc: "Artikel und Mengen",
+      moduleBusinessPartnersDesc: "Kunden und Lieferanten",
+      moduleInvoicesDesc: "Rechnungsstellung und Zahlungen",
     },
     features: {
-      kicker: "Eine Anwendung, vier Bereiche",
+      kicker: "Sechs Module, eine Anwendung",
       title: "Das kann Esblu",
       subtitle:
-        "Die wichtigsten Firmenverwaltungen sind an einem Ort und über ein eigenes Benutzerkonto zugänglich.",
+        "Alles Wichtige für die Firmenverwaltung an einem Ort.",
       examplesAriaLabel: "Dokumentbeispiele",
       inboxTitle: "Inbox",
       inboxDesc:
@@ -301,14 +302,20 @@ const de = {
       machinesDesc:
         "Übersicht über Firmenmaschinen und -technik inklusive Grunddaten, Fotos und Serviceeinträgen.",
       inventoryTitle: "Lager",
-      inventoryDesc: "Einfache Erfassung von Lagerartikeln, Mengen und Fotos.",
+      inventoryDesc:
+        "Einfache Erfassung von Lagerartikeln, Mengen, Mindestbeständen, Lagerort und Fotos.",
+      businessPartnersTitle: "Geschäftspartner",
+      businessPartnersDesc:
+        "Kunden und Lieferanten an einem Ort. Die Rechnungsdaten der Geschäftspartner kann die Firma beim Ausstellen von Rechnungen wiederverwenden, ohne sie erneut einzugeben.",
+      invoicesTitle: "Rechnungen",
+      invoicesDesc:
+        "Rechnungsstellung, Erfassung von Zahlungen und Korrekturbelege direkt in Esblu. Finalisierte Rechnungen haben unveränderliche Rechnungsdaten und lassen sich als PDF erstellen.",
+      efakturaBadge: "eRechnung — in Vorbereitung",
+      efakturaDesc:
+        "Wir bereiten die Unterstützung der strukturierten elektronischen Rechnungsstellung sowie eine künftige Anbindung an eRechnung / Peppol gemäß den geltenden technischen und rechtlichen Anforderungen vor.",
       chatTitle: "Firmenchat",
       chatDesc:
         "Interne Kommunikation zwischen den Mitgliedern Ihrer Firma direkt in Esblu. Nachrichten in Echtzeit, Anhänge und die Möglichkeit, auf ein bestimmtes Fahrzeug, eine Maschine, einen Lagerartikel oder ein Dokument zu verweisen.",
-      chatExample1: "Nachrichten in Echtzeit",
-      chatExample2: "Anhänge",
-      chatExample3: "Verweise auf Fahrzeuge, Maschinen und Lager",
-      chatExample4: "Nur für Firmenmitglieder",
     },
     ai: {
       kicker: "KI-Verarbeitung",
@@ -354,7 +361,7 @@ const de = {
       item5: "Einladung weiterer Teammitglieder",
       item6: "Export der verfügbaren Daten",
       cta: "Beta-Zugang anfragen",
-      note: "Eine kostenpflichtige Version mit höheren Limits ist in Vorbereitung. Esblu befindet sich derzeit in einer geschlossenen Betaphase — neue Nutzer erhalten nach individueller Freigabe Zugang; die Registrierung für die kostenlose Version garantiert keinen bestimmten Preis oder Funktionsumfang der künftigen kostenpflichtigen Version.",
+      note: "Esblu befindet sich derzeit in einer geschlossenen Betaphase. Neue Konten sind nur für freigegebene Tester verfügbar. Eine kostenpflichtige Version mit höheren Limits ist in Vorbereitung — Funktionen, Limits und Preis können sich bis zum kommerziellen Start noch ändern. Die Registrierung für die kostenlose Betaversion garantiert keinen bestimmten Preis oder Funktionsumfang der künftigen kostenpflichtigen Version.",
     },
     security: {
       kicker: "Vertrauen und Sicherheit",
@@ -370,12 +377,12 @@ const de = {
     finalCta: {
       title: "Testen Sie, ob Esblu Ihre Firmenverwaltung vereinfacht.",
       description:
-        "Esblu befindet sich derzeit in einer geschlossenen Betaphase. Schreiben Sie uns, und wir öffnen Ihnen nach Freigabe gerne kostenlosen Zugang.",
+        "Esblu befindet sich derzeit in einer geschlossenen Betaphase. Neue Konten sind nur für freigegebene Tester verfügbar. Schreiben Sie uns, und wir öffnen Ihnen nach Freigabe gerne kostenlosen Zugang.",
       ctaPrimary: "Beta-Zugang anfragen",
       ctaSecondary: "Ich habe bereits ein Konto",
     },
     footer: {
-      tagline: "Kostenlose Testversion",
+      tagline: "Geschlossene Beta — Firmenverwaltung und Rechnungsstellung",
       privacy: "Datenschutz",
       terms: "Nutzungsbedingungen",
       cookies: "Cookies",

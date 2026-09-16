@@ -261,28 +261,28 @@ const en = {
       mainNavAriaLabel: "Main navigation",
     },
     hero: {
-      badge: "Free trial",
-      title:
-        "Company records for documents, vehicles, machines and inventory in one place.",
+      badge: "Closed beta",
+      title: "Company records and invoicing in one place.",
       subtitle:
-        "Esblu helps construction and service companies process documents with AI, keep track of their equipment, and keep company data clearly organized.",
+        "Esblu helps smaller construction, service, transport and technical companies manage documents, vehicles, machines, inventory, business partners and invoices in one application.",
       ctaPrimary: "Request beta access",
       ctaSecondary: "Log in",
       betaNotice:
-        "Esblu is currently in closed beta — new registrations are only available to approved testers.",
-      cardKicker: "Company records",
+        "Esblu is currently in closed beta. New accounts are available only to approved testers.",
+      cardKicker: "Company records and invoicing",
       cardTitle: "Everything important, at a glance",
       cardAiNote: "Less manual retyping of documents",
       moduleInboxDesc: "Documents",
       moduleVehiclesDesc: "Technical data",
       moduleMachinesDesc: "Company equipment",
       moduleInventoryDesc: "Items and quantities",
+      moduleBusinessPartnersDesc: "Customers and suppliers",
+      moduleInvoicesDesc: "Invoicing and payments",
     },
     features: {
-      kicker: "One app, four workspaces",
+      kicker: "Six modules, one app",
       title: "What Esblu can do",
-      subtitle:
-        "The core company records are in one place and available under your own user account.",
+      subtitle: "Everything important for company record-keeping, in one place.",
       examplesAriaLabel: "Document examples",
       inboxTitle: "Inbox",
       inboxDesc:
@@ -302,14 +302,20 @@ const en = {
       machinesDesc:
         "Overview of company machines and equipment, including basic data, photos and service history.",
       inventoryTitle: "Inventory",
-      inventoryDesc: "Simple tracking of inventory items, quantities and photos.",
+      inventoryDesc:
+        "Simple tracking of inventory items, quantities, minimum stock levels, location and photos.",
+      businessPartnersTitle: "Business partners",
+      businessPartnersDesc:
+        "Customers and suppliers in one place. A company can reuse a business partner's billing details when issuing invoices, instead of entering them again each time.",
+      invoicesTitle: "Invoices",
+      invoicesDesc:
+        "Issue invoices, track payments and create correction documents directly in Esblu. Finalized invoices have immutable billing data and can be created as a PDF.",
+      efakturaBadge: "eInvoicing — in preparation",
+      efakturaDesc:
+        "We are preparing support for structured electronic invoicing and a future connection to eInvoicing / Peppol, in line with applicable technical and legal requirements.",
       chatTitle: "Company chat",
       chatDesc:
         "Internal communication between your company's team members, built into Esblu. Real-time messages, attachments, and the ability to reference a specific vehicle, machine, inventory item or document.",
-      chatExample1: "Real-time messages",
-      chatExample2: "Attachments",
-      chatExample3: "Links to vehicles, machines and inventory",
-      chatExample4: "Company members only",
     },
     ai: {
       kicker: "AI processing",
@@ -354,7 +360,7 @@ const en = {
       item5: "Invite additional team members",
       item6: "export of available data",
       cta: "Request beta access",
-      note: "A paid plan with higher limits is in preparation. Esblu is currently in closed beta — new users gain access after individual approval; registering for the free version does not guarantee a specific price or feature set for the future paid version.",
+      note: "Esblu is currently in closed beta. New accounts are available only to approved testers. A paid plan with higher limits is in preparation — features, limits and pricing may still change before commercial launch. Registering for the free beta does not guarantee a specific price or feature set for the future paid version.",
     },
     security: {
       kicker: "Trust and security",
@@ -369,12 +375,12 @@ const en = {
     finalCta: {
       title: "See if Esblu can simplify your company records.",
       description:
-        "Esblu is currently in closed beta. Write to us and we'll be happy to open free access for you once approved.",
+        "Esblu is currently in closed beta. New accounts are available only to approved testers. Write to us and we'll be happy to open free access for you once approved.",
       ctaPrimary: "Request beta access",
       ctaSecondary: "I already have an account",
     },
     footer: {
-      tagline: "Free trial",
+      tagline: "Closed beta — company records and invoicing",
       privacy: "Privacy Policy",
       terms: "Terms of Use",
       cookies: "Cookies",
