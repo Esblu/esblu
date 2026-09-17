@@ -75,6 +75,14 @@ export type InvoiceItem = {
   description: string;
   quantity: number;
   unit: string;
+  /** Kanonický UN/ECE Recommendation 20/21 unit-of-measure kód (napr. HUR,
+   *  MTQ, KGM) pre EN16931/Peppol export — FÁZA 3B P0 gap, migrácia
+   *  20260917100000_add_invoicing_en16931_p0_fields. Nullable/expand-only,
+   *  zámerne oddelené od `unit` (voľný textový display label) — NIKDY sa
+   *  automaticky nedopĺňa z `unit`. V tejto fáze nie je zapojené do žiadneho
+   *  UI/RPC — čisté schema hardening, pozri
+   *  docs/invoicing-en16931-gap-analysis-2026-09.md. */
+  unit_code: string | null;
   unit_price: number;
   vat_category_code: VatCategoryCode;
   vat_rate: number;
@@ -92,6 +100,14 @@ export type InvoiceTaxBreakdown = {
   vat_rate: number;
   taxable_amount: number;
   vat_amount: number;
+  /** VATEX kód dôvodu oslobodenia/prenosu daňovej povinnosti (napr.
+   *  VATEX-EU-AE) pre kategórie E/AE — EN16931 BR-E-10/BR-AE-10. FÁZA 3B P0
+   *  gap, migrácia 20260917100000_add_invoicing_en16931_p0_fields.
+   *  Nullable/expand-only, bez hardcoded krajinovo-špecifického textu/kódu;
+   *  v tejto fáze nezapojené do UI/RPC. */
+  vat_exemption_reason_code: string | null;
+  /** Voľný text sprevádzajúci vat_exemption_reason_code. Nullable/expand-only. */
+  vat_exemption_reason_text: string | null;
 };
 
 export type InvoiceParty = {
