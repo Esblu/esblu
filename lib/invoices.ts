@@ -57,6 +57,18 @@ export type Invoice = {
   payment_terms_days: number | null;
   iban: string | null;
   customer_business_partner_id: string | null;
+  /** Dodávateľ pri direction='received'. Pri 'issued' vždy NULL (DB CHECK
+   *  invoices_supplier_only_when_received). Migrácia 20260920120000. */
+  supplier_business_partner_id: string | null;
+  /** Číslo dokladu tak, ako ho pridelil DODÁVATEĽ — kanonická externá identita
+   *  prijatej faktúry. Esblu prijatej faktúre nikdy neprideľuje vlastné
+   *  invoice_number (DB CHECK invoices_received_never_gets_internal_number);
+   *  po finalizácii je toto pole pre direction='received' povinné
+   *  (invoices_number_required_when_finalized). Pri 'issued' vždy NULL. */
+  supplier_invoice_number: string | null;
+  /** Dátum fyzického prijatia dokladu — nezamieňať s issue_date/tax_point_date.
+   *  Pri direction='issued' vždy NULL. */
+  received_at: string | null;
   corrects_invoice_id: string | null;
   source: InvoiceSource;
   source_document_id: string | null;
@@ -230,7 +242,17 @@ export type DraftInvoiceHeaderInput = {
   currency: string;
   issue_date: string;
   due_date: string | null;
+  /** Protistrana pri direction='issued'. Pre 'received' musí zostať NULL. */
   customer_business_partner_id: string | null;
+  /** Protistrana pri direction='received'. Pre 'issued' musí zostať NULL.
+   *  esblu_finalize_invoice() ju pri received vyžaduje (ESBLU_MISSING_SUPPLIER). */
+  supplier_business_partner_id?: string | null;
+  /** Číslo dokladu dodávateľa. Pri received je po finalizácii povinné
+   *  (ESBLU_MISSING_SUPPLIER_INVOICE_NUMBER). Pre 'issued' musí zostať NULL —
+   *  vydané číslo prideľuje výhradne DB pri finalizácii. */
+  supplier_invoice_number?: string | null;
+  /** Dátum fyzického prijatia dokladu (len received). */
+  received_at?: string | null;
   variable_symbol: string | null;
   payment_terms_days: number | null;
   corrects_invoice_id: string | null;
@@ -251,6 +273,9 @@ export async function createDraftInvoice(
       issue_date: input.issue_date,
       due_date: input.due_date,
       customer_business_partner_id: input.customer_business_partner_id,
+      supplier_business_partner_id: input.supplier_business_partner_id ?? null,
+      supplier_invoice_number: input.supplier_invoice_number ?? null,
+      received_at: input.received_at ?? null,
       variable_symbol: input.variable_symbol,
       payment_terms_days: input.payment_terms_days,
       corrects_invoice_id: input.corrects_invoice_id,
@@ -505,7 +530,13 @@ export function validateDraftBeforeFinalize(
 
 export type FinalizeInvoiceResult = {
   invoice_id: string;
-  invoice_number: string;
+  direction: InvoiceDirection;
+  /** Interné vydané číslo Esblu. NULL pri direction='received' — prijatej
+   *  faktúre sa interné číslo nikdy neprideľuje, jej identitou je
+   *  supplier_invoice_number. */
+  invoice_number: string | null;
+  /** Číslo dokladu dodávateľa. NULL pri direction='issued'. */
+  supplier_invoice_number: string | null;
   subtotal_amount: number;
   vat_total_amount: number;
   total_amount: number;
@@ -525,6 +556,16 @@ const FINALIZE_ERROR_CODES = [
   "ESBLU_CORRECTED_INVOICE_NOT_FOUND",
   "ESBLU_CORRECTED_INVOICE_FOREIGN_COMPANY",
   "ESBLU_CORRECTED_INVOICE_NOT_FINALIZED",
+  // Direction-aware vetvy z migrácie 20260920140000. Sú to reálne výstupy
+  // esblu_finalize_invoice() pre direction='received' — dosiahnuteľné cez
+  // túto dátovú vrstvu už dnes, aj keď dedikovaný received UI ešte nie je.
+  // Kód bez slovníkového záznamu by používateľovi ukázal iba generické
+  // "skúste znova", preto sa pridávajú spolu s SK/DE/EN prekladom.
+  "ESBLU_CORRECTED_INVOICE_DIRECTION_MISMATCH",
+  "ESBLU_MISSING_SUPPLIER",
+  "ESBLU_MISSING_SUPPLIER_INVOICE_NUMBER",
+  "ESBLU_SUPPLIER_NOT_FOUND",
+  "ESBLU_DUPLICATE_RECEIVED_INVOICE",
 ] as const;
 export type FinalizeErrorCode = (typeof FINALIZE_ERROR_CODES)[number];
 
