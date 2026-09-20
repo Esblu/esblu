@@ -214,6 +214,51 @@ Implementované a relevantné pre GDPR ako opatrenie podľa čl. 32:
 
 **Pre CLIA relevantné:** zamestnanec bez `finance.view` **nevidí** údaje o dodávateľoch v kontexte faktúr. To je uplatnenie zásady minimalizácie.
 
+### 5.1 Rozšírenie na OBSAH finančných dokladov (migrácie 20260921120000, 20260921140000)
+
+Pôvodné `finance.view` / `finance.manage` chránili **fakturačné dáta**, nie **obrázok dokladu**. Zamestnanec ani admin bez finance nevideli faktúru v module Faktúry, ale jej fotografiu v Inboxe si otvorili — a cez podpísanú URL aj stiahli. Bolo to opravené:
+
+| Vrstva | Pred | Po |
+|---|---|---|
+| `documents` / `document_links` / `document_attachments` SELECT | iba company scope | + `finance.view` pre finančné doklady |
+| `documents` UPDATE/DELETE | owner/admin | + `finance.manage` pre finančné doklady |
+| `document_links` / `document_attachments` INSERT/UPDATE/DELETE | owner/admin | + `finance.manage` pre finančné doklady |
+| Storage `ai-inbox-documents` SELECT/DELETE | iba členstvo vo firme | + `finance.view` / `finance.manage` |
+
+**Finančný doklad** = `document_type` `invoice` alebo `receipt`, plus **každý ešte neklasifikovaný doklad** (`status` `uploaded`/`processing`) — fail-closed, keďže stĺpec má DEFAULT `'other'`.
+
+**Nefinančné prevádzkové doklady** (PZP, technický preukaz, servisné doklady, vážne lístky, dodacie listy) majú **nezmenený** prístup. Zamestnanec, ktorý ich potreboval, ich má naďalej.
+
+**Pre CLIA relevantné:** minimalizácia sa teraz uplatňuje aj na samotný obsah dokladu tretej strany, nie len na odvodené dáta. Zároveň platí, že zamestnanec **smie doklad nahrať** (aby sa dostal k účtovníčke), ale po uložení ho už nevidí.
+
+### 5.2 `ai_scan_usage` — nové technické počítadlo (migrácia 20260921120000)
+
+Nová tabuľka, ktorá nie je funkciou produktu, ale **bezpečnostným opatrením podľa čl. 32** (ochrana pred zneužitím drahého AI endpointu).
+
+**Účel spracúvania:** technická ochrana pred zneužitím a rate-limiting AI scan endpointov. Nie účtovanie, nie produktový/cenový limit, nie profilovanie, nie analytika správania.
+
+**Uložené údaje — úplný zoznam:**
+
+| Stĺpec | Obsah | Osobný údaj |
+|---|---|---|
+| `id` | technický kľúč | nie |
+| `company_id` | firma, ktorej sa volanie započítalo | nie (údaj o zákazníkovi) |
+| `user_id` | člen, ktorý volanie vykonal | **áno** (identifikátor používateľa) |
+| `endpoint` | konštanta z allowlistu, dnes iba `scan-document` | nie |
+| `created_at` | čas volania | nepriamo |
+
+**Čo sa NEUKLADÁ — dôležité:** žiadny obsah dokladu, žiadny súbor, žiadny výsledok extrakcie, žiadne meno dodávateľa, žiadna suma, žiadny `document_id`, žiadna IP adresa, žiadny user agent. Z riadku sa nedá zistiť, čo bolo na doklade ani ktorého dokladu sa volanie týkalo.
+
+**Prístup:** tabuľka má zapnuté RLS a **zámerne žiadnu politiku** — klient (anon aj prihlásený) ju nevie čítať ani zapisovať. Zapisuje výhradne `esblu_consume_ai_scan_quota()` (SECURITY DEFINER). Overené testom.
+
+**Navrhovaná retencia:** **30 dní.** Guard sám potrebuje len posledných 24 hodín; zvyšok je rezerva na vyšetrenie incidentu zneužitia. Dlhšie uchovávanie nemá účel a bolo by v rozpore s minimalizáciou.
+
+**Navrhovaná stratégia mazania:** jednoduchý periodický prune
+`delete from public.ai_scan_usage where created_at < now() - interval '30 days';`
+**Zatiaľ NEIMPLEMENTOVANÉ.** Projekt dnes nemá auditovanú cron/scheduler infraštruktúru (`pg_cron` nie je nainštalovaný) a zavádzať ju bez samostatného auditu by bolo unáhlené. Pri súčasnom objeme (jednotky riadkov) nejde o tlak na termín — treba to však uzavrieť skôr, než sa AI Inbox otvorí širšiemu okruhu zákazníkov.
+
+**Otázka pre CLIA — data minimization:** guard počíta **per firma**, takže `user_id` preň nie je potrebný. Drží sa výhradne pre prípad vyšetrenia zneužitia ("ktorý člen vyčerpal kvótu"). Ak CLIA vyhodnotí, že tento účel neobstojí, stĺpec sa dá zahodiť bez akéhokoľvek dopadu na funkciu ochrany.
+
 ---
 
 ## 6. Nové subprocesory
@@ -245,6 +290,7 @@ Implementované a relevantné pre GDPR ako opatrenie podľa čl. 32:
 10. Transparentnosť voči dotknutým osobám, ktoré nie sú zákazníkmi Esblu (dodávatelia–SZČO).
 11. Retencia `invoice_events`, `document_review_log`, `assistant_action_confirmations`.
 12. Retencia prepisov hlasu (pred spustením hlasových funkcií).
+13. **`ai_scan_usage`** (§5.2): potvrdenie 30-dňovej retencie a stanovisko, či `user_id` obstojí pre účel vyšetrenia zneužitia, alebo sa má zahodiť.
 
 ---
 
