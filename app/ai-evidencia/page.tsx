@@ -28,6 +28,7 @@ import { REQUEST_LOCALE_HEADER } from "@/lib/i18n/request-locale";
 import {
   getMyActiveMembership,
   hasFinanceManage,
+  hasFinanceView,
   isOwnerOrAdmin,
   type CompanyMemberRole,
 } from "@/lib/company";
@@ -620,6 +621,11 @@ export default function AiEvidenciaPage() {
   // zobrazí iba držiteľovi finance.manage. Skutočné vynútenie je v RLS a v
   // esblu_create_received_invoice_draft(); toto je len UI vrstva.
   const [canManageFinance, setCanManageFinance] = useState(false);
+  // Finančné doklady (faktúra, bloček) sú od migrácie 20260921120000
+  // finance-gated na úrovni RLS aj storage. Tento príznak slúži VÝHRADNE na
+  // to, aby používateľ bez finance.view dostal vysvetlenie, prečo sa mu
+  // uložený doklad v Inboxe nezobrazí — nie je to autorizačná vrstva.
+  const [canViewFinance, setCanViewFinance] = useState(false);
   const [fileName, setFileName] = useState("");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [pendingImageFile, setPendingImageFile] = useState<File | null>(null);
@@ -2265,12 +2271,14 @@ review_status: reviewStatus,
     setCompanyId("");
     setRole(null);
     setCanManageFinance(false);
+    setCanViewFinance(false);
     return null;
   }
 
   setCompanyId(membership.company_id);
   setRole(membership.role);
   setCanManageFinance(hasFinanceManage(membership));
+  setCanViewFinance(hasFinanceView(membership));
   return membership.company_id;
 }
 
@@ -2862,6 +2870,17 @@ function formatDocDate(value: unknown): string {
                 />
               </div>
             )}
+
+            {/* Používateľ bez finance.view smie finančný doklad nahrať (aby
+                sa doklad zo stavby dostal k účtovníčke), ale po uložení ho už
+                v Inboxe neuvidí — SELECT je finance-gated v RLS aj v storage.
+                Bez tohto vysvetlenia by to vyzeralo, že sa uloženie nepodarilo. */}
+            {(scanDocumentType === "invoice" || scanDocumentType === "receipt") &&
+              !canViewFinance && (
+                <p className="rounded-xl bg-amber-500/10 px-4 py-3 text-sm font-semibold text-amber-400">
+                  {t("inbox.errors.financeDocumentHidden")}
+                </p>
+              )}
 
             {/* Prijatá faktúra — canonical cesta.
                 Ponúka sa iba pri type 'invoice' a iba držiteľovi

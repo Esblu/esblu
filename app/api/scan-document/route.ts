@@ -1111,7 +1111,73 @@ export async function POST(req: Request) {
       );
     }
 
-    // 2) Validácia vstupu — až po overení používateľa.
+    // 1b) Firemný kontext + abuse guard — MUSÍ prebehnúť pred nahratím
+    // obsahu do pamäte aj pred akýmkoľvek OpenAI volaním.
+    //
+    // Platný token sám osebe doteraz stačil na neobmedzené volanie drahého AI
+    // endpointu: route overovala iba to, že JWT je platný, nie že používateľ
+    // má aktívne členstvo vo firme.
+    //
+    // esblu_consume_ai_scan_quota() rieši oboje naraz a fail-closed:
+    //   • odvodí company_id z auth.uid() — NIKDY ho nepreberá od volajúceho,
+    //   • bez aktívneho členstva vyhodí ESBLU_NO_ACTIVE_COMPANY,
+    //   • atomicky (pg_advisory_xact_lock) započíta volanie a nad technickým
+    //     stropom vyhodí ESBLU_AI_SCAN_RATE_LIMIT.
+    //
+    // Klient sa volá s tokenom používateľa (nie service_role), takže RLS a
+    // SECURITY DEFINER kontroly platia rovnako ako v /api/invoices/[id]/pdf.
+    const userClient = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      {
+        auth: { autoRefreshToken: false, persistSession: false },
+        global: { headers: { Authorization: `Bearer ${accessToken}` } },
+      }
+    );
+
+    const { error: quotaError } = await userClient.rpc("esblu_consume_ai_scan_quota", {
+      p_endpoint: "scan-document",
+    });
+
+    if (quotaError) {
+      const message = `${quotaError.message ?? ""} ${quotaError.hint ?? ""}`;
+
+      if (message.includes("ESBLU_AI_SCAN_RATE_LIMIT")) {
+        return Response.json(
+          {
+            success: false,
+            error: translate(locale, "inbox.errors.scanRateLimited"),
+          },
+          { status: 429 }
+        );
+      }
+
+      if (
+        message.includes("ESBLU_NO_ACTIVE_COMPANY") ||
+        message.includes("ESBLU_NOT_AUTHENTICATED")
+      ) {
+        return Response.json(
+          {
+            success: false,
+            error: translate(locale, "inbox.errors.scanNoActiveCompany"),
+          },
+          { status: 403 }
+        );
+      }
+
+      // Neznáma chyba guardu = fail-closed. Nikdy nepokračovať k OpenAI len
+      // preto, že sa kontrola nepodarila vyhodnotiť.
+      console.error("scan-document: abuse guard zlyhal:", quotaError.code, quotaError.message);
+      return Response.json(
+        {
+          success: false,
+          error: translate(locale, "inbox.errors.scanFailedGeneric"),
+        },
+        { status: 503 }
+      );
+    }
+
+    // 2) Validácia vstupu — až po overení používateľa a firemného kontextu.
     const formData = await req.formData();
     const imageValue = formData.get("image");
 

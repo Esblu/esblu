@@ -1075,6 +1075,12 @@ const de = {
       aiFieldsMismatchType:
         "Das ausgefüllte Felderobjekt entspricht nicht dem erkannten Dokumenttyp. Versuchen Sie den Scan erneut.",
       scanFailedGeneric: "Die KI-Verarbeitung des Dokuments ist fehlgeschlagen.",
+      scanRateLimited:
+        "Sie haben das technische Limit für Scans pro Stunde erreicht. Bitte versuchen Sie es in Kürze erneut.",
+      scanNoActiveCompany:
+        "Sie haben keine aktive Unternehmenszugehörigkeit — die Dokumentenverarbeitung ist nicht verfügbar.",
+      financeDocumentHidden:
+        "Finanzbelege (Rechnungen und Kassenbons) sehen nur Benutzer mit Finanzzugriff. Der Beleg wurde gespeichert und steht Ihrer Buchhaltung zur Verfügung.",
       frontSideMissing: "Die Vorderseite des Fahrzeugscheins fehlt.",
       backSideMustBeImage: "Die Rückseite muss ein Bild sein.",
       frontSideLabel: "Vorderseite",

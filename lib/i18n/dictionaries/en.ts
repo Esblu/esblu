@@ -1063,6 +1063,12 @@ const en = {
       aiFieldsMismatchType:
         "The filled fields object doesn't match the recognized document type. Try scanning again.",
       scanFailedGeneric: "AI processing of the document failed.",
+      scanRateLimited:
+        "You've reached the technical limit for scans per hour. Please try again shortly.",
+      scanNoActiveCompany:
+        "You have no active company membership — document processing is unavailable.",
+      financeDocumentHidden:
+        "Financial documents (invoices and receipts) are only visible to users with finance access. The document was saved and is available to your accountant.",
       frontSideMissing: "The front side of the vehicle registration is missing.",
       backSideMustBeImage: "The back side must be an image.",
       frontSideLabel: "Front side",

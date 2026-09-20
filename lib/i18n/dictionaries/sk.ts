@@ -1086,6 +1086,12 @@ const sk = {
       aiFieldsMismatchType:
         "Vyplnený fields objekt nezodpovedá rozpoznanému typu dokumentu. Skús sken zopakovať.",
       scanFailedGeneric: "AI spracovanie dokumentu zlyhalo.",
+      scanRateLimited:
+        "Dosiahli ste technický limit počtu skenov za hodinu. Skúste to o chvíľu znova.",
+      scanNoActiveCompany:
+        "Nemáte aktívne členstvo v žiadnej firme — spracovanie dokumentov nie je dostupné.",
+      financeDocumentHidden:
+        "Finančné doklady (faktúry a bločky) vidia iba používatelia s prístupom k financiám. Doklad sa uložil a je dostupný účtovníkovi.",
       frontSideMissing: "Predná strana technického preukazu chýba.",
       backSideMustBeImage: "Zadná strana musí byť obrázok.",
       frontSideLabel: "Predná strana",
