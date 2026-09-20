@@ -38,6 +38,12 @@ import {
   type ReceivedInvoiceCandidate,
 } from "@/lib/invoicing/received-candidate";
 import { computeFileSha256 } from "@/lib/invoicing/received-dedupe";
+import {
+  DocumentModal,
+  docButtonPrimary,
+  docButtonSecondary,
+} from "@/app/components/document/DocumentLayout";
+import { DocumentStatusBadge } from "@/app/components/document/DocumentStatusBadge";
 import { invoiceDetailHref } from "@/lib/entity-links";
 import { useCompanyDpaLegalHold } from "@/app/components/CompanyDpaGate";
 import { normalizeWeightUnit } from "@/lib/normalize-weight-unit";
@@ -568,11 +574,39 @@ function addRecordToSummary(
   }
 }
 
+/**
+ * Dlaždica zložky. Pôvodne trikrát skopírovaný rovnaký blok (Bločky, Faktúry,
+ * vlastné kategórie) — jeden tvar znamená, že sa zložky správajú rovnako.
+ */
+function FolderTile({
+  emoji,
+  title,
+  subtitle,
+  onClick,
+}: {
+  emoji: string;
+  title: string;
+  subtitle: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="rounded-doc border border-doc-border bg-doc-surface p-4 text-left transition hover:bg-doc-surface-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-cyan"
+    >
+      <p aria-hidden="true" className="text-2xl">{emoji}</p>
+      <h3 className="mt-2 text-base font-semibold text-primary">{title}</h3>
+      <p className="mt-0.5 text-sm text-secondary">{subtitle}</p>
+    </button>
+  );
+}
+
 function Info({ title, value }: { title: string; value: any }) {
   return (
-    <div className="rounded-2xl bg-surface-2 p-4">
-      <p className="text-xs text-muted-esblu">{title}</p>
-      <p className="mt-1 font-bold text-primary">{value || "-"}</p>
+    <div className="rounded-doc-sm border border-doc-border bg-surface-2 p-3">
+      <p className="text-[11px] font-medium uppercase tracking-wide text-muted-esblu">{title}</p>
+      <p className="mt-0.5 break-words text-sm text-primary">{value || "-"}</p>
     </div>
   );
 }
@@ -2752,7 +2786,7 @@ function formatDocDate(value: unknown): string {
 
         {result && (
           <div className="mt-8 space-y-4 rounded-3xl bg-surface-2 p-6">
-            <h2 className="text-2xl font-black text-primary">
+            <h2 className="text-lg font-semibold text-primary">
               {t("inbox.loadedData", { type: documentTypeLabels[scanDocumentType ?? "weigh_ticket"] })}
             </h2>
 
@@ -2829,7 +2863,7 @@ function formatDocDate(value: unknown): string {
           scanDocumentType !== "weigh_ticket" &&
           scanDocumentType !== "delivery_note" && (
           <div className="mt-8 space-y-4 rounded-3xl bg-surface-2 p-6">
-            <h2 className="text-2xl font-black text-primary">
+            <h2 className="text-lg font-semibold text-primary">
               {t("inbox.loadedData", { type: documentTypeLabels[scanDocumentType] })}
             </h2>
 
@@ -3089,11 +3123,11 @@ function formatDocDate(value: unknown): string {
         ([spz, vehicleSummary]: any) => (
           <div
             key={spz}
-            className="rounded-3xl border border-subtle bg-surface-1 p-6 shadow-sm"
+            className="rounded-doc border border-doc-border bg-doc-surface p-4 sm:p-5"
           >
             <div className="mb-5 flex items-center justify-between gap-4">
               <div>
-                <p className="text-xs font-bold uppercase tracking-wide text-blue-600">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-esblu">
                   {t("inbox.vehicleGroupLabel")}
                 </p>
 
@@ -3243,15 +3277,15 @@ function formatDocDate(value: unknown): string {
   Object.entries(groupedRecords).map(([spz, items]: any) => (
     <div
       key={spz}
-      className="rounded-3xl border border-subtle bg-surface-1 p-5 shadow-sm"
+      className="rounded-doc border border-doc-border bg-doc-surface p-4"
     >
       <div className="flex items-center justify-between gap-4">
         <div>
-          <p className="text-xs font-black uppercase tracking-wide text-blue-600">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-esblu">
             {t("inbox.assignVehicle")}
           </p>
 
-          <h3 className="mt-2 text-2xl font-black text-primary">
+          <h3 className="mt-1 text-base font-semibold text-primary">
             {spz}
           </h3>
 
@@ -3262,7 +3296,7 @@ function formatDocDate(value: unknown): string {
 
         <button
           onClick={() => setSelectedSpz(spz)}
-          className="rounded-2xl bg-blue-600 px-4 py-3 font-bold text-white"
+          className={`shrink-0 ${docButtonSecondary}`}
         >
           {t("inbox.open")}
         </button>
@@ -3274,7 +3308,7 @@ function formatDocDate(value: unknown): string {
   <>
     <button
       onClick={() => setSelectedSpz(null)}
-      className="mb-4 rounded-2xl bg-surface-2 px-4 py-3 font-bold text-secondary"
+      className={`mb-4 ${docButtonSecondary}`}
     >
       {t("inbox.backToAllPlates")}
     </button>
@@ -3287,42 +3321,39 @@ function formatDocDate(value: unknown): string {
       {groupedRecords[selectedSpz]?.map((record: any) => (
         <div
           key={record.id}
-          className="rounded-3xl border border-subtle bg-surface-1 p-5 shadow-sm"
+          className="rounded-doc border border-doc-border bg-doc-surface p-4"
         >
           <div className="flex items-start justify-between gap-4">
             <div>
-              <p className="text-xs font-black uppercase tracking-wide text-blue-600">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-esblu">
                 📄 {record.document_type || t("inbox.documentFallback")}
               </p>
 
-              <h3 className="mt-2 text-xl font-black text-primary">
+              <h3 className="mt-1 text-base font-semibold text-primary">
                 {record.spz || t("inbox.noPlateCapitalized")}
               </h3>
             </div>
 
-            <span className="rounded-full bg-info-soft px-3 py-1 text-xs font-bold text-blue-700">
+            <span className="shrink-0 rounded-doc-sm border border-doc-border px-2 py-0.5 text-[11px] font-medium text-muted-esblu">
               {record.movement_type || t("inbox.unclassified")}
             </span>
           </div>
 
           <div className="mt-4 space-y-2 text-sm text-secondary">
-            <p>🏗️ {record.construction_site || t("inbox.noConstructionSite")}</p>
-            <p>🏢 {record.supplier || t("inbox.noSupplier")}</p>
-            <p>👤 {record.customer || t("inbox.noCustomer")}</p>
-            <p>📦 {record.material || t("inbox.noMaterial")}</p>
-            <p>
-              ⚖️{" "}
-              {formatRecordWeight(record, t)}
-            </p>
-            <p>
-              📅 {record.document_date || t("inbox.noDate")}{" "}
+            <p>{record.construction_site || t("inbox.noConstructionSite")}</p>
+            <p>{record.supplier || t("inbox.noSupplier")}</p>
+            <p>{record.customer || t("inbox.noCustomer")}</p>
+            <p>{record.material || t("inbox.noMaterial")}</p>
+            <p className="tabular-nums">{formatRecordWeight(record, t)}</p>
+            <p className="text-muted-esblu">
+              {record.document_date || t("inbox.noDate")}{" "}
               {record.document_time || ""}
             </p>
           </div>
 
           <button
             onClick={() => setSelectedRecord(record)}
-            className="mt-5 w-full rounded-2xl bg-blue-600 px-4 py-3 font-bold text-white hover:bg-blue-700"
+            className={`mt-4 w-full ${docButtonSecondary}`}
           >
             {t("inbox.openDetail")}
           </button>
@@ -3335,10 +3366,10 @@ function formatDocDate(value: unknown): string {
   </div>
 )}
     {isOwnerOrAdmin(role) && (
-    <div className="mt-10 rounded-3xl border border-subtle bg-surface-1 p-5 shadow-sm sm:p-6">
+    <div className="mt-10 rounded-doc border border-doc-border bg-doc-surface p-4 sm:p-5">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h2 className="text-2xl font-black text-primary">
+          <h2 className="text-lg font-semibold text-primary">
             {t("inbox.exportDocumentsTitle")}
           </h2>
           <p className="mt-1 text-sm text-secondary">
@@ -3351,7 +3382,7 @@ function formatDocDate(value: unknown): string {
           onClick={handleExportExcel}
           disabled={exportLoading || visibleDocuments.length === 0}
           aria-busy={exportLoading}
-          className="rounded-2xl bg-emerald-600 px-5 py-4 font-black text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+          className={`shrink-0 ${docButtonSecondary}`}
         >
           {exportLoading ? t("inbox.generatingExcel") : t("inbox.exportDocuments")}
         </button>
@@ -3380,36 +3411,24 @@ function formatDocDate(value: unknown): string {
     {/* Zložky "Bločky"/"Faktúry" — nepriradené dokumenty (bod 4 zadania). */}
     {!openFolder && !openCustomCategoryId && (
       <div className="mt-10">
-        <h2 className="text-2xl font-black text-primary">
+        <h2 className="text-lg font-semibold text-primary">
           {t("inbox.foldersTitle")}
         </h2>
 
         <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <button
-            type="button"
+          <FolderTile
+            emoji="🧾"
+            title={t("inbox.receiptsFolderTitle")}
+            subtitle={`${unassignedReceipts.length} ${tCount("inbox.unassignedReceiptsCount", unassignedReceipts.length)}`}
             onClick={() => handleOpenFolder("receipt")}
-            className="rounded-3xl border border-subtle bg-surface-1 p-5 text-left shadow-sm transition hover:border-blue-300"
-          >
-            <p className="text-3xl">🧾</p>
-            <h3 className="mt-2 text-xl font-black text-primary">{t("inbox.receiptsFolderTitle")}</h3>
-            <p className="mt-1 text-sm text-secondary">
-              {unassignedReceipts.length}{" "}
-              {tCount("inbox.unassignedReceiptsCount", unassignedReceipts.length)}
-            </p>
-          </button>
+          />
 
-          <button
-            type="button"
+          <FolderTile
+            emoji="📃"
+            title={t("inbox.invoicesFolderTitle")}
+            subtitle={`${unassignedInvoices.length} ${tCount("inbox.unassignedInvoicesCount", unassignedInvoices.length)}`}
             onClick={() => handleOpenFolder("invoice")}
-            className="rounded-3xl border border-subtle bg-surface-1 p-5 text-left shadow-sm transition hover:border-blue-300"
-          >
-            <p className="text-3xl">📃</p>
-            <h3 className="mt-2 text-xl font-black text-primary">{t("inbox.invoicesFolderTitle")}</h3>
-            <p className="mt-1 text-sm text-secondary">
-              {unassignedInvoices.length}{" "}
-              {tCount("inbox.unassignedInvoicesCount", unassignedInvoices.length)}
-            </p>
-          </button>
+          />
         </div>
       </div>
     )}
@@ -3422,7 +3441,7 @@ function formatDocDate(value: unknown): string {
         žiadny prázdny "0 zložiek" blok. */}
     {!openFolder && !openCustomCategoryId && customCategories.length > 0 && (
       <div className="mt-10">
-        <h2 className="text-2xl font-black text-primary">
+        <h2 className="text-lg font-semibold text-primary">
           {t("inbox.customCategoriesTitle")}
         </h2>
 
@@ -3430,18 +3449,13 @@ function formatDocDate(value: unknown): string {
           {customCategories.map((category) => {
             const count = customCategoryDocumentCounts.get(category.id) || 0;
             return (
-              <button
+              <FolderTile
                 key={category.id}
-                type="button"
+                emoji="🗂️"
+                title={category.name}
+                subtitle={`${count} ${tCount("inbox.customCategoryDocumentsCount", count)}`}
                 onClick={() => handleOpenCustomCategory(category.id)}
-                className="rounded-3xl border border-subtle bg-surface-1 p-5 text-left shadow-sm transition hover:border-blue-300"
-              >
-                <p className="text-3xl">🗂️</p>
-                <h3 className="mt-2 text-xl font-black text-primary">{category.name}</h3>
-                <p className="mt-1 text-sm text-secondary">
-                  {count} {tCount("inbox.customCategoryDocumentsCount", count)}
-                </p>
-              </button>
+              />
             );
           })}
         </div>
@@ -3452,14 +3466,14 @@ function formatDocDate(value: unknown): string {
       <div className="mt-10">
         <button
           onClick={handleBackToFolders}
-          className="mb-4 rounded-2xl bg-surface-2 px-4 py-3 font-bold text-secondary"
+          className={`mb-4 ${docButtonSecondary}`}
         >
           {t("inbox.backToFolders")}
         </button>
 
-        <div className="flex flex-col gap-4 rounded-3xl border border-subtle bg-surface-1 p-5 shadow-sm sm:flex-row sm:items-center sm:justify-between sm:p-6">
+        <div className="flex flex-col gap-4 rounded-doc border border-doc-border bg-doc-surface p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
           <div>
-            <h2 className="text-2xl font-black text-primary">
+            <h2 className="text-lg font-semibold text-primary">
               {`🗂️ ${openCustomCategory.name}`}
             </h2>
             <p className="mt-1 text-sm text-secondary">
@@ -3470,7 +3484,7 @@ function formatDocDate(value: unknown): string {
         </div>
 
         {openCustomCategoryDocuments.length === 0 ? (
-          <p className="mt-4 rounded-xl bg-surface-2 px-4 py-3 text-sm text-secondary">
+          <p className="mt-4 rounded-doc border border-doc-border bg-surface-2 px-4 py-3 text-sm text-secondary">
             {t("inbox.noCustomCategoryDocuments")}
           </p>
         ) : (
@@ -3483,33 +3497,29 @@ function formatDocDate(value: unknown): string {
             {openCustomCategoryDocuments.map((doc) => (
               <div
                 key={doc.id}
-                className="rounded-3xl border border-subtle bg-surface-1 p-5 shadow-sm"
+                className="rounded-doc border border-doc-border bg-doc-surface p-4"
               >
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <p className="text-xs font-black uppercase tracking-wide text-blue-600">
-                      📄{" "}
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-esblu">
                       {documentTypeLabels[doc.document_type as ScanDocumentType] ||
                         doc.document_type ||
                         t("inbox.documentFallback")}
                     </p>
 
-                    <h3 className="mt-2 text-lg font-black text-primary">
+                    <h3 className="mt-1 break-words text-base font-semibold text-primary">
                       {summarizeDocument(doc)}
                     </h3>
                   </div>
 
                   {doc.status === "needs_review" && (
-                    <span className="rounded-full bg-warning-soft px-3 py-1 text-xs font-bold text-amber-400">
-                      {t("inbox.needsReview")}
-                    </span>
+                    <DocumentStatusBadge kind="needs_review" label={t("inbox.needsReview")} />
                   )}
                 </div>
 
-                <div className="mt-4 space-y-2 text-sm text-secondary">
-                  <p>🔗 {describeDocumentAssignment(doc)}</p>
-                  <p>
-                    📅{" "}
+                <div className="mt-3 space-y-1 text-sm text-secondary">
+                  <p>{describeDocumentAssignment(doc)}</p>
+                  <p className="text-muted-esblu">
                     {doc.created_at
                       ? formatDate(doc.created_at, locale)
                       : t("inbox.noDate")}
@@ -3518,7 +3528,7 @@ function formatDocDate(value: unknown): string {
 
                 <button
                   onClick={() => setSelectedOtherDocument(doc)}
-                  className="mt-5 w-full rounded-2xl bg-blue-600 px-4 py-3 font-bold text-white hover:bg-blue-700"
+                  className={`mt-4 w-full ${docButtonSecondary}`}
                 >
                   {t("inbox.openDetail")}
                 </button>
@@ -3533,14 +3543,14 @@ function formatDocDate(value: unknown): string {
       <div className="mt-10">
         <button
           onClick={handleBackToFolders}
-          className="mb-4 rounded-2xl bg-surface-2 px-4 py-3 font-bold text-secondary"
+          className={`mb-4 ${docButtonSecondary}`}
         >
           {t("inbox.backToFolders")}
         </button>
 
-        <div className="flex flex-col gap-4 rounded-3xl border border-subtle bg-surface-1 p-5 shadow-sm sm:flex-row sm:items-center sm:justify-between sm:p-6">
+        <div className="flex flex-col gap-4 rounded-doc border border-doc-border bg-doc-surface p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
           <div>
-            <h2 className="text-2xl font-black text-primary">
+            <h2 className="text-lg font-semibold text-primary">
               {openFolder === "receipt"
                 ? `🧾 ${t("inbox.receiptsFolderTitle")}`
                 : `📃 ${t("inbox.invoicesFolderTitle")}`}
@@ -3557,7 +3567,7 @@ function formatDocDate(value: unknown): string {
             onClick={() => handleExportFolder(openFolder)}
             disabled={folderExportLoading || openFolderDocuments.length === 0}
             aria-busy={folderExportLoading}
-            className="rounded-2xl bg-emerald-600 px-5 py-4 font-black text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+            className={`shrink-0 ${docButtonSecondary}`}
           >
             {folderExportLoading ? t("inbox.generatingExcel") : t("inbox.exportFolder")}
           </button>
@@ -3566,7 +3576,7 @@ function formatDocDate(value: unknown): string {
 
         {folderExportFeedback && (
           <p
-            className={`mt-4 rounded-xl px-4 py-3 text-sm font-semibold ${
+            className={`mt-4 rounded-doc-sm px-4 py-3 text-sm font-medium ${
               folderExportFeedback.type === "success"
                 ? "badge-success"
                 : "badge-danger"
@@ -3577,7 +3587,7 @@ function formatDocDate(value: unknown): string {
         )}
 
         {openFolderDocuments.length === 0 ? (
-          <p className="mt-4 rounded-xl bg-surface-2 px-4 py-3 text-sm text-secondary">
+          <p className="mt-4 rounded-doc border border-doc-border bg-surface-2 px-4 py-3 text-sm text-secondary">
             {t("inbox.noUnassignedDocuments")}
           </p>
         ) : (
@@ -3587,21 +3597,16 @@ function formatDocDate(value: unknown): string {
               return (
                 <div
                   key={doc.id}
-                  className="rounded-3xl border border-subtle bg-surface-1 p-5 shadow-sm"
+                  className="rounded-doc border border-doc-border bg-doc-surface p-4"
                 >
                   <div className="flex items-start justify-between gap-4">
                     <div>
-                      {openFolder === "receipt" ? (
-                        <h3 className="text-lg font-black text-primary">
-                          {(fields.merchant as string) || t("inbox.noMerchant")}
-                        </h3>
-                      ) : (
-                        <h3 className="text-lg font-black text-primary">
-                          {(fields.supplier as string) || t("inbox.noSupplier")}
-                        </h3>
-                      )}
-                      <p className="mt-1 text-sm text-secondary">
-                        📅{" "}
+                      <h3 className="break-words text-base font-semibold text-primary">
+                        {openFolder === "receipt"
+                          ? (fields.merchant as string) || t("inbox.noMerchant")
+                          : (fields.supplier as string) || t("inbox.noSupplier")}
+                      </h3>
+                      <p className="mt-0.5 text-sm text-muted-esblu">
                         {formatDocDate(
                           openFolder === "receipt"
                             ? fields.purchaseDate
@@ -3611,26 +3616,25 @@ function formatDocDate(value: unknown): string {
                     </div>
 
                     {doc.status === "needs_review" && (
-                      <span className="rounded-full bg-warning-soft px-3 py-1 text-xs font-bold text-amber-400">
-                        {t("inbox.needsReview")}
-                      </span>
+                      <DocumentStatusBadge kind="needs_review" label={t("inbox.needsReview")} />
                     )}
                   </div>
 
-                  <div className="mt-4 space-y-1 text-sm text-secondary">
-                    <p>💶 {formatAmount(fields.totalAmount, fields.currency)}</p>
+                  <div className="mt-3 space-y-1 text-sm text-secondary">
+                    <p className="tabular-nums">
+                      {formatAmount(fields.totalAmount, fields.currency)}
+                    </p>
                     {openFolder === "invoice" && (
                       <p>
-                        🔢{" "}
                         {(fields.invoiceNumber as string) || t("inbox.noInvoiceNumber")}
                       </p>
                     )}
-                    {doc.note && <p>📝 {doc.note}</p>}
+                    {doc.note && <p className="text-muted-esblu">{doc.note}</p>}
                   </div>
 
                   <button
                     onClick={() => setSelectedOtherDocument(doc)}
-                    className="mt-5 w-full rounded-2xl bg-blue-600 px-4 py-3 font-bold text-white hover:bg-blue-700"
+                    className={`mt-4 w-full ${docButtonSecondary}`}
                   >
                     {t("inbox.openDetail")}
                   </button>
@@ -3643,7 +3647,7 @@ function formatDocDate(value: unknown): string {
     )}
 
     <div className="mt-10">
-      <h2 className="text-2xl font-black text-primary">
+      <h2 className="text-lg font-semibold text-primary">
         {t("inbox.otherDocumentsTitle")}
       </h2>
       <p className="mt-1 text-sm text-secondary">
@@ -3651,7 +3655,7 @@ function formatDocDate(value: unknown): string {
       </p>
 
       {otherDocumentsFlatList.length === 0 ? (
-        <p className="mt-4 rounded-xl bg-surface-2 px-4 py-3 text-sm text-secondary">
+        <p className="mt-4 rounded-doc border border-doc-border bg-surface-2 px-4 py-3 text-sm text-secondary">
           {t("inbox.noSavedDocuments")}
         </p>
       ) : (
@@ -3659,33 +3663,29 @@ function formatDocDate(value: unknown): string {
           {otherDocumentsFlatList.map((doc) => (
             <div
               key={doc.id}
-              className="rounded-3xl border border-subtle bg-surface-1 p-5 shadow-sm"
+              className="rounded-doc border border-doc-border bg-doc-surface p-4"
             >
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <p className="text-xs font-black uppercase tracking-wide text-blue-600">
-                    📄{" "}
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-esblu">
                     {documentTypeLabels[doc.document_type as ScanDocumentType] ||
                       doc.document_type ||
                       t("inbox.documentFallback")}
                   </p>
 
-                  <h3 className="mt-2 text-lg font-black text-primary">
+                  <h3 className="mt-1 break-words text-base font-semibold text-primary">
                     {summarizeDocument(doc)}
                   </h3>
                 </div>
 
                 {doc.status === "needs_review" && (
-                  <span className="rounded-full bg-warning-soft px-3 py-1 text-xs font-bold text-amber-400">
-                    {t("inbox.needsReview")}
-                  </span>
+                  <DocumentStatusBadge kind="needs_review" label={t("inbox.needsReview")} />
                 )}
               </div>
 
-              <div className="mt-4 space-y-2 text-sm text-secondary">
-                <p>🔗 {describeDocumentAssignment(doc)}</p>
-                <p>
-                  📅{" "}
+              <div className="mt-3 space-y-1 text-sm text-secondary">
+                <p>{describeDocumentAssignment(doc)}</p>
+                <p className="text-muted-esblu">
                   {doc.created_at
                     ? formatDate(doc.created_at, locale)
                     : t("inbox.noDate")}
@@ -3694,7 +3694,7 @@ function formatDocDate(value: unknown): string {
 
               <button
                 onClick={() => setSelectedOtherDocument(doc)}
-                className="mt-5 w-full rounded-2xl bg-blue-600 px-4 py-3 font-bold text-white hover:bg-blue-700"
+                className={`mt-4 w-full ${docButtonSecondary}`}
               >
                 {t("inbox.openDetail")}
               </button>
@@ -3705,21 +3705,11 @@ function formatDocDate(value: unknown): string {
     </div>
 
 {selectedRecord && (
-  <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/50 p-3 sm:items-center sm:p-4">
-    <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-3xl bg-surface-1 p-5 shadow-2xl sm:p-8">
-
-      <div className="flex items-center justify-between">
-        <h2 className="text-3xl font-black">
-          {t("inbox.documentDetailTitle")}
-        </h2>
-
-        <button
-          onClick={() => setSelectedRecord(null)}
-          className="rounded-xl bg-surface-2 px-4 py-2"
-        >
-          ✕
-        </button>
-      </div>
+  <DocumentModal
+    title={t("inbox.documentDetailTitle")}
+    onClose={() => setSelectedRecord(null)}
+    closeLabel={t("common.buttons.close")}
+  >
 
       <div className="mt-8 grid grid-cols-2 gap-4">
 
@@ -3795,25 +3785,14 @@ function formatDocDate(value: unknown): string {
   {t("inbox.deleteRecord")}
 </button>
 )}
-    </div>
-  </div>
+  </DocumentModal>
 )}
 {selectedOtherDocument && (
-  <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/50 p-3 sm:items-center sm:p-4">
-    <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-3xl bg-surface-1 p-5 shadow-2xl sm:p-8">
-
-      <div className="flex items-center justify-between">
-        <h2 className="text-3xl font-black">
-          {t("inbox.documentDetailTitle")}
-        </h2>
-
-        <button
-          onClick={() => setSelectedOtherDocument(null)}
-          className="rounded-xl bg-surface-2 px-4 py-2"
-        >
-          ✕
-        </button>
-      </div>
+  <DocumentModal
+    title={t("inbox.documentDetailTitle")}
+    onClose={() => setSelectedOtherDocument(null)}
+    closeLabel={t("common.buttons.close")}
+  >
 
       <div className="mt-8 grid grid-cols-2 gap-4">
 
@@ -4012,8 +3991,7 @@ function formatDocDate(value: unknown): string {
           : t("inbox.deleteDocument")}
       </button>
       )}
-    </div>
-  </div>
+  </DocumentModal>
 )}
 
 {/* Review prijatej faktúry. Otvára sa až keď je zdrojový dokument uložený
@@ -4038,28 +4016,33 @@ function formatDocDate(value: unknown): string {
 {/* Potvrdenie po vytvorení draftu. Zámerne NEPRESMEROVÁVA automaticky —
     používateľ môže chcieť rovno spracovať ďalší doklad z Inboxu. */}
 {createdReceivedInvoiceId && (
-  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-    <div className="w-full max-w-md rounded-3xl bg-surface-1 p-6 text-center">
-      <h3 className="text-xl font-black text-primary">
-        {t("inbox.receivedInvoice.created.title")}
-      </h3>
-      <p className="mt-2 text-sm text-muted-esblu">
-        {t("inbox.receivedInvoice.created.body")}
-      </p>
-      <a
-        href={invoiceDetailHref(createdReceivedInvoiceId)}
-        className="mt-5 block w-full rounded-2xl bg-accent-esblu px-6 py-4 font-black text-on-accent"
-      >
-        {t("inbox.receivedInvoice.created.openInvoice")}
-      </a>
-      <button
-        onClick={() => setCreatedReceivedInvoiceId(null)}
-        className="mt-3 w-full rounded-2xl border border-subtle px-6 py-4 font-bold text-primary"
-      >
-        {t("inbox.receivedInvoice.created.stayInInbox")}
-      </button>
-    </div>
-  </div>
+  <DocumentModal
+    title={t("inbox.receivedInvoice.created.title")}
+    onClose={() => setCreatedReceivedInvoiceId(null)}
+    closeLabel={t("common.buttons.close")}
+    size="md"
+    footer={
+      <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+        <button
+          type="button"
+          onClick={() => setCreatedReceivedInvoiceId(null)}
+          className={docButtonSecondary}
+        >
+          {t("inbox.receivedInvoice.created.stayInInbox")}
+        </button>
+        <a
+          href={invoiceDetailHref(createdReceivedInvoiceId)}
+          className={docButtonPrimary}
+        >
+          {t("inbox.receivedInvoice.created.openInvoice")}
+        </a>
+      </div>
+    }
+  >
+    <p className="text-sm text-secondary">
+      {t("inbox.receivedInvoice.created.body")}
+    </p>
+  </DocumentModal>
 )}
       </div>
     </main>

@@ -5,6 +5,14 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import BackLink from "@/app/components/BackLink";
 import {
+  DocumentPageShell,
+  DocumentHeader,
+  docButtonPrimary,
+  docButtonSecondary,
+  docField,
+  docLabel,
+} from "@/app/components/document/DocumentLayout";
+import {
   getMyActiveMembership,
   hasFinanceManage,
   type MyActiveMembership,
@@ -205,7 +213,7 @@ export default function NewInvoicePage() {
       )}
 
       {canEdit && (
-        <div className="mt-6 rounded-3xl border border-subtle bg-surface-1 p-6 shadow-lg">
+        <div className="mt-6 space-y-4 rounded-doc border border-doc-border bg-doc-surface p-4 sm:p-5">
           {submitError && (
             <p className="mb-4 rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
               {submitError}
@@ -222,11 +230,11 @@ export default function NewInvoicePage() {
           <div className="grid gap-4 sm:grid-cols-2">
             {!correctsInvoiceId && (
               <div>
-                <label className="mb-2 block text-sm font-semibold">
+                <label className={docLabel}>
                   {t("invoices.newInvoice.kindLabel")}
                 </label>
                 <select
-                  className="w-full rounded-xl border p-3"
+                  className={docField}
                   value={kind}
                   onChange={(event) => setKind(event.target.value as InvoiceKind)}
                 >
@@ -239,7 +247,7 @@ export default function NewInvoicePage() {
             )}
 
             <div>
-              <label className="mb-2 block text-sm font-semibold">
+              <label className={docLabel}>
                 {t("invoices.newInvoice.businessPartnerLabel")}
               </label>
               {partners.length === 0 ? (
@@ -248,7 +256,7 @@ export default function NewInvoicePage() {
                 </p>
               ) : (
                 <select
-                  className="w-full rounded-xl border p-3"
+                  className={docField}
                   value={customerId}
                   onChange={(event) => setCustomerId(event.target.value)}
                 >
@@ -263,57 +271,57 @@ export default function NewInvoicePage() {
             </div>
 
             <div>
-              <label className="mb-2 block text-sm font-semibold">
+              <label className={docLabel}>
                 {t("invoices.newInvoice.issueDateLabel")}
               </label>
               <input
                 type="date"
-                className="w-full rounded-xl border p-3"
+                className={docField}
                 value={issueDate}
                 onChange={(event) => handleIssueDateChange(event.target.value)}
               />
             </div>
 
             <div>
-              <label className="mb-2 block text-sm font-semibold">
+              <label className={docLabel}>
                 {t("invoices.newInvoice.paymentTermsDaysLabel")}
               </label>
               <input
-                className="w-full rounded-xl border p-3"
+                className={docField}
                 value={paymentTermsDays}
                 onChange={(event) => handlePaymentTermsDaysChange(event.target.value)}
               />
             </div>
 
             <div>
-              <label className="mb-2 block text-sm font-semibold">
+              <label className={docLabel}>
                 {t("invoices.newInvoice.dueDateLabel")}
               </label>
               <input
                 type="date"
-                className="w-full rounded-xl border p-3"
+                className={docField}
                 value={dueDate}
                 onChange={(event) => handleDueDateChange(event.target.value)}
               />
             </div>
 
             <div>
-              <label className="mb-2 block text-sm font-semibold">
+              <label className={docLabel}>
                 {t("invoices.newInvoice.currencyLabel")}
               </label>
               <input
-                className="w-full rounded-xl border p-3"
+                className={docField}
                 value={currency}
                 onChange={(event) => setCurrency(event.target.value.toUpperCase())}
               />
             </div>
 
             <div>
-              <label className="mb-2 block text-sm font-semibold">
+              <label className={docLabel}>
                 {t("invoices.newInvoice.variableSymbolLabel")}
               </label>
               <input
-                className="w-full rounded-xl border p-3"
+                className={docField}
                 value={variableSymbol}
                 onChange={(event) => setVariableSymbol(event.target.value)}
               />
@@ -325,7 +333,7 @@ export default function NewInvoicePage() {
               type="button"
               onClick={handleSubmit}
               disabled={createDisabled}
-              className="rounded-xl bg-blue-600 px-6 py-3 font-semibold text-white hover:bg-blue-700 disabled:bg-gray-400"
+              className={docButtonPrimary}
             >
               {saving
                 ? t("invoices.newInvoice.saving")
@@ -336,7 +344,7 @@ export default function NewInvoicePage() {
               type="button"
               onClick={() => router.push("/faktury")}
               disabled={saving}
-              className="rounded-xl border px-6 py-3 font-semibold"
+              className={docButtonSecondary}
             >
               {t("invoices.newInvoice.cancelButton")}
             </button>

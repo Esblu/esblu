@@ -103,6 +103,34 @@
   --radius-card-lg: 1.75rem;
   --radius-control: 0.9rem;
 
+  /* ------------------------------------------------------------------
+     DOCUMENT / OFFICE VRSTVA
+     ------------------------------------------------------------------
+     Dokumentové plochy (faktúry, Inbox, review, partneri) majú pôsobiť
+     pokojnejšie a "kancelárskejšie" než zvyšok appky: menšie rádiusy,
+     tichšie povrchy, menej farebných blokov. Zostávajú v TEJ ISTEJ tmavej
+     palete — nejde o druhú tému, iba o užšie tokeny nad ňou.
+
+     Menší rádius je zámer: 1.5rem pôsobí ako mobilná karta, 0.75rem ako
+     register/doklad. */
+  --radius-doc: 0.75rem;
+  --radius-doc-sm: 0.5rem;
+
+  /* Povrch dokumentového riadku/sekcie — o stupeň tichší než surface-2,
+     aby zoznam dokladov nepôsobil ako kopa kariet. */
+  --color-doc-surface: #070d19;
+  --color-doc-surface-hover: #0c1424;
+  --color-doc-border: rgba(94, 149, 214, 0.14);
+
+  /* CHÝBAJÚCE TOKENY — OPRAVA CHYBY.
+     app/ai-evidencia/page.tsx používal bg-accent-esblu a text-on-accent
+     (CTA "Spracovať ako prijatú faktúru" a odkaz "Otvoriť faktúru"), ale
+     --color-accent-esblu ani --color-on-accent neboli nikde definované,
+     takže obe tlačidlá sa renderovali bez pozadia aj bez farby textu.
+     Mapujeme ich na existujúci modrý akcent, aby sa vizuál nerozišiel. */
+  --color-accent-esblu: var(--color-accent-blue);
+  --color-on-accent: #ffffff;
+
   /* Legacy Next.js template vars — necháme kvôli spätnej kompatibilite,
      appka ich už prakticky nepoužíva (nahradené vyššie). */
   --background: var(--color-page-bg);
@@ -159,6 +187,16 @@
   --color-success: var(--color-success);
   --color-warning: var(--color-warning);
   --color-danger: var(--color-danger);
+
+  /* Document/office vrstva — sprístupnenie ako Tailwind utility
+     (bg-doc-surface, border-doc-border, rounded-doc, …). */
+  --color-accent-esblu: var(--color-accent-esblu);
+  --color-on-accent: var(--color-on-accent);
+  --color-doc-surface: var(--color-doc-surface);
+  --color-doc-surface-hover: var(--color-doc-surface-hover);
+  --color-doc-border: var(--color-doc-border);
+  --radius-doc: var(--radius-doc);
+  --radius-doc-sm: var(--radius-doc-sm);
 }
 
 * {

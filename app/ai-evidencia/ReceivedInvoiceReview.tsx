@@ -36,6 +36,16 @@ import {
   matchSupplier,
   type SupplierMatchResult,
 } from "@/lib/invoicing/supplier-matching";
+import {
+  DocumentModal,
+  DocumentSection,
+  DocumentNotice,
+  DocumentTotalsBlock,
+  docButtonPrimary,
+  docButtonSecondary,
+  docField,
+  docLabel,
+} from "@/app/components/document/DocumentLayout";
 
 // =============================================================================
 // Review obrazovka prijatej faktúry.
@@ -499,655 +509,624 @@ export default function ReceivedInvoiceReview({
       maximumFractionDigits: 2,
     })} ${currency || "EUR"}`;
 
-  const fieldClass =
-    "w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-500 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100";
-  const labelClass = "mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400";
+  // Zdieľané s ostatnými dokumentovými plochami — tento komponent bol jediný
+  // v appke, ktorý používal cudziu slate/dark paletu namiesto design systému.
+  const fieldClass = docField;
+  const labelClass = docLabel;
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/50 p-3 sm:items-center sm:p-4">
-      <div className="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-3xl bg-white p-5 shadow-xl sm:p-7 dark:bg-slate-900">
-        <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
-              {t("inbox.receivedInvoice.title")}
-            </h2>
-            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-              {t("inbox.receivedInvoice.subtitle")}
-            </p>
-          </div>
+  // Akcie žijú v pätičke modálu, aby ostali dosiahnuteľné aj pri dlhom
+  // formulári bez skrolovania na koniec.
+  const actionFooter =
+    loading || loadError ? null : (
+      <div className="space-y-2">
+        <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+          <button type="button" onClick={onCancel} className={docButtonSecondary}>
+            {t("common.buttons.cancel")}
+          </button>
           <button
             type="button"
-            onClick={onCancel}
-            className="rounded-full px-3 py-1 text-sm text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
+            disabled={!canSubmit}
+            onClick={() => void handleSubmit()}
+            className={docButtonPrimary}
           >
-            {t("common.buttons.close")}
+            {submitting
+              ? t("inbox.receivedInvoice.submitting")
+              : t("inbox.receivedInvoice.submit")}
           </button>
         </div>
+        <p className="text-center text-xs text-muted-esblu">
+          {t("inbox.receivedInvoice.draftOnlyNote")}
+        </p>
+      </div>
+    );
 
-        {loading ? (
-          <p className="py-8 text-center text-sm text-slate-500">
-            {t("inbox.receivedInvoice.loading")}
-          </p>
-        ) : loadError ? (
-          <p className="rounded-2xl bg-red-50 p-4 text-sm text-red-700 dark:bg-red-950 dark:text-red-300">
-            {loadError}
-          </p>
-        ) : (
-          <div className="space-y-5">
-            {/* ---------------- DUPLICITA ---------------- */}
-            {dedupe.exact && (
-              <div className="rounded-2xl border border-red-300 bg-red-50 p-4 dark:border-red-800 dark:bg-red-950">
-                <p className="text-sm font-semibold text-red-800 dark:text-red-200">
-                  {t("inbox.receivedInvoice.duplicate.exactTitle")}
-                </p>
-                <p className="mt-1 text-sm text-red-700 dark:text-red-300">
-                  {t(`inbox.receivedInvoice.duplicate.reason.${dedupe.exact.reason}`)}
-                </p>
-                <Link
-                  href={invoiceDetailHref(dedupe.exact.invoice.id)}
-                  className="mt-2 inline-block text-sm font-medium text-red-800 underline dark:text-red-200"
-                >
-                  {t("inbox.receivedInvoice.duplicate.openExisting")}
-                </Link>
-              </div>
-            )}
+  return (
+    <DocumentModal
+      title={t("inbox.receivedInvoice.title")}
+      onClose={onCancel}
+      closeLabel={t("common.buttons.close")}
+      size="xl"
+      footer={actionFooter}
+    >
+      <p className="text-sm text-muted-esblu">
+        {t("inbox.receivedInvoice.subtitle")}
+      </p>
 
-            {!dedupe.exact && dedupe.near.length > 0 && (
-              <div className="rounded-2xl border border-amber-300 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-950">
-                <p className="text-sm font-semibold text-amber-900 dark:text-amber-200">
-                  {t("inbox.receivedInvoice.duplicate.nearTitle")}
-                </p>
-                <ul className="mt-2 space-y-1">
-                  {dedupe.near.slice(0, 3).map((near) => (
-                    <li key={near.invoice.id} className="text-sm text-amber-800 dark:text-amber-300">
-                      <Link
-                        href={invoiceDetailHref(near.invoice.id)}
-                        className="underline"
-                      >
-                        {near.invoice.supplier_invoice_number ??
-                          near.invoice.invoice_number ??
-                          near.invoice.id.slice(0, 8)}
-                      </Link>{" "}
-                      · {near.invoice.issue_date} · {money(near.invoice.total_amount)}
-                    </li>
-                  ))}
-                </ul>
-                <p className="mt-2 text-xs text-amber-700 dark:text-amber-400">
-                  {t("inbox.receivedInvoice.duplicate.nearHint")}
-                </p>
-              </div>
-            )}
+      {loading ? (
+        <p className="py-8 text-center text-sm text-muted-esblu">
+          {t("inbox.receivedInvoice.loading")}
+        </p>
+      ) : loadError ? (
+        <DocumentNotice tone="critical">{loadError}</DocumentNotice>
+      ) : (
+        <div className="space-y-5">
+          {/* ---------------- DUPLICITA ---------------- */}
+          {dedupe.exact && (
+            <DocumentNotice
+              tone="critical"
+              title={t("inbox.receivedInvoice.duplicate.exactTitle")}
+            >
+              <p>{t(`inbox.receivedInvoice.duplicate.reason.${dedupe.exact.reason}`)}</p>
+              <Link
+                href={invoiceDetailHref(dedupe.exact.invoice.id)}
+                className="mt-2 inline-block font-medium underline"
+              >
+                {t("inbox.receivedInvoice.duplicate.openExisting")}
+              </Link>
+            </DocumentNotice>
+          )}
 
-            {dedupe.fingerprintUnavailable && (
-              <p className="rounded-2xl bg-slate-100 p-3 text-xs text-slate-600 dark:bg-slate-800 dark:text-slate-400">
-                {t("inbox.receivedInvoice.duplicate.fingerprintUnavailable")}
+          {!dedupe.exact && dedupe.near.length > 0 && (
+            <DocumentNotice
+              tone="warning"
+              title={t("inbox.receivedInvoice.duplicate.nearTitle")}
+            >
+              <ul className="space-y-1">
+                {dedupe.near.slice(0, 3).map((near) => (
+                  <li key={near.invoice.id} className="text-sm text-warning">
+                    <Link
+                      href={invoiceDetailHref(near.invoice.id)}
+                      className="underline"
+                    >
+                      {near.invoice.supplier_invoice_number ??
+                        near.invoice.invoice_number ??
+                        near.invoice.id.slice(0, 8)}
+                    </Link>{" "}
+                    · {near.invoice.issue_date} · {money(near.invoice.total_amount)}
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-2 text-xs">
+                {t("inbox.receivedInvoice.duplicate.nearHint")}
+              </p>
+            </DocumentNotice>
+          )}
+
+          {dedupe.fingerprintUnavailable && (
+            <p className="rounded-doc border border-doc-border bg-surface-2 p-3 text-xs text-muted-esblu">
+              {t("inbox.receivedInvoice.duplicate.fingerprintUnavailable")}
+            </p>
+          )}
+
+          {/* ---------------- DODÁVATEĽ ---------------- */}
+          <DocumentSection title={t("inbox.receivedInvoice.supplier.title")}>
+
+            {supplierMatch && (
+              <p
+                className={`mb-3 rounded-doc-sm px-3 py-2 text-xs ${
+                  supplierMatch.status === "exact"
+                    ? "bg-success-soft text-success"
+                    : "bg-warning-soft text-warning"
+                }`}
+              >
+                {t(`inbox.receivedInvoice.supplier.match.${supplierMatch.status}`, {
+                  name: candidate.supplier.legal_name ?? "—",
+                  count: String(supplierMatch.matches.length),
+                })}
               </p>
             )}
 
-            {/* ---------------- DODÁVATEĽ ---------------- */}
-            <section className="rounded-2xl border border-slate-200 p-4 dark:border-slate-700">
-              <h3 className="mb-2 text-sm font-semibold text-slate-900 dark:text-slate-100">
-                {t("inbox.receivedInvoice.supplier.title")}
-              </h3>
+            <label className={labelClass} htmlFor="received-supplier">
+              {t("inbox.receivedInvoice.supplier.selectLabel")}
+            </label>
+            <select
+              id="received-supplier"
+              className={fieldClass}
+              value={supplierId}
+              onChange={(event) => setSupplierId(event.target.value)}
+            >
+              <option value="">{t("inbox.receivedInvoice.supplier.selectPlaceholder")}</option>
+              {partners.map((partner) => (
+                <option key={partner.id} value={partner.id}>
+                  {partner.legal_name}
+                  {partner.ico ? ` · ${partner.ico}` : ""}
+                </option>
+              ))}
+            </select>
 
-              {supplierMatch && (
-                <p
-                  className={`mb-3 rounded-xl px-3 py-2 text-xs ${
-                    supplierMatch.status === "exact"
-                      ? "bg-emerald-50 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300"
-                      : "bg-amber-50 text-amber-800 dark:bg-amber-950 dark:text-amber-300"
-                  }`}
-                >
-                  {t(`inbox.receivedInvoice.supplier.match.${supplierMatch.status}`, {
-                    name: candidate.supplier.legal_name ?? "—",
-                    count: String(supplierMatch.matches.length),
-                  })}
-                </p>
-              )}
+            {candidate.supplier.legal_name && (
+              <p className="mt-2 text-xs text-muted-esblu">
+                {t("inbox.receivedInvoice.supplier.fromDocument", {
+                  name: candidate.supplier.legal_name,
+                  ico: candidate.supplier.ico ?? "—",
+                  vat: candidate.supplier.vat_identifier ?? candidate.supplier.ic_dph ?? "—",
+                })}
+              </p>
+            )}
 
-              <label className={labelClass} htmlFor="received-supplier">
-                {t("inbox.receivedInvoice.supplier.selectLabel")}
-              </label>
-              <select
-                id="received-supplier"
-                className={fieldClass}
-                value={supplierId}
-                onChange={(event) => setSupplierId(event.target.value)}
+            {!showCreateSupplier ? (
+              <button
+                type="button"
+                onClick={() => setShowCreateSupplier(true)}
+                className={`mt-3 ${docButtonSecondary}`}
               >
-                <option value="">{t("inbox.receivedInvoice.supplier.selectPlaceholder")}</option>
-                {partners.map((partner) => (
-                  <option key={partner.id} value={partner.id}>
-                    {partner.legal_name}
-                    {partner.ico ? ` · ${partner.ico}` : ""}
-                  </option>
-                ))}
-              </select>
-
-              {candidate.supplier.legal_name && (
-                <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-                  {t("inbox.receivedInvoice.supplier.fromDocument", {
-                    name: candidate.supplier.legal_name,
-                    ico: candidate.supplier.ico ?? "—",
-                    vat: candidate.supplier.vat_identifier ?? candidate.supplier.ic_dph ?? "—",
-                  })}
+                {t("inbox.receivedInvoice.supplier.createButton")}
+              </button>
+            ) : (
+              <div className="mt-3 space-y-3 rounded-doc-sm border border-doc-border bg-surface-2 p-3">
+                <p className="text-xs text-secondary">
+                  {t("inbox.receivedInvoice.supplier.createHint")}
                 </p>
-              )}
-
-              {!showCreateSupplier ? (
-                <button
-                  type="button"
-                  onClick={() => setShowCreateSupplier(true)}
-                  className="mt-3 rounded-xl border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
-                >
-                  {t("inbox.receivedInvoice.supplier.createButton")}
-                </button>
-              ) : (
-                <div className="mt-3 space-y-3 rounded-2xl bg-slate-50 p-3 dark:bg-slate-800">
-                  <p className="text-xs text-slate-600 dark:text-slate-400">
-                    {t("inbox.receivedInvoice.supplier.createHint")}
-                  </p>
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <div className="sm:col-span-2">
-                      <label className={labelClass} htmlFor="new-supplier-name">
-                        {t("inbox.receivedInvoice.supplier.nameLabel")}
-                      </label>
-                      <input
-                        id="new-supplier-name"
-                        className={fieldClass}
-                        value={newSupplierName}
-                        onChange={(event) => setNewSupplierName(event.target.value)}
-                      />
-                    </div>
-                    <div>
-                      <label className={labelClass} htmlFor="new-supplier-ico">
-                        {t("inbox.receivedInvoice.supplier.icoLabel")}
-                      </label>
-                      <input
-                        id="new-supplier-ico"
-                        className={fieldClass}
-                        value={newSupplierIco}
-                        onChange={(event) => setNewSupplierIco(event.target.value)}
-                      />
-                    </div>
-                    <div>
-                      <label className={labelClass} htmlFor="new-supplier-dic">
-                        {t("inbox.receivedInvoice.supplier.dicLabel")}
-                      </label>
-                      <input
-                        id="new-supplier-dic"
-                        className={fieldClass}
-                        value={newSupplierDic}
-                        onChange={(event) => setNewSupplierDic(event.target.value)}
-                      />
-                    </div>
-                    <div className="sm:col-span-2">
-                      <label className={labelClass} htmlFor="new-supplier-vat">
-                        {t("inbox.receivedInvoice.supplier.vatLabel")}
-                      </label>
-                      <input
-                        id="new-supplier-vat"
-                        className={fieldClass}
-                        value={newSupplierVatId}
-                        onChange={(event) => setNewSupplierVatId(event.target.value)}
-                      />
-                    </div>
-                  </div>
-                  <div className="flex flex-col gap-2 sm:flex-row">
-                    <button
-                      type="button"
-                      disabled={creatingSupplier}
-                      onClick={() => void handleCreateSupplier()}
-                      className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50 dark:bg-slate-100 dark:text-slate-900"
-                    >
-                      {creatingSupplier
-                        ? t("inbox.receivedInvoice.supplier.creating")
-                        : t("inbox.receivedInvoice.supplier.confirmCreate")}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowCreateSupplier(false);
-                        setSupplierError(null);
-                      }}
-                      className="rounded-xl border border-slate-300 px-4 py-2 text-sm text-slate-700 dark:border-slate-600 dark:text-slate-200"
-                    >
-                      {t("common.buttons.cancel")}
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {supplierError && (
-                <p className="mt-2 text-sm text-amber-700 dark:text-amber-400">{supplierError}</p>
-              )}
-            </section>
-
-            {/* ---------------- HLAVIČKA ---------------- */}
-            <section className="rounded-2xl border border-slate-200 p-4 dark:border-slate-700">
-              <h3 className="mb-3 text-sm font-semibold text-slate-900 dark:text-slate-100">
-                {t("inbox.receivedInvoice.header.title")}
-              </h3>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div className="sm:col-span-2">
-                  <label className={labelClass} htmlFor="received-number">
-                    {t("inbox.receivedInvoice.header.numberLabel")}
-                  </label>
-                  <input
-                    id="received-number"
-                    className={fieldClass}
-                    value={invoiceNumber}
-                    onChange={(event) => setInvoiceNumber(event.target.value)}
-                  />
-                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                    {t("inbox.receivedInvoice.header.numberHint")}
-                  </p>
-                </div>
-                <div>
-                  <label className={labelClass} htmlFor="received-issue">
-                    {t("inbox.receivedInvoice.header.issueDateLabel")}
-                  </label>
-                  <input
-                    id="received-issue"
-                    type="date"
-                    className={fieldClass}
-                    value={issueDate}
-                    onChange={(event) => setIssueDate(event.target.value)}
-                  />
-                </div>
-                <div>
-                  <label className={labelClass} htmlFor="received-due">
-                    {t("inbox.receivedInvoice.header.dueDateLabel")}
-                  </label>
-                  <input
-                    id="received-due"
-                    type="date"
-                    className={fieldClass}
-                    value={dueDate}
-                    onChange={(event) => setDueDate(event.target.value)}
-                  />
-                </div>
-                <div>
-                  <label className={labelClass} htmlFor="received-delivery">
-                    {t("inbox.receivedInvoice.header.deliveryDateLabel")}
-                  </label>
-                  <input
-                    id="received-delivery"
-                    type="date"
-                    className={fieldClass}
-                    value={deliveryDate}
-                    onChange={(event) => setDeliveryDate(event.target.value)}
-                  />
-                </div>
-                <div>
-                  <label className={labelClass} htmlFor="received-taxpoint">
-                    {t("inbox.receivedInvoice.header.taxPointDateLabel")}
-                  </label>
-                  <input
-                    id="received-taxpoint"
-                    type="date"
-                    className={fieldClass}
-                    value={taxPointDate}
-                    onChange={(event) => setTaxPointDate(event.target.value)}
-                  />
-                </div>
-                <div>
-                  <label className={labelClass} htmlFor="received-received-at">
-                    {t("inbox.receivedInvoice.header.receivedAtLabel")}
-                  </label>
-                  <input
-                    id="received-received-at"
-                    type="date"
-                    className={fieldClass}
-                    value={receivedAt}
-                    onChange={(event) => setReceivedAt(event.target.value)}
-                  />
-                </div>
-                <div>
-                  <label className={labelClass} htmlFor="received-currency">
-                    {t("inbox.receivedInvoice.header.currencyLabel")}
-                  </label>
-                  <input
-                    id="received-currency"
-                    className={fieldClass}
-                    value={currency}
-                    maxLength={3}
-                    onChange={(event) => setCurrency(event.target.value.toUpperCase())}
-                  />
-                </div>
-                <div>
-                  <label className={labelClass} htmlFor="received-iban">
-                    {t("inbox.receivedInvoice.header.ibanLabel")}
-                  </label>
-                  <input
-                    id="received-iban"
-                    className={fieldClass}
-                    value={iban}
-                    onChange={(event) => setIban(event.target.value)}
-                  />
-                </div>
-                <div>
-                  <label className={labelClass} htmlFor="received-bic">
-                    {t("inbox.receivedInvoice.header.bicLabel")}
-                  </label>
-                  <input
-                    id="received-bic"
-                    className={fieldClass}
-                    value={bic}
-                    onChange={(event) => setBic(event.target.value)}
-                  />
-                </div>
-                <div>
-                  <label className={labelClass} htmlFor="received-vs">
-                    {t("inbox.receivedInvoice.header.variableSymbolLabel")}
-                  </label>
-                  <input
-                    id="received-vs"
-                    className={fieldClass}
-                    value={variableSymbol}
-                    onChange={(event) => setVariableSymbol(event.target.value)}
-                  />
-                </div>
-                <div>
-                  <label className={labelClass} htmlFor="received-payref">
-                    {t("inbox.receivedInvoice.header.paymentReferenceLabel")}
-                  </label>
-                  <input
-                    id="received-payref"
-                    className={fieldClass}
-                    value={paymentReference}
-                    onChange={(event) => setPaymentReference(event.target.value)}
-                  />
-                </div>
-              </div>
-            </section>
-
-            {/* ---------------- POLOŽKY ---------------- */}
-            <section className="rounded-2xl border border-slate-200 p-4 dark:border-slate-700">
-              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                  {t("inbox.receivedInvoice.items.title")}
-                </h3>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setItems((current) => [
-                      ...current,
-                      {
-                        key: nextItemKey(),
-                        description: "",
-                        quantity: "1",
-                        unit: "ks",
-                        unitCode: "",
-                        unitPrice: "",
-                        vatCategory: "",
-                        vatRate: "",
-                      },
-                    ])
-                  }
-                  className="rounded-xl border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 dark:border-slate-600 dark:text-slate-200"
-                >
-                  {t("inbox.receivedInvoice.items.addRow")}
-                </button>
-              </div>
-
-              {unresolvedVatRows.length > 0 && (
-                <p className="mb-3 rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-950 dark:text-amber-300">
-                  {t("inbox.receivedInvoice.items.vatUnresolvedHint")}
-                </p>
-              )}
-
-              <div className="space-y-3">
-                {items.map((item, index) => (
-                  <div
-                    key={item.key}
-                    className="rounded-2xl bg-slate-50 p-3 dark:bg-slate-800"
-                  >
-                    <div className="mb-2 flex items-center justify-between gap-2">
-                      <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
-                        {index + 1}.
-                      </span>
-                      {items.length > 1 && (
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setItems((current) => current.filter((row) => row.key !== item.key))
-                          }
-                          className="text-xs text-red-600 hover:underline dark:text-red-400"
-                        >
-                          {t("inbox.receivedInvoice.items.removeRow")}
-                        </button>
-                      )}
-                    </div>
-
-                    <label className={labelClass} htmlFor={`${item.key}-desc`}>
-                      {t("inbox.receivedInvoice.items.descriptionLabel")}
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="sm:col-span-2">
+                    <label className={labelClass} htmlFor="new-supplier-name">
+                      {t("inbox.receivedInvoice.supplier.nameLabel")}
                     </label>
                     <input
-                      id={`${item.key}-desc`}
+                      id="new-supplier-name"
                       className={fieldClass}
-                      value={item.description}
-                      onChange={(event) =>
-                        updateItem(item.key, { description: event.target.value })
-                      }
+                      value={newSupplierName}
+                      onChange={(event) => setNewSupplierName(event.target.value)}
                     />
-
-                    <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
-                      <div>
-                        <label className={labelClass} htmlFor={`${item.key}-qty`}>
-                          {t("inbox.receivedInvoice.items.quantityLabel")}
-                        </label>
-                        <input
-                          id={`${item.key}-qty`}
-                          inputMode="decimal"
-                          className={fieldClass}
-                          value={item.quantity}
-                          onChange={(event) =>
-                            updateItem(item.key, { quantity: event.target.value })
-                          }
-                        />
-                      </div>
-                      <div>
-                        <label className={labelClass} htmlFor={`${item.key}-unit`}>
-                          {t("inbox.receivedInvoice.items.unitLabel")}
-                        </label>
-                        <input
-                          id={`${item.key}-unit`}
-                          className={fieldClass}
-                          value={item.unit}
-                          onChange={(event) => updateItem(item.key, { unit: event.target.value })}
-                        />
-                      </div>
-                      <div>
-                        <label className={labelClass} htmlFor={`${item.key}-price`}>
-                          {t("inbox.receivedInvoice.items.unitPriceLabel")}
-                        </label>
-                        <input
-                          id={`${item.key}-price`}
-                          inputMode="decimal"
-                          className={fieldClass}
-                          value={item.unitPrice}
-                          onChange={(event) =>
-                            updateItem(item.key, { unitPrice: event.target.value })
-                          }
-                        />
-                      </div>
-                      <div>
-                        <label className={labelClass} htmlFor={`${item.key}-vatcat`}>
-                          {t("inbox.receivedInvoice.items.vatCategoryLabel")}
-                        </label>
-                        <select
-                          id={`${item.key}-vatcat`}
-                          className={fieldClass}
-                          value={item.vatCategory}
-                          onChange={(event) => {
-                            const value = event.target.value as VatCategoryCode | "";
-                            updateItem(item.key, {
-                              vatCategory: value,
-                              // Pre Z/E/AE je sadzba technicky 0 — kategória
-                              // sama určuje, že DPH je nulová.
-                              vatRate: value === "S" ? item.vatRate : "0",
-                            });
-                          }}
-                        >
-                          <option value="">
-                            {t("inbox.receivedInvoice.items.vatCategoryPlaceholder")}
-                          </option>
-                          {VAT_CATEGORY_CODES.map((code) => (
-                            <option key={code} value={code}>
-                              {t(`invoices.newInvoice.vatCategory.${code}`)}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    </div>
-
-                    {item.vatCategory === "S" && (
-                      <div className="mt-2 max-w-[10rem]">
-                        <label className={labelClass} htmlFor={`${item.key}-vatrate`}>
-                          {t("inbox.receivedInvoice.items.vatRateLabel")}
-                        </label>
-                        <input
-                          id={`${item.key}-vatrate`}
-                          inputMode="decimal"
-                          className={fieldClass}
-                          value={item.vatRate}
-                          onChange={(event) =>
-                            updateItem(item.key, { vatRate: event.target.value })
-                          }
-                        />
-                      </div>
-                    )}
-
-                    {item.unitCode === "" &&
-                      candidate.items[index]?.unit_code_suggested && (
-                        <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-                          {t("inbox.receivedInvoice.items.unitCodeSuggestion", {
-                            code: candidate.items[index]?.unit_code_suggested ?? "",
-                          })}{" "}
-                          <button
-                            type="button"
-                            className="underline"
-                            onClick={() =>
-                              updateItem(item.key, {
-                                unitCode: candidate.items[index]?.unit_code_suggested ?? "",
-                              })
-                            }
-                          >
-                            {t("inbox.receivedInvoice.items.unitCodeAccept")}
-                          </button>
-                        </p>
-                      )}
                   </div>
-                ))}
-              </div>
-            </section>
-
-            {/* ---------------- SÚČTY ---------------- */}
-            <section className="rounded-2xl border border-slate-200 p-4 dark:border-slate-700">
-              <h3 className="mb-3 text-sm font-semibold text-slate-900 dark:text-slate-100">
-                {t("inbox.receivedInvoice.totals.title")}
-              </h3>
-              <dl className="space-y-1 text-sm">
-                <div className="flex justify-between">
-                  <dt className="text-slate-600 dark:text-slate-400">
-                    {t("invoices.newInvoice.subtotalLabel")}
-                  </dt>
-                  <dd className="font-medium text-slate-900 dark:text-slate-100">
-                    {money(totals.subtotalAmount)}
-                  </dd>
+                  <div>
+                    <label className={labelClass} htmlFor="new-supplier-ico">
+                      {t("inbox.receivedInvoice.supplier.icoLabel")}
+                    </label>
+                    <input
+                      id="new-supplier-ico"
+                      className={fieldClass}
+                      value={newSupplierIco}
+                      onChange={(event) => setNewSupplierIco(event.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className={labelClass} htmlFor="new-supplier-dic">
+                      {t("inbox.receivedInvoice.supplier.dicLabel")}
+                    </label>
+                    <input
+                      id="new-supplier-dic"
+                      className={fieldClass}
+                      value={newSupplierDic}
+                      onChange={(event) => setNewSupplierDic(event.target.value)}
+                    />
+                  </div>
+                  <div className="sm:col-span-2">
+                    <label className={labelClass} htmlFor="new-supplier-vat">
+                      {t("inbox.receivedInvoice.supplier.vatLabel")}
+                    </label>
+                    <input
+                      id="new-supplier-vat"
+                      className={fieldClass}
+                      value={newSupplierVatId}
+                      onChange={(event) => setNewSupplierVatId(event.target.value)}
+                    />
+                  </div>
                 </div>
-                <div className="flex justify-between">
-                  <dt className="text-slate-600 dark:text-slate-400">
-                    {t("invoices.newInvoice.vatTotalLabel")}
-                  </dt>
-                  <dd className="font-medium text-slate-900 dark:text-slate-100">
-                    {money(totals.vatTotalAmount)}
-                  </dd>
-                </div>
-                <div className="flex justify-between border-t border-slate-200 pt-1 dark:border-slate-700">
-                  <dt className="font-semibold text-slate-900 dark:text-slate-100">
-                    {t("inbox.receivedInvoice.totals.computed")}
-                  </dt>
-                  <dd className="font-semibold text-slate-900 dark:text-slate-100">
-                    {money(totals.totalAmount)}
-                  </dd>
-                </div>
-              </dl>
-
-              {totalsComparison.documentTotal !== null && (
-                <p
-                  className={`mt-3 rounded-xl px-3 py-2 text-xs ${
-                    totalsComparison.mismatch
-                      ? "bg-amber-50 text-amber-800 dark:bg-amber-950 dark:text-amber-300"
-                      : "bg-emerald-50 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300"
-                  }`}
-                >
-                  {t(
-                    totalsComparison.mismatch
-                      ? "inbox.receivedInvoice.totals.mismatch"
-                      : "inbox.receivedInvoice.totals.match",
-                    {
-                      document: money(totalsComparison.documentTotal),
-                      computed: money(totalsComparison.computedTotal),
-                    }
-                  )}
-                </p>
-              )}
-            </section>
-
-            {/* ---------------- CHYBY + AKCIE ---------------- */}
-            {blockingReasons.length > 0 && (
-              <ul className="space-y-1 rounded-2xl bg-slate-100 p-3 text-xs text-slate-700 dark:bg-slate-800 dark:text-slate-300">
-                {blockingReasons.map((reason) => (
-                  <li key={reason}>• {reason}</li>
-                ))}
-              </ul>
-            )}
-
-            {submitError && (
-              <div className="rounded-2xl bg-red-50 p-3 text-sm text-red-700 dark:bg-red-950 dark:text-red-300">
-                <p>{submitError}</p>
-                {duplicateInvoiceId && (
-                  <Link
-                    href={invoiceDetailHref(duplicateInvoiceId)}
-                    className="mt-1 inline-block font-medium underline"
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <button
+                    type="button"
+                    disabled={creatingSupplier}
+                    onClick={() => void handleCreateSupplier()}
+                    className={docButtonPrimary}
                   >
-                    {t("inbox.receivedInvoice.duplicate.openExisting")}
-                  </Link>
-                )}
+                    {creatingSupplier
+                      ? t("inbox.receivedInvoice.supplier.creating")
+                      : t("inbox.receivedInvoice.supplier.confirmCreate")}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowCreateSupplier(false);
+                      setSupplierError(null);
+                    }}
+                    className={docButtonSecondary}
+                  >
+                    {t("common.buttons.cancel")}
+                  </button>
+                </div>
               </div>
             )}
 
-            <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
-              <button
-                type="button"
-                onClick={onCancel}
-                className="rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-medium text-slate-700 dark:border-slate-600 dark:text-slate-200"
-              >
-                {t("common.buttons.cancel")}
-              </button>
-              <button
-                type="button"
-                disabled={!canSubmit}
-                onClick={() => void handleSubmit()}
-                className="rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40 dark:bg-slate-100 dark:text-slate-900"
-              >
-                {submitting
-                  ? t("inbox.receivedInvoice.submitting")
-                  : t("inbox.receivedInvoice.submit")}
-              </button>
-            </div>
-
-            <p className="text-center text-xs text-slate-500 dark:text-slate-400">
-              {t("inbox.receivedInvoice.draftOnlyNote")}
-            </p>
-
-            {selectedPartner && (
-              <p className="sr-only">{selectedPartner.legal_name}</p>
+            {supplierError && (
+              <p className="mt-2 text-sm text-warning">{supplierError}</p>
             )}
-          </div>
-        )}
-      </div>
-    </div>
+          </DocumentSection>
+
+          {/* ---------------- HLAVIČKA ---------------- */}
+          <DocumentSection title={t("inbox.receivedInvoice.header.title")}>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="sm:col-span-2">
+                <label className={labelClass} htmlFor="received-number">
+                  {t("inbox.receivedInvoice.header.numberLabel")}
+                </label>
+                <input
+                  id="received-number"
+                  className={fieldClass}
+                  value={invoiceNumber}
+                  onChange={(event) => setInvoiceNumber(event.target.value)}
+                />
+                <p className="mt-1 text-xs text-muted-esblu">
+                  {t("inbox.receivedInvoice.header.numberHint")}
+                </p>
+              </div>
+              <div>
+                <label className={labelClass} htmlFor="received-issue">
+                  {t("inbox.receivedInvoice.header.issueDateLabel")}
+                </label>
+                <input
+                  id="received-issue"
+                  type="date"
+                  className={fieldClass}
+                  value={issueDate}
+                  onChange={(event) => setIssueDate(event.target.value)}
+                />
+              </div>
+              <div>
+                <label className={labelClass} htmlFor="received-due">
+                  {t("inbox.receivedInvoice.header.dueDateLabel")}
+                </label>
+                <input
+                  id="received-due"
+                  type="date"
+                  className={fieldClass}
+                  value={dueDate}
+                  onChange={(event) => setDueDate(event.target.value)}
+                />
+              </div>
+              <div>
+                <label className={labelClass} htmlFor="received-delivery">
+                  {t("inbox.receivedInvoice.header.deliveryDateLabel")}
+                </label>
+                <input
+                  id="received-delivery"
+                  type="date"
+                  className={fieldClass}
+                  value={deliveryDate}
+                  onChange={(event) => setDeliveryDate(event.target.value)}
+                />
+              </div>
+              <div>
+                <label className={labelClass} htmlFor="received-taxpoint">
+                  {t("inbox.receivedInvoice.header.taxPointDateLabel")}
+                </label>
+                <input
+                  id="received-taxpoint"
+                  type="date"
+                  className={fieldClass}
+                  value={taxPointDate}
+                  onChange={(event) => setTaxPointDate(event.target.value)}
+                />
+              </div>
+              <div>
+                <label className={labelClass} htmlFor="received-received-at">
+                  {t("inbox.receivedInvoice.header.receivedAtLabel")}
+                </label>
+                <input
+                  id="received-received-at"
+                  type="date"
+                  className={fieldClass}
+                  value={receivedAt}
+                  onChange={(event) => setReceivedAt(event.target.value)}
+                />
+              </div>
+              <div>
+                <label className={labelClass} htmlFor="received-currency">
+                  {t("inbox.receivedInvoice.header.currencyLabel")}
+                </label>
+                <input
+                  id="received-currency"
+                  className={fieldClass}
+                  value={currency}
+                  maxLength={3}
+                  onChange={(event) => setCurrency(event.target.value.toUpperCase())}
+                />
+              </div>
+              <div>
+                <label className={labelClass} htmlFor="received-iban">
+                  {t("inbox.receivedInvoice.header.ibanLabel")}
+                </label>
+                <input
+                  id="received-iban"
+                  className={fieldClass}
+                  value={iban}
+                  onChange={(event) => setIban(event.target.value)}
+                />
+              </div>
+              <div>
+                <label className={labelClass} htmlFor="received-bic">
+                  {t("inbox.receivedInvoice.header.bicLabel")}
+                </label>
+                <input
+                  id="received-bic"
+                  className={fieldClass}
+                  value={bic}
+                  onChange={(event) => setBic(event.target.value)}
+                />
+              </div>
+              <div>
+                <label className={labelClass} htmlFor="received-vs">
+                  {t("inbox.receivedInvoice.header.variableSymbolLabel")}
+                </label>
+                <input
+                  id="received-vs"
+                  className={fieldClass}
+                  value={variableSymbol}
+                  onChange={(event) => setVariableSymbol(event.target.value)}
+                />
+              </div>
+              <div>
+                <label className={labelClass} htmlFor="received-payref">
+                  {t("inbox.receivedInvoice.header.paymentReferenceLabel")}
+                </label>
+                <input
+                  id="received-payref"
+                  className={fieldClass}
+                  value={paymentReference}
+                  onChange={(event) => setPaymentReference(event.target.value)}
+                />
+              </div>
+            </div>
+          </DocumentSection>
+
+          {/* ---------------- POLOŽKY ---------------- */}
+          <DocumentSection
+            title={t("inbox.receivedInvoice.items.title")}
+            actions={
+              <button
+                type="button"
+                onClick={() =>
+                  setItems((current) => [
+                    ...current,
+                    {
+                      key: nextItemKey(),
+                      description: "",
+                      quantity: "1",
+                      unit: "ks",
+                      unitCode: "",
+                      unitPrice: "",
+                      vatCategory: "",
+                      vatRate: "",
+                    },
+                  ])
+                }
+                className={docButtonSecondary}
+              >
+                {t("inbox.receivedInvoice.items.addRow")}
+              </button>
+            }
+          >
+
+            {unresolvedVatRows.length > 0 && (
+              <p className="mb-3 rounded-doc-sm bg-warning-soft px-3 py-2 text-xs text-warning">
+                {t("inbox.receivedInvoice.items.vatUnresolvedHint")}
+              </p>
+            )}
+
+            <div className="space-y-3">
+              {items.map((item, index) => (
+                <div
+                  key={item.key}
+                  className="rounded-doc-sm border border-doc-border bg-surface-2 p-3"
+                >
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <span className="text-xs font-medium text-muted-esblu">
+                      {index + 1}.
+                    </span>
+                    {items.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setItems((current) => current.filter((row) => row.key !== item.key))
+                        }
+                        className="text-xs text-danger hover:underline"
+                      >
+                        {t("inbox.receivedInvoice.items.removeRow")}
+                      </button>
+                    )}
+                  </div>
+
+                  <label className={labelClass} htmlFor={`${item.key}-desc`}>
+                    {t("inbox.receivedInvoice.items.descriptionLabel")}
+                  </label>
+                  <input
+                    id={`${item.key}-desc`}
+                    className={fieldClass}
+                    value={item.description}
+                    onChange={(event) =>
+                      updateItem(item.key, { description: event.target.value })
+                    }
+                  />
+
+                  <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    <div>
+                      <label className={labelClass} htmlFor={`${item.key}-qty`}>
+                        {t("inbox.receivedInvoice.items.quantityLabel")}
+                      </label>
+                      <input
+                        id={`${item.key}-qty`}
+                        inputMode="decimal"
+                        className={fieldClass}
+                        value={item.quantity}
+                        onChange={(event) =>
+                          updateItem(item.key, { quantity: event.target.value })
+                        }
+                      />
+                    </div>
+                    <div>
+                      <label className={labelClass} htmlFor={`${item.key}-unit`}>
+                        {t("inbox.receivedInvoice.items.unitLabel")}
+                      </label>
+                      <input
+                        id={`${item.key}-unit`}
+                        className={fieldClass}
+                        value={item.unit}
+                        onChange={(event) => updateItem(item.key, { unit: event.target.value })}
+                      />
+                    </div>
+                    <div>
+                      <label className={labelClass} htmlFor={`${item.key}-price`}>
+                        {t("inbox.receivedInvoice.items.unitPriceLabel")}
+                      </label>
+                      <input
+                        id={`${item.key}-price`}
+                        inputMode="decimal"
+                        className={fieldClass}
+                        value={item.unitPrice}
+                        onChange={(event) =>
+                          updateItem(item.key, { unitPrice: event.target.value })
+                        }
+                      />
+                    </div>
+                    <div>
+                      <label className={labelClass} htmlFor={`${item.key}-vatcat`}>
+                        {t("inbox.receivedInvoice.items.vatCategoryLabel")}
+                      </label>
+                      <select
+                        id={`${item.key}-vatcat`}
+                        className={fieldClass}
+                        value={item.vatCategory}
+                        onChange={(event) => {
+                          const value = event.target.value as VatCategoryCode | "";
+                          updateItem(item.key, {
+                            vatCategory: value,
+                            // Pre Z/E/AE je sadzba technicky 0 — kategória
+                            // sama určuje, že DPH je nulová.
+                            vatRate: value === "S" ? item.vatRate : "0",
+                          });
+                        }}
+                      >
+                        <option value="">
+                          {t("inbox.receivedInvoice.items.vatCategoryPlaceholder")}
+                        </option>
+                        {VAT_CATEGORY_CODES.map((code) => (
+                          <option key={code} value={code}>
+                            {t(`invoices.newInvoice.vatCategory.${code}`)}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  {item.vatCategory === "S" && (
+                    <div className="mt-2 max-w-[10rem]">
+                      <label className={labelClass} htmlFor={`${item.key}-vatrate`}>
+                        {t("inbox.receivedInvoice.items.vatRateLabel")}
+                      </label>
+                      <input
+                        id={`${item.key}-vatrate`}
+                        inputMode="decimal"
+                        className={fieldClass}
+                        value={item.vatRate}
+                        onChange={(event) =>
+                          updateItem(item.key, { vatRate: event.target.value })
+                        }
+                      />
+                    </div>
+                  )}
+
+                  {item.unitCode === "" &&
+                    candidate.items[index]?.unit_code_suggested && (
+                      <p className="mt-2 text-xs text-muted-esblu">
+                        {t("inbox.receivedInvoice.items.unitCodeSuggestion", {
+                          code: candidate.items[index]?.unit_code_suggested ?? "",
+                        })}{" "}
+                        <button
+                          type="button"
+                          className="underline"
+                          onClick={() =>
+                            updateItem(item.key, {
+                              unitCode: candidate.items[index]?.unit_code_suggested ?? "",
+                            })
+                          }
+                        >
+                          {t("inbox.receivedInvoice.items.unitCodeAccept")}
+                        </button>
+                      </p>
+                    )}
+                </div>
+              ))}
+            </div>
+          </DocumentSection>
+
+          {/* ---------------- SÚČTY ---------------- */}
+          <DocumentSection title={t("inbox.receivedInvoice.totals.title")}>
+            {/* Canonical prepočet z riadkov. Suma z dokumentu sa NIKDY
+                nezapisuje — nižšie sa len porovnáva. */}
+            <DocumentTotalsBlock
+              rows={[
+                {
+                  label: t("invoices.newInvoice.subtotalLabel"),
+                  value: money(totals.subtotalAmount),
+                },
+                {
+                  label: t("invoices.newInvoice.vatTotalLabel"),
+                  value: money(totals.vatTotalAmount),
+                },
+              ]}
+              total={{
+                label: t("inbox.receivedInvoice.totals.computed"),
+                value: money(totals.totalAmount),
+              }}
+            />
+
+            {totalsComparison.documentTotal !== null && (
+              <p
+                className={`mt-3 rounded-doc-sm px-3 py-2 text-xs ${
+                  totalsComparison.mismatch
+                    ? "bg-warning-soft text-warning"
+                    : "bg-success-soft text-success"
+                }`}
+              >
+                {t(
+                  totalsComparison.mismatch
+                    ? "inbox.receivedInvoice.totals.mismatch"
+                    : "inbox.receivedInvoice.totals.match",
+                  {
+                    document: money(totalsComparison.documentTotal),
+                    computed: money(totalsComparison.computedTotal),
+                  }
+                )}
+              </p>
+            )}
+          </DocumentSection>
+
+          {/* ---------------- CHYBY + AKCIE ---------------- */}
+          {blockingReasons.length > 0 && (
+            <ul className="space-y-1 rounded-doc border border-doc-border bg-surface-2 p-3 text-xs text-secondary">
+              {blockingReasons.map((reason) => (
+                <li key={reason}>• {reason}</li>
+              ))}
+            </ul>
+          )}
+
+          {submitError && (
+            <DocumentNotice tone="critical">
+              <p>{submitError}</p>
+              {duplicateInvoiceId && (
+                <Link
+                  href={invoiceDetailHref(duplicateInvoiceId)}
+                  className="mt-1 inline-block font-medium underline"
+                >
+                  {t("inbox.receivedInvoice.duplicate.openExisting")}
+                </Link>
+              )}
+            </DocumentNotice>
+          )}
+
+          {selectedPartner && <p className="sr-only">{selectedPartner.legal_name}</p>}
+        </div>
+      )}
+    </DocumentModal>
   );
 }

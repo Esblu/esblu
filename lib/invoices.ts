@@ -153,6 +153,16 @@ export type InvoiceParty = {
   bic: string | null;
   email: string | null;
   peppol_identifier: string | null;
+  // EN16931 P1 identifikátory zo snapshotu (migrácia 20260920122000).
+  // Sú súčasťou IMMUTABLE snapshotu — nikdy sa nečítajú z live
+  // business_partners, aj keby sa medzitým zmenili.
+  electronic_address: string | null;
+  electronic_address_scheme_id: string | null;
+  legal_registration_id: string | null;
+  legal_registration_scheme_id: string | null;
+  vat_identifier: string | null;
+  generic_identifier: string | null;
+  generic_identifier_scheme_id: string | null;
   source_business_partner_id: string | null;
   snapshotted_at: string;
 };

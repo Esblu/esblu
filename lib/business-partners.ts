@@ -40,13 +40,16 @@ export type BusinessPartner = {
   created_at: string;
   updated_at: string | null;
 
-  // EN16931 P1 identifikátory (migrácia 20260920122000). Zámerne NIE SÚ
-  // súčasťou BusinessPartnerForm — partner UI ich zatiaľ needituje. Čítajú
-  // sa ale pri deterministickom supplier matchingu (lib/invoicing/
-  // supplier-matching.ts) a snapshotuje ich esblu_finalize_invoice().
-  // Voliteľné v TS zámerne: partner form ich nepozná, takže existujúce
-  // create/update cesty (ktoré payload odvodzujú cez Omit<BusinessPartner,…>)
-  // zostávajú nezmenené a nemusia ich vypĺňať.
+  // Platobné identifikátory (migrácia 20260921160000). EN16931 BT-84 / BT-86.
+  // Kmeňové dáta — finalizovaná faktúra si nesie vlastný snapshot a zmena
+  // tu ju nikdy spätne neovplyvní.
+  iban?: string | null;
+  bic?: string | null;
+
+  // EN16931 P1 identifikátory (migrácia 20260920122000). Používajú sa pri
+  // deterministickom supplier matchingu (lib/invoicing/supplier-matching.ts)
+  // a snapshotuje ich esblu_finalize_invoice().
+  // Voliteľné v TS zámerne: staršie volajúce cesty ich nemusia vypĺňať.
   /** EN16931 BT-31/BT-48. */
   vat_identifier?: string | null;
   /** EN16931 BT-30/BT-47 + ICD scheme. */
@@ -75,6 +78,20 @@ export const EMPTY_BUSINESS_PARTNER_FORM = {
   peppol_identifier: "",
   default_payment_terms_days: "",
   default_currency: "",
+
+  // Platobné údaje (EN16931 BT-84 / BT-86).
+  iban: "",
+  bic: "",
+
+  // eFaktúra — adresácia a registračné identifikátory.
+  // Schémy sú VOĽNÉ TEXTOVÉ POLIA, nie výber z jednej krajiny: EAS (BT-49)
+  // aj ICD (BT-47) sú medzinárodné číselníky a Esblu nesmie predpokladať
+  // jednu schému ani jeden štát (§14 zadania).
+  vat_identifier: "",
+  legal_registration_id: "",
+  legal_registration_scheme_id: "",
+  electronic_address: "",
+  electronic_address_scheme_id: "",
 };
 
 export type BusinessPartnerForm = typeof EMPTY_BUSINESS_PARTNER_FORM;
@@ -99,7 +116,25 @@ export function businessPartnerToForm(partner: BusinessPartner): BusinessPartner
         ? ""
         : String(partner.default_payment_terms_days),
     default_currency: partner.default_currency ?? "",
+    iban: partner.iban ?? "",
+    bic: partner.bic ?? "",
+    vat_identifier: partner.vat_identifier ?? "",
+    legal_registration_id: partner.legal_registration_id ?? "",
+    legal_registration_scheme_id: partner.legal_registration_scheme_id ?? "",
+    electronic_address: partner.electronic_address ?? "",
+    electronic_address_scheme_id: partner.electronic_address_scheme_id ?? "",
   };
+}
+
+/**
+ * Kanonický tvar IBAN/BIC podľa ISO 13616 / ISO 9362: bez medzier a
+ * oddeľovačov, veľkými písmenami. Kontrolné číslice sa ZÁMERNE neoverujú a
+ * existencia účtu sa neoveruje — to je vec platobnej vrstvy, nie evidencie.
+ * Rovnaká normalizácia ako CHECK v migrácii 20260921160000.
+ */
+function normalizePaymentIdentifier(value: string): string | null {
+  const normalized = value.replace(/[\s\-]/g, "").toUpperCase();
+  return normalized.length > 0 ? normalized : null;
 }
 
 function emptyToNull(value: string): string | null {
@@ -159,6 +194,46 @@ export function validateBusinessPartnerForm(
     errors.push({ field: "email", messageKey: "invalidEmail" });
   }
 
+  // Formát presne ako DB CHECK — klient chybu iba vysvetlí skôr. Autoritou
+  // ostáva databáza (§15 zadania: redesign nemení security/validation
+  // authority).
+  const iban = normalizePaymentIdentifier(form.iban);
+  if (iban !== null && !/^[A-Z0-9]{5,34}$/.test(iban)) {
+    errors.push({ field: "iban", messageKey: "invalidIban" });
+  }
+
+  const bic = normalizePaymentIdentifier(form.bic);
+  if (bic !== null && !/^[A-Z0-9]{8}([A-Z0-9]{3})?$/.test(bic)) {
+    errors.push({ field: "bic", messageKey: "invalidBic" });
+  }
+
+  // Elektronická adresa a jej schéma majú zmysel iba spolu: samotné "SK12345"
+  // bez EAS kódu nie je adresovateľné a samotná schéma bez hodnoty neznamená
+  // nič. Preto sa vyžadujú obe, alebo žiadna.
+  const electronicAddress = emptyToNull(form.electronic_address);
+  const electronicAddressScheme = emptyToNull(form.electronic_address_scheme_id);
+  if (electronicAddress !== null && electronicAddressScheme === null) {
+    errors.push({
+      field: "electronic_address_scheme_id",
+      messageKey: "schemeRequiredWithValue",
+    });
+  }
+  if (electronicAddressScheme !== null && electronicAddress === null) {
+    errors.push({ field: "electronic_address", messageKey: "valueRequiredWithScheme" });
+  }
+
+  const legalRegistrationId = emptyToNull(form.legal_registration_id);
+  const legalRegistrationScheme = emptyToNull(form.legal_registration_scheme_id);
+  if (legalRegistrationId !== null && legalRegistrationScheme === null) {
+    errors.push({
+      field: "legal_registration_scheme_id",
+      messageKey: "schemeRequiredWithValue",
+    });
+  }
+  if (legalRegistrationScheme !== null && legalRegistrationId === null) {
+    errors.push({ field: "legal_registration_id", messageKey: "valueRequiredWithScheme" });
+  }
+
   if (errors.length > 0) {
     return { errors, payload: null };
   }
@@ -181,6 +256,13 @@ export function validateBusinessPartnerForm(
       peppol_identifier: emptyToNull(form.peppol_identifier),
       default_payment_terms_days: paymentTermsDays === "invalid" ? null : paymentTermsDays,
       default_currency: currency,
+      iban,
+      bic,
+      vat_identifier: emptyToNull(form.vat_identifier),
+      legal_registration_id: legalRegistrationId,
+      legal_registration_scheme_id: legalRegistrationScheme,
+      electronic_address: electronicAddress,
+      electronic_address_scheme_id: electronicAddressScheme,
     },
   };
 }

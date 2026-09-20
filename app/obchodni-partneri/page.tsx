@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useMemo, useState } from "react";
+import { Suspense, cloneElement, isValidElement, useEffect, useId, useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
@@ -28,8 +28,68 @@ import {
   type BusinessPartnerKind,
   type BusinessPartnerValidationError,
 } from "@/lib/business-partners";
+import {
+  DocumentSection,
+  DocumentNotice,
+  docButtonPrimary,
+  docButtonSecondary,
+  docButtonDanger,
+  docField,
+  docLabel,
+} from "@/app/components/document/DocumentLayout";
 
 type KindFilter = "all" | BusinessPartnerKind;
+
+/**
+ * Jedno pole partnera: label + pole + voliteľná pomôcka a chyba.
+ * Nahrádza 14× opakovaný `<div><label…><input…>{fieldError && <p…>}</div>`.
+ */
+function PartnerField({
+  label,
+  hint,
+  error,
+  full,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  error?: string;
+  full?: boolean;
+  children: React.ReactElement<{ id?: string; "aria-describedby"?: string }>;
+}) {
+  // Label musí byť previazaný s poľom, inak ho čítačka obrazovky neprečíta a
+  // klik naň nezaostrí pole (§25). Id sa generuje, aby volajúci nemusel
+  // vymýšľať unikátne reťazce pre 20 polí.
+  const id = useId();
+  const hintId = `${id}-hint`;
+  const showHint = Boolean(hint) && !error;
+
+  const control = isValidElement(children)
+    ? cloneElement(children, {
+        id,
+        "aria-describedby": showHint || error ? hintId : undefined,
+      })
+    : children;
+
+  return (
+    <div className={full ? "sm:col-span-2" : undefined}>
+      <label className={docLabel} htmlFor={id}>
+        {label}
+      </label>
+      {control}
+      {showHint && (
+        <p id={hintId} className="mt-1 text-xs text-muted-esblu">
+          {hint}
+        </p>
+      )}
+      {error && (
+        <p id={hintId} className="mt-1 text-xs font-medium text-danger">
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
 
 // useSearchParams() vyžaduje Suspense boundary (Next.js App Router) — pozri
 // rovnaký vzor v app/ai-evidencia/page.tsx (OpenFromQueryParam). Izolované
@@ -203,6 +263,11 @@ export default function ObchodniPartneriPage() {
     return found ? t(`businessPartners.errors.${found.messageKey}`) : "";
   }
 
+  /** Chybný stav je okrem rámu vždy aj text pod poľom (§25 — nikdy len farba). */
+  function fieldClass(field: keyof BusinessPartnerForm): string {
+    return fieldError(field) ? `${docField} border-danger` : docField;
+  }
+
   async function handleSubmit() {
     const { errors, payload } = validateBusinessPartnerForm(form);
     setFormErrors(errors);
@@ -293,7 +358,7 @@ export default function ObchodniPartneriPage() {
       </div>
 
       {!canView && membershipLoaded && (
-        <p className="mt-3 rounded-2xl border border-subtle bg-surface-1 p-6 text-center text-secondary">
+        <p className="mt-3 rounded-doc border border-doc-border bg-surface-2 p-6 text-center text-sm text-secondary">
           {t("businessPartners.noFinanceAccess")}
         </p>
       )}
@@ -303,7 +368,7 @@ export default function ObchodniPartneriPage() {
       )}
 
       {canView && legalHold && canEdit && (
-        <p className="mt-3 text-sm font-semibold text-amber-600">
+        <p className="mt-3 text-sm font-medium text-warning">
           {t("businessPartners.legalHoldNotice")}
         </p>
       )}
@@ -311,14 +376,14 @@ export default function ObchodniPartneriPage() {
       {canView && (
       <div className="mt-6 flex flex-wrap gap-3">
         <input
-          className="min-w-[240px] flex-1 rounded-xl border p-3"
+          className={`min-w-[240px] flex-1 ${docField}`}
           placeholder={t("businessPartners.searchPlaceholder")}
           value={search}
           onChange={(event) => setSearch(event.target.value)}
         />
 
         <select
-          className="rounded-xl border p-3"
+          className={`w-auto ${docField}`}
           value={kindFilter}
           onChange={(event) => setKindFilter(event.target.value as KindFilter)}
         >
@@ -331,238 +396,324 @@ export default function ObchodniPartneriPage() {
       )}
 
       {canView && showForm && canEdit && (
-        <div className="mt-6 rounded-3xl border border-subtle bg-surface-1 p-6 shadow-lg">
-          <h2 className="text-lg font-bold text-primary">
+        <div className="mt-6">
+          <h2 className="text-lg font-semibold text-primary">
             {editingId
               ? t("businessPartners.editFormTitle")
               : t("businessPartners.createFormTitle")}
           </h2>
 
           {formSubmitError && (
-            <p className="mt-3 rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
-              {formSubmitError}
-            </p>
+            <div className="mt-3">
+              <DocumentNotice tone="critical">{formSubmitError}</DocumentNotice>
+            </div>
           )}
 
-          <div className="mt-4 grid gap-4 sm:grid-cols-2">
-            <div>
-              <label className="mb-2 block text-sm font-semibold">
-                {t("businessPartners.form.kindLabel")}
-              </label>
-              <select
-                className="w-full rounded-xl border p-3"
-                value={form.kind}
-                onChange={(event) => updateField("kind", event.target.value)}
-              >
-                <option value="customer">{t("businessPartners.kind.customer")}</option>
-                <option value="supplier">{t("businessPartners.kind.supplier")}</option>
-                <option value="both">{t("businessPartners.kind.both")}</option>
-              </select>
-            </div>
+          {/* Zoskupené sekcie namiesto jednej plochej mriežky 14 polí.
+              Používateľ hľadá „kde sa zadáva IBAN“, nie „ktoré je siedme
+              pole“. Poradie sleduje, ako doklad vzniká: kto to je →
+              kde sídli → daňové údaje → ako sa platí → ako sa doručuje
+              elektronicky. */}
+          <div className="mt-5 space-y-4">
+            <DocumentSection title={t("businessPartners.section.identity")}>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <PartnerField label={t("businessPartners.form.kindLabel")}>
+                  <select
+                    className={docField}
+                    value={form.kind}
+                    onChange={(event) => updateField("kind", event.target.value)}
+                  >
+                    <option value="customer">{t("businessPartners.kind.customer")}</option>
+                    <option value="supplier">{t("businessPartners.kind.supplier")}</option>
+                    <option value="both">{t("businessPartners.kind.both")}</option>
+                  </select>
+                </PartnerField>
 
-            <div>
-              <label className="mb-2 block text-sm font-semibold">
-                {t("businessPartners.form.legalNameLabel")}
-              </label>
-              <input
-                className={`w-full rounded-xl border p-3 ${fieldError("legal_name") ? "border-red-500" : ""}`}
-                value={form.legal_name}
-                onChange={(event) => updateField("legal_name", event.target.value)}
-              />
-              {fieldError("legal_name") && (
-                <p className="mt-1 text-xs font-semibold text-red-600">
-                  {fieldError("legal_name")}
-                </p>
-              )}
-            </div>
+                <PartnerField
+                  label={t("businessPartners.form.legalNameLabel")}
+                  error={fieldError("legal_name")}
+                >
+                  <input
+                    className={fieldClass("legal_name")}
+                    value={form.legal_name}
+                    onChange={(event) => updateField("legal_name", event.target.value)}
+                  />
+                </PartnerField>
 
-            <div>
-              <label className="mb-2 block text-sm font-semibold">
-                {t("businessPartners.form.icoLabel")}
-              </label>
-              <input
-                className="w-full rounded-xl border p-3"
-                value={form.ico}
-                onChange={(event) => updateField("ico", event.target.value)}
-              />
-            </div>
+                <PartnerField label={t("businessPartners.form.emailLabel")} error={fieldError("email")}>
+                  <input
+                    type="email"
+                    className={fieldClass("email")}
+                    value={form.email}
+                    onChange={(event) => updateField("email", event.target.value)}
+                  />
+                </PartnerField>
 
-            <div>
-              <label className="mb-2 block text-sm font-semibold">
-                {t("businessPartners.form.dicLabel")}
-              </label>
-              <input
-                className="w-full rounded-xl border p-3"
-                value={form.dic}
-                onChange={(event) => updateField("dic", event.target.value)}
-              />
-            </div>
+                <PartnerField label={t("businessPartners.form.phoneLabel")}>
+                  <input
+                    className={docField}
+                    value={form.phone}
+                    onChange={(event) => updateField("phone", event.target.value)}
+                  />
+                </PartnerField>
+              </div>
+            </DocumentSection>
 
-            <div>
-              <label className="mb-2 block text-sm font-semibold">
-                {t("businessPartners.form.icDphLabel")}
-              </label>
-              <input
-                className="w-full rounded-xl border p-3"
-                value={form.ic_dph}
-                onChange={(event) => updateField("ic_dph", event.target.value)}
-              />
-            </div>
+            <DocumentSection title={t("businessPartners.section.address")}>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <PartnerField label={t("businessPartners.form.addressLine1Label")} full>
+                  <input
+                    className={docField}
+                    value={form.address_line1}
+                    onChange={(event) => updateField("address_line1", event.target.value)}
+                  />
+                </PartnerField>
 
-            <div>
-              <label className="mb-2 block text-sm font-semibold">
-                {t("businessPartners.form.emailLabel")}
-              </label>
-              <input
-                type="email"
-                className={`w-full rounded-xl border p-3 ${fieldError("email") ? "border-red-500" : ""}`}
-                value={form.email}
-                onChange={(event) => updateField("email", event.target.value)}
-              />
-              {fieldError("email") && (
-                <p className="mt-1 text-xs font-semibold text-red-600">{fieldError("email")}</p>
-              )}
-            </div>
+                <PartnerField label={t("businessPartners.form.addressLine2Label")} full>
+                  <input
+                    className={docField}
+                    value={form.address_line2}
+                    onChange={(event) => updateField("address_line2", event.target.value)}
+                  />
+                </PartnerField>
 
-            <div>
-              <label className="mb-2 block text-sm font-semibold">
-                {t("businessPartners.form.phoneLabel")}
-              </label>
-              <input
-                className="w-full rounded-xl border p-3"
-                value={form.phone}
-                onChange={(event) => updateField("phone", event.target.value)}
-              />
-            </div>
+                <PartnerField label={t("businessPartners.form.cityLabel")}>
+                  <input
+                    className={docField}
+                    value={form.city}
+                    onChange={(event) => updateField("city", event.target.value)}
+                  />
+                </PartnerField>
 
-            <div>
-              <label className="mb-2 block text-sm font-semibold">
-                {t("businessPartners.form.addressLine1Label")}
-              </label>
-              <input
-                className="w-full rounded-xl border p-3"
-                value={form.address_line1}
-                onChange={(event) => updateField("address_line1", event.target.value)}
-              />
-            </div>
+                <PartnerField label={t("businessPartners.form.postalCodeLabel")}>
+                  <input
+                    className={docField}
+                    value={form.postal_code}
+                    onChange={(event) => updateField("postal_code", event.target.value)}
+                  />
+                </PartnerField>
 
-            <div>
-              <label className="mb-2 block text-sm font-semibold">
-                {t("businessPartners.form.addressLine2Label")}
-              </label>
-              <input
-                className="w-full rounded-xl border p-3"
-                value={form.address_line2}
-                onChange={(event) => updateField("address_line2", event.target.value)}
-              />
-            </div>
+                <PartnerField
+                  label={t("businessPartners.form.countryCodeLabel")}
+                  error={fieldError("country_code")}
+                >
+                  <input
+                    className={fieldClass("country_code")}
+                    placeholder="SK"
+                    maxLength={2}
+                    value={form.country_code}
+                    onChange={(event) => updateField("country_code", event.target.value)}
+                  />
+                </PartnerField>
+              </div>
+            </DocumentSection>
 
-            <div>
-              <label className="mb-2 block text-sm font-semibold">
-                {t("businessPartners.form.cityLabel")}
-              </label>
-              <input
-                className="w-full rounded-xl border p-3"
-                value={form.city}
-                onChange={(event) => updateField("city", event.target.value)}
-              />
-            </div>
+            {/* Daňové identifikátory. IČO/DIČ/IČ DPH sú lokálne polia, ktoré
+                appka nesie historicky; vat_identifier (BT-31/BT-48) a
+                legal_registration (BT-30/BT-47) sú ich medzinárodné EN16931
+                ekvivalenty. Esblu ich zámerne NESTOTOŽŇUJE automaticky —
+                „IČO = legal registration id“ platí na Slovensku, nie
+                univerzálne (§14 zadania). */}
+            <DocumentSection
+              title={t("businessPartners.section.tax")}
+              description={t("businessPartners.section.taxHint")}
+            >
+              <div className="grid gap-4 sm:grid-cols-2">
+                <PartnerField label={t("businessPartners.form.icoLabel")}>
+                  <input
+                    className={docField}
+                    value={form.ico}
+                    onChange={(event) => updateField("ico", event.target.value)}
+                  />
+                </PartnerField>
 
-            <div>
-              <label className="mb-2 block text-sm font-semibold">
-                {t("businessPartners.form.postalCodeLabel")}
-              </label>
-              <input
-                className="w-full rounded-xl border p-3"
-                value={form.postal_code}
-                onChange={(event) => updateField("postal_code", event.target.value)}
-              />
-            </div>
+                <PartnerField label={t("businessPartners.form.dicLabel")}>
+                  <input
+                    className={docField}
+                    value={form.dic}
+                    onChange={(event) => updateField("dic", event.target.value)}
+                  />
+                </PartnerField>
 
-            <div>
-              <label className="mb-2 block text-sm font-semibold">
-                {t("businessPartners.form.countryCodeLabel")}
-              </label>
-              <input
-                className={`w-full rounded-xl border p-3 ${fieldError("country_code") ? "border-red-500" : ""}`}
-                placeholder="SK"
-                value={form.country_code}
-                onChange={(event) => updateField("country_code", event.target.value)}
-              />
-              {fieldError("country_code") && (
-                <p className="mt-1 text-xs font-semibold text-red-600">
-                  {fieldError("country_code")}
-                </p>
-              )}
-            </div>
+                <PartnerField label={t("businessPartners.form.icDphLabel")}>
+                  <input
+                    className={docField}
+                    value={form.ic_dph}
+                    onChange={(event) => updateField("ic_dph", event.target.value)}
+                  />
+                </PartnerField>
 
-            <div>
-              <label className="mb-2 block text-sm font-semibold">
-                {t("businessPartners.form.peppolLabel")}
-              </label>
-              <input
-                className="w-full rounded-xl border p-3"
-                value={form.peppol_identifier}
-                onChange={(event) => updateField("peppol_identifier", event.target.value)}
-              />
-            </div>
+                <PartnerField
+                  label={t("businessPartners.form.vatIdentifierLabel")}
+                  hint={t("businessPartners.form.vatIdentifierHint")}
+                >
+                  <input
+                    className={docField}
+                    value={form.vat_identifier}
+                    onChange={(event) => updateField("vat_identifier", event.target.value)}
+                  />
+                </PartnerField>
 
-            <div>
-              <label className="mb-2 block text-sm font-semibold">
-                {t("businessPartners.form.paymentTermsLabel")}
-              </label>
-              <input
-                className={`w-full rounded-xl border p-3 ${fieldError("default_payment_terms_days") ? "border-red-500" : ""}`}
-                placeholder="14"
-                value={form.default_payment_terms_days}
-                onChange={(event) =>
-                  updateField("default_payment_terms_days", event.target.value)
-                }
-              />
-              {fieldError("default_payment_terms_days") && (
-                <p className="mt-1 text-xs font-semibold text-red-600">
-                  {fieldError("default_payment_terms_days")}
-                </p>
-              )}
-            </div>
+                <PartnerField
+                  label={t("businessPartners.form.legalRegistrationIdLabel")}
+                  error={fieldError("legal_registration_id")}
+                >
+                  <input
+                    className={fieldClass("legal_registration_id")}
+                    value={form.legal_registration_id}
+                    onChange={(event) =>
+                      updateField("legal_registration_id", event.target.value)
+                    }
+                  />
+                </PartnerField>
 
-            <div>
-              <label className="mb-2 block text-sm font-semibold">
-                {t("businessPartners.form.currencyLabel")}
-              </label>
-              <input
-                className={`w-full rounded-xl border p-3 ${fieldError("default_currency") ? "border-red-500" : ""}`}
-                placeholder="EUR"
-                value={form.default_currency}
-                onChange={(event) => updateField("default_currency", event.target.value)}
-              />
-              {fieldError("default_currency") && (
-                <p className="mt-1 text-xs font-semibold text-red-600">
-                  {fieldError("default_currency")}
-                </p>
-              )}
-            </div>
+                <PartnerField
+                  label={t("businessPartners.form.legalRegistrationSchemeLabel")}
+                  hint={t("businessPartners.form.schemeHint")}
+                  error={fieldError("legal_registration_scheme_id")}
+                >
+                  <input
+                    className={fieldClass("legal_registration_scheme_id")}
+                    placeholder="0158"
+                    value={form.legal_registration_scheme_id}
+                    onChange={(event) =>
+                      updateField("legal_registration_scheme_id", event.target.value)
+                    }
+                  />
+                </PartnerField>
+              </div>
+            </DocumentSection>
+
+            <DocumentSection
+              title={t("businessPartners.section.payment")}
+              description={t("businessPartners.section.paymentHint")}
+            >
+              <div className="grid gap-4 sm:grid-cols-2">
+                <PartnerField
+                  label={t("businessPartners.form.ibanLabel")}
+                  error={fieldError("iban")}
+                >
+                  <input
+                    className={fieldClass("iban")}
+                    autoComplete="off"
+                    spellCheck={false}
+                    value={form.iban}
+                    onChange={(event) => updateField("iban", event.target.value)}
+                  />
+                </PartnerField>
+
+                <PartnerField label={t("businessPartners.form.bicLabel")} error={fieldError("bic")}>
+                  <input
+                    className={fieldClass("bic")}
+                    autoComplete="off"
+                    spellCheck={false}
+                    value={form.bic}
+                    onChange={(event) => updateField("bic", event.target.value)}
+                  />
+                </PartnerField>
+
+                <PartnerField
+                  label={t("businessPartners.form.paymentTermsLabel")}
+                  error={fieldError("default_payment_terms_days")}
+                >
+                  <input
+                    className={fieldClass("default_payment_terms_days")}
+                    inputMode="numeric"
+                    placeholder="14"
+                    value={form.default_payment_terms_days}
+                    onChange={(event) =>
+                      updateField("default_payment_terms_days", event.target.value)
+                    }
+                  />
+                </PartnerField>
+
+                <PartnerField
+                  label={t("businessPartners.form.currencyLabel")}
+                  error={fieldError("default_currency")}
+                >
+                  <input
+                    className={fieldClass("default_currency")}
+                    placeholder="EUR"
+                    maxLength={3}
+                    value={form.default_currency}
+                    onChange={(event) => updateField("default_currency", event.target.value)}
+                  />
+                </PartnerField>
+              </div>
+            </DocumentSection>
+
+            {/* eFaktúra — IBA adresácia. Táto úloha zámerne NEIMPLEMENTUJE
+                Peppol provider ani XML transport (§ zadania): ukladá sa, kam
+                by sa doklad raz doručil, nič sa neodosiela. */}
+            <DocumentSection
+              title={t("businessPartners.section.einvoice")}
+              description={t("businessPartners.section.einvoiceHint")}
+            >
+              <div className="grid gap-4 sm:grid-cols-2">
+                <PartnerField
+                  label={t("businessPartners.form.electronicAddressLabel")}
+                  error={fieldError("electronic_address")}
+                >
+                  <input
+                    className={fieldClass("electronic_address")}
+                    autoComplete="off"
+                    spellCheck={false}
+                    value={form.electronic_address}
+                    onChange={(event) => updateField("electronic_address", event.target.value)}
+                  />
+                </PartnerField>
+
+                <PartnerField
+                  label={t("businessPartners.form.electronicAddressSchemeLabel")}
+                  hint={t("businessPartners.form.schemeHint")}
+                  error={fieldError("electronic_address_scheme_id")}
+                >
+                  <input
+                    className={fieldClass("electronic_address_scheme_id")}
+                    placeholder="0088"
+                    value={form.electronic_address_scheme_id}
+                    onChange={(event) =>
+                      updateField("electronic_address_scheme_id", event.target.value)
+                    }
+                  />
+                </PartnerField>
+
+                <PartnerField
+                  label={t("businessPartners.form.peppolLabel")}
+                  hint={t("businessPartners.form.peppolHint")}
+                  full
+                >
+                  <input
+                    className={docField}
+                    autoComplete="off"
+                    spellCheck={false}
+                    value={form.peppol_identifier}
+                    onChange={(event) => updateField("peppol_identifier", event.target.value)}
+                  />
+                </PartnerField>
+              </div>
+            </DocumentSection>
           </div>
 
-          <div className="mt-6 flex gap-3">
-            <button
-              type="button"
-              onClick={handleSubmit}
-              disabled={saving}
-              className="rounded-xl bg-blue-600 px-6 py-3 font-semibold text-white hover:bg-blue-700 disabled:bg-gray-400"
-            >
-              {saving
-                ? t("businessPartners.form.saving")
-                : t("businessPartners.form.saveButton")}
-            </button>
-
+          <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:justify-end">
             <button
               type="button"
               onClick={closeForm}
               disabled={saving}
-              className="rounded-xl border px-6 py-3 font-semibold"
+              className={docButtonSecondary}
             >
               {t("businessPartners.form.cancelButton")}
+            </button>
+
+            <button
+              type="button"
+              onClick={handleSubmit}
+              disabled={saving}
+              className={docButtonPrimary}
+            >
+              {saving
+                ? t("businessPartners.form.saving")
+                : t("businessPartners.form.saveButton")}
             </button>
           </div>
         </div>
@@ -573,9 +724,9 @@ export default function ObchodniPartneriPage() {
         {loading ? (
           <p className="text-sm text-secondary">{t("businessPartners.loading")}</p>
         ) : loadError ? (
-          <p className="text-sm font-semibold text-red-600">{loadError}</p>
+          <p className="text-sm font-medium text-danger">{loadError}</p>
         ) : filteredPartners.length === 0 ? (
-          <p className="rounded-2xl border border-dashed border-slate-400 bg-surface-1 p-6 text-center text-secondary">
+          <p className="rounded-doc border border-dashed border-doc-border bg-surface-2 p-6 text-center text-sm text-secondary">
             {t("businessPartners.empty")}
           </p>
         ) : (
@@ -583,14 +734,14 @@ export default function ObchodniPartneriPage() {
             {filteredPartners.map((partner) => (
               <li
                 key={partner.id}
-                className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-subtle bg-surface-1 p-4"
+                className="flex flex-wrap items-center justify-between gap-3 rounded-doc border border-doc-border bg-doc-surface p-4 transition hover:bg-doc-surface-hover"
               >
                 <Link
                   href={`/obchodni-partneri/${partner.id}`}
                   className="min-w-0 flex-1"
                 >
                   <p className="truncate font-semibold text-primary">{partner.legal_name}</p>
-                  <p className="text-xs text-secondary">
+                  <p className="mt-0.5 text-xs text-muted-esblu">
                     {kindLabel(partner.kind)}
                     {partner.ico ? ` · IČO ${partner.ico}` : ""}
                     {partner.city ? ` · ${partner.city}` : ""}
@@ -602,14 +753,14 @@ export default function ObchodniPartneriPage() {
                     <button
                       type="button"
                       onClick={() => openEditForm(partner)}
-                      className="rounded-xl border px-4 py-2 text-sm font-semibold"
+                      className={docButtonSecondary}
                     >
                       {t("common.buttons.edit")}
                     </button>
                     <button
                       type="button"
                       onClick={() => handleDelete(partner)}
-                      className="rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700"
+                      className={docButtonDanger}
                     >
                       {t("common.buttons.delete")}
                     </button>

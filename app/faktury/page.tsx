@@ -17,6 +17,16 @@ import InvoicesIcon from "@/app/components/icons/InvoicesIcon";
 import { invoiceDetailHref } from "@/lib/entity-links";
 import { isInvoiceOverdue, listInvoices, type Invoice } from "@/lib/invoices";
 import { listBusinessPartners, type BusinessPartner } from "@/lib/business-partners";
+import {
+  DocumentPageShell,
+  DocumentHeader,
+  DocumentNotice,
+  docButtonPrimary,
+} from "@/app/components/document/DocumentLayout";
+import {
+  DocumentStatusBadge,
+  DocumentSourceBadge,
+} from "@/app/components/document/DocumentStatusBadge";
 
 // Smer je samostatná dimenzia od sekcií. Sekcia "issued" totiž NIKDY
 // neznamenala direction='issued' — znamená "finalizovaná riadna faktúra".
@@ -199,149 +209,180 @@ export default function FakturyPage() {
   const createDisabled = !canEdit || legalHold;
 
   return (
-    <div className="mx-auto max-w-5xl px-4 pb-24 pt-6 sm:px-6">
+    <DocumentPageShell wide>
       <BackLink href="/" label={t("nav.dashboard")} className="mb-6" />
 
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <InvoicesIcon size={32} />
-          <div>
-            <h1 className="text-2xl font-bold text-primary">{t("invoices.title")}</h1>
-            <p className="text-sm text-secondary">{t("invoices.subtitle")}</p>
-          </div>
-        </div>
-
-        {canView && canEdit && (
-          <Link
-            href="/faktury/new"
-            aria-disabled={createDisabled}
-            onClick={(event) => {
-              if (createDisabled) event.preventDefault();
-            }}
-            className="rounded-xl bg-blue-600 px-6 py-3 font-semibold text-white hover:bg-blue-700 aria-disabled:pointer-events-none aria-disabled:bg-gray-400"
-          >
-            {t("invoices.addButton")}
-          </Link>
-        )}
-      </div>
+      <DocumentHeader
+        eyebrow={
+          <span className="inline-flex items-center gap-2">
+            <InvoicesIcon size={18} />
+            {t("invoices.title")}
+          </span>
+        }
+        title={t("invoices.register.title")}
+        meta={t("invoices.subtitle")}
+        aside={
+          canView && canEdit ? (
+            <Link
+              href="/faktury/new"
+              aria-disabled={createDisabled}
+              onClick={(event) => {
+                if (createDisabled) event.preventDefault();
+              }}
+              className={`${docButtonPrimary} aria-disabled:pointer-events-none aria-disabled:opacity-40`}
+            >
+              {t("invoices.addButton")}
+            </Link>
+          ) : undefined
+        }
+      />
 
       {!canView && membershipLoaded && (
-        <p className="mt-3 rounded-2xl border border-subtle bg-surface-1 p-6 text-center text-secondary">
-          {t("invoices.noFinanceAccess")}
-        </p>
+        <div className="mt-6">
+          <DocumentNotice>{t("invoices.noFinanceAccess")}</DocumentNotice>
+        </div>
       )}
 
       {canView && !canEdit && (
-        <p className="mt-3 text-sm text-secondary">{t("invoices.readOnlyNotice")}</p>
+        <p className="mt-4 text-sm text-muted-esblu">{t("invoices.readOnlyNotice")}</p>
       )}
 
       {canView && legalHold && canEdit && (
-        <p className="mt-3 text-sm font-semibold text-amber-600">
-          {t("invoices.legalHoldNotice")}
-        </p>
-      )}
-
-      {canView && (
-        <div className="mt-6 flex flex-wrap gap-2">
-          {DIRECTION_ORDER.map((key) => (
-            <button
-              key={key}
-              type="button"
-              onClick={() => setDirectionFilter(key)}
-              className={`rounded-full border px-4 py-2 text-sm font-bold transition ${
-                directionFilter === key
-                  ? "border-slate-900 bg-slate-900 text-white dark:border-slate-100 dark:bg-slate-100 dark:text-slate-900"
-                  : "border-subtle bg-surface-1 text-secondary hover:text-primary"
-              }`}
-            >
-              {t(`invoices.direction.${key}`)} ({directionCounts[key]})
-            </button>
-          ))}
+        <div className="mt-4">
+          <DocumentNotice tone="warning">{t("invoices.legalHoldNotice")}</DocumentNotice>
         </div>
       )}
 
       {canView && (
-        <div className="mt-3 flex flex-wrap gap-2">
-          {SECTION_ORDER.map((key) => (
-            <button
-              key={key}
-              type="button"
-              onClick={() => setSection(key)}
-              className={`rounded-full border px-4 py-2 text-sm font-semibold transition ${
-                section === key
-                  ? "border-blue-600 bg-blue-600 text-white"
-                  : "border-subtle bg-surface-1 text-secondary hover:text-primary"
-              }`}
-            >
-              {t(`invoices.sections.${key}`)} ({sectionCounts[key]})
-            </button>
-          ))}
+        <div className="mt-6 space-y-3 rounded-doc border border-doc-border bg-doc-surface p-3 sm:p-4">
+          {/* Smer je primárna os registra — dostáva segmented control,
+              nie ďalší rad rovnakých piluliek. */}
+          <div
+            role="tablist"
+            aria-label={t("invoices.register.directionFilterLabel")}
+            className="inline-flex w-full gap-1 rounded-doc-sm border border-doc-border bg-surface-2 p-1 sm:w-auto"
+          >
+            {DIRECTION_ORDER.map((key) => (
+              <button
+                key={key}
+                role="tab"
+                aria-selected={directionFilter === key}
+                type="button"
+                onClick={() => setDirectionFilter(key)}
+                className={`flex-1 whitespace-nowrap rounded-doc-sm px-3 py-1.5 text-sm font-medium transition sm:flex-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-cyan ${
+                  directionFilter === key
+                    ? "bg-accent-esblu text-on-accent"
+                    : "text-secondary hover:text-primary"
+                }`}
+              >
+                {t(`invoices.direction.${key}`)}
+                <span className="ml-1.5 tabular-nums opacity-70">{directionCounts[key]}</span>
+              </button>
+            ))}
+          </div>
+
+          {/* Stav je sekundárna os — tichšie, s vodorovným scrollom na mobile. */}
+          <div className="-mx-1 flex gap-1.5 overflow-x-auto px-1 pb-0.5">
+            {SECTION_ORDER.map((key) => (
+              <button
+                key={key}
+                type="button"
+                aria-pressed={section === key}
+                onClick={() => setSection(key)}
+                className={`whitespace-nowrap rounded-doc-sm border px-3 py-1.5 text-xs font-medium transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-cyan ${
+                  section === key
+                    ? "border-border-strong bg-surface-hover text-primary"
+                    : "border-doc-border text-secondary hover:text-primary"
+                }`}
+              >
+                {t(`invoices.sections.${key}`)}
+                <span className="ml-1.5 tabular-nums opacity-70">{sectionCounts[key]}</span>
+              </button>
+            ))}
+          </div>
         </div>
       )}
 
       {canView && (
-        <div className="mt-6">
+        <div className="mt-4">
           {loading ? (
             <p className="text-sm text-secondary">{t("invoices.loading")}</p>
           ) : loadError ? (
-            <p className="text-sm font-semibold text-red-600">{loadError}</p>
+            <DocumentNotice tone="critical">{loadError}</DocumentNotice>
           ) : filteredInvoices.length === 0 ? (
-            <p className="rounded-2xl border border-dashed border-slate-400 bg-surface-1 p-6 text-center text-secondary">
+            <div className="rounded-doc border border-dashed border-doc-border px-6 py-12 text-center text-sm text-muted-esblu">
               {t("invoices.empty")}
-            </p>
+            </div>
           ) : (
-            <ul className="space-y-3">
-              {filteredInvoices.map((invoice) => {
-                const overdue = isInvoiceOverdue(invoice.due_date, invoice.payment_status);
-                return (
-                  <li key={invoice.id}>
-                    <Link
-                      href={invoiceDetailHref(invoice.id)}
-                      className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-subtle bg-surface-1 p-4 hover:border-blue-400"
-                    >
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate font-semibold text-primary">
-                          {invoiceNumberLabel(invoice)}
-                          {invoice.direction === "received" && (
-                            <span className="ml-2 rounded-full bg-slate-200 px-2 py-0.5 text-xs font-bold text-slate-700 dark:bg-slate-700 dark:text-slate-200">
-                              {t("invoices.direction.receivedBadge")}
-                            </span>
-                          )}
-                          {overdue && (
-                            <span className="ml-2 rounded-full bg-red-100 px-2 py-0.5 text-xs font-bold text-red-700">
-                              {t("invoices.overdueBadge")}
-                            </span>
-                          )}
-                        </p>
-                        <p className="text-xs text-secondary">
-                          {t(`invoices.kind.${invoice.kind}`)}
-                          {counterpartyName(invoice) ? ` · ${counterpartyName(invoice)}` : ""}
-                          {" · "}
-                          {formatDate(invoice.issue_date, locale)}
-                          {invoice.direction === "received" && invoice.source === "ai_inbox"
-                            ? ` · ${t("invoices.source.ai_inbox")}`
-                            : ""}
-                        </p>
-                      </div>
+            <>
+              {/* Desktop: hlavička registra. Na mobile sa skrýva — riadok
+                  je tam čitateľný sám osebe. */}
+              <div className="hidden border-b border-doc-border px-4 pb-2 text-[11px] font-medium uppercase tracking-wide text-muted-esblu sm:grid sm:grid-cols-[minmax(0,2.2fr)_minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)] sm:gap-4">
+                <span>{t("invoices.register.colDocument")}</span>
+                <span>{t("invoices.register.colCounterparty")}</span>
+                <span className="text-right">{t("invoices.register.colTotal")}</span>
+                <span className="text-right">{t("invoices.register.colStatus")}</span>
+              </div>
 
-                      <div className="text-right">
-                        <p className="font-semibold text-primary">
+              <ul className="mt-2 space-y-1.5">
+                {filteredInvoices.map((invoice) => {
+                  const overdue = isInvoiceOverdue(invoice.due_date, invoice.payment_status);
+                  return (
+                    <li key={invoice.id}>
+                      <Link
+                        href={invoiceDetailHref(invoice.id)}
+                        className="block rounded-doc border border-doc-border bg-doc-surface px-4 py-3 transition hover:border-border-strong hover:bg-doc-surface-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-cyan sm:grid sm:grid-cols-[minmax(0,2.2fr)_minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)] sm:items-center sm:gap-4"
+                      >
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="truncate font-medium text-primary">
+                              {invoiceNumberLabel(invoice)}
+                            </span>
+                            <DocumentStatusBadge
+                              kind={invoice.direction === "received" ? "received" : "issued"}
+                            />
+                          </div>
+                          <p className="mt-0.5 truncate text-xs text-muted-esblu">
+                            {t(`invoices.kind.${invoice.kind}`)} ·{" "}
+                            {formatDate(invoice.issue_date, locale)}
+                            {invoice.due_date
+                              ? ` · ${t("invoices.register.dueShort")} ${formatDate(invoice.due_date, locale)}`
+                              : ""}
+                          </p>
+                        </div>
+
+                        <div className="mt-1.5 min-w-0 sm:mt-0">
+                          <p className="truncate text-sm text-secondary">
+                            {counterpartyName(invoice) || "—"}
+                          </p>
+                          {invoice.source !== "manual" && (
+                            <div className="mt-0.5">
+                              <DocumentSourceBadge source={invoice.source} />
+                            </div>
+                          )}
+                        </div>
+
+                        <p className="mt-1.5 text-sm font-semibold tabular-nums text-primary sm:mt-0 sm:text-right">
                           {formatMoney(invoice.total_amount, invoice.currency)}
                         </p>
-                        <p className="text-xs text-secondary">
-                          {invoice.document_status === "draft"
-                            ? t("invoices.documentStatus.draft")
-                            : t(`invoices.paymentStatus.${invoice.payment_status}`)}
-                        </p>
-                      </div>
-                    </Link>
-                  </li>
-                );
-              })}
-            </ul>
+
+                        <div className="mt-1.5 flex flex-wrap items-center gap-1.5 sm:mt-0 sm:justify-end">
+                          {invoice.document_status === "draft" ? (
+                            <DocumentStatusBadge kind="draft" />
+                          ) : (
+                            <DocumentStatusBadge kind={invoice.payment_status} />
+                          )}
+                          {overdue && <DocumentStatusBadge kind="overdue" />}
+                        </div>
+                      </Link>
+                    </li>
+                  );
+                })}
+              </ul>
+            </>
           )}
         </div>
       )}
-    </div>
+    </DocumentPageShell>
   );
 }

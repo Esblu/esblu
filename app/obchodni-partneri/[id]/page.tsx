@@ -13,17 +13,15 @@ import {
   getBusinessPartner,
   type BusinessPartner,
 } from "@/lib/business-partners";
-
-function DetailRow({ label, value }: { label: string; value: string }) {
-  if (!value) return null;
-
-  return (
-    <div className="border-b border-subtle py-3 last:border-0">
-      <p className="text-xs font-semibold uppercase tracking-wide text-secondary">{label}</p>
-      <p className="mt-1 text-primary">{value}</p>
-    </div>
-  );
-}
+import {
+  DocumentPageShell,
+  DocumentHeader,
+  DocumentSection,
+  DocumentMetadataGrid,
+  DocumentNotice,
+  docButtonSecondary,
+  docButtonDanger,
+} from "@/app/components/document/DocumentLayout";
 
 export default function ObchodnyPartnerDetailPage() {
   const { t, locale } = useLocale();
@@ -106,103 +104,154 @@ export default function ObchodnyPartnerDetailPage() {
 
   const canEdit = hasFinanceManage(membership);
 
+  // Adresa sa zobrazuje ako jeden blok, nie ako päť samostatných riadkov —
+  // používateľ ju číta ako adresu, nie ako päť nesúvisiacich polí.
+  const addressLines = partner
+    ? [
+        partner.address_line1,
+        partner.address_line2,
+        [partner.postal_code, partner.city].filter(Boolean).join(" "),
+        partner.country_code,
+      ].filter((line): line is string => Boolean(line && line.trim()))
+    : [];
+
   return (
-    <div className="mx-auto max-w-2xl px-4 pb-24 pt-6 sm:px-6">
+    <DocumentPageShell>
       <BackLink href="/obchodni-partneri" label={t("businessPartners.title")} className="mb-6" />
 
       {loading ? (
         <p className="text-sm text-secondary">{t("businessPartners.loading")}</p>
       ) : loadError || !partner ? (
-        <p className="text-sm font-semibold text-red-600">
+        <DocumentNotice tone="critical">
           {loadError || t("businessPartners.errors.notFound")}
-        </p>
+        </DocumentNotice>
       ) : (
-        <div className="rounded-3xl border border-subtle bg-surface-1 p-6 shadow-lg">
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div>
-              <h1 className="text-2xl font-bold text-primary">{partner.legal_name}</h1>
-              <p className="text-sm text-secondary">
-                {t(`businessPartners.kind.${partner.kind}`)}
-              </p>
-            </div>
+        <>
+          <DocumentHeader
+            eyebrow={t(`businessPartners.kind.${partner.kind}`)}
+            title={partner.legal_name}
+            meta={
+              <>
+                {t("businessPartners.updatedAtPrefix")}{" "}
+                {partner.updated_at
+                  ? formatDateTime(partner.updated_at, locale)
+                  : formatDateTime(partner.created_at, locale)}
+              </>
+            }
+            aside={
+              canEdit ? (
+                <div className="flex gap-2">
+                  <Link
+                    href={`/obchodni-partneri?edit=${partner.id}`}
+                    className={docButtonSecondary}
+                  >
+                    {t("common.buttons.edit")}
+                  </Link>
+                  <button type="button" onClick={handleDelete} className={docButtonDanger}>
+                    {t("common.buttons.delete")}
+                  </button>
+                </div>
+              ) : null
+            }
+          />
 
-            {canEdit && (
-              <div className="flex gap-2">
-                <Link
-                  href={`/obchodni-partneri?edit=${partner.id}`}
-                  className="rounded-xl border px-4 py-2 text-sm font-semibold"
-                >
-                  {t("common.buttons.edit")}
-                </Link>
-                <button
-                  type="button"
-                  onClick={handleDelete}
-                  className="rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700"
-                >
-                  {t("common.buttons.delete")}
-                </button>
-              </div>
+          {/* Rovnaké zoskupenie ako editačný formulár — používateľ nájde
+              údaj na tom istom mieste, kde ho zadával. DocumentMetadataGrid
+              si prázdne hodnoty odfiltruje sám, takže partner bez IBAN-u
+              nedostane prázdnu sekciu s pomlčkami. */}
+          <div className="mt-6 space-y-4">
+            <DocumentSection title={t("businessPartners.section.identity")}>
+              <DocumentMetadataGrid
+                items={[
+                  { label: t("businessPartners.form.emailLabel"), value: partner.email },
+                  { label: t("businessPartners.form.phoneLabel"), value: partner.phone },
+                ]}
+              />
+            </DocumentSection>
+
+            {addressLines.length > 0 && (
+              <DocumentSection title={t("businessPartners.section.address")}>
+                <div className="space-y-0.5 text-sm text-primary">
+                  {addressLines.map((line, index) => (
+                    <p key={index}>{line}</p>
+                  ))}
+                </div>
+              </DocumentSection>
             )}
-          </div>
 
-          <div className="mt-6">
-            <DetailRow label={t("businessPartners.form.icoLabel")} value={partner.ico ?? ""} />
-            <DetailRow label={t("businessPartners.form.dicLabel")} value={partner.dic ?? ""} />
-            <DetailRow
-              label={t("businessPartners.form.icDphLabel")}
-              value={partner.ic_dph ?? ""}
-            />
-            <DetailRow
-              label={t("businessPartners.form.emailLabel")}
-              value={partner.email ?? ""}
-            />
-            <DetailRow
-              label={t("businessPartners.form.phoneLabel")}
-              value={partner.phone ?? ""}
-            />
-            <DetailRow
-              label={t("businessPartners.form.addressLine1Label")}
-              value={partner.address_line1 ?? ""}
-            />
-            <DetailRow
-              label={t("businessPartners.form.addressLine2Label")}
-              value={partner.address_line2 ?? ""}
-            />
-            <DetailRow label={t("businessPartners.form.cityLabel")} value={partner.city ?? ""} />
-            <DetailRow
-              label={t("businessPartners.form.postalCodeLabel")}
-              value={partner.postal_code ?? ""}
-            />
-            <DetailRow
-              label={t("businessPartners.form.countryCodeLabel")}
-              value={partner.country_code ?? ""}
-            />
-            <DetailRow
-              label={t("businessPartners.form.peppolLabel")}
-              value={partner.peppol_identifier ?? ""}
-            />
-            <DetailRow
-              label={t("businessPartners.form.paymentTermsLabel")}
-              value={
-                partner.default_payment_terms_days === null
-                  ? ""
-                  : String(partner.default_payment_terms_days)
-              }
-            />
-            <DetailRow
-              label={t("businessPartners.form.currencyLabel")}
-              value={partner.default_currency ?? ""}
-            />
-          </div>
+            <DocumentSection title={t("businessPartners.section.tax")}>
+              <DocumentMetadataGrid
+                items={[
+                  { label: t("businessPartners.form.icoLabel"), value: partner.ico },
+                  { label: t("businessPartners.form.dicLabel"), value: partner.dic },
+                  { label: t("businessPartners.form.icDphLabel"), value: partner.ic_dph },
+                  {
+                    label: t("businessPartners.form.vatIdentifierLabel"),
+                    value: partner.vat_identifier ?? null,
+                  },
+                  {
+                    label: t("businessPartners.form.legalRegistrationIdLabel"),
+                    // Schéma sa zobrazuje pri hodnote, nie ako samostatný
+                    // riadok — "0158" bez kontextu nikomu nič nepovie.
+                    value: partner.legal_registration_id
+                      ? partner.legal_registration_scheme_id
+                        ? `${partner.legal_registration_id} (${partner.legal_registration_scheme_id})`
+                        : partner.legal_registration_id
+                      : null,
+                  },
+                ]}
+              />
+            </DocumentSection>
 
-          <p className="mt-4 text-xs text-secondary">
-            {t("businessPartners.updatedAtPrefix")}{" "}
-            {partner.updated_at
-              ? formatDateTime(partner.updated_at, locale)
-              : formatDateTime(partner.created_at, locale)}
-          </p>
-        </div>
+            <DocumentSection title={t("businessPartners.section.payment")}>
+              <DocumentMetadataGrid
+                items={[
+                  { label: t("businessPartners.form.ibanLabel"), value: partner.iban ?? null },
+                  { label: t("businessPartners.form.bicLabel"), value: partner.bic ?? null },
+                  {
+                    label: t("businessPartners.form.paymentTermsLabel"),
+                    value:
+                      partner.default_payment_terms_days === null
+                        ? null
+                        : String(partner.default_payment_terms_days),
+                  },
+                  {
+                    label: t("businessPartners.form.currencyLabel"),
+                    value: partner.default_currency,
+                  },
+                ]}
+              />
+            </DocumentSection>
+
+            <DocumentSection
+              title={t("businessPartners.section.einvoice")}
+              description={t("businessPartners.section.einvoiceHint")}
+            >
+              <DocumentMetadataGrid
+                items={[
+                  {
+                    label: t("businessPartners.form.electronicAddressLabel"),
+                    value: partner.electronic_address
+                      ? partner.electronic_address_scheme_id
+                        ? `${partner.electronic_address} (${partner.electronic_address_scheme_id})`
+                        : partner.electronic_address
+                      : null,
+                  },
+                  {
+                    label: t("businessPartners.form.peppolLabel"),
+                    value: partner.peppol_identifier,
+                  },
+                ]}
+              />
+              {!partner.electronic_address && !partner.peppol_identifier && (
+                <p className="text-sm text-muted-esblu">
+                  {t("businessPartners.section.einvoiceEmpty")}
+                </p>
+              )}
+            </DocumentSection>
+          </div>
+        </>
       )}
-    </div>
+    </DocumentPageShell>
   );
 }
