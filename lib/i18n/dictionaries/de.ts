@@ -800,6 +800,120 @@ const de = {
   inbox: {
     backToMenu: "Hauptmenü",
     title: "INBOX",
+    receivedInvoice: {
+      cta: {
+        title: "Als Eingangsrechnung erfassen",
+        description:
+          "Wir legen aus den erkannten Daten einen Entwurf an. Vor dem Speichern prüfen und bestätigen Sie alles selbst.",
+        button: "Als Eingangsrechnung verarbeiten",
+        preparing: "Wird vorbereitet…",
+      },
+      title: "Eingangsrechnung prüfen",
+      subtitle:
+        "Prüfen Sie die erkannten Daten. Die Rechnung entsteht als Entwurf — finalisieren können nur Sie.",
+      loading: "Geschäftspartner und Rechnungen werden geladen…",
+      submit: "Rechnungsentwurf anlegen",
+      submitting: "Wird angelegt…",
+      draftOnlyNote:
+        "Es entsteht ein Entwurf. Nichts wird automatisch finalisiert oder verbucht.",
+      supplier: {
+        title: "Lieferant",
+        selectLabel: "Geschäftspartner zuordnen",
+        selectPlaceholder: "— Lieferant wählen —",
+        fromDocument: "Auf dem Beleg: {{name}} · Firmennummer {{ico}} · USt-IdNr. {{vat}}",
+        createButton: "Neuen Lieferanten anlegen",
+        createHint:
+          "Gespeichert wird nur, was Sie hier bestätigen. Nichts wird automatisch ergänzt.",
+        confirmCreate: "Lieferant anlegen",
+        creating: "Wird angelegt…",
+        nameLabel: "Firmenname",
+        icoLabel: "Firmennummer",
+        dicLabel: "Steuernummer",
+        vatLabel: "USt-IdNr.",
+        nameRequired: "Geben Sie den Firmennamen des Lieferanten ein.",
+        alreadyExists:
+          "Diesen Lieferanten gibt es bereits ({{name}}) — wir haben ihn zugeordnet, statt einen zweiten anzulegen.",
+        duplicateIco:
+          "Ein Lieferant mit dieser Firmennummer existiert in Ihrem Unternehmen bereits.",
+        match: {
+          exact: "Lieferant anhand einer eindeutigen Kennung erkannt und vorausgewählt.",
+          probable:
+            "Wir haben einen wahrscheinlichen Lieferanten über den Namen gefunden ({{name}}). Bestätigen Sie ihn oder wählen Sie einen anderen.",
+          ambiguous:
+            "Wir haben {{count}} mögliche Lieferanten gefunden. Wählen Sie den richtigen — automatisch wird nichts zugeordnet.",
+          none:
+            "Kein Lieferant gefunden. Wählen Sie einen aus der Liste oder legen Sie einen neuen an.",
+        },
+      },
+      header: {
+        title: "Belegdaten",
+        numberLabel: "Rechnungsnummer des Lieferanten",
+        numberHint: "Genau so, wie sie auf dem Beleg steht.",
+        issueDateLabel: "Rechnungsdatum",
+        dueDateLabel: "Fällig am",
+        deliveryDateLabel: "Lieferdatum",
+        taxPointDateLabel: "Leistungsdatum",
+        receivedAtLabel: "Eingangsdatum",
+        currencyLabel: "Währung",
+        ibanLabel: "IBAN",
+        bicLabel: "BIC",
+        variableSymbolLabel: "Variables Symbol",
+        paymentReferenceLabel: "Zahlungsreferenz",
+      },
+      items: {
+        title: "Positionen",
+        addRow: "Zeile hinzufügen",
+        removeRow: "Entfernen",
+        descriptionLabel: "Bezeichnung",
+        quantityLabel: "Menge",
+        unitLabel: "Einheit",
+        unitPriceLabel: "Einzelpreis",
+        vatCategoryLabel: "USt-Kategorie",
+        vatCategoryPlaceholder: "— wählen —",
+        vatRateLabel: "USt-Satz (%)",
+        vatUnresolvedHint:
+          "Bei einigen Zeilen ließ sich die USt-Kategorie nicht zuverlässig bestimmen. Bitte ergänzen — ohne sie legen wir die Rechnung nicht an.",
+        unitCodeSuggestion: "Auf dem Beleg steht der Einheitencode {{code}}.",
+        unitCodeAccept: "Übernehmen",
+      },
+      totals: {
+        title: "Summen",
+        computed: "Aus den Positionen berechnet",
+        match: "Der Beleg nennt {{document}}, berechnet {{computed}} — das passt.",
+        mismatch:
+          "Der Beleg nennt {{document}}, aus den Positionen ergibt sich {{computed}}. Prüfen Sie die Zeilen — maßgeblich ist immer die Summe aus den Positionen.",
+      },
+      duplicate: {
+        exactTitle: "Diese Rechnung ist bereits erfasst",
+        nearTitle: "Eine ähnliche Rechnung existiert bereits",
+        nearHint: "Das wird nicht blockiert — Sie entscheiden.",
+        openExisting: "Vorhandene Rechnung öffnen",
+        fingerprintUnavailable:
+          "Der Lieferant hat weder USt-IdNr. noch Firmennummer, daher können wir die automatische Dublettenprüfung nicht ausführen. Bitte manuell prüfen.",
+        sameFileUploaded: "Genau diese Datei ist in Ihrem Unternehmen bereits hochgeladen.",
+        serverBlocked:
+          "Eine Rechnung mit dieser Identität wurde soeben angelegt. Eine zweite ist nicht entstanden.",
+        reason: {
+          supplier_invoice_number: "Gleicher Lieferant und gleiche Belegnummer.",
+          dedupe_fingerprint: "Identische Belegidentität (Lieferant, Nummer, Datum, Betrag).",
+          source_document: "Aus diesem Beleg wurde bereits eine Rechnung erstellt.",
+        },
+      },
+      validation: {
+        supplierRequired: "Wählen Sie einen Lieferanten aus.",
+        numberRequired: "Geben Sie die Rechnungsnummer des Lieferanten ein.",
+        issueDateRequired: "Geben Sie das Rechnungsdatum ein.",
+        itemsRequired: "Ergänzen Sie mindestens eine vollständige Position.",
+        vatUnresolved: "Ergänzen Sie die USt-Kategorie bei allen Positionen.",
+        exactDuplicate: "Diese Rechnung ist bereits erfasst.",
+      },
+      created: {
+        title: "Rechnungsentwurf angelegt",
+        body: "Sie finden ihn unter den Eingangsrechnungen. Finalisieren Sie ihn nach der Prüfung.",
+        openInvoice: "Rechnung öffnen",
+        stayInInbox: "Im Posteingang bleiben",
+      },
+    },
     documentTypes: {
       weigh_ticket: "Wiegeschein",
       delivery_note: "Lieferschein",
@@ -1734,6 +1848,17 @@ const de = {
     empty: "Sie haben noch keine Rechnungen erstellt.",
     backToList: "Zurück zu den Rechnungen",
     numberFallback: "ohne Nummer (Entwurf)",
+    direction: {
+      all: "Alle",
+      issued: "Ausgang",
+      received: "Eingang",
+      receivedBadge: "Eingang",
+    },
+    source: {
+      manual: "Manuell",
+      ai_inbox: "Aus dem Posteingang",
+      efaktura_peppol: "E-Rechnung",
+    },
     sections: {
       drafts: "Entwürfe",
       issued: "Ausgestellt",
@@ -1826,6 +1951,17 @@ const de = {
       removePaymentConfirmPrefix: "Möchten Sie diese Zahlung wirklich entfernen?",
       noPayments: "Bisher sind keine Zahlungen erfasst.",
       totalPaidLabel: "Insgesamt bezahlt",
+      totalPaidToSupplierLabel: "An Lieferant gezahlt",
+      paymentsIssuedHint: "Zahlungseingänge vom Kunden.",
+      paymentsReceivedHint: "Zahlungsausgänge an den Lieferanten.",
+      supplierInvoiceNumberLabel: "Rechnungsnummer des Lieferanten",
+      supplierInvoiceNumberHint:
+        "Die Nummer genau so, wie der Lieferant sie vergeben hat. Esblu vergibt einer Eingangsrechnung nie eine eigene Nummer.",
+      supplierPartnerLabel: "Lieferant",
+      externalPartyNote: "externes Unternehmen",
+      ourCompanyNote: "Ihr Unternehmen",
+      openSourceDocumentButton: "Originalbeleg öffnen",
+      noSourceDocument: "Dieser Rechnung ist kein Quellbeleg zugeordnet.",
       correctsLabel: "Korrigiert Rechnung",
       correctedByLabel: "Korrigiert durch Beleg",
     },
@@ -1839,6 +1975,8 @@ const de = {
       dueDateBeforeIssueDate: "Das Fälligkeitsdatum darf nicht vor dem Ausstellungsdatum liegen.",
       paymentTermsDaysNegative: "Die Zahlungsfrist (Tage) darf nicht negativ sein.",
       missingBusinessPartner: "Wählen Sie einen Kunden aus.",
+      missingSupplier: "Wählen Sie einen Lieferanten aus.",
+      missingSupplierInvoiceNumber: "Geben Sie die Rechnungsnummer des Lieferanten ein.",
       missingItems: "Die Rechnung muss mindestens eine Position enthalten.",
       missingCorrectsInvoice: "Die Gutschrift/Lastschrift muss auf die korrigierte Rechnung verweisen.",
       itemDescriptionRequired: "Geben Sie eine Positionsbeschreibung ein.",
@@ -1873,6 +2011,8 @@ const de = {
       pdfForbidden: "Für den PDF-Download benötigen Sie eine Finanzberechtigung (finance.view).",
       pdfNotFound: "Die Rechnung wurde nicht gefunden, oder Sie haben keinen Zugriff darauf.",
       pdfNotFinalized: "PDF ist nur für finalisierte Rechnungen verfügbar.",
+      pdfReceivedNotSupported:
+        "Für eine Eingangsrechnung erstellt Esblu kein PDF — das Original stammt vom Lieferanten. Öffnen Sie stattdessen den zugeordneten Quellbeleg.",
       pdfGenerationFailed: "PDF-Erstellung fehlgeschlagen. Bitte versuchen Sie es erneut.",
     },
     pdf: {

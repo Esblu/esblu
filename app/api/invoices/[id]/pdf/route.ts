@@ -147,6 +147,19 @@ export async function GET(req: Request, context: RouteContext) {
     return errorResponse(409, translate(locale, "invoices.errors.pdfNotFinalized"));
   }
 
+  // 5b. PDF generujeme VÝHRADNE pre vlastné vydané doklady.
+  //
+  // Prijatá faktúra je dokument, ktorý vystavil dodávateľ. Vyrobiť z našich
+  // canonical dát jeho PDF náhradu by znamenalo vydávať prerozprávanie
+  // cudzieho dokladu za doklad — a keďže canonical model zachytáva len to,
+  // čo sme pri review potvrdili, výsledok by sa od originálu mohol líšiť.
+  // Originál žije v documents/document_attachments a je na faktúru
+  // prelinkovaný cez document_links.invoice_id; UI naň odkazuje namiesto
+  // tohto endpointu. Fail-closed, nie tichý prázdny doklad.
+  if (invoice.direction !== "issued") {
+    return errorResponse(409, translate(locale, "invoices.errors.pdfReceivedNotSupported"));
+  }
+
   // 6. Parties/items/tax breakdowns — scoped VÝHRADNE na túto invoice_id
   // (RLS navyše nezávisle re-overuje company_id + finance.view pre každú
   // z týchto tabuliek zvlášť).

@@ -39,6 +39,24 @@ export type BusinessPartner = {
   updated_by: string | null;
   created_at: string;
   updated_at: string | null;
+
+  // EN16931 P1 identifikátory (migrácia 20260920122000). Zámerne NIE SÚ
+  // súčasťou BusinessPartnerForm — partner UI ich zatiaľ needituje. Čítajú
+  // sa ale pri deterministickom supplier matchingu (lib/invoicing/
+  // supplier-matching.ts) a snapshotuje ich esblu_finalize_invoice().
+  // Voliteľné v TS zámerne: partner form ich nepozná, takže existujúce
+  // create/update cesty (ktoré payload odvodzujú cez Omit<BusinessPartner,…>)
+  // zostávajú nezmenené a nemusia ich vypĺňať.
+  /** EN16931 BT-31/BT-48. */
+  vat_identifier?: string | null;
+  /** EN16931 BT-30/BT-47 + ICD scheme. */
+  legal_registration_id?: string | null;
+  legal_registration_scheme_id?: string | null;
+  /** EN16931 BT-34/BT-49 + EAS scheme. */
+  electronic_address?: string | null;
+  electronic_address_scheme_id?: string | null;
+  generic_identifier?: string | null;
+  generic_identifier_scheme_id?: string | null;
 };
 
 export const EMPTY_BUSINESS_PARTNER_FORM = {
@@ -251,6 +269,67 @@ export async function updateBusinessPartner(
       updated_at: new Date().toISOString(),
     })
     .eq("id", id)
+    .select("*")
+    .single();
+
+  if (error) {
+    normalizeUpsertError(error);
+  }
+
+  return data as BusinessPartner;
+}
+
+/**
+ * Polia, ktoré smie priniesť Inbox review pri zakladaní nového dodávateľa.
+ * Zámerne užší set než celý partner form — ide VÝHRADNE o hodnoty, ktoré
+ * používateľ v review obrazovke videl a potvrdil. Nič iné sa nedopĺňa.
+ */
+export type SupplierFromReviewInput = {
+  legal_name: string;
+  ico: string | null;
+  dic: string | null;
+  ic_dph: string | null;
+  vat_identifier: string | null;
+  address_line1: string | null;
+  city: string | null;
+  postal_code: string | null;
+  country_code: string | null;
+  email: string | null;
+};
+
+/**
+ * Založí dodávateľa z potvrdeného review.
+ *
+ * `kind` je 'supplier'. Ak partner s rovnakým IČO už existuje, DB unique
+ * constraint to zachytí a funkcia vyhodí BUSINESS_PARTNER_DUPLICATE_ICO_ERROR
+ * — volajúci to MUSÍ ošetriť tak, že ponúkne existujúceho partnera, nikdy nie
+ * tichým vytvorením druhého záznamu. Deterministický pre-check robí
+ * findDeterministicDuplicate() v lib/invoicing/supplier-matching.ts; tento
+ * constraint je druhá, nezávislá poistka proti race condition.
+ */
+export async function createSupplierFromReview(
+  companyId: string,
+  userId: string,
+  input: SupplierFromReviewInput
+): Promise<BusinessPartner> {
+  const { data, error } = await supabase
+    .from("business_partners")
+    .insert({
+      company_id: companyId,
+      kind: "supplier" as BusinessPartnerKind,
+      legal_name: input.legal_name.trim(),
+      ico: emptyToNull(input.ico ?? ""),
+      dic: emptyToNull(input.dic ?? ""),
+      ic_dph: emptyToNull(input.ic_dph ?? ""),
+      vat_identifier: emptyToNull(input.vat_identifier ?? input.ic_dph ?? ""),
+      address_line1: emptyToNull(input.address_line1 ?? ""),
+      city: emptyToNull(input.city ?? ""),
+      postal_code: emptyToNull(input.postal_code ?? ""),
+      country_code: emptyToNull(input.country_code ?? ""),
+      email: emptyToNull(input.email ?? ""),
+      created_by: userId,
+      updated_by: userId,
+    })
     .select("*")
     .single();
 

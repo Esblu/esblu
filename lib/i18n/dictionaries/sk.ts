@@ -812,6 +812,119 @@ const sk = {
   inbox: {
     backToMenu: "Hlavné menu",
     title: "INBOX",
+    receivedInvoice: {
+      cta: {
+        title: "Zaevidovať ako prijatú faktúru",
+        description:
+          "Vytvoríme koncept prijatej faktúry z rozpoznaných údajov. Pred uložením všetko skontrolujete a potvrdíte.",
+        button: "Spracovať ako prijatú faktúru",
+        preparing: "Pripravujem…",
+      },
+      title: "Kontrola prijatej faktúry",
+      subtitle:
+        "Skontrolujte rozpoznané údaje. Faktúra vznikne ako koncept — finalizujete ju až vy.",
+      loading: "Načítavam obchodných partnerov a faktúry…",
+      submit: "Vytvoriť koncept faktúry",
+      submitting: "Vytváram…",
+      draftOnlyNote:
+        "Vznikne koncept. Nič sa automaticky nefinalizuje ani neúčtuje.",
+      supplier: {
+        title: "Dodávateľ",
+        selectLabel: "Priradiť k obchodnému partnerovi",
+        selectPlaceholder: "— vyberte dodávateľa —",
+        fromDocument: "Na doklade: {{name}} · IČO {{ico}} · IČ DPH {{vat}}",
+        createButton: "Vytvoriť nového dodávateľa",
+        createHint:
+          "Uložia sa iba údaje, ktoré tu potvrdíte. Nič sa nedopĺňa automaticky.",
+        confirmCreate: "Vytvoriť dodávateľa",
+        creating: "Vytváram…",
+        nameLabel: "Obchodné meno",
+        icoLabel: "IČO",
+        dicLabel: "DIČ",
+        vatLabel: "IČ DPH",
+        nameRequired: "Zadajte obchodné meno dodávateľa.",
+        alreadyExists:
+          "Takýto dodávateľ už existuje ({{name}}) — priradili sme ho namiesto vytvorenia nového.",
+        duplicateIco: "Dodávateľ s týmto IČO už vo vašej firme existuje.",
+        match: {
+          exact: "Dodávateľ rozpoznaný podľa identifikátora a predvyplnený.",
+          probable:
+            "Našli sme pravdepodobného dodávateľa podľa názvu ({{name}}). Potvrďte ho alebo vyberte iného.",
+          ambiguous:
+            "Našli sme {{count}} možných dodávateľov. Vyberte správneho — automaticky nič nepriraďujeme.",
+          none: "Dodávateľ sa nenašiel. Vyberte ho zo zoznamu alebo vytvorte nového.",
+        },
+      },
+      header: {
+        title: "Údaje dokladu",
+        numberLabel: "Číslo faktúry dodávateľa",
+        numberHint: "Presne tak, ako je vytlačené na doklade.",
+        issueDateLabel: "Dátum vystavenia",
+        dueDateLabel: "Splatnosť",
+        deliveryDateLabel: "Dátum dodania",
+        taxPointDateLabel: "Dátum zdaniteľného plnenia",
+        receivedAtLabel: "Dátum prijatia",
+        currencyLabel: "Mena",
+        ibanLabel: "IBAN",
+        bicLabel: "BIC",
+        variableSymbolLabel: "Variabilný symbol",
+        paymentReferenceLabel: "Referencia platby",
+      },
+      items: {
+        title: "Položky",
+        addRow: "Pridať riadok",
+        removeRow: "Odstrániť",
+        descriptionLabel: "Popis",
+        quantityLabel: "Množstvo",
+        unitLabel: "Jednotka",
+        unitPriceLabel: "Cena/j.",
+        vatCategoryLabel: "Kategória DPH",
+        vatCategoryPlaceholder: "— vyberte —",
+        vatRateLabel: "Sadzba DPH (%)",
+        vatUnresolvedHint:
+          "Pri niektorých riadkoch sa kategória DPH nedala spoľahlivo určiť. Doplňte ju — bez nej faktúru nevytvoríme.",
+        unitCodeSuggestion: "Na doklade je kód jednotky {{code}}.",
+        unitCodeAccept: "Použiť",
+      },
+      totals: {
+        title: "Súčty",
+        computed: "Vypočítané z položiek",
+        match: "Doklad uvádza {{document}}, vypočítané {{computed}} — sedí.",
+        mismatch:
+          "Doklad uvádza {{document}}, z položiek vychádza {{computed}}. Skontrolujte riadky — záväzná je vždy suma z položiek.",
+      },
+      duplicate: {
+        exactTitle: "Túto faktúru už evidujete",
+        nearTitle: "Podobná faktúra už existuje",
+        nearHint: "Nie je to blokované — rozhodnite sa sami.",
+        openExisting: "Otvoriť existujúcu faktúru",
+        fingerprintUnavailable:
+          "Dodávateľ nemá IČ DPH ani IČO, takže automatickú kontrolu duplicity nevieme spustiť. Skontrolujte to prosím ručne.",
+        sameFileUploaded: "Presne tento súbor už vo firme máte nahratý.",
+        serverBlocked:
+          "Faktúru s touto identitou už niekto medzitým vytvoril. Druhá nevznikla.",
+        reason: {
+          supplier_invoice_number:
+            "Rovnaký dodávateľ a rovnaké číslo dokladu.",
+          dedupe_fingerprint: "Zhodná identita dokladu (dodávateľ, číslo, dátum, suma).",
+          source_document: "Z tohto dokumentu už faktúra vznikla.",
+        },
+      },
+      validation: {
+        supplierRequired: "Vyberte dodávateľa.",
+        numberRequired: "Zadajte číslo faktúry dodávateľa.",
+        issueDateRequired: "Zadajte dátum vystavenia.",
+        itemsRequired: "Doplňte aspoň jednu úplnú položku.",
+        vatUnresolved: "Doplňte kategóriu DPH pri všetkých položkách.",
+        exactDuplicate: "Túto faktúru už evidujete.",
+      },
+      created: {
+        title: "Koncept faktúry vytvorený",
+        body: "Faktúru nájdete medzi prijatými. Finalizujete ju až po kontrole.",
+        openInvoice: "Otvoriť faktúru",
+        stayInInbox: "Zostať v Inboxe",
+      },
+    },
     documentTypes: {
       weigh_ticket: "vážny lístok",
       delivery_note: "dodací list",
@@ -1739,6 +1852,17 @@ const sk = {
     empty: "Zatiaľ nemáte vytvorené žiadne faktúry.",
     backToList: "Späť na faktúry",
     numberFallback: "bez čísla (koncept)",
+    direction: {
+      all: "Všetky",
+      issued: "Vydané",
+      received: "Prijaté",
+      receivedBadge: "Prijatá",
+    },
+    source: {
+      manual: "Ručne",
+      ai_inbox: "Z Inboxu",
+      efaktura_peppol: "eFaktúra",
+    },
     sections: {
       drafts: "Koncepty",
       issued: "Vystavené",
@@ -1831,6 +1955,17 @@ const sk = {
       removePaymentConfirmPrefix: "Naozaj chceš odstrániť túto platbu?",
       noPayments: "Zatiaľ nie sú zaznamenané žiadne platby.",
       totalPaidLabel: "Uhradené spolu",
+      totalPaidToSupplierLabel: "Uhradené dodávateľovi",
+      paymentsIssuedHint: "Evidencia úhrad prijatých od odberateľa.",
+      paymentsReceivedHint: "Evidencia úhrad odoslaných dodávateľovi.",
+      supplierInvoiceNumberLabel: "Číslo faktúry dodávateľa",
+      supplierInvoiceNumberHint:
+        "Číslo presne tak, ako ho uviedol dodávateľ. Esblu prijatej faktúre nikdy neprideľuje vlastné číslo.",
+      supplierPartnerLabel: "Dodávateľ",
+      externalPartyNote: "externá firma",
+      ourCompanyNote: "naša firma",
+      openSourceDocumentButton: "Otvoriť originál dokladu",
+      noSourceDocument: "K tejto faktúre nie je pripojený zdrojový dokument.",
       correctsLabel: "Opravuje faktúru",
       correctedByLabel: "Opravené dokladom",
     },
@@ -1844,6 +1979,8 @@ const sk = {
       dueDateBeforeIssueDate: "Dátum splatnosti nesmie byť pred dátumom vystavenia.",
       paymentTermsDaysNegative: "Splatnosť (dni) nesmie byť záporná.",
       missingBusinessPartner: "Vyberte odberateľa.",
+      missingSupplier: "Vyberte dodávateľa.",
+      missingSupplierInvoiceNumber: "Zadajte číslo faktúry dodávateľa.",
       missingItems: "Faktúra musí mať aspoň jednu riadkovú položku.",
       missingCorrectsInvoice: "Dobropis/ťarchopis musí odkazovať na opravovanú faktúru.",
       itemDescriptionRequired: "Zadajte popis položky.",
@@ -1878,6 +2015,8 @@ const sk = {
       pdfForbidden: "Na stiahnutie PDF potrebujete finančné oprávnenie (finance.view).",
       pdfNotFound: "Faktúra sa nenašla, alebo k nej nemáte prístup.",
       pdfNotFinalized: "PDF je dostupné iba pre finalizované faktúry.",
+      pdfReceivedNotSupported:
+        "Pre prijatú faktúru Esblu negeneruje PDF — originál vystavil dodávateľ. Otvorte pripojený zdrojový doklad.",
       pdfGenerationFailed: "Generovanie PDF zlyhalo. Skúste to prosím znova.",
     },
     pdf: {

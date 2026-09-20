@@ -27,9 +27,17 @@ import { formatDate, formatDateTime } from "@/lib/i18n/format";
 import { REQUEST_LOCALE_HEADER } from "@/lib/i18n/request-locale";
 import {
   getMyActiveMembership,
+  hasFinanceManage,
   isOwnerOrAdmin,
   type CompanyMemberRole,
 } from "@/lib/company";
+import ReceivedInvoiceReview from "@/app/ai-evidencia/ReceivedInvoiceReview";
+import {
+  receivedCandidateFromScan,
+  type ReceivedInvoiceCandidate,
+} from "@/lib/invoicing/received-candidate";
+import { computeFileSha256 } from "@/lib/invoicing/received-dedupe";
+import { invoiceDetailHref } from "@/lib/entity-links";
 import { useCompanyDpaLegalHold } from "@/app/components/CompanyDpaGate";
 import { normalizeWeightUnit } from "@/lib/normalize-weight-unit";
 import {
@@ -608,6 +616,10 @@ export default function AiEvidenciaPage() {
   const otherMaterialLabel = t("inbox.otherMaterial");
   const [companyId, setCompanyId] = useState("");
   const [role, setRole] = useState<CompanyMemberRole | null>(null);
+  // Prijatá faktúra je finance dáta — ponuka "Vytvoriť prijatú faktúru" sa
+  // zobrazí iba držiteľovi finance.manage. Skutočné vynútenie je v RLS a v
+  // esblu_create_received_invoice_draft(); toto je len UI vrstva.
+  const [canManageFinance, setCanManageFinance] = useState(false);
   const [fileName, setFileName] = useState("");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [pendingImageFile, setPendingImageFile] = useState<File | null>(null);
@@ -661,6 +673,17 @@ export default function AiEvidenciaPage() {
     { id: string; name: string | null }[]
   >([]);
   const [isSavingOtherDocument, setIsSavingOtherDocument] = useState(false);
+  // Prijatá faktúra: kandidát otvorený v review obrazovke. Nenulový = modal
+  // je otvorený. Dokument je v tom momente už uložený (potrebujeme jeho id
+  // ako source_document_id), canonical faktúra ešte nie.
+  const [receivedCandidate, setReceivedCandidate] =
+    useState<ReceivedInvoiceCandidate | null>(null);
+  /** Nastaví sa spolu s kandidátom — review potrebuje autora pre created_by. */
+  const [currentUserId, setCurrentUserId] = useState("");
+  const [isPreparingReceivedInvoice, setIsPreparingReceivedInvoice] = useState(false);
+  const [createdReceivedInvoiceId, setCreatedReceivedInvoiceId] = useState<string | null>(
+    null
+  );
   const [otherDocuments, setOtherDocuments] = useState<OtherDocumentRow[]>([]);
   const [selectedOtherDocument, setSelectedOtherDocument] =
     useState<OtherDocumentRow | null>(null);
@@ -1696,6 +1719,155 @@ review_status: reviewStatus,
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Prijatá faktúra: dokument → kandidát → review
+  //
+  // Dokument sa uloží TERAZ, canonical faktúra až po potvrdení review. Poradie
+  // je zámerné — faktúra potrebuje source_document_id, a originál dokladu má
+  // v Inboxe zostať aj vtedy, keď používateľ review zruší. Nič sa nemaže.
+  //
+  // Dokument sa ukladá BEZ priradenia k vozidlu/stroju (assignmentTarget je
+  // pre túto cestu irelevantný) — prelinkovanie na faktúru spraví až
+  // esblu_create_received_invoice_draft() cez document_links.invoice_id.
+  // ---------------------------------------------------------------------------
+  async function startReceivedInvoiceReview() {
+    if (
+      !otherResult ||
+      scanDocumentType !== "invoice" ||
+      isPreparingReceivedInvoice ||
+      saveOtherDocumentInProgressRef.current
+    ) {
+      return;
+    }
+
+    if (legalHold) {
+      setError(t("common.legalHoldMessage"));
+      return;
+    }
+
+    setIsPreparingReceivedInvoice(true);
+    setError("");
+
+    let uploadedPath: string | null = null;
+    let documentInserted = false;
+
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!session) {
+        throw new Error(t("inbox.errors.notLoggedIn"));
+      }
+
+      const documentId = crypto.randomUUID();
+      let storagePath: string | null = null;
+      let contentSha256: string | null = null;
+
+      if (selectedFile) {
+        // Dedupe vrstva A — hash binárneho obsahu. Počíta sa pred uploadom,
+        // aby mal dokument identitu ešte než sa uloží. Ak Web Crypto nie je
+        // dostupné, ostane null a dedupe beží len na vrstvách B–D.
+        contentSha256 = await computeFileSha256(selectedFile);
+
+        // eslint-disable-next-line react-hooks/purity -- event handler, never runs during render
+        const uniqueName = `${Date.now()}-${crypto.randomUUID()}.webp`;
+        storagePath = `${session.user.id}/${documentId}/${uniqueName}`;
+
+        const { error: uploadError } = await supabase.storage
+          .from("ai-inbox-documents")
+          .upload(storagePath, selectedFile, {
+            contentType: selectedFile.type || "image/webp",
+            cacheControl: "3600",
+            upsert: false,
+          });
+
+        if (uploadError) {
+          throw new Error(t("inbox.errors.photoSaveFailed", { message: uploadError.message }));
+        }
+
+        uploadedPath = storagePath;
+      }
+
+      const { error: insertError } = await supabase.from("documents").insert({
+        id: documentId,
+        user_id: session.user.id,
+        storage_bucket: "ai-inbox-documents",
+        storage_path: storagePath,
+        original_filename: fileName || null,
+        mime_type: selectedFile?.type || null,
+        file_size: selectedFile?.size ?? null,
+        document_type: "invoice",
+        status: otherResult.reviewStatus === "needs_review" ? "needs_review" : "confirmed",
+        content_sha256: contentSha256,
+        ai_raw_output: {
+          documentType: scanDocumentType,
+          confidenceScore: otherResult.confidenceScore,
+          reviewStatus: otherResult.reviewStatus,
+          documentLanguage: otherResult.documentLanguage,
+          fieldConfidence: otherResult.fieldConfidence,
+          fields: otherResult.fields,
+        },
+        extracted_fields: otherResult.fields,
+        field_confidence: otherResult.fieldConfidence,
+        note: documentNote.trim() || null,
+      });
+
+      if (insertError) {
+        // Partial unique index documents_company_content_sha256_uniq — presne
+        // ten istý súbor už vo firme je. Nič sa nemaže ani neprepisuje,
+        // používateľ dostane zrozumiteľnú hlášku.
+        if (insertError.code === "23505") {
+          throw new Error(t("inbox.receivedInvoice.duplicate.sameFileUploaded"));
+        }
+        throw insertError;
+      }
+
+      documentInserted = true;
+
+      const { error: logError } = await supabase.from("document_review_log").insert({
+        document_id: documentId,
+        document_ref: documentId,
+        user_id: session.user.id,
+        action: "created",
+      });
+
+      if (logError) {
+        console.error("Záznam do document_review_log sa nepodarilo uložiť:", logError);
+      }
+
+      await loadOtherDocuments();
+
+      setCurrentUserId(session.user.id);
+      setReceivedCandidate(
+        receivedCandidateFromScan({
+          fields: otherResult.fields,
+          sourceDocumentId: documentId,
+          confidence: otherResult.confidenceScore,
+        })
+      );
+    } catch (prepareError: unknown) {
+      if (uploadedPath && !documentInserted) {
+        const { error: cleanupError } = await supabase.storage
+          .from("ai-inbox-documents")
+          .remove([uploadedPath]);
+
+        if (cleanupError) {
+          console.error(
+            "Insert zlyhal a osirotenú fotografiu sa nepodarilo odstrániť:",
+            cleanupError
+          );
+        }
+      }
+
+      setError(
+        prepareError instanceof Error ? prepareError.message : t("inbox.errors.saveFailed")
+      );
+    } finally {
+      setIsPreparingReceivedInvoice(false);
+    }
+  }
+
   // Vymazanie dokumentu z public.documents (faktúra, bloček, PZP, servisný
   // doklad, iné) — bod 1 zadania. Poradie je zámerne: najprv Storage
   // (hlavný súbor aj všetky prílohy), až potom DB riadok, aby nikdy
@@ -2092,11 +2264,13 @@ review_status: reviewStatus,
   if (!membership) {
     setCompanyId("");
     setRole(null);
+    setCanManageFinance(false);
     return null;
   }
 
   setCompanyId(membership.company_id);
   setRole(membership.role);
+  setCanManageFinance(hasFinanceManage(membership));
   return membership.company_id;
 }
 
@@ -2686,6 +2860,31 @@ function formatDocDate(value: unknown): string {
                   placeholder={t("inbox.notePlaceholder")}
                   className="mt-1 w-full rounded-xl border border-subtle bg-surface-1 px-4 py-3 outline-none"
                 />
+              </div>
+            )}
+
+            {/* Prijatá faktúra — canonical cesta.
+                Ponúka sa iba pri type 'invoice' a iba držiteľovi
+                finance.manage. Je to alternatíva k archivácii dokumentu, nie
+                jej náhrada: kto chce doklad iba odložiť k vozidlu/stroju,
+                pokračuje priradením nižšie. */}
+            {scanDocumentType === "invoice" && canManageFinance && (
+              <div className="space-y-3 rounded-2xl border border-subtle bg-surface-1 p-5">
+                <h3 className="text-lg font-black text-primary">
+                  {t("inbox.receivedInvoice.cta.title")}
+                </h3>
+                <p className="text-sm text-muted-esblu">
+                  {t("inbox.receivedInvoice.cta.description")}
+                </p>
+                <button
+                  onClick={startReceivedInvoiceReview}
+                  disabled={isPreparingReceivedInvoice || isSavingOtherDocument || legalHold}
+                  className="w-full rounded-2xl bg-accent-esblu px-6 py-4 text-base font-black text-on-accent disabled:opacity-50"
+                >
+                  {isPreparingReceivedInvoice
+                    ? t("inbox.receivedInvoice.cta.preparing")
+                    : t("inbox.receivedInvoice.cta.button")}
+                </button>
               </div>
             )}
 
@@ -3794,6 +3993,52 @@ function formatDocDate(value: unknown): string {
           : t("inbox.deleteDocument")}
       </button>
       )}
+    </div>
+  </div>
+)}
+
+{/* Review prijatej faktúry. Otvára sa až keď je zdrojový dokument uložený
+    (potrebuje jeho id). Zrušenie review dokument NEMAŽE — ostáva v Inboxe. */}
+{receivedCandidate && companyId && (
+  <ReceivedInvoiceReview
+    candidate={receivedCandidate}
+    companyId={companyId}
+    userId={currentUserId}
+    onCancel={() => setReceivedCandidate(null)}
+    onCreated={(invoiceId) => {
+      setReceivedCandidate(null);
+      setCreatedReceivedInvoiceId(invoiceId);
+      resetScanReview();
+      setSelectedFile(null);
+      setFileName("");
+      void loadOtherDocuments();
+    }}
+  />
+)}
+
+{/* Potvrdenie po vytvorení draftu. Zámerne NEPRESMEROVÁVA automaticky —
+    používateľ môže chcieť rovno spracovať ďalší doklad z Inboxu. */}
+{createdReceivedInvoiceId && (
+  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+    <div className="w-full max-w-md rounded-3xl bg-surface-1 p-6 text-center">
+      <h3 className="text-xl font-black text-primary">
+        {t("inbox.receivedInvoice.created.title")}
+      </h3>
+      <p className="mt-2 text-sm text-muted-esblu">
+        {t("inbox.receivedInvoice.created.body")}
+      </p>
+      <a
+        href={invoiceDetailHref(createdReceivedInvoiceId)}
+        className="mt-5 block w-full rounded-2xl bg-accent-esblu px-6 py-4 font-black text-on-accent"
+      >
+        {t("inbox.receivedInvoice.created.openInvoice")}
+      </a>
+      <button
+        onClick={() => setCreatedReceivedInvoiceId(null)}
+        className="mt-3 w-full rounded-2xl border border-subtle px-6 py-4 font-bold text-primary"
+      >
+        {t("inbox.receivedInvoice.created.stayInInbox")}
+      </button>
     </div>
   </div>
 )}

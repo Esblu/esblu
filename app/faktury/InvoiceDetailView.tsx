@@ -99,6 +99,11 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
 
   // Draft edit state (iba kým document_status='draft').
   const [customerId, setCustomerId] = useState("");
+  // Received-only identita. Pri direction='issued' zostávajú prázdne a
+  // neodosielajú sa — DB CHECK invoices_supplier_only_when_received by ich
+  // aj tak odmietol.
+  const [supplierId, setSupplierId] = useState("");
+  const [supplierInvoiceNumber, setSupplierInvoiceNumber] = useState("");
   const [issueDate, setIssueDate] = useState(TODAY);
   const [dueDate, setDueDate] = useState("");
   const [variableSymbol, setVariableSymbol] = useState("");
@@ -181,6 +186,8 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
         const defaultVatRate = billingProfile?.default_vat_rate ?? null;
         setCompanyDefaultVatRate(defaultVatRate);
         setCustomerId(inv.customer_business_partner_id ?? "");
+        setSupplierId(inv.supplier_business_partner_id ?? "");
+        setSupplierInvoiceNumber(inv.supplier_invoice_number ?? "");
         setIssueDate(inv.issue_date);
         setDueDate(inv.due_date ?? "");
         setVariableSymbol(inv.variable_symbol ?? "");
@@ -300,7 +307,7 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
     try {
       const parsedTerms = Number(paymentTermsDays);
       const updated = await updateDraftInvoiceHeader(invoice.id, userId, {
-        customer_business_partner_id: customerId || null,
+        ...directionHeaderPatch(),
         issue_date: issueDate,
         due_date: dueDate || null,
         variable_symbol: variableSymbol.trim() || null,
@@ -321,6 +328,23 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
     }
   }
 
+  const isReceived = invoice?.direction === "received";
+
+  /**
+   * Hlavička draftu podľa smeru. Prijatá faktúra má protistranu v
+   * supplier_business_partner_id a vlastnú identitu v supplier_invoice_number;
+   * customer_business_partner_id pri nej MUSÍ zostať NULL (DB CHECK
+   * invoices_customer_only_when_issued) a naopak.
+   */
+  function directionHeaderPatch() {
+    return isReceived
+      ? {
+          supplier_business_partner_id: supplierId || null,
+          supplier_invoice_number: supplierInvoiceNumber.trim() || null,
+        }
+      : { customer_business_partner_id: customerId || null };
+  }
+
   async function handleFinalize() {
     if (!invoice) return;
 
@@ -330,7 +354,10 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
         issue_date: issueDate,
         due_date: dueDate || undefined,
         payment_terms_days: paymentTermsDays !== "" ? Number(paymentTermsDays) : undefined,
+        direction: invoice.direction,
         customer_business_partner_id: customerId || null,
+        supplier_business_partner_id: supplierId || null,
+        supplier_invoice_number: supplierInvoiceNumber.trim() || null,
         kind: invoice.kind,
         corrects_invoice_id: invoice.corrects_invoice_id,
       },
@@ -353,7 +380,7 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
       // Najprv ulož posledné zmeny hlavičky/riadkov (finalize prepočíta
       // autoritatívne v DB, ale drafte musia byť uložené, aby ich RPC videla).
       await updateDraftInvoiceHeader(invoice.id, userId, {
-        customer_business_partner_id: customerId || null,
+        ...directionHeaderPatch(),
         issue_date: issueDate,
         due_date: dueDate || null,
         variable_symbol: variableSymbol.trim() || null,
@@ -519,7 +546,17 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold text-primary">
-            {invoice.invoice_number ?? t("invoices.numberFallback")}
+            {/* Prijatá faktúra nemá a nikdy nedostane interné číslo Esblu —
+                jej identitou je číslo dodávateľa. Zobraziť tu "FA…" fallback
+                by klamalo o pôvode dokladu. */}
+            {isReceived
+              ? (invoice.supplier_invoice_number ?? t("invoices.numberFallback"))
+              : (invoice.invoice_number ?? t("invoices.numberFallback"))}
+            {isReceived && (
+              <span className="ml-2 rounded-full bg-slate-200 px-2 py-0.5 text-xs font-bold text-slate-700 dark:bg-slate-700 dark:text-slate-200">
+                {t("invoices.direction.receivedBadge")}
+              </span>
+            )}
             {overdue && (
               <span className="ml-2 rounded-full bg-red-100 px-2 py-0.5 text-xs font-bold text-red-700">
                 {t("invoices.overdueBadge")}
@@ -531,6 +568,9 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
             {invoice.document_status === "draft"
               ? t("invoices.documentStatus.draft")
               : t(`invoices.paymentStatus.${invoice.payment_status}`)}
+            {isReceived && invoice.source === "ai_inbox"
+              ? ` · ${t("invoices.source.ai_inbox")}`
+              : ""}
           </p>
         </div>
         <p className="text-2xl font-bold text-primary">
@@ -568,15 +608,36 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
 
           <div className="mt-6 rounded-3xl border border-subtle bg-surface-1 p-6 shadow-lg">
             <div className="grid gap-4 sm:grid-cols-2">
+              {isReceived && (
+                <div className="sm:col-span-2">
+                  <label className="mb-2 block text-sm font-semibold">
+                    {t("invoices.detail.supplierInvoiceNumberLabel")}
+                  </label>
+                  <input
+                    className="w-full rounded-xl border p-3"
+                    value={supplierInvoiceNumber}
+                    disabled={!canEdit}
+                    onChange={(event) => setSupplierInvoiceNumber(event.target.value)}
+                  />
+                  <p className="mt-1 text-xs text-secondary">
+                    {t("invoices.detail.supplierInvoiceNumberHint")}
+                  </p>
+                </div>
+              )}
+
               <div>
                 <label className="mb-2 block text-sm font-semibold">
-                  {t("invoices.newInvoice.businessPartnerLabel")}
+                  {isReceived
+                    ? t("invoices.detail.supplierPartnerLabel")
+                    : t("invoices.newInvoice.businessPartnerLabel")}
                 </label>
                 <select
                   className="w-full rounded-xl border p-3"
-                  value={customerId}
+                  value={isReceived ? supplierId : customerId}
                   disabled={!canEdit}
-                  onChange={(event) => setCustomerId(event.target.value)}
+                  onChange={(event) =>
+                    isReceived ? setSupplierId(event.target.value) : setCustomerId(event.target.value)
+                  }
                 >
                   <option value="">{t("invoices.newInvoice.businessPartnerPlaceholder")}</option>
                   {partners.map((partner) => (
@@ -818,18 +879,38 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
           )}
 
           <div className="mt-4 flex flex-wrap items-center gap-3">
-            <button
-              type="button"
-              onClick={handleDownloadPdf}
-              disabled={downloadingPdf}
-              className="min-h-11 rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:bg-gray-400"
-            >
-              {downloadingPdf
-                ? t("invoices.detail.downloadingPdf")
-                : t("invoices.detail.downloadPdfButton")}
-            </button>
+            {/* PDF generuje Esblu iba pre VLASTNÉ vydané doklady. Prijatá
+                faktúra je dokument dodávateľa — vyrobiť jej vlastné PDF by
+                znamenalo vydávať prerozprávanie cudzieho dokladu za doklad.
+                Originál je prelinkovaný cez zdrojový dokument. */}
+            {!isReceived ? (
+              <button
+                type="button"
+                onClick={handleDownloadPdf}
+                disabled={downloadingPdf}
+                className="min-h-11 rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:bg-gray-400"
+              >
+                {downloadingPdf
+                  ? t("invoices.detail.downloadingPdf")
+                  : t("invoices.detail.downloadPdfButton")}
+              </button>
+            ) : invoice.source_document_id ? (
+              <Link
+                href={`/ai-evidencia?openDocument=${invoice.source_document_id}`}
+                className="inline-flex min-h-11 items-center rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700"
+              >
+                {t("invoices.detail.openSourceDocumentButton")}
+              </Link>
+            ) : (
+              <p className="text-sm text-secondary">
+                {t("invoices.detail.noSourceDocument")}
+              </p>
+            )}
 
-            {canEdit && (
+            {/* Opravný doklad dedí smer opravovanej faktúry — krížiť ich
+                zakazuje ESBLU_CORRECTED_INVOICE_DIRECTION_MISMATCH, a UI pre
+                received opravné doklady zatiaľ neexistuje. */}
+            {canEdit && !isReceived && (
               <Link
                 href={`/faktury/new?corrects=${invoice.id}`}
                 className="inline-flex min-h-11 items-center rounded-xl border px-4 py-2 text-sm font-semibold"
@@ -842,7 +923,13 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
           <div className="mt-6 grid gap-4 sm:grid-cols-2">
             {seller && (
               <div className="rounded-2xl border border-subtle bg-surface-1 p-4">
-                <h2 className="text-sm font-bold text-secondary">{t("invoices.detail.sellerTitle")}</h2>
+                <h2 className="text-sm font-bold text-secondary">
+                  {t("invoices.detail.sellerTitle")}
+                  {/* Pri prijatej faktúre je predávajúcim dodávateľ, nie my —
+                      bez tohto rozlíšenia nie je z detailu zrejmé, ktorá
+                      strana je naša firma. */}
+                  {isReceived ? ` · ${t("invoices.detail.externalPartyNote")}` : ""}
+                </h2>
                 <p className="mt-1 font-semibold text-primary">{seller.legal_name}</p>
                 {seller.ico && <p className="text-sm text-secondary">IČO: {seller.ico}</p>}
                 {seller.address_line1 && (
@@ -856,7 +943,10 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
 
             {buyer && (
               <div className="rounded-2xl border border-subtle bg-surface-1 p-4">
-                <h2 className="text-sm font-bold text-secondary">{t("invoices.detail.buyerTitle")}</h2>
+                <h2 className="text-sm font-bold text-secondary">
+                  {t("invoices.detail.buyerTitle")}
+                  {isReceived ? ` · ${t("invoices.detail.ourCompanyNote")}` : ""}
+                </h2>
                 <p className="mt-1 font-semibold text-primary">{buyer.legal_name}</p>
                 {buyer.ico && <p className="text-sm text-secondary">IČO: {buyer.ico}</p>}
                 {buyer.address_line1 && (
@@ -933,8 +1023,20 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
 
           <h2 className="mt-8 text-lg font-bold text-primary">{t("invoices.detail.paymentsTitle")}</h2>
 
+          {/* Platobný model je pre oba smery ten istý (RPC, payment_status).
+              Mení sa len formulácia: vydaná faktúra je pohľadávka voči
+              zákazníkovi, prijatá je záväzok voči dodávateľovi. */}
+          <p className="mt-1 text-xs text-secondary">
+            {isReceived
+              ? t("invoices.detail.paymentsReceivedHint")
+              : t("invoices.detail.paymentsIssuedHint")}
+          </p>
+
           <p className="mt-2 text-sm text-secondary">
-            {t("invoices.detail.totalPaidLabel")}: {formatMoney(totalPaid, invoice.currency)}
+            {(isReceived
+              ? t("invoices.detail.totalPaidToSupplierLabel")
+              : t("invoices.detail.totalPaidLabel"))}
+            : {formatMoney(totalPaid, invoice.currency)}
           </p>
 
           {payments.length === 0 ? (

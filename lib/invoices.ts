@@ -69,6 +69,20 @@ export type Invoice = {
   /** Dátum fyzického prijatia dokladu — nezamieňať s issue_date/tax_point_date.
    *  Pri direction='issued' vždy NULL. */
   received_at: string | null;
+  /** Dedupe vrstva B — sha256 normalizovanej identity dokladu. NULL ak
+   *  dodávateľ nemá spoľahlivý identifikátor (vtedy dedupe nebeží). */
+  dedupe_fingerprint: string | null;
+  /** Dedupe vrstva C — až s reálnou Peppol prevádzkou. */
+  transport_provider: string | null;
+  transport_message_id: string | null;
+  /** EN16931 BT-10. */
+  buyer_reference: string | null;
+  /** EN16931 BT-13. */
+  purchase_order_reference: string | null;
+  /** EN16931 BT-81, UNTDID 4461. */
+  payment_means_code: string | null;
+  /** EN16931 BT-83 — canonical náprotivok variable_symbol. */
+  payment_reference: string | null;
   corrects_invoice_id: string | null;
   source: InvoiceSource;
   source_document_id: string | null;
@@ -470,7 +484,16 @@ export function validateDraftBeforeFinalize(
     Invoice,
     "issue_date" | "customer_business_partner_id" | "kind" | "corrects_invoice_id"
   > &
-    Partial<Pick<Invoice, "due_date" | "payment_terms_days">>,
+    Partial<
+      Pick<
+        Invoice,
+        | "due_date"
+        | "payment_terms_days"
+        | "direction"
+        | "supplier_business_partner_id"
+        | "supplier_invoice_number"
+      >
+    >,
   items: DraftInvoiceItemInput[]
 ): DraftValidationError[] {
   const errors: DraftValidationError[] = [];
@@ -491,7 +514,26 @@ export function validateDraftBeforeFinalize(
     errors.push({ field: "payment_terms_days", messageKey: "paymentTermsDaysNegative" });
   }
 
-  if (!invoice.customer_business_partner_id) {
+  // Protistrana je direction-aware. Pri prijatej faktúre je ňou DODÁVATEĽ a
+  // customer_business_partner_id je z definície NULL (DB CHECK
+  // invoices_customer_only_when_issued) — kontrolovať ho by znamenalo, že
+  // každý received draft by tu spadol na "missingBusinessPartner".
+  // `direction` je voliteľný: staršie volania bez neho sa správajú ako issued,
+  // čo je pôvodné správanie.
+  if (invoice.direction === "received") {
+    if (!invoice.supplier_business_partner_id) {
+      errors.push({
+        field: "supplier_business_partner_id",
+        messageKey: "missingSupplier",
+      });
+    }
+    if (!invoice.supplier_invoice_number?.trim()) {
+      errors.push({
+        field: "supplier_invoice_number",
+        messageKey: "missingSupplierInvoiceNumber",
+      });
+    }
+  } else if (!invoice.customer_business_partner_id) {
     errors.push({ field: "customer_business_partner_id", messageKey: "missingBusinessPartner" });
   }
 
@@ -588,6 +630,94 @@ export async function finalizeInvoice(invoiceId: string): Promise<FinalizeInvoic
 
   if (error) throw error;
   return data as FinalizeInvoiceResult;
+}
+
+// -----------------------------------------------------------------------------
+// AI Inbox → canonical received invoice draft
+// -----------------------------------------------------------------------------
+
+export type ReceivedDraftItemInput = {
+  description: string;
+  quantity: number;
+  unit: string;
+  /** Iba ak ho používateľ potvrdil — nikdy sa neodvodzuje z `unit`. */
+  unit_code: string | null;
+  unit_price: number;
+  vat_category_code: VatCategoryCode;
+  /** Význam má výhradne pre kategóriu S; pre Z/E/AE posielame 0. */
+  vat_rate: number;
+};
+
+export type CreateReceivedDraftInput = {
+  supplier_business_partner_id: string;
+  supplier_invoice_number: string;
+  issue_date: string;
+  items: ReceivedDraftItemInput[];
+  due_date?: string | null;
+  delivery_date?: string | null;
+  tax_point_date?: string | null;
+  currency?: string | null;
+  iban?: string | null;
+  bic?: string | null;
+  payment_reference?: string | null;
+  variable_symbol?: string | null;
+  buyer_reference?: string | null;
+  purchase_order_reference?: string | null;
+  received_at?: string | null;
+  source_document_id?: string | null;
+  dedupe_fingerprint?: string | null;
+};
+
+export type CreateReceivedDraftResult =
+  | {
+      status: "created";
+      invoice_id: string;
+      supplier_invoice_number: string;
+      item_count: number;
+    }
+  | {
+      status: "duplicate";
+      existing_invoice_id: string;
+      matched_on: "supplier_invoice_number" | "dedupe_fingerprint" | "source_document";
+    };
+
+/**
+ * Vytvorí canonical received invoice DRAFT z potvrdeného Inbox review.
+ *
+ * Volá esblu_create_received_invoice_draft() (SECURITY DEFINER), ktorá v
+ * jednej transakcii overí oprávnenia a tenant, spustí dedupe, vloží faktúru
+ * aj položky a prelinkuje zdrojový dokument. Táto funkcia nikdy nič sama
+ * nezapisuje.
+ *
+ * Duplikát NIE JE chyba — vracia sa ako `status: "duplicate"` s id existujúcej
+ * faktúry, aby ju UI vedelo ponúknuť. Druhá canonical faktúra nevznikne.
+ * Draft sa NIKDY automaticky nefinalizuje.
+ */
+export async function createReceivedInvoiceDraft(
+  input: CreateReceivedDraftInput
+): Promise<CreateReceivedDraftResult> {
+  const { data, error } = await supabase.rpc("esblu_create_received_invoice_draft", {
+    p_supplier_business_partner_id: input.supplier_business_partner_id,
+    p_supplier_invoice_number: input.supplier_invoice_number,
+    p_issue_date: input.issue_date,
+    p_items: input.items,
+    p_due_date: input.due_date ?? null,
+    p_delivery_date: input.delivery_date ?? null,
+    p_tax_point_date: input.tax_point_date ?? null,
+    p_currency: input.currency ?? "EUR",
+    p_iban: input.iban ?? null,
+    p_bic: input.bic ?? null,
+    p_payment_reference: input.payment_reference ?? null,
+    p_variable_symbol: input.variable_symbol ?? null,
+    p_buyer_reference: input.buyer_reference ?? null,
+    p_purchase_order_reference: input.purchase_order_reference ?? null,
+    p_received_at: input.received_at ?? null,
+    p_source_document_id: input.source_document_id ?? null,
+    p_dedupe_fingerprint: input.dedupe_fingerprint ?? null,
+  });
+
+  if (error) throw error;
+  return data as CreateReceivedDraftResult;
 }
 
 export type AddPaymentResult = {

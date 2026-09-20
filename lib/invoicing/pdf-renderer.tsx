@@ -304,13 +304,28 @@ function PartyBox({
   );
 }
 
+/**
+ * Číslo dokladu podľa smeru.
+ *
+ * Endpoint dnes prijaté faktúry odmieta (fail-closed, viď route.ts §5b), takže
+ * táto vetva je defense-in-depth: keby sa received PDF niekedy povolilo,
+ * renderer nesmie vytlačiť prázdne číslo. Prijatá faktúra nemá a nikdy
+ * nedostane invoice_number — jej identitou je číslo dodávateľa.
+ */
+function documentNumberFor(invoice: InvoicePdfBundle["invoice"]): string | null {
+  return invoice.direction === "received"
+    ? (invoice.supplier_invoice_number ?? null)
+    : (invoice.invoice_number ?? null);
+}
+
 function InvoicePdfDocument({ invoice, seller, buyer, items, taxBreakdowns, locale }: InvoicePdfBundle) {
   const documentLabel = translate(locale, `invoices.kind.${invoice.kind}`);
   const rounding = Number(invoice.rounding_amount) || 0;
+  const documentNumber = documentNumberFor(invoice);
 
   return (
     <Document
-      title={invoice.invoice_number ?? documentLabel}
+      title={documentNumber ?? documentLabel}
       author="Esblu"
       creator="Esblu"
       producer="Esblu"
@@ -320,7 +335,7 @@ function InvoicePdfDocument({ invoice, seller, buyer, items, taxBreakdowns, loca
           <View>
             <Text style={styles.docTitle}>{documentLabel}</Text>
             <Text style={styles.docNumber}>
-              {translate(locale, "invoices.pdf.documentNumberLabel")}: {invoice.invoice_number ?? "—"}
+              {translate(locale, "invoices.pdf.documentNumberLabel")}: {documentNumber ?? "—"}
             </Text>
           </View>
           <View style={styles.metaBlock}>

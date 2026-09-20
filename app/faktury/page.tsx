@@ -18,9 +18,21 @@ import { invoiceDetailHref } from "@/lib/entity-links";
 import { isInvoiceOverdue, listInvoices, type Invoice } from "@/lib/invoices";
 import { listBusinessPartners, type BusinessPartner } from "@/lib/business-partners";
 
+// Smer je samostatná dimenzia od sekcií. Sekcia "issued" totiž NIKDY
+// neznamenala direction='issued' — znamená "finalizovaná riadna faktúra".
+// Bez tohto oddelenia by prijaté faktúry ticho padali do sekcií vydaných.
+type DirectionFilter = "all" | "issued" | "received";
+
+const DIRECTION_ORDER: DirectionFilter[] = ["all", "issued", "received"];
+
 type SectionKey = "issued" | "drafts" | "unpaid" | "overdue" | "paid" | "corrections";
 
 const SECTION_ORDER: SectionKey[] = ["issued", "drafts", "unpaid", "overdue", "paid", "corrections"];
+
+function matchesDirection(invoice: Invoice, filter: DirectionFilter): boolean {
+  if (filter === "all") return true;
+  return invoice.direction === filter;
+}
 
 function matchesSection(invoice: Invoice, section: SectionKey): boolean {
   switch (section) {
@@ -61,6 +73,7 @@ export default function FakturyPage() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [section, setSection] = useState<SectionKey>("issued");
+  const [directionFilter, setDirectionFilter] = useState<DirectionFilter>("all");
 
   useEffect(() => {
     void init();
@@ -114,6 +127,23 @@ export default function FakturyPage() {
     }
   }
 
+  // Smerový filter sa aplikuje PRED počítaním sekcií, aby počty v záložkách
+  // zodpovedali tomu, čo sa po kliknutí naozaj zobrazí.
+  const directionScopedInvoices = useMemo(
+    () => invoices.filter((invoice) => matchesDirection(invoice, directionFilter)),
+    [invoices, directionFilter]
+  );
+
+  const directionCounts = useMemo(() => {
+    const counts: Record<DirectionFilter, number> = { all: 0, issued: 0, received: 0 };
+    for (const invoice of invoices) {
+      counts.all += 1;
+      if (invoice.direction === "issued") counts.issued += 1;
+      if (invoice.direction === "received") counts.received += 1;
+    }
+    return counts;
+  }, [invoices]);
+
   const sectionCounts = useMemo(() => {
     const counts: Record<SectionKey, number> = {
       issued: 0,
@@ -123,22 +153,43 @@ export default function FakturyPage() {
       paid: 0,
       corrections: 0,
     };
-    for (const invoice of invoices) {
+    for (const invoice of directionScopedInvoices) {
       for (const key of SECTION_ORDER) {
         if (matchesSection(invoice, key)) counts[key] += 1;
       }
     }
     return counts;
-  }, [invoices]);
+  }, [directionScopedInvoices]);
 
   const filteredInvoices = useMemo(
-    () => invoices.filter((invoice) => matchesSection(invoice, section)),
-    [invoices, section]
+    () => directionScopedInvoices.filter((invoice) => matchesSection(invoice, section)),
+    [directionScopedInvoices, section]
   );
 
-  function customerName(invoice: Invoice): string {
-    if (!invoice.customer_business_partner_id) return "";
-    return partnersById[invoice.customer_business_partner_id]?.legal_name ?? "";
+  /**
+   * Protistrana podľa smeru: pri vydanej faktúre odberateľ, pri prijatej
+   * dodávateľ. Bez tohto rozlíšenia by prijaté faktúry v zozname nemali
+   * uvedenú žiadnu firmu (customer_business_partner_id je pri nich vždy NULL).
+   */
+  function counterpartyName(invoice: Invoice): string {
+    const partnerId =
+      invoice.direction === "received"
+        ? invoice.supplier_business_partner_id
+        : invoice.customer_business_partner_id;
+    if (!partnerId) return "";
+    return partnersById[partnerId]?.legal_name ?? "";
+  }
+
+  /**
+   * Číslo dokladu podľa smeru. Vydaná faktúra má interné číslo Esblu,
+   * prijatá má číslo dodávateľa — fallback "bez čísla (koncept)" by pri
+   * finalizovanej prijatej faktúre klamal.
+   */
+  function invoiceNumberLabel(invoice: Invoice): string {
+    if (invoice.direction === "received") {
+      return invoice.supplier_invoice_number ?? t("invoices.numberFallback");
+    }
+    return invoice.invoice_number ?? t("invoices.numberFallback");
   }
 
   function formatMoney(amount: number, currency: string): string {
@@ -192,6 +243,25 @@ export default function FakturyPage() {
 
       {canView && (
         <div className="mt-6 flex flex-wrap gap-2">
+          {DIRECTION_ORDER.map((key) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => setDirectionFilter(key)}
+              className={`rounded-full border px-4 py-2 text-sm font-bold transition ${
+                directionFilter === key
+                  ? "border-slate-900 bg-slate-900 text-white dark:border-slate-100 dark:bg-slate-100 dark:text-slate-900"
+                  : "border-subtle bg-surface-1 text-secondary hover:text-primary"
+              }`}
+            >
+              {t(`invoices.direction.${key}`)} ({directionCounts[key]})
+            </button>
+          ))}
+        </div>
+      )}
+
+      {canView && (
+        <div className="mt-3 flex flex-wrap gap-2">
           {SECTION_ORDER.map((key) => (
             <button
               key={key}
@@ -231,7 +301,12 @@ export default function FakturyPage() {
                     >
                       <div className="min-w-0 flex-1">
                         <p className="truncate font-semibold text-primary">
-                          {invoice.invoice_number ?? t("invoices.numberFallback")}
+                          {invoiceNumberLabel(invoice)}
+                          {invoice.direction === "received" && (
+                            <span className="ml-2 rounded-full bg-slate-200 px-2 py-0.5 text-xs font-bold text-slate-700 dark:bg-slate-700 dark:text-slate-200">
+                              {t("invoices.direction.receivedBadge")}
+                            </span>
+                          )}
                           {overdue && (
                             <span className="ml-2 rounded-full bg-red-100 px-2 py-0.5 text-xs font-bold text-red-700">
                               {t("invoices.overdueBadge")}
@@ -240,9 +315,12 @@ export default function FakturyPage() {
                         </p>
                         <p className="text-xs text-secondary">
                           {t(`invoices.kind.${invoice.kind}`)}
-                          {customerName(invoice) ? ` · ${customerName(invoice)}` : ""}
+                          {counterpartyName(invoice) ? ` · ${counterpartyName(invoice)}` : ""}
                           {" · "}
                           {formatDate(invoice.issue_date, locale)}
+                          {invoice.direction === "received" && invoice.source === "ai_inbox"
+                            ? ` · ${t("invoices.source.ai_inbox")}`
+                            : ""}
                         </p>
                       </div>
 

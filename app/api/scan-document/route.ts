@@ -200,31 +200,99 @@ const DELIVERY_NOTE_FIELDS_SCHEMA = {
   ],
 } as const;
 
+// Riadková položka faktúry. VAT kategória a unit code sú NÁVRHY — model ich
+// smie vyplniť len keď sú na doklade explicitne uvedené, a canonical zápis
+// ich prevezme až po potvrdení používateľom (lib/invoicing/received-candidate.ts).
+const INVOICE_LINE_ITEM_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    description: { type: ["string", "null"] },
+    quantity: { type: ["number", "null"], minimum: 0 },
+    unit: { type: ["string", "null"] },
+    unitCode: { type: ["string", "null"] },
+    unitPrice: { type: ["number", "null"], minimum: 0 },
+    vatCategoryCode: { type: ["string", "null"], enum: ["S", "Z", "E", "AE", null] },
+    vatRate: { type: ["number", "null"], minimum: 0 },
+  },
+  required: ["description", "quantity", "unit", "unitCode", "unitPrice", "vatCategoryCode", "vatRate"],
+} as const;
+
 const INVOICE_FIELDS_SCHEMA = {
   type: ["object", "null"],
   additionalProperties: false,
   properties: {
     supplier: { type: ["string", "null"] },
+    supplierIco: { type: ["string", "null"] },
+    supplierDic: { type: ["string", "null"] },
+    supplierVatId: { type: ["string", "null"] },
+    supplierAddress: { type: ["string", "null"] },
+    supplierCity: { type: ["string", "null"] },
+    supplierPostalCode: { type: ["string", "null"] },
+    supplierCountryCode: { type: ["string", "null"] },
+    supplierEmail: { type: ["string", "null"] },
     customer: { type: ["string", "null"] },
+    customerIco: { type: ["string", "null"] },
+    customerDic: { type: ["string", "null"] },
+    customerVatId: { type: ["string", "null"] },
+    customerAddress: { type: ["string", "null"] },
+    customerCity: { type: ["string", "null"] },
+    customerPostalCode: { type: ["string", "null"] },
+    customerCountryCode: { type: ["string", "null"] },
+    customerEmail: { type: ["string", "null"] },
     invoiceNumber: { type: ["string", "null"] },
     issueDate: { type: ["string", "null"] },
     dueDate: { type: ["string", "null"] },
+    deliveryDate: { type: ["string", "null"] },
+    taxPointDate: { type: ["string", "null"] },
+    subtotalAmount: { type: ["number", "null"], minimum: 0 },
     totalAmount: { type: ["number", "null"], minimum: 0 },
     currency: { type: ["string", "null"] },
     vatAmount: { type: ["number", "null"], minimum: 0 },
+    iban: { type: ["string", "null"] },
+    bic: { type: ["string", "null"] },
     variableSymbol: { type: ["string", "null"] },
+    paymentReference: { type: ["string", "null"] },
+    buyerReference: { type: ["string", "null"] },
+    purchaseOrderReference: { type: ["string", "null"] },
+    lineItems: { type: ["array", "null"], items: INVOICE_LINE_ITEM_SCHEMA },
     description: { type: ["string", "null"] },
   },
   required: [
     "supplier",
+    "supplierIco",
+    "supplierDic",
+    "supplierVatId",
+    "supplierAddress",
+    "supplierCity",
+    "supplierPostalCode",
+    "supplierCountryCode",
+    "supplierEmail",
     "customer",
+    "customerIco",
+    "customerDic",
+    "customerVatId",
+    "customerAddress",
+    "customerCity",
+    "customerPostalCode",
+    "customerCountryCode",
+    "customerEmail",
     "invoiceNumber",
     "issueDate",
     "dueDate",
+    "deliveryDate",
+    "taxPointDate",
+    "subtotalAmount",
     "totalAmount",
     "currency",
     "vatAmount",
+    "iban",
+    "bic",
     "variableSymbol",
+    "paymentReference",
+    "buyerReference",
+    "purchaseOrderReference",
+    "lineItems",
     "description",
   ],
 } as const;
@@ -380,7 +448,9 @@ TYPY DOKUMENTOV
 - weigh_ticket: vážny lístok z váhy (brutto/tara/netto, SPZ vozidla).
 - delivery_note: dodací list (materiál, množstvo, SPZ; môže byť aj bez
   uvedených hmotností).
-- invoice: faktúra (dodávateľ, odberateľ, suma, splatnosť).
+- invoice: faktúra (dodávateľ, odberateľ, suma, splatnosť). Neurčuj, či je
+  vydaná alebo prijatá — tvojou úlohou je len prečítať, kto je dodávateľ a
+  kto odberateľ. O smere rozhoduje používateľ v aplikácii.
 - receipt: pokladničný bloček (obchod, suma, dátum nákupu).
 - insurance: poistná zmluva alebo poistný certifikát vozidla/stroja (PZP,
   havarijné poistenie a pod.) — poisťovňa, číslo zmluvy, platnosť, poistné.
@@ -534,6 +604,60 @@ podľa toho, v akom jazyku je zvyšok dokumentu.
   čitateľný, inak null.
 - vehicleOrMachineIdentifier vráť iba ak dokument jasne odkazuje na
   konkrétne vozidlo (SPZ) alebo stroj (sériové číslo); inak null.
+
+== INVOICE — STRANY ==
+- supplier je ten, KTO doklad VYSTAVIL (dodávateľ, predávajúci, Lieferant,
+  Supplier). customer je ten, KOMU je vystavený (odberateľ, príjemca faktúry,
+  Kunde, Bill to).
+- Rozlíš ich podľa labelu, nie podľa pozície na stránke a nie podľa toho,
+  ktorý je vytlačený väčším písmom. Hlavička dokladu nie je automaticky
+  dodávateľ.
+- Ak sa z dokladu nedá jednoznačne určiť, ktorá strana je dodávateľ a ktorá
+  odberateľ, vráť pre OBE strany null. Prehodené strany sú horšie než žiadne
+  strany — používateľ by zaevidoval faktúru na nesprávneho partnera.
+- supplierIco/customerIco je IČO (IČ, Company ID, Firmenbuchnummer).
+  supplierDic/customerDic je DIČ (daňové identifikačné číslo).
+  supplierVatId/customerVatId je IČ DPH / VAT ID / USt-IdNr. (spravidla
+  začína kódom krajiny, napr. SK2020…, DE123…). Tieto tri polia NIKDY
+  nezamieňaj — na SK doklade stoja bežne vedľa seba a líšia sa len labelom.
+- supplierCountryCode/customerCountryCode vráť ako 2-písmenový ISO kód iba
+  ak je krajina na doklade uvedená alebo jednoznačne vyplýva z adresy; inak
+  null. Nikdy ho neodvodzuj z jazyka dokladu.
+
+== INVOICE — ČÍSLA, DÁTUMY, PLATBA ==
+- invoiceNumber je číslo dokladu tak, ako ho pridelil DODÁVATEĽ, presne v
+  tvare, v akom je vytlačené (vrátane vedúcich núl a oddeľovačov).
+- deliveryDate je dátum dodania, taxPointDate je dátum dodania na účely DPH
+  (dátum zdaniteľného plnenia, DUZP, Leistungsdatum). Ak doklad uvádza len
+  jeden z nich, vyplň len ten a druhý nechaj null.
+- subtotalAmount je základ dane (suma bez DPH), vatAmount je DPH, totalAmount
+  je suma na úhradu. Vráť len tie, ktoré sú na doklade skutočne vytlačené —
+  chýbajúcu hodnotu NEDOPOČÍTAVAJ.
+- iban a bic vráť iba ak sú na doklade uvedené. variableSymbol je SK/CZ
+  variabilný symbol; paymentReference je referencia platby, ak je uvedená
+  samostatne. buyerReference a purchaseOrderReference vráť iba ak doklad
+  explicitne uvádza referenciu odberateľa / číslo objednávky.
+
+== INVOICE — RIADKOVÉ POLOŽKY ==
+- lineItems vyplň iba ak má doklad čitateľnú tabuľku položiek. Ak položky
+  nie sú čitateľné, vráť null — jeden vymyslený súhrnný riadok je horší než
+  žiadny, pretože vyzerá ako prečítaný údaj.
+- description je text položky. quantity a unitPrice sú čísla bez jednotky a
+  bez meny. unit je jednotka presne ako na doklade ("ks", "hod", "m3").
+- unitCode vyplň IBA ak je na doklade vytlačený kanonický kód jednotky
+  (napr. H87, HUR, MTQ). NIKDY ho neodvodzuj z textu v unit.
+- vatCategoryCode vyplň IBA ak doklad kategóriu explicitne uvádza alebo je
+  jednoznačná zo sadzby a sprievodného textu:
+    S  = bežná zdaňovaná sadzba
+    Z  = nulová sadzba
+    E  = oslobodené od dane
+    AE = prenesenie daňovej povinnosti (reverse charge, Reverse-Charge,
+         "daň odvedie odberateľ")
+  Pri akejkoľvek pochybnosti vráť null. Kategóriu DPH, právny dôvod
+  oslobodenia ani dôvod prenesenia daňovej povinnosti NIKDY neurčuj sám —
+  potvrdzuje ich používateľ.
+- vatRate je percentuálna sadzba z dokladu ako číslo (napr. 23). Vyplň ju aj
+  keď vatCategoryCode nevieš určiť. Sadzbu nikdy nevymýšľaj podľa krajiny.
 
 == INSURANCE ==
 - provider je názov poisťovne (napr. Allianz, Generali, Kooperativa); inak
@@ -817,17 +941,87 @@ function normalizeDeliveryNoteFields(data: Record<string, unknown>) {
   };
 }
 
+const ALLOWED_VAT_CATEGORY_CODES = new Set(["S", "Z", "E", "AE"]);
+
+/** Poistka proti patologickému výstupu modelu (stovky riadkov na review). */
+const MAX_INVOICE_LINE_ITEMS = 200;
+
+/**
+ * Normalizácia jedného riadku faktúry.
+ *
+ * vatCategoryCode sa prepustí IBA ak je to jedna zo štyroch kategórií, ktoré
+ * canonical model pozná. Čokoľvek iné (vrátane kategórií z Peppol code listu,
+ * ktoré Esblu zatiaľ nepodporuje) sa zahodí na null — návrh mimo nášho
+ * modelu je horší než žiadny návrh, lebo by používateľa tlačil potvrdiť
+ * hodnotu, ktorú DB aj tak odmietne.
+ *
+ * Riadok bez popisu sa zahodí celý: prázdny riadok v review obrazovke je
+ * práca navyše, nie informácia.
+ */
+function normalizeInvoiceLineItems(raw: unknown) {
+  if (!Array.isArray(raw)) return null;
+
+  const items = raw
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") return null;
+      const row = entry as Record<string, unknown>;
+      const description = nullableText(row.description);
+      if (!description) return null;
+
+      const rawCategory = nullableText(row.vatCategoryCode)?.toUpperCase() ?? null;
+
+      return {
+        description,
+        quantity: toFiniteNumberOrNull(row.quantity, { min: 0 }),
+        unit: nullableText(row.unit),
+        unitCode: nullableText(row.unitCode),
+        unitPrice: toFiniteNumberOrNull(row.unitPrice, { min: 0 }),
+        vatCategoryCode:
+          rawCategory && ALLOWED_VAT_CATEGORY_CODES.has(rawCategory) ? rawCategory : null,
+        vatRate: toFiniteNumberOrNull(row.vatRate, { min: 0 }),
+      };
+    })
+    .filter((item): item is NonNullable<typeof item> => item !== null);
+
+  return items.slice(0, MAX_INVOICE_LINE_ITEMS);
+}
+
 function normalizeInvoiceFields(data: Record<string, unknown>) {
   return {
     supplier: nullableText(data.supplier),
+    supplierIco: nullableText(data.supplierIco),
+    supplierDic: nullableText(data.supplierDic),
+    supplierVatId: nullableText(data.supplierVatId),
+    supplierAddress: nullableText(data.supplierAddress),
+    supplierCity: nullableText(data.supplierCity),
+    supplierPostalCode: nullableText(data.supplierPostalCode),
+    supplierCountryCode: nullableText(data.supplierCountryCode),
+    supplierEmail: nullableText(data.supplierEmail),
     customer: nullableText(data.customer),
+    customerIco: nullableText(data.customerIco),
+    customerDic: nullableText(data.customerDic),
+    customerVatId: nullableText(data.customerVatId),
+    customerAddress: nullableText(data.customerAddress),
+    customerCity: nullableText(data.customerCity),
+    customerPostalCode: nullableText(data.customerPostalCode),
+    customerCountryCode: nullableText(data.customerCountryCode),
+    customerEmail: nullableText(data.customerEmail),
     invoiceNumber: nullableText(data.invoiceNumber),
     issueDate: nullableText(data.issueDate),
     dueDate: nullableText(data.dueDate),
+    deliveryDate: nullableText(data.deliveryDate),
+    taxPointDate: nullableText(data.taxPointDate),
+    subtotalAmount: toFiniteNumberOrNull(data.subtotalAmount, { min: 0 }),
     totalAmount: toFiniteNumberOrNull(data.totalAmount, { min: 0 }),
     currency: nullableText(data.currency),
     vatAmount: toFiniteNumberOrNull(data.vatAmount, { min: 0 }),
+    iban: nullableText(data.iban),
+    bic: nullableText(data.bic),
     variableSymbol: nullableText(data.variableSymbol),
+    paymentReference: nullableText(data.paymentReference),
+    buyerReference: nullableText(data.buyerReference),
+    purchaseOrderReference: nullableText(data.purchaseOrderReference),
+    lineItems: normalizeInvoiceLineItems(data.lineItems),
     description: nullableText(data.description),
   };
 }
