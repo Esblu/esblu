@@ -53,25 +53,31 @@
   /* Page / layout — KOREKCIA v3: takmer čierna navy (nie modrastá plocha).
      Sidebar (page-bg-elevated) je zámerne TMAVŠÍ než hlavná plocha a menej
      kontrastný, aby nepôsobil ako samostatný svetlejší panel. */
-  --color-page-bg: #030812;
+  /* REVÍZIA: pozadie stránky je o stupeň hlbšie a povrchy nad ním o stupeň
+     svetlejšie. Doterajší rozdiel page-bg -> surface-1 bol 3 body jasu,
+     čo na bežnom kancelárskom monitore nevidno vôbec — karty sa zlievali
+     s pozadím a appka pôsobila ako jedna plochá tmavá plocha. */
+  --color-page-bg: #04070e;
   --color-page-bg-elevated: #020509;
 
   /* Surfaces (tmavé karty) — veľmi blízko page-bg, odlíšenie robí hlavne
      border + jemný vnútorný sheen (pozri .surface-card), nie svetlejšia
      výplň. */
-  --color-surface-1: #060b16;
-  --color-surface-2: #0a1120;
-  --color-surface-hover: #101a2c;
-  --color-surface-glass: rgba(6, 11, 22, 0.78);
+  --color-surface-1: #0a1220;
+  --color-surface-2: #111c2e;
+  --color-surface-hover: #17243a;
+  --color-surface-glass: rgba(10, 18, 32, 0.82);
 
   /* Borders — jemne cyan/modrý nádych namiesto neutrálne sivého */
-  --color-border-subtle: rgba(94, 149, 214, 0.16);
-  --color-border-strong: rgba(94, 149, 214, 0.32);
+  /* Rám je to, čo v tmavom rozhraní nesie tvar. Pri 0.16 bol prakticky
+     neviditeľný, takže register vyzeral ako zoznam textu bez riadkov. */
+  --color-border-subtle: rgba(110, 167, 224, 0.24);
+  --color-border-strong: rgba(120, 190, 235, 0.45);
 
   /* Text */
   --color-text-primary: #f3f6fc;
-  --color-text-secondary: #8ea0bd;
-  --color-text-muted: #5b6d8a;
+  --color-text-secondary: #9fb2cf;
+  --color-text-muted: #6d81a0;
 
   /* Accents */
   --color-accent-cyan: #22d3ee;
@@ -94,9 +100,13 @@
   --color-danger: #f87171;
   --color-danger-bg: rgba(248, 113, 113, 0.12);
 
+  /* Fokus — jeden token pre celú appku, aby sa klávesnicová navigácia
+     nevyhodnocovala zakaždým inak. */
+  --color-focus-ring: #38bdf8;
+
   /* Inputs */
-  --color-input-bg: rgba(9, 15, 28, 0.65);
-  --color-input-border: rgba(148, 178, 224, 0.2);
+  --color-input-bg: rgba(6, 11, 22, 0.75);
+  --color-input-border: rgba(148, 178, 224, 0.26);
 
   /* Radius */
   --radius-card: 1.5rem;
@@ -118,9 +128,9 @@
 
   /* Povrch dokumentového riadku/sekcie — o stupeň tichší než surface-2,
      aby zoznam dokladov nepôsobil ako kopa kariet. */
-  --color-doc-surface: #070d19;
-  --color-doc-surface-hover: #0c1424;
-  --color-doc-border: rgba(94, 149, 214, 0.14);
+  --color-doc-surface: #0b1523;
+  --color-doc-surface-hover: #131f31;
+  --color-doc-border: rgba(110, 167, 224, 0.2);
 
   /* CHÝBAJÚCE TOKENY — OPRAVA CHYBY.
      app/ai-evidencia/page.tsx používal bg-accent-esblu a text-on-accent
@@ -128,8 +138,11 @@
      --color-accent-esblu ani --color-on-accent neboli nikde definované,
      takže obe tlačidlá sa renderovali bez pozadia aj bez farby textu.
      Mapujeme ich na existujúci modrý akcent, aby sa vizuál nerozišiel. */
-  --color-accent-esblu: var(--color-accent-blue);
-  --color-on-accent: #ffffff;
+  /* REVÍZIA: hlavný akcent appky ide na cyan z webu Esblu. Modrá pôsobila
+     ako predvolený Tailwind, nie ako značka. Použitie sa nemení — ostáva
+     výhradne pre primárnu akciu, nikdy pre dekoráciu. */
+  --color-accent-esblu: var(--color-accent-cyan-strong);
+  --color-on-accent: #04131a;
 
   /* Legacy Next.js template vars — necháme kvôli spätnej kompatibilite,
      appka ich už prakticky nepoužíva (nahradené vyššie). */
@@ -192,6 +205,7 @@
      (bg-doc-surface, border-doc-border, rounded-doc, …). */
   --color-accent-esblu: var(--color-accent-esblu);
   --color-on-accent: var(--color-on-accent);
+  --color-focus-ring: var(--color-focus-ring);
   --color-doc-surface: var(--color-doc-surface);
   --color-doc-surface-hover: var(--color-doc-surface-hover);
   --color-doc-border: var(--color-doc-border);

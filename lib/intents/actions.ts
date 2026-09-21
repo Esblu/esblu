@@ -93,7 +93,7 @@ import {
 //           spotrebovaná krokom (a), takže replay nehrozí ani pri zlyhaní
 //           proof verifikácie),
 //        d) až PO úspešnej proof verifikácii revaliduje permissions
-//           (ownerOrAdminOnly pre RENAME) a pri bulk akcii (ASSIGN)
+//           (categoryManagerOnly pre RENAME) a pri bulk akcii (ASSIGN)
 //           revaliduje AKTUÁLNY počet dotknutých dokumentov proti uloženému
 //           expected_count — ak sa líši, appka NIČ nezapíše a vyžiada nový
 //           preview (fail-safe),
@@ -144,13 +144,24 @@ function notFoundResult(locale: Locale, key: string, vars?: Record<string, strin
   return { kind: "not_found", text: translate(locale, key, vars) };
 }
 
-function ownerOrAdminOnly(locale: Locale, ctx: ActionContext): IntentResult | null {
-  // Rovnaký princíp ako RLS UPDATE/DELETE na custom_document_categories
-  // (owner/admin) — Intent Engine tu NIKDY nedáva employee-ovi VIAC práv,
-  // než má dnes v appke (bod 12/21 zadania: "Employee nesmie dostať nové
-  // právo cez Intent Engine"), iba explicitne a zrozumiteľne odmietne
-  // skôr, než appka čokoľvek skúsi zapísať (namiesto surovej DB chyby).
-  if (ctx.role === "owner" || ctx.role === "admin") return null;
+/**
+ * Smie táto rola spravovať vlastné zložky dokladov?
+ *
+ * ZRKADLÍ RLS policy custom_document_categories_update_manager /
+ * _delete_manager (owner, admin, accountant). Účtovník sem patrí —
+ * triedenie dokladov do zložiek je účtovnícka práca; zamestnanec nie.
+ *
+ * Intent Engine tu nikdy nedáva VIAC práv, než má rola v databáze. Je to
+ * len skoršie a zrozumiteľnejšie odmietnutie namiesto surovej DB chyby —
+ * skutočné vynútenie drží RLS, ktorá beží aj tak.
+ *
+ * Keď sa zmení DB policy, MUSÍ sa zmeniť aj toto. Preto je to jedna
+ * funkcia, nie podmienka rozsypaná po súbore.
+ */
+function categoryManagerOnly(locale: Locale, ctx: ActionContext): IntentResult | null {
+  if (ctx.role === "owner" || ctx.role === "admin" || ctx.role === "accountant") {
+    return null;
+  }
   return actionResult(false, translate(locale, "search.actions.errors.ownerOrAdminOnly"));
 }
 
@@ -649,7 +660,7 @@ export async function buildRenameCategoryPreview(
   categoryName: string | undefined,
   newCategoryName: string | undefined
 ): Promise<IntentResult> {
-  const permissionError = ownerOrAdminOnly(locale, ctx);
+  const permissionError = categoryManagerOnly(locale, ctx);
   if (permissionError) return permissionError;
 
   const sourceName = categoryName?.trim();
@@ -695,7 +706,7 @@ async function executeRenameCategory(
   ctx: ActionContext,
   args: Record<string, unknown>
 ): Promise<IntentResult> {
-  const permissionError = ownerOrAdminOnly(locale, ctx);
+  const permissionError = categoryManagerOnly(locale, ctx);
   if (permissionError) return permissionError;
 
   const sourceName = readStringArg(args, "categoryName")?.trim();
@@ -720,7 +731,7 @@ async function executeRenameCategory(
   }
 
   // RLS (UPDATE = owner/admin only) je posledná, nezávislá poistka — ak by
-  // ownerOrAdminOnly() vyššie mala chybu, DB update jednoducho neovplyvní
+  // categoryManagerOnly() vyššie mala chybu, DB update jednoducho neovplyvní
   // žiadny riadok (fail closed, nie fail open).
   const { data, error } = await supabase
     .from("custom_document_categories")

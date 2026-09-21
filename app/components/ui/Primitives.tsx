@@ -109,7 +109,7 @@ export function DataRow({
   // Rám a povrch nesie <li>, nie odkaz — akcie riadku tak môžu bývať v tej
   // istej karte, ale MIMO odkazu (odkaz v odkaze je neplatné HTML a
   // klávesnicou sa nedá ovládať).
-  const shared = `relative block w-full px-4 py-3 text-left focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-cyan sm:grid sm:items-center sm:gap-4 ${
+  const shared = `relative block w-full px-4 py-3 text-left focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring sm:grid sm:items-center sm:gap-4 ${
     trailing ? "sm:pr-32" : "sm:pr-9"
   } ${columns}`;
 
@@ -209,7 +209,7 @@ export function FilterChips({
           type="button"
           aria-pressed={active === option.key}
           onClick={() => onSelect(option.key)}
-          className={`whitespace-nowrap rounded-doc-sm border px-3 py-1.5 text-sm font-medium transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-cyan ${
+          className={`whitespace-nowrap rounded-doc-sm border px-3 py-1.5 text-sm font-medium transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
             active === option.key
               ? "border-border-strong bg-surface-hover text-primary"
               : "border-doc-border text-secondary hover:text-primary"
@@ -516,7 +516,7 @@ export function PhotoGrid({
             <button
               type="button"
               onClick={() => onOpen(photo)}
-              className="block w-full overflow-hidden rounded-doc border border-doc-border transition hover:border-border-strong focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-cyan"
+              className="block w-full overflow-hidden rounded-doc border border-doc-border transition hover:border-border-strong focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
             >
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src={photo.url} alt={photo.alt} className="aspect-[4/3] w-full object-cover" />
@@ -534,7 +534,7 @@ export function PhotoGrid({
               onClick={() => onDelete(photo)}
               disabled={deletingId === photo.id}
               aria-label={deleteLabel}
-              className="absolute right-2 top-2 flex h-9 w-9 items-center justify-center rounded-doc-sm border border-danger/30 bg-page-bg/80 text-danger backdrop-blur transition hover:bg-danger-soft disabled:opacity-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-cyan"
+              className="absolute right-2 top-2 flex h-9 w-9 items-center justify-center rounded-doc-sm border border-danger/30 bg-page-bg/80 text-danger backdrop-blur transition hover:bg-danger-soft disabled:opacity-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
             >
               <TrashIcon size={16} />
             </button>

@@ -55,6 +55,7 @@ import {
   docLabel,
 } from "@/app/components/ui/Primitives";
 import {
+  CheckIcon,
   FileIcon,
   FolderIcon,
   ReceiptIcon,
@@ -71,7 +72,10 @@ import {
 } from "@/lib/weight-utils";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import {
+  countDocumentsInCategory,
+  deleteCustomCategory,
   listCompanyCustomCategories,
+  moveDocumentsToCategory,
   type CustomDocumentCategory,
 } from "@/lib/custom-document-categories";
 
@@ -609,7 +613,7 @@ function FolderTile({
     <button
       type="button"
       onClick={onClick}
-      className="flex items-center gap-3 rounded-doc border border-doc-border bg-doc-surface p-4 text-left transition hover:border-border-strong hover:bg-doc-surface-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-cyan"
+      className="flex items-center gap-3 rounded-doc border border-doc-border bg-doc-surface p-4 text-left transition hover:border-border-strong hover:bg-doc-surface-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
     >
       <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-doc-sm border border-doc-border bg-surface-2 text-secondary">
         {icon}
@@ -708,6 +712,27 @@ export default function AiEvidenciaPage() {
   // zobrazí iba držiteľovi finance.manage. Skutočné vynútenie je v RLS a v
   // esblu_create_received_invoice_draft(); toto je len UI vrstva.
   const [canManageFinance, setCanManageFinance] = useState(false);
+  /**
+   * Smie spravovať vlastné zložky? Zrkadlí RLS policy
+   * custom_document_categories_delete_manager (owner/admin/accountant).
+   * UI len skrýva tlačidlá — odmietnutie drží databáza.
+   */
+  const canManageFolders =
+    role === "owner" || role === "admin" || role === "accountant";
+  // Správa vlastných zložiek — výber dokumentov, presun a mazanie zložky.
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedDocumentIds, setSelectedDocumentIds] = useState<string[]>([]);
+  const [moveTargetOpen, setMoveTargetOpen] = useState(false);
+  const [folderBusy, setFolderBusy] = useState(false);
+  const [folderNotice, setFolderNotice] = useState<{
+    tone: "info" | "warning" | "critical";
+    text: string;
+  } | null>(null);
+  const [pendingFolderDelete, setPendingFolderDelete] = useState<{
+    id: string;
+    name: string;
+    realCount: number | null;
+  } | null>(null);
   // Finančné doklady (faktúra, bloček) sú od migrácie 20260921120000
   // finance-gated na úrovni RLS aj storage. Tento príznak slúži VÝHRADNE na
   // to, aby používateľ bez finance.view dostal vysvetlenie, prečo sa mu
@@ -2458,6 +2483,98 @@ async function loadOtherDocuments(currentCompanyId: string = companyId) {
 // zbytočnému volaniu skôr, než appka vie, či vôbec existuje aktívna firma
 // (rovnaký vzor ako loadRecords/loadOtherDocuments vyššie) — samotný dopyt
 // filter nepotrebuje, RLS ho aj tak vynúti nezávisle.
+// ---------------------------------------------------------------------------
+// Vlastné zložky — výber, presun, mazanie
+// ---------------------------------------------------------------------------
+
+function toggleDocumentSelection(documentId: string) {
+  setSelectedDocumentIds((current) =>
+    current.includes(documentId)
+      ? current.filter((id) => id !== documentId)
+      : [...current, documentId]
+  );
+}
+
+function exitSelectionMode() {
+  setSelectionMode(false);
+  setSelectedDocumentIds([]);
+  setMoveTargetOpen(false);
+}
+
+/** Presun výberu do inej zložky, alebo von z vlastnej zložky (null). */
+async function handleMoveSelected(targetCategoryId: string | null) {
+  if (selectedDocumentIds.length === 0 || folderBusy) return;
+
+  setFolderBusy(true);
+  setMoveTargetOpen(false);
+
+  const result = await moveDocumentsToCategory(
+    supabase,
+    selectedDocumentIds,
+    targetCategoryId
+  );
+
+  if (result.ok) {
+    setFolderNotice({
+      tone: "info",
+      text: t("inbox.folders.moveSuccess", { count: String(result.moved) }),
+    });
+    exitSelectionMode();
+  } else if (result.error === "PARTIAL") {
+    // Časť výberu neprešla cez finance gating. Tvrdiť "presunuté" by bola
+    // lož — používateľ musí vedieť, že niečo ostalo na mieste.
+    setFolderNotice({
+      tone: "warning",
+      text: t("inbox.folders.movePartial", {
+        moved: String(result.moved),
+        total: String(selectedDocumentIds.length),
+      }),
+    });
+    exitSelectionMode();
+  } else {
+    setFolderNotice({ tone: "critical", text: t("inbox.folders.moveFailed") });
+  }
+
+  await loadOtherDocuments();
+  setFolderBusy(false);
+}
+
+/** Otvorí potvrdenie zmazania zložky — s počtom zisteným zo servera. */
+async function requestFolderDelete(category: CustomDocumentCategory) {
+  setFolderNotice(null);
+  const realCount = await countDocumentsInCategory(supabase, category.id);
+  setPendingFolderDelete({ id: category.id, name: category.name, realCount });
+}
+
+async function confirmFolderDelete() {
+  if (!pendingFolderDelete || folderBusy) return;
+
+  setFolderBusy(true);
+  const result = await deleteCustomCategory(supabase, pendingFolderDelete.id);
+
+  if (result.ok) {
+    setFolderNotice({
+      tone: "info",
+      text: t("inbox.folders.deleteSuccess", { name: pendingFolderDelete.name }),
+    });
+    if (openCustomCategoryId === pendingFolderDelete.id) {
+      setOpenCustomCategoryId(null);
+    }
+    await Promise.all([loadCustomCategories(), loadOtherDocuments()]);
+  } else {
+    setFolderNotice({
+      tone: "critical",
+      text:
+        result.error === "FORBIDDEN"
+          ? t("inbox.folders.deleteForbidden")
+          : t("inbox.folders.deleteFailed"),
+    });
+  }
+
+  setPendingFolderDelete(null);
+  setFolderBusy(false);
+}
+
 async function loadCustomCategories(currentCompanyId: string = companyId) {
   if (!currentCompanyId) {
     setCustomCategories([]);
@@ -2675,7 +2792,12 @@ const EVIDENCE_COLUMNS =
 const FOLDER_COLUMNS =
   "sm:grid-cols-[minmax(0,2.4fr)_minmax(0,1.6fr)_minmax(0,1fr)]";
 
-function renderDocumentRegister(documents: OtherDocumentRow[]) {
+function renderDocumentRegister(
+  documents: OtherDocumentRow[],
+  options?: { selectable?: boolean }
+) {
+  const selectable = Boolean(options?.selectable) && selectionMode;
+
   return (
     <>
       <RegisterHeader columns={DOCUMENT_COLUMNS}>
@@ -2689,16 +2811,38 @@ function renderDocumentRegister(documents: OtherDocumentRow[]) {
           <DataRow
             key={doc.id}
             columns={DOCUMENT_COLUMNS}
-            onClick={() => setSelectedOtherDocument(doc)}
-            ariaLabel={`${t("inbox.openDetail")}: ${summarizeDocument(doc)}`}
+            onClick={() =>
+              selectable ? toggleDocumentSelection(doc.id) : setSelectedOtherDocument(doc)
+            }
+            ariaLabel={
+              selectable
+                ? `${t("inbox.folders.selectDocument")}: ${summarizeDocument(doc)}`
+                : `${t("inbox.openDetail")}: ${summarizeDocument(doc)}`
+            }
           >
             <div className="flex min-w-0 items-start gap-2.5">
-              <span
-                aria-hidden="true"
-                className="mt-0.5 shrink-0 text-muted-esblu"
-              >
-                <FileIcon size={18} />
-              </span>
+              {selectable ? (
+                /* Vizuálny stav výberu. Klikateľný je celý riadok, takže
+                   checkbox je iba indikátor — preto aria-hidden a
+                   pointer-events-none, aby nevznikol druhý cieľ kliku. */
+                <span
+                  aria-hidden="true"
+                  className={`mt-0.5 flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-[4px] border ${
+                    selectedDocumentIds.includes(doc.id)
+                      ? "border-transparent bg-accent-esblu text-on-accent"
+                      : "border-doc-border"
+                  }`}
+                >
+                  {selectedDocumentIds.includes(doc.id) && <CheckIcon size={12} />}
+                </span>
+              ) : (
+                <span
+                  aria-hidden="true"
+                  className="mt-0.5 shrink-0 text-muted-esblu"
+                >
+                  <FileIcon size={18} />
+                </span>
+              )}
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="truncate font-medium text-primary">
@@ -3078,7 +3222,7 @@ function renderDocumentRegister(documents: OtherDocumentRow[]) {
                 <button
                   type="button"
                   onClick={() => setAssignmentTarget("vehicle")}
-                  className={`rounded-doc-sm border px-3 py-3 text-sm font-medium transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-cyan ${
+                  className={`rounded-doc-sm border px-3 py-3 text-sm font-medium transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
                     assignmentTarget === "vehicle"
                       ? "border-transparent bg-accent-esblu text-on-accent"
                       : "bg-surface-2 text-secondary"
@@ -3089,7 +3233,7 @@ function renderDocumentRegister(documents: OtherDocumentRow[]) {
                 <button
                   type="button"
                   onClick={() => setAssignmentTarget("machine")}
-                  className={`rounded-doc-sm border px-3 py-3 text-sm font-medium transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-cyan ${
+                  className={`rounded-doc-sm border px-3 py-3 text-sm font-medium transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
                     assignmentTarget === "machine"
                       ? "border-transparent bg-accent-esblu text-on-accent"
                       : "bg-surface-2 text-secondary"
@@ -3101,7 +3245,7 @@ function renderDocumentRegister(documents: OtherDocumentRow[]) {
                   <button
                     type="button"
                     onClick={() => setAssignmentTarget("none")}
-                    className={`rounded-doc-sm border px-3 py-3 text-sm font-medium transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-cyan ${
+                    className={`rounded-doc-sm border px-3 py-3 text-sm font-medium transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
                       assignmentTarget === "none"
                         ? "border-transparent bg-accent-esblu text-on-accent"
                         : "bg-surface-2 text-secondary"
@@ -3483,7 +3627,7 @@ function renderDocumentRegister(documents: OtherDocumentRow[]) {
         </button>
 
         <div className="flex flex-col gap-4 rounded-doc border border-doc-border bg-doc-surface p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
-          <div>
+          <div className="min-w-0">
             <h2 className="text-lg font-semibold text-primary">
               {openCustomCategory.name}
             </h2>
@@ -3492,7 +3636,92 @@ function renderDocumentRegister(documents: OtherDocumentRow[]) {
               {tCount("inbox.customCategoryDocumentsCount", openCustomCategoryDocuments.length)}
             </p>
           </div>
+
+          {canManageFolders && (
+            <div className="flex shrink-0 flex-wrap gap-2">
+              {openCustomCategoryDocuments.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => (selectionMode ? exitSelectionMode() : setSelectionMode(true))}
+                  className={docButtonSecondary}
+                >
+                  {selectionMode
+                    ? t("inbox.folders.selectionCancel")
+                    : t("inbox.folders.selectDocuments")}
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => requestFolderDelete(openCustomCategory)}
+                disabled={folderBusy}
+                className={docButtonDanger}
+              >
+                {t("inbox.folders.deleteFolder")}
+              </button>
+            </div>
+          )}
         </div>
+
+        {folderNotice && (
+          <div className="mt-3">
+            <Notice tone={folderNotice.tone}>{folderNotice.text}</Notice>
+          </div>
+        )}
+
+        {/* Lišta hromadného presunu. Drží sa pri spodku obrazovky, aby bola
+            na telefóne dosiahnuteľná aj pri dlhom zozname. */}
+        {selectionMode && selectedDocumentIds.length > 0 && (
+          <div className="sticky bottom-4 z-10 mt-3 rounded-doc border border-doc-border bg-surface-1/95 p-3 backdrop-blur">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm font-medium text-primary">
+                {t("inbox.folders.selectedCount", {
+                  count: String(selectedDocumentIds.length),
+                })}
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => setMoveTargetOpen((value) => !value)}
+                  disabled={folderBusy}
+                  className={docButtonPrimary}
+                >
+                  {t("inbox.folders.moveTo")}
+                </button>
+                <button type="button" onClick={exitSelectionMode} className={docButtonSecondary}>
+                  {t("common.buttons.cancel")}
+                </button>
+              </div>
+            </div>
+
+            {moveTargetOpen && (
+              <div className="mt-3 flex flex-wrap gap-1.5 border-t border-doc-border pt-3">
+                {customCategories
+                  .filter((category) => category.id !== openCustomCategory.id)
+                  .map((category) => (
+                    <button
+                      key={category.id}
+                      type="button"
+                      onClick={() => handleMoveSelected(category.id)}
+                      disabled={folderBusy}
+                      className={`${docButtonSecondary} px-2.5 text-xs`}
+                    >
+                      {category.name}
+                    </button>
+                  ))}
+                {/* Vyradenie zo zložky — dokument ostáva, iba stratí
+                    zaradenie a vráti sa medzi nezaradené. */}
+                <button
+                  type="button"
+                  onClick={() => handleMoveSelected(null)}
+                  disabled={folderBusy}
+                  className={`${docButtonSecondary} px-2.5 text-xs`}
+                >
+                  {t("inbox.folders.removeFromFolder")}
+                </button>
+              </div>
+            )}
+          </div>
+        )}
 
         {openCustomCategoryDocuments.length === 0 ? (
           <div className="mt-4">
@@ -3500,10 +3729,7 @@ function renderDocumentRegister(documents: OtherDocumentRow[]) {
           </div>
         ) : (
           <div className="mt-4">
-            {/* Rovnaký riadok ako "Ostatné dokumenty" nižšie — vlastná
-                kategória môže obsahovať ľubovoľný document_type, takže sa
-                reuseuje typovo-neutrálny riadok registra. */}
-            {renderDocumentRegister(openCustomCategoryDocuments)}
+            {renderDocumentRegister(openCustomCategoryDocuments, { selectable: true })}
           </div>
         )}
       </div>
@@ -3959,6 +4185,58 @@ function renderDocumentRegister(documents: OtherDocumentRow[]) {
 
 {/* Potvrdenie po vytvorení draftu. Zámerne NEPRESMEROVÁVA automaticky —
     používateľ môže chcieť rovno spracovať ďalší doklad z Inboxu. */}
+{/* Potvrdenie zmazania vlastnej zložky.
+    Dokumenty sa NIKDY nemažú — FK documents.custom_category_id má
+    ON DELETE SET NULL, takže zo zložky iba vypadnú. Počet je ten
+    SKUTOČNÝ zo servera, nie z prefiltrovaného zoznamu v pamäti: pri
+    nedostatočnom finance práve by lokálny počet ukazoval nulu nad
+    zložkou plnou faktúr. */}
+{pendingFolderDelete && (
+  <DocumentModal
+    title={t("inbox.folders.deleteTitle")}
+    onClose={() => setPendingFolderDelete(null)}
+    closeLabel={t("common.buttons.close")}
+    size="md"
+    footer={
+      <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+        <button
+          type="button"
+          onClick={() => setPendingFolderDelete(null)}
+          className={docButtonSecondary}
+        >
+          {t("common.buttons.cancel")}
+        </button>
+        <button
+          type="button"
+          onClick={confirmFolderDelete}
+          disabled={folderBusy}
+          className={docButtonDanger}
+        >
+          {folderBusy ? t("inbox.deleting") : t("inbox.folders.deleteConfirm")}
+        </button>
+      </div>
+    }
+  >
+    <p className="text-sm text-primary">
+      {t("inbox.folders.deleteQuestion", { name: pendingFolderDelete.name })}
+    </p>
+
+    {pendingFolderDelete.realCount !== null && pendingFolderDelete.realCount > 0 ? (
+      <div className="mt-3">
+        <Notice tone="warning">
+          {t("inbox.folders.deleteWithDocuments", {
+            count: String(pendingFolderDelete.realCount),
+          })}
+        </Notice>
+      </div>
+    ) : (
+      <p className="mt-3 text-sm text-muted-esblu">
+        {t("inbox.folders.deleteDocumentsSafe")}
+      </p>
+    )}
+  </DocumentModal>
+)}
+
 {createdReceivedInvoiceId && (
   <DocumentModal
     title={t("inbox.receivedInvoice.created.title")}

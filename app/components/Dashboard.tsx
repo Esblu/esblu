@@ -5,7 +5,12 @@ import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
-import { getCompanyProfile, getMyActiveMembership, hasFinanceView } from "@/lib/company";
+import {
+  canOperate,
+  getCompanyProfile,
+  getMyActiveMembership,
+  hasFinanceView,
+} from "@/lib/company";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import ModuleCard, { type ModuleAccent } from "./ModuleCard";
 import InboxDocumentIcon from "./icons/InboxDocumentIcon";
@@ -27,6 +32,26 @@ function getGreeting(t: (key: string) => string) {
   if (hour >= 18 && hour < 22) return t("dashboard.greetingEvening");
 
   return t("dashboard.greetingNight");
+}
+
+const OPERATIONAL_HREFS = ["/vozidla", "/stroje", "/sklad"];
+const FINANCE_HREFS = ["/obchodni-partneri", "/faktury"];
+
+/**
+ * Jedno pravidlo viditeľnosti modulu pre dlaždice aj navigáciu.
+ *
+ * Doteraz sa filter písal dvakrát a iba pre financie. Účtovník potrebuje
+ * opačný smer — vidí doklady, nevidí majetok — takže obe osi patria na
+ * jedno miesto, inak sa časom rozídu.
+ */
+function isModuleVisible(
+  href: string,
+  financeAccess: boolean,
+  operationalAccess: boolean
+): boolean {
+  if (FINANCE_HREFS.includes(href)) return financeAccess;
+  if (OPERATIONAL_HREFS.includes(href)) return operationalAccess;
+  return true;
 }
 
 export default function Dashboard() {
@@ -51,6 +76,8 @@ export default function Dashboard() {
   // strane DB, takže priame otvorenie URL bez oprávnenia aj tak nič
   // nezobrazí.
   const [financeAccess, setFinanceAccess] = useState(false);
+  // Prevádzkový rozsah — účtovník nemá stroje, sklad ani vozidlá ako modul.
+  const [operationalAccess, setOperationalAccess] = useState(false);
   const [search, setSearch] = useState("");
   // Intent Engine (app/api/assistant/intent) — samostatný stav od
   // existujúceho plain-substring searchResults nižšie, aby sa pri
@@ -125,6 +152,7 @@ export default function Dashboard() {
       setItems([]);
       setVignettes([]);
       setFinanceAccess(false);
+      setOperationalAccess(false);
       // Bez aktívneho membershipu niet "firmy", ktorej branding by sa dal
       // načítať (esblu_get_company_profile by aj tak nič nevrátila) —
       // ostáva dnešný generický fallback ("ESBLU", žiadne logo).
@@ -132,6 +160,7 @@ export default function Dashboard() {
     }
 
     setFinanceAccess(hasFinanceView(membership));
+    setOperationalAccess(canOperate(membership.role));
     loadData(membership.company_id);
     loadCompanyProfile();
   }
@@ -707,9 +736,8 @@ export default function Dashboard() {
   // aplikuje až na už typovanú premennú, nie v rámci toho istého výrazu.
   // Faktúry používajú TOTOŽNÝ finance-gating ako obchodní partneri (obe sú
   // finančné/účtovné dáta, esblu_my_finance_view() na DB strane).
-  const modules = allModules.filter(
-    (module) =>
-      (module.href !== "/obchodni-partneri" && module.href !== "/faktury") || financeAccess
+  const modules = allModules.filter((module) =>
+    isModuleVisible(module.href, financeAccess, operationalAccess)
   );
 
   // Spoločný zoznam navigačných položiek pre desktop sidebar AJ mobilné
@@ -737,9 +765,7 @@ export default function Dashboard() {
     },
     { href: "/nastavenia", label: t("nav.settings"), image: "/images/settings.png" },
     // Finance Access Hardening — rovnaký filter ako pri "modules" vyššie.
-  ].filter(
-    (item) => (item.href !== "/obchodni-partneri" && item.href !== "/faktury") || financeAccess
-  );
+  ].filter((item) => isModuleVisible(item.href, financeAccess, operationalAccess));
 
   // Action Engine — [Zrušiť]: jednoduchý no-op, appka nič nezapísala do DB
   // (a pri EXPORT_DOCUMENTS ani nič nestiahla) — panel sa iba skryje, `search`

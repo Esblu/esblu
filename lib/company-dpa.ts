@@ -5,7 +5,7 @@ export type CompanyDpaStatus = {
   current_dpa_version: string;
   has_current_acceptance: boolean;
   accepted_at: string | null;
-  my_role: "owner" | "admin" | "employee";
+  my_role: "owner" | "admin" | "accountant" | "employee";
 };
 
 /**

@@ -5,7 +5,12 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import BackLink from "@/app/components/BackLink";
-import { getMyActiveMembership, hasFinanceManage, type MyActiveMembership } from "@/lib/company";
+import {
+  getMyActiveMembership,
+  hasFinanceManage,
+  hasFinanceView,
+  type MyActiveMembership,
+} from "@/lib/company";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import { formatDateTime } from "@/lib/i18n/format";
 import {
@@ -64,6 +69,14 @@ export default function ObchodnyPartnerDetailPage() {
 
     const activeMembership = await getMyActiveMembership();
     setMembership(activeMembership);
+
+    // Explicitný view gate. RLS by síce vrátila null, ale spoliehať sa na
+    // to znamená poslať dotaz, ktorý sa nemal nikdy odoslať.
+    if (!hasFinanceView(activeMembership)) {
+      setLoadError(t("businessPartners.noFinanceAccess"));
+      setLoading(false);
+      return;
+    }
 
     try {
       const row = await getBusinessPartner(partnerId);

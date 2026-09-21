@@ -203,7 +203,7 @@ export default function InventoryItemDetailView({ entityId }: { entityId: string
                     href={photoUrl(photo.file_path)}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="block overflow-hidden rounded-doc border border-doc-border focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-cyan"
+                    className="block overflow-hidden rounded-doc border border-doc-border focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   >
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img

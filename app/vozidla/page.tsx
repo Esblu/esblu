@@ -47,6 +47,7 @@ type InspectionFilter = "all" | "attention" | "missing";
 import BackLink from "../components/BackLink";
 import {
   getMyActiveMembership,
+  canOperate,
   isOwnerOrAdmin,
   type CompanyMemberRole,
 } from "@/lib/company";
@@ -1258,7 +1259,7 @@ export default function VozidlaPage() {
         title={t("vehicles.register.title")}
         meta={t("vehicles.list.subtitle")}
         aside={
-          role !== "employee" && !showRegistrationFlow && !vehicle ? (
+          canOperate(role) && !showRegistrationFlow && !vehicle ? (
             <div className="flex flex-wrap gap-2">
               <button
                 type="button"
@@ -1292,7 +1293,7 @@ export default function VozidlaPage() {
         />
       )}
 
-      {legalHold && role !== "employee" && (
+      {legalHold && canOperate(role) && (
         <div className="mt-4">
           <Notice tone="warning">{t("common.legalHoldMessage")}</Notice>
         </div>
@@ -1302,7 +1303,7 @@ export default function VozidlaPage() {
           zadania). Zdieľa presne rovnaké handlery/stav/uloženie ako predtým
           v Inbox, iba UI vstupný bod je teraz tu na hlavnej obrazovke
           Vozidlá namiesto samostatnej sekcie v Inboxe. */}
-      {role !== "employee" && showRegistrationFlow && (
+      {canOperate(role) && showRegistrationFlow && (
         <div className="mt-6 rounded-doc border border-doc-border bg-doc-surface p-4 sm:p-5">
           <div className="flex items-start justify-between gap-4">
             <div>
@@ -1690,7 +1691,7 @@ export default function VozidlaPage() {
         </div>
       )}
 
-      {role !== "employee" && vehicle && (
+      {canOperate(role) && vehicle && (
         <div className="mt-6 space-y-4">
           <SectionPanel
             title={
@@ -1867,7 +1868,7 @@ export default function VozidlaPage() {
             <EmptyState
               title={t("vehicles.list.noneYet")}
               action={
-                role !== "employee" ? (
+                canOperate(role) ? (
                   <button
                     type="button"
                     onClick={() => setVehicle({})}

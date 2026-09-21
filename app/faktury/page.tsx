@@ -286,7 +286,7 @@ export default function FakturyPage() {
                     aria-selected={directionFilter === key}
                     type="button"
                     onClick={() => setDirectionFilter(key)}
-                    className={`flex-1 whitespace-nowrap rounded-doc-sm px-3 py-2 text-sm font-medium transition sm:flex-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-cyan ${
+                    className={`flex-1 whitespace-nowrap rounded-doc-sm px-3 py-2 text-sm font-medium transition sm:flex-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
                       directionFilter === key
                         ? "bg-accent-esblu text-on-accent"
                         : "text-secondary hover:text-primary"

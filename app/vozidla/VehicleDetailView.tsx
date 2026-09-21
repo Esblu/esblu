@@ -28,6 +28,7 @@ import { CarIcon, WrenchIcon } from "@/app/components/icons/AppIcons";
 import { inspectionState } from "@/lib/vehicles";
 import {
   getMyActiveMembership,
+  canOperate,
   isOwnerOrAdmin,
   type CompanyMemberRole,
 } from "@/lib/company";
@@ -1131,7 +1132,7 @@ export default function VehicleDetailView({
             type="button"
             aria-selected={tab === item.key}
             onClick={() => setTab(item.key)}
-            className={`whitespace-nowrap rounded-doc-sm border px-3 py-2 text-sm font-medium transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-cyan ${
+            className={`whitespace-nowrap rounded-doc-sm border px-3 py-2 text-sm font-medium transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
               tab === item.key
                 ? "border-border-strong bg-surface-hover text-primary"
                 : "border-doc-border text-secondary hover:text-primary"
@@ -1186,7 +1187,7 @@ export default function VehicleDetailView({
             </p>
           </div>
 
-          {role !== "employee" && (
+          {canOperate(role) && (
             <button
               onClick={() => {
                 if (!editingVignetteId && legalHold) {
@@ -1207,11 +1208,11 @@ export default function VehicleDetailView({
           )}
         </div>
 
-        {role !== "employee" && !editingVignetteId && legalHold && (
+        {canOperate(role) && !editingVignetteId && legalHold && (
           <div className="mt-3"><Notice tone="warning">{t("common.legalHoldMessage")}</Notice></div>
         )}
 
-        {role !== "employee" && showVignetteForm && (
+        {canOperate(role) && showVignetteForm && (
           <div className="mt-4 rounded-doc border border-doc-border bg-surface-2 p-4">
             <h3 className="mb-4 text-xl font-bold">
               {editingVignetteId
@@ -1321,7 +1322,7 @@ export default function VehicleDetailView({
                   })}
                 </p>
 
-                {role !== "employee" && (
+                {canOperate(role) && (
                   <div className="flex gap-2">
                     <button
                       onClick={() => startEditVignette(item)}
@@ -1682,7 +1683,7 @@ export default function VehicleDetailView({
                     >
                       {t("vehicles.services.editButton")}
                     </button>
-                    {role !== "employee" && (
+                    {canOperate(role) && (
                       <button
                         type="button"
                         onClick={() => deleteService(item.id)}

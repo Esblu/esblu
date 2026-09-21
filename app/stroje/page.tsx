@@ -837,7 +837,7 @@ export default function StrojePage() {
                           type="button"
                           onClick={() => removePendingPhoto(index)}
                           aria-label={t("vehicles.buttons.deleteWithIcon")}
-                          className="absolute right-2 top-2 flex h-9 w-9 items-center justify-center rounded-doc-sm border border-danger/30 bg-page-bg/80 text-danger backdrop-blur transition hover:bg-danger-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-cyan"
+                          className="absolute right-2 top-2 flex h-9 w-9 items-center justify-center rounded-doc-sm border border-danger/30 bg-page-bg/80 text-danger backdrop-blur transition hover:bg-danger-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                         >
                           <TrashIcon size={16} />
                         </button>

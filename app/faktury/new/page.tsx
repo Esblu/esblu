@@ -15,6 +15,7 @@ import {
 import {
   getMyActiveMembership,
   hasFinanceManage,
+  hasFinanceView,
   type MyActiveMembership,
 } from "@/lib/company";
 import { useCompanyDpaLegalHold } from "@/app/components/CompanyDpaGate";
@@ -95,6 +96,11 @@ export default function NewInvoicePage() {
     setMembershipLoaded(true);
 
     if (!activeMembership) return;
+
+    // Bez finance view sa stránka ďalej vôbec nenačítava. Doteraz tu bola
+    // iba premenná canEdit, takže zamestnanec síce nemohol uložiť, ale
+    // zoznam obchodných partnerov sa mu aj tak stiahol.
+    if (!hasFinanceView(activeMembership)) return;
 
     setCompanyId(activeMembership.company_id);
 

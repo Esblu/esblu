@@ -46,10 +46,37 @@ import {
   type CompanyBillingProfileValidationError,
 } from "@/lib/company-billing-profile";
 
+/**
+ * Role, ktoré sa dajú pozvať. Zrkadlí DB allowlist v
+ * esblu_create_company_invite — majiteľ sa nepozýva, ten firmu zakladá.
+ */
+const INVITE_ROLE_OPTIONS: {
+  value: CompanyInviteRole;
+  labelKey: string;
+  hintKey: string;
+}[] = [
+  {
+    value: "admin",
+    labelKey: "settings.users.roleAdmin",
+    hintKey: "settings.users.roleAdminHint",
+  },
+  {
+    value: "accountant",
+    labelKey: "settings.users.roleAccountant",
+    hintKey: "settings.users.roleAccountantHint",
+  },
+  {
+    value: "employee",
+    labelKey: "settings.users.roleEmployee",
+    hintKey: "settings.users.roleEmployeeHint",
+  },
+];
+
 function getMemberRoleLabels(t: (key: string) => string): Record<string, string> {
   return {
     owner: t("settings.users.roles.owner"),
     admin: t("settings.users.roles.admin"),
+    accountant: t("settings.users.roles.accountant"),
     employee: t("settings.users.roles.employee"),
   };
 }
@@ -1131,27 +1158,27 @@ export default function NastaveniaPage() {
                         />
 
                         <div className="flex flex-col gap-2 sm:flex-row">
-                          <label className="flex flex-1 items-center gap-2 rounded-xl border border-subtle p-3 text-sm">
-                            <input
-                              type="radio"
-                              name="inviteRole"
-                              checked={inviteRole === "admin"}
-                              onChange={() => setInviteRole("admin")}
-                              disabled={inviteSubmitting}
-                            />
-                            {t("settings.users.roleAdmin")}
-                          </label>
-
-                          <label className="flex flex-1 items-center gap-2 rounded-xl border border-subtle p-3 text-sm">
-                            <input
-                              type="radio"
-                              name="inviteRole"
-                              checked={inviteRole === "employee"}
-                              onChange={() => setInviteRole("employee")}
-                              disabled={inviteSubmitting}
-                            />
-                            {t("settings.users.roleEmployee")}
-                          </label>
+                          {INVITE_ROLE_OPTIONS.map((option) => (
+                            <label
+                              key={option.value}
+                              className="flex flex-1 items-start gap-2 rounded-xl border border-subtle p-3 text-sm"
+                            >
+                              <input
+                                type="radio"
+                                name="inviteRole"
+                                className="mt-0.5"
+                                checked={inviteRole === option.value}
+                                onChange={() => setInviteRole(option.value)}
+                                disabled={inviteSubmitting}
+                              />
+                              <span>
+                                <span className="block">{t(option.labelKey)}</span>
+                                <span className="mt-0.5 block text-xs text-muted-esblu">
+                                  {t(option.hintKey)}
+                                </span>
+                              </span>
+                            </label>
+                          ))}
                         </div>
                       </div>
 

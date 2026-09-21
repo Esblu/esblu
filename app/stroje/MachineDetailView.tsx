@@ -797,7 +797,7 @@ export default function MachineDetailView({
             type="button"
             aria-selected={tab === item.key}
             onClick={() => setTab(item.key)}
-            className={`whitespace-nowrap rounded-doc-sm border px-3 py-2 text-sm font-medium transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-cyan ${
+            className={`whitespace-nowrap rounded-doc-sm border px-3 py-2 text-sm font-medium transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
               tab === item.key
                 ? "border-border-strong bg-surface-hover text-primary"
                 : "border-doc-border text-secondary hover:text-primary"
@@ -1086,7 +1086,7 @@ export default function MachineDetailView({
                   <li key={`${doc.source}-${doc.id}`}>
                     <Link
                       href={doc.href}
-                      className="flex items-center gap-3 rounded-doc border border-doc-border bg-surface-2 px-3 py-2.5 transition hover:border-border-strong hover:bg-surface-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-cyan"
+                      className="flex items-center gap-3 rounded-doc border border-doc-border bg-surface-2 px-3 py-2.5 transition hover:border-border-strong hover:bg-surface-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                     >
                       <span aria-hidden="true" className="shrink-0 text-muted-esblu">
                         <FileIcon size={18} />
@@ -1172,7 +1172,7 @@ export default function MachineDetailView({
                       href={photoUrl(photo.file_path)}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="block overflow-hidden rounded-doc border border-doc-border focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-cyan"
+                      className="block overflow-hidden rounded-doc border border-doc-border focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                     >
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img
@@ -1186,7 +1186,7 @@ export default function MachineDetailView({
                       onClick={() => deletePhoto(photo)}
                       disabled={deletingPhotoId === photo.id || legalHold}
                       aria-label={t("vehicles.buttons.deleteWithIcon")}
-                      className="absolute right-2 top-2 flex h-9 w-9 items-center justify-center rounded-doc-sm border border-danger/30 bg-page-bg/80 text-danger backdrop-blur transition hover:bg-danger-soft disabled:opacity-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-cyan"
+                      className="absolute right-2 top-2 flex h-9 w-9 items-center justify-center rounded-doc-sm border border-danger/30 bg-page-bg/80 text-danger backdrop-blur transition hover:bg-danger-soft disabled:opacity-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                     >
                       <TrashIcon size={16} />
                     </button>

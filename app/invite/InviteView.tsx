@@ -272,7 +272,9 @@ export default function InviteView({ token }: { token: string }) {
   }
 
   const roleLabel =
-    preview.role === "admin" || preview.role === "employee"
+    preview.role === "admin" ||
+    preview.role === "accountant" ||
+    preview.role === "employee"
       ? t(`common.roles.${preview.role}`)
       : preview.role;
 

@@ -72,7 +72,7 @@ export type ChatMessageReference = {
 export type CompanyMemberForChat = {
   user_id: string;
   email: string;
-  role: "owner" | "admin" | "employee";
+  role: "owner" | "admin" | "accountant" | "employee";
 };
 
 export type UnreadCountRow = {

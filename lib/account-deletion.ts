@@ -48,7 +48,7 @@ export type AccountDeletionPreflight = {
   // členstvo, NIE je owner_id žiadnej firmy) — appka mu smie ponúknuť
   // rovnaké samoobslužné zrušenie účtu ako admin/employee (pozri
   // app/api/account/preflight/route.ts, app/api/account/delete/route.ts).
-  role: "owner" | "admin" | "employee" | null;
+  role: "owner" | "admin" | "accountant" | "employee" | null;
   otherActiveMembersCount: number;
   orphan: boolean;
 };

@@ -1,7 +1,7 @@
 import { supabase } from "@/lib/supabase";
 
-export type CompanyMemberRole = "owner" | "admin" | "employee";
-export type CompanyInviteRole = "admin" | "employee";
+export type CompanyMemberRole = "owner" | "admin" | "accountant" | "employee";
+export type CompanyInviteRole = "admin" | "accountant" | "employee";
 export type CompanyInviteStatus = "pending" | "accepted" | "revoked" | "expired";
 
 export type EnsureOwnerCompanyResult = {
@@ -55,7 +55,10 @@ type FinanceCheckInput = {
 
 export function hasFinanceView(membership: FinanceCheckInput | null | undefined): boolean {
   if (!membership) return false;
-  if (membership.role === "owner") return true;
+  // Zamestnanec financie nemá NIKDY — ani keby mu v permissions niečo
+  // zostalo. Rovnaké poradie vetiev ako v esblu_my_finance_view().
+  if (membership.role === "employee") return false;
+  if (membership.role === "owner" || membership.role === "accountant") return true;
   return Boolean(membership.permissions?.finance?.view || membership.permissions?.finance?.manage);
 }
 
@@ -66,7 +69,8 @@ export function hasFinanceView(membership: FinanceCheckInput | null | undefined)
  */
 export function hasFinanceManage(membership: FinanceCheckInput | null | undefined): boolean {
   if (!membership) return false;
-  if (membership.role === "owner") return true;
+  if (membership.role === "employee") return false;
+  if (membership.role === "owner" || membership.role === "accountant") return true;
   return Boolean(membership.permissions?.finance?.manage);
 }
 
@@ -120,6 +124,28 @@ export async function getMyActiveMembership(): Promise<MyActiveMembership | null
 
 export function isOwnerOrAdmin(role: CompanyMemberRole | null | undefined) {
   return role === "owner" || role === "admin";
+}
+
+/**
+ * Patrí rola do PREVÁDZKY — stroje, sklad, servis a fotky vozidiel,
+ * vážne lístky? Zrkadlí DB funkciu esblu_role_can_operate().
+ *
+ * Zámerne POZITÍVNY výpočet rolí, nie `role !== "accountant"`. Negatívna
+ * podmienka je presne tá chyba, ktorou by ďalšia nová rola ticho získala
+ * prevádzkový zápis — a v appke takých negatívnych kontrol bolo desať.
+ *
+ * Toto je iba UI vrstva. Skutočnú autorizáciu drží RLS.
+ */
+export function canOperate(role: CompanyMemberRole | null | undefined) {
+  return role === "owner" || role === "admin" || role === "employee";
+}
+
+/**
+ * Účtovník — má doklady, nemá majetok. Používa sa tam, kde treba
+ * rozhodnúť o zobrazení prevádzkových modulov.
+ */
+export function isAccountant(role: CompanyMemberRole | null | undefined) {
+  return role === "accountant";
 }
 
 export type CompanyProfile = {
