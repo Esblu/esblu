@@ -12,7 +12,7 @@ import {
 import { executeIntent } from "@/lib/intents/handlers";
 import { buildActionPreview } from "@/lib/intents/actions";
 import { isValidConversationId } from "@/lib/intents/conversation";
-import { boundClientCalendarDate } from "@/lib/local-date";
+import { resolveClientCalendarDate } from "@/lib/local-date";
 import {
   startInvoiceDraftFlow,
   continueInvoiceDraftFlow,
@@ -73,13 +73,16 @@ export async function POST(req: Request) {
     // stredoeurópskeho času by sám odvodil včerajšok — a `issue_date` je
     // daňovo relevantný údaj. Klient preto pošle svoj deň a server ho
     // OVERÍ: tvar, reálnosť dátumu a odchýlku najviac jeden deň od UTC
-    // (viac už nie je časové pásmo, ale iný dátum). Neplatná hodnota sa
-    // ticho nahradí UTC dneškom, príkaz sa kvôli nej neodmieta.
+    // (viac už nie je časové pásmo, ale iný dátum).
     //
-    // Toto NIE JE autorizačný vstup: rozhoduje iba o predvyplnenom dátume,
-    // ktorý používateľ v koncepte vidí a môže zmeniť. Kto smie doklad
-    // vytvoriť, drží rola a RLS nezávisle od tejto hodnoty.
-    const issueDate = boundClientCalendarDate(body?.localDate);
+    // `null` znamená "nevieme to spoľahlivo určiť" a NEMÁ náhradnú
+    // hodnotu. Čítacie a navigačné príkazy dátum nepotrebujú, takže ich
+    // to nezastaví; zakladanie dokladu sa naň ale spoľahnúť musí a nižšie
+    // sa kvôli nemu zastaví.
+    //
+    // Toto NIE JE autorizačný vstup: neurčuje firmu ani používateľa a
+    // nemá vplyv na to, kto smie doklad vytvoriť — to drží rola a RLS.
+    const issueDate = resolveClientCalendarDate(body?.localDate);
 
     // Identifikátor prebiehajúceho dialógu. Sám osebe nič neodomyká —
     // server pri ňom vždy overuje aj totožnosť volajúceho a jeho aktívnu

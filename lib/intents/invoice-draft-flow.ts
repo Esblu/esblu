@@ -55,12 +55,15 @@ export type InvoiceDraftFlowContext = {
   userId: string;
   conversationId: string;
   /**
-   * Kalendárny deň používateľa pre TÚTO požiadavku — už overený a
-   * ohraničený serverom. Berie sa z aktuálneho kroku, nie z uloženého
-   * kontextu: rozhoduje deň, kedy doklad naozaj vzniká, a dialóg môže
-   * prebiehať cez polnoc.
+   * Kalendárny deň používateľa pre TÚTO požiadavku — už overený
+   * serverom. Berie sa z aktuálneho kroku, nie z uloženého kontextu:
+   * rozhoduje deň, kedy doklad naozaj vzniká, a dialóg môže prebiehať
+   * cez polnoc.
+   *
+   * `null` znamená, že sa deň nedal spoľahlivo určiť. Doklad sa vtedy
+   * NEVYTVORÍ — pozri `continueFlow`.
    */
-  issueDate: string;
+  issueDate: string | null;
 };
 
 /**
@@ -195,6 +198,29 @@ async function continueFlow(
   const missing = missingInvoiceFields(slots);
 
   if (missing.length === 0) {
+    // FAIL CLOSED NA DÁTUME.
+    //
+    // Toto je jediné miesto, kde doklad vzniká, a preto jediné miesto,
+    // kde sa dátum kontroluje. Keď sa kalendárny deň používateľa nedá
+    // spoľahlivo určiť — klient ho neposlal, poslal nezmysel alebo deň
+    // mimo možného rozsahu časových pásiem — doklad sa NEVYTVORÍ.
+    //
+    // Skoršia verzia v tomto prípade dosadila UTC dnešok. Znelo to
+    // zhovievavo, ale o polnoci stredoeurópskeho času by to znamenalo
+    // ticho vystavený doklad s včerajším dátumom. Odmietnutý príkaz
+    // používateľ vidí a zopakuje; nesprávny dátum na daňovom doklade sa
+    // nájde až pri kontrole.
+    //
+    // Platí to aj pre ručne poskladanú požiadavku, ktorá `localDate`
+    // vynechá zámerne — jediná cesta k dokladu vedie cez túto kontrolu.
+    if (!ctx.issueDate) {
+      await clearConversationContext(supabase, ctx.conversationId);
+      return {
+        kind: "error",
+        text: translate(locale, "search.voice.invoice.localDateRequired"),
+      };
+    }
+
     const result = await createInvoiceDraftFromSlots(
       supabase,
       locale,

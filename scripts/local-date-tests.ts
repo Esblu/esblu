@@ -20,7 +20,7 @@ import {
   todayLocalDate,
   todayUtcDate,
   isValidCalendarDate,
-  boundClientCalendarDate,
+  resolveClientCalendarDate,
 } from "../lib/local-date.ts";
 
 let passed = 0;
@@ -146,36 +146,64 @@ check("null", isValidCalendarDate(null), false);
 check("SQL pokus", isValidCalendarDate("2026-09-22'; drop table invoices;--"), false);
 
 // -----------------------------------------------------------------------------
-// Ohraničenie dátumu od klienta
+// Prijatie dátumu od klienta — FAIL CLOSED
 //
-// Toto je poistka proti spätnému datovaniu dokladu. Rozdiel oproti UTC dňu
-// môže byť nanajvýš jeden deň — viac už nie je časové pásmo.
+// `null` znamená „nevieme to spoľahlivo určiť". ZÁMERNE tu nie je náhradná
+// hodnota: skoršia verzia vracala UTC dnešok, čo o polnoci znamenalo ticho
+// vystavený doklad s včerajším dátumom. Volajúci, ktorý doklad zakladá, sa
+// na `null` musí zastaviť.
 // -----------------------------------------------------------------------------
 const NOW = new Date("2026-09-21T22:30:00Z"); // UTC deň = 2026-09-21
 
-check("klient hlási svoj zajtrajšok (UTC+2 o polnoci)", boundClientCalendarDate("2026-09-22", NOW), "2026-09-22");
-check("klient hlási ten istý deň", boundClientCalendarDate("2026-09-21", NOW), "2026-09-21");
-check("klient hlási včerajšok (pásma západne od UTC)", boundClientCalendarDate("2026-09-20", NOW), "2026-09-20");
+// A) Platný deň z pásma UTC+2 tesne po polnoci — presne nahlásený prípad.
+check("A: klient hlási svoj zajtrajšok", resolveClientCalendarDate("2026-09-22", NOW), "2026-09-22");
+check("klient hlási ten istý deň", resolveClientCalendarDate("2026-09-21", NOW), "2026-09-21");
+check("klient hlási včerajšok (pásma západne od UTC)", resolveClientCalendarDate("2026-09-20", NOW), "2026-09-20");
 
-check("podvrh: o mesiac vzad → UTC dnešok", boundClientCalendarDate("2026-08-21", NOW), "2026-09-21");
-check("podvrh: o rok vpred → UTC dnešok", boundClientCalendarDate("2027-09-21", NOW), "2026-09-21");
-check("podvrh: dva dni vzad → UTC dnešok", boundClientCalendarDate("2026-09-19", NOW), "2026-09-21");
-check("podvrh: dva dni vpred → UTC dnešok", boundClientCalendarDate("2026-09-23", NOW), "2026-09-21");
-check("nezmysel → UTC dnešok", boundClientCalendarDate("nie-datum", NOW), "2026-09-21");
-check("chýbajúci → UTC dnešok", boundClientCalendarDate(undefined, NOW), "2026-09-21");
-check("neexistujúci dátum → UTC dnešok", boundClientCalendarDate("2026-02-31", NOW), "2026-09-21");
+// B) Chýbajúci — NIKDY nie UTC dnešok.
+check("B: chýbajúci → null", resolveClientCalendarDate(undefined, NOW), null);
+check("B: null → null", resolveClientCalendarDate(null, NOW), null);
+check("B: prázdny reťazec → null", resolveClientCalendarDate("", NOW), null);
+
+// C) Neplatný tvar.
+check("C: nezmysel → null", resolveClientCalendarDate("nie-datum", NOW), null);
+check("C: slovenský tvar → null", resolveClientCalendarDate("22.09.2026", NOW), null);
+check("C: časová pečiatka → null", resolveClientCalendarDate("2026-09-22T00:30:00Z", NOW), null);
+check("C: číslo → null", resolveClientCalendarDate(20260922, NOW), null);
+check("C: objekt → null", resolveClientCalendarDate({ d: "2026-09-22" }, NOW), null);
+
+// D) Neexistujúci dátum.
+check("D: 2026-02-31 → null", resolveClientCalendarDate("2026-02-31", NOW), null);
+check("D: 2026-02-29 (nepriestupný) → null", resolveClientCalendarDate("2026-02-29", NOW), null);
+check("D: 13. mesiac → null", resolveClientCalendarDate("2026-13-01", NOW), null);
+
+// E) Podvrhnutý dátum ďaleko v minulosti/budúcnosti — pokus o spätné
+//    datovanie do uzavretého obdobia.
+check("E: o mesiac vzad → null", resolveClientCalendarDate("2026-08-21", NOW), null);
+check("E: o rok vpred → null", resolveClientCalendarDate("2027-09-21", NOW), null);
+check("E: dva dni vzad → null", resolveClientCalendarDate("2026-09-19", NOW), null);
+check("E: dva dni vpred → null", resolveClientCalendarDate("2026-09-23", NOW), null);
+check("E: SQL pokus → null", resolveClientCalendarDate("2026-09-22'; drop table invoices;--", NOW), null);
 
 // Ohraničenie musí fungovať aj cez hranicu mesiaca a roka.
 check(
   "hranica mesiaca: klientov 1. 10. je platný",
-  boundClientCalendarDate("2026-10-01", new Date("2026-09-30T22:30:00Z")),
+  resolveClientCalendarDate("2026-10-01", new Date("2026-09-30T22:30:00Z")),
   "2026-10-01"
 );
 check(
   "hranica roka: klientov 1. 1. je platný",
-  boundClientCalendarDate("2027-01-01", new Date("2026-12-31T23:30:00Z")),
+  resolveClientCalendarDate("2027-01-01", new Date("2026-12-31T23:30:00Z")),
   "2027-01-01"
 );
+
+// Poistka proti návratu starého správania: pri žiadnom neplatnom vstupe
+// sa nesmie objaviť UTC dnešok.
+{
+  const badInputs = [undefined, null, "", "nie-datum", "2026-02-31", "2026-08-21", "2027-09-21", 20260922];
+  const leaked = badInputs.filter((input) => resolveClientCalendarDate(input, NOW) === "2026-09-21");
+  check("žiadny neplatný vstup nespadne na UTC dnešok", leaked.length, 0);
+}
 
 // -----------------------------------------------------------------------------
 // Ručná a hlasová faktúra musia dať ROVNAKÝ dátum
@@ -191,8 +219,8 @@ check(
   // Ručná cesta: prehliadač počíta svoj lokálny deň.
   const manualDate = calendarDateInTimeZone(instant, userTimeZone);
 
-  // Hlasová cesta: prehliadač pošle ten istý deň, server ho overí a ohraničí.
-  const voiceDate = boundClientCalendarDate(
+  // Hlasová cesta: prehliadač pošle ten istý deň, server ho overí.
+  const voiceDate = resolveClientCalendarDate(
     calendarDateInTimeZone(instant, userTimeZone),
     instant
   );
@@ -206,7 +234,7 @@ check(
 {
   const instant = new Date("2026-12-31T23:30:00Z");
   const manualDate = calendarDateInTimeZone(instant, "Europe/Bratislava");
-  const voiceDate = boundClientCalendarDate(manualDate, instant);
+  const voiceDate = resolveClientCalendarDate(manualDate, instant);
   check("hranica roka: obe cesty = 1. 1. 2027", manualDate === voiceDate && manualDate === "2027-01-01", true);
 }
 

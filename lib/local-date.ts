@@ -27,7 +27,7 @@
 // Preto sa berie odtiaľ, kde je odpoveď bez konfigurácie k dispozícii: z
 // prehliadača používateľa. V prehliadači je „dnes" jednoducho dnes. Na
 // serveri, kde sa doklad zakladá pri hlasovom príkaze, klient svoj
-// kalendárny deň pošle a server ho overí — pozri `boundClientCalendarDate`.
+// kalendárny deň pošle a server ho overí — pozri `resolveClientCalendarDate`.
 //
 // ZÁMERNE SA NEHARDCODUJE SLOVENSKO
 // ---------------------------------
@@ -45,7 +45,7 @@
  *
  * V prehliadači je to pásmo používateľa — teda to, čo chceme. Na serveri
  * je to UTC, preto sa serverové cesty nesmú spoliehať iba na toto (pozri
- * `boundClientCalendarDate`).
+ * `resolveClientCalendarDate`).
  *
  * Používa sa lokálny `Date`, nie `toISOString()`. Práve zámena týchto dvoch
  * bola pôvodná chyba.
@@ -111,36 +111,49 @@ export function isValidCalendarDate(value: unknown): value is string {
 // -----------------------------------------------------------------------------
 
 /**
- * Prevezme kalendárny deň, ktorý poslal klient, a ohraničí ho.
+ * Overí kalendárny deň, ktorý poslal klient. Vráti `null`, keď sa naň
+ * nedá spoľahnúť.
  *
- * Bez ohraničenia by klient mohol dokladu nastaviť ľubovoľný dátum
- * vystavenia — vrátane spätného do uzavretého obdobia. Hranica je pritom
- * daná fyzikou, nie odhadom: reálne časové pásma sú v rozsahu UTC−12 až
+ * ZÁMERNE NEMÁ NÁHRADNÚ HODNOTU
+ * -----------------------------
+ * Skoršia verzia pri chýbajúcom alebo neplatnom vstupe vracala UTC
+ * dnešok. Znelo to zhovievavo, ale znamenalo to presne tú chybu, kvôli
+ * ktorej celý tento súbor vznikol: o 00:30 stredoeurópskeho času by
+ * doklad ticho dostal včerajší dátum. Tichý nesprávny dátum na daňovom
+ * doklade je horší než odmietnutý príkaz — odmietnutie používateľ vidí
+ * a zopakuje, nesprávny dátum sa nájde až pri kontrole.
+ *
+ * Volajúci sa preto musí rozhodnúť sám. Kde dátum rozhoduje (zakladanie
+ * dokladu), sa má príkaz zastaviť; kde nerozhoduje (čítanie, navigácia),
+ * sa `null` jednoducho ignoruje.
+ *
+ * OHRANIČENIE
+ * -----------
+ * Rozsah je daný fyzikou, nie odhadom: reálne časové pásma sú UTC−12 až
  * UTC+14, takže lokálny kalendárny deň môže byť oproti UTC dňu nanajvýš
  * o jeden deň vzad alebo vpred. Čokoľvek mimo tohto okna nie je časové
- * pásmo, ale pokus o iný dátum.
+ * pásmo, ale pokus o iný dátum — napríklad spätné datovanie do už
+ * uzavretého obdobia.
  *
- * Čo je a čo NIE JE táto funkcia: je to voľba predvyplnenej hodnoty, nie
- * autorizácia. Kto smie doklad vytvoriť, rozhoduje rola a RLS úplne
- * nezávisle od dátumu, a používateľ dátum v koncepte aj tak vidí a môže
- * ho zmeniť.
- *
- * Neplatný alebo chýbajúci vstup nie je chyba — vráti sa UTC dnešok, teda
- * pôvodné správanie. Kvôli nerozpoznanému dátumu sa príkaz neodmieta.
+ * ČO TÁTO FUNKCIA NIE JE
+ * ----------------------
+ * Nie je autorizácia. Neurčuje firmu ani používateľa a nemá vplyv na to,
+ * kto smie doklad vytvoriť — to drží rola a RLS úplne nezávisle. Rozhoduje
+ * výhradne o hodnote jedného poľa, ktoré používateľ v koncepte aj tak vidí
+ * a môže zmeniť.
  */
-export function boundClientCalendarDate(
+export function resolveClientCalendarDate(
   clientDate: unknown,
   now: Date = new Date()
-): string {
-  const utcToday = todayUtcDate(now);
-  if (!isValidCalendarDate(clientDate)) return utcToday;
+): string | null {
+  if (!isValidCalendarDate(clientDate)) return null;
 
-  const utcMs = Date.parse(`${utcToday}T00:00:00Z`);
+  const utcMs = Date.parse(`${todayUtcDate(now)}T00:00:00Z`);
   const clientMs = Date.parse(`${clientDate}T00:00:00Z`);
-  if (!Number.isFinite(clientMs)) return utcToday;
+  if (!Number.isFinite(clientMs) || !Number.isFinite(utcMs)) return null;
 
   const dayOffset = Math.round((clientMs - utcMs) / 86_400_000);
-  return dayOffset >= -1 && dayOffset <= 1 ? clientDate : utcToday;
+  return dayOffset >= -1 && dayOffset <= 1 ? clientDate : null;
 }
 
 // -----------------------------------------------------------------------------

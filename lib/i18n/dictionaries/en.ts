@@ -278,6 +278,7 @@ const en = {
         draftReviewNote: "The invoice is still a draft — it has no number and books nothing. Review it and issue it manually.",
         openDraft: "Open draft",
         createFailed: "The invoice draft could not be created.",
+        localDateRequired: "I could not determine today's date, so no invoice was created. Please try the command again.",
       },
       ui: {
         startRecording: "Start voice search",

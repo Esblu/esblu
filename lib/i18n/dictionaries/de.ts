@@ -277,6 +277,7 @@ const de = {
         draftReviewNote: "Die Rechnung ist bislang ein Entwurf — ohne Nummer und ohne buchhalterische Wirkung. Bitte prüfen und manuell ausstellen.",
         openDraft: "Entwurf öffnen",
         createFailed: "Der Rechnungsentwurf konnte nicht erstellt werden.",
+        localDateRequired: "Das heutige Datum konnte nicht bestimmt werden, daher wurde keine Rechnung erstellt. Bitte versuchen Sie den Befehl erneut.",
       },
       ui: {
         startRecording: "Sprachsuche starten",

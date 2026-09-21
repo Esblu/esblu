@@ -589,7 +589,7 @@ export async function createInvoiceDraftFromSlots(
   slots: InvoiceDraftSlots,
   /**
    * Kalendárny deň používateľa, už overený a ohraničený na serveri
-   * (`boundClientCalendarDate`). Server beží v UTC, takže bez tejto hodnoty
+   * (`resolveClientCalendarDate`). Server beží v UTC, takže bez tejto hodnoty
    * by o polnoci stredoeurópskeho času vznikol doklad s včerajším dátumom —
    * presne chyba, ktorá sa prejavila v reálnom teste.
    */

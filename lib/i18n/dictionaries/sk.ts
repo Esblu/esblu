@@ -292,6 +292,7 @@ const sk = {
         draftReviewNote: "Faktúra je zatiaľ koncept — nemá číslo a nič neúčtuje. Skontrolujte ju a vystavte ručne.",
         openDraft: "Otvoriť koncept",
         createFailed: "Koncept faktúry sa nepodarilo vytvoriť.",
+        localDateRequired: "Nepodarilo sa určiť dnešný dátum, preto som faktúru nevytvoril. Skúste príkaz, prosím, znova.",
       },
       ui: {
         startRecording: "Spustiť hlasové vyhľadávanie",
