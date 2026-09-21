@@ -55,6 +55,24 @@ import {
 
 type DetailTab = "overview" | "service" | "documents" | "photos";
 
+/** Allowlist pre ?tab= — aby sa do stavu nedostala hodnota z adresy. */
+const DETAIL_TAB_KEYS: readonly DetailTab[] = ["overview", "service", "documents", "photos"];
+
+/**
+ * Záložka z adresy. Neznáma hodnota (aj podvrhnutá) sa ticho ignoruje a
+ * zostáva prehľad — parameter nič neodomyká, iba prepína pohľad.
+ *
+ * Číta sa z `window.location`, nie cez useSearchParams(): ten by vyžadoval
+ * <Suspense> obal okolo celého detailu kvôli jednému nepovinnému parametru.
+ */
+function readInitialTab(): DetailTab {
+  if (typeof window === "undefined") return "overview";
+  const requested = new URLSearchParams(window.location.search).get("tab");
+  return requested && (DETAIL_TAB_KEYS as readonly string[]).includes(requested)
+    ? (requested as DetailTab)
+    : "overview";
+}
+
 type MachineService = {
   id: string;
   machine_id: string;
@@ -190,7 +208,12 @@ export default function MachineDetailView({
   const [isServiceSaving, setIsServiceSaving] = useState(false);
   const [deletingServiceId, setDeletingServiceId] = useState<string | null>(null);
   const [documents, setDocuments] = useState<MachineDocumentEntry[]>([]);
-  const [tab, setTab] = useState<DetailTab>("overview");
+  // Počiatočná záložka smie prísť z adresy (?tab=photos — hlasové "ukáž
+  // fotky stroja X"). Číta sa v inicializátore stavu, nie v efekte: efekt
+  // by znamenal, že sa komponent najprv vykreslí s prehľadom a hneď
+  // prekreslí s galériou. Nezhoda pri hydratácii nehrozí — pruh záložiek
+  // sa vykresľuje až po načítaní stroja, ktoré beží výhradne na klientovi.
+  const [tab, setTab] = useState<DetailTab>(readInitialTab);
   const [isUploading, setIsUploading] = useState(false);
   const [deletingPhotoId, setDeletingPhotoId] = useState<string | null>(null);
   const serviceSaveInProgressRef = useRef(false);

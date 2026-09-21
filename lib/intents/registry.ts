@@ -28,6 +28,19 @@ export type IntentDefinition = {
   name: IntentName;
   readOnly: boolean;
   requiresConfirmation: boolean;
+  /**
+   * Voice Phase 2 — tretia kategória: zapisuje, ale nepýta sa pred zápisom,
+   * pretože výsledok POVINNE otvorí na kontrolu (dnes výhradne
+   * CREATE_INVOICE_DRAFT).
+   *
+   * Je to samostatný, EXPLICITNÝ príznak, nie len `requiresConfirmation:
+   * false`. Rozdiel je podstatný: keby stačilo vynechať potvrdenie, stačilo
+   * by pri budúcom intente jedno opomenutie a zapisoval by bez akejkoľvek
+   * kontroly. Takto musí autor nového intentu vedome napísať, že jeho
+   * výsledok sa dá skontrolovať — a ak to napíše nepravdivo, je to vidieť
+   * v diffe na jednom riadku.
+   */
+  createsReviewableDraft?: boolean;
   description: string;
 };
 
@@ -207,6 +220,46 @@ export const INTENT_REGISTRY: Record<IntentName, IntentDefinition> = {
     requiresConfirmation: true,
     description: "Presuň dokumenty z jednej vlastnej zložky do druhej, alebo ich zo zložky vyraď.",
   },
+
+  SHOW_INVOICES_BY_STATUS: {
+    name: "SHOW_INVOICES_BY_STATUS",
+    readOnly: true,
+    requiresConfirmation: false,
+    description: "Zobraz faktúry podľa stavu (neuhradené, uhradené, po splatnosti, vydané, prijaté, rozpracované).",
+  },
+  SHOW_LOW_STOCK: {
+    name: "SHOW_LOW_STOCK",
+    readOnly: true,
+    requiresConfirmation: false,
+    description: "Zobraz skladové položky pod minimom alebo úplne vypredané.",
+  },
+  SHOW_MACHINE_DOCUMENTS: {
+    name: "SHOW_MACHINE_DOCUMENTS",
+    readOnly: true,
+    requiresConfirmation: false,
+    description: "Zobraz dokumenty priradené ku stroju.",
+  },
+  SHOW_MACHINE_PHOTOS: {
+    name: "SHOW_MACHINE_PHOTOS",
+    readOnly: true,
+    requiresConfirmation: false,
+    description: "Otvor fotogalériu stroja.",
+  },
+  OPEN_DOCUMENT_FOLDER: {
+    name: "OPEN_DOCUMENT_FOLDER",
+    readOnly: true,
+    requiresConfirmation: false,
+    description: "Otvor vlastnú zložku dokumentov podľa názvu.",
+  },
+
+  CREATE_INVOICE_DRAFT: {
+    name: "CREATE_INVOICE_DRAFT",
+    readOnly: false,
+    requiresConfirmation: false,
+    createsReviewableDraft: true,
+    description:
+      "Vytvor DRAFT vydanej faktúry z nadiktovaných údajov a otvor ho na kontrolu. Nikdy nefinalizuje a nikdy nezakladá partnera.",
+  },
 };
 
 export function isRegisteredReadOnlyIntent(name: string): name is IntentName {
@@ -224,6 +277,25 @@ export function isRegisteredWriteIntent(name: string): name is IntentName {
     (INTENT_NAMES as readonly string[]).includes(name) &&
     INTENT_REGISTRY[name as IntentName]?.readOnly === false &&
     INTENT_REGISTRY[name as IntentName]?.requiresConfirmation === true
+  );
+}
+
+/**
+ * Voice Phase 2 — intenty, ktoré zapisujú bez potvrdenia, ale ich výsledok
+ * sa POVINNE otvorí na kontrolu.
+ *
+ * Podmienky sú tri a musia platiť naraz. `createsReviewableDraft === true`
+ * sám osebe by nestačil: keby ho niekto pridal k intentu, ktorý navyše
+ * vyžaduje potvrdenie, vznikli by dve cesty k tomu istému zápisu a jedna
+ * z nich by potvrdenie obišla.
+ */
+export function isRegisteredReviewableDraftIntent(name: string): name is IntentName {
+  const definition = INTENT_REGISTRY[name as IntentName];
+  return (
+    (INTENT_NAMES as readonly string[]).includes(name) &&
+    definition?.readOnly === false &&
+    definition?.requiresConfirmation === false &&
+    definition?.createsReviewableDraft === true
   );
 }
 

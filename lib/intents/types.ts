@@ -106,6 +106,36 @@ export const INTENT_NAMES = [
   // ---------------------------------------------------------------------
   "DELETE_DOCUMENT_CATEGORY",
   "MOVE_DOCUMENTS_TO_CATEGORY",
+
+  // ---------------------------------------------------------------------
+  // Voice Phase 2 — doplnené čítanie naprieč modulmi.
+  //
+  // Stav faktúry (uhradené/vydané/prijaté/po splatnosti) je jeden intent s
+  // parametrom, nie štyri samostatné. Štyri intenty by znamenali štyri
+  // takmer rovnaké handlery, ktoré sa časom rozídu; parameter má jeden
+  // handler a jeden allowlist hodnôt.
+  // ---------------------------------------------------------------------
+  "SHOW_INVOICES_BY_STATUS",
+  "SHOW_LOW_STOCK",
+  "SHOW_MACHINE_DOCUMENTS",
+  "SHOW_MACHINE_PHOTOS",
+  "OPEN_DOCUMENT_FOLDER",
+
+  // ---------------------------------------------------------------------
+  // Voice Phase 2 — vytvorenie DRAFTU vydanej faktúry.
+  //
+  // Tento intent zapisuje, ale NEMÁ potvrdzovací dialóg — a to je zámer,
+  // nie opomenutie. Potvrdenie chráni pred nezvratnou stratou; draft
+  // faktúry nie je nezvratný, nemá číslo, nič neúčtuje a dá sa zmazať.
+  // Ochranou tu nie je otázka "naozaj?", ale to, že výsledok sa POVINNE
+  // otvorí na kontrolu: používateľ vidí, čo vzniklo, skôr než to čokoľvek
+  // znamená. Otázka pred vytvorením by bola rituál — prečítal by ju ten
+  // istý človek, ktorý o sekundu neskôr uvidí skutočný doklad.
+  //
+  // Finalizácia ani úhrada rečou NEEXISTUJÚ a v tejto fáze ani vzniknúť
+  // nemajú — tie nezvratné sú.
+  // ---------------------------------------------------------------------
+  "CREATE_INVOICE_DRAFT",
 ] as const;
 
 export type IntentName = (typeof INTENT_NAMES)[number];
@@ -235,7 +265,36 @@ export type IntentArgs = {
   // dateTo/query). Musí existovať (appka ju NIKDY nezaloží automaticky v
   // rámci priradenia — pozri lib/intents/actions.ts).
   targetCategoryName?: string;
+  // SHOW_INVOICES_BY_STATUS — presne jedna z povolených hodnôt nižšie.
+  invoiceStatus?: InvoiceStatusFilter;
+  // CREATE_INVOICE_DRAFT — meno odberateľa tak, ako ho používateľ vyslovil.
+  // Handler ho VŽDY overí proti reálnym partnerom firmy a pri viacerých
+  // zhodách sa spýta; nikdy nevyberá sám a nikdy nezakladá nového partnera.
+  partnerQuery?: string;
 };
+
+// Stavy faktúr, na ktoré sa dá pýtať. Zámerne "priateľské" hodnoty, nie
+// stĺpce — `overdue` v databáze neexistuje ako hodnota, je to kombinácia
+// splatnosti a stavu úhrady (lib/invoicing/vat-engine.ts#isInvoiceOverdue),
+// a `issued`/`received` je smer, nie stav. Mapovanie robí handler na
+// jednom mieste.
+export const INVOICE_STATUS_FILTERS = [
+  "unpaid",
+  "paid",
+  "overdue",
+  "issued",
+  "received",
+  "draft",
+] as const;
+
+export type InvoiceStatusFilter = (typeof INVOICE_STATUS_FILTERS)[number];
+
+export function isInvoiceStatusFilter(value: unknown): value is InvoiceStatusFilter {
+  return (
+    typeof value === "string" &&
+    (INVOICE_STATUS_FILTERS as readonly string[]).includes(value)
+  );
+}
 
 export type ParsedIntent = {
   name: IntentName;
@@ -392,4 +451,39 @@ export type IntentResult =
         }[];
       };
     }
-  | { kind: "action_result"; success: boolean; text: string };
+  | { kind: "action_result"; success: boolean; text: string }
+  // ---------------------------------------------------------------------
+  // Voice Phase 2 — viackrokový dialóg.
+  //
+  // `clarify` znamená: príkaz je rozpoznaný, ale niečo v ňom chýba alebo
+  // je nejednoznačné, a appka sa PÝTA namiesto toho, aby doplnila. Je to
+  // samostatný tvar, nie `answer` s otáznikom — UI podľa neho vie, že má
+  // čakať odpoveď a poslať ju do toho istého dialógu.
+  //
+  // `conversationId` je opaque identifikátor, ktorý klient vráti pri
+  // ďalšom kroku. Sám osebe nič neodomyká: server pri ňom vždy overuje aj
+  // totožnosť volajúceho a jeho aktívnu firmu (pozri migráciu
+  // 20260924100000_add_assistant_conversation_context.sql).
+  //
+  // `choices` sa posiela IBA pri výbere z konkrétnych kandidátov (napr.
+  // dvaja partneri s podobným menom) a nesie ich označenia — nie preto,
+  // aby si klient vybral sám, ale aby používateľ videl, medzi čím vyberá.
+  // Výber sa aj tak vyhodnocuje na serveri proti uloženému kontextu.
+  // ---------------------------------------------------------------------
+  | {
+      kind: "clarify";
+      question: string;
+      conversationId: string;
+      choices?: { value: string; label: string }[];
+    }
+  // Draft vznikol a MUSÍ sa skontrolovať. `entity` vedie na detail
+  // dokladu; `summary` je to isté, čo je v doklade, aby používateľ videl
+  // výsledok skôr, než naň klikne. Žiadne potvrdzovanie pred vytvorením —
+  // dôvod je pri CREATE_INVOICE_DRAFT v INTENT_NAMES vyššie.
+  | {
+      kind: "draft_created";
+      title: string;
+      note: string;
+      summary: { label: string; value: string }[];
+      entity: EntityRef;
+    };

@@ -682,17 +682,25 @@ function Info({ title, value }: { title: string; value: any }) {
 function OpenFromQueryParam({
   onOpenDocument,
   onOpenEvidence,
+  onOpenFolder,
 }: {
   onOpenDocument: (id: string) => void;
   onOpenEvidence: (id: string) => void;
+  /** ?openFolder=<custom_document_categories.id> — hlasové "otvor zložku X".
+   *  Identifikátor sa NEOVERUJE tu: zložka sa otvorí iba vtedy, keď je v
+   *  načítanom, RLS-obmedzenom zozname zložiek firmy. Cudzie id teda
+   *  neurobí nič. */
+  onOpenFolder: (categoryId: string) => void;
 }) {
   const searchParams = useSearchParams();
 
   useEffect(() => {
     const openDocument = searchParams.get("openDocument");
     const openEvidence = searchParams.get("openEvidence");
+    const openFolder = searchParams.get("openFolder");
     if (openDocument) onOpenDocument(openDocument);
     if (openEvidence) onOpenEvidence(openEvidence);
+    if (openFolder) onOpenFolder(openFolder);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
 
@@ -2918,6 +2926,7 @@ function renderDocumentRegister(
         <OpenFromQueryParam
           onOpenDocument={setPendingOpenDocumentId}
           onOpenEvidence={setPendingOpenEvidenceId}
+          onOpenFolder={handleOpenCustomCategory}
         />
       </Suspense>
       <div className="mx-auto max-w-5xl">

@@ -256,6 +256,27 @@ const de = {
         recognising: "Befehl wird erkannt…",
         awaitingConfirmation: "Warte auf Bestätigung.",
         denied: "Für diese Aktion fehlt Ihnen die Berechtigung.",
+        understanding: "Befehl wird verstanden…",
+        clarification: "Mir fehlt noch eine Angabe.",
+        review: "Bitte prüfen Sie das Ergebnis.",
+        complete: "Fertig.",
+        failed: "Der Befehl konnte nicht abgeschlossen werden.",
+      },
+      answerLabel: "Ihre Antwort",
+      answerPlaceholder: "Antwort schreiben oder sprechen",
+      answerSend: "Senden",
+      invoice: {
+        askPartner: "Für welchen Kunden soll die Rechnung sein?",
+        askPartnerChoice: "Ich habe mehrere Partner gefunden: {{names}}. Welchen meinen Sie?",
+        askDescription: "Wofür soll die Rechnung sein?",
+        askAmount: "Wie hoch ist der Betrag?",
+        askVat: "Welche Mehrwertsteuerkategorie und welchen Satz möchten Sie verwenden?",
+        partnerNotFound: "Den Kunden „{{name}}“ habe ich unter den Geschäftspartnern nicht gefunden. Ich lege keinen neuen Partner an — bitte fügen Sie ihn manuell hinzu.",
+        tooManyTurns: "Der Befehl konnte nicht vervollständigt werden. Bitte sagen Sie ihn vollständig in einem Satz.",
+        draftCreatedTitle: "Rechnungsentwurf ist bereit",
+        draftReviewNote: "Die Rechnung ist bislang ein Entwurf — ohne Nummer und ohne buchhalterische Wirkung. Bitte prüfen und manuell ausstellen.",
+        openDraft: "Entwurf öffnen",
+        createFailed: "Der Rechnungsentwurf konnte nicht erstellt werden.",
       },
       ui: {
         startRecording: "Sprachsuche starten",
@@ -1510,6 +1531,9 @@ const de = {
   },
 
   machines: {
+    voice: {
+      noDocuments: "Der Maschine {{machine}} ist kein Dokument zugeordnet.",
+    },
     list: {
       photoHint: "Die Fotos werden direkt nach dem Speichern der Maschine hochgeladen.",
       subtitle: "Erfassung von Firmenmaschinen und -technik.",
@@ -1637,6 +1661,12 @@ const de = {
   },
 
   inventory: {
+    voice: {
+      lowTitle: "Artikel unter dem Mindestbestand",
+      outTitle: "Ausverkaufte Artikel",
+      noneLow: "Kein Artikel liegt unter dem Mindestbestand.",
+      noneOut: "Kein Artikel ist ausverkauft.",
+    },
     list: {
       subtitle: "Erfassung von Werkzeugen, Material und Lagerbeständen.",
       addItem: "Artikel hinzufügen",
@@ -2002,7 +2032,22 @@ const de = {
 
   invoices: {
     voice: {
-      noUnpaid: "Alle Rechnungen sind bezahlt.",
+      title: {
+        unpaid: "Offene Rechnungen",
+        paid: "Bezahlte Rechnungen",
+        overdue: "Überfällige Rechnungen",
+        issued: "Ausgangsrechnungen",
+        received: "Eingangsrechnungen",
+        draft: "Rechnungsentwürfe",
+      },
+      empty: {
+        unpaid: "Alle Rechnungen sind bezahlt.",
+        paid: "Es ist noch keine Rechnung bezahlt.",
+        overdue: "Keine Rechnung ist überfällig.",
+        issued: "Es wurde noch keine Rechnung ausgestellt.",
+        received: "Es ist noch keine Eingangsrechnung erfasst.",
+        draft: "Keine Rechnungsentwürfe.",
+      },
     },
     title: "Rechnungen",
     subtitle: "Ausgestellte Rechnungen, Gutschriften und Lastschriften Ihrer Firma.",

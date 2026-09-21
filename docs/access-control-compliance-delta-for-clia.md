@@ -19,7 +19,7 @@
 
 ## 1. Zhrnutie pre právny tím
 
-Pribudla štvrtá rola používateľa: **`accountant` (účtovník)**.
+Pribudla štvrtá rola používateľa: **`accountant` (účtovník)** — autorizovaný používateľ účtovníckeho scope v rámci tenant firmy (bližšie bod 2).
 
 Zmena **nezavádza žiadnu novú kategóriu osobných údajov** ani nový účel spracúvania. Nemení sa ani rozsah zbieraných údajov, ani retencia, ani zoznam subprocesorov. Mení sa **iba to, kto z existujúcich údajov čo vidí** — a to smerom k prísnejšiemu oddeleniu.
 
@@ -29,11 +29,30 @@ Z pohľadu GDPR ide o opatrenie podľa čl. 32 (zabezpečenie spracúvania), kon
 
 ## 2. Postavenie účtovníka
 
-Účtovník je **company-internal authorized user** — člen firmy zákazníka (`company_members`), nie samostatný príjemca údajov a nie ďalší sprostredkovateľ. Platí pre neho presne ten istý vzťah prevádzkovateľ – sprostredkovateľ ako pre ostatné role: **prevádzkovateľom zostáva zákazník, Esblu zostáva sprostredkovateľom.**
+### 2.1 Čo o ňom vieme technicky
 
-Praktický scenár: externá účtovníčka, ktorej firma potrebuje sprístupniť doklady, ale nie prevádzkovú evidenciu majetku. Ak je takáto osoba zmluvne treťou stranou voči zákazníkovi, vzťah medzi ňou a zákazníkom **rieši zákazník**, nie Esblu — Esblu len poskytuje technický prostriedok na obmedzenie jej prístupu.
+`accountant` je **autorizovaný používateľ účtovníckeho scope v rámci tenant firmy** — má aktívny záznam v `company_members` danej firmy a jeho prístup je obmedzený na finančné údaje popísané v bode 3.
 
-**Poznámka pre právny tím:** práve preto považujeme túto zmenu za posilnenie pozície zákazníka ako prevádzkovateľa. Doteraz musel externej účtovníčke dať rolu `employee` s finančným oprávnením, čím jej zároveň sprístupnil celý prevádzkový denník firmy. To bol reálny nadbytočný prístup.
+To je **úplný rozsah toho, čo Esblu o tejto osobe vie**. Systém nerozlišuje — a ani nemá ako rozlíšiť — či ide o:
+
+- internú osobu zákazníka (zamestnanec, konateľ, interné účtovné oddelenie), alebo
+- **externú účtovníčku či účtovnú spoločnosť**, ktorej zákazník prístup udelil.
+
+Obe možnosti sú z technického pohľadu ten istý riadok v `company_members` s rolou `accountant`.
+
+### 2.2 Čo tento dokument ZÁMERNE neurčuje
+
+Právne postavenie externej účtovníčky — teda či je voči zákazníkovi **príjemcom (recipient)**, **sprostredkovateľom (processor)**, **samostatným prevádzkovateľom (independent controller)** alebo v inom vzťahu — **tento technický dokument neurčuje a určiť nemôže.**
+
+Závisí to od konkrétneho zmluvného vzťahu medzi zákazníkom a jeho účtovníkom, prípadne od účtovnej a daňovej legislatívy, ktorá účtovníkovi ukladá vlastné zákonné povinnosti. Ten istý technický prístup môže byť v dvoch firmách právne odlišný.
+
+> **Otázka pre CLIA:** ako sa postavenie osoby s rolou `accountant` posudzuje podľa konkrétneho zmluvného vzťahu zákazníka s ňou, a či z toho pre Esblu vyplýva nejaká povinnosť (napr. informačná voči zákazníkovi).
+
+Esblu do vzťahu medzi zákazníkom a jeho účtovníkom nevstupuje a neposudzuje ho — poskytuje iba technický prostriedok na obmedzenie rozsahu prístupu. **Vo vzťahu Esblu ↔ zákazník sa nič nemení: prevádzkovateľom zostáva zákazník, Esblu zostáva sprostredkovateľom.**
+
+### 2.3 Prečo to považujeme za zlepšenie
+
+Nezávisle od toho, ako sa uvedená otázka zodpovie, zmena zužuje rozsah prístupu. Doteraz musel zákazník účtovníkovi dať rolu `employee` s finančným oprávnením, čím mu zároveň sprístupnil celý prevádzkový denník firmy. To bol reálny nadbytočný prístup — a pri externej osobe o to významnejší.
 
 ---
 
@@ -113,7 +132,7 @@ Z toho vyplýva:
 
 ## 7. Čo si zaslúži pozornosť právneho tímu
 
-1. **Postavenie externej účtovníčky.** Ak zákazník dá rolu `accountant` osobe mimo svojej organizácie, vzniká vzťah medzi ním a ňou. Esblu doň nevstupuje, ale stojí za zváženie, či to má byť spomenuté v dokumentácii pre zákazníka.
+1. **Postavenie externej účtovníčky — hlavná otvorená otázka (viď bod 2.2).** Rola `accountant` môže patriť internej aj externej osobe a Esblu medzi nimi nerozlišuje. Či je externá účtovníčka voči zákazníkovi príjemcom, sprostredkovateľom, samostatným prevádzkovateľom alebo v inom vzťahu, vyplýva z ich zmluvy a z účtovnej/daňovej legislatívy — nie z návrhu systému. Prosíme o posúdenie, či z toho pre Esblu vyplýva nejaká povinnosť (napr. informovať zákazníka pri udelení tejto roly).
 2. **Rozsah resolvera.** Domnievame sa, že „ŠPZ a značka vozidla uvedeného na doklade“ je primerané minimum. Ak by právny tím považoval aj to za nadbytočné, dá sa zúžiť na samotné ŠPZ.
 3. **Retencia sa nemení.** Rola neovplyvňuje, ako dlho sa údaje uchovávajú.
 

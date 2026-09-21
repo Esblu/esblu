@@ -1,3 +1,4 @@
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
 import {
   computeInvoiceLine,
@@ -23,6 +24,14 @@ export type { VatCategoryCode } from "@/lib/invoicing/vat-engine";
 // USING/WITH CHECK), takže funkcie nižšie fungujú iba nad draftmi (okrem
 // finalize/payment RPC wrapperov).
 // =============================================================================
+
+/**
+ * Klient, ktorým sa zápis vykoná. Prehliadač posiela singleton, server
+ * posiela klienta obliekaného tokenom prihláseného používateľa — v oboch
+ * prípadoch ide o rolu `authenticated`, takže RLS platí rovnako. Nikdy sem
+ * nepatrí service-role klient; ten by RLS obišiel.
+ */
+type SupabaseLike = SupabaseClient;
 
 export type InvoiceDirection = "issued" | "received";
 export type InvoiceKind =
@@ -282,12 +291,23 @@ export type DraftInvoiceHeaderInput = {
   corrects_invoice_id: string | null;
 };
 
+/**
+ * `db` je voliteľný Supabase klient. Bez neho sa použije klientský
+ * singleton (formulár v prehliadači); server (hlasový asistent) sem
+ * odovzdá klienta obliekaného tokenom volajúceho.
+ *
+ * Je to jeden parameter namiesto druhej funkcie zámerne: obe cesty tak
+ * posielajú DOSLOVA ten istý payload a prechádzajú tou istou RLS
+ * politikou. Samostatná "serverová verzia" by sa časom rozišla a rozdiel
+ * by sa našiel až na produkcii.
+ */
 export async function createDraftInvoice(
   companyId: string,
   userId: string,
-  input: DraftInvoiceHeaderInput
+  input: DraftInvoiceHeaderInput,
+  db: SupabaseLike = supabase
 ): Promise<Invoice> {
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from("invoices")
     .insert({
       company_id: companyId,
@@ -361,9 +381,10 @@ export type DraftInvoiceItemInput = {
  */
 export async function replaceDraftInvoiceItems(
   invoiceId: string,
-  items: DraftInvoiceItemInput[]
+  items: DraftInvoiceItemInput[],
+  db: SupabaseLike = supabase
 ): Promise<InvoiceItem[]> {
-  const { error: deleteError } = await supabase
+  const { error: deleteError } = await db
     .from("invoice_items")
     .delete()
     .eq("invoice_id", invoiceId);
@@ -395,7 +416,7 @@ export async function replaceDraftInvoiceItems(
     };
   });
 
-  const { data, error } = await supabase.from("invoice_items").insert(rows).select("*");
+  const { data, error } = await db.from("invoice_items").insert(rows).select("*");
 
   if (error) throw error;
   return (data as InvoiceItem[]) ?? [];

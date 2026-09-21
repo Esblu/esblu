@@ -3,8 +3,10 @@ import {
   DEADLINE_TYPE_FILTERS,
   DOCUMENT_TYPE_FILTERS,
   INTENT_NAMES,
+  INVOICE_STATUS_FILTERS,
   isDeadlineTypeFilter,
   isDocumentTypeFilter,
+  isInvoiceStatusFilter,
   type IntentName,
   type ParsedIntent,
 } from "@/lib/intents/types";
@@ -82,6 +84,17 @@ const INTENT_CLASSIFICATION_SCHEMA = {
     categoryName: { type: ["string", "null"] },
     newCategoryName: { type: ["string", "null"] },
     targetCategoryName: { type: ["string", "null"] },
+    // SHOW_INVOICES_BY_STATUS — striktný enum, rovnaký allowlist ako v
+    // lib/intents/types.ts. Model teda nemôže vrátiť "stav", ktorý appka
+    // nepozná.
+    invoiceStatus: {
+      type: ["string", "null"],
+      enum: [...INVOICE_STATUS_FILTERS, null],
+    },
+    // CREATE_INVOICE_DRAFT — meno odberateľa PRESNE tak, ako zaznelo.
+    // Model tu nič neoveruje ani nedopĺňa; partnera resolvuje server proti
+    // reálnym dátam firmy a pri viacerých zhodách sa pýta.
+    partnerQuery: { type: ["string", "null"] },
   },
   required: [
     "intent",
@@ -98,6 +111,8 @@ const INTENT_CLASSIFICATION_SCHEMA = {
     "categoryName",
     "newCategoryName",
     "targetCategoryName",
+    "invoiceStatus",
+    "partnerQuery",
   ],
 } as const;
 
@@ -157,14 +172,49 @@ Pravidlá:
   zložky" bez cieľa, nechaj targetCategoryName null. Keď sa dokumenty
   vyberajú FILTROM (typ, dátum), a nie zdrojovou zložkou, použi
   ASSIGN_DOCUMENTS_TO_CATEGORY.
+- SHOW_INVOICES_BY_STATUS je pre otázky na faktúry podľa STAVU. Povolené
+  hodnoty "invoiceStatus" (nič iné):
+${INVOICE_STATUS_FILTERS.map((s) => `  - ${s}`).join("\n")}
+  Mapovanie: "uhradené"/"zaplatené"/"bezahlte"/"paid" → paid;
+  "neuhradené"/"offene"/"unpaid" → unpaid; "po splatnosti"/"überfällig"/
+  "overdue" → overdue; "vydané"/"Ausgangsrechnungen"/"issued" → issued;
+  "prijaté"/"Eingangsrechnungen"/"received" → received;
+  "rozpracované"/"koncepty"/"Entwürfe"/"drafts" → draft. Keď text pýta
+  faktúry BEZ stavu, použi SEARCH_INVOICE, nie tento intent.
+- SHOW_LOW_STOCK je pre "čo nám dochádza", "položky pod minimom", "was
+  geht uns aus", "low stock". Keď text hovorí o ÚPLNE vypredaných
+  ("vypredané", "nič nemáme", "out of stock", "ausverkauft"), nastav
+  "onlyOverdue" na true — v tomto intente znamená "iba vypredané".
+- SHOW_MACHINE_DOCUMENTS ("ukáž dokumenty k bagru CAT 302") a
+  SHOW_MACHINE_PHOTOS ("ukáž fotky stroja X") — "query" je názov stroja
+  presne z textu.
+- OPEN_DOCUMENT_FOLDER je pre "otvor zložku X", "öffne den Ordner X",
+  "open folder X" — "categoryName" je názov zložky presne z textu. Keď sa
+  má zložka VYTVORIŤ, je to CREATE_DOCUMENT_CATEGORY, nie tento intent.
+- CREATE_INVOICE_DRAFT je pre "vytvor faktúru pre X za Y 300 eur s 23
+  percent DPH", "erstelle eine Rechnung für X", "create an invoice for X".
+  Vyplň:
+    * "partnerQuery" = meno odberateľa presne tak, ako zaznelo (nikdy
+      vymyslené, nikdy doplnené o právnu formu, ktorá v texte nie je),
+    * "query" = predmet fakturácie / popis položky ("kopanie",
+      "Erdarbeiten", "excavation"),
+    * "amount" = jednotková cena v číslach, LEN ak je vo vete suma,
+    * "invoiceStatus" nechaj null.
+  Ktorýkoľvek z týchto údajov môže chýbať — vtedy nechaj null. NIKDY
+  nedopĺňaj sumu, sadzbu DPH ani partnera, ktorých text neobsahuje; appka
+  sa na ne sama spýta. Sadzbu DPH nevraciaš vôbec — tú si appka číta
+  deterministicky z textu.
 - Príkazy, ktoré appka zatiaľ nepodporuje, VŽDY klasifikuj ako intent:
   null (NIKDY sa nesnaž vynútiť ich do najbližšieho povoleného intentu).
-  Sem patrí najmä: zmazanie dokumentu/zložky ("Vymaž všetky faktúry.",
-  "Zmaž zložku Servis."), odoslanie/poslanie dokumentu alebo emailu
-  ("Pošli faktúru zákazníkovi."), zmena skladového množstva ("Odpočítaj 5
-  kusov spreja.", "Pridaj 10 kusov."), úprava/vytvorenie vozidla alebo
-  stroja príkazom, a čokoľvek iné, čo by vyžadovalo zápis do databázy mimo
-  zoznamu povolených intentov vyššie.
+  Sem patrí najmä: zmazanie dokumentu ("Vymaž všetky faktúry."),
+  odoslanie/poslanie dokumentu alebo emailu ("Pošli faktúru zákazníkovi."),
+  zmena skladového množstva ("Odpočítaj 5 kusov spreja.", "Pridaj 10
+  kusov."), úprava/vytvorenie vozidla alebo stroja príkazom,
+  FINALIZÁCIA/vystavenie faktúry ("Vystav tú faktúru.", "Finalizuj
+  faktúru.") a označenie faktúry za uhradenú ("Označ faktúru ako
+  zaplatenú.") — tie posledné dve appka zámerne rečou nerobí — a čokoľvek
+  iné, čo by vyžadovalo zápis do databázy mimo zoznamu povolených intentov
+  vyššie.
 - "dateFrom"/"dateTo" (formát "YYYY-MM-DD") nastav LEN ak text obsahuje
   jednoznačný časový rozsah (napr. "za august", "tento mesiac", "tento
   rok") — rok, ak nie je v texte, je vždy aktuálny kalendárny rok. Inak
@@ -232,6 +282,8 @@ export async function classifyIntentWithAi(
       categoryName: string | null;
       newCategoryName: string | null;
       targetCategoryName: string | null;
+      invoiceStatus: string | null;
+      partnerQuery: string | null;
     };
 
     if (!parsed.intent || !(INTENT_NAMES as readonly string[]).includes(parsed.intent)) {
@@ -272,6 +324,14 @@ export async function classifyIntentWithAi(
         categoryName: parsed.categoryName ?? undefined,
         newCategoryName: parsed.newCategoryName ?? undefined,
         targetCategoryName: parsed.targetCategoryName ?? undefined,
+        // Druhá, nezávislá kontrola oproti json_schema enumu — rovnaký
+        // fail-closed princíp ako pri documentTypes/deadlineTypes vyššie.
+        invoiceStatus: isInvoiceStatusFilter(parsed.invoiceStatus)
+          ? parsed.invoiceStatus
+          : undefined,
+        // Voľný text; skutočné overenie proti partnerom firmy robí server
+        // (lib/intents/invoice-draft.ts). Model iba naznačuje.
+        partnerQuery: parsed.partnerQuery ?? undefined,
       },
       source: "ai",
     };

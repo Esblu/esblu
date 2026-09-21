@@ -347,6 +347,120 @@ const UNSUPPORTED_ACTION_STEMS = [
 ];
 
 // =============================================================================
+// Holé navigačné príkazy (Voice Phase 2, bod 12 zadania).
+//
+// PREČO VÔBEC
+// -----------
+// "Otvor sklad" je najčastejší a najmenej nejednoznačný príkaz, aký appka
+// dostane — a doteraz kvôli nemu musela volať jazykový model. To znamená
+// sieťové volanie, latenciu a závislosť na dostupnosti služby pri príkaze,
+// ktorý má presne jeden možný význam. Tieto sa preto vyhodnotia lokálne.
+//
+// PREČO TO NIE JE VEĽKÁ REGEXOVÁ TABUĽKA
+// --------------------------------------
+// Vetva je zámerne úzka: rozpozná IBA "sloveso + názov modulu" a nič iné.
+// Nevie, aké moduly existujú — názov posunie ďalej ako `query` a modul
+// priradí handleOpenModule(), ktorý už zoznam modulov má. Nevzniká tak
+// druhý zoznam modulov, ktorý by sa musel udržiavať v súlade s prvým.
+//
+// Veta musí byť KRÁTKA (najviac štyri slová po odstránení slovesa). Vďaka
+// tomu "otvor faktúru 2026001 od Testera" sem nespadne a ide bežnou cestou
+// na vyhľadávanie faktúry. Zložitejšie príkazy naďalej klasifikuje model.
+// =============================================================================
+// Výhradne slovesá POHYBU. "Ukáž"/"zobraz"/"show"/"zeig" tu ZÁMERNE nie sú:
+// nie sú to navigačné slovesá, ale dotazovacie ("ukáž neuhradené faktúry",
+// "ukáž všetky stroje") a ich zachytenie sem by tichým spôsobom pripravilo
+// používateľa o filter, ktorý vyslovil.
+const NAVIGATION_VERBS = [
+  // SK/CZ
+  "otvor",
+  "otvorte",
+  "otevri",
+  "prejdi do",
+  "prejdi na",
+  "chod do",
+  "chod na",
+  "prepni na",
+  // DE
+  "offne",
+  "oeffne",
+  "offnen sie",
+  "geh zu",
+  "gehe zu",
+  "wechsle zu",
+  // EN
+  "open",
+  "go to",
+  "navigate to",
+  "switch to",
+];
+
+// Vytvorenie faktúry rečou. Kmene sú zámerne krátke a musia sa vyskytnúť
+// OBA — sloveso aj podstatné meno. Samotné "faktúra" znamená hľadanie,
+// samotné "vytvor" zakladanie zložky; až spolu znamenajú nový doklad.
+const INVOICE_CREATION_VERBS = [
+  "vytvor", "vystav", "sprav", "urob", "zaloz",
+  "erstelle", "erstellen", "schreibe",
+  "create", "make", "issue", "raise",
+];
+const INVOICE_CREATION_NOUNS = ["faktur", "rechnung", "invoice"];
+
+function matchesInvoiceCreation(text: string): boolean {
+  return (
+    INVOICE_CREATION_VERBS.some((verb) => text.includes(verb)) &&
+    INVOICE_CREATION_NOUNS.some((noun) => text.includes(noun))
+  );
+}
+
+/** Členy, ktoré pred názvom modulu nič neznamenajú ("öffne die Rechnungen"). */
+const NAVIGATION_ARTICLES = new Set(["the", "die", "der", "das", "den", "dem"]);
+
+/**
+ * Slová, ktoré z vety robia DOTAZ, nie navigáciu. Keď sa vo zvyšku objaví
+ * čokoľvek z tohto zoznamu, vetva sa nechytá a príkaz ide bežnou cestou —
+ * aby sa "otvor neuhradené faktúry" nezmenilo na "otvor faktúry".
+ */
+const NAVIGATION_DISQUALIFIERS = [
+  "vsetk", "alle", "all",
+  "neuhraden", "uhraden", "unpaid", "paid", "offene", "bezahlt",
+  "po splatnosti", "overdue", "falig",
+  "vydan", "prijat", "issued", "received", "ausgang", "eingang",
+  "draft", "rozpracovan",
+];
+
+/**
+ * Vráti to, čo za navigačným slovesom nasleduje — alebo `undefined`, keď
+ * veta navigačný príkaz nie je.
+ */
+function readBareNavigationTarget(text: string): string | undefined {
+  // Najdlhšie sloveso vyhráva, aby "prejdi do" nezostalo pri "prejdi".
+  const verbs = [...NAVIGATION_VERBS].sort((a, b) => b.length - a.length);
+
+  for (const verb of verbs) {
+    if (!text.startsWith(`${verb} `)) continue;
+
+    const rest = text.slice(verb.length).trim().replace(/[.?!]+$/, "");
+    if (!rest) return undefined;
+
+    // Číslica vo zvyšku znamená konkrétnu entitu ("otvor faktúru 2026001"),
+    // nie modul.
+    if (/\d/.test(rest)) return undefined;
+
+    if (NAVIGATION_DISQUALIFIERS.some((stem) => rest.includes(stem))) return undefined;
+
+    const words = rest.split(/\s+/).filter((word) => !NAVIGATION_ARTICLES.has(word));
+
+    // Jedno až dve slová ("sklad", "obchodni partneri"). Čokoľvek dlhšie je
+    // veta, nie príkaz — a patrí modelu.
+    if (words.length === 0 || words.length > 2) return undefined;
+
+    return words.join(" ");
+  }
+
+  return undefined;
+}
+
+// =============================================================================
 // Zložky dokumentov (custom_document_categories) — "Vytvor zložku X.",
 // "Premenuj zložku X na Y.", "Daj/Priraď [filter] do zložky X." (doplnenie
 // zadania, sekcie 7/10/12). Bežia PROTI PÔVODNÉMU `rawText` (nie
@@ -594,6 +708,28 @@ export function parseIntentDeterministic(rawText: string): ParsedIntent | null {
   //    príkaz mohol tichým pádom zmeniť na iný, neúmyselný intent.
   if (containsAny(text, UNSUPPORTED_ACTION_STEMS)) {
     return null;
+  }
+
+  // 0b) Vytvorenie faktúry — deterministický parser sa ho NESMIE dotknúť.
+  //
+  //     "Vytvor faktúru pre Tester1 za kopanie 300 eur." obsahuje slovo
+  //     "faktúr", ktoré je nižšie rozpoznané ako TYP DOKUMENTU — bez tohto
+  //     kroku by príkaz skončil ako SEARCH_DOCUMENTS a zobrazil zoznam
+  //     dokladov namiesto založenia faktúry. Príkaz sa preto vracia ako
+  //     nerozpoznaný a preberá ho klasifikátor, ktorý z vety vie vytiahnuť
+  //     aj odberateľa a predmet (pozri lib/intents/ai-fallback.ts).
+  //
+  //     Odovzdanie modelu tu NIE JE oslabenie: klasifikátor môže vrátiť
+  //     jedine intent z allowlistu a oprávnenia aj tak drží server a RLS.
+  if (matchesInvoiceCreation(text)) {
+    return null;
+  }
+
+  // 0c) Holý navigačný príkaz ("otvor sklad", "open inventory", "öffne
+  //     Lager") — pozri NAVIGATION_VERBS vyššie.
+  const navigationTarget = readBareNavigationTarget(text);
+  if (navigationTarget) {
+    return build("OPEN_MODULE", { query: navigationTarget });
   }
 
   // 1) Deadline-dotazy ("čo mi končí", "aké termíny treba riešiť", "čo je

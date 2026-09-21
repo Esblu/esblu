@@ -257,6 +257,27 @@ const en = {
         recognising: "Recognising the command…",
         awaitingConfirmation: "Waiting for confirmation.",
         denied: "You do not have permission for this action.",
+        understanding: "Understanding the command…",
+        clarification: "I need one more detail.",
+        review: "Please review the result.",
+        complete: "Done.",
+        failed: "The command could not be completed.",
+      },
+      answerLabel: "Your answer",
+      answerPlaceholder: "Type or say your answer",
+      answerSend: "Send",
+      invoice: {
+        askPartner: "Which customer is the invoice for?",
+        askPartnerChoice: "I found several partners: {{names}}. Which one do you mean?",
+        askDescription: "What is the invoice for?",
+        askAmount: "What is the amount?",
+        askVat: "Which VAT category and rate would you like to use?",
+        partnerNotFound: "I could not find the customer “{{name}}” among your business partners. I will not create a new partner — please add them manually.",
+        tooManyTurns: "The command could not be completed. Please say it in full in one sentence.",
+        draftCreatedTitle: "Invoice draft is ready",
+        draftReviewNote: "The invoice is still a draft — it has no number and books nothing. Review it and issue it manually.",
+        openDraft: "Open draft",
+        createFailed: "The invoice draft could not be created.",
       },
       ui: {
         startRecording: "Start voice search",
@@ -1489,6 +1510,9 @@ const en = {
   },
 
   machines: {
+    voice: {
+      noDocuments: "No document is linked to machine {{machine}}.",
+    },
     list: {
       photoHint: "Photos are uploaded right after the machine is saved.",
       subtitle: "Records of company machines and equipment.",
@@ -1616,6 +1640,12 @@ const en = {
   },
 
   inventory: {
+    voice: {
+      lowTitle: "Items below minimum",
+      outTitle: "Out-of-stock items",
+      noneLow: "No item is below its minimum.",
+      noneOut: "No item is out of stock.",
+    },
     list: {
       subtitle: "Records of tools, materials, and inventory stock.",
       addItem: "Add item",
@@ -1981,7 +2011,22 @@ const en = {
 
   invoices: {
     voice: {
-      noUnpaid: "All invoices are paid.",
+      title: {
+        unpaid: "Unpaid invoices",
+        paid: "Paid invoices",
+        overdue: "Overdue invoices",
+        issued: "Issued invoices",
+        received: "Received invoices",
+        draft: "Draft invoices",
+      },
+      empty: {
+        unpaid: "All invoices are paid.",
+        paid: "No invoice has been paid yet.",
+        overdue: "No invoice is overdue.",
+        issued: "No invoice has been issued yet.",
+        received: "No received invoice has been recorded yet.",
+        draft: "No draft invoices.",
+      },
     },
     title: "Invoices",
     subtitle: "Your company's issued invoices, credit notes, and debit notes.",

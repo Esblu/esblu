@@ -6,6 +6,11 @@ import {
   handleSearchInvoice,
   handleSearchPartner,
   handleShowUnpaidInvoices,
+  handleShowInvoicesByStatus,
+  handleShowLowStock,
+  handleShowMachineDocuments,
+  handleShowMachinePhotos,
+  handleOpenDocumentFolder,
   type ReadContext,
 } from "@/lib/intents/handlers-navigation-finance";
 import {
@@ -1152,6 +1157,22 @@ export async function executeIntent(
     case "SEARCH_PARTNER":
       if (!readCtx) return { kind: "error", text: translate(locale, "search.errors.generic") };
       return handleSearchPartner(supabase, locale, readCtx, intent.args.query);
+    case "SHOW_INVOICES_BY_STATUS":
+      if (!readCtx) return { kind: "error", text: translate(locale, "search.errors.generic") };
+      return handleShowInvoicesByStatus(supabase, locale, readCtx, intent.args.invoiceStatus);
+    case "SHOW_LOW_STOCK":
+      if (!readCtx) return { kind: "error", text: translate(locale, "search.errors.generic") };
+      // `onlyOverdue` sa tu číta ako "iba úplne vypredané" — parser ho pre
+      // tento intent nastavuje na základe slov "vypredané"/"out of stock".
+      return handleShowLowStock(supabase, locale, readCtx, intent.args.onlyOverdue === true);
+    case "SHOW_MACHINE_DOCUMENTS":
+      if (!readCtx) return { kind: "error", text: translate(locale, "search.errors.generic") };
+      return handleShowMachineDocuments(supabase, locale, readCtx, intent.args.query);
+    case "SHOW_MACHINE_PHOTOS":
+      if (!readCtx) return { kind: "error", text: translate(locale, "search.errors.generic") };
+      return handleShowMachinePhotos(supabase, locale, readCtx, intent.args.query);
+    case "OPEN_DOCUMENT_FOLDER":
+      return handleOpenDocumentFolder(supabase, locale, intent.args.categoryName ?? intent.args.query);
     default:
       // Nedosiahnuteľné, ak registry.ts a types.ts zostanú v súlade — pozri
       // isRegisteredReadOnlyIntent() kontrolu v route.ts, ktorá beží PRED

@@ -1,13 +1,18 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { apiUrl } from "@/lib/api-url";
 import { REQUEST_LOCALE_HEADER } from "@/lib/i18n/request-locale";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import { useVoiceCapture } from "@/hooks/use-voice-capture";
 import { IntentResultView } from "@/app/components/voice/IntentResultView";
-import { docButtonSecondary } from "@/app/components/document/DocumentLayout";
+import {
+  docButtonSecondary,
+  docButtonPrimary,
+  docField,
+  docLabel,
+} from "@/app/components/document/DocumentLayout";
 import { CloseIcon } from "@/app/components/icons/AppIcons";
 import type { IntentResult } from "@/lib/intents/types";
 
@@ -32,16 +37,35 @@ import type { IntentResult } from "@/lib/intents/types";
 // endpoint, ktorý obsluhuje písaný vstup. Server si sám odvodí firmu aj
 // rolu z tokenu a všetko ďalej beží cez user-scoped klienta a RLS. Hlas
 // tu nemá vlastnú cestu k dátam ani vlastný zoznam povolených akcií.
+//
+// VIACKROKOVÝ DIALÓG (Phase 2)
+// ----------------------------
+// Keď príkazu chýba údaj, server namiesto odmietnutia vráti otázku a
+// `conversationId`. Ten sa pošle späť pri ďalšej odpovedi. Je to OPAQUE
+// identifikátor, nie oprávnenie: server pri ňom vždy overuje aj totožnosť
+// volajúceho a jeho aktívnu firmu, takže cudzí (ani vymyslený)
+// identifikátor neodomkne nič.
+//
+// Odpovedať sa dá hlasom aj klávesnicou. Nie z pohodlnosti — diktovanie
+// mena partnera je presne ten prípad, kde sa prepis mýli najčastejšie, a
+// používateľ musí mať možnosť ho napísať bez toho, aby začínal odznova.
 // =============================================================================
 
+/**
+ * Fázy dialógu. Používateľ musí v každom okamihu vedieť, čo sa deje —
+ * preto má každá fáza vlastnú vetu, nie jeden univerzálny "pracujem…".
+ */
 type Phase =
   | "idle"
   | "listening"
   | "transcribing"
-  | "recognising"
+  | "understanding"
+  | "clarification"
   | "awaitingConfirmation"
-  | "done"
-  | "denied";
+  | "review"
+  | "complete"
+  | "denied"
+  | "failed";
 
 export function VoiceLauncher() {
   const { t, locale } = useLocale();
@@ -53,6 +77,11 @@ export function VoiceLauncher() {
   const [phase, setPhase] = useState<Phase>("idle");
   const [message, setMessage] = useState("");
 
+  // Prebiehajúci dialóg. V ref, nie v state — hodnota sa musí dať prečítať
+  // v callbacku hneď po jej nastavení, bez čakania na prekreslenie.
+  const conversationIdRef = useRef<string>(newConversationId());
+  const [clarifyAnswer, setClarifyAnswer] = useState("");
+
   const { voiceState, voiceError, handleMicButtonClick, cancelVoiceRecording } =
     useVoiceCapture({
       onTranscript: (text) => {
@@ -61,9 +90,9 @@ export function VoiceLauncher() {
       },
     });
 
-  /** Prepis -> intent. Presne tá istá cesta ako pri písanom vstupe. */
+  /** Prepis alebo napísaný text -> intent. Presne tá istá cesta. */
   async function runIntent(text: string) {
-    setPhase("recognising");
+    setPhase("understanding");
     setIntentResult(null);
     setMessage("");
 
@@ -85,12 +114,12 @@ export function VoiceLauncher() {
           Authorization: `Bearer ${session.access_token}`,
           [REQUEST_LOCALE_HEADER]: locale,
         },
-        body: JSON.stringify({ text }),
+        body: JSON.stringify({ text, conversationId: conversationIdRef.current }),
       });
 
       const data = await response.json();
 
-      // 403 znamená, že server rolu odmietol. Používateľovi sa ukáže
+      // 401/403 znamená, že server rolu odmietol. Používateľovi sa ukáže
       // zrozumiteľná veta, nie stavový kód ani telo odpovede.
       if (response.status === 403 || response.status === 401) {
         setPhase("denied");
@@ -101,18 +130,32 @@ export function VoiceLauncher() {
       if (response.ok && data.success && data.recognized) {
         const result = data.result as IntentResult;
         setIntentResult(result);
-        setPhase(result.kind === "action_preview" ? "awaitingConfirmation" : "done");
+        setClarifyAnswer("");
+
+        if (result.kind === "clarify") setPhase("clarification");
+        else if (result.kind === "action_preview") setPhase("awaitingConfirmation");
+        else if (result.kind === "draft_created") setPhase("review");
+        else if (result.kind === "error") setPhase("failed");
+        else setPhase("complete");
         return;
       }
 
-      setPhase("done");
+      setPhase("complete");
       setMessage(t("search.errors.commandNotUnderstood"));
     } catch (error) {
       // Nikdy nevypisujeme technický detail do rozhrania.
       console.error("VoiceLauncher: rozpoznanie príkazu zlyhalo:", error);
-      setPhase("done");
+      setPhase("failed");
       setMessage(t("search.errors.generic"));
     }
+  }
+
+  /** Odpoveď na otázku asistenta — písaná alebo vybraná zo zoznamu. */
+  function submitClarifyAnswer(value: string) {
+    const answer = value.trim();
+    if (!answer) return;
+    setTranscript(answer);
+    void runIntent(answer);
   }
 
   /**
@@ -149,10 +192,10 @@ export function VoiceLauncher() {
 
       const data = await response.json();
       setIntentResult((data?.result as IntentResult) ?? null);
-      setPhase("done");
+      setPhase("complete");
     } catch (error) {
       console.error("VoiceLauncher: vykonanie akcie zlyhalo:", error);
-      setPhase("done");
+      setPhase("failed");
       setMessage(t("search.errors.generic"));
     } finally {
       setActionSubmitting(false);
@@ -160,7 +203,18 @@ export function VoiceLauncher() {
   }
 
   function handleCancel() {
+    resetDialog();
+  }
+
+  /**
+   * Zrušenie dialógu si vždy vypýta NOVÝ identifikátor. Bez toho by ďalší
+   * príkaz pokračoval v rozpracovanom dialógu, ktorý používateľ práve
+   * zavrel — a dostal by otázku na niečo, čo už nechce.
+   */
+  function resetDialog() {
+    conversationIdRef.current = newConversationId();
     setIntentResult(null);
+    setClarifyAnswer("");
     setPhase("idle");
     setMessage("");
   }
@@ -169,9 +223,7 @@ export function VoiceLauncher() {
     if (voiceState === "recording") cancelVoiceRecording();
     setOpen(false);
     setTranscript("");
-    setIntentResult(null);
-    setPhase("idle");
-    setMessage("");
+    resetDialog();
   }
 
   // Jedna veta o tom, čo sa práve deje. Žiadne technické výpisy.
@@ -180,13 +232,21 @@ export function VoiceLauncher() {
       ? t("search.voice.states.listening")
       : voiceState === "processing"
         ? t("search.voice.states.transcribing")
-        : phase === "recognising"
-          ? t("search.voice.states.recognising")
-          : phase === "awaitingConfirmation"
-            ? t("search.voice.states.awaitingConfirmation")
-            : phase === "denied"
-              ? t("search.voice.states.denied")
-              : "";
+        : phase === "understanding"
+          ? t("search.voice.states.understanding")
+          : phase === "clarification"
+            ? t("search.voice.states.clarification")
+            : phase === "awaitingConfirmation"
+              ? t("search.voice.states.awaitingConfirmation")
+              : phase === "review"
+                ? t("search.voice.states.review")
+                : phase === "complete"
+                  ? t("search.voice.states.complete")
+                  : phase === "denied"
+                    ? t("search.voice.states.denied")
+                    : phase === "failed"
+                      ? t("search.voice.states.failed")
+                      : "";
 
   if (!open) {
     return (
@@ -200,6 +260,8 @@ export function VoiceLauncher() {
       </button>
     );
   }
+
+  const clarify = intentResult?.kind === "clarify" ? intentResult : null;
 
   return (
     <section
@@ -236,9 +298,7 @@ export function VoiceLauncher() {
         </button>
       </div>
 
-      {voiceError && (
-        <p className="mt-2 text-sm text-danger">{voiceError}</p>
-      )}
+      {voiceError && <p className="mt-2 text-sm text-danger">{voiceError}</p>}
 
       {transcript && (
         <p className="mt-2 truncate text-sm text-muted-esblu">
@@ -248,7 +308,59 @@ export function VoiceLauncher() {
 
       {message && <p className="mt-2 text-sm text-secondary">{message}</p>}
 
-      {intentResult && (
+      {/* Otázka asistenta. Odpovedať sa dá hlasom (tlačidlo vyššie) aj
+          písmom — meno partnera je presne to, čo prepis reči najčastejšie
+          skomolí. */}
+      {clarify && (
+        <div className="mt-3 rounded-doc border border-doc-border bg-surface-2 p-3">
+          <p className="text-sm font-medium text-primary">{clarify.question}</p>
+
+          {clarify.choices && clarify.choices.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-2">
+              {clarify.choices.map((choice) => (
+                <button
+                  key={choice.value}
+                  type="button"
+                  onClick={() => submitClarifyAnswer(choice.label)}
+                  className={`${docButtonSecondary} text-sm`}
+                >
+                  {choice.label}
+                </button>
+              ))}
+            </div>
+          )}
+
+          <form
+            className="mt-3 flex flex-wrap items-end gap-2"
+            onSubmit={(event) => {
+              event.preventDefault();
+              submitClarifyAnswer(clarifyAnswer);
+            }}
+          >
+            <div className="min-w-0 flex-1">
+              <label className={docLabel} htmlFor="esblu-voice-answer">
+                {t("search.voice.answerLabel")}
+              </label>
+              <input
+                id="esblu-voice-answer"
+                className={docField}
+                value={clarifyAnswer}
+                onChange={(event) => setClarifyAnswer(event.target.value)}
+                placeholder={t("search.voice.answerPlaceholder")}
+                autoComplete="off"
+              />
+            </div>
+            <button type="submit" className={docButtonPrimary} disabled={!clarifyAnswer.trim()}>
+              {t("search.voice.answerSend")}
+            </button>
+            <button type="button" onClick={handleCancel} className={docButtonSecondary}>
+              {t("common.buttons.cancel")}
+            </button>
+          </form>
+        </div>
+      )}
+
+      {intentResult && intentResult.kind !== "clarify" && (
         <div className="mt-3">
           <IntentResultView
             intentResult={intentResult}
@@ -260,6 +372,24 @@ export function VoiceLauncher() {
       )}
     </section>
   );
+}
+
+/**
+ * Náhodný identifikátor dialógu.
+ *
+ * Tvar (32 hex znakov) musí sedieť s CHECK-om v databáze. `crypto` je
+ * dostupné vo všetkých prehliadačoch, ktoré appka podporuje; fallback
+ * existuje len preto, aby komponent nespadol v prostredí bez neho —
+ * identifikátor nie je tajomstvo ani oprávnenie, takže slabší zdroj
+ * náhody tu nič neohrozuje.
+ */
+function newConversationId(): string {
+  if (typeof crypto !== "undefined" && "getRandomValues" in crypto) {
+    const bytes = new Uint8Array(16);
+    crypto.getRandomValues(bytes);
+    return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  }
+  return Array.from({ length: 32 }, () => Math.floor(Math.random() * 16).toString(16)).join("");
 }
 
 /** Mikrofón. Vlastný glyf, aby launcher nezávisel na ikone chatu. */

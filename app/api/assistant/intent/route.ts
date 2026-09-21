@@ -4,9 +4,18 @@ import { getRequestLocale } from "@/lib/i18n/request-locale";
 import { translate } from "@/lib/i18n/translate";
 import { parseIntentDeterministic } from "@/lib/intents/parse";
 import { classifyIntentWithAi } from "@/lib/intents/ai-fallback";
-import { isRegisteredReadOnlyIntent, isRegisteredWriteIntent } from "@/lib/intents/registry";
+import {
+  isRegisteredReadOnlyIntent,
+  isRegisteredWriteIntent,
+  isRegisteredReviewableDraftIntent,
+} from "@/lib/intents/registry";
 import { executeIntent } from "@/lib/intents/handlers";
 import { buildActionPreview } from "@/lib/intents/actions";
+import { isValidConversationId } from "@/lib/intents/conversation";
+import {
+  startInvoiceDraftFlow,
+  continueInvoiceDraftFlow,
+} from "@/lib/intents/invoice-draft-flow";
 import type { ParsedIntent } from "@/lib/intents/types";
 import type { CompanyMemberRole } from "@/lib/company";
 
@@ -54,8 +63,18 @@ export async function POST(req: Request) {
       return Response.json({ success: false, error: authError }, { status: 401 });
     }
 
-    const body = (await req.json().catch(() => null)) as { text?: string } | null;
+    const body = (await req.json().catch(() => null)) as
+      | { text?: string; conversationId?: string }
+      | null;
     const rawText = typeof body?.text === "string" ? body.text.trim() : "";
+
+    // Identifikátor prebiehajúceho dialógu. Sám osebe nič neodomyká —
+    // server pri ňom vždy overuje aj totožnosť volajúceho a jeho aktívnu
+    // firmu (SECURITY DEFINER funkcie, migrácia 20260924100000). Neplatný
+    // tvar sa ticho zahodí a príkaz sa spracuje ako nový.
+    const conversationId = isValidConversationId(body?.conversationId)
+      ? body.conversationId
+      : null;
 
     if (!rawText) {
       return Response.json(
@@ -97,28 +116,12 @@ export async function POST(req: Request) {
       );
     }
 
-    let intent: ParsedIntent | null = parseIntentDeterministic(rawText);
-    if (!intent) {
-      intent = await classifyIntentWithAi(rawText);
-    }
-
-    if (!intent || (!isRegisteredReadOnlyIntent(intent.name) && !isRegisteredWriteIntent(intent.name))) {
-      return Response.json({
-        success: true,
-        recognized: false,
-        result: { kind: "not_found", text: translate(locale, "search.errors.commandNotUnderstood") },
-      });
-    }
-
-    // READ intenty sa vykonajú PRIAMO — WRITE intenty NIKDY (bod 5/6
-    // zadania): vrátia iba `action_preview`/`action_result`/`not_found`
-    // z buildActionPreview, skutočný zápis do DB robí AŽ samostatný
-    // endpoint app/api/assistant/action/execute po explicitnom potvrdení.
     // Oprávnenia sa počítajú NA SERVERI z rovnakých RPC, aké používa RLS —
     // nie z roly odhadnutej na klientovi a nie z tela požiadavky. Keby RPC
     // zlyhalo, `false` znamená odmietnutie, nie tichý prechod.
-    const [financeViewResult, canOperateResult] = await Promise.all([
+    const [financeViewResult, financeManageResult, canOperateResult] = await Promise.all([
       supabase.rpc("esblu_my_finance_view"),
+      supabase.rpc("esblu_my_finance_manage"),
       supabase.rpc("esblu_role_can_operate"),
     ]);
 
@@ -127,19 +130,117 @@ export async function POST(req: Request) {
       financeView: financeViewResult.data === true,
       canOperate: canOperateResult.data === true,
     };
+    const financeManage = financeManageResult.data === true;
 
-    const result = isRegisteredReadOnlyIntent(intent.name)
-      ? await executeIntent(supabase, locale, intent, readCtx)
-      : await buildActionPreview(
+    // ------------------------------------------------------------------
+    // Prebiehajúci dialóg má prednosť pred klasifikáciou.
+    //
+    // Keď sa appka pred chvíľou spýtala "Aká suma?", je odpoveď "300 eur"
+    // odpoveďou — nie novým príkazom. Keby sa najprv klasifikovala, model
+    // by z nej urobil nezmysel alebo nič, a otázka by sa položila znova.
+    //
+    // Kontext sa NAČÍTAVA Z DATABÁZY podľa totožnosti volajúceho; to, že
+    // klient nejaké conversationId poslal, samo osebe neznamená, že
+    // nejaký dialóg existuje.
+    // ------------------------------------------------------------------
+    if (conversationId && financeManage) {
+      const continued = await continueInvoiceDraftFlow(
+        supabase,
+        locale,
+        {
+          companyId: membership.company_id as string,
+          userId: user.id,
+          conversationId,
+        },
+        rawText
+      );
+
+      if (continued) {
+        return Response.json({
+          success: true,
+          recognized: true,
+          intent: "CREATE_INVOICE_DRAFT",
+          source: "conversation",
+          result: continued,
+        });
+      }
+    }
+
+    let intent: ParsedIntent | null = parseIntentDeterministic(rawText);
+    if (!intent) {
+      intent = await classifyIntentWithAi(rawText);
+    }
+
+    if (
+      !intent ||
+      (!isRegisteredReadOnlyIntent(intent.name) &&
+        !isRegisteredWriteIntent(intent.name) &&
+        !isRegisteredReviewableDraftIntent(intent.name))
+    ) {
+      return Response.json({
+        success: true,
+        recognized: false,
+        result: { kind: "not_found", text: translate(locale, "search.errors.commandNotUnderstood") },
+      });
+    }
+
+    // ------------------------------------------------------------------
+    // Tri cesty, tri rôzne stupne opatrnosti:
+    //
+    //  READ            — vykoná sa priamo, RLS je posledná autorita.
+    //  WRITE           — NIKDY sa nevykoná tu; vráti sa iba návrh a čaká
+    //                    sa na potvrdenie cez /action/execute.
+    //  REVIEWABLE DRAFT — zapíše sa, ale výsledok sa POVINNE otvorí na
+    //                    kontrolu (dnes výhradne draft faktúry, ktorý nemá
+    //                    číslo, nič neúčtuje a dá sa zmazať). Dôvod, prečo
+    //                    tu potvrdenie nie je, je pri CREATE_INVOICE_DRAFT
+    //                    v lib/intents/types.ts.
+    // ------------------------------------------------------------------
+    let result;
+
+    if (isRegisteredReadOnlyIntent(intent.name)) {
+      result = await executeIntent(supabase, locale, intent, readCtx);
+    } else if (isRegisteredReviewableDraftIntent(intent.name)) {
+      // Fakturovať smie iba držiteľ finančnej správy. Kontroluje sa PRED
+      // akýmkoľvek dotazom aj pred prvou otázkou dialógu — zamestnanec
+      // nemá dostať otázku "pre koho?" na príkaz, ktorý by aj tak nesmel
+      // dokončiť. Skutočné vynútenie drží RLS pri zápise.
+      if (!financeManage) {
+        result = { kind: "error" as const, text: translate(locale, "search.voice.states.denied") };
+      } else if (!conversationId) {
+        // Dialóg bez identifikátora sa viesť nedá — a bez neho by sa prvá
+        // chýbajúca hodnota už nemala kam doplniť.
+        result = {
+          kind: "error" as const,
+          text: translate(locale, "search.errors.commandNotUnderstood"),
+        };
+      } else {
+        result = await startInvoiceDraftFlow(
           supabase,
           locale,
           {
             companyId: membership.company_id as string,
             userId: user.id,
-            role: membership.role as CompanyMemberRole,
+            conversationId,
           },
-          intent
+          rawText,
+          intent.args.partnerQuery,
+          intent.args.query,
+          intent.args.amount
         );
+      }
+    } else {
+      result = await buildActionPreview(
+        supabase,
+        locale,
+        {
+          companyId: membership.company_id as string,
+          userId: user.id,
+          role: membership.role as CompanyMemberRole,
+        },
+        intent
+      );
+    }
 
     return Response.json({
       success: true,

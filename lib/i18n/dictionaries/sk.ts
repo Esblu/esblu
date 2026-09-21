@@ -271,6 +271,27 @@ const sk = {
         recognising: "Rozpoznávam príkaz…",
         awaitingConfirmation: "Čakám na potvrdenie.",
         denied: "Na túto akciu nemáte oprávnenie.",
+        understanding: "Rozumiem príkazu…",
+        clarification: "Potrebujem doplniť jeden údaj.",
+        review: "Skontrolujte, prosím, výsledok.",
+        complete: "Hotovo.",
+        failed: "Príkaz sa nepodarilo dokončiť.",
+      },
+      answerLabel: "Vaša odpoveď",
+      answerPlaceholder: "Napíšte alebo povedzte odpoveď",
+      answerSend: "Odoslať",
+      invoice: {
+        askPartner: "Pre ktorého odberateľa má byť faktúra?",
+        askPartnerChoice: "Našiel som viacero partnerov: {{names}}. Ktorého myslíte?",
+        askDescription: "Za čo má byť faktúra?",
+        askAmount: "Aká je suma?",
+        askVat: "Akú kategóriu a sadzbu DPH chcete použiť?",
+        partnerNotFound: "Odberateľa „{{name}}“ som medzi obchodnými partnermi nenašiel. Nového partnera nezakladám — pridajte ho, prosím, ručne.",
+        tooManyTurns: "Príkaz sa nepodarilo doplniť. Skúste ho, prosím, povedať naraz a celý.",
+        draftCreatedTitle: "Koncept faktúry je pripravený",
+        draftReviewNote: "Faktúra je zatiaľ koncept — nemá číslo a nič neúčtuje. Skontrolujte ju a vystavte ručne.",
+        openDraft: "Otvoriť koncept",
+        createFailed: "Koncept faktúry sa nepodarilo vytvoriť.",
       },
       ui: {
         startRecording: "Spustiť hlasové vyhľadávanie",
@@ -1517,6 +1538,9 @@ const sk = {
   },
 
   machines: {
+    voice: {
+      noDocuments: "K stroju {{machine}} nie je priradený žiadny dokument.",
+    },
     list: {
       photoHint: "Fotografie sa nahrajú hneď po uložení stroja.",
       subtitle: "Evidencia firemných strojov a techniky.",
@@ -1644,6 +1668,12 @@ const sk = {
   },
 
   inventory: {
+    voice: {
+      lowTitle: "Položky pod minimom",
+      outTitle: "Vypredané položky",
+      noneLow: "Žiadna položka nie je pod minimom.",
+      noneOut: "Žiadna položka nie je vypredaná.",
+    },
     list: {
       subtitle: "Evidencia náradia, materiálu a skladových zásob.",
       addItem: "Pridať položku",
@@ -2006,7 +2036,22 @@ const sk = {
 
   invoices: {
     voice: {
-      noUnpaid: "Všetky faktúry sú uhradené.",
+      title: {
+        unpaid: "Neuhradené faktúry",
+        paid: "Uhradené faktúry",
+        overdue: "Faktúry po splatnosti",
+        issued: "Vydané faktúry",
+        received: "Prijaté faktúry",
+        draft: "Rozpracované faktúry",
+      },
+      empty: {
+        unpaid: "Všetky faktúry sú uhradené.",
+        paid: "Zatiaľ nie je uhradená žiadna faktúra.",
+        overdue: "Žiadna faktúra nie je po splatnosti.",
+        issued: "Zatiaľ nie je vystavená žiadna faktúra.",
+        received: "Zatiaľ nie je evidovaná žiadna prijatá faktúra.",
+        draft: "Žiadne rozpracované faktúry.",
+      },
     },
     title: "Faktúry",
     subtitle: "Vystavené faktúry, dobropisy a ťarchopisy vašej firmy.",

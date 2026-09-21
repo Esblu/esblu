@@ -214,6 +214,43 @@ export function IntentResultView({
           </p>
         );
 
+      // Draft, ktorý sa MUSÍ skontrolovať. Súhrn je tu preto, aby
+      // používateľ videl, čo vzniklo, EŠTE PRED tým, než niekam klikne —
+      // odkaz bez súhrnu by znamenal, že sa o obsahu dokladu dozvie až na
+      // inej obrazovke.
+      case "draft_created":
+        return (
+          <div className="rounded-2xl border border-subtle bg-surface-1/60 p-4">
+            <p className="text-sm font-bold text-primary">{intentResult.title}</p>
+
+            <div className="mt-3 space-y-1">
+              {intentResult.summary.map((row) => (
+                <div key={row.label} className="flex items-start justify-between gap-3 text-sm">
+                  <span className="shrink-0 text-secondary">{row.label}</span>
+                  <span className="min-w-0 break-words text-right font-semibold text-primary">
+                    {row.value}
+                  </span>
+                </div>
+              ))}
+            </div>
+
+            <p className="mt-3 text-xs text-secondary">{intentResult.note}</p>
+
+            <Link
+              href={intentResult.entity.href}
+              className="mt-3 inline-block text-xs font-bold uppercase tracking-wide text-accent-cyan"
+            >
+              {intentResult.entity.label} →
+            </Link>
+          </div>
+        );
+
+      // `clarify` sem NEPATRÍ — otázku vykresľuje launcher sám, pretože k
+      // nej patrí aj pole na odpoveď, ktoré tento komponent (zámerne
+      // hlúpy, bez vlastného stavu) držať nemá.
+      case "clarify":
+        return null;
+
       default:
         return null;
     }
