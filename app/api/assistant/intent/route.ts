@@ -114,8 +114,22 @@ export async function POST(req: Request) {
     // zadania): vrátia iba `action_preview`/`action_result`/`not_found`
     // z buildActionPreview, skutočný zápis do DB robí AŽ samostatný
     // endpoint app/api/assistant/action/execute po explicitnom potvrdení.
+    // Oprávnenia sa počítajú NA SERVERI z rovnakých RPC, aké používa RLS —
+    // nie z roly odhadnutej na klientovi a nie z tela požiadavky. Keby RPC
+    // zlyhalo, `false` znamená odmietnutie, nie tichý prechod.
+    const [financeViewResult, canOperateResult] = await Promise.all([
+      supabase.rpc("esblu_my_finance_view"),
+      supabase.rpc("esblu_role_can_operate"),
+    ]);
+
+    const readCtx = {
+      role: membership.role as CompanyMemberRole,
+      financeView: financeViewResult.data === true,
+      canOperate: canOperateResult.data === true,
+    };
+
     const result = isRegisteredReadOnlyIntent(intent.name)
-      ? await executeIntent(supabase, locale, intent)
+      ? await executeIntent(supabase, locale, intent, readCtx)
       : await buildActionPreview(
           supabase,
           locale,

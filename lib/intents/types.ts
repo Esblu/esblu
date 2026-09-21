@@ -75,6 +75,37 @@ export const INTENT_NAMES = [
   "CREATE_DOCUMENT_CATEGORY",
   "RENAME_DOCUMENT_CATEGORY",
   "ASSIGN_DOCUMENTS_TO_CATEGORY",
+
+  // ---------------------------------------------------------------------
+  // Voice Phase 1 — navigácia a účtovnícke čítanie.
+  //
+  // OPEN_MODULE je jediný intent, ktorý nič nehľadá — iba presmeruje. Je
+  // zámerne oddelený od OPEN_* intentov nad entitami, lebo tie riešia
+  // disambiguáciu a tento nie: modul buď existuje a rola naň má právo,
+  // alebo nie.
+  // ---------------------------------------------------------------------
+  "OPEN_MODULE",
+
+  // Finančné čítanie. Handler pre ne vyžaduje finance view EŠTE PRED
+  // dotazom do DB — nie preto, že by RLS nestačila (vrátila by nula
+  // riadkov), ale aby zamestnanec dostal zrozumiteľné odmietnutie namiesto
+  // "nič sa nenašlo", ktoré by o existencii dát nepriamo vypovedalo.
+  "SEARCH_INVOICE",
+  "SHOW_UNPAID_INVOICES",
+  "SEARCH_PARTNER",
+
+  // ---------------------------------------------------------------------
+  // Voice Phase 1 — rizikové zápisy nad zložkami.
+  //
+  // Doterajší komentár vyššie hovoril, že mazací intent je bezpečnejšie
+  // nemať vôbec. To platilo, kým neexistovalo HMAC-podpísané potvrdenie a
+  // kým mazanie zložky mohlo znamenať stratu dokumentov. Dnes platí ani
+  // jedno: potvrdenie sa dá uplatniť práve raz a FK
+  // documents.custom_category_id má ON DELETE SET NULL, takže dokumenty
+  // zmazanie zložky prežijú. Preto je intent pridaný — s potvrdením.
+  // ---------------------------------------------------------------------
+  "DELETE_DOCUMENT_CATEGORY",
+  "MOVE_DOCUMENTS_TO_CATEGORY",
 ] as const;
 
 export type IntentName = (typeof INTENT_NAMES)[number];
@@ -295,7 +326,13 @@ export type IntentResult =
   // ---------------------------------------------------------------------
   | {
       kind: "action_preview";
-      action: "EXPORT_DOCUMENTS" | "CREATE_DOCUMENT_CATEGORY" | "RENAME_DOCUMENT_CATEGORY" | "ASSIGN_DOCUMENTS_TO_CATEGORY";
+      action:
+        | "EXPORT_DOCUMENTS"
+        | "CREATE_DOCUMENT_CATEGORY"
+        | "RENAME_DOCUMENT_CATEGORY"
+        | "ASSIGN_DOCUMENTS_TO_CATEGORY"
+        | "DELETE_DOCUMENT_CATEGORY"
+        | "MOVE_DOCUMENTS_TO_CATEGORY";
       summary: string;
       confirmLabel: string;
       cancelLabel: string;

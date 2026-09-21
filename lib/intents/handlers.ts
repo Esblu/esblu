@@ -2,6 +2,13 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Locale } from "@/lib/i18n/locales";
 import { translate } from "@/lib/i18n/translate";
 import {
+  handleOpenModule,
+  handleSearchInvoice,
+  handleSearchPartner,
+  handleShowUnpaidInvoices,
+  type ReadContext,
+} from "@/lib/intents/handlers-navigation-finance";
+import {
   resolveVehicleByPlate,
   searchVehicles,
   searchMachines,
@@ -1050,7 +1057,14 @@ export async function handleUpcomingDeadlines(
 export async function executeIntent(
   supabase: SupabaseClient,
   locale: Locale,
-  intent: ParsedIntent
+  intent: ParsedIntent,
+  /**
+   * Rola a odvodené oprávnenia volajúceho. Potrebujú ich iba navigačné a
+   * finančné intenty — ostatné handlery sa naďalej spoliehajú výhradne na
+   * RLS. Je voliteľný, aby sa existujúce volania nemuseli meniť; keď chýba,
+   * finančné intenty fail-closed odmietnu.
+   */
+  readCtx?: ReadContext
 ): Promise<IntentResult> {
   switch (intent.name) {
     case "OPEN_VEHICLE":
@@ -1126,6 +1140,18 @@ export async function executeIntent(
         intent.args.onlyOverdue,
         intent.args.deadlineTypes
       );
+    case "OPEN_MODULE":
+      if (!readCtx) return { kind: "error", text: translate(locale, "search.errors.generic") };
+      return handleOpenModule(locale, readCtx, intent.args.query);
+    case "SEARCH_INVOICE":
+      if (!readCtx) return { kind: "error", text: translate(locale, "search.errors.generic") };
+      return handleSearchInvoice(supabase, locale, readCtx, intent.args.query);
+    case "SHOW_UNPAID_INVOICES":
+      if (!readCtx) return { kind: "error", text: translate(locale, "search.errors.generic") };
+      return handleShowUnpaidInvoices(supabase, locale, readCtx);
+    case "SEARCH_PARTNER":
+      if (!readCtx) return { kind: "error", text: translate(locale, "search.errors.generic") };
+      return handleSearchPartner(supabase, locale, readCtx, intent.args.query);
     default:
       // Nedosiahnuteľné, ak registry.ts a types.ts zostanú v súlade — pozri
       // isRegisteredReadOnlyIntent() kontrolu v route.ts, ktorá beží PRED

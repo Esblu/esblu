@@ -1,6 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
+import { VoiceLauncherSlot } from "@/app/components/voice/VoiceLauncherSlot";
 
 // =============================================================================
 // Kancelárske primitívy pre dokumentové plochy.
@@ -26,6 +27,14 @@ export function DocumentPageShell({
 }) {
   return (
     <div className={`mx-auto ${wide ? "max-w-6xl" : "max-w-5xl"} px-4 pb-28 pt-6 sm:px-6`}>
+      {/* Hlasový launcher je v TOKU stránky, nie plávajúci — appka už má
+          jeden plávajúci prvok (bublinku chatu), ktorý si používateľ môže
+          pretiahnuť kamkoľvek, takže druhý by sa s ním skôr či neskôr
+          prekryl. Takto je dostupný na každej stránke, ktorá používa túto
+          schránku, a kolidovať nemá s čím. */}
+      <div className="mb-4 flex justify-end">
+        <VoiceLauncherSlot />
+      </div>
       {children}
     </div>
   );

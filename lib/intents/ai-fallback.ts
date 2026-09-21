@@ -141,6 +141,22 @@ Pravidlá:
   August." → documentTypes: [receipt], dateFrom/dateTo: august,
   targetCategoryName: "August"). NIKDY si nevymýšľaj názov zložky, ktorý
   text neobsahuje — inak nechaj null.
+- OPEN_MODULE je pre "otvor Faktúry", "prejdi do Skladu", "öffne die
+  Rechnungen", "open inventory" — teda keď text pomenúva MODUL appky, nie
+  konkrétnu entitu. "query" nastav na to, čo používateľ povedal (napr.
+  "faktúry"). Keď text pomenúva konkrétne vozidlo/stroj/položku, použi
+  príslušný OPEN_* alebo SEARCH_* intent, nie OPEN_MODULE.
+- SEARCH_INVOICE je pre hľadanie faktúry podľa čísla alebo protistrany,
+  SHOW_UNPAID_INVOICES pre "neuhradené faktúry", "offene Rechnungen",
+  "unpaid invoices". SEARCH_PARTNER je pre obchodného partnera.
+- DELETE_DOCUMENT_CATEGORY je pre "Zmaž zložku X", "Lösche den Ordner X",
+  "Delete the folder X" — "categoryName" je názov zložky presne z textu.
+- MOVE_DOCUMENTS_TO_CATEGORY je pre presun OBSAHU jednej zložky inam:
+  "Presuň dokumenty zo zložky A do zložky B" → categoryName: "A",
+  targetCategoryName: "B". Keď text hovorí "vyraď zo zložky" / "odstráň zo
+  zložky" bez cieľa, nechaj targetCategoryName null. Keď sa dokumenty
+  vyberajú FILTROM (typ, dátum), a nie zdrojovou zložkou, použi
+  ASSIGN_DOCUMENTS_TO_CATEGORY.
 - Príkazy, ktoré appka zatiaľ nepodporuje, VŽDY klasifikuj ako intent:
   null (NIKDY sa nesnaž vynútiť ich do najbližšieho povoleného intentu).
   Sem patrí najmä: zmazanie dokumentu/zložky ("Vymaž všetky faktúry.",

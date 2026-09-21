@@ -216,6 +216,10 @@ const de = {
         done: "Export wurde vorbereitet ({{count}} Dokumente).",
       },
       category: {
+        deleteSummary: "Ordner „{{name}}“ löschen?",
+        deleteSummaryWithDocuments: "Ordner „{{name}}“ löschen? Er enthält {{count}} Dokumente — diese bleiben erhalten.",
+        deleteConfirmLabel: "Ordner löschen",
+        deleteSuccess: "Ordner „{{name}}“ wurde gelöscht.",
         missingName: "Bitte geben Sie einen Namen für den neuen Ordner ein.",
         alreadyExists: "Der Ordner „{{name}}“ existiert bereits.",
         createSummary: "Neuen Ordner „{{name}}“ erstellen?",
@@ -227,6 +231,10 @@ const de = {
         renameConfirmLabel: "Umbenennen",
         renameSuccess: "Ordner „{{from}}“ wurde in „{{to}}“ umbenannt.",
       },
+      move: {
+        summary: "{{count}} Dokumente aus dem Ordner „{{source}}“ nach „{{target}}“ verschieben?",
+        confirmLabel: "Verschieben",
+      },
       assign: {
         missingTarget: "Bitte geben Sie an, welchem Ordner die Dokumente zugeordnet werden sollen.",
         targetNotFound: "Der Ordner „{{name}}“ existiert noch nicht. Erstellen Sie ihn zuerst mit „Erstelle Ordner {{name}}.“",
@@ -237,6 +245,18 @@ const de = {
       },
     },
     voice: {
+      launcher: "Sprachbefehl",
+      start: "Sprechen",
+      stop: "Stoppen",
+      hint: "Sagen Sie einen Befehl — zum Beispiel „Rechnungen öffnen“.",
+      transcriptPrefix: "Transkript:",
+      states: {
+        listening: "Ich höre zu…",
+        transcribing: "Wird transkribiert…",
+        recognising: "Befehl wird erkannt…",
+        awaitingConfirmation: "Warte auf Bestätigung.",
+        denied: "Für diese Aktion fehlt Ihnen die Berechtigung.",
+      },
       ui: {
         startRecording: "Sprachsuche starten",
         recording: "Aufnahme läuft…",
@@ -1981,6 +2001,9 @@ const de = {
   },
 
   invoices: {
+    voice: {
+      noUnpaid: "Alle Rechnungen sind bezahlt.",
+    },
     title: "Rechnungen",
     subtitle: "Ausgestellte Rechnungen, Gutschriften und Lastschriften Ihrer Firma.",
     addButton: "Neue Rechnung",

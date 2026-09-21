@@ -18,6 +18,9 @@ import {
   listCompanyCustomCategories,
   findMatchingCustomCategory,
   createCustomCategory,
+  countDocumentsInCategory,
+  deleteCustomCategory,
+  moveDocumentsToCategory,
   normalizeCanonicalCategorySlug,
   type CustomDocumentCategory,
 } from "@/lib/custom-document-categories";
@@ -178,6 +181,8 @@ const CONFIRMATION_BOUND_INTENTS = [
   "CREATE_DOCUMENT_CATEGORY",
   "RENAME_DOCUMENT_CATEGORY",
   "ASSIGN_DOCUMENTS_TO_CATEGORY",
+  "DELETE_DOCUMENT_CATEGORY",
+  "MOVE_DOCUMENTS_TO_CATEGORY",
 ] as const;
 
 type ConfirmationBoundIntentName = (typeof CONFIRMATION_BOUND_INTENTS)[number];
@@ -982,6 +987,13 @@ export async function buildActionPreview(
         dateTo: intent.args.dateTo,
         targetCategoryName: intent.args.targetCategoryName,
       });
+    case "DELETE_DOCUMENT_CATEGORY":
+      return buildDeleteCategoryPreview(supabase, locale, ctx, intent.args.categoryName);
+    case "MOVE_DOCUMENTS_TO_CATEGORY":
+      return buildMoveDocumentsPreview(supabase, locale, ctx, {
+        categoryName: intent.args.categoryName,
+        targetCategoryName: intent.args.targetCategoryName,
+      });
     default:
       return { kind: "error", text: translate(locale, "search.errors.generic") };
   }
@@ -1020,9 +1032,259 @@ export async function executeAction(
       return executeRenameCategory(supabase, locale, ctx, claimed.canonical_args);
     case "ASSIGN_DOCUMENTS_TO_CATEGORY":
       return executeAssignDocuments(supabase, locale, claimed.canonical_args, claimed.expected_count);
+    case "DELETE_DOCUMENT_CATEGORY":
+      return executeDeleteCategory(supabase, locale, ctx, claimed.canonical_args);
+    case "MOVE_DOCUMENTS_TO_CATEGORY":
+      return executeMoveDocuments(
+        supabase,
+        locale,
+        ctx,
+        claimed.canonical_args,
+        claimed.expected_count
+      );
     default:
       // isConfirmationBoundIntentName() vyššie už zaručuje, že sem appka
       // nikdy nedôjde — čisto exhaustiveness fallback (fail closed).
       return actionResult(false, translate(locale, "search.errors.generic"));
   }
+}
+
+// =============================================================================
+// Voice Phase 1 — zmazanie zložky a presun dokumentov
+// =============================================================================
+
+/**
+ * Zmazanie vlastnej zložky.
+ *
+ * Počet dokumentov v zhrnutí sa číta cez countDocumentsInCategory(), teda
+ * SERVEROVO a bez ohľadu na to, čo volajúci vidí. Keby sa počítalo z
+ * načítaného zoznamu, používateľ bez finančného práva by nad zložkou plnou
+ * faktúr dostal "0 dokumentov" a potvrdzovacia veta by klamala.
+ *
+ * Dokumenty sa mazaním zložky nikdy nestratia — FK
+ * documents.custom_category_id má ON DELETE SET NULL. Zhrnutie to hovorí
+ * nahlas, aby používateľ nemusel dúfať.
+ */
+export async function buildDeleteCategoryPreview(
+  supabase: SupabaseClient,
+  locale: Locale,
+  ctx: ActionContext,
+  categoryName: string | undefined
+): Promise<IntentResult> {
+  const permissionError = categoryManagerOnly(locale, ctx);
+  if (permissionError) return permissionError;
+
+  const trimmed = categoryName?.trim();
+  if (!trimmed) {
+    return notFoundResult(locale, "search.actions.category.missingName");
+  }
+
+  const existing = await listCompanyCustomCategories(supabase);
+  const source = findMatchingCustomCategory(existing, trimmed);
+  if (!source) {
+    return actionResult(false, translate(locale, "search.actions.category.notFound", { name: trimmed }));
+  }
+
+  const realCount = await countDocumentsInCategory(supabase, source.id);
+
+  const confirmationId = await insertActionConfirmation(
+    supabase,
+    ctx,
+    "DELETE_DOCUMENT_CATEGORY",
+    { categoryId: source.id, categoryName: source.name },
+    realCount
+  );
+  if (!confirmationId) {
+    return actionResult(false, translate(locale, "search.errors.generic"));
+  }
+
+  return {
+    kind: "action_preview",
+    action: "DELETE_DOCUMENT_CATEGORY",
+    summary:
+      realCount && realCount > 0
+        ? translate(locale, "search.actions.category.deleteSummaryWithDocuments", {
+            name: source.name,
+            count: String(realCount),
+          })
+        : translate(locale, "search.actions.category.deleteSummary", { name: source.name }),
+    confirmLabel: translate(locale, "search.actions.category.deleteConfirmLabel"),
+    cancelLabel: translate(locale, "search.actions.cancelLabel"),
+    confirmationId,
+    affectedCount: realCount ?? undefined,
+  };
+}
+
+export async function executeDeleteCategory(
+  supabase: SupabaseClient,
+  locale: Locale,
+  ctx: ActionContext,
+  canonicalArgs: Record<string, unknown>
+): Promise<IntentResult> {
+  // Kontrola sa opakuje aj pri vykonaní — medzi zobrazením potvrdenia a
+  // jeho uplatnením sa rola mohla zmeniť. RLS je pod tým ešte raz.
+  const permissionError = categoryManagerOnly(locale, ctx);
+  if (permissionError) return permissionError;
+
+  const categoryId = typeof canonicalArgs.categoryId === "string" ? canonicalArgs.categoryId : null;
+  const categoryName =
+    typeof canonicalArgs.categoryName === "string" ? canonicalArgs.categoryName : "";
+
+  if (!categoryId) {
+    return actionResult(false, translate(locale, "search.errors.generic"));
+  }
+
+  const result = await deleteCustomCategory(supabase, categoryId);
+
+  if (!result.ok) {
+    return actionResult(
+      false,
+      translate(
+        locale,
+        result.error === "FORBIDDEN"
+          ? "search.actions.errors.ownerOrAdminOnly"
+          : "search.errors.generic"
+      )
+    );
+  }
+
+  return actionResult(
+    true,
+    translate(locale, "search.actions.category.deleteSuccess", { name: categoryName })
+  );
+}
+
+/**
+ * Presun dokumentov z jednej vlastnej zložky do druhej, alebo ich
+ * vyradenie zo zložky (`targetCategoryName` prázdne).
+ *
+ * expected_count sa podpisuje spolu so zvyškom potvrdenia, takže medzi
+ * zobrazením a uplatnením sa nedá počet ticho zmeniť.
+ */
+export async function buildMoveDocumentsPreview(
+  supabase: SupabaseClient,
+  locale: Locale,
+  ctx: ActionContext,
+  args: { categoryName?: string; targetCategoryName?: string }
+): Promise<IntentResult> {
+  const permissionError = categoryManagerOnly(locale, ctx);
+  if (permissionError) return permissionError;
+
+  const sourceName = args.categoryName?.trim();
+  if (!sourceName) {
+    return notFoundResult(locale, "search.actions.category.missingName");
+  }
+
+  const existing = await listCompanyCustomCategories(supabase);
+  const source = findMatchingCustomCategory(existing, sourceName);
+  if (!source) {
+    return actionResult(false, translate(locale, "search.actions.category.notFound", { name: sourceName }));
+  }
+
+  const targetName = args.targetCategoryName?.trim();
+  let targetId: string | null = null;
+  let targetLabel = translate(locale, "inbox.folders.removeFromFolder");
+
+  if (targetName) {
+    const target = findMatchingCustomCategory(existing, targetName);
+    if (!target) {
+      return actionResult(false, translate(locale, "search.actions.assign.targetNotFound", { name: targetName }));
+    }
+    if (target.id === source.id) {
+      return actionResult(false, translate(locale, "search.errors.generic"));
+    }
+    targetId = target.id;
+    targetLabel = target.name;
+  }
+
+  const count = await countDocumentsInCategory(supabase, source.id);
+
+  if (!count || count === 0) {
+    return actionResult(false, translate(locale, "search.actions.assign.noDocuments"));
+  }
+
+  const confirmationId = await insertActionConfirmation(
+    supabase,
+    ctx,
+    "MOVE_DOCUMENTS_TO_CATEGORY",
+    { sourceCategoryId: source.id, targetCategoryId: targetId },
+    count
+  );
+  if (!confirmationId) {
+    return actionResult(false, translate(locale, "search.errors.generic"));
+  }
+
+  return {
+    kind: "action_preview",
+    action: "MOVE_DOCUMENTS_TO_CATEGORY",
+    summary: translate(locale, "search.actions.move.summary", {
+      count: String(count),
+      source: source.name,
+      target: targetLabel,
+    }),
+    confirmLabel: translate(locale, "search.actions.move.confirmLabel"),
+    cancelLabel: translate(locale, "search.actions.cancelLabel"),
+    confirmationId,
+    affectedCount: count,
+  };
+}
+
+export async function executeMoveDocuments(
+  supabase: SupabaseClient,
+  locale: Locale,
+  ctx: ActionContext,
+  canonicalArgs: Record<string, unknown>,
+  expectedCount: number | null
+): Promise<IntentResult> {
+  const permissionError = categoryManagerOnly(locale, ctx);
+  if (permissionError) return permissionError;
+
+  const sourceId =
+    typeof canonicalArgs.sourceCategoryId === "string" ? canonicalArgs.sourceCategoryId : null;
+  const targetId =
+    typeof canonicalArgs.targetCategoryId === "string" ? canonicalArgs.targetCategoryId : null;
+
+  if (!sourceId) {
+    return actionResult(false, translate(locale, "search.errors.generic"));
+  }
+
+  // Zoznam id sa načíta ZNOVA, tesne pred zápisom — obsah zložky sa medzi
+  // potvrdením a vykonaním mohol zmeniť.
+  const { data, error } = await supabase
+    .from("documents")
+    .select("id")
+    .eq("custom_category_id", sourceId)
+    .is("deleted_at", null);
+
+  if (error) {
+    return actionResult(false, translate(locale, "search.errors.generic"));
+  }
+
+  const ids = (data as { id: string }[] | null)?.map((row) => row.id) ?? [];
+
+  // Ak sa počet oproti podpísanému potvrdeniu zmenil, akcia sa NEVYKONÁ.
+  // Používateľ potvrdzoval konkrétne číslo, nie "čokoľvek, čo tam bude".
+  if (expectedCount !== null && ids.length !== expectedCount) {
+    return actionResult(false, translate(locale, "search.actions.confirmation.dataChanged"));
+  }
+
+  const result = await moveDocumentsToCategory(supabase, ids, targetId);
+
+  if (!result.ok) {
+    if (result.error === "PARTIAL") {
+      return actionResult(
+        false,
+        translate(locale, "inbox.folders.movePartial", {
+          moved: String(result.moved),
+          total: String(ids.length),
+        })
+      );
+    }
+    return actionResult(false, translate(locale, "search.errors.generic"));
+  }
+
+  return actionResult(
+    true,
+    translate(locale, "inbox.folders.moveSuccess", { count: String(result.moved) })
+  );
 }

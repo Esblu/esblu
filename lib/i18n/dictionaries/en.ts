@@ -217,6 +217,10 @@ const en = {
         done: "Export ready ({{count}} documents).",
       },
       category: {
+        deleteSummary: "Delete the folder “{{name}}”?",
+        deleteSummaryWithDocuments: "Delete the folder “{{name}}”? It holds {{count}} documents — they are kept.",
+        deleteConfirmLabel: "Delete folder",
+        deleteSuccess: "Folder “{{name}}” was deleted.",
         missingName: "Enter a name for the new folder.",
         alreadyExists: "The folder \"{{name}}\" already exists.",
         createSummary: "Create a new folder \"{{name}}\"?",
@@ -228,6 +232,10 @@ const en = {
         renameConfirmLabel: "Rename",
         renameSuccess: "Folder \"{{from}}\" was renamed to \"{{to}}\".",
       },
+      move: {
+        summary: "Move {{count}} documents from “{{source}}” to “{{target}}”?",
+        confirmLabel: "Move",
+      },
       assign: {
         missingTarget: "Tell me which folder to assign the documents to.",
         targetNotFound: "The folder \"{{name}}\" doesn't exist yet. Create it first with \"Create folder {{name}}.\"",
@@ -238,6 +246,18 @@ const en = {
       },
     },
     voice: {
+      launcher: "Voice command",
+      start: "Speak",
+      stop: "Stop",
+      hint: "Say a command — for example “open invoices”.",
+      transcriptPrefix: "Transcript:",
+      states: {
+        listening: "Listening…",
+        transcribing: "Transcribing…",
+        recognising: "Recognising the command…",
+        awaitingConfirmation: "Waiting for confirmation.",
+        denied: "You do not have permission for this action.",
+      },
       ui: {
         startRecording: "Start voice search",
         recording: "Recording…",
@@ -1960,6 +1980,9 @@ const en = {
   },
 
   invoices: {
+    voice: {
+      noUnpaid: "All invoices are paid.",
+    },
     title: "Invoices",
     subtitle: "Your company's issued invoices, credit notes, and debit notes.",
     addButton: "New invoice",

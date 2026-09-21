@@ -1,0 +1,220 @@
+"use client";
+
+import Link from "next/link";
+import { useLocale } from "@/lib/i18n/LocaleProvider";
+import type { IntentResult } from "@/lib/intents/types";
+
+// =============================================================================
+// Zobrazenie výsledku Intent Enginu.
+//
+// Bolo to 190 riadkov priamo v Dashboarde, takže výsledok hlasového alebo
+// písaného príkazu sa dal ukázať iba tam. Globálny launcher potrebuje to
+// isté — a dva renderery toho istého typu by sa časom rozišli.
+//
+// Komponent je ZÁMERNE hlúpy: nič nevykonáva, iba vykresľuje. Potvrdenie
+// akcie deleguje nahor cez `onConfirm`, pretože ho vybavuje volajúci,
+// ktorý drží prihlasovací token.
+// =============================================================================
+
+export function IntentResultView({
+  intentResult,
+  actionSubmitting,
+  onConfirm,
+  onCancel,
+}: {
+  intentResult: IntentResult | null;
+  actionSubmitting: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  const { t } = useLocale();
+
+  if (!intentResult) return null;
+
+
+    const cardClass =
+      "surface-card-hover block rounded-2xl border border-subtle bg-surface-1/60 p-4 transition";
+    const boxClass =
+      "rounded-2xl border border-subtle bg-surface-1/60 p-4 text-sm text-secondary";
+
+    switch (intentResult.kind) {
+      case "navigate":
+        return (
+          <Link href={intentResult.entity.href} className={cardClass}>
+            <p className="text-xs font-bold uppercase tracking-wide text-accent-cyan">
+              {t("search.ui.openAction")}
+            </p>
+            <p className="mt-1 text-base font-bold text-primary">
+              {intentResult.entity.label}
+            </p>
+          </Link>
+        );
+
+      case "answer":
+        return (
+          <div className={boxClass}>
+            <p className="text-sm font-medium text-primary">{intentResult.text}</p>
+            {intentResult.entity && (
+              <Link
+                href={intentResult.entity.href}
+                className="mt-2 inline-block text-xs font-bold uppercase tracking-wide text-accent-cyan"
+              >
+                {intentResult.entity.label} →
+              </Link>
+            )}
+          </div>
+        );
+
+      case "report":
+        return (
+          <div className="rounded-2xl border border-subtle bg-surface-1/60 p-4">
+            <Link
+              href={intentResult.entity.href}
+              className="text-xs font-bold uppercase tracking-wide text-accent-cyan"
+            >
+              {intentResult.entity.label} →
+            </Link>
+            <div className="mt-3 space-y-4">
+              {intentResult.sections.map((section) => (
+                <div key={section.title}>
+                  <p className="text-xs font-bold uppercase tracking-wide text-muted-esblu">
+                    {section.title}
+                  </p>
+                  <div className="mt-1.5 space-y-1">
+                    {section.rows.map((row) => (
+                      <div key={row.label} className="flex items-center justify-between gap-3 text-sm">
+                        <span className="text-secondary">{row.label}</span>
+                        <span className="font-semibold text-primary">{row.value}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+
+      case "list":
+        return (
+          <div className="space-y-2.5">
+            <p className="text-xs font-bold uppercase tracking-wide text-muted-esblu">
+              {intentResult.title}
+            </p>
+            {intentResult.items.map((item) => (
+              <Link key={item.id} href={item.href} className={cardClass}>
+                <p className="text-base font-bold text-primary">{item.label}</p>
+              </Link>
+            ))}
+          </div>
+        );
+
+      case "deadline_list":
+        if (intentResult.items.length === 0) {
+          return <p className={boxClass}>{t("search.ui.noDeadlines")}</p>;
+        }
+        return (
+          <div className="space-y-2.5">
+            <p className="text-xs font-bold uppercase tracking-wide text-muted-esblu">
+              {intentResult.title}
+            </p>
+            {intentResult.items.map((item, index) => (
+              <Link key={`${item.entity.id}-${index}`} href={item.entity.href} className={cardClass}>
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-bold text-primary">
+                      {item.entity.label}
+                    </p>
+                    <p className="text-xs text-secondary">
+                      {item.typeLabel} — {item.dueDateLabel}
+                    </p>
+                  </div>
+                  <span className="shrink-0 rounded-full bg-amber-400/12 px-2.5 py-1 text-[11px] font-bold text-amber-400">
+                    {item.severityLabel}
+                  </span>
+                </div>
+              </Link>
+            ))}
+          </div>
+        );
+
+      case "document_list":
+        return (
+          <div className="space-y-2.5">
+            <p className="text-xs font-bold uppercase tracking-wide text-muted-esblu">
+              {intentResult.title}
+            </p>
+            {intentResult.items.map((item, index) => (
+              <Link key={`${item.href}-${index}`} href={item.href} className={cardClass}>
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-bold text-primary">{item.label}</p>
+                    <p className="text-xs text-secondary">
+                      {item.typeLabel}
+                      {item.dateLabel ? ` — ${item.dateLabel}` : ""}
+                    </p>
+                  </div>
+                  <span className="shrink-0 rounded-full bg-accent-cyan/12 px-2.5 py-1 text-[11px] font-bold text-accent-cyan">
+                    {item.linkLabel}
+                  </span>
+                </div>
+              </Link>
+            ))}
+          </div>
+        );
+
+      case "disambiguate":
+        return (
+          <div className="space-y-2.5">
+            <p className="text-xs font-bold uppercase tracking-wide text-muted-esblu">
+              {t("search.ui.multipleMatches")}
+            </p>
+            {intentResult.candidates.map((candidate) => (
+              <Link key={candidate.id} href={candidate.href} className={cardClass}>
+                <p className="text-base font-bold text-primary">{candidate.label}</p>
+              </Link>
+            ))}
+          </div>
+        );
+
+      case "not_found":
+      case "error":
+        return <p className={boxClass}>{intentResult.text}</p>;
+
+      case "action_preview":
+        return (
+          <div className={boxClass}>
+            <p className="text-sm font-medium text-primary">{intentResult.summary}</p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={onConfirm}
+                disabled={actionSubmitting}
+                className="btn-primary px-4 py-2 text-xs font-bold uppercase tracking-wide disabled:opacity-60"
+              >
+                {intentResult.confirmLabel}
+              </button>
+              <button
+                type="button"
+                onClick={onCancel}
+                disabled={actionSubmitting}
+                className="btn-secondary px-4 py-2 text-xs font-bold uppercase tracking-wide disabled:opacity-60"
+              >
+                {intentResult.cancelLabel}
+              </button>
+            </div>
+          </div>
+        );
+
+      case "action_result":
+        return (
+          <p className={boxClass}>
+            <span className={intentResult.success ? "text-primary" : "text-secondary"}>
+              {intentResult.text}
+            </span>
+          </p>
+        );
+
+      default:
+        return null;
+    }
+}

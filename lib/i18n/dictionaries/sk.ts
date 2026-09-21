@@ -228,6 +228,10 @@ const sk = {
         done: "Export bol pripravený ({{count}} dokumentov).",
       },
       category: {
+        deleteSummary: "Zmazať zložku „{{name}}“?",
+        deleteSummaryWithDocuments: "Zmazať zložku „{{name}}“? Obsahuje {{count}} dokumentov — tie zostanú zachované.",
+        deleteConfirmLabel: "Zmazať zložku",
+        deleteSuccess: "Zložka „{{name}}“ bola zmazaná.",
         missingName: "Napíšte názov novej zložky.",
         alreadyExists: "Zložka „{{name}}“ už existuje.",
         createSummary: "Vytvoriť novú zložku „{{name}}“?",
@@ -238,6 +242,10 @@ const sk = {
         renameSummary: "Premenovať zložku „{{from}}“ na „{{to}}“?",
         renameConfirmLabel: "Premenovať",
         renameSuccess: "Zložka „{{from}}“ bola premenovaná na „{{to}}“.",
+      },
+      move: {
+        summary: "Presunúť {{count}} dokumentov zo zložky „{{source}}“ do „{{target}}“?",
+        confirmLabel: "Presunúť",
       },
       assign: {
         missingTarget: "Napíšte, do ktorej zložky chcete dokumenty priradiť.",
@@ -252,6 +260,18 @@ const sk = {
     // nad rovnakým textovým poľom/Intent Enginom vyššie, nikdy nový
     // paralelný systém.
     voice: {
+      launcher: "Hlasový príkaz",
+      start: "Hovoriť",
+      stop: "Zastaviť",
+      hint: "Povedz príkaz — napríklad „otvor faktúry“.",
+      transcriptPrefix: "Prepis:",
+      states: {
+        listening: "Počúvam…",
+        transcribing: "Prepisujem…",
+        recognising: "Rozpoznávam príkaz…",
+        awaitingConfirmation: "Čakám na potvrdenie.",
+        denied: "Na túto akciu nemáte oprávnenie.",
+      },
       ui: {
         startRecording: "Spustiť hlasové vyhľadávanie",
         recording: "Nahrávam…",
@@ -1985,6 +2005,9 @@ const sk = {
   },
 
   invoices: {
+    voice: {
+      noUnpaid: "Všetky faktúry sú uhradené.",
+    },
     title: "Faktúry",
     subtitle: "Vystavené faktúry, dobropisy a ťarchopisy vašej firmy.",
     addButton: "Nová faktúra",

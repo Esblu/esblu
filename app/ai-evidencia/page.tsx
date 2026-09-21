@@ -39,6 +39,7 @@ import {
 } from "@/lib/invoicing/received-candidate";
 import { computeFileSha256 } from "@/lib/invoicing/received-dedupe";
 import { DocumentStatusBadge } from "@/app/components/document/DocumentStatusBadge";
+import { UploadHero } from "@/app/components/ui/UploadHero";
 import {
   DataRow,
   EmptyState,
@@ -59,7 +60,6 @@ import {
   FileIcon,
   FolderIcon,
   ReceiptIcon,
-  PaperclipIcon,
 } from "@/app/components/icons/AppIcons";
 import { invoiceDetailHref } from "@/lib/entity-links";
 import { useCompanyDpaLegalHold } from "@/app/components/CompanyDpaGate";
@@ -790,6 +790,16 @@ export default function AiEvidenciaPage() {
   const [machineOptions, setMachineOptions] = useState<
     { id: string; name: string | null }[]
   >([]);
+  /**
+   * Minimálne označenia entít z esblu_document_entity_labels().
+   *
+   * Účtovník od migrácie 20260923100000 nevidí tabuľky vozidiel a strojov
+   * vôbec, takže vehicleOptions/machineOptions mu ostanú prázdne. Aby pri
+   * doklade nevidel "Neznáme vozidlo", dostane odtiaľto jeden zobraziteľný
+   * reťazec — a nič viac. Prevádzkové role to nepotrebujú, ale načítava sa
+   * to pre všetkých, aby tu neboli dve rôzne vetvy podľa roly.
+   */
+  const [entityLabels, setEntityLabels] = useState<Record<string, string>>({});
   const [isSavingOtherDocument, setIsSavingOtherDocument] = useState(false);
   // Prijatá faktúra: kandidát otvorený v review obrazovke. Nenulový = modal
   // je otvorený. Dokument je v tom momente už uložený (potrebujeme jeho id
@@ -2443,6 +2453,30 @@ async function loadVehicleAndMachineOptions(
   if (!machinesResult.error && machinesResult.data) {
     setMachineOptions(machinesResult.data);
   }
+
+  await loadEntityLabels();
+}
+
+/**
+ * Označenia entít naviazaných na doklady, ktoré smiem čítať.
+ *
+ * RPC je SECURITY DEFINER a sama si overuje firmu aj čitateľnosť dokladu,
+ * takže tu nie je čo filtrovať — a zámerne sa jej neodovzdáva žiadny
+ * parameter, ktorý by sa dal zneužiť.
+ */
+async function loadEntityLabels() {
+  const { data, error } = await supabase.rpc("esblu_document_entity_labels");
+
+  if (error) {
+    console.error("esblu_document_entity_labels zlyhalo:", error.message);
+    return;
+  }
+
+  const map: Record<string, string> = {};
+  for (const row of (data as { entity_id: string; label: string | null }[]) ?? []) {
+    if (row.entity_id && row.label) map[row.entity_id] = row.label;
+  }
+  setEntityLabels(map);
 }
 
 // Ostatné typy dokumentov (faktúra, bloček, PZP/poistná zmluva, servisný
@@ -2719,17 +2753,18 @@ function describeDocumentAssignment(doc: OtherDocumentRow): string {
   if (!link) return t("inbox.noAssignment");
 
   if (link.vehicle_id) {
+    // Poradie je zámerné: resolver je jediný zdroj, ktorý má aj účtovník.
     const vehicle = vehicleOptions.find((v) => v.id === link.vehicle_id);
-    return t("inbox.vehicleAssignment", {
-      value: vehicle ? vehicle.spz ?? "" : t("inbox.unknownVehicle"),
-    });
+    const label =
+      entityLabels[link.vehicle_id] ?? vehicle?.spz ?? t("inbox.unknownVehicle");
+    return t("inbox.vehicleAssignment", { value: label });
   }
 
   if (link.machine_id) {
     const machine = machineOptions.find((m) => m.id === link.machine_id);
-    return t("inbox.machineAssignment", {
-      value: machine ? machine.name ?? "" : t("inbox.unknownMachine"),
-    });
+    const label =
+      entityLabels[link.machine_id] ?? machine?.name ?? t("inbox.unknownMachine");
+    return t("inbox.machineAssignment", { value: label });
   }
 
   return t("inbox.noAssignment");
@@ -2917,32 +2952,19 @@ function renderDocumentRegister(
             zadania). Inbox od tejto zmeny nemá žiadnu "Technické preukazy"
             sekciu ani CTA "pridať vozidlo z TP". */}
 
-        <div className="mt-8 rounded-doc border border-dashed border-doc-border bg-surface-2 px-5 py-6">
-          <div className="flex flex-col items-center gap-4 text-center sm:flex-row sm:items-center sm:gap-5 sm:text-left">
-            <span
-              aria-hidden="true"
-              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-doc-sm border border-doc-border bg-doc-surface text-secondary"
-            >
-              <PaperclipIcon size={22} />
-            </span>
-
-            <div className="min-w-0 flex-1">
-              <h2 className="text-base font-semibold text-primary">
-                {t("inbox.addDocument.title")}
-              </h2>
-              <p className="mt-0.5 text-sm text-muted-esblu">
-                {t("inbox.addDocument.description")}
-              </p>
-            </div>
-
-            <UploadActions
-              className="shrink-0 justify-center"
-              cameraLabel={t("inbox.addDocument.takePhoto")}
-              galleryLabel={t("inbox.addDocument.gallery")}
-              disabled={planUsageLoading || isCreationBlocked || isProcessing || isSaving}
-              onSelect={handleFile}
-            />
-          </div>
+        <div className="mt-8">
+          <UploadHero
+            title={t("inbox.addDocument.title")}
+            description={t("inbox.addDocument.description")}
+            actions={
+              <UploadActions
+                cameraLabel={t("inbox.addDocument.takePhoto")}
+                galleryLabel={t("inbox.addDocument.gallery")}
+                disabled={planUsageLoading || isCreationBlocked || isProcessing || isSaving}
+                onSelect={handleFile}
+              />
+            }
+          />
         </div>
 
         {previewUrl && pendingImageFile && (

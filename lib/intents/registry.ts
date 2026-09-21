@@ -169,6 +169,44 @@ export const INTENT_REGISTRY: Record<IntentName, IntentDefinition> = {
     description:
       "Hromadne priraď nájdené dokumenty (podľa filtrov) do existujúcej vlastnej zložky.",
   },
+
+  OPEN_MODULE: {
+    name: "OPEN_MODULE",
+    readOnly: true,
+    requiresConfirmation: false,
+    description: "Otvor modul appky (Inbox, Faktúry, Partneri, Vozidlá, Stroje, Sklad, Nastavenia).",
+  },
+  SEARCH_INVOICE: {
+    name: "SEARCH_INVOICE",
+    readOnly: true,
+    requiresConfirmation: false,
+    description: "Nájdi faktúru podľa čísla alebo protistrany.",
+  },
+  SHOW_UNPAID_INVOICES: {
+    name: "SHOW_UNPAID_INVOICES",
+    readOnly: true,
+    requiresConfirmation: false,
+    description: "Zobraz neuhradené faktúry.",
+  },
+  SEARCH_PARTNER: {
+    name: "SEARCH_PARTNER",
+    readOnly: true,
+    requiresConfirmation: false,
+    description: "Nájdi obchodného partnera podľa názvu alebo IČO.",
+  },
+
+  DELETE_DOCUMENT_CATEGORY: {
+    name: "DELETE_DOCUMENT_CATEGORY",
+    readOnly: false,
+    requiresConfirmation: true,
+    description: "Zmaž vlastnú zložku dokumentov. Dokumenty v nej zostávajú zachované.",
+  },
+  MOVE_DOCUMENTS_TO_CATEGORY: {
+    name: "MOVE_DOCUMENTS_TO_CATEGORY",
+    readOnly: false,
+    requiresConfirmation: true,
+    description: "Presuň dokumenty z jednej vlastnej zložky do druhej, alebo ich zo zložky vyraď.",
+  },
 };
 
 export function isRegisteredReadOnlyIntent(name: string): name is IntentName {
