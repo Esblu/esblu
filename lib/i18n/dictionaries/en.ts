@@ -1301,7 +1301,22 @@ const en = {
       noneYet: "No vehicle has been saved yet.",
       confirmDeleteVehicle: "Are you sure you want to delete this vehicle?",
     },
+    register: {
+      title: "Vehicle register",
+      searchLabel: "Search vehicles",
+      searchPlaceholder: "Plate, VIN, brand, model...",
+      inspectionFilterLabel: "Inspections",
+      needsAttention: "Needs attention",
+      missingInspection: "Date missing",
+      allFuels: "All fuels",
+      colVehicle: "Vehicle",
+      colEngine: "Engine",
+      colInspections: "MOT / emissions",
+    },
     forms: {
+      groupIdentification: "Identification",
+      groupTechnical: "Technical data",
+      groupInspections: "Inspections",
       editVehicleTitle: "Edit vehicle",
       reviewVehicleTitle: "Review the vehicle data",
       saveVehicle: "Save vehicle",
@@ -1367,6 +1382,7 @@ const en = {
       deleteWithIcon: "Delete",
     },
     detail: {
+      sectionsLabel: "Vehicle sections",
       documentTypeRegistration: "Registration certificate",
       documentsTitle: "Insurance and registration certificate",
       documentsDescription:
@@ -1429,6 +1445,7 @@ const en = {
 
   machines: {
     list: {
+      photoHint: "Photos are uploaded right after the machine is saved.",
       subtitle: "Records of company machines and equipment.",
       addMachine: "Add machine",
       editMachineTitle: "Edit machine",
@@ -1454,6 +1471,7 @@ const en = {
     },
     photoAlt: "Machine photo",
     errors: {
+      somePhotosFailed: "The machine was saved, but {{count}} photos could not be uploaded. Add them again from the machine gallery.",
       loadFailedPrefix: "Error loading machines: {{message}}",
       nameRequired: "Enter the machine name.",
       saveFailedPrefix: "Error saving the machine: {{message}}",

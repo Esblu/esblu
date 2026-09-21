@@ -6,6 +6,27 @@ import { supabase } from "@/lib/supabase";
 import { openExternalUrl } from "@/lib/file-actions";
 import BackLink from "@/app/components/BackLink";
 import {
+  PageShell,
+  PageHeader,
+  SectionPanel,
+  MetricGrid,
+  Metric,
+  MetadataGrid,
+  Notice,
+  EmptyState,
+  Modal,
+  PhotoGrid,
+  PlateBadge,
+  StatusBadge,
+  TimelineItem,
+  UploadActions,
+  docButtonPrimary,
+  docButtonSecondary,
+  docButtonDanger,
+} from "@/app/components/ui/Primitives";
+import { CarIcon, WrenchIcon } from "@/app/components/icons/AppIcons";
+import { inspectionState } from "@/lib/vehicles";
+import {
   getMyActiveMembership,
   isOwnerOrAdmin,
   type CompanyMemberRole,
@@ -20,6 +41,8 @@ import {
   vignetteCountryLabel,
   type VehicleVignette,
 } from "@/lib/vehicle-vignettes";
+
+type VehicleTab = "overview" | "vignettes" | "documents" | "service" | "photos";
 import {
   buildVehicleDeadlines,
   deadlineTypeLabel,
@@ -199,6 +222,7 @@ export default function VehicleDetailView({
   const [photos, setPhotos] = useState<any[]>([]);
   const [isUploadingPhotos, setIsUploadingPhotos] = useState(false);
   const [deletingPhotoId, setDeletingPhotoId] = useState<string | null>(null);
+  const [tab, setTab] = useState<VehicleTab>("overview");
   const [lightboxPhoto, setLightboxPhoto] = useState<any>(null);
   const [linkedDocuments, setLinkedDocuments] = useState<
     LinkedVehicleDocument[]
@@ -954,100 +978,209 @@ export default function VehicleDetailView({
   }
 
   if (!vehicle) {
-    return <div className="p-10">{t("common.buttons.loading")}</div>;
+    return (
+      <PageShell>
+        <p className="py-10 text-sm text-secondary">{t("common.buttons.loading")}</p>
+      </PageShell>
+    );
+  }
+
+  // Termíny STK/EK/známok pre TOTO vozidlo. Prahy aj texty prichádzajú z
+  // lib/deadlines.ts — rovnaký zdroj, aký používa Dashboard aj Intent
+  // Engine, aby si jeden termín nikde neprotirečil. next_service_date sem
+  // zámerne nepatrí, tá má vlastnú záložku.
+  const activeDeadlines = buildVehicleDeadlines([vehicle], vignettes, [], locale).filter(
+    (item) => item.deadlineType !== "vehicle_service"
+  );
+
+  const stkState = inspectionState(vehicle.stk);
+  const ekState = inspectionState(vehicle.ek);
+
+  const TABS: { key: VehicleTab; label: string; count?: number }[] = [
+    { key: "overview", label: t("machines.detail.tabOverview") },
+    { key: "vignettes", label: t("vehicles.vignettes.title"), count: vignettes.length },
+    {
+      key: "documents",
+      label: t("vehicles.detail.documentsTitle"),
+      count: linkedDocuments.length,
+    },
+    { key: "service", label: t("vehicles.services.title"), count: services.length },
+    { key: "photos", label: t("vehicles.gallery.title"), count: photos.length },
+  ];
+
+  const coverPhoto = photos[0] ? photoUrl(photos[0].storage_path) : null;
+
+  function inspectionMetricTone(state: { severity: string | null; ok: boolean }) {
+    if (state.severity === "overdue") return "critical" as const;
+    if (state.severity) return "warning" as const;
+    return "neutral" as const;
   }
 
   return (
-    <main className="app-shell-bg min-h-screen p-10">
+    <PageShell>
       <Suspense fallback={null}>
         <OpenLinkedDocumentFromQueryParam onOpenDocument={setPendingOpenDocumentId} />
       </Suspense>
-      <BackLink href="/vozidla" label={t("nav.vehicles")} className="mb-4" />
+      <BackLink href="/vozidla" label={t("nav.vehicles")} className="mb-6" />
 
-      <h1 className="text-4xl font-bold">
-        {vehicle.znacka} {vehicle.model}
-      </h1>
+      <PageHeader
+        eyebrow={
+          <span className="inline-flex items-center gap-2">
+            <CarIcon size={18} />
+            {vehicle.palivo || t("nav.vehicles")}
+          </span>
+        }
+        title={
+          <span className="flex items-center gap-3">
+            {coverPhoto ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={coverPhoto}
+                alt=""
+                className="h-11 w-11 shrink-0 rounded-doc-sm border border-doc-border object-cover"
+              />
+            ) : (
+              <span
+                aria-hidden="true"
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-doc-sm border border-doc-border bg-surface-2 text-muted-esblu"
+              >
+                <CarIcon size={22} />
+              </span>
+            )}
+            <span className="min-w-0 break-words">
+              {[vehicle.znacka, vehicle.model].filter(Boolean).join(" ") ||
+                vehicle.spz ||
+                t("dashboard.noName")}
+            </span>
+          </span>
+        }
+        badges={
+          <>
+            <PlateBadge plate={vehicle.spz || t("dashboard.noPlate")} size="sm" />
+            {stkState.severity === "overdue" && (
+              <StatusBadge kind="overdue" label={t("vehicles.fields.stk")} />
+            )}
+            {ekState.severity === "overdue" && (
+              <StatusBadge kind="overdue" label={t("vehicles.fields.ek")} />
+            )}
+          </>
+        }
+        meta={vehicle.vin || undefined}
+      />
 
-      {/* Upozornenia na STK/EK/diaľničné známky pre TOTO KONKRÉTNE vozidlo
-          (zadanie, bod 9B: "Detail vozidla/stroja — relevantné upozornenie
-          pri konkrétnej entite"). Číta VÝHRADNE už načítané `vehicle` a
-          `vignettes` (žiadny nový dopyt) cez ten istý zdieľaný
-          lib/deadlines.ts, aký používa Dashboard aj Intent Engine — jedna
-          definícia prahov/farieb na celú appku (bod 8 a 17 zadania).
-          next_service_date sem zámerne NEPATRÍ (servisná sekcia nižšie má
-          vlastný, podrobnejší zoznam) — iba časovo-kritické STK/EK/známky. */}
-      {(() => {
-        const activeDeadlines = buildVehicleDeadlines(
-          [vehicle],
-          vignettes,
-          [],
-          locale
-        ).filter((item) => item.deadlineType !== "vehicle_service");
-
-        if (activeDeadlines.length === 0) return null;
-
-        return (
-          <div className="mt-4 space-y-2">
-            {activeDeadlines.map((item, index) => {
-              const isOverdue = item.severity === "overdue";
-              const label = deadlineTypeLabel(
-                item.deadlineType,
-                locale,
-                item.vignetteCountryCode
-              );
-
-              return (
-                <div
-                  key={`${item.deadlineType}-${index}`}
-                  className={`rounded-2xl border px-4 py-3 text-sm font-medium ${
-                    isOverdue
-                      ? "border-red-400/30 bg-red-400/10 text-red-400"
-                      : "border-amber-400/30 bg-amber-400/10 text-amber-400"
-                  }`}
-                >
-                  {isOverdue
-                    ? t("dashboard.alertOverdue", {
-                        type: label,
-                        name: `${vehicle.znacka || ""} ${vehicle.model || ""}`.trim(),
-                        spz: vehicle.spz || t("dashboard.noPlate"),
-                      })
-                    : t("dashboard.alertDueSoon", {
-                        type: label,
-                        name: `${vehicle.znacka || ""} ${vehicle.model || ""}`.trim(),
-                        spz: vehicle.spz || t("dashboard.noPlate"),
-                        days: item.daysRemaining,
-                      })}
-                </div>
-              );
-            })}
-          </div>
-        );
-      })()}
-
-      <div className="surface-card mt-8 p-8">
-        <div className="grid grid-cols-2 gap-5">
-          <p><b>{t("inbox.fields.spz")}:</b> {vehicle.spz}</p>
-          <p><b>{t("inbox.fields.vin")}:</b> {vehicle.vin}</p>
-          <p><b>{t("inbox.fields.rokVyroby")}:</b> {vehicle.rok_vyroby}</p>
-          <p><b>{t("inbox.fields.palivo")}:</b> {vehicle.palivo}</p>
-          <p><b>{t("inbox.fields.vykon")}:</b> {vehicle.vykon}</p>
-          <p><b>{t("vehicles.fields.objem")}:</b> {vehicle.objem}</p>
-          <p><b>{t("inbox.fields.farba")}:</b> {vehicle.farba}</p>
-          <p><b>{t("vehicles.fields.hmotnost")}:</b> {vehicle.hmotnost}</p>
-          <p><b>{t("inbox.fields.pocetMiest")}:</b> {vehicle.pocet_miest}</p>
-          <p><b>{t("vehicles.fields.stk")}:</b> {vehicle.stk || t("common.misc.notFilled")}</p>
-          <p><b>{t("vehicles.fields.ek")}:</b> {vehicle.ek || t("common.misc.notFilled")}</p>
-        </div>
+      <div className="mt-6">
+        <MetricGrid>
+          <Metric
+            label={t("vehicles.fields.stk")}
+            value={vehicle.stk ? formatDate(vehicle.stk, locale) : t("common.misc.notFilled")}
+            tone={inspectionMetricTone(stkState)}
+          />
+          <Metric
+            label={t("vehicles.fields.ek")}
+            value={vehicle.ek ? formatDate(vehicle.ek, locale) : t("common.misc.notFilled")}
+            tone={inspectionMetricTone(ekState)}
+          />
+          <Metric
+            label={t("inbox.fields.vykon")}
+            value={vehicle.vykon ? `${vehicle.vykon} kW` : "—"}
+          />
+          <Metric
+            label={t("inbox.fields.rokVyroby")}
+            value={vehicle.rok_vyroby ? String(vehicle.rok_vyroby) : "—"}
+          />
+        </MetricGrid>
       </div>
 
-      {/* Diaľničné známky (vehicle_vignettes) — v logickej blízkosti STK/EK
-          vyššie, ako samostatná sekcia (1 vozidlo môže mať viac známok pre
-          rôzne krajiny naraz). owner/admin vidia formulár a tlačidlá
-          upraviť/odstrániť, employee iba zoznam. */}
-      <div className="surface-card mt-10 p-8">
+      {activeDeadlines.length > 0 && (
+        <div className="mt-4 space-y-2">
+          {activeDeadlines.map((item, index) => {
+            const isOverdue = item.severity === "overdue";
+            const label = deadlineTypeLabel(item.deadlineType, locale, item.vignetteCountryCode);
+            return (
+              <Notice
+                key={`${item.deadlineType}-${index}`}
+                tone={isOverdue ? "critical" : "warning"}
+              >
+                {isOverdue
+                  ? t("dashboard.alertOverdue", {
+                      type: label,
+                      name: `${vehicle.znacka || ""} ${vehicle.model || ""}`.trim(),
+                      spz: vehicle.spz || t("dashboard.noPlate"),
+                    })
+                  : t("dashboard.alertDueSoon", {
+                      type: label,
+                      name: `${vehicle.znacka || ""} ${vehicle.model || ""}`.trim(),
+                      spz: vehicle.spz || t("dashboard.noPlate"),
+                      days: item.daysRemaining,
+                    })}
+              </Notice>
+            );
+          })}
+        </div>
+      )}
+
+      <div
+        role="tablist"
+        aria-label={t("vehicles.detail.sectionsLabel")}
+        className="mt-6 -mx-1 flex gap-1 overflow-x-auto px-1"
+      >
+        {TABS.map((item) => (
+          <button
+            key={item.key}
+            role="tab"
+            type="button"
+            aria-selected={tab === item.key}
+            onClick={() => setTab(item.key)}
+            className={`whitespace-nowrap rounded-doc-sm border px-3 py-2 text-sm font-medium transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-cyan ${
+              tab === item.key
+                ? "border-border-strong bg-surface-hover text-primary"
+                : "border-doc-border text-secondary hover:text-primary"
+            }`}
+          >
+            {item.label}
+            {item.count !== undefined && item.count > 0 && (
+              <span className="ml-1.5 tabular-nums opacity-70">{item.count}</span>
+            )}
+          </button>
+        ))}
+      </div>
+
+      {tab === "overview" && (
+        <div className="mt-4">
+          <SectionPanel title={t("machines.detail.tabOverview")}>
+            <MetadataGrid
+              items={[
+                { label: t("inbox.fields.spz"), value: vehicle.spz },
+                { label: t("inbox.fields.vin"), value: vehicle.vin },
+                { label: t("inbox.fields.znacka"), value: vehicle.znacka },
+                { label: t("inbox.fields.model"), value: vehicle.model },
+                { label: t("inbox.fields.rokVyroby"), value: vehicle.rok_vyroby },
+                {
+                  label: t("inbox.fields.datumPrvejEvidencie"),
+                  value: vehicle.datum_prvej_evidencie
+                    ? formatDate(vehicle.datum_prvej_evidencie, locale)
+                    : null,
+                },
+                { label: t("inbox.fields.palivo"), value: vehicle.palivo },
+                { label: t("vehicles.fields.objem"), value: vehicle.objem },
+                { label: t("inbox.fields.vykon"), value: vehicle.vykon },
+                { label: t("inbox.fields.farba"), value: vehicle.farba },
+                { label: t("vehicles.fields.hmotnost"), value: vehicle.hmotnost },
+                { label: t("inbox.fields.pocetMiest"), value: vehicle.pocet_miest },
+              ]}
+            />
+          </SectionPanel>
+        </div>
+      )}
+
+      {/* Diaľničné známky (vehicle_vignettes) — 1 vozidlo môže mať viac
+          známok pre rôzne krajiny naraz. owner/admin vidia formulár a
+          tlačidlá upraviť/odstrániť, employee iba zoznam. */}
+      {tab === "vignettes" && (
+      <div className="mt-4 rounded-doc border border-doc-border bg-doc-surface p-4 sm:p-5">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h2 className="text-2xl font-bold">{t("vehicles.vignettes.title")}</h2>
+            <h2 className="text-base font-semibold text-primary">{t("vehicles.vignettes.title")}</h2>
             <p className="mt-1 text-sm text-muted-esblu">
               {t("vehicles.vignettes.description")}
             </p>
@@ -1067,7 +1200,7 @@ export default function VehicleDetailView({
                 }
               }}
               disabled={!editingVignetteId && legalHold && !showVignetteForm}
-              className="shrink-0 rounded-xl bg-blue-600 px-5 py-3 text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-gray-400"
+              className={`shrink-0 ${docButtonSecondary}`}
             >
               {t("vehicles.vignettes.add")}
             </button>
@@ -1075,13 +1208,11 @@ export default function VehicleDetailView({
         </div>
 
         {role !== "employee" && !editingVignetteId && legalHold && (
-          <p className="mt-3 text-sm text-amber-400">
-            {t("common.legalHoldMessage")}
-          </p>
+          <div className="mt-3"><Notice tone="warning">{t("common.legalHoldMessage")}</Notice></div>
         )}
 
         {role !== "employee" && showVignetteForm && (
-          <div className="mt-6 rounded-2xl border border-subtle bg-surface-2 p-6">
+          <div className="mt-4 rounded-doc border border-doc-border bg-surface-2 p-4">
             <h3 className="mb-4 text-xl font-bold">
               {editingVignetteId
                 ? t("vehicles.vignettes.editTitle")
@@ -1151,7 +1282,7 @@ export default function VehicleDetailView({
               <button
                 onClick={saveVignette}
                 disabled={isSavingVignette}
-                className="rounded-xl bg-green-600 px-5 py-3 text-white hover:bg-green-700 disabled:bg-gray-400"
+                className={docButtonPrimary}
               >
                 {isSavingVignette
                   ? t("common.buttons.saving")
@@ -1171,9 +1302,9 @@ export default function VehicleDetailView({
         )}
 
         {vignettesLoading ? (
-          <p className="mt-6 text-muted-esblu">{t("common.buttons.loading")}</p>
+          <p className="mt-4 text-sm text-muted-esblu">{t("common.buttons.loading")}</p>
         ) : vignettes.length === 0 ? (
-          <p className="mt-6 text-muted-esblu">
+          <p className="mt-4 text-sm text-muted-esblu">
             {t("vehicles.vignettes.noneYet")}
           </p>
         ) : (
@@ -1181,7 +1312,7 @@ export default function VehicleDetailView({
             {vignettes.map((item) => (
               <li
                 key={item.id}
-                className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-subtle bg-surface-2 p-4"
+                className="flex flex-wrap items-center justify-between gap-3 rounded-doc border border-doc-border bg-surface-2 p-3"
               >
                 <p className="font-medium text-primary">
                   {t("vehicles.vignettes.validUntilLine", {
@@ -1194,14 +1325,14 @@ export default function VehicleDetailView({
                   <div className="flex gap-2">
                     <button
                       onClick={() => startEditVignette(item)}
-                      className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-bold text-white hover:bg-blue-700"
+                      className={`${docButtonSecondary} px-2.5 text-xs`}
                     >
                       {t("vehicles.vignettes.edit")}
                     </button>
                     <button
                       onClick={() => deleteVignette(item.id)}
                       disabled={deletingVignetteId !== null}
-                      className="rounded-lg bg-red-600 px-3 py-2 text-xs font-bold text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-gray-400"
+                      className={`${docButtonDanger} px-2.5 text-xs`}
                     >
                       {deletingVignetteId === String(item.id)
                         ? t("inbox.deleting")
@@ -1214,17 +1345,19 @@ export default function VehicleDetailView({
           </ul>
         )}
       </div>
+      )}
 
-      <div className="surface-card mt-10 p-8">
-        <h2 className="text-2xl font-bold">{t("vehicles.detail.documentsTitle")}</h2>
+      {tab === "documents" && (
+      <div className="mt-4 rounded-doc border border-doc-border bg-doc-surface p-4 sm:p-5">
+        <h2 className="text-base font-semibold text-primary">{t("vehicles.detail.documentsTitle")}</h2>
         <p className="mt-1 text-sm text-muted-esblu">
           {t("vehicles.detail.documentsDescription")}
         </p>
 
         {linkedDocumentsLoading ? (
-          <p className="mt-6 text-muted-esblu">{t("vehicles.detail.loadingDocuments")}</p>
+          <p className="mt-4 text-sm text-muted-esblu">{t("vehicles.detail.loadingDocuments")}</p>
         ) : linkedDocuments.length === 0 ? (
-          <p className="mt-6 text-muted-esblu">
+          <p className="mt-4 text-sm text-muted-esblu">
             {t("vehicles.detail.noDocumentsYet")}
           </p>
         ) : (
@@ -1232,11 +1365,11 @@ export default function VehicleDetailView({
             {linkedDocuments.map((doc) => (
               <div
                 key={doc.id}
-                className="rounded-2xl border border-subtle bg-surface-2 p-6"
+                className="rounded-doc border border-doc-border bg-surface-2 p-4"
               >
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
-                    <h3 className="text-lg font-bold text-primary">
+                    <h3 className="text-sm font-semibold text-primary">
                       {linkedDocumentTypeLabels[doc.document_type || ""] ||
                         t("vehicles.detail.documentFallback")}
                     </h3>
@@ -1265,7 +1398,7 @@ export default function VehicleDetailView({
                           const url = doc.signedUrl;
                           if (url) openExternalUrl(url);
                         }}
-                        className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-bold text-white hover:bg-blue-700"
+                        className={`${docButtonSecondary} px-2.5 text-xs`}
                       >
                         {t("inbox.open")}
                       </button>
@@ -1283,7 +1416,7 @@ export default function VehicleDetailView({
                           type="button"
                           onClick={() => deleteLinkedDocument(doc)}
                           disabled={deletingDocumentId !== null}
-                          className="rounded-xl bg-red-600 px-4 py-2 text-sm font-bold text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-gray-400"
+                          className={`${docButtonDanger} px-2.5 text-xs`}
                         >
                           {deletingDocumentId === doc.id
                             ? t("inbox.deleting")
@@ -1319,94 +1452,74 @@ export default function VehicleDetailView({
           </div>
         )}
       </div>
+      )}
 
-      <div className="surface-card mt-10 p-8">
+      {tab === "photos" && (
+      <div className="mt-4 rounded-doc border border-doc-border bg-doc-surface p-4 sm:p-5">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <h2 className="text-2xl font-bold">{t("vehicles.gallery.title")}</h2>
+          <h2 className="text-base font-semibold text-primary">{t("vehicles.gallery.title")}</h2>
 
           {/* Pridávanie fotografií smie aj employee (rovnaké oprávnenie ako
               SELECT/INSERT na vehicle_photos) — vymazanie fotografie ostáva
               iba owner/admin nižšie. Toto sa netýka samotného vozidla
               (vehicles) — employee ho naďalej nemôže editovať ani mazať. */}
-          <div className="flex gap-3">
-            <label className="cursor-pointer rounded-xl bg-blue-600 px-5 py-3 text-white hover:bg-blue-700">
-              {isUploadingPhotos ? t("inbox.uploading") : t("vehicles.gallery.takeOrUploadPhotos")}
-              <input
-                type="file"
-                accept="image/*"
-                capture="environment"
-                multiple
-                className="hidden"
-                onChange={uploadVehiclePhotos}
-                disabled={isUploadingPhotos || legalHold}
-              />
-            </label>
-
-            <label className="cursor-pointer rounded-xl border border-subtle bg-surface-1 px-5 py-3 text-secondary">
-              {t("vehicles.gallery.addPhotos")}
-              <input
-                type="file"
-                accept="image/*"
-                multiple
-                className="hidden"
-                onChange={uploadVehiclePhotos}
-                disabled={isUploadingPhotos || legalHold}
-              />
-            </label>
-          </div>
+          <UploadActions
+            className="shrink-0"
+            multiple
+            cameraLabel={t("inbox.registration.takePhoto")}
+            galleryLabel={t("vehicles.gallery.addPhotos")}
+            disabled={isUploadingPhotos || legalHold}
+            onSelect={uploadVehiclePhotos}
+          />
         </div>
 
         {legalHold && (
-          <p className="mt-3 text-sm text-amber-400">{t("common.legalHoldMessage")}</p>
+          <div className="mt-3"><Notice tone="warning">{t("common.legalHoldMessage")}</Notice></div>
+        )}
+
+        {isUploadingPhotos && (
+          <p className="mt-3 text-sm text-secondary">{t("inbox.uploading")}</p>
         )}
 
         {photos.length === 0 ? (
-          <p className="mt-6 text-muted-esblu">
-            {t("vehicles.gallery.noneYet")}
-          </p>
+          <div className="mt-4">
+            <EmptyState title={t("vehicles.gallery.noneYet")} />
+          </div>
         ) : (
-          <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
-            {photos.map((photo) => (
-              <div
-                key={photo.id}
-                className="rounded-xl border border-subtle bg-surface-2 p-2"
-              >
-                <button
-                  type="button"
-                  onClick={() => setLightboxPhoto(photo)}
-                  className="block w-full"
-                >
-                  <img
-                    src={photoUrl(photo.storage_path)}
-                    alt={t("vehicles.gallery.photoAlt")}
-                    className="h-32 w-full rounded-lg object-cover sm:h-36"
-                  />
-                </button>
-
-                {isOwnerOrAdmin(role) && (
-                  <button
-                    onClick={() => deletePhoto(photo)}
-                    disabled={deletingPhotoId !== null}
-                    className="mt-2 w-full rounded-lg bg-red-600 px-3 py-2 text-xs font-bold text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-gray-400"
-                  >
-                    {deletingPhotoId === String(photo.id)
-                      ? t("inbox.deleting")
-                      : t("vehicles.buttons.deleteWithIcon")}
-                  </button>
-                )}
-              </div>
-            ))}
+          <div className="mt-4">
+            <PhotoGrid
+              photos={photos.map((photo) => ({
+                id: String(photo.id),
+                url: photoUrl(photo.storage_path),
+                alt: t("vehicles.gallery.photoAlt"),
+              }))}
+              onOpen={(tile) => {
+                const found = photos.find((photo) => String(photo.id) === tile.id);
+                if (found) setLightboxPhoto(found);
+              }}
+              /* Mazanie fotky ostáva owner/admin — rovnaké pravidlo ako
+                 predtým aj ako v RLS na vehicle_photos. */
+              onDelete={
+                isOwnerOrAdmin(role)
+                  ? (tile) => {
+                      const found = photos.find((photo) => String(photo.id) === tile.id);
+                      if (found) deletePhoto(found);
+                    }
+                  : undefined
+              }
+              deleteLabel={t("vehicles.buttons.deleteWithIcon")}
+              deletingId={deletingPhotoId}
+            />
           </div>
         )}
       </div>
 
-      {/* "Pridať servis" — presunuté úplne na spodok detailu vozidla
-          (posledná sekcia pred lightbox modálom), presne podľa zadania.
-          Žiadna zmena servisnej logiky/dát/formulára/validácie/oprávnení —
-          iba UI poradie. */}
-      <div className="surface-card mt-10 mb-10 p-8">
+      )}
+
+      {tab === "service" && (
+      <div className="mt-4 rounded-doc border border-doc-border bg-doc-surface p-4 sm:p-5">
         <div className="flex items-center justify-between">
-          <h2 className="text-2xl font-bold">{t("vehicles.services.title")}</h2>
+          <h2 className="text-base font-semibold text-primary">{t("vehicles.services.title")}</h2>
 
           <button
             onClick={() => {
@@ -1419,20 +1532,18 @@ export default function VehicleDetailView({
               setService(emptyService);
             }}
             disabled={!editingServiceId && legalHold && !showForm}
-            className="rounded-xl bg-blue-600 px-5 py-3 text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-gray-400"
+            className={docButtonSecondary}
           >
             {t("vehicles.services.addService")}
           </button>
         </div>
 
         {!editingServiceId && legalHold && (
-          <p className="mt-3 text-sm text-amber-400">
-            {t("common.legalHoldMessage")}
-          </p>
+          <div className="mt-3"><Notice tone="warning">{t("common.legalHoldMessage")}</Notice></div>
         )}
 
         {showForm && (
-          <div className="mt-6 rounded-2xl border border-subtle bg-surface-2 p-6">
+          <div className="mt-4 rounded-doc border border-doc-border bg-surface-2 p-4">
             <h3 className="mb-4 text-xl font-bold">
               {editingServiceId
                 ? t("vehicles.services.editServiceTitle")
@@ -1498,7 +1609,7 @@ export default function VehicleDetailView({
               <button
                 onClick={saveService}
                 disabled={isSaving}
-                className="rounded-xl bg-green-600 px-5 py-3 text-white hover:bg-green-700 disabled:bg-gray-400"
+                className={docButtonPrimary}
               >
                 {isSaving
                   ? t("common.buttons.saving")
@@ -1520,106 +1631,97 @@ export default function VehicleDetailView({
         )}
 
         {services.length === 0 ? (
-          <p className="mt-6 text-muted-esblu">
-            {t("vehicles.services.noneYet")}
-          </p>
+          <div className="mt-4">
+            <EmptyState title={t("vehicles.services.noneYet")} />
+          </div>
         ) : (
-          <div className="mt-6 space-y-4">
-            {services.map((item) => (
-              <div
+          /* Časová os namiesto kariet — servisná história sa číta
+             chronologicky. Rovnaký tvar ako na detaile stroja, aby servis
+             vozidla a servis stroja nevyzerali ako dve rôzne appky. */
+          <ol className="mt-4">
+            {services.map((item, index) => (
+              <TimelineItem
                 key={item.id}
-                className="rounded-2xl border border-subtle bg-surface-2 p-6 shadow-sm"
+                last={index === services.length - 1}
+                marker={<WrenchIcon size={14} />}
+                title={item.title}
+                meta={
+                  <span className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-sm">
+                    <span className="tabular-nums text-secondary">
+                      {item.service_date ? formatDate(item.service_date, locale) : "—"}
+                    </span>
+                    {item.mileage ? (
+                      <span className="text-muted-esblu">
+                        {t("vehicles.services.mileage")}:{" "}
+                        <span className="tabular-nums">{item.mileage} km</span>
+                      </span>
+                    ) : null}
+                    {item.technician && (
+                      <span className="text-muted-esblu">{item.technician}</span>
+                    )}
+                    <span className="font-medium tabular-nums text-primary">
+                      {item.cost ? `${item.cost} €` : t("vehicles.services.costNotProvided")}
+                    </span>
+                    {item.next_service_date && (
+                      <span className="text-muted-esblu">
+                        {t("inbox.fields.nextServiceDate")}:{" "}
+                        <span className="tabular-nums">
+                          {formatDate(item.next_service_date, locale)}
+                        </span>
+                      </span>
+                    )}
+                  </span>
+                }
+                actions={
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => startEditService(item)}
+                      aria-label={`${t("vehicles.services.editButton")}: ${item.title}`}
+                      className={`${docButtonSecondary} px-2.5 text-xs`}
+                    >
+                      {t("vehicles.services.editButton")}
+                    </button>
+                    {role !== "employee" && (
+                      <button
+                        type="button"
+                        onClick={() => deleteService(item.id)}
+                        aria-label={`${t("vehicles.buttons.deleteWithIcon")}: ${item.title}`}
+                        className={`${docButtonDanger} px-2.5 text-xs`}
+                      >
+                        {t("vehicles.buttons.deleteWithIcon")}
+                      </button>
+                    )}
+                  </>
+                }
               >
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <h3 className="text-2xl font-bold text-primary">
-                      🔧 {item.title}
-                    </h3>
-
-                    <p className="mt-1 text-sm text-muted-esblu">
-                      📅 {item.service_date}
-                    </p>
-                  </div>
-
-                  <div className="badge-success rounded-xl px-4 py-2 text-lg font-bold">
-                    {item.cost ? `${item.cost} €` : t("vehicles.services.costNotProvided")}
-                  </div>
-                </div>
-
-                <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-3">
-                  <div className="rounded-xl bg-surface-1 p-4">
-                    <p className="text-sm text-muted-esblu">{t("vehicles.services.mileage")}</p>
-                    <p className="text-lg font-bold">
-                      {item.mileage ? `${item.mileage} km` : "—"}
-                    </p>
-                  </div>
-
-                  <div className="rounded-xl bg-surface-1 p-4">
-                    <p className="text-sm text-muted-esblu">{t("vehicles.services.technician")}</p>
-                    <p className="text-lg font-bold">
-                      {item.technician || "—"}
-                    </p>
-                  </div>
-
-                  <div className="rounded-xl bg-surface-1 p-4">
-                    <p className="text-sm text-muted-esblu">{t("inbox.fields.nextServiceDate")}</p>
-                    <p className="text-lg font-bold">
-                      {item.next_service_date || "—"}
-                    </p>
-                  </div>
-                </div>
-
                 {item.description && (
-                  <p className="mt-5 rounded-xl bg-surface-1 p-4 text-secondary">
+                  <p className="whitespace-pre-wrap text-sm text-secondary">
                     {item.description}
                   </p>
                 )}
-
-                <div className="mt-5 flex gap-3">
-                  <button
-                    onClick={() => startEditService(item)}
-                    className="rounded-xl bg-blue-600 px-4 py-2 text-white hover:bg-blue-700"
-                  >
-                    {t("vehicles.services.editButton")}
-                  </button>
-
-                  {role !== "employee" && (
-                    <button
-                      onClick={() => deleteService(item.id)}
-                      className="rounded-xl bg-red-600 px-4 py-2 text-white hover:bg-red-700"
-                    >
-                      {t("vehicles.buttons.deleteWithIcon")}
-                    </button>
-                  )}
-                </div>
-              </div>
+              </TimelineItem>
             ))}
-          </div>
+          </ol>
         )}
       </div>
+      )}
 
       {lightboxPhoto && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
-          onClick={() => setLightboxPhoto(null)}
+        <Modal
+          title={t("vehicles.gallery.photoLightboxAlt")}
+          onClose={() => setLightboxPhoto(null)}
+          closeLabel={t("common.buttons.close")}
+          size="xl"
         >
-          <div className="relative max-h-[90vh] max-w-4xl">
-            <img
-              src={photoUrl(lightboxPhoto.storage_path)}
-              alt={t("vehicles.gallery.photoLightboxAlt")}
-              className="max-h-[90vh] max-w-full rounded-2xl object-contain"
-              onClick={(e) => e.stopPropagation()}
-            />
-            <button
-              type="button"
-              onClick={() => setLightboxPhoto(null)}
-              className="absolute -top-4 -right-4 rounded-full bg-surface-1 px-3 py-2 text-lg font-bold text-primary shadow-lg"
-            >
-              ✕
-            </button>
-          </div>
-        </div>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={photoUrl(lightboxPhoto.storage_path)}
+            alt={t("vehicles.gallery.photoLightboxAlt")}
+            className="max-h-[70vh] w-full rounded-doc object-contain"
+          />
+        </Modal>
       )}
-    </main>
+    </PageShell>
   );
 }

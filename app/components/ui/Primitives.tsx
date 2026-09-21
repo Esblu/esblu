@@ -2,7 +2,14 @@
 
 import { useId, useState, type ReactNode } from "react";
 import Link from "next/link";
-import { FilterIcon, SearchIcon, ChevronRightIcon } from "@/app/components/icons/AppIcons";
+import {
+  CameraIcon,
+  ChevronRightIcon,
+  FilterIcon,
+  ImageIcon,
+  SearchIcon,
+  TrashIcon,
+} from "@/app/components/icons/AppIcons";
 
 // =============================================================================
 // Zdieľané B2B primitívy Esblu.
@@ -410,5 +417,154 @@ export function TimelineItem({
         {children && <div className="mt-2">{children}</div>}
       </div>
     </li>
+  );
+}
+
+// -----------------------------------------------------------------------------
+// Nahrávanie fotografií
+// -----------------------------------------------------------------------------
+
+/**
+ * Dvojica "Odfotiť / Galéria".
+ *
+ * Tento blok bol v appke napísaný SEDEMKRÁT (Inbox, TP sken predná aj zadná
+ * strana, fotky vozidla v zozname, galéria vozidla, galéria stroja, sklad) a
+ * zakaždým inak: raz modré tlačidlo a biele, raz dve tiché, raz `bg-blue-600`
+ * s `text-blue-700`. Jedna implementácia znamená, že "pridať fotku" vyzerá
+ * a správa sa všade rovnako.
+ *
+ * `capture="environment"` je len NÁVRH pre prehliadač — na desktope otvorí
+ * bežný výber súboru. Preto sú obe tlačidlá vždy k dispozícii.
+ */
+export function UploadActions({
+  onSelect,
+  disabled,
+  multiple,
+  cameraLabel,
+  galleryLabel,
+  className = "",
+}: {
+  onSelect: (event: React.ChangeEvent<HTMLInputElement>) => void;
+  disabled?: boolean;
+  multiple?: boolean;
+  cameraLabel: string;
+  galleryLabel: string;
+  className?: string;
+}) {
+  const state = disabled ? "pointer-events-none opacity-40" : "cursor-pointer";
+
+  return (
+    <div className={`flex flex-wrap gap-2 ${className}`}>
+      <label className={`${docButtonSecondary} gap-2 ${state}`}>
+        <CameraIcon size={16} />
+        {cameraLabel}
+        <input
+          type="file"
+          accept="image/*"
+          capture="environment"
+          multiple={multiple}
+          className="sr-only"
+          disabled={disabled}
+          onChange={onSelect}
+        />
+      </label>
+
+      <label className={`${docButtonSecondary} gap-2 ${state}`}>
+        <ImageIcon size={16} />
+        {galleryLabel}
+        <input
+          type="file"
+          accept="image/*"
+          multiple={multiple}
+          className="sr-only"
+          disabled={disabled}
+          onChange={onSelect}
+        />
+      </label>
+    </div>
+  );
+}
+
+export type PhotoTile = { id: string; url: string; alt: string };
+
+/**
+ * Mriežka fotografií s JEDNOTNÝM pomerom strán 4:3.
+ *
+ * Náhodne vysoké dlaždice pôsobia ako nástenka, nie ako evidencia majetku —
+ * preto `object-cover` a pevný pomer, nech sú fotky nafotené akokoľvek.
+ */
+export function PhotoGrid({
+  photos,
+  onOpen,
+  onDelete,
+  deleteLabel,
+  deletingId,
+}: {
+  photos: PhotoTile[];
+  /** Bez neho je dlaždica statická (napr. keď používateľ nemá čo otvárať). */
+  onOpen?: (photo: PhotoTile) => void;
+  /** Bez neho sa tlačidlo mazania vôbec nevykreslí — gating rieši volajúci. */
+  onDelete?: (photo: PhotoTile) => void;
+  deleteLabel?: string;
+  deletingId?: string | null;
+}) {
+  return (
+    <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+      {photos.map((photo) => (
+        <li key={photo.id} className="relative">
+          {onOpen ? (
+            <button
+              type="button"
+              onClick={() => onOpen(photo)}
+              className="block w-full overflow-hidden rounded-doc border border-doc-border transition hover:border-border-strong focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-cyan"
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={photo.url} alt={photo.alt} className="aspect-[4/3] w-full object-cover" />
+            </button>
+          ) : (
+            <div className="overflow-hidden rounded-doc border border-doc-border">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={photo.url} alt={photo.alt} className="aspect-[4/3] w-full object-cover" />
+            </div>
+          )}
+
+          {onDelete && (
+            <button
+              type="button"
+              onClick={() => onDelete(photo)}
+              disabled={deletingId === photo.id}
+              aria-label={deleteLabel}
+              className="absolute right-2 top-2 flex h-9 w-9 items-center justify-center rounded-doc-sm border border-danger/30 bg-page-bg/80 text-danger backdrop-blur transition hover:bg-danger-soft disabled:opacity-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-cyan"
+            >
+              <TrashIcon size={16} />
+            </button>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/**
+ * Evidenčné číslo vozidla.
+ *
+ * Biela tabuľka s čiernym písmom je zámerná aj v tmavej téme — ŠPZ je
+ * fyzický objekt a používateľ ju hľadá presne týmto tvarom. Je to jediné
+ * miesto v appke, kde sa vedome nedržíme tmavej palety.
+ */
+export function PlateBadge({
+  plate,
+  size = "md",
+}: {
+  plate: string;
+  size?: "sm" | "md";
+}) {
+  const scale = size === "sm" ? "px-2 py-0.5 text-sm" : "px-3 py-1 text-base";
+  return (
+    <span
+      className={`inline-block rounded-[0.25rem] border border-slate-900 bg-white font-semibold tracking-widest text-slate-900 ${scale}`}
+    >
+      {plate}
+    </span>
   );
 }

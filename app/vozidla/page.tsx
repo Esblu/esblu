@@ -6,7 +6,44 @@ import PlanLimitNotice from "@/app/components/PlanLimitNotice";
 import { usePlanUsage } from "@/hooks/use-plan-usage";
 import { isPlanLimitReachedError } from "@/lib/plan-limits";
 import { normalizeSpz } from "@/lib/normalize-spz";
-import VehicleCard from "../components/VehicleCard";
+import { formatDate } from "@/lib/i18n/format";
+import { vehicleDetailHref } from "@/lib/entity-links";
+import {
+  inspectionState,
+  matchesVehicleQuery,
+  vehicleAttention,
+  vehicleFuels,
+  vehicleTitle,
+  type VehicleRow,
+} from "@/lib/vehicles";
+import {
+  PageShell,
+  PageHeader,
+  SectionPanel,
+  RegisterToolbar,
+  RegisterHeader,
+  SearchField,
+  FilterChips,
+  DataRow,
+  EmptyState,
+  LoadingRows,
+  Notice,
+  StatusBadge,
+  UploadActions,
+  PlateBadge,
+  docButtonPrimary,
+  docButtonSecondary,
+  docButtonDanger,
+  docField,
+  docLabel,
+} from "@/app/components/ui/Primitives";
+import { CarIcon, PlusIcon, ScanIcon } from "@/app/components/icons/AppIcons";
+
+/** Jedna šablóna stĺpcov pre hlavičku aj riadky fleet registra. */
+const VEHICLE_COLUMNS =
+  "sm:grid-cols-[minmax(0,2.4fr)_minmax(0,1.6fr)_minmax(0,1fr)_minmax(0,1.3fr)]";
+
+type InspectionFilter = "all" | "attention" | "missing";
 import BackLink from "../components/BackLink";
 import {
   getMyActiveMembership,
@@ -148,7 +185,13 @@ export default function VozidlaPage() {
   const [role, setRole] = useState<CompanyMemberRole | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [vehicle, setVehicle] = useState<any | null>(null);
-  const [vehicles, setVehicles] = useState<any[]>([]);
+  const [vehicles, setVehicles] = useState<VehicleRow[]>([]);
+  const [photosByVehicle, setPhotosByVehicle] = useState<Record<string, string>>({});
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+  const [search, setSearch] = useState("");
+  const [fuelFilter, setFuelFilter] = useState("all");
+  const [inspectionFilter, setInspectionFilter] = useState<InspectionFilter>("all");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [photoTargetVehicleId, setPhotoTargetVehicleId] = useState("");
   const [isUploadingVehiclePhotos, setIsUploadingVehiclePhotos] =
@@ -261,6 +304,9 @@ export default function VozidlaPage() {
   async function loadVehicles(currentCompanyId: string = companyId) {
     if (!currentCompanyId) return;
 
+    setLoading(true);
+    setLoadError("");
+
     const { data, error } = await supabase
       .from("vehicles")
       .select("*")
@@ -268,11 +314,39 @@ export default function VozidlaPage() {
       .order("znacka", { ascending: true });
 
     if (error) {
-      alert(t("vehicles.errors.loadVehiclesFailed", { message: error.message }));
+      setLoadError(t("vehicles.errors.loadVehiclesFailed", { message: error.message }));
+      setLoading(false);
       return;
     }
 
-    setVehicles(data || []);
+    const rows = (data as VehicleRow[]) || [];
+    setVehicles(rows);
+
+    // Miniatúra do registra. Jeden dotaz pre všetky vozidlá naraz —
+    // fotka je len vizuálna pomôcka, nesmie stáť N dotazov.
+    const ids = rows.map((row) => row.id);
+    if (ids.length > 0) {
+      const { data: photos } = await supabase
+        .from("vehicle_photos")
+        .select("vehicle_id, storage_path, created_at")
+        .in("vehicle_id", ids)
+        .eq("company_id", currentCompanyId)
+        .order("created_at", { ascending: false });
+
+      const map: Record<string, string> = {};
+      for (const photo of (photos as { vehicle_id: string; storage_path: string }[]) || []) {
+        if (!map[photo.vehicle_id]) {
+          map[photo.vehicle_id] = supabase.storage
+            .from("vehicle-photos")
+            .getPublicUrl(photo.storage_path).data.publicUrl;
+        }
+      }
+      setPhotosByVehicle(map);
+    } else {
+      setPhotosByVehicle({});
+    }
+
+    setLoading(false);
   }
 
   function clearRegistrationResult() {
@@ -1126,58 +1200,101 @@ export default function VozidlaPage() {
     setVehicle(null);
   }
 
+  // ---------------------------------------------------------------------------
+  // Odvodené zobrazenie fleet registra
+  // ---------------------------------------------------------------------------
+  const fuels = vehicleFuels(vehicles);
+
+  const visibleVehicles = vehicles.filter((car) => {
+    if (!matchesVehicleQuery(car, search)) return false;
+    if (fuelFilter !== "all" && (car.palivo ?? "") !== fuelFilter) return false;
+    if (inspectionFilter === "attention" && vehicleAttention(car) === null) return false;
+    if (inspectionFilter === "missing" && car.stk && car.ek) return false;
+    return true;
+  });
+
+  const attentionCount = vehicles.filter((car) => vehicleAttention(car) !== null).length;
+  const missingInspectionCount = vehicles.filter((car) => !car.stk || !car.ek).length;
+
+  /**
+   * Jedna kontrola (STK/EK) ako štítok. Prázdny dátum sa NEOZNAČÍ ako
+   * v poriadku — "nevieme" a "platné" sú dva rôzne stavy.
+   */
+  function inspectionCell(label: string, date: string | null) {
+    const state = inspectionState(date);
+
+    if (!date) {
+      return (
+        <span className="inline-flex items-center gap-1 rounded-doc-sm border border-dashed border-doc-border px-2 py-0.5 text-xs text-muted-esblu">
+          {label}: {t("common.misc.notFilled")}
+        </span>
+      );
+    }
+
+    if (state.severity === "overdue") {
+      return <StatusBadge kind="overdue" label={`${label} ${formatDate(date, locale)}`} />;
+    }
+    if (state.severity) {
+      return <StatusBadge kind="needs_review" label={`${label} ${formatDate(date, locale)}`} />;
+    }
+    return (
+      <span className="inline-flex items-center gap-1 rounded-doc-sm border border-doc-border px-2 py-0.5 text-xs tabular-nums text-secondary">
+        {label}: {formatDate(date, locale)}
+      </span>
+    );
+  }
+
   return (
-    <main className="app-shell-bg min-h-screen p-4 sm:p-6 lg:p-10">
-      <BackLink href="/" label={t("inbox.backToMenu")} className="mb-4" />
+    <PageShell wide>
+      <BackLink href="/" label={t("inbox.backToMenu")} className="mb-6" />
 
-      <div className="flex items-center gap-4">
-  <img
-    src="/images/van.png"
-    alt={t("nav.vehicles")}
-    className="h-20 w-20 object-contain"
-  />
-  <h1 className="text-4xl font-bold text-primary">{t("nav.vehicles")}</h1>
-</div>
-
-      <p className="mt-4 text-secondary">
-        {t("vehicles.list.subtitle")}
-      </p>
+      <PageHeader
+        eyebrow={
+          <span className="inline-flex items-center gap-2">
+            <CarIcon size={18} />
+            {t("nav.vehicles")}
+          </span>
+        }
+        title={t("vehicles.register.title")}
+        meta={t("vehicles.list.subtitle")}
+        aside={
+          role !== "employee" && !showRegistrationFlow && !vehicle ? (
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => setShowRegistrationFlow(true)}
+                disabled={isNewVehicleBlocked}
+                className={`${docButtonPrimary} gap-2`}
+              >
+                <ScanIcon size={16} />
+                {t("vehicles.list.scanRegistrationCta")}
+              </button>
+              <button
+                type="button"
+                onClick={() => setVehicle({})}
+                disabled={isNewVehicleBlocked}
+                className={`${docButtonSecondary} gap-2`}
+              >
+                <PlusIcon size={16} />
+                {t("vehicles.list.addManuallyCta")}
+              </button>
+            </div>
+          ) : undefined
+        }
+      />
 
       {!planUsageLoading && isPlanLimited && (
         <PlanLimitNotice
           resource="vehicles"
           usage={planUsage}
           limit={planLimit}
-          className="mt-6"
+          className="mt-4"
         />
       )}
 
-      {role !== "employee" && !showRegistrationFlow && !vehicle && (
-        <div className="mt-8 flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-subtle bg-surface-1 p-6 shadow-lg backdrop-blur-xl">
-          <div>
-            <h2 className="text-xl font-bold">{t("vehicles.list.addVehicleTitle")}</h2>
-            <p className="mt-1 text-sm text-secondary">
-              {t("vehicles.list.addVehicleDescription")}
-            </p>
-          </div>
-          <div className="flex shrink-0 flex-wrap gap-3">
-            <button
-              type="button"
-              onClick={() => setShowRegistrationFlow(true)}
-              disabled={isNewVehicleBlocked}
-              className="rounded-xl bg-blue-600 px-5 py-3 font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-gray-400"
-            >
-              {t("vehicles.list.scanRegistrationCta")}
-            </button>
-            <button
-              type="button"
-              onClick={() => setVehicle({})}
-              disabled={isNewVehicleBlocked}
-              className="rounded-xl border border-subtle bg-surface-2 px-5 py-3 font-medium text-secondary hover:bg-surface-hover disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {t("vehicles.list.addManuallyCta")}
-            </button>
-          </div>
+      {legalHold && role !== "employee" && (
+        <div className="mt-4">
+          <Notice tone="warning">{t("common.legalHoldMessage")}</Notice>
         </div>
       )}
 
@@ -1186,10 +1303,10 @@ export default function VozidlaPage() {
           v Inbox, iba UI vstupný bod je teraz tu na hlavnej obrazovke
           Vozidlá namiesto samostatnej sekcie v Inboxe. */}
       {role !== "employee" && showRegistrationFlow && (
-        <div className="mt-8 rounded-3xl border border-subtle bg-surface-1 p-6 shadow-lg backdrop-blur-xl">
+        <div className="mt-6 rounded-doc border border-doc-border bg-doc-surface p-4 sm:p-5">
           <div className="flex items-start justify-between gap-4">
             <div>
-              <h2 className="text-2xl font-bold text-primary">
+              <h2 className="text-base font-semibold text-primary">
                 {t("inbox.registration.sectionTitle")}
               </h2>
               <p className="mt-2 text-sm text-secondary">
@@ -1209,55 +1326,26 @@ export default function VozidlaPage() {
           </div>
 
           <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
-            <section className="rounded-2xl bg-surface-2 p-5 shadow-sm">
-              <h3 className="text-lg font-bold">{t("inbox.registration.frontTitle")}</h3>
+            <section className="rounded-doc border border-doc-border bg-surface-2 p-4">
+              <h3 className="text-sm font-semibold">{t("inbox.registration.frontTitle")}</h3>
               <p className="mt-1 text-sm text-secondary">
                 {t("inbox.registration.frontRequired")}
               </p>
 
-              <div className="mt-4 flex flex-wrap gap-3">
-                <label className="cursor-pointer rounded-xl bg-blue-600 px-4 py-3 font-medium text-white hover:bg-blue-700">
-                  {isPreparingRegFront ? t("inbox.registration.preparing") : t("inbox.registration.takePhoto")}
-                  <input
-                    type="file"
-                    accept="image/*"
-                    capture="environment"
-                    className="hidden"
-                    disabled={
-                      isProcessingRegistration ||
-                      isPreparingRegFront ||
-                      legalHold
-                    }
-                    onChange={(event) =>
-                      handleRegistrationFileChange("front", event)
-                    }
-                  />
-                </label>
-
-                <label className="cursor-pointer rounded-xl border border-subtle bg-surface-1 px-4 py-3 font-medium text-secondary hover:bg-surface-2">
-                  {t("inbox.registration.chooseFromGallery")}
-                  <input
-                    type="file"
-                    accept="image/*"
-                    className="hidden"
-                    disabled={
-                      isProcessingRegistration ||
-                      isPreparingRegFront ||
-                      legalHold
-                    }
-                    onChange={(event) =>
-                      handleRegistrationFileChange("front", event)
-                    }
-                  />
-                </label>
-              </div>
+              <UploadActions
+                className="mt-4"
+                cameraLabel={isPreparingRegFront ? t("inbox.registration.preparing") : t("inbox.registration.takePhoto")}
+                galleryLabel={t("inbox.registration.chooseFromGallery")}
+                disabled={isProcessingRegistration || isPreparingRegFront || legalHold}
+                onSelect={(event) => handleRegistrationFileChange("front", event)}
+              />
 
               {regFrontPreview ? (
                 <div className="mt-4">
                   <img
                     src={regFrontPreview}
                     alt={t("inbox.registration.frontAlt")}
-                    className="h-64 w-full rounded-xl border border-subtle bg-surface-1 object-contain"
+                    className="h-64 w-full rounded-doc border border-doc-border bg-doc-surface object-contain"
                   />
                   <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
                     <p className="text-xs text-muted-esblu">
@@ -1267,68 +1355,39 @@ export default function VozidlaPage() {
                       type="button"
                       onClick={() => removeRegistrationImage("front")}
                       disabled={isProcessingRegistration}
-                      className="rounded-lg bg-red-600 px-3 py-2 text-sm text-white hover:bg-red-700 disabled:bg-gray-400"
+                      className={`${docButtonDanger} px-2.5 text-xs`}
                     >
                       {t("inbox.registration.remove")}
                     </button>
                   </div>
                 </div>
               ) : (
-                <div className="mt-4 rounded-xl border border-dashed border-subtle p-8 text-center text-sm text-muted-esblu">
+                <div className="mt-4 rounded-doc border border-dashed border-doc-border p-8 text-center text-sm text-muted-esblu">
                   {t("inbox.registration.frontNotSelected")}
                 </div>
               )}
             </section>
 
-            <section className="rounded-2xl bg-surface-2 p-5 shadow-sm">
-              <h3 className="text-lg font-bold">{t("inbox.registration.backTitle")}</h3>
+            <section className="rounded-doc border border-doc-border bg-surface-2 p-4">
+              <h3 className="text-sm font-semibold">{t("inbox.registration.backTitle")}</h3>
               <p className="mt-1 text-sm text-secondary">
                 {t("inbox.registration.backOptional")}
               </p>
 
-              <div className="mt-4 flex flex-wrap gap-3">
-                <label className="cursor-pointer rounded-xl bg-blue-600 px-4 py-3 font-medium text-white hover:bg-blue-700">
-                  {isPreparingRegBack ? t("inbox.registration.preparing") : t("inbox.registration.takePhoto")}
-                  <input
-                    type="file"
-                    accept="image/*"
-                    capture="environment"
-                    className="hidden"
-                    disabled={
-                      isProcessingRegistration ||
-                      isPreparingRegBack ||
-                      legalHold
-                    }
-                    onChange={(event) =>
-                      handleRegistrationFileChange("back", event)
-                    }
-                  />
-                </label>
-
-                <label className="cursor-pointer rounded-xl border border-subtle bg-surface-1 px-4 py-3 font-medium text-secondary hover:bg-surface-2">
-                  {t("inbox.registration.chooseFromGallery")}
-                  <input
-                    type="file"
-                    accept="image/*"
-                    className="hidden"
-                    disabled={
-                      isProcessingRegistration ||
-                      isPreparingRegBack ||
-                      legalHold
-                    }
-                    onChange={(event) =>
-                      handleRegistrationFileChange("back", event)
-                    }
-                  />
-                </label>
-              </div>
+              <UploadActions
+                className="mt-4"
+                cameraLabel={isPreparingRegBack ? t("inbox.registration.preparing") : t("inbox.registration.takePhoto")}
+                galleryLabel={t("inbox.registration.chooseFromGallery")}
+                disabled={isProcessingRegistration || isPreparingRegBack || legalHold}
+                onSelect={(event) => handleRegistrationFileChange("back", event)}
+              />
 
               {regBackPreview ? (
                 <div className="mt-4">
                   <img
                     src={regBackPreview}
                     alt={t("inbox.registration.backAlt")}
-                    className="h-64 w-full rounded-xl border border-subtle bg-surface-1 object-contain"
+                    className="h-64 w-full rounded-doc border border-doc-border bg-doc-surface object-contain"
                   />
                   <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
                     <p className="text-xs text-muted-esblu">
@@ -1338,14 +1397,14 @@ export default function VozidlaPage() {
                       type="button"
                       onClick={() => removeRegistrationImage("back")}
                       disabled={isProcessingRegistration}
-                      className="rounded-lg bg-red-600 px-3 py-2 text-sm text-white hover:bg-red-700 disabled:bg-gray-400"
+                      className={`${docButtonDanger} px-2.5 text-xs`}
                     >
                       {t("inbox.registration.remove")}
                     </button>
                   </div>
                 </div>
               ) : (
-                <div className="mt-4 rounded-xl border border-dashed border-subtle p-8 text-center text-sm text-muted-esblu">
+                <div className="mt-4 rounded-doc border border-dashed border-doc-border p-8 text-center text-sm text-muted-esblu">
                   {t("inbox.registration.backNotSelected")}
                 </div>
               )}
@@ -1362,7 +1421,7 @@ export default function VozidlaPage() {
               isPreparingRegBack ||
               legalHold
             }
-            className="mt-6 rounded-xl bg-green-600 px-6 py-3 font-medium text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:bg-gray-400"
+            className={`mt-5 ${docButtonPrimary}`}
           >
             {isProcessingRegistration
               ? t("inbox.registration.loadingData")
@@ -1370,15 +1429,15 @@ export default function VozidlaPage() {
           </button>
 
           {registrationError && (
-            <p className="mt-4 rounded-xl bg-danger-soft p-4 text-sm font-medium text-red-700">
+            <p className="mt-4 rounded-doc border border-danger/30 bg-danger-soft p-4 text-sm font-medium text-danger">
               {registrationError}
             </p>
           )}
 
           {registrationFields && (
-            <div className="mt-6 space-y-4 rounded-2xl border border-subtle bg-surface-2 p-5">
+            <div className="mt-5 space-y-4 rounded-doc border border-doc-border bg-surface-2 p-4">
               {registrationDuplicateVehicle ? (
-                <p className="rounded-xl bg-warning-soft px-4 py-3 text-sm font-bold text-amber-400">
+                <p className="rounded-doc-sm border border-warning/30 bg-warning-soft px-4 py-3 text-sm font-medium text-warning">
                   {t("inbox.registration.duplicateFoundPrefix")}
                   {registrationDuplicateVehicle.spz || t("inbox.noPlate")}
                   {t("inbox.registration.duplicateFoundSuffix")}
@@ -1389,7 +1448,7 @@ export default function VozidlaPage() {
                 </p>
               )}
 
-              <h3 className="text-lg font-bold text-primary">
+              <h3 className="text-sm font-semibold text-primary">
                 {t("inbox.registration.reviewTitle")}
               </h3>
 
@@ -1416,7 +1475,7 @@ export default function VozidlaPage() {
                   ["cisloTechnickehoPreukazu", t("inbox.fields.cisloTechnickehoPreukazu")],
                 ].map(([key, label]) => (
                   <label key={key} className="block">
-                    <span className="text-sm font-medium text-secondary">
+                    <span className={docLabel}>
                       {label}
                     </span>
                     <input
@@ -1436,7 +1495,7 @@ export default function VozidlaPage() {
                   krajinu) — presne rovnaký country/valid_until model ako
                   sekcia "Diaľničné známky" v detaile vozidla, uložený AŽ pri
                   potvrdení vytvorenia/aktualizácie vozidla nižšie. */}
-              <div className="mt-2 rounded-2xl border border-subtle bg-surface-1 p-5">
+              <div className="mt-2 rounded-doc border border-doc-border bg-doc-surface p-4">
                 <h4 className="text-sm font-bold text-primary">
                   {t("inbox.registration.vignettesSectionTitle")}
                 </h4>
@@ -1449,7 +1508,7 @@ export default function VozidlaPage() {
                     {registrationVignettes.map((row, index) => (
                       <div
                         key={index}
-                        className="grid grid-cols-1 gap-3 rounded-xl border border-subtle bg-surface-2 p-4 md:grid-cols-[1fr_1fr_auto]"
+                        className="grid grid-cols-1 gap-3 rounded-doc-sm border border-doc-border bg-doc-surface p-3 md:grid-cols-[1fr_1fr_auto]"
                       >
                         <label className="block">
                           <span className="text-xs font-medium text-secondary">
@@ -1548,7 +1607,7 @@ export default function VozidlaPage() {
                   (!registrationDuplicateVehicle &&
                     (planUsageLoading || isPlanLimited))
                 }
-                className="w-full rounded-2xl bg-blue-600 px-5 py-4 text-lg font-black text-white disabled:opacity-60"
+                className={`w-full ${docButtonPrimary}`}
               >
                 {isSavingRegistration
                   ? t("common.buttons.saving")
@@ -1560,7 +1619,7 @@ export default function VozidlaPage() {
               {!registrationDuplicateVehicle &&
                 !planUsageLoading &&
                 isPlanLimited && (
-                  <p className="rounded-xl bg-danger-soft p-3 text-sm font-medium text-red-700">
+                  <p className="rounded-doc-sm border border-danger/30 bg-danger-soft p-3 text-sm font-medium text-danger">
                     {t("common.planLimitMessage")}
                   </p>
                 )}
@@ -1574,178 +1633,348 @@ export default function VozidlaPage() {
           úprava/mazanie v tomto module) ostávajú employeeovi naďalej
           nedostupné, toto sa ich netýka. */}
       {role && (
-        <div className="mt-6 rounded-2xl border border-subtle bg-surface-1 p-6 shadow-lg backdrop-blur-xl">
-          <h2 className="text-xl font-bold">{t("vehicles.gallery.addPhotosTitle")}</h2>
-          <p className="mt-1 text-sm text-secondary">
-            {t("vehicles.gallery.addPhotosDescription")}
-          </p>
+        <div className="mt-6">
+          <SectionPanel
+            title={t("vehicles.gallery.addPhotosTitle")}
+            description={t("vehicles.gallery.addPhotosDescription")}
+          >
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+              <div className="min-w-0 sm:flex-1">
+                <label className="sr-only" htmlFor="photo-target-vehicle">
+                  {t("inbox.chooseVehiclePlaceholder")}
+                </label>
+                <select
+                  id="photo-target-vehicle"
+                  value={photoTargetVehicleId}
+                  onChange={(e) => setPhotoTargetVehicleId(e.target.value)}
+                  className={docField}
+                >
+                  <option value="">{t("inbox.chooseVehiclePlaceholder")}</option>
+                  {vehicles.map((car) => (
+                    <option key={car.id} value={car.id}>
+                      {car.spz || t("inbox.noPlateCapitalized")}
+                      {car.znacka ? ` — ${car.znacka} ${car.model || ""}` : ""}
+                    </option>
+                  ))}
+                </select>
+              </div>
 
-          <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center">
-            <select
-              value={photoTargetVehicleId}
-              onChange={(e) => setPhotoTargetVehicleId(e.target.value)}
-              className="rounded-xl border border-subtle bg-surface-2 px-4 py-3 outline-none sm:flex-1"
-            >
-              <option value="">{t("inbox.chooseVehiclePlaceholder")}</option>
-              {vehicles.map((car) => (
-                <option key={car.id} value={car.id}>
-                  {car.spz || t("inbox.noPlateCapitalized")}
-                  {car.znacka ? ` — ${car.znacka} ${car.model || ""}` : ""}
-                </option>
-              ))}
-            </select>
-
-            <label
-              className={`rounded-xl px-5 py-3 text-center font-medium ${
-                isUploadingVehiclePhotos || !photoTargetVehicleId || legalHold
-                  ? "cursor-not-allowed bg-surface-2 text-muted-esblu"
-                  : "cursor-pointer bg-blue-600 text-white hover:bg-blue-700"
-              }`}
-            >
-              {isUploadingVehiclePhotos ? t("inbox.uploading") : t("vehicles.gallery.takeOrUploadPhotos")}
-              <input
-                type="file"
-                accept="image/*"
+              <UploadActions
+                className="shrink-0"
                 multiple
-                className="hidden"
-                disabled={
-                  isUploadingVehiclePhotos ||
-                  !photoTargetVehicleId ||
-                  legalHold
-                }
-                onChange={uploadVehiclePhotosFromList}
+                cameraLabel={t("inbox.registration.takePhoto")}
+                galleryLabel={t("machines.detail.galleryButton")}
+                disabled={isUploadingVehiclePhotos || !photoTargetVehicleId || legalHold}
+                onSelect={uploadVehiclePhotosFromList}
               />
-            </label>
-          </div>
+            </div>
 
-          {vehicles.length === 0 && (
-            <p className="mt-2 text-xs text-muted-esblu">
-              {t("vehicles.list.noneYetShort")}
-            </p>
-          )}
+            {isUploadingVehiclePhotos && (
+              <p className="mt-3 text-sm text-secondary">{t("inbox.uploading")}</p>
+            )}
 
-          {photoUploadFeedback && (
-            <p
-              className={`mt-3 rounded-xl p-3 text-sm font-medium ${
-                photoUploadFeedback.type === "success"
-                  ? "badge-success"
-                  : "bg-danger-soft text-red-700"
-              }`}
-            >
-              {photoUploadFeedback.text}
-            </p>
-          )}
+            {vehicles.length === 0 && (
+              <p className="mt-3 text-sm text-muted-esblu">
+                {t("vehicles.list.noneYetShort")}
+              </p>
+            )}
+
+            {photoUploadFeedback && (
+              <div className="mt-3">
+                <Notice tone={photoUploadFeedback.type === "success" ? "info" : "critical"}>
+                  {photoUploadFeedback.text}
+                </Notice>
+              </div>
+            )}
+          </SectionPanel>
         </div>
       )}
 
       {role !== "employee" && vehicle && (
-        <div className="mt-8 rounded-2xl bg-surface-1 p-6 shadow">
-          <h2 className="mb-6 text-2xl font-bold">
-            {editingId ? t("vehicles.forms.editVehicleTitle") : t("vehicles.forms.reviewVehicleTitle")}
-          </h2>
+        <div className="mt-6 space-y-4">
+          <SectionPanel
+            title={
+              editingId
+                ? t("vehicles.forms.editVehicleTitle")
+                : t("vehicles.forms.reviewVehicleTitle")
+            }
+          >
+            {/* Zoskupené podľa toho, ako sa vozidlo v evidencii popisuje:
+                čím sa identifikuje -> aké má parametre -> kedy mu končia
+                kontroly. Plochá mriežka 14 polí nedávala poradie zmysel. */}
+            <p className={docLabel}>{t("vehicles.forms.groupIdentification")}</p>
+            <div className="grid gap-4 sm:grid-cols-2">
+              {(
+                [
+                  [t("inbox.fields.spz"), "spz"],
+                  [t("inbox.fields.vin"), "vin"],
+                  [t("inbox.fields.znacka"), "znacka"],
+                  [t("inbox.fields.model"), "model"],
+                  [t("inbox.fields.rokVyroby"), "rokVyroby"],
+                  [t("inbox.fields.datumPrvejEvidencie"), "datumPrvejEvidencie"],
+                ] as [string, string][]
+              ).map(([label, key]) => (
+                <div key={key}>
+                  <label className={docLabel} htmlFor={`vehicle-${key}`}>
+                    {label}
+                  </label>
+                  <input
+                    id={`vehicle-${key}`}
+                    className={docField}
+                    value={vehicle?.[key] || ""}
+                    onChange={(e) => updateVehicle(key, e.target.value)}
+                  />
+                </div>
+              ))}
+            </div>
 
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            {[
-              [t("inbox.fields.spz"), "spz"],
-              [t("inbox.fields.vin"), "vin"],
-              [t("inbox.fields.znacka"), "znacka"],
-              [t("inbox.fields.model"), "model"],
-              [t("inbox.fields.rokVyroby"), "rokVyroby"],
-              [t("inbox.fields.palivo"), "palivo"],
-              [t("inbox.fields.objemMotora"), "objemMotora"],
-              [t("inbox.fields.vykon"), "vykon"],
-              [t("inbox.fields.farba"), "farba"],
-              [t("inbox.fields.datumPrvejEvidencie"), "datumPrvejEvidencie"],
-              [t("vehicles.fields.hmotnost"), "hmotnost"],
-              [t("inbox.fields.pocetMiest"), "pocetMiest"],
-            ].map(([label, key]) => (
-              <label key={key} className="block">
-                <span className="text-sm font-medium text-secondary">
-                  {label}
-                </span>
+            <p className={`${docLabel} mt-5`}>{t("vehicles.forms.groupTechnical")}</p>
+            <div className="grid gap-4 sm:grid-cols-2">
+              {(
+                [
+                  [t("inbox.fields.palivo"), "palivo"],
+                  [t("inbox.fields.objemMotora"), "objemMotora"],
+                  [t("inbox.fields.vykon"), "vykon"],
+                  [t("inbox.fields.farba"), "farba"],
+                  [t("vehicles.fields.hmotnost"), "hmotnost"],
+                  [t("inbox.fields.pocetMiest"), "pocetMiest"],
+                ] as [string, string][]
+              ).map(([label, key]) => (
+                <div key={key}>
+                  <label className={docLabel} htmlFor={`vehicle-${key}`}>
+                    {label}
+                  </label>
+                  <input
+                    id={`vehicle-${key}`}
+                    className={docField}
+                    value={vehicle?.[key] || ""}
+                    onChange={(e) => updateVehicle(key, e.target.value)}
+                  />
+                </div>
+              ))}
+            </div>
+
+            <p className={`${docLabel} mt-5`}>{t("vehicles.forms.groupInspections")}</p>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div>
+                <label className={docLabel} htmlFor="vehicle-stk">
+                  {t("vehicles.fields.stkValidUntil")}
+                </label>
                 <input
-                  className="mt-1 w-full rounded-xl border p-3"
-                  value={vehicle?.[key] || ""}
-                  onChange={(e) => updateVehicle(key, e.target.value)}
+                  id="vehicle-stk"
+                  type="date"
+                  className={docField}
+                  value={vehicle.stk || ""}
+                  onChange={(e) => updateVehicle("stk", e.target.value)}
                 />
-              </label>
-            ))}
+              </div>
 
-            <label className="block">
-              <span className="text-sm font-medium text-secondary">
-                {t("vehicles.fields.stkValidUntil")}
-              </span>
-              <input
-                className="mt-1 w-full rounded-xl border p-3"
-                type="date"
-                value={vehicle.stk || ""}
-                onChange={(e) => updateVehicle("stk", e.target.value)}
-              />
-            </label>
+              <div>
+                <label className={docLabel} htmlFor="vehicle-ek">
+                  {t("vehicles.fields.ekValidUntil")}
+                </label>
+                <input
+                  id="vehicle-ek"
+                  type="date"
+                  className={docField}
+                  value={vehicle.ek || ""}
+                  onChange={(e) => updateVehicle("ek", e.target.value)}
+                />
+              </div>
+            </div>
 
-            <label className="block">
-              <span className="text-sm font-medium text-secondary">
-                {t("vehicles.fields.ekValidUntil")}
-              </span>
-              <input
-                className="mt-1 w-full rounded-xl border p-3"
-                type="date"
-                value={vehicle.ek || ""}
-                onChange={(e) => updateVehicle("ek", e.target.value)}
-              />
-            </label>
-          </div>
-
-          <div className="mt-6 flex gap-3">
-            <button
-              onClick={handleSaveVehicle}
-              disabled={isSaving || isNewVehicleBlocked}
-              className="rounded-xl bg-blue-600 px-6 py-3 text-white hover:bg-blue-700 disabled:bg-gray-400"
-            >
-              {isSaving
-                ? t("common.buttons.saving")
-                : editingId
-                ? t("vehicles.forms.saveChanges")
-                : t("vehicles.forms.saveVehicle")}
-            </button>
-
-            {vehicle && (
-              <button
-                onClick={cancelEdit}
-                className="rounded-xl bg-surface-2 px-6 py-3 text-primary hover:bg-surface-hover"
-              >
-                {editingId ? t("vehicles.forms.cancelEdit") : t("common.buttons.cancel")}
+            <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:justify-end">
+              <button type="button" onClick={cancelEdit} className={docButtonSecondary}>
+                {t("vehicles.forms.cancelEdit")}
               </button>
-            )}
-          </div>
+              <button
+                type="button"
+                onClick={handleSaveVehicle}
+                disabled={isSaving}
+                className={docButtonPrimary}
+              >
+                {isSaving
+                  ? t("common.buttons.saving")
+                  : editingId
+                    ? t("vehicles.forms.saveChanges")
+                    : t("vehicles.forms.saveVehicle")}
+              </button>
+            </div>
+          </SectionPanel>
         </div>
       )}
 
-      <div className="mt-10">
-        <h2 className="mb-4 text-2xl font-bold text-primary">
-  {t("vehicles.list.savedVehiclesTitle")}
-</h2>
+      <div className="mt-8">
+        <h2 className="mb-3 text-lg font-semibold text-primary">
+          {t("vehicles.list.savedVehiclesTitle")}
+        </h2>
 
-        {vehicles.length === 0 ? (
-          <div className="rounded-2xl bg-surface-1 p-6 shadow">
-            <p className="text-muted-esblu">
-              {t("vehicles.list.noneYet")}
-            </p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
-            {vehicles.map((car) => (
-              <VehicleCard
-                key={car.id}
-                car={car}
-                onDelete={handleDeleteVehicle}
-                onEdit={handleEdit}
-                canManage={isOwnerOrAdmin(role)}
+        <RegisterToolbar
+          filtersLabel={t("common.register.filters")}
+          filtersCloseLabel={t("common.register.filtersClose")}
+          activeFilterCount={
+            (fuelFilter !== "all" ? 1 : 0) + (inspectionFilter !== "all" ? 1 : 0)
+          }
+          search={
+            <SearchField
+              label={t("vehicles.register.searchLabel")}
+              placeholder={t("vehicles.register.searchPlaceholder")}
+              value={search}
+              onChange={setSearch}
+            />
+          }
+          filters={
+            <div className="space-y-2">
+              <FilterChips
+                label={t("vehicles.register.inspectionFilterLabel")}
+                active={inspectionFilter}
+                onSelect={(key) => setInspectionFilter(key as InspectionFilter)}
+                options={[
+                  { key: "all", label: t("common.register.all"), count: vehicles.length },
+                  {
+                    key: "attention",
+                    label: t("vehicles.register.needsAttention"),
+                    count: attentionCount,
+                  },
+                  {
+                    key: "missing",
+                    label: t("vehicles.register.missingInspection"),
+                    count: missingInspectionCount,
+                  },
+                ]}
               />
-            ))}
-          </div>
-        )}
+              {fuels.length > 0 && (
+                <FilterChips
+                  label={t("inbox.fields.palivo")}
+                  active={fuelFilter}
+                  onSelect={setFuelFilter}
+                  options={[
+                    { key: "all", label: t("vehicles.register.allFuels") },
+                    ...fuels.map((fuel) => ({ key: fuel, label: fuel })),
+                  ]}
+                />
+              )}
+            </div>
+          }
+        />
+
+        <div className="mt-4">
+          {loading ? (
+            <LoadingRows label={t("common.buttons.loading")} />
+          ) : loadError ? (
+            <Notice tone="critical">{loadError}</Notice>
+          ) : vehicles.length === 0 ? (
+            <EmptyState
+              title={t("vehicles.list.noneYet")}
+              action={
+                role !== "employee" ? (
+                  <button
+                    type="button"
+                    onClick={() => setVehicle({})}
+                    disabled={isNewVehicleBlocked}
+                    className={`${docButtonPrimary} gap-2`}
+                  >
+                    <PlusIcon size={16} />
+                    {t("vehicles.list.addManuallyCta")}
+                  </button>
+                ) : undefined
+              }
+            />
+          ) : visibleVehicles.length === 0 ? (
+            <EmptyState title={t("common.register.noMatches")} />
+          ) : (
+            <>
+              <RegisterHeader columns={VEHICLE_COLUMNS}>
+                <span>{t("vehicles.register.colVehicle")}</span>
+                <span>{t("inbox.fields.vin")}</span>
+                <span>{t("vehicles.register.colEngine")}</span>
+                <span>{t("vehicles.register.colInspections")}</span>
+              </RegisterHeader>
+
+              <ul className="mt-2 space-y-1.5">
+                {visibleVehicles.map((car) => (
+                  <DataRow
+                    key={car.id}
+                    href={vehicleDetailHref(car.id)}
+                    columns={VEHICLE_COLUMNS}
+                    ariaLabel={`${car.spz} · ${vehicleTitle(car, t("dashboard.noName"))}`}
+                    trailing={
+                      isOwnerOrAdmin(role) ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => handleEdit(car)}
+                            aria-label={`${t("common.buttons.edit")}: ${car.spz}`}
+                            className={`${docButtonSecondary} px-2.5 text-xs`}
+                          >
+                            {t("common.buttons.edit")}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteVehicle(car.id)}
+                            aria-label={`${t("common.buttons.delete")}: ${car.spz}`}
+                            className={`${docButtonDanger} px-2.5 text-xs`}
+                          >
+                            {t("common.buttons.delete")}
+                          </button>
+                        </>
+                      ) : undefined
+                    }
+                  >
+                    {/* 1 ŠPZ + značka/model — ŠPZ je to, čím vodič vozidlo
+                        pomenúva, preto vedie riadok. */}
+                    <div className="flex min-w-0 items-center gap-3">
+                      {photosByVehicle[car.id] ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={photosByVehicle[car.id]}
+                          alt=""
+                          className="h-10 w-10 shrink-0 rounded-doc-sm border border-doc-border object-cover"
+                        />
+                      ) : (
+                        <span
+                          aria-hidden="true"
+                          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-doc-sm border border-doc-border bg-surface-2 text-muted-esblu"
+                        >
+                          <CarIcon size={18} />
+                        </span>
+                      )}
+                      <div className="min-w-0">
+                        <PlateBadge plate={car.spz || t("inbox.noPlate")} size="sm" />
+                        <p className="mt-1 truncate text-sm text-secondary">
+                          {[car.znacka, car.model].filter(Boolean).join(" ") || "—"}
+                          {car.rok_vyroby ? ` · ${car.rok_vyroby}` : ""}
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* 2 VIN */}
+                    <p className="mt-1.5 truncate font-mono text-sm text-muted-esblu sm:mt-0">
+                      {car.vin || "—"}
+                    </p>
+
+                    {/* 3 palivo + výkon */}
+                    <div className="mt-1.5 min-w-0 sm:mt-0">
+                      <p className="truncate text-sm text-secondary">{car.palivo || "—"}</p>
+                      {car.vykon && (
+                        <p className="mt-0.5 text-sm tabular-nums text-muted-esblu">
+                          {car.vykon} kW
+                        </p>
+                      )}
+                    </div>
+
+                    {/* 4 STK + EK — stav nesie text aj farba, nikdy len farba */}
+                    <div className="mt-2 flex flex-wrap items-center gap-1.5 sm:mt-0">
+                      {inspectionCell(t("vehicles.fields.stk"), car.stk)}
+                      {inspectionCell(t("vehicles.fields.ek"), car.ek)}
+                    </div>
+                  </DataRow>
+                ))}
+              </ul>
+            </>
+          )}
+        </div>
       </div>
-    </main>
+    </PageShell>
   );
 }

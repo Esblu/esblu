@@ -258,3 +258,28 @@ export const CoinIcon = (p: IconProps) => (
     <path d="M12 6.5v11" />
   </Svg>
 );
+
+/* --------------------------------------------------------------------------
+   Vozidlá
+   -------------------------------------------------------------------------- */
+
+export const CarIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M4 16v-3.2L6 8h12l2 4.8V16" />
+    <path d="M3 16h18v2a1 1 0 0 1-1 1h-1.5a1 1 0 0 1-1-1v-1h-11v1a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z" />
+    <path d="M6.5 12.5h11" />
+    <circle cx="7.5" cy="16" r="0.9" fill="currentColor" stroke="none" />
+    <circle cx="16.5" cy="16" r="0.9" fill="currentColor" stroke="none" />
+  </Svg>
+);
+
+/** Sken dokladu — rohy rámu, nie fotoaparát (fotoaparát už má CameraIcon). */
+export const ScanIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M4 8V6a2 2 0 0 1 2-2h2" />
+    <path d="M16 4h2a2 2 0 0 1 2 2v2" />
+    <path d="M20 16v2a2 2 0 0 1-2 2h-2" />
+    <path d="M8 20H6a2 2 0 0 1-2-2v-2" />
+    <path d="M4 12h16" />
+  </Svg>
+);

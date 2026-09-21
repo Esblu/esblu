@@ -35,6 +35,7 @@ import {
   LoadingRows,
   SectionPanel,
   Notice,
+  UploadActions,
   StatusBadge,
   docButtonPrimary,
   docButtonSecondary,
@@ -42,7 +43,8 @@ import {
   docField,
   docLabel,
 } from "@/app/components/ui/Primitives";
-import { MachineIcon, PlusIcon } from "@/app/components/icons/AppIcons";
+import { MachineIcon, PlusIcon, TrashIcon } from "@/app/components/icons/AppIcons";
+import { compressImage } from "@/lib/image-compress";
 
 /** Jedna šablóna stĺpcov pre hlavičku aj riadky registra. */
 const MACHINE_COLUMNS =
@@ -67,6 +69,16 @@ export default function StrojePage() {
   const [isSaving, setIsSaving] = useState(false);
   const [deletingMachineId, setDeletingMachineId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
+  /**
+   * Fotografie vybrané EŠTE PRED vytvorením stroja.
+   *
+   * machine_photos.machine_id je NOT NULL, takže fotku nie je kam uložiť,
+   * kým stroj neexistuje. Držíme ich preto v pamäti a nahráme hneď po
+   * inserte — navonok je to jeden plynulý krok "vyplniť a uložiť".
+   */
+  const [pendingPhotos, setPendingPhotos] = useState<File[]>([]);
+  const [pendingPhotoPreviews, setPendingPhotoPreviews] = useState<string[]>([]);
+  const [photoUploadNotice, setPhotoUploadNotice] = useState("");
   const saveInProgressRef = useRef(false);
   const {
     usage: planUsage,
@@ -208,6 +220,96 @@ export default function StrojePage() {
     }));
   }
 
+  /**
+   * Výber fotiek v create flow. Komprimujeme hneď pri výbere (rovnaký
+   * helper ako inde v appke), aby sa pri ukladaní už len nahrávalo a
+   * používateľ nečakal dvakrát.
+   */
+  async function handlePendingPhotos(event: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.target.files ?? []);
+    event.target.value = "";
+    if (files.length === 0) return;
+
+    setPhotoUploadNotice("");
+
+    const prepared: File[] = [];
+    for (const file of files) {
+      try {
+        prepared.push(await compressImage(file, 0, t));
+      } catch (error) {
+        console.error("Kompresia fotografie stroja zlyhala:", error);
+        alert(t("vehicles.errors.photoCompressFailed"));
+      }
+    }
+
+    if (prepared.length === 0) return;
+
+    setPendingPhotos((current) => [...current, ...prepared]);
+    setPendingPhotoPreviews((current) => [
+      ...current,
+      ...prepared.map((file) => URL.createObjectURL(file)),
+    ]);
+  }
+
+  function removePendingPhoto(index: number) {
+    setPendingPhotoPreviews((current) => {
+      const url = current[index];
+      if (url) URL.revokeObjectURL(url);
+      return current.filter((_, i) => i !== index);
+    });
+    setPendingPhotos((current) => current.filter((_, i) => i !== index));
+  }
+
+  function clearPendingPhotos() {
+    for (const url of pendingPhotoPreviews) URL.revokeObjectURL(url);
+    setPendingPhotoPreviews([]);
+    setPendingPhotos([]);
+  }
+
+  /**
+   * Nahranie čakajúcich fotiek k UŽ VYTVORENÉMU stroju.
+   *
+   * Zámerne NEROLLBACKUJE vytvorenie stroja, keď zlyhá fotka: stroj je
+   * hodnotnejší záznam než fotka a zahodiť ho kvôli nepodarenému uploadu
+   * by používateľa pripravilo o vyplnené údaje. Namiesto toho sa stroj
+   * uloží, používateľ dostane jasnú správu a fotku vie doplniť v galérii.
+   *
+   * Cesta v storage aj poradie zápisov (storage -> DB, pri zlyhaní DB sa
+   * objekt maže) sú rovnaké ako v existujúcej galérii stroja — žiadne nové
+   * oprávnenia, žiadna zmena RLS.
+   */
+  async function uploadPendingPhotos(machineId: string): Promise<number> {
+    let failed = 0;
+
+    for (const file of pendingPhotos) {
+      const path = `${userId}/${machineId}/${Date.now()}-${crypto.randomUUID()}-${file.name}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from("machine-photos")
+        .upload(path, file, { contentType: file.type || "image/webp" });
+
+      if (uploadError) {
+        console.error("Upload fotografie stroja zlyhal:", uploadError.message);
+        failed += 1;
+        continue;
+      }
+
+      const { error: dbError } = await supabase.from("machine_photos").insert({
+        user_id: userId,
+        machine_id: machineId,
+        file_path: path,
+      });
+
+      if (dbError) {
+        console.error("Zápis machine_photos zlyhal:", dbError.message);
+        await supabase.storage.from("machine-photos").remove([path]);
+        failed += 1;
+      }
+    }
+
+    return failed;
+  }
+
   async function saveMachine() {
     if (saveInProgressRef.current) return;
 
@@ -255,6 +357,7 @@ export default function StrojePage() {
         setMachine(emptyMachine);
         setEditingId(null);
         setShowForm(false);
+        clearPendingPhotos();
         await loadMachines();
         return;
       }
@@ -266,12 +369,29 @@ export default function StrojePage() {
         return;
       }
 
-      const { error } = await supabase.from("machines").insert(payload);
+      // `select().single()` potrebujeme kvôli id — bez neho by sme nemali
+      // kam fotku priradiť. RLS zostáva jediná autorizácia.
+      const { data: created, error } = await supabase
+        .from("machines")
+        .insert(payload)
+        .select("id")
+        .single();
       if (error) throw error;
 
+      let failedPhotos = 0;
+      if (created?.id && pendingPhotos.length > 0) {
+        failedPhotos = await uploadPendingPhotos(created.id as string);
+      }
+
+      clearPendingPhotos();
       setMachine(emptyMachine);
       setEditingId(null);
       setShowForm(false);
+      setPhotoUploadNotice(
+        failedPhotos > 0
+          ? t("machines.errors.somePhotosFailed", { count: String(failedPhotos) })
+          : ""
+      );
       await Promise.all([loadMachines(), refreshPlanUsage()]);
     } catch (saveError: unknown) {
       if (isPlanLimitReachedError(saveError, "machines")) {
@@ -442,6 +562,8 @@ export default function StrojePage() {
     setEditingId(null);
     setMachine(emptyMachine);
     setShowForm(false);
+    clearPendingPhotos();
+    setPhotoUploadNotice("");
   }
 
   // ---------------------------------------------------------------------------
@@ -548,6 +670,12 @@ export default function StrojePage() {
       {legalHold && (
         <div className="mt-4">
           <Notice tone="warning">{t("common.legalHoldMessage")}</Notice>
+        </div>
+      )}
+
+      {photoUploadNotice && (
+        <div className="mt-4">
+          <Notice tone="warning">{photoUploadNotice}</Notice>
         </div>
       )}
 
@@ -676,6 +804,50 @@ export default function StrojePage() {
               </div>
             </div>
 
+            {/* Fotografie priamo v create flow. Pri úprave sa neponúkajú —
+                existujúci stroj má plnohodnotnú galériu na svojom detaile a
+                dva rôzne spôsoby pridávania fotiek by si konkurovali. */}
+            {!editingId && (
+              <div className="mt-5 border-t border-doc-border pt-5">
+                <p className={docLabel}>{t("machines.detail.galleryTitle")}</p>
+                <UploadActions
+                  multiple
+                  cameraLabel={t("inbox.registration.takePhoto")}
+                  galleryLabel={t("machines.detail.galleryButton")}
+                  disabled={isSaving}
+                  onSelect={handlePendingPhotos}
+                />
+                <p className="mt-2 text-xs text-muted-esblu">
+                  {t("machines.list.photoHint")}
+                </p>
+
+                {pendingPhotoPreviews.length > 0 && (
+                  <ul className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+                    {pendingPhotoPreviews.map((url, index) => (
+                      <li key={url} className="relative">
+                        <div className="overflow-hidden rounded-doc border border-doc-border">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={url}
+                            alt={t("machines.photoAlt")}
+                            className="aspect-[4/3] w-full object-cover"
+                          />
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => removePendingPhoto(index)}
+                          aria-label={t("vehicles.buttons.deleteWithIcon")}
+                          className="absolute right-2 top-2 flex h-9 w-9 items-center justify-center rounded-doc-sm border border-danger/30 bg-page-bg/80 text-danger backdrop-blur transition hover:bg-danger-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-cyan"
+                        >
+                          <TrashIcon size={16} />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+
             <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:justify-end">
               <button type="button" onClick={cancelEdit} className={docButtonSecondary}>
                 {t("vehicles.forms.cancelEdit")}
@@ -686,7 +858,11 @@ export default function StrojePage() {
                 disabled={isSaving}
                 className={docButtonPrimary}
               >
-                {isSaving ? t("common.buttons.saving") : t("machines.list.saveMachine")}
+                {isSaving
+                  ? pendingPhotos.length > 0
+                    ? t("inbox.uploading")
+                    : t("common.buttons.saving")
+                  : t("machines.list.saveMachine")}
               </button>
             </div>
           </SectionPanel>

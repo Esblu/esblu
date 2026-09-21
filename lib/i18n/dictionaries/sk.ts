@@ -1329,7 +1329,22 @@ const sk = {
       noneYet: "Zatiaľ nie je uložené žiadne vozidlo.",
       confirmDeleteVehicle: "Naozaj chceš vymazať toto vozidlo?",
     },
+    register: {
+      title: "Register vozidiel",
+      searchLabel: "Hľadať vozidlo",
+      searchPlaceholder: "ŠPZ, VIN, značka, model...",
+      inspectionFilterLabel: "Kontroly",
+      needsAttention: "Vyžaduje pozornosť",
+      missingInspection: "Chýba termín",
+      allFuels: "Všetky palivá",
+      colVehicle: "Vozidlo",
+      colEngine: "Motor",
+      colInspections: "STK / EK",
+    },
     forms: {
+      groupIdentification: "Identifikácia",
+      groupTechnical: "Technické údaje",
+      groupInspections: "Kontroly",
       editVehicleTitle: "Upraviť vozidlo",
       reviewVehicleTitle: "Skontrolujte údaje vozidla",
       saveVehicle: "Uložiť vozidlo",
@@ -1395,6 +1410,7 @@ const sk = {
       deleteWithIcon: "Vymazať",
     },
     detail: {
+      sectionsLabel: "Sekcie vozidla",
       documentTypeRegistration: "Technický preukaz",
       documentsTitle: "PZP a technický preukaz",
       documentsDescription:
@@ -1457,6 +1473,7 @@ const sk = {
 
   machines: {
     list: {
+      photoHint: "Fotografie sa nahrajú hneď po uložení stroja.",
       subtitle: "Evidencia firemných strojov a techniky.",
       addMachine: "Pridať stroj",
       editMachineTitle: "Upraviť stroj",
@@ -1482,6 +1499,7 @@ const sk = {
     },
     photoAlt: "Fotografia stroja",
     errors: {
+      somePhotosFailed: "Stroj sa uložil, ale {{count}} fotografií sa nepodarilo nahrať. Skús ich pridať v galérii stroja.",
       loadFailedPrefix: "Chyba pri načítaní strojov: {{message}}",
       nameRequired: "Vyplň názov stroja.",
       saveFailedPrefix: "Chyba pri ukladaní stroja: {{message}}",

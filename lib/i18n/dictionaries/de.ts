@@ -1318,7 +1318,22 @@ const de = {
       noneYet: "Es ist noch kein Fahrzeug gespeichert.",
       confirmDeleteVehicle: "Möchten Sie dieses Fahrzeug wirklich löschen?",
     },
+    register: {
+      title: "Fahrzeugregister",
+      searchLabel: "Fahrzeug suchen",
+      searchPlaceholder: "Kennzeichen, FIN, Marke, Modell...",
+      inspectionFilterLabel: "Prüfungen",
+      needsAttention: "Handlungsbedarf",
+      missingInspection: "Termin fehlt",
+      allFuels: "Alle Kraftstoffe",
+      colVehicle: "Fahrzeug",
+      colEngine: "Motor",
+      colInspections: "HU / AU",
+    },
     forms: {
+      groupIdentification: "Identifikation",
+      groupTechnical: "Technische Daten",
+      groupInspections: "Prüfungen",
       editVehicleTitle: "Fahrzeug bearbeiten",
       reviewVehicleTitle: "Überprüfen Sie die Fahrzeugdaten",
       saveVehicle: "Fahrzeug speichern",
@@ -1385,6 +1400,7 @@ const de = {
       deleteWithIcon: "Löschen",
     },
     detail: {
+      sectionsLabel: "Fahrzeugbereiche",
       documentTypeRegistration: "Fahrzeugschein",
       documentsTitle: "KFZ-Versicherung und Fahrzeugschein",
       documentsDescription:
@@ -1450,6 +1466,7 @@ const de = {
 
   machines: {
     list: {
+      photoHint: "Die Fotos werden direkt nach dem Speichern der Maschine hochgeladen.",
       subtitle: "Erfassung von Firmenmaschinen und -technik.",
       addMachine: "Maschine hinzufügen",
       editMachineTitle: "Maschine bearbeiten",
@@ -1475,6 +1492,7 @@ const de = {
     },
     photoAlt: "Foto der Maschine",
     errors: {
+      somePhotosFailed: "Die Maschine wurde gespeichert, aber {{count}} Fotos konnten nicht hochgeladen werden. Bitte über die Maschinengalerie erneut hinzufügen.",
       loadFailedPrefix: "Fehler beim Laden der Maschinen: {{message}}",
       nameRequired: "Bitte geben Sie den Namen der Maschine ein.",
       saveFailedPrefix: "Fehler beim Speichern der Maschine: {{message}}",
