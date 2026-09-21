@@ -586,7 +586,14 @@ export async function createInvoiceDraftFromSlots(
   locale: Locale,
   companyId: string,
   userId: string,
-  slots: InvoiceDraftSlots
+  slots: InvoiceDraftSlots,
+  /**
+   * Kalendárny deň používateľa, už overený a ohraničený na serveri
+   * (`boundClientCalendarDate`). Server beží v UTC, takže bez tejto hodnoty
+   * by o polnoci stredoeurópskeho času vznikol doklad s včerajším dátumom —
+   * presne chyba, ktorá sa prejavila v reálnom teste.
+   */
+  issueDate: string
 ): Promise<IntentResult> {
   if (!slots.partnerId || !slots.description || slots.unitPrice === undefined) {
     return { kind: "error", text: translate(locale, "search.errors.generic") };
@@ -616,7 +623,7 @@ export async function createInvoiceDraftFromSlots(
         direction: "issued",
         kind: "regular_invoice",
         currency,
-        issue_date: new Date().toISOString().slice(0, 10),
+        issue_date: issueDate,
         due_date: null,
         customer_business_partner_id: slots.partnerId,
         variable_symbol: null,

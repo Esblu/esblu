@@ -61,12 +61,15 @@ import {
   DocumentSourceBadge,
 } from "@/app/components/document/DocumentStatusBadge";
 import { getCompanyBillingProfile } from "@/lib/company-billing-profile";
+import { todayLocalDate } from "@/lib/local-date";
 import { apiUrl } from "@/lib/api-url";
 import { REQUEST_LOCALE_HEADER } from "@/lib/i18n/request-locale";
 import { downloadBlob } from "@/lib/file-actions";
 
 const VAT_CATEGORIES: VatCategoryCode[] = ["S", "Z", "E", "AE"];
-const TODAY = new Date().toISOString().slice(0, 10);
+// Kalendárny deň POUŽÍVATEĽA, nie UTC — predvyplňuje dátum vystavenia aj
+// dátum úhrady. Pozri lib/local-date.ts.
+const TODAY = todayLocalDate();
 
 // Žiadny hardcoded country-specific universal VAT default (20/23/19/5 %
 // a pod.) — Esblu má byť použiteľné medzinárodne a nesmie samo rozhodovať,

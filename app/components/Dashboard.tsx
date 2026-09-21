@@ -24,6 +24,7 @@ import { REQUEST_LOCALE_HEADER } from "@/lib/i18n/request-locale";
 import type { IntentResult } from "@/lib/intents/types";
 import { useVoiceCapture } from "@/hooks/use-voice-capture";
 import { IntentResultView } from "@/app/components/voice/IntentResultView";
+import { todayLocalDate } from "@/lib/local-date";
 
 function getGreeting(t: (key: string) => string) {
   const hour = new Date().getHours();
@@ -331,7 +332,11 @@ export default function Dashboard() {
             Authorization: `Bearer ${session.access_token}`,
             [REQUEST_LOCALE_HEADER]: locale,
           },
-          body: JSON.stringify({ text: trimmed }),
+          // Kalendárny deň prehliadača — rovnako ako v hlasovom launcheri.
+          // Dashboard dnes doklad nezakladá, ale posiela sa na ten istý
+          // endpoint; keby to tu chýbalo, správal by sa o polnoci inak než
+          // launcher a rozdiel by sa hľadal ťažko.
+          body: JSON.stringify({ text: trimmed, localDate: todayLocalDate() }),
         });
 
         const data = await response.json();

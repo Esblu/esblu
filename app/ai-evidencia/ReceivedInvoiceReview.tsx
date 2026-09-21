@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import { formatNumber } from "@/lib/i18n/format";
 import { invoiceDetailHref } from "@/lib/entity-links";
+import { todayLocalDate } from "@/lib/local-date";
 import {
   createSupplierFromReview,
   listBusinessPartners,
@@ -167,7 +168,9 @@ export default function ReceivedInvoiceReview({
   const [bic, setBic] = useState(candidate.bic ?? "");
   const [variableSymbol, setVariableSymbol] = useState(candidate.variable_symbol ?? "");
   const [paymentReference, setPaymentReference] = useState(candidate.payment_reference ?? "");
-  const [receivedAt, setReceivedAt] = useState(() => new Date().toISOString().slice(0, 10));
+  // Kalendárny deň používateľa, nie UTC — o polnoci by sa inak doklad
+  // zaevidoval ako prijatý včera (pozri lib/local-date.ts).
+  const [receivedAt, setReceivedAt] = useState(() => todayLocalDate());
 
   const [items, setItems] = useState<EditableItem[]>(() => toEditableItems(candidate));
 

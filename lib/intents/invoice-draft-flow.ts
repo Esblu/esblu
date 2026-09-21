@@ -54,6 +54,13 @@ export type InvoiceDraftFlowContext = {
   companyId: string;
   userId: string;
   conversationId: string;
+  /**
+   * Kalendárny deň používateľa pre TÚTO požiadavku — už overený a
+   * ohraničený serverom. Berie sa z aktuálneho kroku, nie z uloženého
+   * kontextu: rozhoduje deň, kedy doklad naozaj vzniká, a dialóg môže
+   * prebiehať cez polnoc.
+   */
+  issueDate: string;
 };
 
 /**
@@ -193,7 +200,8 @@ async function continueFlow(
       locale,
       ctx.companyId,
       ctx.userId,
-      slots
+      slots,
+      ctx.issueDate
     );
 
     // Dialóg sa ruší AJ pri neúspechu. Keby zostal, používateľ by na ďalšiu

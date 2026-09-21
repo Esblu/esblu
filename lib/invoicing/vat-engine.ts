@@ -1,4 +1,5 @@
 import Decimal from "decimal.js";
+import { todayLocalDate } from "@/lib/local-date";
 
 // -----------------------------------------------------------------------------
 // Deterministický VAT engine (Fáza 2 — fakturačné jadro).
@@ -214,8 +215,20 @@ export function isVatCategoryCode(value: string): value is VatCategoryCode {
  * Odvodený (nie uložený) "po splatnosti" stav — presne podľa Fázy 0/zadania:
  * overdue sa nikdy neukladá do DB, počíta sa vždy nanovo.
  */
-export function isInvoiceOverdue(dueDate: string | null, paymentStatus: string): boolean {
+export function isInvoiceOverdue(
+  dueDate: string | null,
+  paymentStatus: string,
+  /**
+   * Kalendárny dnešok. Predvolene deň prostredia, kde kód beží — v
+   * prehliadači teda deň používateľa. Predtým sa tu počítal UTC deň, takže
+   * faktúra splatná „dnes" sa o polnoci stredoeurópskeho času ešte niekoľko
+   * hodín tvárila ako splatná zajtra.
+   *
+   * Parameter je tu preto, aby sa dal v testoch a na serveri odovzdať
+   * konkrétny deň namiesto spoliehania sa na pásmo procesu.
+   */
+  today: string = todayLocalDate()
+): boolean {
   if (!dueDate || paymentStatus === "paid") return false;
-  const today = new Date().toISOString().slice(0, 10);
   return dueDate < today;
 }

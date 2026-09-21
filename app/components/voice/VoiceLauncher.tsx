@@ -6,6 +6,7 @@ import { apiUrl } from "@/lib/api-url";
 import { REQUEST_LOCALE_HEADER } from "@/lib/i18n/request-locale";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import { useVoiceCapture } from "@/hooks/use-voice-capture";
+import { todayLocalDate } from "@/lib/local-date";
 import { IntentResultView } from "@/app/components/voice/IntentResultView";
 import {
   docButtonSecondary,
@@ -114,7 +115,15 @@ export function VoiceLauncher() {
           Authorization: `Bearer ${session.access_token}`,
           [REQUEST_LOCALE_HEADER]: locale,
         },
-        body: JSON.stringify({ text, conversationId: conversationIdRef.current }),
+        // `localDate` je kalendárny deň PREHLIADAČA. Server beží v UTC a
+        // sám by o polnoci stredoeurópskeho času založil doklad s včerajším
+        // dátumom. Server si hodnotu overí a ohraničí (lib/local-date.ts),
+        // takže ju neprijíma naslepo.
+        body: JSON.stringify({
+          text,
+          conversationId: conversationIdRef.current,
+          localDate: todayLocalDate(),
+        }),
       });
 
       const data = await response.json();

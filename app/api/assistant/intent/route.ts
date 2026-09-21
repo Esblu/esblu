@@ -12,6 +12,7 @@ import {
 import { executeIntent } from "@/lib/intents/handlers";
 import { buildActionPreview } from "@/lib/intents/actions";
 import { isValidConversationId } from "@/lib/intents/conversation";
+import { boundClientCalendarDate } from "@/lib/local-date";
 import {
   startInvoiceDraftFlow,
   continueInvoiceDraftFlow,
@@ -64,9 +65,21 @@ export async function POST(req: Request) {
     }
 
     const body = (await req.json().catch(() => null)) as
-      | { text?: string; conversationId?: string }
+      | { text?: string; conversationId?: string; localDate?: string }
       | null;
     const rawText = typeof body?.text === "string" ? body.text.trim() : "";
+
+    // Kalendárny deň používateľa. Server beží v UTC, takže o polnoci
+    // stredoeurópskeho času by sám odvodil včerajšok — a `issue_date` je
+    // daňovo relevantný údaj. Klient preto pošle svoj deň a server ho
+    // OVERÍ: tvar, reálnosť dátumu a odchýlku najviac jeden deň od UTC
+    // (viac už nie je časové pásmo, ale iný dátum). Neplatná hodnota sa
+    // ticho nahradí UTC dneškom, príkaz sa kvôli nej neodmieta.
+    //
+    // Toto NIE JE autorizačný vstup: rozhoduje iba o predvyplnenom dátume,
+    // ktorý používateľ v koncepte vidí a môže zmeniť. Kto smie doklad
+    // vytvoriť, drží rola a RLS nezávisle od tejto hodnoty.
+    const issueDate = boundClientCalendarDate(body?.localDate);
 
     // Identifikátor prebiehajúceho dialógu. Sám osebe nič neodomyká —
     // server pri ňom vždy overuje aj totožnosť volajúceho a jeho aktívnu
@@ -151,6 +164,7 @@ export async function POST(req: Request) {
           companyId: membership.company_id as string,
           userId: user.id,
           conversationId,
+          issueDate,
         },
         rawText
       );
@@ -222,6 +236,7 @@ export async function POST(req: Request) {
             companyId: membership.company_id as string,
             userId: user.id,
             conversationId,
+            issueDate,
           },
           rawText,
           intent.args.partnerQuery,

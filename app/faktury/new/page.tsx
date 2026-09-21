@@ -29,6 +29,7 @@ import {
   type InvoiceKind,
 } from "@/lib/invoices";
 import { listBusinessPartners, type BusinessPartner } from "@/lib/business-partners";
+import { todayLocalDate } from "@/lib/local-date";
 
 // Dobropis/ťarchopis sa zakladá z detailu opravovanej faktúry
 // ("Vytvoriť dobropis" tlačidlo v InvoiceDetailView) s ?corrects=<id> —
@@ -47,7 +48,9 @@ function CorrectsFromQueryParam({ onCorrectsId }: { onCorrectsId: (id: string) =
   return null;
 }
 
-const TODAY = new Date().toISOString().slice(0, 10);
+// Kalendárny deň POUŽÍVATEĽA, nie UTC. `toISOString()` tu predtým o polnoci
+// stredoeurópskeho času predvyplnil včerajšok — pozri lib/local-date.ts.
+const TODAY = todayLocalDate();
 
 export default function NewInvoicePage() {
   const router = useRouter();
