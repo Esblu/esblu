@@ -45,3 +45,5 @@ next-env.d.ts
 # local agent/tooling state
 .claude/
 Claude outputs/
+
+marketing/
