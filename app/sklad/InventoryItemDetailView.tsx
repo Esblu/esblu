@@ -4,73 +4,220 @@ import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import BackLink from "@/app/components/BackLink";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
+import { formatDate, formatNumber } from "@/lib/i18n/format";
+import { stockStatus, type InventoryItemRow } from "@/lib/inventory";
+import {
+  PageShell,
+  PageHeader,
+  SectionPanel,
+  MetricGrid,
+  Metric,
+  MetadataGrid,
+  Notice,
+  EmptyState,
+  StatusBadge,
+} from "@/app/components/ui/Primitives";
+import { PackageIcon } from "@/app/components/icons/AppIcons";
+
+type InventoryPhoto = {
+  id: string;
+  file_path: string;
+};
 
 // -----------------------------------------------------------------------------
-// Zdieľaný detail skladovej položky — pozri obdobný komentár v
-// app/vozidla/VehicleDetailView.tsx. Web wrapper: app/sklad/[id]/page.tsx
-// (useParams). Mobile wrapper: mobile/app/sklad/detail/page.tsx
-// (useSearchParams).
+// Detail skladovej položky.
+//
+// Pôvodne to bolo 75 riadkov štyroch `<b>štítok:</b> hodnota` odsekov v
+// napevno dvojstĺpcovej mriežke (aj na 360 px telefóne) a nič viac —
+// najtenší detail v celej appke. Fotky položky sa síce ukladali, ale
+// nikde sa nezobrazovali.
+//
+// Čo tu ZÁMERNE NIE JE, pretože to model nemá (nahlásené ako gap, nie
+// dopĺňané naslepo): SKU, jednotková cena a hodnota zásoby, história
+// pohybov a "posledná zmena" (tabuľka má iba created_at).
 // -----------------------------------------------------------------------------
-export default function InventoryItemDetailView({
-  entityId,
-}: {
-  entityId: string;
-}) {
-  const itemId = entityId;
-  const { t } = useLocale();
-
-  const [item, setItem] = useState<any>(null);
+export default function InventoryItemDetailView({ entityId }: { entityId: string }) {
+  const { t, locale } = useLocale();
+  const [item, setItem] = useState<InventoryItemRow | null>(null);
+  const [photos, setPhotos] = useState<InventoryPhoto[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
 
   useEffect(() => {
-    loadItem();
-  }, []);
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entityId]);
 
-  async function loadItem() {
+  async function load() {
+    setLoading(true);
+    setLoadError("");
+
     const { data, error } = await supabase
       .from("inventory_items")
       .select("*")
-      .eq("id", itemId)
-      .single();
+      .eq("id", entityId)
+      .maybeSingle();
 
-    if (!error) setItem(data);
+    if (error) {
+      setLoadError(t("inventory.errors.loadFailedPrefix", { message: error.message }));
+      setLoading(false);
+      return;
+    }
+
+    setItem((data as InventoryItemRow) ?? null);
+
+    if (data) {
+      const { data: photoRows } = await supabase
+        .from("inventory_photos")
+        .select("id, file_path")
+        .eq("inventory_item_id", entityId)
+        .order("created_at", { ascending: false });
+
+      setPhotos((photoRows as InventoryPhoto[]) ?? []);
+    }
+
+    setLoading(false);
   }
 
-  if (!item) {
-    return <div className="p-10">{t("common.buttons.loading")}</div>;
+  function photoUrl(path: string) {
+    return supabase.storage.from("inventory-photos").getPublicUrl(path).data.publicUrl;
   }
 
-  const lowStock =
-    item.min_quantity !== null &&
-    item.min_quantity !== undefined &&
-    Number(item.quantity || 0) <= Number(item.min_quantity);
+  if (loading) {
+    return (
+      <PageShell>
+        <p className="py-10 text-sm text-secondary">{t("common.buttons.loading")}</p>
+      </PageShell>
+    );
+  }
+
+  if (loadError || !item) {
+    return (
+      <PageShell>
+        <BackLink href="/sklad" label={t("nav.inventory")} className="mb-6" />
+        <Notice tone="critical">{loadError || t("inventory.errors.notFound")}</Notice>
+      </PageShell>
+    );
+  }
+
+  const status = stockStatus(item);
+  const quantity =
+    typeof item.quantity === "number" ? formatNumber(item.quantity, locale) : "—";
+
+  const statusBadge =
+    status === "out" ? (
+      <StatusBadge kind="error" label={t("inventory.stock.out")} />
+    ) : status === "low" ? (
+      <StatusBadge kind="needs_review" label={t("inventory.stock.low")} />
+    ) : status === "ok" ? (
+      <StatusBadge kind="paid" label={t("inventory.stock.ok")} />
+    ) : (
+      <StatusBadge kind="draft" label={t("inventory.stock.untracked")} />
+    );
 
   return (
-    <main className="app-shell-bg min-h-screen p-10">
-      <BackLink href="/sklad" label={t("nav.inventory")} className="mb-4" />
+    <PageShell>
+      <BackLink href="/sklad" label={t("nav.inventory")} className="mb-6" />
 
-      <h1 className="text-4xl font-bold">📦 {item.name}</h1>
+      <PageHeader
+        eyebrow={
+          <span className="inline-flex items-center gap-2">
+            <PackageIcon size={18} />
+            {item.category || t("nav.inventory")}
+          </span>
+        }
+        title={item.name || t("dashboard.noName")}
+        badges={statusBadge}
+        meta={item.location || undefined}
+      />
 
-      {lowStock && (
-        <div className="badge-warning mt-6 rounded-xl p-4 font-bold">
-          {t("inventory.detail.lowStockBadge")}
+      {status === "low" && (
+        <div className="mt-4">
+          <Notice tone="warning">{t("inventory.detail.lowStockBadge")}</Notice>
+        </div>
+      )}
+      {status === "out" && (
+        <div className="mt-4">
+          <Notice tone="critical">{t("inventory.detail.outOfStockNotice")}</Notice>
         </div>
       )}
 
-      <div className="surface-card mt-8 p-8">
-        <div className="grid grid-cols-2 gap-5">
-          <p><b>{t("inventory.list.categoryLabel")}:</b> {item.category || "—"}</p>
-          <p><b>{t("inventory.list.quantityLabel")}:</b> {item.quantity ?? 0} {item.unit || ""}</p>
-          <p><b>{t("inventory.detail.minQuantityLabel")}:</b> {item.min_quantity ?? "—"} {item.unit || ""}</p>
-          <p><b>{t("inventory.list.locationLabel")}:</b> {item.location || "—"}</p>
-        </div>
+      {/* Množstvo je hlavná informácia skladu — dostáva najväčšie číslo
+          na stránke, nie riadok "Množstvo: 24" niekde v zozname polí. */}
+      <div className="mt-6">
+        <MetricGrid>
+          <Metric
+            label={t("inventory.list.quantityLabel")}
+            value={item.unit ? `${quantity} ${item.unit}` : quantity}
+            tone={status === "out" ? "critical" : status === "low" ? "warning" : "neutral"}
+          />
+          <Metric
+            label={t("inventory.detail.minQuantityLabel")}
+            value={
+              typeof item.min_quantity === "number"
+                ? item.unit
+                  ? `${formatNumber(item.min_quantity, locale)} ${item.unit}`
+                  : formatNumber(item.min_quantity, locale)
+                : "—"
+            }
+            hint={
+              typeof item.min_quantity === "number"
+                ? undefined
+                : t("inventory.detail.noMinimumHint")
+            }
+          />
+          <Metric label={t("inventory.list.categoryLabel")} value={item.category || "—"} />
+          <Metric label={t("inventory.list.locationLabel")} value={item.location || "—"} />
+        </MetricGrid>
+      </div>
+
+      <div className="mt-4 space-y-4">
+        <SectionPanel title={t("inventory.detail.detailsTitle")}>
+          <MetadataGrid
+            items={[
+              { label: t("inventory.list.unitPlaceholder"), value: item.unit },
+              {
+                label: t("inventory.detail.createdAtLabel"),
+                value: formatDate(item.created_at, locale),
+              },
+            ]}
+          />
+        </SectionPanel>
 
         {item.notes && (
-          <div className="mt-6 rounded-xl bg-surface-2 p-4">
-            <b>{t("inventory.list.notesLabel")}</b>
-            <p className="mt-2">{item.notes}</p>
-          </div>
+          <SectionPanel title={t("inventory.list.notesLabel")}>
+            <p className="whitespace-pre-wrap text-sm text-secondary">{item.notes}</p>
+          </SectionPanel>
         )}
+
+        {/* Fotografie sa ukladali už doteraz, len ich detail nikdy
+            nezobrazil — sú v inventory_photos a viditeľné cez RLS. */}
+        <SectionPanel title={t("inventory.detail.photosTitle")}>
+          {photos.length === 0 ? (
+            <EmptyState title={t("inventory.detail.noPhotos")} />
+          ) : (
+            <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+              {photos.map((photo) => (
+                <li key={photo.id}>
+                  <a
+                    href={photoUrl(photo.file_path)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="block overflow-hidden rounded-doc border border-doc-border focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-cyan"
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={photoUrl(photo.file_path)}
+                      alt={t("inventory.photoAlt")}
+                      className="aspect-[4/3] w-full object-cover"
+                    />
+                  </a>
+                </li>
+              ))}
+            </ul>
+          )}
+        </SectionPanel>
       </div>
-    </main>
+    </PageShell>
   );
 }

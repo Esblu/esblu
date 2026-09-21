@@ -73,13 +73,58 @@ async function compressImage(
     URL.revokeObjectURL(imageUrl);
   }
 }
+/** Jedna šablóna stĺpcov pre hlavičku aj riadky registra. */
+const INVENTORY_COLUMNS =
+  "sm:grid-cols-[minmax(0,2.4fr)_minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,1.1fr)]";
+
+import {
+  inventoryCategories,
+  matchesInventoryQuery,
+  stockStatus,
+  type InventoryItemRow,
+  type StockStatus,
+} from "@/lib/inventory";
+import { formatNumber } from "@/lib/i18n/format";
+import {
+  PageShell,
+  PageHeader,
+  SectionPanel,
+  RegisterToolbar,
+  RegisterHeader,
+  SearchField,
+  FilterChips,
+  DataRow,
+  EmptyState,
+  LoadingRows,
+  Notice,
+  StatusBadge,
+  docButtonPrimary,
+  docButtonSecondary,
+  docButtonDanger,
+  docField,
+  docLabel,
+} from "@/app/components/ui/Primitives";
+import {
+  CameraIcon,
+  ImageIcon,
+  PackageIcon,
+  PlusIcon,
+} from "@/app/components/icons/AppIcons";
+
+type StockFilter = "all" | StockStatus;
+
 export default function SkladPage() {
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
   const [photoFile, setPhotoFile] = useState<File | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
   const [userId, setUserId] = useState("");
   const [companyId, setCompanyId] = useState("");
-  const [items, setItems] = useState<any[]>([]);
+  const [items, setItems] = useState<InventoryItemRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+  const [search, setSearch] = useState("");
+  const [categoryFilter, setCategoryFilter] = useState("all");
+  const [stockFilter, setStockFilter] = useState<StockFilter>("all");
   const [showForm, setShowForm] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -144,6 +189,9 @@ function inventoryPhotoUrl(path: string) {
   async function loadItems(currentCompanyId: string = companyId) {
     if (!currentCompanyId) return;
 
+    setLoading(true);
+    setLoadError("");
+
     const { data, error } = await supabase
       .from("inventory_items")
       .select("*")
@@ -151,39 +199,39 @@ function inventoryPhotoUrl(path: string) {
       .order("created_at", { ascending: false });
 
     if (error) {
-      alert(t("inventory.errors.loadFailedPrefix", { message: error.message }));
+      setLoadError(t("inventory.errors.loadFailedPrefix", { message: error.message }));
+      setLoading(false);
       return;
     }
 
-    const itemIds = (data || []).map((item) => item.id);
+    const itemIds = (data || []).map((row) => row.id);
 
-let photosData: any[] = [];
+    let photosData: { inventory_item_id: string; file_path: string }[] = [];
 
-if (itemIds.length > 0) {
-  const { data: photos } = await supabase
-    .from("inventory_photos")
-    .select("*")
-    .in("inventory_item_id", itemIds)
-    .eq("company_id", currentCompanyId)
-    .order("created_at", { ascending: false });
+    if (itemIds.length > 0) {
+      const { data: photos } = await supabase
+        .from("inventory_photos")
+        .select("inventory_item_id, file_path, created_at")
+        .in("inventory_item_id", itemIds)
+        .eq("company_id", currentCompanyId)
+        .order("created_at", { ascending: false });
 
-  photosData = photos || [];
-}
+      photosData = photos || [];
+    }
 
-const itemsWithPhotos = (data || []).map((item) => {
-  const firstPhoto = photosData.find(
-    (photo) => photo.inventory_item_id === item.id
-  );
+    const itemsWithPhotos = (data || []).map((row) => {
+      const firstPhoto = photosData.find(
+        (photo) => photo.inventory_item_id === row.id
+      );
 
-  return {
-    ...item,
-    first_photo_url: firstPhoto
-      ? inventoryPhotoUrl(firstPhoto.file_path)
-      : null,
-  };
-});
+      return {
+        ...row,
+        first_photo_url: firstPhoto ? inventoryPhotoUrl(firstPhoto.file_path) : null,
+      };
+    });
 
-setItems(itemsWithPhotos);
+    setItems(itemsWithPhotos as InventoryItemRow[]);
+    setLoading(false);
   }
 
   function updateItem(key: string, value: string) {
@@ -343,16 +391,19 @@ setItems(itemsWithPhotos);
 }
   }
 
-  function editItem(row: any) {
+  function editItem(row: InventoryItemRow) {
     setEditingId(row.id);
     setShowForm(true);
 
     setItem({
       name: row.name || "",
       category: row.category || "",
-      quantity: row.quantity || "",
+      quantity: row.quantity === null || row.quantity === undefined ? "" : String(row.quantity),
       unit: row.unit || "",
-      min_quantity: row.min_quantity || "",
+      min_quantity:
+        row.min_quantity === null || row.min_quantity === undefined
+          ? ""
+          : String(row.min_quantity),
       location: row.location || "",
       notes: row.notes || "",
     });
@@ -383,7 +434,7 @@ setItems(itemsWithPhotos);
   }
 
   const photoPaths = (itemPhotos || [])
-    .map((photo: any) => photo.file_path)
+    .map((photo: { file_path: string }) => photo.file_path)
     .filter(Boolean);
 
   if (photoPaths.length > 0) {
@@ -417,244 +468,414 @@ setItems(itemsWithPhotos);
   await Promise.all([loadItems(companyId), refreshPlanUsage()]);
 }
 
-  function isLowStock(row: any) {
-    if (row.min_quantity === null || row.min_quantity === undefined) return false;
-    return Number(row.quantity || 0) <= Number(row.min_quantity);
+  // ---------------------------------------------------------------------------
+  // Odvodené zobrazenie registra
+  // ---------------------------------------------------------------------------
+  const categories = inventoryCategories(items);
+
+  const visibleItems = items.filter((row) => {
+    if (!matchesInventoryQuery(row, search)) return false;
+    if (categoryFilter !== "all" && (row.category ?? "") !== categoryFilter) return false;
+    if (stockFilter !== "all" && stockStatus(row) !== stockFilter) return false;
+    return true;
+  });
+
+  const statusCounts = items.reduce<Record<StockStatus, number>>(
+    (acc, row) => {
+      acc[stockStatus(row)] += 1;
+      return acc;
+    },
+    { out: 0, low: 0, ok: 0, untracked: 0 }
+  );
+
+  const activeFilterCount =
+    (categoryFilter !== "all" ? 1 : 0) + (stockFilter !== "all" ? 1 : 0);
+
+  /**
+   * Množstvo je hlavná informácia skladu, takže sa píše ako jedno číslo
+   * s jednotkou ("24 ks"), nie ako dva štítkované riadky.
+   */
+  function quantityLabel(row: InventoryItemRow): string {
+    const amount =
+      typeof row.quantity === "number" ? formatNumber(row.quantity, locale) : "—";
+    return row.unit ? `${amount} ${row.unit}` : amount;
+  }
+
+  function stockBadge(row: InventoryItemRow) {
+    const status = stockStatus(row);
+    if (status === "out")
+      return <StatusBadge kind="error" label={t("inventory.stock.out")} />;
+    if (status === "low")
+      return <StatusBadge kind="needs_review" label={t("inventory.stock.low")} />;
+    if (status === "ok")
+      return <StatusBadge kind="paid" label={t("inventory.stock.ok")} />;
+    // Bez nastaveného minima appka nevie povedať, či je zásoba dostatočná —
+    // tvrdiť "Dostupné" by bola domnienka.
+    return <StatusBadge kind="draft" label={t("inventory.stock.untracked")} />;
   }
 
   return (
-    <main className="app-shell-bg min-h-screen p-4 sm:p-6 lg:p-10">
-      <BackLink href="/" label={t("inbox.backToMenu")} className="mb-4" />
+    <PageShell wide>
+      <BackLink href="/" label={t("inbox.backToMenu")} className="mb-6" />
 
-      <div className="flex items-center gap-4">
-  <img
-    src="/images/warehouse.png"
-    alt={t("nav.inventory")}
-    className="h-20 w-20 object-contain"
-  />
-  <h1 className="text-4xl font-bold text-primary">
-  {t("nav.inventory")}
-</h1>
-</div>
-
-      <p className="mt-4 text-secondary">
-        {t("inventory.list.subtitle")}
-      </p>
+      <PageHeader
+        eyebrow={
+          <span className="inline-flex items-center gap-2">
+            <PackageIcon size={18} />
+            {t("nav.inventory")}
+          </span>
+        }
+        title={t("inventory.register.title")}
+        meta={t("inventory.list.subtitle")}
+        aside={
+          <button
+            type="button"
+            onClick={() => {
+              setShowForm(!showForm);
+              setEditingId(null);
+              setItem(emptyItem);
+            }}
+            disabled={isItemCreationUnavailable && !showForm}
+            className={`${docButtonPrimary} gap-2`}
+          >
+            <PlusIcon size={16} />
+            {t("inventory.list.addItem")}
+          </button>
+        }
+      />
 
       {!planUsageLoading && isPlanLimited && (
         <PlanLimitNotice
           resource="inventory_items"
           usage={planUsage}
           limit={planLimit}
-          className="mt-6"
+          className="mt-4"
         />
       )}
 
-      <button
-        onClick={() => {
-          setShowForm(!showForm);
-          setEditingId(null);
-          setItem(emptyItem);
-        }}
-        disabled={isItemCreationUnavailable}
-        className="mt-8 rounded-xl bg-blue-600 px-6 py-3 text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-gray-400"
-      >
-        {t("inventory.list.addItem")}
-      </button>
-
       {legalHold && (
-        <p className="mt-3 text-sm text-amber-400">{t("common.legalHoldMessage")}</p>
-      )}
-
-      {showForm && (
-        <div className="mt-8 rounded-2xl border border-subtle bg-surface-1 p-6 shadow-lg backdrop-blur-xl">
-          <h2 className="mb-6 text-2xl font-bold">
-            {editingId ? t("inventory.list.editItemTitle") : t("inventory.list.addItemTitle")}
-          </h2>
-
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            <input
-              placeholder={t("inventory.list.namePlaceholder")}
-              className="rounded-xl border p-3"
-              value={item.name}
-              onChange={(e) => updateItem("name", e.target.value)}
-            />
-
-            <input
-              placeholder={t("inventory.list.categoryPlaceholder")}
-              className="rounded-xl border p-3"
-              value={item.category}
-              onChange={(e) => updateItem("category", e.target.value)}
-            />
-
-            <input
-              type="number"
-              placeholder={t("inventory.list.quantityPlaceholder")}
-              className="rounded-xl border p-3"
-              value={item.quantity}
-              onChange={(e) => updateItem("quantity", e.target.value)}
-            />
-
-            <input
-              placeholder={t("inventory.list.unitPlaceholder")}
-              className="rounded-xl border p-3"
-              value={item.unit}
-              onChange={(e) => updateItem("unit", e.target.value)}
-            />
-
-            <input
-              type="number"
-              placeholder={t("inventory.list.minQuantityPlaceholder")}
-              className="rounded-xl border p-3"
-              value={item.min_quantity}
-              onChange={(e) => updateItem("min_quantity", e.target.value)}
-            />
-
-            <input
-              placeholder={t("inventory.list.locationPlaceholder")}
-              className="rounded-xl border p-3"
-              value={item.location}
-              onChange={(e) => updateItem("location", e.target.value)}
-            />
-          </div>
-
-          <textarea
-            placeholder={t("inventory.list.notesPlaceholder")}
-            className="mt-4 w-full rounded-xl border p-3"
-            value={item.notes}
-            onChange={(e) => updateItem("notes", e.target.value)}
-          />
-          <div className="mt-5 grid grid-cols-2 gap-3">
-  <label className="cursor-pointer rounded-xl bg-blue-600 px-4 py-3 text-center font-semibold text-white hover:bg-blue-700">
-    {t("inbox.registration.takePhoto")}
-    <input
-      type="file"
-      accept="image/*"
-      capture="environment"
-      className="hidden"
-      disabled={!editingId && isItemCreationUnavailable}
-      onChange={handlePhotoChange}
-    />
-  </label>
-
-  <label className="cursor-pointer rounded-xl border border-subtle bg-surface-1 px-4 py-3 text-center font-semibold text-blue-700 shadow hover:bg-surface-2">
-    {t("machines.detail.galleryButton")}
-    <input
-      type="file"
-      accept="image/*"
-      className="hidden"
-      disabled={!editingId && isItemCreationUnavailable}
-      onChange={handlePhotoChange}
-    />
-  </label>
-</div>
-
-{photoPreview && (
-  <div className="mt-4">
-    <img
-      src={photoPreview}
-      alt={t("inventory.list.photoPreviewAlt")}
-      className="h-48 w-full rounded-xl object-cover"
-    />
-  </div>
-)}
-          <button
-            onClick={saveItem}
-            disabled={isSaving || (!editingId && isItemCreationUnavailable)}
-            className="mt-5 rounded-xl bg-green-600 px-6 py-3 text-white hover:bg-green-700 disabled:bg-gray-400"
-          >
-            {isSaving
-              ? t("common.buttons.saving")
-              : editingId
-              ? t("vehicles.forms.saveChanges")
-              : t("inventory.list.saveItem")}
-          </button>
+        <div className="mt-4">
+          <Notice tone="warning">{t("common.legalHoldMessage")}</Notice>
         </div>
       )}
 
-        <div className="mt-10">
-  <h2 className="mb-4 text-2xl font-bold text-primary">
-    {t("inventory.list.savedItemsTitle")}
-  </h2>
+      {showForm && (
+        <div className="mt-6">
+          <SectionPanel
+            title={
+              editingId ? t("inventory.list.editItemTitle") : t("inventory.list.addItemTitle")
+            }
+          >
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="sm:col-span-2">
+                <label className={docLabel} htmlFor="item-name">
+                  {t("inventory.list.namePlaceholder")}
+                </label>
+                <input
+                  id="item-name"
+                  className={docField}
+                  value={item.name}
+                  onChange={(event) => updateItem("name", event.target.value)}
+                />
+              </div>
 
-        {items.length === 0 ? (
-         <div className="rounded-2xl border border-subtle bg-surface-1 p-6 shadow-lg backdrop-blur-xl">
-           <p className="font-medium text-secondary"> {t("inventory.list.noneYet")}</p>
-          </div>
+              <div>
+                <label className={docLabel} htmlFor="item-category">
+                  {t("inventory.list.categoryLabel")}
+                </label>
+                <input
+                  id="item-category"
+                  className={docField}
+                  value={item.category}
+                  onChange={(event) => updateItem("category", event.target.value)}
+                />
+              </div>
+
+              <div>
+                <label className={docLabel} htmlFor="item-location">
+                  {t("inventory.list.locationLabel")}
+                </label>
+                <input
+                  id="item-location"
+                  className={docField}
+                  value={item.location}
+                  onChange={(event) => updateItem("location", event.target.value)}
+                />
+              </div>
+
+              <div>
+                <label className={docLabel} htmlFor="item-quantity">
+                  {t("inventory.list.quantityLabel")}
+                </label>
+                <input
+                  id="item-quantity"
+                  type="number"
+                  inputMode="decimal"
+                  className={docField}
+                  value={item.quantity}
+                  onChange={(event) => updateItem("quantity", event.target.value)}
+                />
+              </div>
+
+              <div>
+                <label className={docLabel} htmlFor="item-unit">
+                  {t("inventory.list.unitPlaceholder")}
+                </label>
+                <input
+                  id="item-unit"
+                  className={docField}
+                  value={item.unit}
+                  onChange={(event) => updateItem("unit", event.target.value)}
+                />
+              </div>
+
+              <div className="sm:col-span-2">
+                <label className={docLabel} htmlFor="item-min">
+                  {t("inventory.list.minimumLabel")}
+                </label>
+                <input
+                  id="item-min"
+                  type="number"
+                  inputMode="decimal"
+                  className={docField}
+                  value={item.min_quantity}
+                  onChange={(event) => updateItem("min_quantity", event.target.value)}
+                />
+                <p className="mt-1 text-xs text-muted-esblu">
+                  {t("inventory.list.minimumHint")}
+                </p>
+              </div>
+
+              <div className="sm:col-span-2">
+                <label className={docLabel} htmlFor="item-notes">
+                  {t("inventory.list.notesLabel")}
+                </label>
+                <textarea
+                  id="item-notes"
+                  rows={3}
+                  className={docField}
+                  value={item.notes}
+                  onChange={(event) => updateItem("notes", event.target.value)}
+                />
+              </div>
+            </div>
+
+            <div className="mt-4 flex flex-wrap gap-2">
+              <label
+                className={`${docButtonSecondary} cursor-pointer gap-2 ${
+                  isSaving ? "pointer-events-none opacity-40" : ""
+                }`}
+              >
+                <CameraIcon size={16} />
+                {t("inbox.registration.takePhoto")}
+                <input
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  className="sr-only"
+                  onChange={handlePhotoChange}
+                />
+              </label>
+              <label
+                className={`${docButtonSecondary} cursor-pointer gap-2 ${
+                  isSaving ? "pointer-events-none opacity-40" : ""
+                }`}
+              >
+                <ImageIcon size={16} />
+                {t("machines.detail.galleryButton")}
+                <input
+                  type="file"
+                  accept="image/*"
+                  className="sr-only"
+                  onChange={handlePhotoChange}
+                />
+              </label>
+            </div>
+
+            {photoPreview && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={photoPreview}
+                alt={t("inventory.list.photoPreviewAlt")}
+                className="mt-3 h-40 w-full rounded-doc border border-doc-border object-cover"
+              />
+            )}
+
+            <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowForm(false);
+                  setEditingId(null);
+                  setItem(emptyItem);
+                }}
+                className={docButtonSecondary}
+              >
+                {t("vehicles.forms.cancelEdit")}
+              </button>
+              <button
+                type="button"
+                onClick={saveItem}
+                disabled={isSaving}
+                className={docButtonPrimary}
+              >
+                {isSaving ? t("common.buttons.saving") : t("inventory.list.saveItem")}
+              </button>
+            </div>
+          </SectionPanel>
+        </div>
+      )}
+
+      <div className="mt-6">
+        <RegisterToolbar
+          filtersLabel={t("common.register.filters")}
+          filtersCloseLabel={t("common.register.filtersClose")}
+          activeFilterCount={activeFilterCount}
+          search={
+            <SearchField
+              label={t("inventory.register.searchLabel")}
+              placeholder={t("inventory.register.searchPlaceholder")}
+              value={search}
+              onChange={setSearch}
+            />
+          }
+          filters={
+            <div className="space-y-2">
+              <FilterChips
+                label={t("inventory.register.stockFilterLabel")}
+                active={stockFilter}
+                onSelect={(key) => setStockFilter(key as StockFilter)}
+                options={[
+                  { key: "all", label: t("common.register.all"), count: items.length },
+                  { key: "low", label: t("inventory.stock.low"), count: statusCounts.low },
+                  { key: "out", label: t("inventory.stock.out"), count: statusCounts.out },
+                  { key: "ok", label: t("inventory.stock.ok"), count: statusCounts.ok },
+                  {
+                    key: "untracked",
+                    label: t("inventory.stock.untracked"),
+                    count: statusCounts.untracked,
+                  },
+                ]}
+              />
+              {categories.length > 0 && (
+                <FilterChips
+                  label={t("inventory.list.categoryLabel")}
+                  active={categoryFilter}
+                  onSelect={setCategoryFilter}
+                  options={[
+                    { key: "all", label: t("common.register.allCategories") },
+                    ...categories.map((category) => ({ key: category, label: category })),
+                  ]}
+                />
+              )}
+            </div>
+          }
+        />
+      </div>
+
+      <div className="mt-4">
+        {loading ? (
+          <LoadingRows label={t("common.buttons.loading")} />
+        ) : loadError ? (
+          <Notice tone="critical">{loadError}</Notice>
+        ) : items.length === 0 ? (
+          <EmptyState
+            title={t("inventory.list.noneYet")}
+            action={
+              <button
+                type="button"
+                onClick={() => setShowForm(true)}
+                disabled={isItemCreationUnavailable}
+                className={`${docButtonPrimary} gap-2`}
+              >
+                <PlusIcon size={16} />
+                {t("inventory.list.addItem")}
+              </button>
+            }
+          />
+        ) : visibleItems.length === 0 ? (
+          <EmptyState title={t("common.register.noMatches")} />
         ) : (
-          <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
-            {items.map((row) => (
-              <div
-                key={row.id}
-                className="rounded-2xl border border-subtle bg-surface-1 p-6 shadow-sm"
-              >{row.first_photo_url ? (
-  <img
-    src={row.first_photo_url}
-    alt={row.name || t("inventory.photoAlt")}
-    className="mb-4 h-56 w-full rounded-xl object-cover"
-  />
-) : (
-  <div className="mb-4 flex h-56 w-full items-center justify-center rounded-xl border-2 border-dashed border-subtle bg-surface-2">
-    <div className="text-center text-muted-esblu">
-      <div className="text-6xl">📦</div>
-      <p className="mt-2 text-sm font-medium">
-        {t("inventory.list.noPhoto")}
-      </p>
-    </div>
-  </div>
-)}
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <h3 className="text-2xl font-bold">
-                      {row.name || t("dashboard.noName")}
-                    </h3>
+          <>
+            <RegisterHeader columns={INVENTORY_COLUMNS}>
+              <span>{t("inventory.register.colItem")}</span>
+              <span>{t("inventory.list.locationLabel")}</span>
+              <span className="text-right">{t("inventory.list.quantityLabel")}</span>
+              <span>{t("inventory.register.colStock")}</span>
+            </RegisterHeader>
 
-                    <p className="mt-2 text-secondary">
-                      {t("inventory.list.categoryLabel")}: {row.category || "—"}
-                    </p>
+            <ul className="mt-2 space-y-1.5">
+              {visibleItems.map((row) => (
+                <DataRow
+                  key={row.id}
+                  href={inventoryItemDetailHref(row.id)}
+                  columns={INVENTORY_COLUMNS}
+                  ariaLabel={row.name ?? t("dashboard.noName")}
+                  trailing={
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => editItem(row)}
+                        aria-label={`${t("common.buttons.edit")}: ${row.name ?? ""}`}
+                        className={`${docButtonSecondary} px-2.5 text-xs`}
+                      >
+                        {t("common.buttons.edit")}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => deleteItem(row.id)}
+                        aria-label={`${t("common.buttons.delete")}: ${row.name ?? ""}`}
+                        className={`${docButtonDanger} px-2.5 text-xs`}
+                      >
+                        {t("common.buttons.delete")}
+                      </button>
+                    </>
+                  }
+                >
+                  <div className="flex min-w-0 items-center gap-3">
+                    {row.first_photo_url ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={row.first_photo_url}
+                        alt=""
+                        className="h-10 w-10 shrink-0 rounded-doc-sm border border-doc-border object-cover"
+                      />
+                    ) : (
+                      <span
+                        aria-hidden="true"
+                        className="flex h-10 w-10 shrink-0 items-center justify-center rounded-doc-sm border border-doc-border bg-surface-2 text-muted-esblu"
+                      >
+                        <PackageIcon size={18} />
+                      </span>
+                    )}
+                    <div className="min-w-0">
+                      <span className="block truncate font-medium text-primary">
+                        {row.name || t("dashboard.noName")}
+                      </span>
+                      <span className="mt-0.5 block truncate text-sm text-muted-esblu">
+                        {row.category || "—"}
+                      </span>
+                    </div>
                   </div>
 
-                  {isLowStock(row) && (
-                    <div className="badge-warning rounded-xl px-4 py-2 font-bold">
-                      {t("inventory.list.lowStock")}
-                    </div>
-                  )}
-                </div>
+                  <p className="mt-1.5 truncate text-sm text-secondary sm:mt-0">
+                    {row.location || "—"}
+                  </p>
 
-                <div className="mt-5 grid grid-cols-2 gap-3 text-sm">
-                  <p><b>{t("inventory.list.quantityLabel")}:</b> {row.quantity ?? 0} {row.unit || ""}</p>
-                  <p><b>{t("inventory.list.minimumLabel")}:</b> {row.min_quantity ?? "—"} {row.unit || ""}</p>
-                  <p><b>{t("inventory.list.locationLabel")}:</b> {row.location || "—"}</p>
-                  <p><b>{t("inventory.list.notesLabel")}</b> {row.notes || "—"}</p>
-                </div>
-
-                <div className="mt-5 flex gap-3">
-                  <Link
-                    href={inventoryItemDetailHref(row.id)}
-                    className="btn-secondary px-4 py-2"
-                  >
-                    {t("inventory.list.detailLink")}
-                  </Link>
-
-                  <button
-                    onClick={() => editItem(row)}
-                    className="rounded-xl bg-blue-600 px-4 py-2 text-white"
-                  >
-                    {t("common.buttons.edit")}
-                  </button>
-
-                  <button
-                    onClick={() => deleteItem(row.id)}
-                    className="rounded-xl bg-red-600 px-4 py-2 text-white"
-                  >
-                    {t("common.buttons.delete")}
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
+                  {/* Množstvo a stav idú na mobile do jedného riadku, aby
+                      položka zabrala tri riadky namiesto šiestich. */}
+                  <div className="mt-2 flex items-center justify-between gap-3 sm:contents">
+                    <p className="text-base font-semibold tabular-nums text-primary sm:text-sm sm:text-right">
+                      {quantityLabel(row)}
+                    </p>
+                    <div className="flex sm:justify-start">{stockBadge(row)}</div>
+                  </div>
+                </DataRow>
+              ))}
+            </ul>
+          </>
         )}
       </div>
-    </main>
+    </PageShell>
   );
 }

@@ -1,12 +1,59 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 import BackLink from "@/app/components/BackLink";
 import { getMyActiveMembership } from "@/lib/company";
 import { useCompanyDpaLegalHold } from "@/app/components/CompanyDpaGate";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import { computeDeadlineStatus } from "@/lib/deadlines";
+import { formatDate, formatNumber } from "@/lib/i18n/format";
+import {
+  machineServiceAttention,
+  summarizeMachineServices,
+  type MachineRow,
+  type MachineServiceRow,
+} from "@/lib/machines";
+
+type MachinePhoto = {
+  id: string;
+  machine_id: string | null;
+  file_path: string;
+  created_at: string;
+};
+import {
+  fetchMachineDocuments,
+  type MachineDocumentEntry,
+} from "@/lib/machine-documents";
+import {
+  PageShell,
+  PageHeader,
+  SectionPanel,
+  MetricGrid,
+  Metric,
+  MetadataGrid,
+  Notice,
+  EmptyState,
+  TimelineItem,
+  StatusBadge,
+  docButtonPrimary,
+  docButtonSecondary,
+  docButtonDanger,
+  docField,
+  docLabel,
+} from "@/app/components/ui/Primitives";
+import {
+  CameraIcon,
+  FileIcon,
+  ImageIcon,
+  MachineIcon,
+  PlusIcon,
+  TrashIcon,
+  WrenchIcon,
+} from "@/app/components/icons/AppIcons";
+
+type DetailTab = "overview" | "service" | "documents" | "photos";
 
 type MachineService = {
   id: string;
@@ -134,20 +181,22 @@ export default function MachineDetailView({
 
   const [userId, setUserId] = useState("");
   const [companyId, setCompanyId] = useState("");
-  const [machine, setMachine] = useState<any>(null);
-  const [photos, setPhotos] = useState<any[]>([]);
+  const [machine, setMachine] = useState<MachineRow | null>(null);
+  const [photos, setPhotos] = useState<MachinePhoto[]>([]);
   const [services, setServices] = useState<MachineService[]>([]);
   const [service, setService] = useState(emptyService);
   const [showServiceForm, setShowServiceForm] = useState(false);
   const [editingServiceId, setEditingServiceId] = useState<string | null>(null);
   const [isServiceSaving, setIsServiceSaving] = useState(false);
   const [deletingServiceId, setDeletingServiceId] = useState<string | null>(null);
+  const [documents, setDocuments] = useState<MachineDocumentEntry[]>([]);
+  const [tab, setTab] = useState<DetailTab>("overview");
   const [isUploading, setIsUploading] = useState(false);
   const [deletingPhotoId, setDeletingPhotoId] = useState<string | null>(null);
   const serviceSaveInProgressRef = useRef(false);
   const serviceDeleteInProgressRef = useRef(false);
   const { legalHold } = useCompanyDpaLegalHold();
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
 
   useEffect(() => {
     checkUser();
@@ -179,6 +228,7 @@ export default function MachineDetailView({
     loadMachine(membership.company_id);
     loadPhotos(membership.company_id);
     loadServices(membership.company_id);
+    loadDocuments();
   }
 
   async function loadMachine(currentCompanyId: string) {
@@ -190,6 +240,16 @@ export default function MachineDetailView({
       .single();
 
     setMachine(data);
+  }
+
+  /**
+   * Dokumenty priradené k stroju. Väzba document_links.machine_id /
+   * ai_evidence.machine_id v DB existuje a Inbox do nej už dnes zapisuje
+   * ("Uložiť k stroju") — detail stroja ich len nikdy nezobrazil.
+   * Žiadna nová tabuľka, žiadna nová migrácia, iba čítanie cez RLS.
+   */
+  async function loadDocuments() {
+    setDocuments(await fetchMachineDocuments(supabase, machineId));
   }
 
   async function loadPhotos(currentCompanyId: string = companyId) {
@@ -471,12 +531,13 @@ export default function MachineDetailView({
     }
 
     await loadPhotos();
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Chyba pri nahrávaní fotografie stroja:", error);
 
     alert(
       t("machines.errors.photoUploadFailedPrefix", {
-        message: error?.message || t("vehicles.errors.unknownError"),
+        message:
+          error instanceof Error ? error.message : t("vehicles.errors.unknownError"),
       })
     );
   } finally {
@@ -486,7 +547,7 @@ export default function MachineDetailView({
     event.target.value = "";
   }
 }
-  async function deletePhoto(photo: any) {
+  async function deletePhoto(photo: MachinePhoto) {
     if (deletingPhotoId) return;
 
     const photoId = String(photo?.id || "");
@@ -569,387 +630,573 @@ export default function MachineDetailView({
     return data.publicUrl;
   }
 
+  // ---------------------------------------------------------------------------
+  // Odvodené ukazovatele. Tabuľka `machines` nemá motohodiny ani termíny
+  // servisu — všetko nižšie pochádza z už načítaných machine_services.
+  // ---------------------------------------------------------------------------
+  const summary = summarizeMachineServices(services as unknown as MachineServiceRow[]);
+  const attention = machineServiceAttention(summary.nextServiceDate);
+
   if (!machine) {
-    return <div className="p-10">{t("common.buttons.loading")}</div>;
+    return (
+      <PageShell>
+        <p className="py-10 text-sm text-secondary">{t("common.buttons.loading")}</p>
+      </PageShell>
+    );
   }
 
+  const TABS: { key: DetailTab; label: string; count?: number }[] = [
+    { key: "overview", label: t("machines.detail.tabOverview") },
+    { key: "service", label: t("machines.detail.servicesTitle"), count: services.length },
+    { key: "documents", label: t("machines.detail.documentsTitle"), count: documents.length },
+    { key: "photos", label: t("machines.detail.galleryTitle"), count: photos.length },
+  ];
+
+  const coverPhoto = photos[0] ? photoUrl(photos[0].file_path) : null;
+
   return (
-    <main className="app-shell-bg min-h-screen p-10">
-      <BackLink href="/stroje" label={t("nav.machines")} className="mb-4" />
+    <PageShell>
+      <BackLink href="/stroje" label={t("nav.machines")} className="mb-6" />
 
-      <h1 className="text-4xl font-bold">🚜 {machine.name}</h1>
+      <PageHeader
+        eyebrow={
+          <span className="inline-flex items-center gap-2">
+            <MachineIcon size={18} />
+            {machine.category || t("nav.machines")}
+          </span>
+        }
+        title={
+          <span className="flex items-center gap-3">
+            {coverPhoto ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={coverPhoto}
+                alt=""
+                className="h-11 w-11 shrink-0 rounded-doc-sm border border-doc-border object-cover"
+              />
+            ) : (
+              <span
+                aria-hidden="true"
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-doc-sm border border-doc-border bg-surface-2 text-muted-esblu"
+              >
+                <MachineIcon size={22} />
+              </span>
+            )}
+            <span className="min-w-0 break-words">{machine.name}</span>
+          </span>
+        }
+        badges={
+          <>
+            {machine.status && (
+              <span className="rounded-doc-sm border border-doc-border px-2 py-0.5 text-xs font-medium text-secondary">
+                {machine.status}
+              </span>
+            )}
+            {attention === "overdue" && (
+              <StatusBadge kind="overdue" label={t("machines.service.overdue")} />
+            )}
+            {attention === "due_soon" && (
+              <StatusBadge kind="needs_review" label={t("machines.service.dueSoon")} />
+            )}
+          </>
+        }
+        meta={
+          [machine.manufacturer, machine.model, machine.serial_number]
+            .filter(Boolean)
+            .join(" · ") || undefined
+        }
+      />
 
-      {/* Upozornenie na ďalší servis — Intent Engine / Deadline Engine
-          (zadanie, bod 9B: "Detail vozidla/stroja — relevantné upozornenie
-          pri konkrétnej entite"). Číta VÝLUČNE už načítané `services`
-          (žiadny nový dopyt) — `services[0]` je najnovší servis (zoradené
-          service_date DESC pri loadServices()), presne rovnaká
-          "posledný servis → jeho next_service_date" logika, akú používa
-          zdieľaný lib/deadlines.ts pre Dashboard aj Intent Engine. */}
-      {(() => {
-        const nextServiceDate = services[0]?.next_service_date;
-        const status = computeDeadlineStatus(nextServiceDate);
-        if (!status) return null;
+      {/* Kľúčové ukazovatele. Motohodiny sú zámerne označené ako "pri
+          poslednom servise" — machines nemá stĺpec s aktuálnym stavom a
+          tváriť sa, že ho máme, by bolo klamstvo v evidencii majetku. */}
+      <div className="mt-6">
+        <MetricGrid>
+          <Metric
+            label={t("machines.detail.mileageLabel")}
+            value={
+              summary.lastKnownMileage === null
+                ? "—"
+                : formatNumber(summary.lastKnownMileage, locale)
+            }
+            hint={
+              summary.lastKnownMileage === null
+                ? undefined
+                : t("machines.register.atLastService")
+            }
+          />
+          <Metric
+            label={t("machines.detail.lastServiceLabel")}
+            value={
+              summary.lastServiceDate ? formatDate(summary.lastServiceDate, locale) : "—"
+            }
+            hint={
+              summary.serviceCount > 0
+                ? t("machines.detail.serviceCount", { count: String(summary.serviceCount) })
+                : undefined
+            }
+          />
+          <Metric
+            label={t("inbox.fields.nextServiceDate")}
+            value={
+              summary.nextServiceDate ? formatDate(summary.nextServiceDate, locale) : "—"
+            }
+            tone={
+              attention === "overdue" ? "critical" : attention === "due_soon" ? "warning" : "neutral"
+            }
+          />
+          <Metric
+            label={t("machines.detail.totalServiceCostLabel")}
+            value={
+              summary.totalCost === null
+                ? "—"
+                : formatNumber(summary.totalCost, locale, {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                  })
+            }
+            hint={summary.totalCost === null ? undefined : t("machines.detail.fromServiceRecords")}
+          />
+        </MetricGrid>
+      </div>
 
-        const isOverdue = status.severity === "overdue";
-
-        return (
-          <div
-            className={`mt-4 rounded-2xl border px-4 py-3 text-sm font-medium ${
-              isOverdue
-                ? "border-red-400/30 bg-red-400/10 text-red-400"
-                : "border-amber-400/30 bg-amber-400/10 text-amber-400"
-            }`}
-          >
-            {isOverdue
+      {/* Upozornenie na termín — rovnaké prahy ako Dashboard a Intent
+          Engine (lib/deadlines.ts), aby si jeden termín neprotirečil. */}
+      {(attention === "overdue" || attention === "due_soon") && summary.nextServiceDate && (
+        <div className="mt-4">
+          <Notice tone={attention === "overdue" ? "critical" : "warning"}>
+            {attention === "overdue"
               ? t("search.answers.dateOverdue", {
                   type: t("search.deadlineTypeLabels.machineService"),
                   entity: machine.name || "",
-                  date: new Date(nextServiceDate as string).toLocaleDateString(),
-                  days: Math.abs(status.daysRemaining),
+                  date: formatDate(summary.nextServiceDate, locale),
+                  days: Math.abs(computeDeadlineStatus(summary.nextServiceDate)?.daysRemaining ?? 0),
                 })
               : t("search.answers.dateDueSoon", {
                   type: t("search.deadlineTypeLabels.machineService"),
                   entity: machine.name || "",
-                  date: new Date(nextServiceDate as string).toLocaleDateString(),
-                  days: status.daysRemaining,
+                  date: formatDate(summary.nextServiceDate, locale),
+                  days: computeDeadlineStatus(summary.nextServiceDate)?.daysRemaining ?? 0,
                 })}
-          </div>
-        );
-      })()}
-
-      <div className="surface-card mt-8 p-8">
-        <div className="grid grid-cols-2 gap-5">
-          <p><b>{t("machines.list.categoryLabel")}:</b> {machine.category || "—"}</p>
-          <p><b>{t("machines.list.manufacturerLabel")}:</b> {machine.manufacturer || "—"}</p>
-          <p><b>{t("machines.list.modelLabel")}:</b> {machine.model || "—"}</p>
-          <p><b>{t("machines.list.serialNumberLabel")}:</b> {machine.serial_number || "—"}</p>
-          <p><b>{t("inbox.fields.rokVyroby")}:</b> {machine.year || "—"}</p>
-          <p><b>{t("machines.detail.purchaseDateLabel")}:</b> {machine.purchase_date || "—"}</p>
-          <p><b>{t("machines.list.statusLabel")}:</b> {machine.status || "—"}</p>
+          </Notice>
         </div>
+      )}
 
-        {machine.notes && (
-          <div className="mt-6 rounded-xl bg-surface-2 p-4">
-            <b>{t("machines.detail.notesLabel")}</b>
-            <p className="mt-2">{machine.notes}</p>
-          </div>
-        )}
-      </div>
-
-      <section className="mt-10 rounded-2xl bg-surface-1 p-5 shadow sm:p-8">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <h2 className="text-2xl font-bold">{t("machines.detail.servicesTitle")}</h2>
-
+      {/* Záložky. Detail majetku má štyri celkom odlišné obsahy —
+          zoskrolovať ich pod seba by znamenalo, že fotky sú 900 px
+          pod servisom. */}
+      <div
+        role="tablist"
+        aria-label={t("machines.detail.sectionsLabel")}
+        className="mt-6 -mx-1 flex gap-1 overflow-x-auto px-1"
+      >
+        {TABS.map((item) => (
           <button
+            key={item.key}
+            role="tab"
             type="button"
-            onClick={() => {
-              if (showServiceForm) {
-                cancelServiceEdit();
-              } else {
-                if (legalHold) {
-                  alert(t("common.legalHoldMessage"));
-                  return;
-                }
-                setService(emptyService);
-                setEditingServiceId(null);
-                setShowServiceForm(true);
-              }
-            }}
-            disabled={
-              isServiceSaving ||
-              deletingServiceId !== null ||
-              (!showServiceForm && legalHold)
-            }
-            className="w-full rounded-xl bg-blue-600 px-5 py-3 text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-gray-400 sm:w-auto"
+            aria-selected={tab === item.key}
+            onClick={() => setTab(item.key)}
+            className={`whitespace-nowrap rounded-doc-sm border px-3 py-2 text-sm font-medium transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-cyan ${
+              tab === item.key
+                ? "border-border-strong bg-surface-hover text-primary"
+                : "border-doc-border text-secondary hover:text-primary"
+            }`}
           >
-            {showServiceForm ? t("machines.detail.closeForm") : t("vehicles.services.addService")}
+            {item.label}
+            {item.count !== undefined && item.count > 0 && (
+              <span className="ml-1.5 tabular-nums opacity-70">{item.count}</span>
+            )}
           </button>
-        </div>
-
-        {legalHold && !showServiceForm && (
-          <p className="mt-3 text-sm text-amber-400">{t("common.legalHoldMessage")}</p>
-        )}
-
-        {showServiceForm && (
-          <div className="mt-6 rounded-2xl border border-subtle bg-surface-2 p-4 sm:p-6">
-            <h3 className="text-xl font-bold">
-              {editingServiceId
-                ? t("vehicles.services.editServiceTitle")
-                : t("vehicles.services.addServiceTitle")}
-            </h3>
-
-            <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
-              <label className="min-w-0 text-sm font-medium text-secondary">
-                {t("machines.detail.serviceDateLabel")}
-                <input
-                  type="date"
-                  value={service.service_date}
-                  onChange={(event) =>
-                    updateService("service_date", event.target.value)
-                  }
-                  disabled={isServiceSaving}
-                  className="mt-1 w-full min-w-0 rounded-xl border bg-surface-1 p-3 text-base font-normal text-primary disabled:bg-surface-2"
-                />
-              </label>
-
-              <label className="min-w-0 text-sm font-medium text-secondary">
-                {t("machines.detail.mileageLabel")}
-                <input
-                  type="number"
-                  min="0"
-                  step="1"
-                  inputMode="numeric"
-                  value={service.mileage}
-                  onChange={(event) =>
-                    updateService("mileage", event.target.value)
-                  }
-                  disabled={isServiceSaving}
-                  className="mt-1 w-full min-w-0 rounded-xl border bg-surface-1 p-3 text-base font-normal text-primary disabled:bg-surface-2"
-                />
-              </label>
-
-              <label className="min-w-0 text-sm font-medium text-secondary">
-                {t("machines.detail.titleLabel")}
-                <input
-                  value={service.title}
-                  onChange={(event) =>
-                    updateService("title", event.target.value)
-                  }
-                  disabled={isServiceSaving}
-                  className="mt-1 w-full min-w-0 rounded-xl border bg-surface-1 p-3 text-base font-normal text-primary disabled:bg-surface-2"
-                />
-              </label>
-
-              <label className="min-w-0 text-sm font-medium text-secondary">
-                {t("machines.detail.costLabel")}
-                <input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  inputMode="decimal"
-                  value={service.cost}
-                  onChange={(event) =>
-                    updateService("cost", event.target.value)
-                  }
-                  disabled={isServiceSaving}
-                  className="mt-1 w-full min-w-0 rounded-xl border bg-surface-1 p-3 text-base font-normal text-primary disabled:bg-surface-2"
-                />
-              </label>
-
-              <label className="min-w-0 text-sm font-medium text-secondary">
-                {t("machines.detail.technicianLabel")}
-                <input
-                  value={service.technician}
-                  onChange={(event) =>
-                    updateService("technician", event.target.value)
-                  }
-                  disabled={isServiceSaving}
-                  className="mt-1 w-full min-w-0 rounded-xl border bg-surface-1 p-3 text-base font-normal text-primary disabled:bg-surface-2"
-                />
-              </label>
-
-              <label className="min-w-0 text-sm font-medium text-secondary">
-                {t("inbox.fields.nextServiceDate")}
-                <input
-                  type="date"
-                  value={service.next_service_date}
-                  onChange={(event) =>
-                    updateService("next_service_date", event.target.value)
-                  }
-                  disabled={isServiceSaving}
-                  className="mt-1 w-full min-w-0 rounded-xl border bg-surface-1 p-3 text-base font-normal text-primary disabled:bg-surface-2"
-                />
-              </label>
-            </div>
-
-            <label className="mt-4 block text-sm font-medium text-secondary">
-              {t("machines.detail.descriptionLabel")}
-              <textarea
-                value={service.description}
-                onChange={(event) =>
-                  updateService("description", event.target.value)
-                }
-                disabled={isServiceSaving}
-                rows={4}
-                className="mt-1 w-full min-w-0 resize-y rounded-xl border bg-surface-1 p-3 text-base font-normal text-primary disabled:bg-surface-2"
-              />
-            </label>
-
-            <div className="mt-5 flex flex-col gap-3 sm:flex-row">
-              <button
-                type="button"
-                onClick={saveService}
-                disabled={isServiceSaving || deletingServiceId !== null}
-                className="w-full rounded-xl bg-green-600 px-5 py-3 text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:bg-gray-400 sm:w-auto"
-              >
-                {isServiceSaving
-                  ? t("common.buttons.saving")
-                  : editingServiceId
-                    ? t("machines.detail.saveChangesPlain")
-                    : t("machines.detail.saveServicePlain")}
-              </button>
-
-              <button
-                type="button"
-                onClick={cancelServiceEdit}
-                disabled={isServiceSaving}
-                className="w-full rounded-xl bg-surface-2 px-5 py-3 text-primary hover:bg-surface-hover disabled:cursor-not-allowed disabled:bg-surface-1 disabled:text-muted-esblu sm:w-auto"
-              >
-                {t("common.buttons.cancel")}
-              </button>
-            </div>
-          </div>
-        )}
-
-        {services.length === 0 ? (
-          <p className="mt-6 text-muted-esblu">
-            {t("machines.detail.noServicesYet")}
-          </p>
-        ) : (
-          <div className="mt-6 space-y-4">
-            {services.map((item) => (
-              <article
-                key={item.id}
-                className="min-w-0 rounded-2xl border border-subtle bg-surface-2 p-4 shadow-sm sm:p-6"
-              >
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                  <div className="min-w-0">
-                    <h3 className="break-words text-xl font-bold text-primary sm:text-2xl">
-                      🔧 {item.title}
-                    </h3>
-                    <p className="mt-1 text-sm text-muted-esblu">
-                      📅 {item.service_date}
-                    </p>
-                  </div>
-
-                  {item.cost != null && (
-                    <div className="badge-success self-start rounded-xl px-4 py-2 font-bold">
-                      {item.cost} €
-                    </div>
-                  )}
-                </div>
-
-                <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-3">
-                  <div className="rounded-xl bg-surface-1 p-4">
-                    <p className="text-sm text-muted-esblu">{t("machines.detail.mileageLabel")}</p>
-                    <p className="break-words text-lg font-bold">
-                      {item.mileage != null ? item.mileage : "—"}
-                    </p>
-                  </div>
-
-                  <div className="rounded-xl bg-surface-1 p-4">
-                    <p className="text-sm text-muted-esblu">{t("machines.detail.technicianLabel")}</p>
-                    <p className="break-words text-lg font-bold">
-                      {item.technician || "—"}
-                    </p>
-                  </div>
-
-                  <div className="rounded-xl bg-surface-1 p-4">
-                    <p className="text-sm text-muted-esblu">{t("inbox.fields.nextServiceDate")}</p>
-                    <p className="break-words text-lg font-bold">
-                      {item.next_service_date || "—"}
-                    </p>
-                  </div>
-                </div>
-
-                {item.description && (
-                  <p className="mt-5 whitespace-pre-wrap break-words rounded-xl bg-surface-1 p-4 text-secondary">
-                    {item.description}
-                  </p>
-                )}
-
-                <div className="mt-5 flex flex-col gap-3 sm:flex-row">
-                  <button
-                    type="button"
-                    onClick={() => startEditService(item)}
-                    disabled={
-                      isServiceSaving || deletingServiceId !== null
-                    }
-                    className="w-full rounded-xl bg-blue-600 px-4 py-2 text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-gray-400 sm:w-auto"
-                  >
-                    {t("common.buttons.edit")}
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => deleteService(item.id)}
-                    disabled={
-                      isServiceSaving || deletingServiceId !== null
-                    }
-                    className="w-full rounded-xl bg-red-600 px-4 py-2 text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-gray-400 sm:w-auto"
-                  >
-                    {deletingServiceId === item.id ? t("inbox.deleting") : t("common.buttons.delete")}
-                  </button>
-                </div>
-              </article>
-            ))}
-          </div>
-        )}
-      </section>
-
-      <div className="surface-card mt-10 p-8">
-        <div className="flex items-center justify-between">
-          <h2 className="text-2xl font-bold">{t("machines.detail.galleryTitle")}</h2>
-
-          <div className="flex gap-3">
-  <label className="cursor-pointer rounded-xl bg-blue-600 px-5 py-3 text-white hover:bg-blue-700">
-    {isUploading ? t("inbox.uploading") : t("inbox.registration.takePhoto")}
-    <input
-      type="file"
-      accept="image/*"
-      capture="environment"
-      className="hidden"
-      onChange={uploadPhoto}
-      disabled={isUploading || legalHold}
-    />
-  </label>
-
-  <label className="cursor-pointer rounded-xl border border-subtle bg-surface-1 px-5 py-3 text-secondary">
-    {t("machines.detail.galleryButton")}
-    <input
-      type="file"
-      accept="image/*"
-      className="hidden"
-      onChange={uploadPhoto}
-      disabled={isUploading || legalHold}
-    />
-  </label>
-</div>
-        </div>
-
-        {legalHold && (
-          <p className="mt-3 text-sm text-amber-400">{t("common.legalHoldMessage")}</p>
-        )}
-
-        {photos.length === 0 ? (
-          <p className="mt-6 text-muted-esblu">
-            {t("machines.detail.noPhotosYet")}
-          </p>
-        ) : (
-          <div className="mt-6 grid grid-cols-1 gap-5 md:grid-cols-3">
-            {photos.map((photo) => (
-              <div key={photo.id} className="rounded-xl border border-subtle bg-surface-2 p-3">
-                <img
-                  src={photoUrl(photo.file_path)}
-                  alt={t("machines.photoAlt")}
-                  className="h-48 w-full rounded-xl object-cover"
-                />
-
-                <button
-                  onClick={() => deletePhoto(photo)}
-                  disabled={deletingPhotoId !== null}
-                  className="mt-3 w-full rounded-xl bg-red-600 px-4 py-2 text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-gray-400"
-                >
-                  {deletingPhotoId === String(photo.id)
-                    ? t("inbox.deleting")
-                    : t("vehicles.buttons.deleteWithIcon")}
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
+        ))}
       </div>
-    </main>
+
+      {/* ------------------------------ PREHĽAD ----------------------------- */}
+      {tab === "overview" && (
+        <div className="mt-4 space-y-4">
+          <SectionPanel title={t("machines.detail.tabOverview")}>
+            <MetadataGrid
+              items={[
+                { label: t("machines.list.categoryLabel"), value: machine.category },
+                { label: t("machines.list.manufacturerLabel"), value: machine.manufacturer },
+                { label: t("machines.list.modelLabel"), value: machine.model },
+                { label: t("machines.list.serialNumberLabel"), value: machine.serial_number },
+                { label: t("inbox.fields.rokVyroby"), value: machine.year },
+                {
+                  label: t("machines.detail.purchaseDateLabel"),
+                  value: machine.purchase_date
+                    ? formatDate(machine.purchase_date, locale)
+                    : null,
+                },
+                { label: t("machines.list.statusLabel"), value: machine.status },
+              ]}
+            />
+          </SectionPanel>
+
+          {machine.notes && (
+            <SectionPanel title={t("machines.detail.notesLabel")}>
+              <p className="whitespace-pre-wrap text-sm text-secondary">{machine.notes}</p>
+            </SectionPanel>
+          )}
+        </div>
+      )}
+
+      {/* ------------------------------- SERVIS ----------------------------- */}
+      {tab === "service" && (
+        <div className="mt-4">
+          <SectionPanel
+            title={t("machines.detail.servicesTitle")}
+            actions={
+              <button
+                type="button"
+                onClick={() => {
+                  if (showServiceForm) cancelServiceEdit();
+                  else setShowServiceForm(true);
+                }}
+                className={`${docButtonSecondary} gap-2`}
+              >
+                {showServiceForm ? null : <PlusIcon size={16} />}
+                {showServiceForm
+                  ? t("machines.detail.closeForm")
+                  : t("vehicles.services.addService")}
+              </button>
+            }
+          >
+            {legalHold && (
+              <div className="mb-4">
+                <Notice tone="warning">{t("common.legalHoldMessage")}</Notice>
+              </div>
+            )}
+
+            {showServiceForm && (
+              <div className="mb-4 rounded-doc border border-doc-border bg-surface-2 p-4">
+                <p className="mb-3 text-sm font-semibold text-primary">
+                  {editingServiceId
+                    ? t("vehicles.services.editServiceTitle")
+                    : t("vehicles.services.addServiceTitle")}
+                </p>
+
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div>
+                    <label className={docLabel} htmlFor="service-date">
+                      {t("machines.detail.serviceDateLabel")}
+                    </label>
+                    <input
+                      id="service-date"
+                      type="date"
+                      className={docField}
+                      value={service.service_date}
+                      onChange={(event) => updateService("service_date", event.target.value)}
+                    />
+                  </div>
+
+                  <div>
+                    <label className={docLabel} htmlFor="service-title">
+                      {t("machines.detail.titleLabel")}
+                    </label>
+                    <input
+                      id="service-title"
+                      className={docField}
+                      value={service.title}
+                      onChange={(event) => updateService("title", event.target.value)}
+                    />
+                  </div>
+
+                  <div>
+                    <label className={docLabel} htmlFor="service-mileage">
+                      {t("machines.detail.mileageLabel")}
+                    </label>
+                    <input
+                      id="service-mileage"
+                      inputMode="numeric"
+                      className={docField}
+                      value={service.mileage}
+                      onChange={(event) => updateService("mileage", event.target.value)}
+                    />
+                  </div>
+
+                  <div>
+                    <label className={docLabel} htmlFor="service-cost">
+                      {t("machines.detail.costLabel")}
+                    </label>
+                    <input
+                      id="service-cost"
+                      inputMode="decimal"
+                      className={docField}
+                      value={service.cost}
+                      onChange={(event) => updateService("cost", event.target.value)}
+                    />
+                  </div>
+
+                  <div>
+                    <label className={docLabel} htmlFor="service-technician">
+                      {t("machines.detail.technicianLabel")}
+                    </label>
+                    <input
+                      id="service-technician"
+                      className={docField}
+                      value={service.technician}
+                      onChange={(event) => updateService("technician", event.target.value)}
+                    />
+                  </div>
+
+                  <div>
+                    <label className={docLabel} htmlFor="service-next">
+                      {t("inbox.fields.nextServiceDate")}
+                    </label>
+                    <input
+                      id="service-next"
+                      type="date"
+                      className={docField}
+                      value={service.next_service_date}
+                      onChange={(event) =>
+                        updateService("next_service_date", event.target.value)
+                      }
+                    />
+                  </div>
+
+                  <div className="sm:col-span-2">
+                    <label className={docLabel} htmlFor="service-description">
+                      {t("machines.detail.descriptionLabel")}
+                    </label>
+                    <textarea
+                      id="service-description"
+                      rows={3}
+                      className={docField}
+                      value={service.description}
+                      onChange={(event) => updateService("description", event.target.value)}
+                    />
+                  </div>
+                </div>
+
+                <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:justify-end">
+                  <button
+                    type="button"
+                    onClick={cancelServiceEdit}
+                    className={docButtonSecondary}
+                  >
+                    {t("vehicles.forms.cancelEdit")}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={saveService}
+                    disabled={isServiceSaving}
+                    className={docButtonPrimary}
+                  >
+                    {isServiceSaving
+                      ? t("common.buttons.saving")
+                      : editingServiceId
+                        ? t("machines.detail.saveChangesPlain")
+                        : t("machines.detail.saveServicePlain")}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {services.length === 0 ? (
+              <EmptyState title={t("machines.detail.noServicesYet")} />
+            ) : (
+              /* Časová os namiesto kopy kariet — servisná história sa číta
+                 chronologicky, nie ako galéria. */
+              <ol className="mt-1">
+                {services.map((item, index) => (
+                  <TimelineItem
+                    key={item.id}
+                    last={index === services.length - 1}
+                    marker={<WrenchIcon size={14} />}
+                    title={item.title}
+                    meta={
+                      <span className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-sm">
+                        <span className="tabular-nums text-secondary">
+                          {item.service_date ? formatDate(item.service_date, locale) : "—"}
+                        </span>
+                        {item.mileage !== null && item.mileage !== "" && (
+                          <span className="text-muted-esblu">
+                            {t("machines.detail.mileageLabel")}:{" "}
+                            <span className="tabular-nums">{item.mileage}</span>
+                          </span>
+                        )}
+                        {item.technician && (
+                          <span className="text-muted-esblu">{item.technician}</span>
+                        )}
+                        {item.cost !== null && item.cost !== "" && (
+                          <span className="font-medium tabular-nums text-primary">
+                            {item.cost} €
+                          </span>
+                        )}
+                        {item.next_service_date && (
+                          <span className="text-muted-esblu">
+                            {t("inbox.fields.nextServiceDate")}:{" "}
+                            <span className="tabular-nums">
+                              {formatDate(item.next_service_date, locale)}
+                            </span>
+                          </span>
+                        )}
+                      </span>
+                    }
+                    actions={
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => startEditService(item)}
+                          aria-label={`${t("common.buttons.edit")}: ${item.title}`}
+                          className={`${docButtonSecondary} px-2.5 text-xs`}
+                        >
+                          {t("common.buttons.edit")}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => deleteService(item.id)}
+                          disabled={deletingServiceId === item.id}
+                          aria-label={`${t("common.buttons.delete")}: ${item.title}`}
+                          className={`${docButtonDanger} px-2.5 text-xs`}
+                        >
+                          {deletingServiceId === item.id
+                            ? t("inbox.deleting")
+                            : t("common.buttons.delete")}
+                        </button>
+                      </>
+                    }
+                  >
+                    {item.description && (
+                      <p className="whitespace-pre-wrap text-sm text-secondary">
+                        {item.description}
+                      </p>
+                    )}
+                  </TimelineItem>
+                ))}
+              </ol>
+            )}
+          </SectionPanel>
+        </div>
+      )}
+
+      {/* ----------------------------- DOKUMENTY ---------------------------- */}
+      {tab === "documents" && (
+        <div className="mt-4">
+          <SectionPanel
+            title={t("machines.detail.documentsTitle")}
+            description={t("machines.detail.documentsHint")}
+          >
+            {documents.length === 0 ? (
+              <EmptyState title={t("machines.detail.noDocuments")} />
+            ) : (
+              <ul className="space-y-1.5">
+                {documents.map((doc) => (
+                  <li key={`${doc.source}-${doc.id}`}>
+                    <Link
+                      href={doc.href}
+                      className="flex items-center gap-3 rounded-doc border border-doc-border bg-surface-2 px-3 py-2.5 transition hover:border-border-strong hover:bg-surface-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-cyan"
+                    >
+                      <span aria-hidden="true" className="shrink-0 text-muted-esblu">
+                        <FileIcon size={18} />
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm font-medium text-primary">
+                          {doc.label || t("inbox.documentFallback")}
+                        </span>
+                        <span className="mt-0.5 block truncate text-sm text-muted-esblu">
+                          {doc.documentType || t("inbox.documentFallback")}
+                          {doc.date ? ` · ${formatDate(doc.date, locale)}` : ""}
+                        </span>
+                      </span>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </SectionPanel>
+        </div>
+      )}
+
+      {/* ---------------------------- FOTOGRAFIE ---------------------------- */}
+      {tab === "photos" && (
+        <div className="mt-4">
+          <SectionPanel
+            title={t("machines.detail.galleryTitle")}
+            actions={
+              <>
+                <label
+                  className={`${docButtonSecondary} cursor-pointer gap-2 ${
+                    isUploading || legalHold ? "pointer-events-none opacity-40" : ""
+                  }`}
+                >
+                  <CameraIcon size={16} />
+                  {t("inbox.registration.takePhoto")}
+                  <input
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    className="sr-only"
+                    disabled={isUploading || legalHold}
+                    onChange={uploadPhoto}
+                  />
+                </label>
+                <label
+                  className={`${docButtonSecondary} cursor-pointer gap-2 ${
+                    isUploading || legalHold ? "pointer-events-none opacity-40" : ""
+                  }`}
+                >
+                  <ImageIcon size={16} />
+                  {t("machines.detail.galleryButton")}
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="sr-only"
+                    disabled={isUploading || legalHold}
+                    onChange={uploadPhoto}
+                  />
+                </label>
+              </>
+            }
+          >
+            {legalHold && (
+              <div className="mb-4">
+                <Notice tone="warning">{t("common.legalHoldMessage")}</Notice>
+              </div>
+            )}
+
+            {isUploading && (
+              <p className="mb-3 text-sm text-secondary">{t("inbox.uploading")}</p>
+            )}
+
+            {photos.length === 0 ? (
+              <EmptyState title={t("machines.detail.noPhotosYet")} />
+            ) : (
+              /* Rovnaký pomer strán pre každú fotku — mriežka s náhodne
+                 vysokými dlaždicami pôsobí ako nástenka, nie ako evidencia. */
+              <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+                {photos.map((photo) => (
+                  <li key={photo.id} className="group relative">
+                    <a
+                      href={photoUrl(photo.file_path)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="block overflow-hidden rounded-doc border border-doc-border focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-cyan"
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={photoUrl(photo.file_path)}
+                        alt={t("machines.photoAlt")}
+                        className="aspect-[4/3] w-full object-cover transition group-hover:opacity-90"
+                      />
+                    </a>
+                    <button
+                      type="button"
+                      onClick={() => deletePhoto(photo)}
+                      disabled={deletingPhotoId === photo.id || legalHold}
+                      aria-label={t("vehicles.buttons.deleteWithIcon")}
+                      className="absolute right-2 top-2 flex h-9 w-9 items-center justify-center rounded-doc-sm border border-danger/30 bg-page-bg/80 text-danger backdrop-blur transition hover:bg-danger-soft disabled:opacity-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-cyan"
+                    >
+                      <TrashIcon size={16} />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </SectionPanel>
+        </div>
+      )}
+    </PageShell>
   );
 }

@@ -18,6 +18,14 @@ import { invoiceDetailHref } from "@/lib/entity-links";
 import { isInvoiceOverdue, listInvoices, type Invoice } from "@/lib/invoices";
 import { listBusinessPartners, type BusinessPartner } from "@/lib/business-partners";
 import {
+  RegisterToolbar,
+  RegisterHeader,
+  FilterChips,
+  DataRow,
+  EmptyState,
+  LoadingRows,
+} from "@/app/components/ui/Primitives";
+import {
   DocumentPageShell,
   DocumentHeader,
   DocumentNotice,
@@ -68,6 +76,10 @@ function matchesSection(invoice: Invoice, section: SectionKey): boolean {
       return false;
   }
 }
+
+/** Jedna šablóna stĺpcov pre hlavičku aj riadky — nesmú sa rozísť. */
+const INVOICE_COLUMNS =
+  "sm:grid-cols-[minmax(0,2.2fr)_minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)]";
 
 export default function FakturyPage() {
   const { t, locale } = useLocale();
@@ -254,119 +266,125 @@ export default function FakturyPage() {
       )}
 
       {canView && (
-        <div className="mt-6 space-y-3 rounded-doc border border-doc-border bg-doc-surface p-3 sm:p-4">
-          {/* Smer je primárna os registra — dostáva segmented control,
-              nie ďalší rad rovnakých piluliek. */}
-          <div
-            role="tablist"
-            aria-label={t("invoices.register.directionFilterLabel")}
-            className="inline-flex w-full gap-1 rounded-doc-sm border border-doc-border bg-surface-2 p-1 sm:w-auto"
-          >
-            {DIRECTION_ORDER.map((key) => (
-              <button
-                key={key}
-                role="tab"
-                aria-selected={directionFilter === key}
-                type="button"
-                onClick={() => setDirectionFilter(key)}
-                className={`flex-1 whitespace-nowrap rounded-doc-sm px-3 py-1.5 text-sm font-medium transition sm:flex-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-cyan ${
-                  directionFilter === key
-                    ? "bg-accent-esblu text-on-accent"
-                    : "text-secondary hover:text-primary"
-                }`}
+        <div className="mt-6">
+          <RegisterToolbar
+            filtersLabel={t("common.register.filters")}
+            filtersCloseLabel={t("common.register.filtersClose")}
+            activeSummary={t(`invoices.sections.${section}`)}
+            primary={
+              /* Smer je primárna os registra — segmented control, ktorý
+                 zostáva viditeľný aj na mobile. */
+              <div
+                role="tablist"
+                aria-label={t("invoices.register.directionFilterLabel")}
+                className="inline-flex w-full gap-1 rounded-doc-sm border border-doc-border bg-surface-2 p-1 sm:w-auto"
               >
-                {t(`invoices.direction.${key}`)}
-                <span className="ml-1.5 tabular-nums opacity-70">{directionCounts[key]}</span>
-              </button>
-            ))}
-          </div>
-
-          {/* Stav je sekundárna os — tichšie, s vodorovným scrollom na mobile. */}
-          <div className="-mx-1 flex gap-1.5 overflow-x-auto px-1 pb-0.5">
-            {SECTION_ORDER.map((key) => (
-              <button
-                key={key}
-                type="button"
-                aria-pressed={section === key}
-                onClick={() => setSection(key)}
-                className={`whitespace-nowrap rounded-doc-sm border px-3 py-1.5 text-xs font-medium transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-cyan ${
-                  section === key
-                    ? "border-border-strong bg-surface-hover text-primary"
-                    : "border-doc-border text-secondary hover:text-primary"
-                }`}
-              >
-                {t(`invoices.sections.${key}`)}
-                <span className="ml-1.5 tabular-nums opacity-70">{sectionCounts[key]}</span>
-              </button>
-            ))}
-          </div>
+                {DIRECTION_ORDER.map((key) => (
+                  <button
+                    key={key}
+                    role="tab"
+                    aria-selected={directionFilter === key}
+                    type="button"
+                    onClick={() => setDirectionFilter(key)}
+                    className={`flex-1 whitespace-nowrap rounded-doc-sm px-3 py-2 text-sm font-medium transition sm:flex-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-cyan ${
+                      directionFilter === key
+                        ? "bg-accent-esblu text-on-accent"
+                        : "text-secondary hover:text-primary"
+                    }`}
+                  >
+                    {t(`invoices.direction.${key}`)}
+                    <span className="ml-1.5 tabular-nums opacity-70">{directionCounts[key]}</span>
+                  </button>
+                ))}
+              </div>
+            }
+            filters={
+              /* Stav je sekundárna os. Na mobile žije za tlačidlom
+                 "Filtre" (§A1) — šesť piluliek nad zoznamom zabralo
+                 polovicu obrazovky telefónu. */
+              <FilterChips
+                label={t("invoices.register.statusFilterLabel")}
+                active={section}
+                onSelect={(key) => setSection(key as SectionKey)}
+                options={SECTION_ORDER.map((key) => ({
+                  key,
+                  label: t(`invoices.sections.${key}`),
+                  count: sectionCounts[key],
+                }))}
+              />
+            }
+          />
         </div>
       )}
 
       {canView && (
         <div className="mt-4">
           {loading ? (
-            <p className="text-sm text-secondary">{t("invoices.loading")}</p>
+            <LoadingRows label={t("invoices.loading")} />
           ) : loadError ? (
             <DocumentNotice tone="critical">{loadError}</DocumentNotice>
           ) : filteredInvoices.length === 0 ? (
-            <div className="rounded-doc border border-dashed border-doc-border px-6 py-12 text-center text-sm text-muted-esblu">
-              {t("invoices.empty")}
-            </div>
+            <EmptyState title={t("invoices.empty")} />
           ) : (
             <>
-              {/* Desktop: hlavička registra. Na mobile sa skrýva — riadok
-                  je tam čitateľný sám osebe. */}
-              <div className="hidden border-b border-doc-border px-4 pb-2 text-[11px] font-medium uppercase tracking-wide text-muted-esblu sm:grid sm:grid-cols-[minmax(0,2.2fr)_minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)] sm:gap-4">
+              <RegisterHeader columns={INVOICE_COLUMNS}>
                 <span>{t("invoices.register.colDocument")}</span>
                 <span>{t("invoices.register.colCounterparty")}</span>
                 <span className="text-right">{t("invoices.register.colTotal")}</span>
                 <span className="text-right">{t("invoices.register.colStatus")}</span>
-              </div>
+              </RegisterHeader>
 
               <ul className="mt-2 space-y-1.5">
                 {filteredInvoices.map((invoice) => {
                   const overdue = isInvoiceOverdue(invoice.due_date, invoice.payment_status);
                   return (
-                    <li key={invoice.id}>
-                      <Link
-                        href={invoiceDetailHref(invoice.id)}
-                        className="block rounded-doc border border-doc-border bg-doc-surface px-4 py-3 transition hover:border-border-strong hover:bg-doc-surface-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-cyan sm:grid sm:grid-cols-[minmax(0,2.2fr)_minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)] sm:items-center sm:gap-4"
-                      >
-                        <div className="min-w-0">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <span className="truncate font-medium text-primary">
-                              {invoiceNumberLabel(invoice)}
-                            </span>
-                            <DocumentStatusBadge
-                              kind={invoice.direction === "received" ? "received" : "issued"}
-                            />
+                    <DataRow
+                      key={invoice.id}
+                      href={invoiceDetailHref(invoice.id)}
+                      columns={INVOICE_COLUMNS}
+                      ariaLabel={`${invoiceNumberLabel(invoice)} · ${counterpartyName(invoice) || "—"}`}
+                    >
+                      {/* 1 číslo + smer */}
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="truncate font-medium text-primary">
+                            {invoiceNumberLabel(invoice)}
+                          </span>
+                          <DocumentStatusBadge
+                            kind={invoice.direction === "received" ? "received" : "issued"}
+                          />
+                        </div>
+                        {/* 4 dátum / splatnosť — na mobile čitateľných 14px,
+                            na desktope tichšie, lebo tam je viac kontextu. */}
+                        <p className="mt-0.5 truncate text-sm text-muted-esblu sm:text-xs">
+                          {t(`invoices.kind.${invoice.kind}`)} ·{" "}
+                          {formatDate(invoice.issue_date, locale)}
+                          {invoice.due_date
+                            ? ` · ${t("invoices.register.dueShort")} ${formatDate(invoice.due_date, locale)}`
+                            : ""}
+                        </p>
+                      </div>
+
+                      {/* 2 protistrana + 6 pôvod */}
+                      <div className="mt-1 min-w-0 sm:mt-0">
+                        <p className="truncate text-sm text-secondary">
+                          {counterpartyName(invoice) || "—"}
+                        </p>
+                        {invoice.source !== "manual" && (
+                          <div className="mt-0.5">
+                            <DocumentSourceBadge source={invoice.source} />
                           </div>
-                          <p className="mt-0.5 truncate text-xs text-muted-esblu">
-                            {t(`invoices.kind.${invoice.kind}`)} ·{" "}
-                            {formatDate(invoice.issue_date, locale)}
-                            {invoice.due_date
-                              ? ` · ${t("invoices.register.dueShort")} ${formatDate(invoice.due_date, locale)}`
-                              : ""}
-                          </p>
-                        </div>
+                        )}
+                      </div>
 
-                        <div className="mt-1.5 min-w-0 sm:mt-0">
-                          <p className="truncate text-sm text-secondary">
-                            {counterpartyName(invoice) || "—"}
-                          </p>
-                          {invoice.source !== "manual" && (
-                            <div className="mt-0.5">
-                              <DocumentSourceBadge source={invoice.source} />
-                            </div>
-                          )}
-                        </div>
-
-                        <p className="mt-1.5 text-sm font-semibold tabular-nums text-primary sm:mt-0 sm:text-right">
+                      {/* 3 suma + 5 stav — na mobile v jednom riadku vedľa
+                          seba, aby doklad zabral tri riadky, nie šesť. */}
+                      <div className="mt-2 flex items-center justify-between gap-3 sm:contents">
+                        <p className="text-base font-semibold tabular-nums text-primary sm:text-sm sm:text-right">
                           {formatMoney(invoice.total_amount, invoice.currency)}
                         </p>
 
-                        <div className="mt-1.5 flex flex-wrap items-center gap-1.5 sm:mt-0 sm:justify-end">
+                        <div className="flex flex-wrap items-center justify-end gap-1.5">
                           {invoice.document_status === "draft" ? (
                             <DocumentStatusBadge kind="draft" />
                           ) : (
@@ -374,8 +392,8 @@ export default function FakturyPage() {
                           )}
                           {overdue && <DocumentStatusBadge kind="overdue" />}
                         </div>
-                      </Link>
-                    </li>
+                      </div>
+                    </DataRow>
                   );
                 })}
               </ul>

@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useRef, useState, type ReactNode } from "react";
 import { useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { apiUrl } from "@/lib/api-url";
@@ -44,6 +44,17 @@ import {
   docButtonSecondary,
 } from "@/app/components/document/DocumentLayout";
 import { DocumentStatusBadge } from "@/app/components/document/DocumentStatusBadge";
+import {
+  DataRow,
+  EmptyState,
+  RegisterHeader,
+} from "@/app/components/ui/Primitives";
+import {
+  FileIcon,
+  FolderIcon,
+  ReceiptIcon,
+  PaperclipIcon,
+} from "@/app/components/icons/AppIcons";
 import { invoiceDetailHref } from "@/lib/entity-links";
 import { useCompanyDpaLegalHold } from "@/app/components/CompanyDpaGate";
 import { normalizeWeightUnit } from "@/lib/normalize-weight-unit";
@@ -579,12 +590,12 @@ function addRecordToSummary(
  * vlastné kategórie) — jeden tvar znamená, že sa zložky správajú rovnako.
  */
 function FolderTile({
-  emoji,
+  icon,
   title,
   subtitle,
   onClick,
 }: {
-  emoji: string;
+  icon: ReactNode;
   title: string;
   subtitle: string;
   onClick: () => void;
@@ -593,11 +604,15 @@ function FolderTile({
     <button
       type="button"
       onClick={onClick}
-      className="rounded-doc border border-doc-border bg-doc-surface p-4 text-left transition hover:bg-doc-surface-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-cyan"
+      className="flex items-center gap-3 rounded-doc border border-doc-border bg-doc-surface p-4 text-left transition hover:border-border-strong hover:bg-doc-surface-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-cyan"
     >
-      <p aria-hidden="true" className="text-2xl">{emoji}</p>
-      <h3 className="mt-2 text-base font-semibold text-primary">{title}</h3>
-      <p className="mt-0.5 text-sm text-secondary">{subtitle}</p>
+      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-doc-sm border border-doc-border bg-surface-2 text-secondary">
+        {icon}
+      </span>
+      <span className="min-w-0">
+        <span className="block truncate text-base font-semibold text-primary">{title}</span>
+        <span className="mt-0.5 block text-sm text-muted-esblu">{subtitle}</span>
+      </span>
     </button>
   );
 }
@@ -2607,15 +2622,88 @@ function formatDocDate(value: unknown): string {
   return typeof value === "string" && value ? value : t("inbox.noDate");
 }
 
+// ---------------------------------------------------------------------------
+// Typovo-neutrálny register dokumentov.
+//
+// Pôvodne to boli vysoké karty v dvojstĺpcovej mriežke: fotka, nadpis,
+// dva riadky metadát a celoplošné modré tlačidlo "Otvoriť detail" —
+// jeden doklad zabral na telefóne skoro celú obrazovku. Register má
+// rovnaké informácie v troch riadkoch a otvára sa klikom na celý riadok.
+// ---------------------------------------------------------------------------
+const DOCUMENT_COLUMNS =
+  "sm:grid-cols-[minmax(0,2.4fr)_minmax(0,1.6fr)_minmax(0,1fr)]";
+const EVIDENCE_COLUMNS =
+  "sm:grid-cols-[minmax(0,2.2fr)_minmax(0,2fr)_minmax(0,1fr)]";
+const FOLDER_COLUMNS =
+  "sm:grid-cols-[minmax(0,2.4fr)_minmax(0,1.6fr)_minmax(0,1fr)]";
+
+function renderDocumentRegister(documents: OtherDocumentRow[]) {
   return (
-    <main className="app-shell-bg min-h-screen p-4 sm:p-6 lg:p-10">
+    <>
+      <RegisterHeader columns={DOCUMENT_COLUMNS}>
+        <span>{t("inbox.register.colDocument")}</span>
+        <span>{t("inbox.register.colAssignment")}</span>
+        <span className="text-right">{t("inbox.register.colDate")}</span>
+      </RegisterHeader>
+
+      <ul className="mt-2 space-y-1.5">
+        {documents.map((doc) => (
+          <DataRow
+            key={doc.id}
+            columns={DOCUMENT_COLUMNS}
+            onClick={() => setSelectedOtherDocument(doc)}
+            ariaLabel={`${t("inbox.openDetail")}: ${summarizeDocument(doc)}`}
+          >
+            <div className="flex min-w-0 items-start gap-2.5">
+              <span
+                aria-hidden="true"
+                className="mt-0.5 shrink-0 text-muted-esblu"
+              >
+                <FileIcon size={18} />
+              </span>
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="truncate font-medium text-primary">
+                    {summarizeDocument(doc)}
+                  </span>
+                  {doc.status === "needs_review" && (
+                    <DocumentStatusBadge
+                      kind="needs_review"
+                      label={t("inbox.needsReview")}
+                    />
+                  )}
+                </div>
+                <p className="mt-0.5 truncate text-sm text-muted-esblu">
+                  {documentTypeLabels[doc.document_type as ScanDocumentType] ||
+                    doc.document_type ||
+                    t("inbox.documentFallback")}
+                </p>
+              </div>
+            </div>
+
+            <p className="mt-1 truncate text-sm text-secondary sm:mt-0">
+              {describeDocumentAssignment(doc)}
+            </p>
+
+            <p className="mt-1 text-sm text-muted-esblu sm:mt-0 sm:text-right">
+              {doc.created_at ? formatDate(doc.created_at, locale) : t("inbox.noDate")}
+            </p>
+          </DataRow>
+        ))}
+      </ul>
+    </>
+  );
+}
+
+  return (
+    <main className="app-shell-bg min-h-screen px-4 pb-28 pt-4 sm:px-6 sm:pt-6 lg:px-10 lg:pt-10">
       <Suspense fallback={null}>
         <OpenFromQueryParam
           onOpenDocument={setPendingOpenDocumentId}
           onOpenEvidence={setPendingOpenEvidenceId}
         />
       </Suspense>
-      <div className="mx-auto max-w-3xl">
+      <div className="mx-auto max-w-5xl">
         <BackLink href="/" label={t("inbox.backToMenu")} className="mb-4" />
 
         <div className="flex items-center gap-4">
@@ -2649,10 +2737,12 @@ function formatDocDate(value: unknown): string {
             zadania). Inbox od tejto zmeny nemá žiadnu "Technické preukazy"
             sekciu ani CTA "pridať vozidlo z TP". */}
 
-        <div className="mt-10 rounded-3xl border-2 border-dashed border-blue-300 bg-info-soft p-6 text-center">
-  <span className="text-5xl">📄</span>
+        <div className="mt-10 rounded-doc border border-dashed border-doc-border bg-surface-2 p-6 text-center">
+  <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-doc-sm border border-doc-border bg-doc-surface text-secondary">
+    <PaperclipIcon size={24} />
+  </span>
 
-  <h2 className="mt-4 text-2xl font-bold text-primary">
+  <h2 className="mt-4 text-lg font-semibold text-primary">
     {t("inbox.addDocument.title")}
   </h2>
 
@@ -3313,53 +3403,51 @@ function formatDocDate(value: unknown): string {
       {t("inbox.backToAllPlates")}
     </button>
 
-    <h3 className="mb-4 text-2xl font-bold text-primary">
-      🚛 {selectedSpz}
-    </h3>
+    <h3 className="mb-4 text-lg font-semibold text-primary">{selectedSpz}</h3>
 
-    <div className="space-y-3">
+    <RegisterHeader columns={EVIDENCE_COLUMNS}>
+      <span>{t("inbox.register.colDocument")}</span>
+      <span>{t("inbox.register.colSite")}</span>
+      <span className="text-right">{t("inbox.register.colWeight")}</span>
+    </RegisterHeader>
+
+    <ul className="mt-2 space-y-1.5">
       {groupedRecords[selectedSpz]?.map((record: any) => (
-        <div
+        <DataRow
           key={record.id}
-          className="rounded-doc border border-doc-border bg-doc-surface p-4"
+          columns={EVIDENCE_COLUMNS}
+          onClick={() => setSelectedRecord(record)}
+          ariaLabel={`${t("inbox.openDetail")}: ${record.spz || selectedSpz}`}
         >
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-esblu">
-                📄 {record.document_type || t("inbox.documentFallback")}
-              </p>
-
-              <h3 className="mt-1 text-base font-semibold text-primary">
-                {record.spz || t("inbox.noPlateCapitalized")}
-              </h3>
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="truncate font-medium text-primary">
+                {record.document_type || t("inbox.documentFallback")}
+              </span>
+              <span className="shrink-0 rounded-doc-sm border border-doc-border px-2 py-0.5 text-[11px] font-medium text-muted-esblu">
+                {record.movement_type || t("inbox.unclassified")}
+              </span>
             </div>
-
-            <span className="shrink-0 rounded-doc-sm border border-doc-border px-2 py-0.5 text-[11px] font-medium text-muted-esblu">
-              {record.movement_type || t("inbox.unclassified")}
-            </span>
-          </div>
-
-          <div className="mt-4 space-y-2 text-sm text-secondary">
-            <p>{record.construction_site || t("inbox.noConstructionSite")}</p>
-            <p>{record.supplier || t("inbox.noSupplier")}</p>
-            <p>{record.customer || t("inbox.noCustomer")}</p>
-            <p>{record.material || t("inbox.noMaterial")}</p>
-            <p className="tabular-nums">{formatRecordWeight(record, t)}</p>
-            <p className="text-muted-esblu">
-              {record.document_date || t("inbox.noDate")}{" "}
-              {record.document_time || ""}
+            <p className="mt-0.5 truncate text-sm text-muted-esblu">
+              {record.document_date || t("inbox.noDate")} {record.document_time || ""}
             </p>
           </div>
 
-          <button
-            onClick={() => setSelectedRecord(record)}
-            className={`mt-4 w-full ${docButtonSecondary}`}
-          >
-            {t("inbox.openDetail")}
-          </button>
-        </div>
+          <div className="mt-1 min-w-0 sm:mt-0">
+            <p className="truncate text-sm text-secondary">
+              {record.construction_site || t("inbox.noConstructionSite")}
+            </p>
+            <p className="mt-0.5 truncate text-sm text-muted-esblu">
+              {record.material || t("inbox.noMaterial")}
+            </p>
+          </div>
+
+          <p className="mt-1 text-sm font-semibold tabular-nums text-primary sm:mt-0 sm:text-right">
+            {formatRecordWeight(record, t)}
+          </p>
+        </DataRow>
       ))}
-    </div>
+    </ul>
   </>
 )}
     </div>
@@ -3417,14 +3505,14 @@ function formatDocDate(value: unknown): string {
 
         <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
           <FolderTile
-            emoji="🧾"
+            icon={<ReceiptIcon size={20} />}
             title={t("inbox.receiptsFolderTitle")}
             subtitle={`${unassignedReceipts.length} ${tCount("inbox.unassignedReceiptsCount", unassignedReceipts.length)}`}
             onClick={() => handleOpenFolder("receipt")}
           />
 
           <FolderTile
-            emoji="📃"
+            icon={<FileIcon size={20} />}
             title={t("inbox.invoicesFolderTitle")}
             subtitle={`${unassignedInvoices.length} ${tCount("inbox.unassignedInvoicesCount", unassignedInvoices.length)}`}
             onClick={() => handleOpenFolder("invoice")}
@@ -3451,7 +3539,7 @@ function formatDocDate(value: unknown): string {
             return (
               <FolderTile
                 key={category.id}
-                emoji="🗂️"
+                icon={<FolderIcon size={20} />}
                 title={category.name}
                 subtitle={`${count} ${tCount("inbox.customCategoryDocumentsCount", count)}`}
                 onClick={() => handleOpenCustomCategory(category.id)}
@@ -3474,7 +3562,7 @@ function formatDocDate(value: unknown): string {
         <div className="flex flex-col gap-4 rounded-doc border border-doc-border bg-doc-surface p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
           <div>
             <h2 className="text-lg font-semibold text-primary">
-              {`🗂️ ${openCustomCategory.name}`}
+              {openCustomCategory.name}
             </h2>
             <p className="mt-1 text-sm text-secondary">
               {openCustomCategoryDocuments.length}{" "}
@@ -3484,61 +3572,19 @@ function formatDocDate(value: unknown): string {
         </div>
 
         {openCustomCategoryDocuments.length === 0 ? (
-          <p className="mt-4 rounded-doc border border-doc-border bg-surface-2 px-4 py-3 text-sm text-secondary">
-            {t("inbox.noCustomCategoryDocuments")}
-          </p>
+          <div className="mt-4">
+            <EmptyState title={t("inbox.noCustomCategoryDocuments")} />
+          </div>
         ) : (
-          <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
-            {/* Rovnaká karta ako "Ostatné dokumenty" nižšie (summarizeDocument/
-                describeDocumentAssignment) — vlastná kategória môže obsahovať
-                ľubovoľný document_type (bločky, faktúry, "other", ...), takže
-                sa reuseuje typovo-neutrálna karta, nie receipt/invoice-
-                špecifická z openFolder sekcie vyššie. */}
-            {openCustomCategoryDocuments.map((doc) => (
-              <div
-                key={doc.id}
-                className="rounded-doc border border-doc-border bg-doc-surface p-4"
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-esblu">
-                      {documentTypeLabels[doc.document_type as ScanDocumentType] ||
-                        doc.document_type ||
-                        t("inbox.documentFallback")}
-                    </p>
-
-                    <h3 className="mt-1 break-words text-base font-semibold text-primary">
-                      {summarizeDocument(doc)}
-                    </h3>
-                  </div>
-
-                  {doc.status === "needs_review" && (
-                    <DocumentStatusBadge kind="needs_review" label={t("inbox.needsReview")} />
-                  )}
-                </div>
-
-                <div className="mt-3 space-y-1 text-sm text-secondary">
-                  <p>{describeDocumentAssignment(doc)}</p>
-                  <p className="text-muted-esblu">
-                    {doc.created_at
-                      ? formatDate(doc.created_at, locale)
-                      : t("inbox.noDate")}
-                  </p>
-                </div>
-
-                <button
-                  onClick={() => setSelectedOtherDocument(doc)}
-                  className={`mt-4 w-full ${docButtonSecondary}`}
-                >
-                  {t("inbox.openDetail")}
-                </button>
-              </div>
-            ))}
+          <div className="mt-4">
+            {/* Rovnaký riadok ako "Ostatné dokumenty" nižšie — vlastná
+                kategória môže obsahovať ľubovoľný document_type, takže sa
+                reuseuje typovo-neutrálny riadok registra. */}
+            {renderDocumentRegister(openCustomCategoryDocuments)}
           </div>
         )}
       </div>
     )}
-
     {openFolder && (
       <div className="mt-10">
         <button
@@ -3552,8 +3598,8 @@ function formatDocDate(value: unknown): string {
           <div>
             <h2 className="text-lg font-semibold text-primary">
               {openFolder === "receipt"
-                ? `🧾 ${t("inbox.receiptsFolderTitle")}`
-                : `📃 ${t("inbox.invoicesFolderTitle")}`}
+                ? t("inbox.receiptsFolderTitle")
+                : t("inbox.invoicesFolderTitle")}
             </h2>
             <p className="mt-1 text-sm text-secondary">
               {openFolderDocuments.length}{" "}
@@ -3587,60 +3633,76 @@ function formatDocDate(value: unknown): string {
         )}
 
         {openFolderDocuments.length === 0 ? (
-          <p className="mt-4 rounded-doc border border-doc-border bg-surface-2 px-4 py-3 text-sm text-secondary">
-            {t("inbox.noUnassignedDocuments")}
-          </p>
+          <div className="mt-4">
+            <EmptyState title={t("inbox.noUnassignedDocuments")} />
+          </div>
         ) : (
-          <div className="mt-4 space-y-3">
-            {openFolderDocuments.map((doc) => {
-              const fields = doc.extracted_fields || {};
-              return (
-                <div
-                  key={doc.id}
-                  className="rounded-doc border border-doc-border bg-doc-surface p-4"
-                >
-                  <div className="flex items-start justify-between gap-4">
-                    <div>
-                      <h3 className="break-words text-base font-semibold text-primary">
-                        {openFolder === "receipt"
-                          ? (fields.merchant as string) || t("inbox.noMerchant")
-                          : (fields.supplier as string) || t("inbox.noSupplier")}
-                      </h3>
-                      <p className="mt-0.5 text-sm text-muted-esblu">
-                        {formatDocDate(
-                          openFolder === "receipt"
-                            ? fields.purchaseDate
-                            : fields.issueDate
+          <div className="mt-4">
+            <RegisterHeader columns={FOLDER_COLUMNS}>
+              <span>
+                {openFolder === "receipt"
+                  ? t("inbox.register.colMerchant")
+                  : t("inbox.register.colSupplier")}
+              </span>
+              <span>{t("inbox.register.colReference")}</span>
+              <span className="text-right">{t("inbox.register.colAmount")}</span>
+            </RegisterHeader>
+
+            <ul className="mt-2 space-y-1.5">
+              {openFolderDocuments.map((doc) => {
+                const fields = doc.extracted_fields || {};
+                const name =
+                  openFolder === "receipt"
+                    ? (fields.merchant as string) || t("inbox.noMerchant")
+                    : (fields.supplier as string) || t("inbox.noSupplier");
+                return (
+                  <DataRow
+                    key={doc.id}
+                    columns={FOLDER_COLUMNS}
+                    onClick={() => setSelectedOtherDocument(doc)}
+                    ariaLabel={`${t("inbox.openDetail")}: ${name}`}
+                  >
+                    <div className="flex min-w-0 items-start gap-2.5">
+                      <span aria-hidden="true" className="mt-0.5 shrink-0 text-muted-esblu">
+                        {openFolder === "receipt" ? (
+                          <ReceiptIcon size={18} />
+                        ) : (
+                          <FileIcon size={18} />
                         )}
-                      </p>
+                      </span>
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="truncate font-medium text-primary">{name}</span>
+                          {doc.status === "needs_review" && (
+                            <DocumentStatusBadge
+                              kind="needs_review"
+                              label={t("inbox.needsReview")}
+                            />
+                          )}
+                        </div>
+                        <p className="mt-0.5 truncate text-sm text-muted-esblu">
+                          {formatDocDate(
+                            openFolder === "receipt"
+                              ? fields.purchaseDate
+                              : fields.issueDate
+                          )}
+                        </p>
+                      </div>
                     </div>
 
-                    {doc.status === "needs_review" && (
-                      <DocumentStatusBadge kind="needs_review" label={t("inbox.needsReview")} />
-                    )}
-                  </div>
+                    <p className="mt-1 truncate text-sm text-secondary sm:mt-0">
+                      {openFolder === "invoice"
+                        ? (fields.invoiceNumber as string) || t("inbox.noInvoiceNumber")
+                        : doc.note || "—"}
+                    </p>
 
-                  <div className="mt-3 space-y-1 text-sm text-secondary">
-                    <p className="tabular-nums">
+                    <p className="mt-1 text-sm font-semibold tabular-nums text-primary sm:mt-0 sm:text-right">
                       {formatAmount(fields.totalAmount, fields.currency)}
                     </p>
-                    {openFolder === "invoice" && (
-                      <p>
-                        {(fields.invoiceNumber as string) || t("inbox.noInvoiceNumber")}
-                      </p>
-                    )}
-                    {doc.note && <p className="text-muted-esblu">{doc.note}</p>}
-                  </div>
-
-                  <button
-                    onClick={() => setSelectedOtherDocument(doc)}
-                    className={`mt-4 w-full ${docButtonSecondary}`}
-                  >
-                    {t("inbox.openDetail")}
-                  </button>
-                </div>
-              );
-            })}
+                  </DataRow>
+                );
+              })}
+            </ul>
           </div>
         )}
       </div>
@@ -3655,51 +3717,12 @@ function formatDocDate(value: unknown): string {
       </p>
 
       {otherDocumentsFlatList.length === 0 ? (
-        <p className="mt-4 rounded-doc border border-doc-border bg-surface-2 px-4 py-3 text-sm text-secondary">
-          {t("inbox.noSavedDocuments")}
-        </p>
+        <div className="mt-4">
+          <EmptyState title={t("inbox.noSavedDocuments")} />
+        </div>
       ) : (
-        <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
-          {otherDocumentsFlatList.map((doc) => (
-            <div
-              key={doc.id}
-              className="rounded-doc border border-doc-border bg-doc-surface p-4"
-            >
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-esblu">
-                    {documentTypeLabels[doc.document_type as ScanDocumentType] ||
-                      doc.document_type ||
-                      t("inbox.documentFallback")}
-                  </p>
-
-                  <h3 className="mt-1 break-words text-base font-semibold text-primary">
-                    {summarizeDocument(doc)}
-                  </h3>
-                </div>
-
-                {doc.status === "needs_review" && (
-                  <DocumentStatusBadge kind="needs_review" label={t("inbox.needsReview")} />
-                )}
-              </div>
-
-              <div className="mt-3 space-y-1 text-sm text-secondary">
-                <p>{describeDocumentAssignment(doc)}</p>
-                <p className="text-muted-esblu">
-                  {doc.created_at
-                    ? formatDate(doc.created_at, locale)
-                    : t("inbox.noDate")}
-                </p>
-              </div>
-
-              <button
-                onClick={() => setSelectedOtherDocument(doc)}
-                className={`mt-4 w-full ${docButtonSecondary}`}
-              >
-                {t("inbox.openDetail")}
-              </button>
-            </div>
-          ))}
+        <div className="mt-4">
+          {renderDocumentRegister(otherDocumentsFlatList)}
         </div>
       )}
     </div>

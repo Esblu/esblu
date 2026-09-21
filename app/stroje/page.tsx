@@ -13,12 +13,56 @@ import { getMyActiveMembership } from "@/lib/company";
 import { useCompanyDpaLegalHold } from "@/app/components/CompanyDpaGate";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import { machineDetailHref } from "@/lib/entity-links";
+import {
+  machineCategories,
+  machineServiceAttention,
+  matchesMachineQuery,
+  summarizeMachineServices,
+  type MachineRow,
+  type MachineServiceRow,
+  type MachineServiceSummary,
+} from "@/lib/machines";
+import { formatDate, formatNumber } from "@/lib/i18n/format";
+import {
+  PageShell,
+  PageHeader,
+  RegisterToolbar,
+  RegisterHeader,
+  SearchField,
+  FilterChips,
+  DataRow,
+  EmptyState,
+  LoadingRows,
+  SectionPanel,
+  Notice,
+  StatusBadge,
+  docButtonPrimary,
+  docButtonSecondary,
+  docButtonDanger,
+  docField,
+  docLabel,
+} from "@/app/components/ui/Primitives";
+import { MachineIcon, PlusIcon } from "@/app/components/icons/AppIcons";
+
+/** Jedna šablóna stĺpcov pre hlavičku aj riadky registra. */
+const MACHINE_COLUMNS =
+  "sm:grid-cols-[minmax(0,2.4fr)_minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,1.2fr)]";
+
+type ServiceFilter = "all" | "attention" | "scheduled" | "none";
 
 export default function StrojePage() {
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
   const [userId, setUserId] = useState("");
   const [companyId, setCompanyId] = useState("");
-  const [machines, setMachines] = useState<any[]>([]);
+  const [machines, setMachines] = useState<MachineRow[]>([]);
+  const [serviceSummaries, setServiceSummaries] = useState<
+    Record<string, MachineServiceSummary>
+  >({});
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+  const [search, setSearch] = useState("");
+  const [categoryFilter, setCategoryFilter] = useState("all");
+  const [serviceFilter, setServiceFilter] = useState<ServiceFilter>("all");
   const [showForm, setShowForm] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [deletingMachineId, setDeletingMachineId] = useState<string | null>(null);
@@ -88,6 +132,9 @@ export default function StrojePage() {
   async function loadMachines(currentCompanyId: string = companyId) {
     if (!currentCompanyId) return;
 
+    setLoading(true);
+    setLoadError("");
+
     const { data: machinesData, error } = await supabase
       .from("machines")
       .select("*")
@@ -95,29 +142,53 @@ export default function StrojePage() {
       .order("created_at", { ascending: false });
 
     if (error) {
-      alert(t("machines.errors.loadFailedPrefix", { message: error.message }));
+      setLoadError(t("machines.errors.loadFailedPrefix", { message: error.message }));
+      setLoading(false);
       return;
     }
 
     const machineIds = (machinesData || []).map((m) => m.id);
 
-    let photosData: any[] = [];
+    let photosData: { machine_id: string; file_path: string }[] = [];
+    let servicesData: MachineServiceRow[] = [];
 
     if (machineIds.length > 0) {
-      const { data } = await supabase
-        .from("machine_photos")
-        .select("*")
-        .in("machine_id", machineIds)
-        .eq("company_id", currentCompanyId)
-        .order("created_at", { ascending: false });
+      // Dva dotazy naraz. Servisy potrebuje register kvôli motohodinám a
+      // termínom — tabuľka machines tieto údaje nemá (pozri lib/machines.ts).
+      const [photos, services] = await Promise.all([
+        supabase
+          .from("machine_photos")
+          .select("*")
+          .in("machine_id", machineIds)
+          .eq("company_id", currentCompanyId)
+          .order("created_at", { ascending: false }),
+        supabase
+          .from("machine_services")
+          .select("id, machine_id, service_date, mileage, title, cost, next_service_date")
+          .in("machine_id", machineIds)
+          .eq("company_id", currentCompanyId)
+          .order("service_date", { ascending: false }),
+      ]);
 
-      photosData = data || [];
+      photosData = photos.data || [];
+      servicesData = (services.data as MachineServiceRow[]) || [];
+    }
+
+    const byMachine = new Map<string, MachineServiceRow[]>();
+    for (const service of servicesData) {
+      if (!service.machine_id) continue;
+      const list = byMachine.get(service.machine_id);
+      if (list) list.push(service);
+      else byMachine.set(service.machine_id, [service]);
+    }
+
+    const summaries: Record<string, MachineServiceSummary> = {};
+    for (const id of machineIds) {
+      summaries[id] = summarizeMachineServices(byMachine.get(id) ?? []);
     }
 
     const machinesWithPhotos = (machinesData || []).map((item) => {
-      const firstPhoto = photosData.find(
-        (photo) => photo.machine_id === item.id
-      );
+      const firstPhoto = photosData.find((photo) => photo.machine_id === item.id);
 
       return {
         ...item,
@@ -125,7 +196,9 @@ export default function StrojePage() {
       };
     });
 
-    setMachines(machinesWithPhotos);
+    setMachines(machinesWithPhotos as MachineRow[]);
+    setServiceSummaries(summaries);
+    setLoading(false);
   }
 
   function updateMachine(key: string, value: string) {
@@ -217,7 +290,7 @@ export default function StrojePage() {
     }
   }
 
-  function editMachine(item: any) {
+  function editMachine(item: MachineRow) {
     setEditingId(item.id);
     setShowForm(true);
 
@@ -227,7 +300,7 @@ export default function StrojePage() {
       manufacturer: item.manufacturer || "",
       model: item.model || "",
       serial_number: item.serial_number || "",
-      year: item.year || "",
+      year: item.year ? String(item.year) : "",
       purchase_date: item.purchase_date || "",
       status: item.status || "",
       notes: item.notes || "",
@@ -371,232 +444,437 @@ export default function StrojePage() {
     setShowForm(false);
   }
 
+  // ---------------------------------------------------------------------------
+  // Odvodené zobrazenie registra
+  // ---------------------------------------------------------------------------
+  const categories = machineCategories(machines);
+
+  const visibleMachines = machines.filter((item) => {
+    if (!matchesMachineQuery(item, search)) return false;
+    if (categoryFilter !== "all" && (item.category ?? "") !== categoryFilter) return false;
+
+    if (serviceFilter !== "all") {
+      const attention = machineServiceAttention(serviceSummaries[item.id]?.nextServiceDate);
+      if (serviceFilter === "attention" && attention !== "overdue" && attention !== "due_soon")
+        return false;
+      if (serviceFilter === "scheduled" && attention !== "ok" && attention !== "due_soon")
+        return false;
+      if (serviceFilter === "none" && attention !== "unknown") return false;
+    }
+
+    return true;
+  });
+
+  const attentionCount = machines.filter((item) => {
+    const attention = machineServiceAttention(serviceSummaries[item.id]?.nextServiceDate);
+    return attention === "overdue" || attention === "due_soon";
+  }).length;
+
+  const activeFilterCount =
+    (categoryFilter !== "all" ? 1 : 0) + (serviceFilter !== "all" ? 1 : 0);
+
+  function serviceCell(machineId: string) {
+    const summary = serviceSummaries[machineId];
+    const next = summary?.nextServiceDate ?? null;
+    const attention = machineServiceAttention(next);
+
+    if (!next) {
+      return <span className="text-sm text-muted-esblu">{t("machines.register.noService")}</span>;
+    }
+
+    return (
+      <span className="inline-flex flex-wrap items-center gap-1.5">
+        <span
+          className={`text-sm tabular-nums ${
+            attention === "overdue"
+              ? "text-danger"
+              : attention === "due_soon"
+                ? "text-warning"
+                : "text-secondary"
+          }`}
+        >
+          {formatDate(next, locale)}
+        </span>
+        {attention === "overdue" && (
+          <StatusBadge kind="overdue" label={t("machines.service.overdue")} />
+        )}
+        {attention === "due_soon" && (
+          <StatusBadge kind="needs_review" label={t("machines.service.dueSoon")} />
+        )}
+      </span>
+    );
+  }
+
   return (
-    <main className="app-shell-bg min-h-screen p-4 sm:p-6 lg:p-10">
-      <BackLink href="/" label={t("inbox.backToMenu")} className="mb-4" />
+    <PageShell wide>
+      <BackLink href="/" label={t("inbox.backToMenu")} className="mb-6" />
 
-      <div className="flex items-center gap-4">
-  <img
-    src="/images/excavator.png"
-    alt={t("nav.machines")}
-    className="h-20 w-20 object-contain"
-  />
-  <h1 className="text-4xl font-bold text-primary">{t("nav.machines")}</h1>
-</div>
+      <PageHeader
+        eyebrow={
+          <span className="inline-flex items-center gap-2">
+            <MachineIcon size={18} />
+            {t("nav.machines")}
+          </span>
+        }
+        title={t("machines.register.title")}
+        meta={t("machines.list.subtitle")}
+        aside={
+          <button
+            type="button"
+            onClick={() => {
+              setShowForm((value) => !value);
+              if (showForm) cancelEdit();
+            }}
+            disabled={isMachineCreationUnavailable && !showForm}
+            className={`${docButtonPrimary} gap-2`}
+          >
+            <PlusIcon size={16} />
+            {t("machines.list.addMachine")}
+          </button>
+        }
+      />
 
-      <p className="mt-4 text-secondary">
-        {t("machines.list.subtitle")}
-      </p>
-
-      {!planUsageLoading && isPlanLimited && (
-        <PlanLimitNotice
-          resource="machines"
-          usage={planUsage}
-          limit={planLimit}
-          className="mt-6"
-        />
-      )}
-
-      <button
-        onClick={() => {
-          setShowForm(!showForm);
-          setEditingId(null);
-          setMachine(emptyMachine);
-        }}
-        disabled={isMachineCreationUnavailable}
-        className="mt-8 rounded-xl bg-blue-600 px-6 py-3 text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-gray-400"
-      >
-        {t("machines.list.addMachine")}
-      </button>
-
-      {legalHold && (
-        <p className="mt-3 text-sm text-amber-400">{t("common.legalHoldMessage")}</p>
-      )}
-
-      {showForm && (
-        <div className="mt-8 rounded-2xl bg-surface-1 border border-subtle backdrop-blur-xl p-6 shadow-lg">
-          <h2 className="mb-6 text-2xl font-bold">
-            {editingId ? t("machines.list.editMachineTitle") : t("machines.list.addMachineTitle")}
-          </h2>
-
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            <input
-              placeholder={t("machines.list.namePlaceholder")}
-              className="rounded-xl border p-3"
-              value={machine.name}
-              onChange={(e) => updateMachine("name", e.target.value)}
-            />
-
-            <input
-              placeholder={t("machines.list.categoryPlaceholder")}
-              className="rounded-xl border p-3"
-              value={machine.category}
-              onChange={(e) => updateMachine("category", e.target.value)}
-            />
-
-            <input
-              placeholder={t("machines.list.manufacturerPlaceholder")}
-              className="rounded-xl border p-3"
-              value={machine.manufacturer}
-              onChange={(e) => updateMachine("manufacturer", e.target.value)}
-            />
-
-            <input
-              placeholder={t("machines.list.modelPlaceholder")}
-              className="rounded-xl border p-3"
-              value={machine.model}
-              onChange={(e) => updateMachine("model", e.target.value)}
-            />
-
-            <input
-              placeholder={t("machines.list.serialNumberPlaceholder")}
-              className="rounded-xl border p-3"
-              value={machine.serial_number}
-              onChange={(e) => updateMachine("serial_number", e.target.value)}
-            />
-
-            <input
-              type="number"
-              placeholder={t("inbox.fields.rokVyroby")}
-              className="rounded-xl border p-3"
-              value={machine.year}
-              onChange={(e) => updateMachine("year", e.target.value)}
-            />
-
-            <input
-              type="date"
-              className="rounded-xl border p-3"
-              value={machine.purchase_date}
-              onChange={(e) => updateMachine("purchase_date", e.target.value)}
-            />
-
-            <input
-              placeholder={t("machines.list.statusPlaceholder")}
-              className="rounded-xl border p-3"
-              value={machine.status}
-              onChange={(e) => updateMachine("status", e.target.value)}
-            />
-          </div>
-
-          <textarea
-            placeholder={t("machines.list.notesPlaceholder")}
-            className="mt-4 w-full rounded-xl border p-3"
-            value={machine.notes}
-            onChange={(e) => updateMachine("notes", e.target.value)}
+      {isPlanLimited && (
+        <div className="mt-4">
+          <PlanLimitNotice
+            resource="machines"
+            usage={planUsage}
+            limit={planLimit}
+            className="mt-0"
           />
-
-          <div className="mt-5 flex gap-3">
-            <button
-              onClick={saveMachine}
-              disabled={
-                isSaving || (!editingId && isMachineCreationUnavailable)
-              }
-              className="rounded-xl bg-green-600 px-6 py-3 text-white hover:bg-green-700 disabled:bg-gray-400"
-            >
-              {isSaving
-                ? t("common.buttons.saving")
-                : editingId
-                ? t("vehicles.forms.saveChanges")
-                : t("machines.list.saveMachine")}
-            </button>
-
-            {editingId && (
-              <button
-                onClick={cancelEdit}
-                className="rounded-xl bg-surface-2 px-6 py-3 text-primary hover:bg-surface-hover"
-              >
-                {t("vehicles.forms.cancelEdit")}
-              </button>
-            )}
-          </div>
         </div>
       )}
 
-      <div className="mt-10">
-        <h2 className="mb-4 text-2xl font-bold text-primary">
-  {t("machines.list.savedMachinesTitle")}
-</h2>
+      {legalHold && (
+        <div className="mt-4">
+          <Notice tone="warning">{t("common.legalHoldMessage")}</Notice>
+        </div>
+      )}
 
-        {machines.length === 0 ? (
-          <div className="rounded-2xl border border-subtle bg-surface-1 p-6 shadow-lg backdrop-blur-xl">
-            <p className="font-medium text-secondary">
-  {t("machines.list.noneYet")}
-</p>
-          </div>
-          ) : (
-         <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
-            {machines.map((item) => (
-              <div
-                key={item.id}
-                className="overflow-hidden rounded-2xl border border-subtle bg-surface-1 backdrop-blur-xl shadow-lg"
-              >
-                {item.first_photo_url ? (
-                  <img
-                    src={item.first_photo_url}
-                    alt={item.name || t("machines.photoAlt")}
-                    className="h-56 w-full object-cover"
-                  />
-                ) : (
-                  <div className="flex h-56 w-full items-center justify-center bg-surface-2 text-muted-esblu">
-                    {t("machines.list.noPhoto")}
-                  </div>
-                )}
-
-                <div className="p-6">
-                  <h3 className="text-2xl font-bold">
-                    {item.name || t("dashboard.noName")}
-                  </h3>
-
-                  <p className="mt-2 text-secondary">
-                    {t("machines.list.categoryLabel")}: {item.category || "—"}
-                  </p>
-                  <p className="text-secondary">
-                    {t("machines.list.manufacturerLabel")}: {item.manufacturer || "—"}
-                  </p>
-                  <p className="text-secondary">
-                    {t("machines.list.modelLabel")}: {item.model || "—"}
-                  </p>
-                  <p className="text-secondary">
-                    {t("machines.list.serialNumberLabel")}: {item.serial_number || "—"}
-                  </p>
-                  <p className="text-secondary">
-                    {t("inbox.fields.rokVyroby")}: {item.year || "—"}
-                  </p>
-                  <p className="text-secondary">
-                    {t("machines.list.statusLabel")}: {item.status || "—"}
-                  </p>
-
-                  <div className="mt-5 flex gap-3">
-                    <Link
-                      href={machineDetailHref(item.id)}
-                      className="btn-secondary px-4 py-2"
-                    >
-                      {t("machines.list.detailLink")}
-                    </Link>
-
-                    <button
-                      onClick={() => editMachine(item)}
-                      className="rounded-xl bg-blue-600 px-4 py-2 text-white hover:bg-blue-700"
-                    >
-                      {t("common.buttons.edit")}
-                    </button>
-
-                    <button
-                      onClick={() => deleteMachine(item.id)}
-                      disabled={deletingMachineId !== null}
-                      className="rounded-xl bg-red-600 px-4 py-2 text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-gray-400"
-                    >
-                      {deletingMachineId === item.id
-                        ? t("inbox.deleting")
-                        : t("common.buttons.delete")}
-                    </button>
-                  </div>
-                </div>
+      {showForm && (
+        <div className="mt-6">
+          <SectionPanel
+            title={
+              editingId ? t("machines.list.editMachineTitle") : t("machines.list.addMachineTitle")
+            }
+          >
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="sm:col-span-2">
+                <label className={docLabel} htmlFor="machine-name">
+                  {t("machines.list.namePlaceholder")}
+                </label>
+                <input
+                  id="machine-name"
+                  className={docField}
+                  value={machine.name}
+                  onChange={(event) => updateMachine("name", event.target.value)}
+                />
               </div>
-            ))}
-          </div>
+
+              <div>
+                <label className={docLabel} htmlFor="machine-category">
+                  {t("machines.list.categoryLabel")}
+                </label>
+                <input
+                  id="machine-category"
+                  className={docField}
+                  value={machine.category}
+                  onChange={(event) => updateMachine("category", event.target.value)}
+                />
+              </div>
+
+              <div>
+                <label className={docLabel} htmlFor="machine-status">
+                  {t("machines.list.statusLabel")}
+                </label>
+                <input
+                  id="machine-status"
+                  className={docField}
+                  value={machine.status}
+                  onChange={(event) => updateMachine("status", event.target.value)}
+                />
+                {/* machines.status je v databáze voľný text bez číselníka —
+                    UI preto neponúka výber, iba pole. Pozri lib/machines.ts. */}
+                <p className="mt-1 text-xs text-muted-esblu">
+                  {t("machines.list.statusHint")}
+                </p>
+              </div>
+
+              <div>
+                <label className={docLabel} htmlFor="machine-manufacturer">
+                  {t("machines.list.manufacturerLabel")}
+                </label>
+                <input
+                  id="machine-manufacturer"
+                  className={docField}
+                  value={machine.manufacturer}
+                  onChange={(event) => updateMachine("manufacturer", event.target.value)}
+                />
+              </div>
+
+              <div>
+                <label className={docLabel} htmlFor="machine-model">
+                  {t("machines.list.modelLabel")}
+                </label>
+                <input
+                  id="machine-model"
+                  className={docField}
+                  value={machine.model}
+                  onChange={(event) => updateMachine("model", event.target.value)}
+                />
+              </div>
+
+              <div>
+                <label className={docLabel} htmlFor="machine-serial">
+                  {t("machines.list.serialNumberLabel")}
+                </label>
+                <input
+                  id="machine-serial"
+                  className={docField}
+                  value={machine.serial_number}
+                  onChange={(event) => updateMachine("serial_number", event.target.value)}
+                />
+              </div>
+
+              <div>
+                <label className={docLabel} htmlFor="machine-year">
+                  {t("inbox.fields.rokVyroby")}
+                </label>
+                <input
+                  id="machine-year"
+                  inputMode="numeric"
+                  className={docField}
+                  value={machine.year}
+                  onChange={(event) => updateMachine("year", event.target.value)}
+                />
+              </div>
+
+              <div>
+                <label className={docLabel} htmlFor="machine-purchase">
+                  {t("machines.detail.purchaseDateLabel")}
+                </label>
+                <input
+                  id="machine-purchase"
+                  type="date"
+                  className={docField}
+                  value={machine.purchase_date}
+                  onChange={(event) => updateMachine("purchase_date", event.target.value)}
+                />
+              </div>
+
+              <div className="sm:col-span-2">
+                <label className={docLabel} htmlFor="machine-notes">
+                  {t("machines.detail.notesLabel")}
+                </label>
+                <textarea
+                  id="machine-notes"
+                  rows={3}
+                  className={docField}
+                  value={machine.notes}
+                  onChange={(event) => updateMachine("notes", event.target.value)}
+                />
+              </div>
+            </div>
+
+            <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:justify-end">
+              <button type="button" onClick={cancelEdit} className={docButtonSecondary}>
+                {t("vehicles.forms.cancelEdit")}
+              </button>
+              <button
+                type="button"
+                onClick={saveMachine}
+                disabled={isSaving}
+                className={docButtonPrimary}
+              >
+                {isSaving ? t("common.buttons.saving") : t("machines.list.saveMachine")}
+              </button>
+            </div>
+          </SectionPanel>
+        </div>
+      )}
+
+      <div className="mt-6">
+        <RegisterToolbar
+          filtersLabel={t("common.register.filters")}
+          filtersCloseLabel={t("common.register.filtersClose")}
+          activeFilterCount={activeFilterCount}
+          search={
+            <SearchField
+              label={t("machines.register.searchLabel")}
+              placeholder={t("machines.register.searchPlaceholder")}
+              value={search}
+              onChange={setSearch}
+            />
+          }
+          filters={
+            <div className="space-y-2">
+              <FilterChips
+                label={t("machines.register.serviceFilterLabel")}
+                active={serviceFilter}
+                onSelect={(key) => setServiceFilter(key as ServiceFilter)}
+                options={[
+                  { key: "all", label: t("common.register.all"), count: machines.length },
+                  {
+                    key: "attention",
+                    label: t("machines.register.needsAttention"),
+                    count: attentionCount,
+                  },
+                  { key: "scheduled", label: t("machines.register.scheduled") },
+                  { key: "none", label: t("machines.register.noServicePlan") },
+                ]}
+              />
+              {categories.length > 0 && (
+                <FilterChips
+                  label={t("machines.list.categoryLabel")}
+                  active={categoryFilter}
+                  onSelect={setCategoryFilter}
+                  options={[
+                    { key: "all", label: t("common.register.allCategories") },
+                    ...categories.map((category) => ({ key: category, label: category })),
+                  ]}
+                />
+              )}
+            </div>
+          }
+        />
+      </div>
+
+      <div className="mt-4">
+        {loading ? (
+          <LoadingRows label={t("common.buttons.loading")} />
+        ) : loadError ? (
+          <Notice tone="critical">{loadError}</Notice>
+        ) : machines.length === 0 ? (
+          <EmptyState
+            title={t("machines.list.noneYet")}
+            action={
+              <button
+                type="button"
+                onClick={() => setShowForm(true)}
+                disabled={isMachineCreationUnavailable}
+                className={`${docButtonPrimary} gap-2`}
+              >
+                <PlusIcon size={16} />
+                {t("machines.list.addMachine")}
+              </button>
+            }
+          />
+        ) : visibleMachines.length === 0 ? (
+          <EmptyState title={t("common.register.noMatches")} />
+        ) : (
+          <>
+            <RegisterHeader columns={MACHINE_COLUMNS}>
+              <span>{t("machines.register.colMachine")}</span>
+              <span>{t("machines.register.colIdentification")}</span>
+              <span className="text-right">{t("machines.register.colHours")}</span>
+              <span>{t("machines.register.colNextService")}</span>
+            </RegisterHeader>
+
+            <ul className="mt-2 space-y-1.5">
+              {visibleMachines.map((item) => {
+                const summary = serviceSummaries[item.id];
+                return (
+                  <DataRow
+                    key={item.id}
+                    href={machineDetailHref(item.id)}
+                    columns={MACHINE_COLUMNS}
+                    ariaLabel={item.name ?? t("dashboard.noName")}
+                    trailing={
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => editMachine(item)}
+                          aria-label={`${t("common.buttons.edit")}: ${item.name ?? ""}`}
+                          className={`${docButtonSecondary} px-2.5 text-xs`}
+                        >
+                          {t("common.buttons.edit")}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => deleteMachine(item.id)}
+                          disabled={deletingMachineId === item.id}
+                          aria-label={`${t("common.buttons.delete")}: ${item.name ?? ""}`}
+                          className={`${docButtonDanger} px-2.5 text-xs`}
+                        >
+                          {deletingMachineId === item.id
+                            ? t("inbox.deleting")
+                            : t("common.buttons.delete")}
+                        </button>
+                      </>
+                    }
+                  >
+                    {/* 1 stroj — miniatúra, názov, stav */}
+                    <div className="flex min-w-0 items-center gap-3">
+                      {item.first_photo_url ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={item.first_photo_url}
+                          alt=""
+                          className="h-10 w-10 shrink-0 rounded-doc-sm border border-doc-border object-cover"
+                        />
+                      ) : (
+                        <span
+                          aria-hidden="true"
+                          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-doc-sm border border-doc-border bg-surface-2 text-muted-esblu"
+                        >
+                          <MachineIcon size={18} />
+                        </span>
+                      )}
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="truncate font-medium text-primary">
+                            {item.name || t("dashboard.noName")}
+                          </span>
+                          {item.status && (
+                            <span className="shrink-0 rounded-doc-sm border border-doc-border px-2 py-0.5 text-[11px] font-medium text-muted-esblu">
+                              {item.status}
+                            </span>
+                          )}
+                        </div>
+                        <p className="mt-0.5 truncate text-sm text-muted-esblu">
+                          {[item.category, item.manufacturer, item.model]
+                            .filter(Boolean)
+                            .join(" · ") || "—"}
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* 2 identifikácia */}
+                    <div className="mt-1.5 min-w-0 sm:mt-0">
+                      <p className="truncate text-sm text-secondary">
+                        {item.serial_number || "—"}
+                      </p>
+                      {item.year && (
+                        <p className="mt-0.5 text-sm text-muted-esblu tabular-nums">{item.year}</p>
+                      )}
+                    </div>
+
+                    {/* 3 motohodiny — posledný ZNÁMY stav, nie aktuálny */}
+                    <div className="mt-1.5 sm:mt-0 sm:text-right">
+                      {summary?.lastKnownMileage !== null &&
+                      summary?.lastKnownMileage !== undefined ? (
+                        <>
+                          <p className="text-sm font-semibold tabular-nums text-primary">
+                            {formatNumber(summary.lastKnownMileage, locale)}
+                          </p>
+                          <p className="text-xs text-muted-esblu">
+                            {t("machines.register.atLastService")}
+                          </p>
+                        </>
+                      ) : (
+                        <p className="text-sm text-muted-esblu">—</p>
+                      )}
+                    </div>
+
+                    {/* 4 ďalší servis */}
+                    <div className="mt-1.5 sm:mt-0">{serviceCell(item.id)}</div>
+                  </DataRow>
+                );
+              })}
+            </ul>
+          </>
         )}
       </div>
-    </main>
+    </PageShell>
   );
 }

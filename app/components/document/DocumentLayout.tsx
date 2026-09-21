@@ -295,7 +295,11 @@ export function DocumentModal({
     <div
       role="dialog"
       aria-modal="true"
-      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/60 p-3 sm:items-center sm:p-6"
+      /* z-80: plávajúce tlačidlo chatu je fixed na z-70 a pri otvorenom
+         modáli prekrývalo jeho akcie v pravom dolnom rohu. Modál preto
+         musí byť nad ním — samotný chat sa nemení, len sa počas modálu
+         nedostane pred obsah, ktorý má používateľ potvrdiť. */
+      className="fixed inset-0 z-[80] flex items-start justify-center overflow-y-auto bg-black/60 p-3 sm:items-center sm:p-6"
     >
       <div
         className={`max-h-[92vh] w-full ${width} overflow-y-auto rounded-doc border border-doc-border bg-surface-1`}
