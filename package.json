@@ -10,7 +10,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test:voice": "node --experimental-strip-types --no-warnings scripts/voice-parsing-tests.ts"
+    "test:voice": "node --experimental-strip-types --no-warnings scripts/voice-parsing-tests.ts",
+    "test:partners": "node --experimental-strip-types --no-warnings scripts/partner-matching-tests.ts"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.9.0",

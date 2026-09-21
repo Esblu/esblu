@@ -10,6 +10,7 @@ import {
   type DraftInvoiceItemInput,
 } from "@/lib/invoices";
 import { isVatCategoryCode, type VatCategoryCode } from "@/lib/invoicing/vat-engine";
+import { matchPartnersByName, type PartnerMatchTier } from "@/lib/partner-matching";
 import { findNumber, findCurrency, findVatRate, mentionsVat } from "@/lib/intents/number-words";
 
 // =============================================================================
@@ -293,37 +294,75 @@ function stripTrailingAmount(description: string): string {
 
 export type PartnerCandidate = { id: string; label: string };
 
+export type PartnerResolution = {
+  tier: PartnerMatchTier;
+  /** Smie sa použiť bez pýtania? Nikdy pri `suggestion`. */
+  autoResolvable: boolean;
+  candidates: PartnerCandidate[];
+};
+
+type PartnerRow = { id: string; legal_name: string | null; ico: string | null };
+
 /**
- * Nájde partnera podľa vysloveného mena.
+ * Nájde odberateľa podľa vysloveného mena alebo IČO.
  *
  * Filtruje sa v JS nad RLS-obmedzenou množinou, nikdy cez PostgREST
  * `.or()` — voľný text z prepisu reči sa do dopytového výrazu nedostane.
+ *
+ * Samotné porovnávanie názvov robí zdieľaný lib/partner-matching.ts, ten
+ * istý kanonický kľúč, akým appka páruje dodávateľov na prijatých
+ * faktúrach. Bola to pôvodne nezávislá vetva s `includes()` a práve na nej
+ * vznikla chyba z reálneho testu: partner „Tester1" a prepis „Tester 1"
+ * boli pre ňu dva rôzne reťazce.
  */
 export async function resolvePartnerCandidates(
   supabase: SupabaseClient,
   query: string
-): Promise<PartnerCandidate[]> {
+): Promise<PartnerResolution> {
+  const empty: PartnerResolution = { tier: "none", autoResolvable: false, candidates: [] };
+
+  const trimmed = query.trim();
+  if (!trimmed) return empty;
+
   const { data, error } = await supabase
     .from("business_partners")
     .select("id, legal_name, ico")
     .order("legal_name", { ascending: true })
     .limit(300);
 
-  if (error) return [];
+  if (error) return empty;
 
-  const rows = (data as { id: string; legal_name: string | null; ico: string | null }[]) ?? [];
-  const needle = fold(query).trim();
-  if (!needle) return [];
+  const rows = (data as PartnerRow[]) ?? [];
 
-  const matches = rows.filter(
-    (row) =>
-      fold(row.legal_name ?? "").includes(needle) || (row.ico ?? "").includes(needle)
-  );
+  // IČO je identifikátor, nie názov — presná zhoda je deterministická a
+  // rozhoduje pred akýmkoľvek porovnávaním mien. Rovnaká priorita ako pri
+  // párovaní dodávateľov v lib/invoicing/supplier-matching.ts.
+  const identifier = trimmed.replace(/[\s.\-/]/g, "");
+  if (/^\d{6,}$/.test(identifier)) {
+    const icoHits = rows.filter((row) => (row.ico ?? "").replace(/[\s.\-/]/g, "") === identifier);
+    if (icoHits.length > 0) {
+      return {
+        tier: "exact",
+        autoResolvable: icoHits.length === 1,
+        candidates: icoHits.slice(0, 5).map(toCandidate),
+      };
+    }
+  }
 
-  return matches.slice(0, 5).map((row) => ({
+  const match = matchPartnersByName(trimmed, rows, (row) => row.legal_name);
+
+  return {
+    tier: match.tier,
+    autoResolvable: match.autoResolvable,
+    candidates: match.matches.slice(0, 5).map(toCandidate),
+  };
+}
+
+function toCandidate(row: PartnerRow): PartnerCandidate {
+  return {
     id: row.id,
     label: row.ico ? `${row.legal_name ?? ""} · ${row.ico}` : row.legal_name ?? "",
-  }));
+  };
 }
 
 /** Označenia pre už vyriešené id — meno sa nikdy neukladá, vždy sa číta. */

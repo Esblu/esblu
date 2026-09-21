@@ -10,6 +10,7 @@ import {
   listCompanyCustomCategories,
   findMatchingCustomCategory,
 } from "@/lib/custom-document-categories";
+import { matchPartnersByName } from "@/lib/partner-matching";
 
 // =============================================================================
 // Voice Phase 1 — navigácia a účtovnícke čítanie.
@@ -369,16 +370,23 @@ export async function handleSearchPartner(
   }
 
   const rows = (data as { id: string; legal_name: string; ico: string | null }[]) ?? [];
-  const needle = stripDiacritics(query.toLowerCase());
 
+  // Rovnaké kanonické porovnanie ako pri hlasovom zakladaní faktúry, aby
+  // „nájdi partnera Tester 1" našlo partnera „Tester1". Tu je to iba
+  // vyhľadávanie — výsledkom je zoznam, z ktorého si používateľ vyberá,
+  // takže sa smú ukázať aj čiastočné zhody.
   const matches =
-    needle === ""
+    query === ""
       ? rows
-      : rows.filter(
-          (row) =>
-            stripDiacritics((row.legal_name ?? "").toLowerCase()).includes(needle) ||
-            (row.ico ?? "").includes(needle)
-        );
+      : (() => {
+          const byName = matchPartnersByName(query, rows, (row) => row.legal_name);
+          if (byName.matches.length > 0) return byName.matches;
+          // Doplnkovo IČO — identifikátor, nie názov.
+          const identifier = query.replace(/[\s.\-/]/g, "");
+          return identifier
+            ? rows.filter((row) => (row.ico ?? "").replace(/[\s.\-/]/g, "").includes(identifier))
+            : [];
+        })();
 
   if (matches.length === 0) {
     return { kind: "not_found", text: translate(locale, "businessPartners.empty") };

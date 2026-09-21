@@ -1,5 +1,6 @@
 import type { BusinessPartner } from "@/lib/business-partners";
 import type { CandidateParty } from "@/lib/invoicing/received-candidate";
+import { partnerNameExactKey } from "@/lib/partner-matching";
 
 // =============================================================================
 // Supplier matching — priradenie dodávateľa z kandidáta k master data.
@@ -67,28 +68,12 @@ function normalizeIdentifier(value: string | null | undefined): string | null {
  * Meno firmy na porovnanie: bez diakritiky, bez právnej formy, bez
  * interpunkcie, jednoduché medzery. "Stavby, s. r. o." → "STAVBY".
  *
- * Odstránenie právnej formy je zámerné — je to najčastejší zdroj
- * falošného nezhodnutia. Zároveň je to presne dôvod, prečo meno nikdy
- * nestačí na auto-match: po odstránení formy môžu splynúť dve rôzne firmy.
+ * Samotná definícia sa presunula do lib/partner-matching.ts, aby existovala
+ * RAZ — ten istý kanonický názov potrebuje aj hlasové rozpoznanie
+ * odberateľa. Správanie sa presunom NEZMENILO; tento re-export drží
+ * doterajší názov, takže párovanie dodávateľov je bit po bite to isté.
  */
-const LEGAL_FORM_PATTERN =
-  /\b(s\s?r\s?o|spol\s?s\s?r\s?o|a\s?s|k\s?s|v\s?o\s?s|gmbh|ag|ug|kg|ohg|mbh|ltd|llc|inc|plc|sp\s?z\s?o\s?o|zo|se)\b/g;
-
-export function normalizeCompanyName(value: string | null | undefined): string | null {
-  if (typeof value !== "string") return null;
-  const normalized = value
-    .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
-    .toLowerCase()
-    .replace(/[.,;:()"']/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .replace(LEGAL_FORM_PATTERN, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toUpperCase();
-  return normalized === "" ? null : normalized;
-}
+export { partnerNameExactKey as normalizeCompanyName } from "@/lib/partner-matching";
 
 // -----------------------------------------------------------------------------
 // Matching
@@ -176,10 +161,10 @@ export function matchSupplier(
   }
 
   // Kritérium 5 — meno. Iba návrh, nikdy auto-select.
-  const wantedName = normalizeCompanyName(candidate.legal_name);
+  const wantedName = partnerNameExactKey(candidate.legal_name);
   if (wantedName) {
     const nameHits = partners.filter(
-      (partner) => normalizeCompanyName(partner.legal_name) === wantedName
+      (partner) => partnerNameExactKey(partner.legal_name) === wantedName
     );
     if (nameHits.length === 1) {
       return {

@@ -84,12 +84,16 @@ export async function startInvoiceDraftFlow(
   }
 
   if (partnerQuery?.trim()) {
-    const candidates = await resolvePartnerCandidates(supabase, partnerQuery.trim());
+    const resolution = await resolvePartnerCandidates(supabase, partnerQuery.trim());
 
-    if (candidates.length === 1) {
-      slots.partnerId = candidates[0].id;
-    } else if (candidates.length > 1) {
-      slots.partnerCandidateIds = candidates.map((candidate) => candidate.id);
+    if (resolution.autoResolvable) {
+      // Presná alebo silná zhoda a práve jeden kandidát.
+      slots.partnerId = resolution.candidates[0].id;
+    } else if (resolution.candidates.length > 0) {
+      // Viac kandidátov, alebo len čiastočná zhoda. V oboch prípadoch sa
+      // asistent pýta — aj keď je kandidát jediný. „Podobný názov" nie je
+      // to isté ako „ten názov".
+      slots.partnerCandidateIds = resolution.candidates.map((candidate) => candidate.id);
     } else {
       // Nenašiel sa — a NEZALOŽÍ sa. Nový obchodný partner je záznam s
       // fakturačnými a daňovými údajmi; vyrobiť ho z jedného vysloveného
@@ -142,9 +146,9 @@ export async function continueInvoiceDraftFlow(
   // Meno partnera je jediná odpoveď, ktorá vyžaduje dotaz do databázy —
   // ostatné sa dajú prečítať z textu.
   if (field === "partner") {
-    const candidates = await resolvePartnerCandidates(supabase, rawAnswer.trim());
+    const resolution = await resolvePartnerCandidates(supabase, rawAnswer.trim());
 
-    if (candidates.length === 0) {
+    if (resolution.candidates.length === 0) {
       return askAgain(supabase, locale, ctx, slots, {
         kind: "not_found",
         text: translate(locale, "search.voice.invoice.partnerNotFound", {
@@ -153,8 +157,8 @@ export async function continueInvoiceDraftFlow(
       });
     }
 
-    if (candidates.length === 1) slots.partnerId = candidates[0].id;
-    else slots.partnerCandidateIds = candidates.map((candidate) => candidate.id);
+    if (resolution.autoResolvable) slots.partnerId = resolution.candidates[0].id;
+    else slots.partnerCandidateIds = resolution.candidates.map((candidate) => candidate.id);
 
     return continueFlow(supabase, locale, ctx, slots);
   }
