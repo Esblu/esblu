@@ -62,6 +62,29 @@ import type { CompanyMemberRole } from "@/lib/company";
 
 const MAX_TEXT_LENGTH = 200;
 
+const ANSWER_UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Štruktúrovaná odpoveď na otázku „ktorého partnera myslíte?".
+ *
+ * Tlačidlo posiela identifikátor namiesto zobrazeného textu. Predtým
+ * niesol význam iba popisok („Tester1 · 4678922778"), ktorý sa musel
+ * spätne rozpoznávať z reťazca — a práve to viedlo k tomu, že sa výber
+ * partnera dal zameniť za inú odpoveď.
+ *
+ * Tu sa overuje IBA tvar. Že partner existuje, patrí do firmy volajúceho
+ * a že ho server sám ponúkol, sa kontroluje v continueInvoiceDraftFlow.
+ */
+function readPartnerSelectionAnswer(raw: unknown): string | null {
+  if (!raw || typeof raw !== "object") return null;
+  const answer = raw as Record<string, unknown>;
+  if (answer.type !== "partner_selection") return null;
+  const partnerId = answer.partnerId;
+  return typeof partnerId === "string" && ANSWER_UUID_PATTERN.test(partnerId)
+    ? partnerId
+    : null;
+}
+
 /**
  * Ktoré intenty sa dajú doplniť z otvorenej entity, a akého typu tá entita
  * musí byť.
@@ -113,7 +136,13 @@ export async function POST(req: Request) {
     }
 
     const body = (await req.json().catch(() => null)) as
-      | { text?: string; conversationId?: string; localDate?: string; uiContext?: unknown }
+      | {
+          text?: string;
+          conversationId?: string;
+          localDate?: string;
+          uiContext?: unknown;
+          answer?: unknown;
+        }
       | null;
     const rawText = typeof body?.text === "string" ? body.text.trim() : "";
 
@@ -136,6 +165,11 @@ export async function POST(req: Request) {
     // Neplatný tvar sa ticho zahodí a príkaz sa spracuje, akoby nič
     // otvorené nebolo. Overenie proti databáze prebieha nižšie.
     const uiContext = readUiContext(body?.uiContext);
+
+    // Štruktúrovaná odpoveď z tlačidla („vybral som tohto partnera").
+    // Prečíta sa iba tvar; či ten partner naozaj existuje, patrí do firmy
+    // volajúceho a bol vôbec ponúknutý, rozhoduje až server nižšie.
+    const structuredPartnerId = readPartnerSelectionAnswer(body?.answer);
 
     // Identifikátor prebiehajúceho dialógu. Sám osebe nič neodomyká —
     // server pri ňom vždy overuje aj totožnosť volajúceho a jeho aktívnu
@@ -222,7 +256,8 @@ export async function POST(req: Request) {
           conversationId,
           issueDate,
         },
-        rawText
+        rawText,
+        structuredPartnerId
       );
 
       if (continued) {

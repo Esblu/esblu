@@ -13,7 +13,8 @@
     "test:voice": "node --experimental-strip-types --no-warnings scripts/voice-parsing-tests.ts",
     "test:partners": "node --experimental-strip-types --no-warnings scripts/partner-matching-tests.ts",
     "test:dates": "node --experimental-strip-types --no-warnings scripts/local-date-tests.ts",
-    "test:items": "node --experimental-strip-types --no-warnings scripts/invoice-items-tests.ts"
+    "test:items": "node --experimental-strip-types --no-warnings scripts/invoice-items-tests.ts",
+    "test:state": "node --experimental-strip-types --no-warnings scripts/draft-state-tests.ts"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.9.0",

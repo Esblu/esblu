@@ -14,6 +14,17 @@ import type { IntentResult } from "@/lib/intents/types";
 // Komponent je ZÁMERNE hlúpy: nič nevykonáva, iba vykresľuje. Potvrdenie
 // akcie deleguje nahor cez `onConfirm`, pretože ho vybavuje volajúci,
 // ktorý drží prihlasovací token.
+//
+// TYPOGRAFIA
+// ----------
+// Obsah, ktorý má používateľ prečítať — popisy položiek, poznámky, sumy —
+// nikdy nie je menší než `text-sm`. Panel sa po odpovedi opticky
+// zmenšoval práve preto, že tieto texty boli `text-xs`, zatiaľ čo otázka
+// nad nimi `text-sm`. Menšie písmo zostáva iba na štítkoch sekcií a
+// odznakoch, ktoré sa nečítajú, iba označujú.
+//
+// Dlhý obsah sa ZALAMUJE, neskracuje: odrezaný popis položky na faktúre
+// je horší než o riadok vyšší panel.
 // =============================================================================
 
 export function IntentResultView({
@@ -41,7 +52,7 @@ export function IntentResultView({
       case "navigate":
         return (
           <Link href={intentResult.entity.href} className={cardClass}>
-            <p className="text-xs font-bold uppercase tracking-wide text-accent-cyan">
+            <p className="min-h-11 py-2 text-sm font-bold text-accent-cyan">
               {t("search.ui.openAction")}
             </p>
             <p className="mt-1 text-base font-bold text-primary">
@@ -57,7 +68,7 @@ export function IntentResultView({
             {intentResult.entity && (
               <Link
                 href={intentResult.entity.href}
-                className="mt-2 inline-block text-xs font-bold uppercase tracking-wide text-accent-cyan"
+                className="mt-2 inline-block min-h-11 py-2 text-sm font-bold text-accent-cyan"
               >
                 {intentResult.entity.label} →
               </Link>
@@ -70,7 +81,7 @@ export function IntentResultView({
           <div className="rounded-2xl border border-subtle bg-surface-1/60 p-4">
             <Link
               href={intentResult.entity.href}
-              className="text-xs font-bold uppercase tracking-wide text-accent-cyan"
+              className="min-h-11 py-2 text-sm font-bold text-accent-cyan"
             >
               {intentResult.entity.label} →
             </Link>
@@ -121,14 +132,14 @@ export function IntentResultView({
               <Link key={`${item.entity.id}-${index}`} href={item.entity.href} className={cardClass}>
                 <div className="flex items-center justify-between gap-3">
                   <div className="min-w-0">
-                    <p className="truncate text-sm font-bold text-primary">
+                    <p className="break-words text-sm font-bold text-primary">
                       {item.entity.label}
                     </p>
-                    <p className="text-xs text-secondary">
+                    <p className="text-sm text-secondary">
                       {item.typeLabel} — {item.dueDateLabel}
                     </p>
                   </div>
-                  <span className="shrink-0 rounded-full bg-amber-400/12 px-2.5 py-1 text-[11px] font-bold text-amber-400">
+                  <span className="shrink-0 rounded-full bg-amber-400/12 px-2.5 py-1 text-xs font-bold text-amber-400">
                     {item.severityLabel}
                   </span>
                 </div>
@@ -147,13 +158,13 @@ export function IntentResultView({
               <Link key={`${item.href}-${index}`} href={item.href} className={cardClass}>
                 <div className="flex items-center justify-between gap-3">
                   <div className="min-w-0">
-                    <p className="truncate text-sm font-bold text-primary">{item.label}</p>
-                    <p className="text-xs text-secondary">
+                    <p className="break-words text-sm font-bold text-primary">{item.label}</p>
+                    <p className="text-sm text-secondary">
                       {item.typeLabel}
                       {item.dateLabel ? ` — ${item.dateLabel}` : ""}
                     </p>
                   </div>
-                  <span className="shrink-0 rounded-full bg-accent-cyan/12 px-2.5 py-1 text-[11px] font-bold text-accent-cyan">
+                  <span className="shrink-0 rounded-full bg-accent-cyan/12 px-2.5 py-1 text-xs font-bold text-accent-cyan">
                     {item.linkLabel}
                   </span>
                 </div>
@@ -189,7 +200,7 @@ export function IntentResultView({
                 type="button"
                 onClick={onConfirm}
                 disabled={actionSubmitting}
-                className="btn-primary px-4 py-2 text-xs font-bold uppercase tracking-wide disabled:opacity-60"
+                className="btn-primary min-h-11 px-4 py-2 text-sm font-bold disabled:opacity-60"
               >
                 {intentResult.confirmLabel}
               </button>
@@ -197,7 +208,7 @@ export function IntentResultView({
                 type="button"
                 onClick={onCancel}
                 disabled={actionSubmitting}
-                className="btn-secondary px-4 py-2 text-xs font-bold uppercase tracking-wide disabled:opacity-60"
+                className="btn-secondary min-h-11 px-4 py-2 text-sm font-bold disabled:opacity-60"
               >
                 {intentResult.cancelLabel}
               </button>
@@ -234,11 +245,11 @@ export function IntentResultView({
               ))}
             </div>
 
-            <p className="mt-3 text-xs text-secondary">{intentResult.note}</p>
+            <p className="mt-3 text-sm leading-relaxed text-secondary">{intentResult.note}</p>
 
             <Link
               href={intentResult.entity.href}
-              className="mt-3 inline-block text-xs font-bold uppercase tracking-wide text-accent-cyan"
+              className="mt-3 inline-block min-h-11 py-2 text-sm font-bold text-accent-cyan"
             >
               {intentResult.entity.label} →
             </Link>

@@ -141,7 +141,12 @@ export async function continueInvoiceDraftFlow(
   supabase: SupabaseClient,
   locale: Locale,
   ctx: InvoiceDraftFlowContext,
-  rawAnswer: string
+  rawAnswer: string,
+  /**
+   * Partner vybraný ŤUKNUTÍM na tlačidlo. Klient ho iba navrhuje —
+   * server ho nižšie overuje proti vlastnej ponuke aj proti RLS.
+   */
+  structuredPartnerId?: string | null
 ): Promise<IntentResult | null> {
   const stored = await loadConversationContext(supabase, ctx.conversationId);
   if (!stored || stored.pendingIntent !== PENDING_INTENT) return null;
@@ -162,6 +167,68 @@ export async function continueInvoiceDraftFlow(
     return null;
   }
 
+  // ------------------------------------------------------------------
+  // O TOM, ČO ODPOVEĎ ZNAMENÁ, ROZHODUJE POLOŽENÁ OTÁZKA.
+  //
+  // Toto poradie je oprava reálnej chyby. Heuristika „pridaj ešte..." sa
+  // predtým vyhodnocovala PRED vetvou podľa poľa, takže sa pozerala na
+  // KAŽDÚ odpoveď — vrátane výberu partnera. Keďže porovnávala
+  // podreťazcom, meno „Tester1" (bez diakritiky „tester1") obsahovalo
+  // „este" z „ešte", výber partnera sa tváril ako pridanie položky a
+  // používateľ dostal „Nerozumel som, akú položku a za akú sumu pridať."
+  //
+  // Systém pritom vie, na čo sa pýtal. Doplnenie položky preto prichádza
+  // do úvahy IBA pri otázkach o položkách; pri výbere partnera sa
+  // neuvažuje vôbec, nech odpoveď obsahuje čokoľvek.
+  // ------------------------------------------------------------------
+  const allowsItemAppend = field === "items" || field === "itemPrice" || field === "vat";
+
+  if (allowsItemAppend && looksLikeItemAppend(rawAnswer) && (slots.items?.length ?? 0) > 0) {
+    const appended = appendItemFromAnswer(slots, rawAnswer);
+
+    if (!appended) {
+      // Zámer bol zrejmý, ale položka sa z odpovede nedala prečítať.
+      // Pôvodné riadky zostávajú nedotknuté a asistent sa spýta znova.
+      return askAgain(supabase, locale, ctx, slots, {
+        kind: "clarify",
+        question: translate(locale, "search.voice.invoice.appendUnclear"),
+        conversationId: ctx.conversationId,
+      });
+    }
+
+    return continueFlow(supabase, locale, ctx, appended);
+  }
+
+  // Štruktúrovaný výber partnera (ťuknutie na tlačidlo). Identifikátor sa
+  // NEBERIE naslepo — musí byť medzi kandidátmi, ktoré server sám ponúkol,
+  // a zároveň čitateľný cez RLS. Obe podmienky, nie jedna.
+  if ((field === "partnerChoice" || field === "partner") && structuredPartnerId) {
+    const offered = slots.partnerCandidateIds ?? [];
+    const isOffered = offered.includes(structuredPartnerId);
+    const readable = isOffered
+      ? (await readPartnerLabels(supabase, [structuredPartnerId])).length === 1
+      : false;
+
+    if (!isOffered || !readable) {
+      // Podvrhnutý, cudzí alebo medzitým nedostupný partner. Sloty sa
+      // nemenia a asistent sa spýta znova — bez vysvetlenia prečo.
+      return askAgain(supabase, locale, ctx, slots, {
+        kind: "clarify",
+        question: translate(locale, "search.voice.invoice.askPartnerChoice", {
+          names: (await readPartnerLabels(supabase, offered))
+            .map((candidate) => candidate.label)
+            .join(", "),
+        }),
+        conversationId: ctx.conversationId,
+      });
+    }
+
+    // Vyrieši sa VÝHRADNE partner. Položky, DPH ani mena sa nedotknú.
+    slots.partnerId = structuredPartnerId;
+    slots.partnerCandidateIds = undefined;
+    return continueFlow(supabase, locale, ctx, slots);
+  }
+
   // Meno partnera je jediná odpoveď, ktorá vyžaduje dotaz do databázy —
   // ostatné sa dajú prečítať z textu.
   if (field === "partner") {
@@ -180,27 +247,6 @@ export async function continueInvoiceDraftFlow(
     else slots.partnerCandidateIds = resolution.candidates.map((candidate) => candidate.id);
 
     return continueFlow(supabase, locale, ctx, slots);
-  }
-
-  // „Pridaj ešte dopravu 50 eur." — doplnenie ďalšieho riadka počas
-  // rozpracovanej faktúry. Vyhodnocuje sa PRED `applyAnswer`, pretože
-  // odpoveď na otázku o DPH a doplnenie položky vyzerajú inak a nesmú si
-  // konkurovať: bez tejto vetvy by „pridaj dopravu 50" pri otázke o DPH
-  // skončilo ako sadzba 50 %.
-  if (looksLikeItemAppend(rawAnswer) && (slots.items?.length ?? 0) > 0) {
-    const appended = appendItemFromAnswer(slots, rawAnswer);
-
-    if (!appended) {
-      // Zámer bol zrejmý, ale položka sa z odpovede nedala prečítať.
-      // Pôvodné riadky zostávajú nedotknuté a asistent sa spýta znova.
-      return askAgain(supabase, locale, ctx, slots, {
-        kind: "clarify",
-        question: translate(locale, "search.voice.invoice.appendUnclear"),
-        conversationId: ctx.conversationId,
-      });
-    }
-
-    return continueFlow(supabase, locale, ctx, appended);
   }
 
   const candidates =

@@ -1,5 +1,6 @@
 import Decimal from "decimal.js";
 import { todayLocalDate } from "@/lib/local-date";
+import { type VatCategoryCode } from "./vat-categories";
 
 // -----------------------------------------------------------------------------
 // Deterministický VAT engine (Fáza 2 — fakturačné jadro).
@@ -68,9 +69,14 @@ import { todayLocalDate } from "@/lib/local-date";
 
 Decimal.set({ rounding: Decimal.ROUND_HALF_UP });
 
-export type VatCategoryCode = "S" | "Z" | "E" | "AE";
-
-export const VAT_CATEGORY_CODES: readonly VatCategoryCode[] = ["S", "Z", "E", "AE"];
+// Kategórie sa presunuli do lib/invoicing/vat-categories.ts (bez importov),
+// aby sa dali overiť aj tam, kde by sa celý VAT engine ťahať nemal.
+// Správanie sa presunom nezmenilo; tieto re-exporty držia doterajšie názvy.
+export {
+  VAT_CATEGORY_CODES,
+  isVatCategoryCode,
+  type VatCategoryCode,
+} from "./vat-categories";
 
 export interface VatEngineLineInput {
   quantity: number | string;
@@ -207,10 +213,6 @@ export function computeInvoiceTotals(
 }
 
 /** Overí, či je zadaná hodnota platný VAT category kód (S/Z/E/AE). */
-export function isVatCategoryCode(value: string): value is VatCategoryCode {
-  return (VAT_CATEGORY_CODES as readonly string[]).includes(value);
-}
-
 /**
  * Odvodený (nie uložený) "po splatnosti" stav — presne podľa Fázy 0/zadania:
  * overdue sa nikdy neukladá do DB, počíta sa vždy nanovo.

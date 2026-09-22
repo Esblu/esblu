@@ -53,6 +53,27 @@ import type { IntentResult } from "@/lib/intents/types";
 // používateľ musí mať možnosť ho napísať bez toho, aby začínal odznova.
 // =============================================================================
 
+// =============================================================================
+// TYPOGRAFIA PANELA — JEDNA MIERKA PRE VŠETKY STAVY
+//
+// Na mobile sa text panela po odpovedi zmenšil. Nebolo to naschvál a ani
+// to nebolo „prispôsobenie dlhšiemu obsahu": jednotlivé stavy boli písané
+// v rôznom čase a každý si niesol vlastnú veľkosť — otázka `text-sm`,
+// odpoveď a poznámky `text-xs`, štítky ešte menej. Pri prechode medzi
+// stavmi to vyzeralo, akoby rozhranie zmenšovalo písmo, aby sa obsah
+// zmestil.
+//
+// Veľkosť písma preto NEZÁVISÍ od stavu. Panel smie rásť do výšky, text sa
+// smie zalamovať, ale zmenšovať sa nesmie. Žiadny `scale()`, žiadny zoom,
+// žiadny `text-xs` ako únik pri dlhšom obsahu.
+// =============================================================================
+
+/** Obsah, ktorý používateľ číta: stav, prepis, otázka, odpoveď, položky. */
+const VOICE_TEXT = "text-sm leading-relaxed";
+
+/** Vedľajší popis (čo je otvorené). Stále čitateľný, nie drobné písmo. */
+const VOICE_META = "text-sm leading-relaxed";
+
 /**
  * Fázy dialógu. Používateľ musí v každom okamihu vedieť, čo sa deje —
  * preto má každá fáza vlastnú vetu, nie jeden univerzálny "pracujem…".
@@ -93,7 +114,10 @@ export function VoiceLauncher({ uiContext = null }: { uiContext?: UiContext | nu
     });
 
   /** Prepis alebo napísaný text -> intent. Presne tá istá cesta. */
-  async function runIntent(text: string) {
+  async function runIntent(
+    text: string,
+    structuredAnswer?: { type: "partner_selection"; partnerId: string }
+  ) {
     setPhase("understanding");
     setIntentResult(null);
     setMessage("");
@@ -124,11 +148,16 @@ export function VoiceLauncher({ uiContext = null }: { uiContext?: UiContext | nu
         // a jej identifikátor, nič viac. Žiadny obsah dokumentu, žiadny
         // text z OCR. Server si entitu aj tak overí znova a firmu ani rolu
         // z klienta neberie.
+        // `answer` nesie ŠTRUKTÚROVANÝ výber (ťuknutie na tlačidlo
+        // partnera). Predtým niesol význam iba zobrazený text a ten sa
+        // musel spätne rozpoznávať — práve tak sa výber partnera dal
+        // zameniť za inú odpoveď. Server identifikátor aj tak overuje.
         body: JSON.stringify({
           text,
           conversationId: conversationIdRef.current,
           localDate: todayLocalDate(),
           ...(uiContext ? { uiContext } : {}),
+          ...(structuredAnswer ? { answer: structuredAnswer } : {}),
         }),
       });
 
@@ -166,11 +195,14 @@ export function VoiceLauncher({ uiContext = null }: { uiContext?: UiContext | nu
   }
 
   /** Odpoveď na otázku asistenta — písaná alebo vybraná zo zoznamu. */
-  function submitClarifyAnswer(value: string) {
+  function submitClarifyAnswer(
+    value: string,
+    structuredAnswer?: { type: "partner_selection"; partnerId: string }
+  ) {
     const answer = value.trim();
     if (!answer) return;
     setTranscript(answer);
-    void runIntent(answer);
+    void runIntent(answer, structuredAnswer);
   }
 
   /**
@@ -307,7 +339,7 @@ export function VoiceLauncher({ uiContext = null }: { uiContext?: UiContext | nu
             : t("search.voice.start")}
         </button>
 
-        <span aria-live="polite" className="min-w-0 flex-1 text-sm text-secondary">
+        <span aria-live="polite" className={`min-w-0 flex-1 ${VOICE_TEXT} text-secondary`}>
           {statusText || t("search.voice.hint")}
         </span>
 
@@ -324,27 +356,27 @@ export function VoiceLauncher({ uiContext = null }: { uiContext?: UiContext | nu
       {/* Čo je otvorené. Bez toho by používateľ nevedel, na čo sa „tento"
           vzťahuje — a keď nie je otvorené nič, appka to netvrdí. */}
       {contextLabel && (
-        <p className="mt-2 truncate text-xs text-muted-esblu">
+        <p className={`mt-2 ${VOICE_META} text-muted-esblu`}>
           {t("search.voice.context.workingWith")} {contextLabel}
         </p>
       )}
 
-      {voiceError && <p className="mt-2 text-sm text-danger">{voiceError}</p>}
+      {voiceError && <p className={`mt-2 ${VOICE_TEXT} text-danger`}>{voiceError}</p>}
 
       {transcript && (
-        <p className="mt-2 truncate text-sm text-muted-esblu">
+        <p className={`mt-2 break-words ${VOICE_TEXT} text-muted-esblu`}>
           {t("search.voice.transcriptPrefix")} „{transcript}“
         </p>
       )}
 
-      {message && <p className="mt-2 text-sm text-secondary">{message}</p>}
+      {message && <p className={`mt-2 break-words ${VOICE_TEXT} text-secondary`}>{message}</p>}
 
       {/* Otázka asistenta. Odpovedať sa dá hlasom (tlačidlo vyššie) aj
           písmom — meno partnera je presne to, čo prepis reči najčastejšie
           skomolí. */}
       {clarify && (
         <div className="mt-3 rounded-doc border border-doc-border bg-surface-2 p-3">
-          <p className="text-sm font-medium text-primary">{clarify.question}</p>
+          <p className={`break-words ${VOICE_TEXT} font-medium text-primary`}>{clarify.question}</p>
 
           {clarify.choices && clarify.choices.length > 0 && (
             <div className="mt-2 flex flex-wrap gap-2">
@@ -352,8 +384,13 @@ export function VoiceLauncher({ uiContext = null }: { uiContext?: UiContext | nu
                 <button
                   key={choice.value}
                   type="button"
-                  onClick={() => submitClarifyAnswer(choice.label)}
-                  className={`${docButtonSecondary} text-sm`}
+                  onClick={() =>
+                    submitClarifyAnswer(choice.label, {
+                      type: "partner_selection",
+                      partnerId: choice.value,
+                    })
+                  }
+                  className={`${docButtonSecondary} ${VOICE_TEXT} min-h-11 max-w-full whitespace-normal text-left`}
                 >
                   {choice.label}
                 </button>
@@ -374,17 +411,25 @@ export function VoiceLauncher({ uiContext = null }: { uiContext?: UiContext | nu
               </label>
               <input
                 id="esblu-voice-answer"
-                className={docField}
+                className={`${docField} ${VOICE_TEXT} min-h-11`}
                 value={clarifyAnswer}
                 onChange={(event) => setClarifyAnswer(event.target.value)}
                 placeholder={t("search.voice.answerPlaceholder")}
                 autoComplete="off"
               />
             </div>
-            <button type="submit" className={docButtonPrimary} disabled={!clarifyAnswer.trim()}>
+            <button
+              type="submit"
+              className={`${docButtonPrimary} ${VOICE_TEXT} min-h-11`}
+              disabled={!clarifyAnswer.trim()}
+            >
               {t("search.voice.answerSend")}
             </button>
-            <button type="button" onClick={handleCancel} className={docButtonSecondary}>
+            <button
+              type="button"
+              onClick={handleCancel}
+              className={`${docButtonSecondary} ${VOICE_TEXT} min-h-11`}
+            >
               {t("common.buttons.cancel")}
             </button>
           </form>
