@@ -16,6 +16,14 @@ import { formatDate, formatNumber } from "@/lib/i18n/format";
 import InvoicesIcon from "@/app/components/icons/InvoicesIcon";
 import { invoiceDetailHref } from "@/lib/entity-links";
 import { isInvoiceOverdue, listInvoices, type Invoice } from "@/lib/invoices";
+import {
+  matchesDirection,
+  matchesSection,
+  DIRECTION_ORDER,
+  SECTION_ORDER,
+  type DirectionFilter,
+  type SectionKey,
+} from "@/lib/invoicing/invoice-register-filters";
 import { listBusinessPartners, type BusinessPartner } from "@/lib/business-partners";
 import {
   RegisterToolbar,
@@ -39,43 +47,13 @@ import {
 // Smer je samostatná dimenzia od sekcií. Sekcia "issued" totiž NIKDY
 // neznamenala direction='issued' — znamená "finalizovaná riadna faktúra".
 // Bez tohto oddelenia by prijaté faktúry ticho padali do sekcií vydaných.
-type DirectionFilter = "all" | "issued" | "received";
+//
+// Samotné pravidlá zaradenia žijú v lib/invoicing/invoice-register-filters.ts,
+// aby ich používali počty aj zoznam a dali sa odskúšať bez prehliadača.
 
-const DIRECTION_ORDER: DirectionFilter[] = ["all", "issued", "received"];
-
-type SectionKey = "issued" | "drafts" | "unpaid" | "overdue" | "paid" | "corrections";
-
-const SECTION_ORDER: SectionKey[] = ["issued", "drafts", "unpaid", "overdue", "paid", "corrections"];
-
-function matchesDirection(invoice: Invoice, filter: DirectionFilter): boolean {
-  if (filter === "all") return true;
-  return invoice.direction === filter;
-}
-
-function matchesSection(invoice: Invoice, section: SectionKey): boolean {
-  switch (section) {
-    case "issued":
-      return (
-        invoice.document_status === "finalized" &&
-        (invoice.kind === "regular_invoice" || invoice.kind === "payment_received_invoice")
-      );
-    case "drafts":
-      return invoice.document_status === "draft";
-    case "unpaid":
-      return invoice.document_status === "finalized" && invoice.payment_status === "unpaid";
-    case "overdue":
-      return (
-        invoice.document_status === "finalized" &&
-        isInvoiceOverdue(invoice.due_date, invoice.payment_status)
-      );
-    case "paid":
-      return invoice.document_status === "finalized" && invoice.payment_status === "paid";
-    case "corrections":
-      return invoice.kind === "credit_note" || invoice.kind === "debit_note";
-    default:
-      return false;
-  }
-}
+/** "Po splatnosti" je odvodený stav — pozri lib/invoicing/vat-engine.ts. */
+const isOverdueInvoice = (invoice: Invoice) =>
+  isInvoiceOverdue(invoice.due_date, invoice.payment_status);
 
 /** Jedna šablóna stĺpcov pre hlavičku aj riadky — nesmú sa rozísť. */
 const INVOICE_COLUMNS =
@@ -94,7 +72,7 @@ export default function FakturyPage() {
   const [partnersById, setPartnersById] = useState<Record<string, BusinessPartner>>({});
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
-  const [section, setSection] = useState<SectionKey>("issued");
+  const [section, setSection] = useState<SectionKey>("all");
   const [directionFilter, setDirectionFilter] = useState<DirectionFilter>("all");
 
   useEffect(() => {
@@ -156,18 +134,31 @@ export default function FakturyPage() {
     [invoices, directionFilter]
   );
 
+
+  // JEDNA DEFINÍCIA PRE POČET AJ ZOZNAM.
+  //
+  // Číslo pri záložke musí hovoriť o tom, čo používateľ po kliknutí uvidí.
+  // Predtým sa počítalo cez všetky doklady, kým zoznam navyše filtroval
+  // podľa stavu — register tak tvrdil „Všetky 3" a vykreslil dva riadky.
+  // Počty sa preto počítajú nad TOU ISTOU množinou, z ktorej vzniká zoznam.
+  const sectionScopedInvoices = useMemo(
+    () => invoices.filter((invoice) => matchesSection(invoice, section, isOverdueInvoice)),
+    [invoices, section]
+  );
+
   const directionCounts = useMemo(() => {
     const counts: Record<DirectionFilter, number> = { all: 0, issued: 0, received: 0 };
-    for (const invoice of invoices) {
+    for (const invoice of sectionScopedInvoices) {
       counts.all += 1;
       if (invoice.direction === "issued") counts.issued += 1;
       if (invoice.direction === "received") counts.received += 1;
     }
     return counts;
-  }, [invoices]);
+  }, [sectionScopedInvoices]);
 
   const sectionCounts = useMemo(() => {
     const counts: Record<SectionKey, number> = {
+      all: 0,
       issued: 0,
       drafts: 0,
       unpaid: 0,
@@ -177,14 +168,14 @@ export default function FakturyPage() {
     };
     for (const invoice of directionScopedInvoices) {
       for (const key of SECTION_ORDER) {
-        if (matchesSection(invoice, key)) counts[key] += 1;
+        if (matchesSection(invoice, key, isOverdueInvoice)) counts[key] += 1;
       }
     }
     return counts;
   }, [directionScopedInvoices]);
 
   const filteredInvoices = useMemo(
-    () => directionScopedInvoices.filter((invoice) => matchesSection(invoice, section)),
+    () => directionScopedInvoices.filter((invoice) => matchesSection(invoice, section, isOverdueInvoice)),
     [directionScopedInvoices, section]
   );
 

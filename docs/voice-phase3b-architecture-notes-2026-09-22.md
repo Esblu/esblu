@@ -56,7 +56,12 @@ histórie jeho príkazov. Pohodlie tu nestojí za nepredvídateľnosť.
 
 ---
 
-## 3. Kanonické smerovanie Inbox → Faktúry (§19–20) — pripravené
+## 3. Kanonické smerovanie Inbox → Faktúry (§19–20) — HOTOVÉ 2026-09-23
+
+> Stav sa zmenil. Implementované v `lib/invoicing/received-invoice-route.ts`
+> spolu s odstránením zložky „Faktúry" z Inboxu. Zvyšok tejto kapitoly
+> popisuje návrh tak, ako bol dohodnutý; skutočnosť sa od neho neodchýlila.
+
 
 ### Dnešný stav
 

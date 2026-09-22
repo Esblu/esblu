@@ -36,10 +36,74 @@ function check(label: string, actual: unknown, expected: unknown): void {
 }
 
 /** Kompaktný tvar na porovnávanie: "popis@cena" alebo "popis@?" bez ceny. */
-function shape(text: string): string {
-  const result = extractInvoiceItems(text);
+function shape(text: string, partnerHint?: string): string {
+  const result = extractInvoiceItems(text, partnerHint);
   if (result.problem) return `PROBLEM:${result.problem}`;
   return result.items.map((i) => `${i.description}@${i.unitPrice ?? "?"}`).join(" | ");
+}
+
+// -----------------------------------------------------------------------------
+// Veta BEZ uvádzacej frázy (reálny mobilný prepis)
+//
+// Takto ľudia hovoria: príkaz, meno, položky, DPH — všetko oddelené iba
+// čiarkami. Skoršia verzia v takejto vete nenašla ANI JEDNU položku
+// (chýbala fráza „za"), vrstva nad ňou doplnila jediný riadok z modelu a
+// druhá položka zmizla bez stopy. Presne to sa stalo v produkcii:
+// nadiktované „kopanie 300 + dovoz 50", vytvorené „kopanie 300".
+// -----------------------------------------------------------------------------
+const MOBILE_TRANSCRIPT = "Vytvor faktúru, tester 1, kopanie 300 euro, dovoz 50 euro, 23% DPH.";
+
+check(
+  "reálny prepis: obe položky prežijú",
+  shape(MOBILE_TRANSCRIPT, "tester 1"),
+  "kopanie@300 | dovoz@50"
+);
+check(
+  "reálny prepis bez známeho partnera: radšej otázka než 3 riadky",
+  shape(MOBILE_TRANSCRIPT),
+  "PROBLEM:ambiguous"
+);
+check(
+  "SK bez frázy, s medzerou v mene partnera",
+  shape("Vytvor faktúru pre Tester 1, kopanie 300 eur, dovoz 50 eur, s 23 percent DPH.", "Tester 1"),
+  "kopanie@300 | dovoz@50"
+);
+check(
+  "DE bez frázy",
+  shape("Erstelle Rechnung, Tester1, Erdarbeiten 300 Euro, Transport 50 Euro, 23% MwSt", "Tester1"),
+  "Erdarbeiten@300 | Transport@50"
+);
+check(
+  "EN: meno za predložkou „for\" sa nestane položkou",
+  shape("Create invoice for Tester1, excavation 300 euros, transport 50 euros, 23% VAT", "Tester1"),
+  "excavation@300 | transport@50"
+);
+check("holá dvojica s čiarkou", shape("kopanie 300, doprava 50"), "kopanie@300 | doprava@50");
+check("holá dvojica so spojkou", shape("kopanie 300 a doprava 50"), "kopanie@300 | doprava@50");
+check(
+  "holá dvojica s menou",
+  shape("kopanie 300 eur, doprava 50 eur, 23% DPH"),
+  "kopanie@300 | doprava@50"
+);
+check(
+  "holá dvojica, DPH slovom",
+  shape("kopanie 300 euro, dovoz 50 euro, 23 percent DPH"),
+  "kopanie@300 | dovoz@50"
+);
+check(
+  "druhá položka bez ceny → otázka, nie čiastočný doklad",
+  shape("Vytvor faktúru, Tester1, kopanie 300 eur, doprava", "Tester1"),
+  "PROBLEM:ambiguous"
+);
+
+// Otázka musí vedieť pomenovať, čomu appka rozumela — inak by používateľ
+// musel hádať, ktorý riadok doplniť.
+{
+  const parsed = extractInvoiceItems("Vytvor faktúru, Tester1, kopanie 300 eur, doprava", "Tester1");
+  check("pri odmietnutí sa nevracia žiadna položka", parsed.items.length, 0);
+  check("ale rozpoznané sa nesú ďalej", parsed.recognized.length, 2);
+  check("prvé rozpoznané má cenu", parsed.recognized[0].unitPrice, 300);
+  check("druhé rozpoznané cenu nemá", parsed.recognized[1].unitPrice, undefined);
 }
 
 // -----------------------------------------------------------------------------

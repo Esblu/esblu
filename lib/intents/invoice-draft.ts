@@ -166,7 +166,11 @@ function extractAfterPhrase(rawText: string, phrases: string[]): string | undefi
  *
  * Nič, čo tu nevyjde, sa nedopĺňa — chýbajúce hodnoty sa stanú otázkou.
  */
-export function extractInvoiceSlotsFromText(rawText: string): InvoiceDraftSlots {
+export function extractInvoiceSlotsFromText(
+  rawText: string,
+  /** Meno partnera z vety — aby sa úsek s ním nestal položkou. */
+  partnerHint?: string
+): InvoiceDraftSlots {
   const slots: InvoiceDraftSlots = {};
 
   const currency = findCurrency(rawText);
@@ -189,9 +193,17 @@ export function extractInvoiceSlotsFromText(rawText: string): InvoiceDraftSlots 
   // asistent sa spýta. Viac položiek, z ktorých jednej chýba cena, sa
   // ZÁMERNE neuloží ani čiastočne: bol by to signál, že rozdelenie
   // prebehlo zle, a čiastočný doklad je horší než otázka.
-  const parsed = extractInvoiceItems(rawText);
+  const parsed = extractInvoiceItems(rawText, partnerHint);
   if (parsed.items.length > 0 && parsed.problem !== "ambiguous") {
     slots.items = parsed.items;
+  }
+
+  // Keď parser rozdelenie ODMIETOL, náhradná jednopoložková cesta nižšie sa
+  // NESMIE spustiť. Inak by z vety s dvoma riadkami vznikol doklad s jedným
+  // — presne to sa stalo pri „kopanie 300 euro, dovoz 50 euro": druhý
+  // riadok zmizol a používateľ sa to dozvedel až z hotového konceptu.
+  if (parsed.problem === "ambiguous" || parsed.problem === "too_many_items") {
+    return slots;
   }
 
   // Jediná položka bez ceny sa smie prevziať — je to bežný prípad („za
@@ -221,11 +233,43 @@ export function extractInvoiceSlotsFromText(rawText: string): InvoiceDraftSlots 
  * Dôvod, prečo sa veta nedala rozdeliť na položky — na formulovanie
  * otázky. `null`, keď problém nie je.
  */
-export function itemParseProblem(rawText: string): "ambiguous" | "too_many_items" | null {
-  const parsed = extractInvoiceItems(rawText);
+export function itemParseProblem(
+  rawText: string,
+  partnerHint?: string
+): "ambiguous" | "too_many_items" | null {
+  const parsed = extractInvoiceItems(rawText, partnerHint);
   return parsed.problem === "ambiguous" || parsed.problem === "too_many_items"
     ? parsed.problem
     : null;
+}
+
+/**
+ * Rozpoznané a nerozpoznané úseky pre znenie otázky.
+ *
+ * Existuje preto, že „nerozumel som" je pri dvoch položkách zbytočne
+ * bezmocná odpoveď. Používateľ vie doplniť presne to, čo appka pomenuje.
+ */
+export function describeItemParse(
+  rawText: string,
+  partnerHint?: string
+): {
+  problem: "ambiguous" | "too_many_items" | null;
+  recognized: { description: string; unitPrice?: number }[];
+  unresolved: string[];
+} {
+  const parsed = extractInvoiceItems(rawText, partnerHint);
+  const problem =
+    parsed.problem === "ambiguous" || parsed.problem === "too_many_items"
+      ? parsed.problem
+      : null;
+  return {
+    problem,
+    recognized: parsed.recognized.map((item) => ({
+      description: item.description,
+      ...(item.unitPrice === undefined ? {} : { unitPrice: item.unitPrice }),
+    })),
+    unresolved: parsed.unresolved,
+  };
 }
 
 /**
@@ -550,6 +594,19 @@ export async function createInvoiceDraftFromSlots(
         {
           label: translate(locale, "invoices.newInvoice.itemVatCategoryLabel"),
           value: `${items[0].vat_category_code} · ${formatAmount(items[0].vat_rate)} %`,
+        },
+        // Základ a daň, nie iba celková suma. Pri jednej položke sa dali
+        // dopočítať z hlavy; pri dvoch už nie, a práve vtedy má kontrola
+        // zmysel — chýbajúci riadok je vidieť na základe dane skôr než
+        // kdekoľvek inde. Všetky tri čísla počíta ten istý VAT engine z
+        // tých istých položiek, ktoré sa práve uložili.
+        {
+          label: translate(locale, "invoices.newInvoice.subtotalLabel"),
+          value: `${totals.subtotalAmount} ${currency}`,
+        },
+        {
+          label: translate(locale, "invoices.newInvoice.vatTotalLabel"),
+          value: `${totals.vatTotalAmount} ${currency}`,
         },
         {
           label: translate(locale, "invoices.newInvoice.totalLabel"),

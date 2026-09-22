@@ -22,6 +22,7 @@ import {
   appendItemFromAnswer,
   looksLikeItemAppend,
   buildItemPriceQuestion,
+  describeItemParse,
   type InvoiceDraftField,
   type InvoiceDraftSlots,
   type PartnerCandidate,
@@ -85,7 +86,26 @@ export async function startInvoiceDraftFlow(
   descriptionHint: string | undefined,
   amountHint: number | undefined
 ): Promise<IntentResult> {
-  const slots = extractInvoiceSlotsFromText(rawText);
+  const slots = extractInvoiceSlotsFromText(rawText, partnerQuery);
+
+  // ------------------------------------------------------------------
+  // ČIASTOČNÉ POROZUMENIE = OTÁZKA, NIE DOKLAD.
+  //
+  // Keď veta vyzerá na viac riadkov, ale rozdeliť sa spoľahlivo nedá,
+  // nesmie vzniknúť koncept s tým jedným riadkom, ktorému appka rozumela.
+  // Toto je miesto, kde sa to rozhoduje, a musí byť PRED doplnením popisu
+  // z modelu — ten vracia vždy nanajvýš jednu položku, takže by
+  // odmietnutie prebil a druhý riadok by ticho zanikol.
+  // ------------------------------------------------------------------
+  const parse = describeItemParse(rawText, partnerQuery);
+  if (parse.problem) {
+    const partial = buildPartialItemsMessage(locale, parse);
+    return askAgain(supabase, locale, ctx, slots, {
+      kind: "clarify",
+      question: partial,
+      conversationId: ctx.conversationId,
+    });
+  }
 
   // Model môže popis/sumu rozpoznať lepšie než deterministická extrakcia
   // (napr. keď veta nemá "za"). Použijú sa IBA keď z vety nevyšla ani
@@ -381,6 +401,41 @@ async function continueFlow(
     conversationId: ctx.conversationId,
     choices: question.choices,
   };
+}
+
+/**
+ * Znenie otázky pri čiastočnom porozumení.
+ *
+ * Nepomenovať, čomu appka rozumela, by znamenalo pýtať sa znova na celú
+ * vetu — a používateľ by ju musel povedať celú, hoci chýba jeden riadok.
+ * Rozpoznané položky sa preto vymenujú a otázka smeruje na zvyšok.
+ */
+function buildPartialItemsMessage(
+  locale: Locale,
+  parse: { problem: "ambiguous" | "too_many_items" | null; recognized: { description: string; unitPrice?: number }[]; unresolved: string[] }
+): string {
+  if (parse.problem === "too_many_items") {
+    return translate(locale, "search.voice.invoice.tooManyItems");
+  }
+
+  if (parse.recognized.length === 0) {
+    return translate(locale, "search.voice.invoice.itemsUnclear");
+  }
+
+  const understood = parse.recognized
+    .map((item) =>
+      item.unitPrice === undefined
+        ? item.description
+        : `${item.description} — ${item.unitPrice}`
+    )
+    .join("; ");
+
+  return parse.unresolved.length > 0
+    ? translate(locale, "search.voice.invoice.itemsPartialWithRest", {
+        understood,
+        rest: parse.unresolved.join("; "),
+      })
+    : translate(locale, "search.voice.invoice.itemsPartial", { understood });
 }
 
 /** Zachová stav a vráti iné oznámenie než otázku (napr. "partnera nepoznám"). */

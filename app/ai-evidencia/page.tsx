@@ -62,6 +62,7 @@ import {
   ReceiptIcon,
 } from "@/app/components/icons/AppIcons";
 import { invoiceDetailHref } from "@/lib/entity-links";
+import { receivedInvoiceRoute } from "@/lib/invoicing/received-invoice-route";
 import { VoiceLauncherSlot } from "@/app/components/voice/VoiceLauncherSlot";
 import { useCompanyDpaLegalHold } from "@/app/components/CompanyDpaGate";
 import { normalizeWeightUnit } from "@/lib/normalize-weight-unit";
@@ -126,7 +127,15 @@ type OtherDocumentRow = {
   storage_path: string | null;
   original_filename: string | null;
   note: string | null;
-  document_links?: { vehicle_id: string | null; machine_id: string | null }[];
+  // `invoice_id` vzniká výhradne v esblu_create_received_invoice_draft() a
+  // hovorí, že z tohto dokumentu UŽ vznikla kanonická faktúra. Predtým sa
+  // nečítal vôbec, takže spracovaná faktúra zostala v Inboxe navždy medzi
+  // „nepriradenými" — Inbox nemal ako vedieť, že jej práca skončila.
+  document_links?: {
+    vehicle_id: string | null;
+    machine_id: string | null;
+    invoice_id?: string | null;
+  }[];
   // Voliteľné priradenie k firemnej vlastnej kategórii (Intent Engine
   // ASSIGN_DOCUMENTS_TO_CATEGORY, pozri lib/intents/actions.ts). Stĺpec
   // v DB existuje už od 20260914120000_add_custom_document_categories a
@@ -159,13 +168,34 @@ function getAttachmentTypeLabels(
   };
 }
 
-// Dokumenty typu receipt/invoice bez priradenia k vozidlu/stroju sa v zozname
-// zobrazujú zoskupené do zložiek "Bločky"/"Faktúry" (pozri bod 4 zadania),
-// nie samostatne v plochom zozname "Ostatné dokumenty" — aby sa rovnaký
-// dokument nikdy nezobrazil na dvoch miestach naraz.
+// Bločky bez priradenia k vozidlu/stroju sa zobrazujú zoskupené v zložke
+// "Bločky", nie samostatne v plochom zozname "Ostatné dokumenty" — aby sa
+// rovnaký dokument nikdy nezobrazil na dvoch miestach naraz.
+//
+// Faktúry sem už NEPATRIA. Inbox je príjem; domovom faktúry je modul
+// Faktúry. Pozri `documentInvoiceId` nižšie.
 function isDocumentAssigned(doc: OtherDocumentRow): boolean {
   const link = Array.isArray(doc?.document_links) ? doc.document_links[0] : null;
   return Boolean(link && (link.vehicle_id || link.machine_id));
+}
+
+/**
+ * Identifikátor kanonickej faktúry, ktorá z tohto dokumentu už vznikla.
+ *
+ * Prechádzajú sa VŠETKY väzby, nie iba prvá: dokument môže byť súčasne
+ * priradený k vozidlu aj byť predlohou faktúry a poradie riadkov nie je
+ * zaručené.
+ *
+ * `null` znamená „faktúra z neho ešte nevznikla" — alebo že volajúci na
+ * faktúry nevidí. Oba prípady sa správajú rovnako a to je správne: kto
+ * doklad nevidí, nemá sa o ňom dozvedieť ani z Inboxu.
+ */
+function documentInvoiceId(doc: OtherDocumentRow): string | null {
+  const links = Array.isArray(doc?.document_links) ? doc.document_links : [];
+  for (const link of links) {
+    if (link?.invoice_id) return link.invoice_id;
+  }
+  return null;
 }
 
 // Rovnaký princíp ako isDocumentAssigned() vyššie, ale pre priradenie k
@@ -935,9 +965,21 @@ const unassignedReceipts = otherDocuments.filter(
     !isDocumentAssigned(doc) &&
     !hasCustomCategoryAssignment(doc)
 );
-const unassignedInvoices = otherDocuments.filter(
+// FAKTÚRY UŽ V INBOXE VLASTNÚ ZLOŽKU NEMAJÚ.
+//
+// Zložka „Faktúry" tu bola natrvalo a počítala aj doklady, z ktorých už
+// dávno vznikla riadna faktúra — Inbox o tom nevedel, lebo väzbu s
+// invoice_id nikdy nečítal. Používateľ tak mal faktúru na dvoch miestach
+// a na jednom z nich navždy ako „nepriradenú".
+//
+// Inbox je príjem. Naskenovaná faktúra je tu iba dovtedy, kým sa z nej
+// nestane doklad; potom jej domovom je modul Faktúry a v Inboxe zostáva
+// ako PREDLOHA, dostupná z detailu faktúry. Nič sa nemaže a nikam
+// nepresúva — mení sa iba to, kde sa doklad zobrazuje a ako sa nazýva.
+const pendingInvoiceDocuments = otherDocuments.filter(
   (doc) =>
     doc.document_type === "invoice" &&
+    !documentInvoiceId(doc) &&
     !isDocumentAssigned(doc) &&
     !hasCustomCategoryAssignment(doc)
 );
@@ -954,8 +996,15 @@ const otherDocumentsFlatList = otherDocuments.filter((doc) => {
     return false;
   }
 
+  if (doc.document_type === "receipt" && !isDocumentAssigned(doc)) {
+    return false;
+  }
+
+  // Faktúra čakajúca na spracovanie má vlastnú sekciu vyššie. Tá, z ktorej
+  // už doklad vznikol, patrí sem — ako predloha s odkazom na faktúru.
   if (
-    (doc.document_type === "receipt" || doc.document_type === "invoice") &&
+    doc.document_type === "invoice" &&
+    !documentInvoiceId(doc) &&
     !isDocumentAssigned(doc)
   ) {
     return false;
@@ -963,12 +1012,7 @@ const otherDocumentsFlatList = otherDocuments.filter((doc) => {
 
   return true;
 });
-const openFolderDocuments =
-  openFolder === "receipt"
-    ? unassignedReceipts
-    : openFolder === "invoice"
-      ? unassignedInvoices
-      : [];
+const openFolderDocuments = openFolder === "receipt" ? unassignedReceipts : [];
 
 // "Vlastné zložky" (Intent Engine CREATE/RENAME/ASSIGN_DOCUMENTS_TO_CATEGORY,
 // pozri lib/intents/actions.ts) — dokumenty zoskupené podľa
@@ -1075,7 +1119,9 @@ const openCustomCategoryDocuments = openCustomCategoryId
   async function handleExportFolder(kind: AiInboxFolderKind) {
     if (folderExportLoading) return;
 
-    const folderRecords = kind === "receipt" ? unassignedReceipts : unassignedInvoices;
+    // Zložku majú už iba bločky. Export faktúr z Inboxu zanikol spolu s
+    // ich zložkou — faktúry sa exportujú z modulu Faktúry, kde sú doma.
+    const folderRecords = kind === "receipt" ? unassignedReceipts : pendingInvoiceDocuments;
 
     if (folderRecords.length === 0) {
       setFolderExportFeedback({
@@ -3669,7 +3715,42 @@ function renderDocumentRegister(
     </div>
     )}
 
-    {/* Zložky "Bločky"/"Faktúry" — nepriradené dokumenty (bod 4 zadania). */}
+    {/* Faktúry čakajúce na spracovanie — PRECHODNÝ rad, nie zložka.
+        Sekcia zmizne, keď je prázdna: Inbox nemá byť miestom, kde faktúra
+        býva, ale miestom, cez ktoré prejde do modulu Faktúry. */}
+    {!openFolder && !openCustomCategoryId && pendingInvoiceDocuments.length > 0 && (
+      <div className="mt-10">
+        <h2 className="text-lg font-semibold text-primary">
+          {t("inbox.pendingInvoicesTitle")}
+        </h2>
+        <p className="mt-1 text-sm text-muted-esblu">
+          {t("inbox.pendingInvoicesHint")}
+        </p>
+
+        <ul className="mt-4 space-y-2">
+          {pendingInvoiceDocuments.map((doc) => (
+            <li
+              key={doc.id}
+              className="flex flex-wrap items-center justify-between gap-3 rounded-doc border border-doc-border bg-surface-2 px-4 py-3"
+            >
+              <div className="min-w-0">
+                <p className="truncate text-sm font-medium text-primary">
+                  {doc.original_filename || t("inbox.noName")}
+                </p>
+                <p className="mt-0.5 text-sm text-muted-esblu">
+                  {doc.created_at ? formatDate(doc.created_at, locale) : "—"}
+                </p>
+              </div>
+              <a href={receivedInvoiceRoute(doc.id)} className={docButtonPrimary}>
+                {t("inbox.processAsReceivedInvoice")}
+              </a>
+            </li>
+          ))}
+        </ul>
+      </div>
+    )}
+
+    {/* Zložka "Bločky" — nepriradené dokumenty. */}
     {!openFolder && !openCustomCategoryId && (
       <div className="mt-10">
         <h2 className="text-lg font-semibold text-primary">
@@ -3682,13 +3763,6 @@ function renderDocumentRegister(
             title={t("inbox.receiptsFolderTitle")}
             subtitle={`${unassignedReceipts.length} ${tCount("inbox.unassignedReceiptsCount", unassignedReceipts.length)}`}
             onClick={() => handleOpenFolder("receipt")}
-          />
-
-          <FolderTile
-            icon={<FileIcon size={20} />}
-            title={t("inbox.invoicesFolderTitle")}
-            subtitle={`${unassignedInvoices.length} ${tCount("inbox.unassignedInvoicesCount", unassignedInvoices.length)}`}
-            onClick={() => handleOpenFolder("invoice")}
           />
         </div>
       </div>
@@ -4109,6 +4183,31 @@ function renderDocumentRegister(
         />
 
       </div>
+
+      {/* Kam tento doklad v evidencii patrí. Bez toho bol dokument v
+          Inboxe slepá ulička: faktúra z neho už existovala, ale nedalo sa
+          k nej odtiaľto dostať — ani sa nedalo zistiť, že vôbec vznikla. */}
+      {documentInvoiceId(selectedOtherDocument) ? (
+        <div className="mt-5 rounded-doc border border-doc-border bg-surface-2 p-4">
+          <p className="text-sm text-secondary">{t("inbox.invoiceAlreadyCreated")}</p>
+          <a
+            href={invoiceDetailHref(documentInvoiceId(selectedOtherDocument) as string)}
+            className={`mt-3 inline-flex ${docButtonPrimary}`}
+          >
+            {t("inbox.receivedInvoice.created.openInvoice")}
+          </a>
+        </div>
+      ) : selectedOtherDocument.document_type === "invoice" ? (
+        <div className="mt-5 rounded-doc border border-doc-border bg-surface-2 p-4">
+          <p className="text-sm text-secondary">{t("inbox.pendingInvoicesHint")}</p>
+          <a
+            href={receivedInvoiceRoute(selectedOtherDocument.id)}
+            className={`mt-3 inline-flex ${docButtonPrimary}`}
+          >
+            {t("inbox.processAsReceivedInvoice")}
+          </a>
+        </div>
+      ) : null}
 
       {selectedOtherDocument.note && (
         <div className="mt-5 rounded-doc border border-warning/30 bg-warning-soft p-4">

@@ -14,7 +14,8 @@
     "test:partners": "node --experimental-strip-types --no-warnings scripts/partner-matching-tests.ts",
     "test:dates": "node --experimental-strip-types --no-warnings scripts/local-date-tests.ts",
     "test:items": "node --experimental-strip-types --no-warnings scripts/invoice-items-tests.ts",
-    "test:state": "node --experimental-strip-types --no-warnings scripts/draft-state-tests.ts"
+    "test:state": "node --experimental-strip-types --no-warnings scripts/draft-state-tests.ts",
+    "test:register": "node --experimental-strip-types --no-warnings scripts/invoice-register-tests.ts"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.9.0",

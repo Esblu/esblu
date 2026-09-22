@@ -2,6 +2,7 @@ import type { Locale } from "@/lib/i18n/locales";
 import { translate } from "@/lib/i18n/translate";
 import type { IntentResult } from "@/lib/intents/types";
 import type { ResolvedUiEntity } from "@/lib/intents/ui-context";
+import { receivedInvoiceRoute } from "@/lib/invoicing/received-invoice-route";
 
 // =============================================================================
 // Príkazy nad PRÁVE OTVORENOU entitou.
@@ -92,7 +93,7 @@ export function handleProcessCurrentDocumentAsReceivedInvoice(
       type: "document",
       id: entity.entityId,
       label: translate(locale, "search.voice.context.openReceivedReview"),
-      href: `/ai-evidencia?openDocument=${encodeURIComponent(entity.entityId)}&processReceived=1`,
+      href: receivedInvoiceRoute(entity.entityId),
     },
   };
 }
