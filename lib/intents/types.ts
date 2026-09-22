@@ -136,6 +136,20 @@ export const INTENT_NAMES = [
   // nemajú — tie nezvratné sú.
   // ---------------------------------------------------------------------
   "CREATE_INVOICE_DRAFT",
+
+  // ---------------------------------------------------------------------
+  // Voice Phase 3A — príkaz nad PRÁVE OTVORENOU entitou.
+  //
+  // „Spracuj tento dokument ako prijatú faktúru." Intent je označený ako
+  // read-only, a to presne: nič nezapisuje. Overí, že dokument je naozaj
+  // otvorený, že ho volajúci smie použiť a že je na to spôsobilý, a potom
+  // otvorí existujúcu obrazovku na kontrolu. Doklad z neho vznikne až
+  // vtedy, keď ho tam človek potvrdí — cez tú istú cestu ako pri kliknutí.
+  //
+  // „Tento" pritom NIKDY neznamená „posledný" — pozri lib/intents/
+  // ui-context.ts, prečo je odvodzovanie z databázy tichá chyba.
+  // ---------------------------------------------------------------------
+  "PROCESS_CURRENT_DOCUMENT_AS_RECEIVED_INVOICE",
 ] as const;
 
 export type IntentName = (typeof INTENT_NAMES)[number];

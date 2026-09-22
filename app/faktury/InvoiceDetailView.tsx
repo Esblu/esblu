@@ -545,7 +545,7 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
 
   if (!canView || notFound || !invoice) {
     return (
-      <DocumentPageShell>
+      <DocumentPageShell uiContext={{ module: "invoice", entityType: "invoice", entityId: entityId }}>
         <BackLink href="/faktury" label={t("invoices.backToList")} className="mb-6" />
         <DocumentNotice>
           {!canView ? t("invoices.noFinanceAccess") : t("invoices.errors.notFound")}
@@ -561,7 +561,7 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
   const preview = previewDraftTotals(draftItems.filter((item) => item.description.trim()));
 
   return (
-    <DocumentPageShell>
+    <DocumentPageShell uiContext={{ module: "invoice", entityType: "invoice", entityId: entityId }}>
       <BackLink href="/faktury" label={t("invoices.backToList")} className="mb-6" />
 
       <DocumentHeader

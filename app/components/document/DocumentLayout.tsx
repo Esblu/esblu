@@ -1,6 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
+import type { UiContext } from "@/lib/intents/ui-context";
 import { VoiceLauncherSlot } from "@/app/components/voice/VoiceLauncherSlot";
 
 // =============================================================================
@@ -20,10 +21,17 @@ import { VoiceLauncherSlot } from "@/app/components/voice/VoiceLauncherSlot";
 export function DocumentPageShell({
   children,
   wide = false,
+  uiContext,
 }: {
   children: ReactNode;
   /** Register/zoznam potrebuje viac šírky než detail jedného dokladu. */
   wide?: boolean;
+  /**
+   * Entita otvorená na tejto obrazovke — aby hlasové „tento/táto" vedelo,
+   * čoho sa týka. Posiela sa iba typ a identifikátor; server si ho aj tak
+   * overuje znova.
+   */
+  uiContext?: UiContext | null;
 }) {
   return (
     <div className={`mx-auto ${wide ? "max-w-6xl" : "max-w-5xl"} px-4 pb-28 pt-6 sm:px-6`}>
@@ -33,7 +41,7 @@ export function DocumentPageShell({
           prekryl. Takto je dostupný na každej stránke, ktorá používa túto
           schránku, a kolidovať nemá s čím. */}
       <div className="mb-4 flex justify-end">
-        <VoiceLauncherSlot />
+        <VoiceLauncherSlot uiContext={uiContext} />
       </div>
       {children}
     </div>

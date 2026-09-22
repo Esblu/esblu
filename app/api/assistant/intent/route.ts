@@ -14,6 +14,13 @@ import { buildActionPreview } from "@/lib/intents/actions";
 import { isValidConversationId } from "@/lib/intents/conversation";
 import { resolveClientCalendarDate } from "@/lib/local-date";
 import {
+  readUiContext,
+  resolveUiEntity,
+  moduleMatchesEntity,
+  type UiContextEntityType,
+} from "@/lib/intents/ui-context";
+import { handleProcessCurrentDocumentAsReceivedInvoice } from "@/lib/intents/handlers-context";
+import {
   startInvoiceDraftFlow,
   continueInvoiceDraftFlow,
 } from "@/lib/intents/invoice-draft-flow";
@@ -55,6 +62,47 @@ import type { CompanyMemberRole } from "@/lib/company";
 
 const MAX_TEXT_LENGTH = 200;
 
+/**
+ * Ktoré intenty sa dajú doplniť z otvorenej entity, a akého typu tá entita
+ * musí byť.
+ *
+ * Doplní sa VÝHRADNE chýbajúci hľadaný výraz. Príkaz, v ktorom používateľ
+ * entitu pomenoval, sa nikdy neprepisuje — vyslovené meno má vždy
+ * prednosť pred tým, čo je práve otvorené.
+ */
+const CONTEXTUAL_QUERY_INTENTS: Record<string, UiContextEntityType> = {
+  SHOW_VEHICLE_DOCUMENTS: "vehicle",
+  SHOW_VEHICLE_SERVICE: "vehicle",
+  VEHICLE_STK_STATUS: "vehicle",
+  VEHICLE_EK_STATUS: "vehicle",
+  VEHICLE_VIGNETTE_STATUS: "vehicle",
+  VEHICLE_COST_SUMMARY: "vehicle",
+  VEHICLE_REPORT: "vehicle",
+  OPEN_VEHICLE: "vehicle",
+  SHOW_MACHINE_SERVICE: "machine",
+  SHOW_MACHINE_DOCUMENTS: "machine",
+  SHOW_MACHINE_PHOTOS: "machine",
+  MACHINE_REPORT: "machine",
+  OPEN_MACHINE: "machine",
+  INVENTORY_ITEM_STATUS: "inventory_item",
+  OPEN_INVENTORY_ITEM: "inventory_item",
+  SEARCH_PARTNER: "partner",
+  SEARCH_INVOICE: "invoice",
+};
+
+function withContextualQuery(
+  intent: ParsedIntent,
+  entity: Awaited<ReturnType<typeof resolveUiEntity>>
+): ParsedIntent {
+  if (!entity || !entity.label) return intent;
+  if (intent.args.query?.trim()) return intent;
+
+  const expected = CONTEXTUAL_QUERY_INTENTS[intent.name];
+  if (!expected || expected !== entity.entityType) return intent;
+
+  return { ...intent, args: { ...intent.args, query: entity.label } };
+}
+
 export async function POST(req: Request) {
   const locale = getRequestLocale(req);
 
@@ -65,7 +113,7 @@ export async function POST(req: Request) {
     }
 
     const body = (await req.json().catch(() => null)) as
-      | { text?: string; conversationId?: string; localDate?: string }
+      | { text?: string; conversationId?: string; localDate?: string; uiContext?: unknown }
       | null;
     const rawText = typeof body?.text === "string" ? body.text.trim() : "";
 
@@ -83,6 +131,11 @@ export async function POST(req: Request) {
     // Toto NIE JE autorizačný vstup: neurčuje firmu ani používateľa a
     // nemá vplyv na to, kto smie doklad vytvoriť — to drží rola a RLS.
     const issueDate = resolveClientCalendarDate(body?.localDate);
+
+    // Kontext otvorenej obrazovky — iba modul, typ entity a UUID.
+    // Neplatný tvar sa ticho zahodí a príkaz sa spracuje, akoby nič
+    // otvorené nebolo. Overenie proti databáze prebieha nižšie.
+    const uiContext = readUiContext(body?.uiContext);
 
     // Identifikátor prebiehajúceho dialógu. Sám osebe nič neodomyká —
     // server pri ňom vždy overuje aj totožnosť volajúceho a jeho aktívnu
@@ -213,10 +266,37 @@ export async function POST(req: Request) {
     //                    tu potvrdenie nie je, je pri CREATE_INVOICE_DRAFT
     //                    v lib/intents/types.ts.
     // ------------------------------------------------------------------
+    // ------------------------------------------------------------------
+    // Kontext otvorenej obrazovky.
+    //
+    // Klient identifikátor iba NAVRHUJE — server si ho overí znova cez
+    // user-scoped klienta, takže o firemnej izolácii aj o práve čítať
+    // rozhoduje RLS. Cudzí, podvrhnutý, zmazaný či nedostupný záznam
+    // skončí ako `null`, teda „nič otvorené", bez vysvetlenia prečo.
+    //
+    // Firma, používateľ, rola ani oprávnenia sa z klienta NEBERÚ nikdy.
+    // ------------------------------------------------------------------
+    const resolvedEntity =
+      uiContext && moduleMatchesEntity(uiContext)
+        ? await resolveUiEntity(supabase, uiContext)
+        : null;
+
     let result;
 
-    if (isRegisteredReadOnlyIntent(intent.name)) {
-      result = await executeIntent(supabase, locale, intent, readCtx);
+    if (intent.name === "PROCESS_CURRENT_DOCUMENT_AS_RECEIVED_INVOICE") {
+      result = handleProcessCurrentDocumentAsReceivedInvoice(
+        locale,
+        resolvedEntity,
+        financeManage
+      );
+    } else if (isRegisteredReadOnlyIntent(intent.name)) {
+      // Kontextové doplnenie: „ukáž dokumenty tohto vozidla" je ten istý
+      // intent ako „ukáž dokumenty vozidla BA123AB", len bez vysloveného
+      // označenia. Keď je entita správneho typu otvorená a overená,
+      // doplní sa jej označenie ako hľadaný výraz — existujúce handlery
+      // tak fungujú bez zmeny a nevzniká pre „tento" druhá vetva logiky.
+      const enriched = withContextualQuery(intent, resolvedEntity);
+      result = await executeIntent(supabase, locale, enriched, readCtx);
     } else if (isRegisteredReviewableDraftIntent(intent.name)) {
       // Fakturovať smie iba držiteľ finančnej správy. Kontroluje sa PRED
       // akýmkoľvek dotazom aj pred prvou otázkou dialógu — zamestnanec

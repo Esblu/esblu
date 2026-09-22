@@ -6,6 +6,12 @@
     "skipLibCheck": true,
     "strict": true,
     "noEmit": true,
+    // Povoľuje `import "./modul.ts"`. Vďaka tomu sa čisté, bezzávislostné
+    // moduly (parsovanie čísel, položiek, zhody partnerov) dajú spustiť
+    // priamo v Node cez `--experimental-strip-types`, takže testy v
+    // scripts/ nepotrebujú bundler ani testovací framework. Vyžaduje
+    // `noEmit: true`, čo tento projekt aj tak má.
+    "allowImportingTsExtensions": true,
     "esModuleInterop": true,
     "module": "esnext",
     "moduleResolution": "bundler",

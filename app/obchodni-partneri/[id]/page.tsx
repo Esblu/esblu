@@ -129,7 +129,7 @@ export default function ObchodnyPartnerDetailPage() {
     : [];
 
   return (
-    <DocumentPageShell>
+    <DocumentPageShell uiContext={{ module: "partner", entityType: "partner", entityId: String(id) }}>
       <BackLink href="/obchodni-partneri" label={t("businessPartners.title")} className="mb-6" />
 
       {loading ? (

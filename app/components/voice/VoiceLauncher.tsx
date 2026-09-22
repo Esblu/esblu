@@ -7,6 +7,7 @@ import { REQUEST_LOCALE_HEADER } from "@/lib/i18n/request-locale";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import { useVoiceCapture } from "@/hooks/use-voice-capture";
 import { todayLocalDate } from "@/lib/local-date";
+import type { UiContext } from "@/lib/intents/ui-context";
 import { IntentResultView } from "@/app/components/voice/IntentResultView";
 import {
   docButtonSecondary,
@@ -68,7 +69,7 @@ type Phase =
   | "denied"
   | "failed";
 
-export function VoiceLauncher() {
+export function VoiceLauncher({ uiContext = null }: { uiContext?: UiContext | null } = {}) {
   const { t, locale } = useLocale();
 
   const [open, setOpen] = useState(false);
@@ -119,10 +120,15 @@ export function VoiceLauncher() {
         // sám by o polnoci stredoeurópskeho času založil doklad s včerajším
         // dátumom. Server si hodnotu overí a ohraničí (lib/local-date.ts),
         // takže ju neprijíma naslepo.
+        // `uiContext` hovorí, ČO MÁ POUŽÍVATEĽ OTVORENÉ — modul, typ entity
+        // a jej identifikátor, nič viac. Žiadny obsah dokumentu, žiadny
+        // text z OCR. Server si entitu aj tak overí znova a firmu ani rolu
+        // z klienta neberie.
         body: JSON.stringify({
           text,
           conversationId: conversationIdRef.current,
           localDate: todayLocalDate(),
+          ...(uiContext ? { uiContext } : {}),
         }),
       });
 
@@ -235,6 +241,14 @@ export function VoiceLauncher() {
     resetDialog();
   }
 
+  // Označenie otvorenej entity. ZÁMERNE sa nezobrazuje identifikátor —
+  // používateľovi nič nepovie a v rozhraní vyzerá ako chyba. Klient pozná
+  // iba typ, takže ukáže názov typu; presné označenie (napr. názov súboru)
+  // pozná až server a použije ho vo svojich odpovediach.
+  const contextLabel = uiContext
+    ? t(`search.voice.context.entityType.${uiContext.entityType}`)
+    : "";
+
   // Jedna veta o tom, čo sa práve deje. Žiadne technické výpisy.
   const statusText =
     voiceState === "recording"
@@ -306,6 +320,14 @@ export function VoiceLauncher() {
           <CloseIcon size={16} />
         </button>
       </div>
+
+      {/* Čo je otvorené. Bez toho by používateľ nevedel, na čo sa „tento"
+          vzťahuje — a keď nie je otvorené nič, appka to netvrdí. */}
+      {contextLabel && (
+        <p className="mt-2 truncate text-xs text-muted-esblu">
+          {t("search.voice.context.workingWith")} {contextLabel}
+        </p>
+      )}
 
       {voiceError && <p className="mt-2 text-sm text-danger">{voiceError}</p>}
 

@@ -5,6 +5,7 @@ import type { IntentResult } from "@/lib/intents/types";
 import {
   loadConversationContext,
   saveConversationContext,
+  claimConversationContext,
   clearConversationContext,
   MAX_CONVERSATION_TURNS,
 } from "@/lib/intents/conversation";
@@ -18,6 +19,9 @@ import {
   readSlots,
   resolvePartnerCandidates,
   serializeSlots,
+  appendItemFromAnswer,
+  looksLikeItemAppend,
+  buildItemPriceQuestion,
   type InvoiceDraftField,
   type InvoiceDraftSlots,
   type PartnerCandidate,
@@ -84,13 +88,18 @@ export async function startInvoiceDraftFlow(
   const slots = extractInvoiceSlotsFromText(rawText);
 
   // Model môže popis/sumu rozpoznať lepšie než deterministická extrakcia
-  // (napr. keď veta nemá "za"). Použijú sa iba tam, kde extrakcia nič
-  // nenašla — nikdy neprepíšu to, čo sa z textu dá prečítať priamo.
-  if (!slots.description && descriptionHint?.trim()) {
-    slots.description = descriptionHint.trim().slice(0, 200);
-  }
-  if (slots.unitPrice === undefined && typeof amountHint === "number" && amountHint >= 0) {
-    slots.unitPrice = amountHint;
+  // (napr. keď veta nemá "za"). Použijú sa IBA keď z vety nevyšla ani
+  // jedna položka — nikdy neprepíšu to, čo sa z textu dalo prečítať
+  // priamo, a nikdy nedoplnia druhý riadok k už rozpoznaným.
+  if ((slots.items?.length ?? 0) === 0 && descriptionHint?.trim()) {
+    slots.items = [
+      {
+        description: descriptionHint.trim().slice(0, 200),
+        ...(typeof amountHint === "number" && amountHint >= 0
+          ? { unitPrice: amountHint }
+          : {}),
+      },
+    ];
   }
 
   if (partnerQuery?.trim()) {
@@ -173,6 +182,27 @@ export async function continueInvoiceDraftFlow(
     return continueFlow(supabase, locale, ctx, slots);
   }
 
+  // „Pridaj ešte dopravu 50 eur." — doplnenie ďalšieho riadka počas
+  // rozpracovanej faktúry. Vyhodnocuje sa PRED `applyAnswer`, pretože
+  // odpoveď na otázku o DPH a doplnenie položky vyzerajú inak a nesmú si
+  // konkurovať: bez tejto vetvy by „pridaj dopravu 50" pri otázke o DPH
+  // skončilo ako sadzba 50 %.
+  if (looksLikeItemAppend(rawAnswer) && (slots.items?.length ?? 0) > 0) {
+    const appended = appendItemFromAnswer(slots, rawAnswer);
+
+    if (!appended) {
+      // Zámer bol zrejmý, ale položka sa z odpovede nedala prečítať.
+      // Pôvodné riadky zostávajú nedotknuté a asistent sa spýta znova.
+      return askAgain(supabase, locale, ctx, slots, {
+        kind: "clarify",
+        question: translate(locale, "search.voice.invoice.appendUnclear"),
+        conversationId: ctx.conversationId,
+      });
+    }
+
+    return continueFlow(supabase, locale, ctx, appended);
+  }
+
   const candidates =
     field === "partnerChoice"
       ? await readPartnerLabels(supabase, slots.partnerCandidateIds ?? [])
@@ -221,19 +251,51 @@ async function continueFlow(
       };
     }
 
-    const result = await createInvoiceDraftFromSlots(
+    // OCHRANA PROTI DUPLICITNÉMU DOKLADU.
+    //
+    // Dialóg sa najprv ATOMICKY uplatní a až potom vzniká doklad. Keď tú
+    // istú požiadavku pošle klient dvakrát — zopakované volanie, obnovená
+    // sieť, dvojité ťuknutie — druhý claim nájde riadok už spotrebovaný,
+    // vráti `null` a druhá faktúra nevznikne.
+    //
+    // Poradie je podstatné. Keby sa doklad vytvoril pred uplatnením,
+    // ochrana by neexistovala; presne to bola medzera pred Phase 3A.
+    //
+    // Stav sa uloží vždy (aj pri prvom kroku s úplnou vetou), aby vôbec
+    // bolo čo uplatniť a aby zopakovanie narazilo na spotrebovaný riadok.
+    const stored = await saveConversationContext(
+      supabase,
+      ctx.conversationId,
+      PENDING_INTENT,
+      serializeSlots(slots),
+      []
+    );
+    if (stored === null) {
+      return { kind: "error", text: translate(locale, "search.errors.generic") };
+    }
+
+    const claimed = await claimConversationContext(supabase, ctx.conversationId);
+    if (!claimed) {
+      // Niekto (alebo zopakovaná požiadavka) tento dialóg už uplatnil.
+      return {
+        kind: "answer",
+        text: translate(locale, "search.voice.invoice.alreadyCreated"),
+      };
+    }
+
+    // Sloty sa čítajú z UPLATNENÉHO riadka, nie z pamäte procesu —
+    // rovnaký princíp ako pri potvrdzovaní akcií: autoritou je to, čo je
+    // v databáze, nie to, čo drží požiadavka.
+    const claimedSlots = readSlots(claimed.slots);
+
+    return createInvoiceDraftFromSlots(
       supabase,
       locale,
       ctx.companyId,
       ctx.userId,
-      slots,
+      claimedSlots,
       ctx.issueDate
     );
-
-    // Dialóg sa ruší AJ pri neúspechu. Keby zostal, používateľ by na ďalšiu
-    // vetu dostal otázku z príkazu, ktorý už považoval za vybavený.
-    await clearConversationContext(supabase, ctx.conversationId);
-    return result;
   }
 
   const saved = await saveConversationContext(
@@ -262,9 +324,14 @@ async function continueFlow(
 
   const question = buildQuestion(locale, missing[0], candidates);
 
+  // Pri viacerých položkách musí otázka pomenovať TÚ, ktorej chýba cena —
+  // inak používateľ priradí sumu k nesprávnemu riadku.
+  const questionText =
+    missing[0] === "itemPrice" ? buildItemPriceQuestion(locale, slots) : question.question;
+
   return {
     kind: "clarify",
-    question: question.question,
+    question: questionText,
     conversationId: ctx.conversationId,
     choices: question.choices,
   };
@@ -293,8 +360,8 @@ async function askAgain(
 const FIELDS: InvoiceDraftField[] = [
   "partner",
   "partnerChoice",
-  "description",
-  "unitPrice",
+  "items",
+  "itemPrice",
   "vat",
 ];
 

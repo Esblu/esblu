@@ -252,6 +252,17 @@ export const INTENT_REGISTRY: Record<IntentName, IntentDefinition> = {
     description: "Otvor vlastnú zložku dokumentov podľa názvu.",
   },
 
+  PROCESS_CURRENT_DOCUMENT_AS_RECEIVED_INVOICE: {
+    name: "PROCESS_CURRENT_DOCUMENT_AS_RECEIVED_INVOICE",
+    // Read-only, a je to presné: intent nezapisuje nič. Overí otvorený
+    // dokument a otvorí obrazduku na kontrolu; doklad vznikne až po
+    // potvrdení človekom, tou istou cestou ako pri kliknutí.
+    readOnly: true,
+    requiresConfirmation: false,
+    description:
+      "Otvor kontrolu prijatej faktúry pre PRÁVE OTVORENÝ dokument z Inboxu. Nič nezapisuje, nič nefinalizuje a nezakladá dodávateľa.",
+  },
+
   CREATE_INVOICE_DRAFT: {
     name: "CREATE_INVOICE_DRAFT",
     readOnly: false,

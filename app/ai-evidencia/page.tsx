@@ -62,6 +62,7 @@ import {
   ReceiptIcon,
 } from "@/app/components/icons/AppIcons";
 import { invoiceDetailHref } from "@/lib/entity-links";
+import { VoiceLauncherSlot } from "@/app/components/voice/VoiceLauncherSlot";
 import { useCompanyDpaLegalHold } from "@/app/components/CompanyDpaGate";
 import { normalizeWeightUnit } from "@/lib/normalize-weight-unit";
 import {
@@ -683,6 +684,7 @@ function OpenFromQueryParam({
   onOpenDocument,
   onOpenEvidence,
   onOpenFolder,
+  onProcessReceived,
 }: {
   onOpenDocument: (id: string) => void;
   onOpenEvidence: (id: string) => void;
@@ -691,6 +693,8 @@ function OpenFromQueryParam({
    *  načítanom, RLS-obmedzenom zozname zložiek firmy. Cudzie id teda
    *  neurobí nič. */
   onOpenFolder: (categoryId: string) => void;
+  /** ?openDocument=<id>&processReceived=1 — hlasové „spracuj tento dokument". */
+  onProcessReceived: (documentId: string) => void;
 }) {
   const searchParams = useSearchParams();
 
@@ -701,6 +705,9 @@ function OpenFromQueryParam({
     if (openDocument) onOpenDocument(openDocument);
     if (openEvidence) onOpenEvidence(openEvidence);
     if (openFolder) onOpenFolder(openFolder);
+    if (openDocument && searchParams.get("processReceived") === "1") {
+      onProcessReceived(openDocument);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
 
@@ -830,6 +837,8 @@ export default function AiEvidenciaPage() {
   // vyššie).
   const [pendingOpenDocumentId, setPendingOpenDocumentId] = useState<string | null>(null);
   const [pendingOpenEvidenceId, setPendingOpenEvidenceId] = useState<string | null>(null);
+  /** ?processReceived=1 — otvor kontrolu prijatej faktúry nad otvoreným dokladom. */
+  const [pendingProcessReceivedId, setPendingProcessReceivedId] = useState<string | null>(null);
   // Poznámka pri bločku/faktúre — voliteľné pole vyplnené pred uložením
   // (bod 2 zadania). Vážneho lístka/dodacieho listu sa netýka.
   const [documentNote, setDocumentNote] = useState("");
@@ -2705,6 +2714,53 @@ useEffect(() => {
   return () => clearTimeout(timer);
 }, [pendingOpenDocumentId, otherDocuments]);
 
+// ---------------------------------------------------------------------------
+// ?processReceived=1 — otvor kontrolu prijatej faktúry nad ULOŽENÝM dokumentom.
+//
+// Doteraz sa dala táto obrazovka otvoriť IBA hneď po skenovaní, z údajov,
+// ktoré existovali len v pamäti. Dokument uložený v Inboxe sa už spracovať
+// nedal, hoci rozpoznané polia má uložené — cesta späť jednoducho
+// neexistovala. Hlasový príkaz „spracuj tento dokument ako prijatú faktúru"
+// ju potreboval, ale užitočná je aj bez hlasu.
+//
+// Kandidát sa skladá z `extracted_fields` TOHO dokumentu, tou istou funkciou
+// ako pri skenovaní. Dokument pochádza z `otherDocuments`, teda zo zoznamu
+// načítaného cez RLS — identifikátor v adrese preto sám osebe nič neodomyká:
+// keď naň používateľ nemá právo, v zozname nie je a nič sa neotvorí.
+//
+// Žiadna finalizácia ani zakladanie dodávateľa sa tu nedeje. Otvára sa iba
+// obrazovka na kontrolu, presne ako po skenovaní.
+// ---------------------------------------------------------------------------
+useEffect(() => {
+  if (!pendingProcessReceivedId || !companyId) return;
+
+  const match = otherDocuments.find((doc) => doc.id === pendingProcessReceivedId);
+  if (!match) return;
+
+  setPendingProcessReceivedId(null);
+
+  // Typ dokladu sa NEPREPISUJE. Bločok sa na faktúru nepreklopí mlčky —
+  // to je účtovné rozhodnutie a patrí človeku.
+  if (match.document_type !== "invoice") {
+    setError(t("search.voice.context.documentNotInvoice"));
+    return;
+  }
+
+  const fields = match.extracted_fields;
+  if (!fields || Object.keys(fields).length === 0) {
+    setError(t("search.voice.context.documentWithoutExtraction"));
+    return;
+  }
+
+  setReceivedCandidate(
+    receivedCandidateFromScan({
+      fields: fields as Parameters<typeof receivedCandidateFromScan>[0]["fields"],
+      sourceDocumentId: match.id,
+    })
+  );
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [pendingProcessReceivedId, otherDocuments, companyId]);
+
 // ?openEvidence=<id> — rovnaký princíp pre vážny lístok/dodací list
 // (public.ai_evidence, `records` zoznam).
 useEffect(() => {
@@ -2923,10 +2979,29 @@ function renderDocumentRegister(
   return (
     <main className="app-shell-bg min-h-screen px-4 pb-28 pt-4 sm:px-6 sm:pt-6 lg:px-10 lg:pt-10">
       <Suspense fallback={null}>
+        {/* Hlasový launcher. Kontext nesie IBA typ a identifikátor práve
+            otvoreného dokladu — vďaka tomu „spracuj tento dokument" vie, o
+            čo ide, a keď nie je otvorené nič, príkaz sa poctivo odmietne
+            namiesto odhadovania „posledného". */}
+        <div className="mb-4 flex justify-end">
+          <VoiceLauncherSlot
+            uiContext={
+              selectedOtherDocument
+                ? {
+                    module: "inbox",
+                    entityType: "document",
+                    entityId: selectedOtherDocument.id,
+                  }
+                : null
+            }
+          />
+        </div>
+
         <OpenFromQueryParam
           onOpenDocument={setPendingOpenDocumentId}
           onOpenEvidence={setPendingOpenEvidenceId}
           onOpenFolder={handleOpenCustomCategory}
+          onProcessReceived={setPendingProcessReceivedId}
         />
       </Suspense>
       <div className="mx-auto max-w-5xl">

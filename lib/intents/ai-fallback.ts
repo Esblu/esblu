@@ -204,6 +204,13 @@ ${INVOICE_STATUS_FILTERS.map((s) => `  - ${s}`).join("\n")}
   nedopĺňaj sumu, sadzbu DPH ani partnera, ktorých text neobsahuje; appka
   sa na ne sama spýta. Sadzbu DPH nevraciaš vôbec — tú si appka číta
   deterministicky z textu.
+- PROCESS_CURRENT_DOCUMENT_AS_RECEIVED_INVOICE je pre príkaz nad PRÁVE
+  OTVORENÝM dokumentom: "spracuj tento dokument ako prijatú faktúru",
+  "spracuj toto ako faktúru", "spracuj túto faktúru", "verarbeite dieses
+  Dokument", "verarbeite das als Rechnung", "process this document",
+  "process this as an invoice". Nič nevypĺňaj — ani "query". Keď text
+  pomenúva KONKRÉTNY doklad menom alebo číslom, nie je to tento intent,
+  ale SEARCH_DOCUMENTS alebo SEARCH_INVOICE.
 - Príkazy, ktoré appka zatiaľ nepodporuje, VŽDY klasifikuj ako intent:
   null (NIKDY sa nesnaž vynútiť ich do najbližšieho povoleného intentu).
   Sem patrí najmä: zmazanie dokumentu ("Vymaž všetky faktúry."),

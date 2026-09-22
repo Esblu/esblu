@@ -1,6 +1,7 @@
 "use client";
 
 import { VoiceLauncher } from "@/app/components/voice/VoiceLauncher";
+import type { UiContext } from "@/lib/intents/ui-context";
 
 // =============================================================================
 // Tenký obal okolo VoiceLauncher.
@@ -13,6 +14,6 @@ import { VoiceLauncher } from "@/app/components/voice/VoiceLauncher";
 // bez zásahu do schránky.
 // =============================================================================
 
-export function VoiceLauncherSlot() {
-  return <VoiceLauncher />;
+export function VoiceLauncherSlot({ uiContext }: { uiContext?: UiContext | null }) {
+  return <VoiceLauncher uiContext={uiContext ?? null} />;
 }

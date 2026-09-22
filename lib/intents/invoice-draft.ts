@@ -12,6 +12,14 @@ import {
 import { isVatCategoryCode, type VatCategoryCode } from "@/lib/invoicing/vat-engine";
 import { matchPartnersByName, type PartnerMatchTier } from "@/lib/partner-matching";
 import { findNumber, findCurrency, findVatRate, mentionsVat } from "@/lib/intents/number-words";
+import {
+  extractInvoiceItems,
+  extractSingleAppendedItem,
+  MAX_VOICE_ITEMS,
+  MAX_VOICE_UNIT_PRICE,
+  MAX_DESCRIPTION_LENGTH,
+  type InvoiceItemCandidate,
+} from "@/lib/intents/invoice-items";
 
 // =============================================================================
 // Voice Phase 2 — vytvorenie DRAFTU vydanej faktúry rečou.
@@ -61,10 +69,16 @@ export type InvoiceDraftSlots = {
   partnerId?: string;
   /** Kandidáti pri nejednoznačnom mene — iba identifikátory, max 5. */
   partnerCandidateIds?: string[];
-  description?: string;
-  quantity?: number;
-  unit?: string;
-  unitPrice?: number;
+  /**
+   * Riadkové položky. Phase 3A: pole namiesto jednej trojice
+   * popis/množstvo/cena.
+   *
+   * Sadzba a kategória DPH tu ZÁMERNE nie sú — platia pre celý doklad.
+   * Per-riadkovú daň by hlas rozhodoval bez toho, aby ju používateľ mohol
+   * pri diktovaní prehliadnuť, a to je presne to, čo appka o dani
+   * nerozhoduje.
+   */
+  items?: InvoiceItemCandidate[];
   currency?: string;
   vatCategoryCode?: VatCategoryCode;
   vatRate?: number;
@@ -74,17 +88,14 @@ export type InvoiceDraftSlots = {
 export type InvoiceDraftField =
   | "partner"
   | "partnerChoice"
-  | "description"
-  | "unitPrice"
+  | "items"
+  | "itemPrice"
   | "vat";
 
 const SLOT_KEYS: (keyof InvoiceDraftSlots)[] = [
   "partnerId",
   "partnerCandidateIds",
-  "description",
-  "quantity",
-  "unit",
-  "unitPrice",
+  "items",
   "currency",
   "vatCategoryCode",
   "vatRate",
@@ -110,18 +121,59 @@ export function readSlots(raw: unknown): InvoiceDraftSlots {
       .slice(0, 5);
     if (ids.length > 0) slots.partnerCandidateIds = ids;
   }
-  if (typeof source.description === "string" && source.description.trim()) {
-    slots.description = source.description.trim().slice(0, 200);
+  // Položky sa validujú riadok po riadku. Uložený jsonb je pre server
+  // VSTUP, nie pamäť procesu — aj keď ho tam zapísala tá istá aplikácia,
+  // medzitým ho mohol niekto zmeniť priamym volaním RPC.
+  if (Array.isArray(source.items)) {
+    const items: InvoiceItemCandidate[] = [];
+
+    for (const raw of source.items.slice(0, MAX_VOICE_ITEMS)) {
+      if (!raw || typeof raw !== "object") continue;
+      const row = raw as Record<string, unknown>;
+
+      const description =
+        typeof row.description === "string" ? row.description.trim() : "";
+      if (!description) continue;
+
+      const item: InvoiceItemCandidate = {
+        description: description.slice(0, MAX_DESCRIPTION_LENGTH),
+      };
+
+      // Cena: iba konečné, nezáporné číslo v rozumnom rozsahu. NaN,
+      // Infinity ani záporná hodnota sa nikdy nestanú nulou — pole
+      // jednoducho zostane nevyplnené a asistent sa spýta.
+      if (
+        typeof row.unitPrice === "number" &&
+        Number.isFinite(row.unitPrice) &&
+        row.unitPrice >= 0 &&
+        row.unitPrice <= MAX_VOICE_UNIT_PRICE
+      ) {
+        item.unitPrice = row.unitPrice;
+      }
+
+      if (
+        typeof row.quantity === "number" &&
+        Number.isFinite(row.quantity) &&
+        row.quantity > 0 &&
+        row.quantity <= MAX_VOICE_UNIT_PRICE
+      ) {
+        item.quantity = row.quantity;
+      }
+
+      if (typeof row.unit === "string" && row.unit.trim()) {
+        item.unit = row.unit.trim().slice(0, 20);
+      }
+
+      if (typeof row.currency === "string" && /^[A-Z]{3}$/.test(row.currency)) {
+        item.currency = row.currency;
+      }
+
+      items.push(item);
+    }
+
+    if (items.length > 0) slots.items = items;
   }
-  if (typeof source.quantity === "number" && Number.isFinite(source.quantity) && source.quantity > 0) {
-    slots.quantity = source.quantity;
-  }
-  if (typeof source.unit === "string" && source.unit.trim()) {
-    slots.unit = source.unit.trim().slice(0, 20);
-  }
-  if (typeof source.unitPrice === "number" && Number.isFinite(source.unitPrice) && source.unitPrice >= 0) {
-    slots.unitPrice = source.unitPrice;
-  }
+
   if (typeof source.currency === "string" && /^[A-Z]{3}$/.test(source.currency)) {
     slots.currency = source.currency;
   }
@@ -246,15 +298,48 @@ export function extractInvoiceSlotsFromText(rawText: string): InvoiceDraftSlots 
     if (vatRate > 0) slots.vatCategoryCode = "S";
   }
 
-  // Suma. Hľadá sa až ZA sadzbou DPH, ak nejaká bola — inak by "23 percent"
-  // mohlo skončiť ako cena.
-  const amount = findAmountExcludingVat(rawText);
-  if (amount !== null) slots.unitPrice = amount;
+  // Položky. Rozdelenie vety rieši lib/intents/invoice-items.ts a keď si
+  // nie je isté, vráti prázdno s dôvodom — vtedy sa tu nič nedosadí a
+  // asistent sa spýta. Viac položiek, z ktorých jednej chýba cena, sa
+  // ZÁMERNE neuloží ani čiastočne: bol by to signál, že rozdelenie
+  // prebehlo zle, a čiastočný doklad je horší než otázka.
+  const parsed = extractInvoiceItems(rawText);
+  if (parsed.items.length > 0 && parsed.problem !== "ambiguous") {
+    slots.items = parsed.items;
+  }
 
-  const description = extractAfterPhrase(rawText, DESCRIPTION_PHRASES);
-  if (description) slots.description = stripTrailingAmount(description);
+  // Jediná položka bez ceny sa smie prevziať — je to bežný prípad („za
+  // kopanie") a chýbajúca cena je ďalšia otázka, nie chyba rozdelenia.
+  if (!slots.items) {
+    const description = extractAfterPhrase(rawText, DESCRIPTION_PHRASES);
+    if (description) {
+      const cleaned = stripTrailingAmount(description);
+      if (cleaned) {
+        const amount = findAmountExcludingVat(rawText);
+        slots.items = [
+          {
+            description: cleaned.slice(0, MAX_DESCRIPTION_LENGTH),
+            ...(amount !== null && amount >= 0 && amount <= MAX_VOICE_UNIT_PRICE
+              ? { unitPrice: amount }
+              : {}),
+          },
+        ];
+      }
+    }
+  }
 
   return slots;
+}
+
+/**
+ * Dôvod, prečo sa veta nedala rozdeliť na položky — na formulovanie
+ * otázky. `null`, keď problém nie je.
+ */
+export function itemParseProblem(rawText: string): "ambiguous" | "too_many_items" | null {
+  const parsed = extractInvoiceItems(rawText);
+  return parsed.problem === "ambiguous" || parsed.problem === "too_many_items"
+    ? parsed.problem
+    : null;
 }
 
 /**
@@ -417,8 +502,14 @@ export function missingInvoiceFields(slots: InvoiceDraftSlots): InvoiceDraftFiel
   if (!slots.partnerId) {
     missing.push(slots.partnerCandidateIds?.length ? "partnerChoice" : "partner");
   }
-  if (!slots.description) missing.push("description");
-  if (slots.unitPrice === undefined) missing.push("unitPrice");
+  if (!slots.items || slots.items.length === 0) {
+    missing.push("items");
+  } else if (slots.items.some((item) => item.unitPrice === undefined)) {
+    // Ktorejkoľvek položke chýba cena. Pýta sa vždy na PRVÚ takú (pozri
+    // firstItemWithoutPrice) — jedna otázka na jednu chýbajúcu hodnotu.
+    missing.push("itemPrice");
+  }
+
   // Kategória AJ sadzba musia byť obe známe. Kategória bez sadzby je pri
   // "S" neúplná; sadzba bez kategórie je pri nule nejednoznačná.
   if (!slots.vatCategoryCode || slots.vatRate === undefined) missing.push("vat");
@@ -462,9 +553,9 @@ export function applyAnswer(
 
   switch (field) {
     case "partner": {
-      // Odpoveď na "pre koho" je meno — resolvovanie robí volajúci, tu sa
-      // iba zapamätá, čo sa má hľadať.
-      next.description = next.description;
+      // Odpoveď na "pre koho" je meno. Resolvovanie proti reálnym
+      // partnerom robí volajúci (potrebuje dotaz do databázy), takže tu
+      // sa slot nemení.
       return next;
     }
 
@@ -485,14 +576,45 @@ export function applyAnswer(
       return next;
     }
 
-    case "description": {
-      next.description = answer.replace(/[.,;:!?]+\s*$/, "").slice(0, 200);
+    case "items": {
+      // Odpoveď na „za čo má byť faktúra?" môže obsahovať aj viac položiek
+      // naraz („za kopanie 300 eur a dopravu 50"). Rozdelenie rieši ten
+      // istý parser ako pri celej vete — vrátane odmietnutia, keď si nie
+      // je istý.
+      const parsed = extractInvoiceItems(`za ${answer}`);
+
+      if (parsed.items.length > 0 && parsed.problem !== "ambiguous") {
+        next.items = parsed.items.slice(0, MAX_VOICE_ITEMS);
+        const currency = findCurrency(answer);
+        if (currency) next.currency = currency;
+        return next;
+      }
+
+      // Parser si nie je istý. Odpoveď sa vezme ako JEDEN popis bez ceny —
+      // cena sa potom dopýta samostatne. Nikdy sa z nej nestane nula.
+      if (parsed.problem !== "ambiguous" && parsed.problem !== "too_many_items") {
+        const description = answer.replace(/[.,;:!?]+\s*$/, "").trim();
+        if (description) {
+          next.items = [{ description: description.slice(0, MAX_DESCRIPTION_LENGTH) }];
+        }
+      }
+
       return next;
     }
 
-    case "unitPrice": {
+    case "itemPrice": {
+      // Cena sa dopĺňa do PRVEJ položky, ktorej chýba — presne tej, na
+      // ktorú sa asistent pýtal.
+      const target = firstItemWithoutPrice(next.items);
+      if (target === null) return next;
+
       const amount = findNumber(answer);
-      if (amount) next.unitPrice = amount.value;
+      if (amount && amount.value >= 0 && amount.value <= MAX_VOICE_UNIT_PRICE) {
+        const items = [...(next.items ?? [])];
+        items[target] = { ...items[target], unitPrice: amount.value };
+        next.items = items;
+      }
+
       const currency = findCurrency(answer);
       if (currency) next.currency = currency;
       return next;
@@ -531,6 +653,57 @@ export function applyAnswer(
   }
 }
 
+/** Index prvej položky bez ceny, alebo `null`. */
+export function firstItemWithoutPrice(
+  items: InvoiceItemCandidate[] | undefined
+): number | null {
+  if (!items) return null;
+  const index = items.findIndex((item) => item.unitPrice === undefined);
+  return index === -1 ? null : index;
+}
+
+/**
+ * Pridá k rozpracovanej faktúre ďalšiu položku („Pridaj ešte dopravu 50
+ * eur.").
+ *
+ * PRIPÁJA, neprepisuje. To je celý zmysel — používateľ, ktorý dopĺňa
+ * riadok, o ten predchádzajúci prísť nesmie.
+ *
+ * Vracia `null`, keď sa z odpovede nedá vyčítať práve jedna položka s
+ * cenou, alebo by sa prekročil strop počtu riadkov.
+ */
+export function appendItemFromAnswer(
+  slots: InvoiceDraftSlots,
+  rawAnswer: string
+): InvoiceDraftSlots | null {
+  const item = extractSingleAppendedItem(rawAnswer);
+  if (!item) return null;
+
+  const existing = slots.items ?? [];
+  if (existing.length >= MAX_VOICE_ITEMS) return null;
+
+  return { ...slots, items: [...existing, item] };
+}
+
+/** Rozpoznanie zámeru „pridaj ešte ..." počas rozpracovanej faktúry. */
+const APPEND_PHRASES = [
+  "pridaj",
+  "doplň",
+  "doplnit",
+  "dodaj",
+  "este",
+  "fuege hinzu",
+  "füge hinzu",
+  "hinzufuegen",
+  "add",
+  "also add",
+];
+
+export function looksLikeItemAppend(rawText: string): boolean {
+  const folded = fold(rawText);
+  return APPEND_PHRASES.some((phrase) => folded.includes(fold(phrase)));
+}
+
 function readOrdinal(folded: string): number | null {
   if (/\bprv|\berst|\bfirst|\b1\b/.test(folded)) return 0;
   if (/\bdruh|\bzweit|\bsecond|\b2\b/.test(folded)) return 1;
@@ -560,13 +733,35 @@ export function buildQuestion(
           label: candidate.label,
         })),
       };
-    case "description":
+    case "items":
       return { question: translate(locale, "search.voice.invoice.askDescription") };
-    case "unitPrice":
+    case "itemPrice":
       return { question: translate(locale, "search.voice.invoice.askAmount") };
     case "vat":
       return { question: translate(locale, "search.voice.invoice.askVat") };
   }
+}
+
+/**
+ * Otázka na položku, ktorej chýba cena, s pomenovaním TEJ položky.
+ *
+ * Pri jednej položke by stačilo „Aká je suma?". Pri viacerých je to
+ * nejednoznačné — používateľ musí vedieť, o ktorý riadok ide, inak cenu
+ * priradí k nesprávnemu.
+ */
+export function buildItemPriceQuestion(
+  locale: Locale,
+  slots: InvoiceDraftSlots
+): string {
+  const index = firstItemWithoutPrice(slots.items);
+  const items = slots.items ?? [];
+
+  if (index === null) return translate(locale, "search.voice.invoice.askAmount");
+  if (items.length <= 1) return translate(locale, "search.voice.invoice.askAmount");
+
+  return translate(locale, "search.voice.invoice.askAmountForItem", {
+    item: items[index].description,
+  });
 }
 
 // -----------------------------------------------------------------------------
@@ -595,25 +790,48 @@ export async function createInvoiceDraftFromSlots(
    */
   issueDate: string
 ): Promise<IntentResult> {
-  if (!slots.partnerId || !slots.description || slots.unitPrice === undefined) {
+  if (!slots.partnerId || !slots.items || slots.items.length === 0) {
     return { kind: "error", text: translate(locale, "search.errors.generic") };
   }
   if (!slots.vatCategoryCode || slots.vatRate === undefined) {
+    return { kind: "error", text: translate(locale, "search.errors.generic") };
+  }
+  if (slots.items.length > MAX_VOICE_ITEMS) {
+    return { kind: "error", text: translate(locale, "search.voice.invoice.tooManyItems") };
+  }
+
+  // Posledná kontrola pred zápisom: každá položka musí mať cenu v rozsahu.
+  // `missingInvoiceFields` to už overil, ale sloty prišli z databázy a
+  // medzi overením a zápisom je vždy nejaká vzdialenosť. Cena sa tu nikdy
+  // nedosadzuje — chýbajúca znamená odmietnutie, nie nulu.
+  const invalidItem = slots.items.find(
+    (item) =>
+      item.unitPrice === undefined ||
+      !Number.isFinite(item.unitPrice) ||
+      item.unitPrice < 0 ||
+      item.unitPrice > MAX_VOICE_UNIT_PRICE ||
+      !item.description.trim()
+  );
+  if (invalidItem) {
     return { kind: "error", text: translate(locale, "search.errors.generic") };
   }
 
   const currency =
     slots.currency ?? (await readPartnerCurrency(supabase, slots.partnerId)) ?? FALLBACK_CURRENCY;
 
-  const item: DraftInvoiceItemInput = {
-    description: slots.description,
-    quantity: slots.quantity ?? DEFAULT_QUANTITY,
-    unit: slots.unit ?? DEFAULT_UNIT,
-    unit_price: slots.unitPrice,
-    vat_category_code: slots.vatCategoryCode,
-    // Kategórie mimo "S" nesú daň 0 — vynútené aj VAT enginom.
-    vat_rate: slots.vatCategoryCode === "S" ? slots.vatRate : 0,
-  };
+  // Sadzba a kategória DPH platia pre celý doklad — presne tak, ako ich
+  // používateľ vyslovil. Per-riadková daň by znamenala, že o niektorom
+  // riadku rozhodla appka.
+  const vatRate = slots.vatCategoryCode === "S" ? slots.vatRate : 0;
+
+  const items: DraftInvoiceItemInput[] = slots.items.map((item) => ({
+    description: item.description,
+    quantity: item.quantity ?? DEFAULT_QUANTITY,
+    unit: item.unit ?? DEFAULT_UNIT,
+    unit_price: item.unitPrice as number,
+    vat_category_code: slots.vatCategoryCode as VatCategoryCode,
+    vat_rate: vatRate,
+  }));
 
   try {
     const invoice = await createDraftInvoice(
@@ -633,9 +851,9 @@ export async function createInvoiceDraftFromSlots(
       supabase
     );
 
-    await replaceDraftInvoiceItems(invoice.id, [item], supabase);
+    await replaceDraftInvoiceItems(invoice.id, items, supabase);
 
-    const totals = previewDraftTotals([item]);
+    const totals = previewDraftTotals(items);
     const partner = (await readPartnerLabels(supabase, [slots.partnerId]))[0];
 
     return {
@@ -647,17 +865,18 @@ export async function createInvoiceDraftFromSlots(
           label: translate(locale, "invoices.newInvoice.businessPartnerLabel"),
           value: partner?.label ?? "—",
         },
-        {
-          label: translate(locale, "invoices.newInvoice.itemDescriptionLabel"),
-          value: item.description,
-        },
-        {
-          label: translate(locale, "invoices.newInvoice.itemUnitPriceLabel"),
-          value: `${formatAmount(item.unit_price)} ${currency}`,
-        },
+        // Každý riadok samostatne. Súhrn, ktorý by položky zlúčil do jednej
+        // sumy, by zakryl práve to, čo má používateľ skontrolovať.
+        ...items.map((row, index) => ({
+          label:
+            items.length > 1
+              ? `${index + 1}. ${translate(locale, "invoices.newInvoice.itemDescriptionLabel")}`
+              : translate(locale, "invoices.newInvoice.itemDescriptionLabel"),
+          value: `${row.description} — ${formatAmount(row.unit_price)} ${currency}`,
+        })),
         {
           label: translate(locale, "invoices.newInvoice.itemVatCategoryLabel"),
-          value: `${item.vat_category_code} · ${formatAmount(item.vat_rate)} %`,
+          value: `${items[0].vat_category_code} · ${formatAmount(items[0].vat_rate)} %`,
         },
         {
           label: translate(locale, "invoices.newInvoice.totalLabel"),
