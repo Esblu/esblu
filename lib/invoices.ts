@@ -1,14 +1,15 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
 import {
-  computeInvoiceLine,
   computeInvoiceTotals,
   isInvoiceOverdue as vatEngineIsInvoiceOverdue,
   type VatCategoryCode,
   type VatEngineLineInput,
 } from "@/lib/invoicing/vat-engine";
+import { DEFAULT_PRICE_MODE, type PriceMode } from "@/lib/invoicing/price-mode";
 
 export type { VatCategoryCode } from "@/lib/invoicing/vat-engine";
+export type { PriceMode } from "@/lib/invoicing/price-mode";
 
 // =============================================================================
 // invoices — Fáza 2 fakturačné jadro, dátová vrstva.
@@ -119,6 +120,14 @@ export type InvoiceItem = {
    *  docs/invoicing-en16931-gap-analysis-2026-09.md. */
   unit_code: string | null;
   unit_price: number;
+  /**
+   * Ako sa má čítať `unit_price` — pozri KANONICKÝ PEŇAŽNÝ MODEL v
+   * lib/invoicing/vat-engine.ts. "net" = cena bez dane (autoritatívny je
+   * line_net_amount), "gross" = cena s daňou tak, ako ju človek zadal
+   * (autoritatívny je line_gross_amount). Riadky spred migrácie
+   * 20260923190000 majú "net", teda presne svoj doterajší význam.
+   */
+  price_mode: PriceMode;
   vat_category_code: VatCategoryCode;
   vat_rate: number;
   line_net_amount: number;
@@ -367,7 +376,24 @@ export type DraftInvoiceItemInput = {
   vat_category_code: VatCategoryCode;
   vat_rate: number;
   unit_price: number;
+  /**
+   * Ako sa má čítať `unit_price`. Voliteľné — chýbajúca hodnota znamená
+   * "net", teda doterajšie správanie každého volajúceho, ktorý o režime ceny
+   * nevie. Pozri KANONICKÝ PEŇAŽNÝ MODEL v lib/invoicing/vat-engine.ts.
+   */
+  price_mode?: PriceMode;
 };
+
+/** Vstup pre VAT engine z draft riadku — jediný preklad medzi oboma tvarmi. */
+function toEngineLine(item: DraftInvoiceItemInput): VatEngineLineInput {
+  return {
+    quantity: item.quantity,
+    unitPrice: item.unit_price,
+    vatCategoryCode: item.vat_category_code,
+    vatRate: item.vat_rate,
+    priceMode: item.price_mode ?? DEFAULT_PRICE_MODE,
+  };
+}
 
 /**
  * Nahradí VŠETKY riadky draftu naraz (delete + insert v jednej "logickej"
@@ -393,28 +419,26 @@ export async function replaceDraftInvoiceItems(
 
   if (items.length === 0) return [];
 
-  const rows = items.map((item, index) => {
-    const computed = computeInvoiceLine({
-      quantity: item.quantity,
-      unitPrice: item.unit_price,
-      vatCategoryCode: item.vat_category_code,
-      vatRate: item.vat_rate,
-    });
+  // Riadky sa počítajú NARAZ, nie po jednom. Dopočítaná zložka (daň pri
+  // cenách bez dane, základ pri cenách s daňou) sa rozdeľuje zo skupinového
+  // čísla, takže riadok bez ostatných riadkov sa spočítať nedá — a keby sa
+  // to skúsilo, súčty by sa rozišli o cent. Presne to bol bug 1800,01.
+  const computed = computeInvoiceTotals(items.map(toEngineLine));
 
-    return {
-      invoice_id: invoiceId,
-      position: index + 1,
-      description: item.description,
-      quantity: item.quantity,
-      unit: item.unit,
-      unit_price: item.unit_price,
-      vat_category_code: item.vat_category_code,
-      vat_rate: item.vat_rate,
-      line_net_amount: Number(computed.lineNetAmount),
-      line_vat_amount: Number(computed.lineVatAmount),
-      line_gross_amount: Number(computed.lineGrossAmount),
-    };
-  });
+  const rows = items.map((item, index) => ({
+    invoice_id: invoiceId,
+    position: index + 1,
+    description: item.description,
+    quantity: item.quantity,
+    unit: item.unit,
+    unit_price: item.unit_price,
+    price_mode: item.price_mode ?? DEFAULT_PRICE_MODE,
+    vat_category_code: item.vat_category_code,
+    vat_rate: item.vat_rate,
+    line_net_amount: Number(computed.lines[index].lineNetAmount),
+    line_vat_amount: Number(computed.lines[index].lineVatAmount),
+    line_gross_amount: Number(computed.lines[index].lineGrossAmount),
+  }));
 
   const { data, error } = await db.from("invoice_items").insert(rows).select("*");
 
@@ -426,14 +450,7 @@ export async function replaceDraftInvoiceItems(
  *  autoritatívny zdroj, iba to, čo esblu_finalize_invoice() nezávisle
  *  prepočíta a naozaj zapíše. */
 export function previewDraftTotals(items: DraftInvoiceItemInput[]) {
-  const lines: VatEngineLineInput[] = items.map((item) => ({
-    quantity: item.quantity,
-    unitPrice: item.unit_price,
-    vatCategoryCode: item.vat_category_code,
-    vatRate: item.vat_rate,
-  }));
-
-  return computeInvoiceTotals(lines);
+  return computeInvoiceTotals(items.map(toEngineLine));
 }
 
 // -----------------------------------------------------------------------------

@@ -19,7 +19,8 @@
     "test:money": "node --experimental-strip-types --no-warnings scripts/financial-validator-tests.ts",
     "test:lifecycle": "node --experimental-strip-types --no-warnings scripts/accounting-lifecycle-tests.ts",
     "test:pricemode": "node --experimental-strip-types --no-warnings scripts/price-mode-tests.ts",
-    "test:vat": "node --experimental-strip-types --no-warnings scripts/vat-arithmetic-tests.ts"
+    "test:vat": "node --experimental-strip-types --no-warnings scripts/vat-arithmetic-tests.ts",
+    "test:gross": "node --experimental-strip-types --no-warnings scripts/gross-rounding-tests.ts"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.9.0",

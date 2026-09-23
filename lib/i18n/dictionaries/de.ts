@@ -331,6 +331,7 @@ const de = {
   landing: {
     nav: {
       features: "Funktionen",
+      demo: "Demo",
       freePlan: "Kostenloser Plan",
       contact: "Kontakt",
       login: "Anmelden",
@@ -344,6 +345,7 @@ const de = {
         "Esblu hilft kleineren Bau-, Service-, Transport- und Technikfirmen, Dokumente, Fahrzeuge, Maschinen, Lager, Geschäftspartner und Rechnungen in einer Anwendung zu verwalten.",
       ctaPrimary: "Beta-Zugang anfragen",
       ctaSecondary: "Anmelden",
+      ctaVideo: "Demo ansehen",
       betaNotice:
         "Esblu befindet sich derzeit in einer geschlossenen Betaphase. Neue Konten sind nur für freigegebene Tester verfügbar.",
       cardKicker: "Firmenverwaltung und Rechnungsstellung",
@@ -355,6 +357,35 @@ const de = {
       moduleInventoryDesc: "Artikel und Mengen",
       moduleBusinessPartnersDesc: "Kunden und Lieferanten",
       moduleInvoicesDesc: "Rechnungsstellung und Zahlungen",
+    },
+    video: {
+      kicker: "Produktdemo",
+      title: "Esblu in der Praxis",
+      subtitle:
+        "In wenigen Minuten sehen Sie, wie Esblu Dokumente, Fahrzeuge, Maschinen, Service, Lager und Rechnungen in einem Firmensystem verbindet. Ohne Registrierung, direkt hier. Das Video ist derzeit nur auf Slowakisch verfügbar.",
+      playAria: "Esblu Produktdemo abspielen",
+      posterAlt:
+        "Esblu Oberfläche — Firmenübersicht mit Modulen und Hinweisen auf anstehende Fristen",
+      audioLanguage: "Ton auf Slowakisch",
+      chaptersLabel: "Zum Kapitel springen",
+      chapter: {
+        intro: "Einleitung",
+        documents: "Dokumente",
+        vehicles: "Fahrzeuge",
+        machines: "Maschinen",
+        inventory: "Lager",
+        invoices: "Rechnungen",
+        search: "Suche",
+        collaboration: "Zusammenarbeit",
+        security: "Rollen und Sicherheit",
+      },
+      ctaTitle: "Möchten Sie wissen, ob Esblu zu Ihrem Betrieb passt?",
+      ctaDescription:
+        "Schreiben Sie uns, um was für einen Betrieb es geht und was Sie heute über Papier, Excel oder WhatsApp lösen. Wir melden uns und klären, ob Esblu Ihnen helfen kann.",
+      ctaPrimary: "Beta-Zugang anfragen",
+      ctaSecondary: "Zu den Funktionen",
+      betaNotice:
+        "Das Video ist öffentlich und erfordert keine Registrierung. Den Beta-Zugang klären wir individuell per E-Mail.",
     },
     features: {
       kicker: "Sechs Module, eine Anwendung",
@@ -2232,6 +2263,8 @@ const de = {
       itemQuantityLabel: "Menge",
       itemUnitLabel: "Einheit",
       itemUnitPriceLabel: "Einzelpreis",
+      itemUnitPriceGrossLabel: "Einzelpreis inkl. MwSt.",
+      itemUnitPriceNetLabel: "Einzelpreis ohne MwSt.",
       itemVatCategoryLabel: "USt-Kategorie",
       itemVatRateLabel: "USt-Satz (%)",
       vatRateNotPercentageHint: "Für diese Kategorie (Z/E/AE) ist der Satz kein Prozentsatz — der USt-Betrag ist immer 0.",

@@ -4,6 +4,7 @@ import Decimal from "decimal.js";
 // bundlera. `local-date.ts` sám žiadne importy nemá.
 import { todayLocalDate } from "../local-date.ts";
 import { type VatCategoryCode } from "./vat-categories.ts";
+import { DEFAULT_PRICE_MODE, type PriceMode } from "./price-mode.ts";
 
 // -----------------------------------------------------------------------------
 // Deterministický VAT engine (Fáza 2 — fakturačné jadro).
@@ -87,6 +88,12 @@ export interface VatEngineLineInput {
   vatCategoryCode: VatCategoryCode;
   /** Percento, napr. 20 pre 20 %, nie 0.20. */
   vatRate: number | string;
+  /**
+   * Ako sa má čítať `unitPrice`. Predvolene "net" — presne to, čo engine
+   * robil predtým, než režim ceny vôbec existoval. Pozri KANONICKÝ PEŇAŽNÝ
+   * MODEL nižšie.
+   */
+  priceMode?: PriceMode;
 }
 
 export interface VatEngineLineResult {
@@ -134,122 +141,291 @@ function effectiveVatRate(categoryCode: VatCategoryCode, rawRate: Decimal.Value)
   return rate.isFinite() ? rate : new Decimal(0);
 }
 
+// =============================================================================
+// KANONICKÝ PEŇAŽNÝ MODEL
+//
+// Toto je jediné miesto, kde sa rozhoduje, čo je na faktúre zdrojový údaj a
+// čo je z neho dopočítané. Kto to raz rozviaže, vráti chybu, ktorá stála
+// jednu cestu do produkcie.
+//
+// PRAVIDLO
+// --------
+// `unit_price` je JEDINÉ cenové pole. `price_mode` hovorí, ako sa má čítať.
+// Dve cenové polia vedľa seba neexistujú — dva zdroje pravdy sa raz rozídu.
+//
+//   REŽIM "net"   → unit_price je cena BEZ dane
+//                   AUTORITATÍVNE:  line_net   = ROUND(quantity × unit_price, 2)
+//                   DOPOČÍTANÉ:     line_vat, line_gross, základ, daň, spolu
+//
+//   REŽIM "gross" → unit_price je cena S DAŇOU, tak, ako ju človek povedal
+//                   AUTORITATÍVNE:  line_gross = ROUND(quantity × unit_price, 2)
+//                   DOPOČÍTANÉ:     line_net, line_vat, základ, daň, spolu
+//
+// Vyslovená suma je zdrojový údaj. Žiadna výpočtová vrstva ju nesmie zmeniť.
+//
+// KDE SA ZAOKRÚHĽUJE
+// ------------------
+// Presne na dvoch miestach a nikde inde:
+//
+//   1. raz na riadok — autoritatívna suma ROUND(quantity × unit_price, 2)
+//   2. raz na skupinu (kategória + sadzba + režim):
+//        net   → daň skupiny = ROUND(základ × sadzba / 100, 2)   [EN16931 BR-CO-17]
+//        gross → základ skupiny = ROUND(suma s daňou / (1 + sadzba/100), 2)
+//                daň skupiny   = suma s daňou − základ skupiny
+//
+// Dopočítané riadkové zložky sa NEZAOKRÚHĽUJÚ samostatne. Rozdeľujú sa zo
+// skupinového čísla pravidlom najväčších zvyškov (`allocateByLargestRemainder`),
+// takže ich súčet sedí na skupinu na cent. Práve toto tu predtým chýbalo:
+// riadky sa zaokrúhľovali nezávisle od skupiny, obe čísla boli „správne" a
+// dokopy dali o cent viac.
+//
+// ČO Z TOHO PLYNIE (platí vždy, nie „skoro vždy")
+// -----------------------------------------------
+//   Σ line_net   = základ
+//   Σ line_vat   = daň
+//   Σ line_gross = spolu (pred rounding_amount)
+//   základ + daň = spolu
+//   v režime gross navyše: Σ vyslovených súm = spolu, na cent
+//
+// REŽIM "net" SA TÝMTO NEZMENIL. Základ, daň aj celková suma vychádzajú
+// presne ako predtým; dopočítaná je iba riadková daň, ktorá sa teraz
+// rozdeľuje zo skupiny namiesto samostatného zaokrúhľovania — čiže sedí na
+// rozpis dane. Historické finalizované doklady sa nikdy neprepočítavajú.
+//
+// ÚČTOVNÍK / CLIA
+// ---------------
+// Voľba „základ sa dopočíta zo skupinovej sumy s daňou" je TECHNICKÉ
+// rozhodnutie o konzistencii, nie tvrdenie o právnej povinnosti. Zaokrúhľovacie
+// pravidlo pre ceny s daňou nie je v celej EÚ jednotné — presnú metódu treba
+// dať účtovníkovi na posúdenie (pozri docs/canonical-monetary-model.md).
+// =============================================================================
+
 /**
- * Prepočíta jeden riadok faktúry. line_net_amount = ROUND(quantity ×
- * unit_price, 2); line_vat_amount = ROUND(line_net_amount × effective_rate / 100, 2)
- * (per-riadok, IBA na UI zobrazenie); line_gross_amount = net + vat.
- * effective_rate je 0 pre všetky kategórie okrem S (pozri effectiveVatRate).
+ * Rozdelí `total` (v centoch) medzi riadky v pomere ich váh tak, aby súčet
+ * sedel na `total` PRESNE.
+ *
+ * Pravidlo najväčších zvyškov: každý riadok dostane celú časť svojho podielu,
+ * a zvyšné centy idú riadkom s najväčším desatinným zvyškom. Pri rovnakom
+ * zvyšku rozhoduje poradie riadku na faktúre — nie poradie v pamäti, nie
+ * náhoda. To isté pravidlo, v tom istom poradí, má aj SQL vo
+ * `esblu_finalize_invoice`; preto sa koncept a finalizácia nemôžu rozísť.
  */
-export function computeInvoiceLine(input: VatEngineLineInput): VatEngineLineResult {
-  const quantity = new Decimal(input.quantity);
-  const unitPrice = new Decimal(input.unitPrice);
-  const vatRate = effectiveVatRate(input.vatCategoryCode, input.vatRate);
+function allocateByLargestRemainder(weights: Decimal[], total: Decimal): Decimal[] {
+  const weightSum = weights.reduce((acc, weight) => acc.plus(weight), new Decimal(0));
 
-  const lineNet = round2(quantity.times(unitPrice));
-  const lineVat = round2(lineNet.times(vatRate).dividedBy(100));
-  const lineGross = lineNet.plus(lineVat);
+  // Nulový (alebo degenerovaný) základ na rozdelenie: rozdeliť sa nedá nič a
+  // nič sa ani nevymyslí. Všetko je nula.
+  if (weightSum.isZero() || weightSum.isNegative()) {
+    return weights.map(() => new Decimal(0));
+  }
 
-  return {
-    lineNetAmount: lineNet.toFixed(2),
-    lineVatAmount: lineVat.toFixed(2),
-    lineGrossAmount: lineGross.toFixed(2),
-  };
+  const shares = weights.map((weight) => weight.times(total).dividedBy(weightSum));
+  const floors = shares.map((share) => share.floor());
+  const allocated = floors.reduce((acc, value) => acc.plus(value), new Decimal(0));
+
+  // Koľko centov ostalo nerozdelených. Vždy 0 ≤ deficit < počet riadkov.
+  const deficit = total.minus(allocated).toNumber();
+
+  const order = shares
+    .map((share, index) => ({ index, remainder: share.minus(floors[index]) }))
+    .sort((a, b) => b.remainder.comparedTo(a.remainder) || a.index - b.index);
+
+  const result = floors.slice();
+  for (let i = 0; i < deficit && i < order.length; i++) {
+    result[order[i].index] = result[order[i].index].plus(1);
+  }
+  return result;
 }
 
 /**
- * Jednotková cena BEZ dane z ceny S DAŇOU.
+ * Prepočíta JEDEN samostatný riadok.
  *
- * KEDY SA POUŽIJE
- * ---------------
- * Keď používateľ povie „uvedené ceny sú už s DPH". Esblu ukladá do
- * `invoice_items.unit_price` cenu bez dane, takže sa musí prepočítať —
- * a prepočítať sa musí TU, jediným miestom, kde v appke beží peňažná
- * matematika. Model ani parser o daň nezavadia.
- *
- * PRESNOSŤ A JEDEN CENT
- * ---------------------
- * Základ sa zaokrúhľuje na centy, lebo to je tvar, v akom cena na doklade
- * naozaj stojí a v akom ju človek v koncepte uvidí a prípadne prepíše.
- *
- * Dôsledok treba povedať nahlas: pri časti súm sa spätný prepočet od
- * vyslovenej sumy odchýli o jeden cent. „0,99 € s 23 % DPH" dá základ
- * 0,80 € a riadok 0,98 €, pretože žiadna cena v centoch nedá po pripočítaní
- * dane presne 0,99. Nie je to chyba zaokrúhľovania, ktorú by sa dalo
- * „opraviť" väčšou presnosťou — overené: šesť desatinných miest dá presne
- * tie isté výsledky, lebo riadkový základ sa aj tak počíta na centy.
- *
- * Odchýlka je najviac 1 cent na riadok a používateľ vidí skutočné súčty v
- * koncepte skôr, než čokoľvek vystaví.
- *
- * Pri nulovej sadzbe (alebo kategórii bez dane) je cena s daňou totožná s
- * cenou bez dane a nič sa nedelí.
+ * Pozor: riadok na faktúre nikdy nestojí sám — jeho daň sa rozdeľuje zo
+ * skupiny, takže jediný správny vstup je celý doklad. Táto funkcia preto iba
+ * pošle jeden riadok cez `computeInvoiceTotals`; pre doklad s jednou položkou
+ * je výsledok totožný a pre viac položiek sa takto nedá omylom obísť
+ * skupinové zaokrúhlenie.
  */
-export function netUnitPriceFromGross(
-  grossUnitPrice: number | string,
+export function computeInvoiceLine(input: VatEngineLineInput): VatEngineLineResult {
+  return computeInvoiceTotals([input]).lines[0];
+}
+
+/**
+ * Základ dane zo sumy S DAŇOU — pre CELÚ skupinu naraz, nie po riadkoch.
+ *
+ * Toto je jediné zaokrúhlenie, ktoré v režime gross rozhoduje o výsledku.
+ * Daň sa z neho už nepočíta nezávisle, ale odčíta: daň = suma s daňou −
+ * základ. Vďaka tomu súčet sedí na vyslovenú sumu vždy, nie väčšinou.
+ *
+ * Pri nulovej sadzbe (alebo kategórii bez dane) je suma s daňou totožná so
+ * základom a nič sa nedelí.
+ */
+export function taxableFromGross(
+  grossAmount: Decimal.Value,
   vatCategoryCode: VatCategoryCode,
-  vatRate: number | string
+  vatRate: Decimal.Value
 ): string {
-  const gross = new Decimal(grossUnitPrice);
+  const gross = new Decimal(grossAmount);
   const rate = effectiveVatRate(vatCategoryCode, vatRate);
 
   if (rate.isZero()) return round2(gross).toFixed(2);
 
-  const divisor = rate.dividedBy(100).plus(1);
-  return round2(gross.dividedBy(divisor)).toFixed(2);
+  return round2(gross.dividedBy(rate.dividedBy(100).plus(1))).toFixed(2);
+}
+
+interface Bucket {
+  code: VatCategoryCode;
+  rate: Decimal;
+  priceMode: PriceMode;
+  indexes: number[];
+  /** ROUND(quantity × unit_price, 2) po riadkoch — autoritatívne sumy. */
+  authoritative: Decimal[];
 }
 
 /**
- * Prepočíta celú faktúru: riadky + normalizovaný VAT breakdown (EN16931
- * BR-CO-17: sadzba aplikovaná na súčet základu danej kategórie/sadzby, nie
- * na súčet už zaokrúhlených per-line súm) + súčty (BR-CO-10/14/15).
+ * Prepočíta celú faktúru podľa kanonického peňažného modelu (pozri komentár
+ * vyššie): riadky + rozpis dane + súčty.
+ *
+ * EN16931 / Peppol BIS 3.0: BR-CO-10/13 (základ = Σ riadkových základov),
+ * BR-CO-17 (daň kategórie sa počíta zo ZOSČÍTANÉHO základu, nie zo súčtu
+ * jednotlivo zaokrúhlených riadkových daní), BR-CO-14, BR-CO-15.
+ *
+ * Riadky s cenami s daňou a bez dane sa zoskupujú oddelene, aj keď majú tú
+ * istú sadzbu: každá skupina má vlastnú autoritatívnu sumu, z ktorej sa
+ * počíta. V rozpise dane sa potom sčítajú pod jednu kategóriu a sadzbu. Esblu
+ * zmiešané režimy na jednom doklade zatiaľ neponúka (hlas sa radšej spýta),
+ * ale keby sa raz zjavili, aritmetika ich neskazí.
  */
 export function computeInvoiceTotals(
   lines: VatEngineLineInput[],
   roundingAmount: number | string = 0
 ): VatEngineResult {
-  const computedLines = lines.map(computeInvoiceLine);
+  // 1. Autoritatívna suma na riadok — jediné riadkové zaokrúhlenie.
+  const authoritative = lines.map((line) =>
+    round2(new Decimal(line.quantity).times(new Decimal(line.unitPrice)))
+  );
 
-  const groups = new Map<
-    string,
-    { code: VatCategoryCode; rate: Decimal; taxable: Decimal }
-  >();
-
+  // 2. Skupiny: kategória + sadzba + režim ceny.
+  const buckets = new Map<string, Bucket>();
   lines.forEach((line, index) => {
     const rate = effectiveVatRate(line.vatCategoryCode, line.vatRate);
-    const key = `${line.vatCategoryCode}:${rate.toFixed(4)}`;
-    const net = new Decimal(computedLines[index].lineNetAmount);
-    const existing = groups.get(key);
+    const priceMode = line.priceMode ?? DEFAULT_PRICE_MODE;
+    const key = `${line.vatCategoryCode}:${rate.toFixed(4)}:${priceMode}`;
+    const existing = buckets.get(key);
     if (existing) {
-      existing.taxable = existing.taxable.plus(net);
+      existing.indexes.push(index);
+      existing.authoritative.push(authoritative[index]);
     } else {
-      groups.set(key, { code: line.vatCategoryCode, rate, taxable: net });
+      buckets.set(key, {
+        code: line.vatCategoryCode,
+        rate,
+        priceMode,
+        indexes: [index],
+        authoritative: [authoritative[index]],
+      });
     }
   });
 
-  const breakdown: VatBreakdownResult[] = Array.from(groups.values())
-    .sort((a, b) => a.code.localeCompare(b.code) || a.rate.comparedTo(b.rate))
-    .map((group) => {
-      const vatAmount = round2(group.taxable.times(group.rate).dividedBy(100));
-      return {
-        vatCategoryCode: group.code,
-        vatRate: group.rate.toFixed(4),
-        taxableAmount: group.taxable.toFixed(2),
-        vatAmount: vatAmount.toFixed(2),
-      };
+  // 3. Skupinové zaokrúhlenie + rozdelenie dopočítanej zložky späť na riadky.
+  const lineNet: Decimal[] = new Array(lines.length);
+  const lineVat: Decimal[] = new Array(lines.length);
+  const lineGross: Decimal[] = new Array(lines.length);
+
+  const bucketResults: {
+    code: VatCategoryCode;
+    rate: Decimal;
+    taxable: Decimal;
+    vat: Decimal;
+  }[] = [];
+
+  for (const bucket of buckets.values()) {
+    const authSum = bucket.authoritative.reduce(
+      (acc, value) => acc.plus(value),
+      new Decimal(0)
+    );
+
+    let taxable: Decimal;
+    let vat: Decimal;
+    /** Skupinové číslo, ktoré sa rozdeľuje späť na riadky, v centoch. */
+    let distributed: Decimal;
+
+    if (bucket.priceMode === "gross") {
+      // Autoritatívna je suma S DAŇOU. Základ sa dopočíta raz, pre celú
+      // skupinu, a daň je zvyšok — takže súčet nemôže ujsť ani o cent.
+      taxable = new Decimal(taxableFromGross(authSum, bucket.code, bucket.rate));
+      vat = authSum.minus(taxable);
+      distributed = taxable;
+    } else {
+      // Autoritatívny je základ. Daň podľa BR-CO-17 zo zosčítaného základu.
+      taxable = authSum;
+      vat = round2(authSum.times(bucket.rate).dividedBy(100));
+      distributed = vat;
+    }
+
+    const allocatedCents = allocateByLargestRemainder(
+      bucket.authoritative.map((value) => value.times(100)),
+      distributed.times(100)
+    );
+
+    bucket.indexes.forEach((lineIndex, position) => {
+      const authoritativeAmount = bucket.authoritative[position];
+      const allocated = allocatedCents[position].dividedBy(100);
+
+      if (bucket.priceMode === "gross") {
+        lineGross[lineIndex] = authoritativeAmount;
+        lineNet[lineIndex] = allocated;
+        lineVat[lineIndex] = authoritativeAmount.minus(allocated);
+      } else {
+        lineNet[lineIndex] = authoritativeAmount;
+        lineVat[lineIndex] = allocated;
+        lineGross[lineIndex] = authoritativeAmount.plus(allocated);
+      }
     });
 
-  const subtotal = computedLines.reduce(
-    (acc, line) => acc.plus(line.lineNetAmount),
+    bucketResults.push({ code: bucket.code, rate: bucket.rate, taxable, vat });
+  }
+
+  // 4. Rozpis dane: režimy sa tu opäť spájajú pod jednu kategóriu a sadzbu.
+  const grouped = new Map<
+    string,
+    { code: VatCategoryCode; rate: Decimal; taxable: Decimal; vat: Decimal }
+  >();
+  for (const result of bucketResults) {
+    const key = `${result.code}:${result.rate.toFixed(4)}`;
+    const existing = grouped.get(key);
+    if (existing) {
+      existing.taxable = existing.taxable.plus(result.taxable);
+      existing.vat = existing.vat.plus(result.vat);
+    } else {
+      grouped.set(key, { ...result });
+    }
+  }
+
+  const breakdown: VatBreakdownResult[] = Array.from(grouped.values())
+    .sort((a, b) => a.code.localeCompare(b.code) || a.rate.comparedTo(b.rate))
+    .map((group) => ({
+      vatCategoryCode: group.code,
+      vatRate: group.rate.toFixed(4),
+      taxableAmount: group.taxable.toFixed(2),
+      vatAmount: group.vat.toFixed(2),
+    }));
+
+  const subtotal = bucketResults.reduce(
+    (acc, result) => acc.plus(result.taxable),
     new Decimal(0)
   );
-  const vatTotal = breakdown.reduce(
-    (acc, entry) => acc.plus(entry.vatAmount),
+  const vatTotal = bucketResults.reduce(
+    (acc, result) => acc.plus(result.vat),
     new Decimal(0)
   );
   const total = subtotal.plus(vatTotal).plus(new Decimal(roundingAmount));
 
   return {
-    lines: computedLines,
+    lines: lines.map((_, index) => ({
+      lineNetAmount: lineNet[index].toFixed(2),
+      lineVatAmount: lineVat[index].toFixed(2),
+      lineGrossAmount: lineGross[index].toFixed(2),
+    })),
     breakdown,
     subtotalAmount: subtotal.toFixed(2),
     vatTotalAmount: vatTotal.toFixed(2),

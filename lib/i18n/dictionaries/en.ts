@@ -332,6 +332,7 @@ const en = {
   landing: {
     nav: {
       features: "Features",
+      demo: "Demo",
       freePlan: "Free plan",
       contact: "Contact",
       login: "Log in",
@@ -345,6 +346,7 @@ const en = {
         "Esblu helps smaller construction, service, transport and technical companies manage documents, vehicles, machines, inventory, business partners and invoices in one application.",
       ctaPrimary: "Request beta access",
       ctaSecondary: "Log in",
+      ctaVideo: "Watch the demo",
       betaNotice:
         "Esblu is currently in closed beta. New accounts are available only to approved testers.",
       cardKicker: "Company records and invoicing",
@@ -356,6 +358,35 @@ const en = {
       moduleInventoryDesc: "Items and quantities",
       moduleBusinessPartnersDesc: "Customers and suppliers",
       moduleInvoicesDesc: "Invoicing and payments",
+    },
+    video: {
+      kicker: "Product demo",
+      title: "See Esblu in action",
+      subtitle:
+        "In a few minutes you will see how Esblu brings documents, vehicles, machines, service, inventory and invoices into a single company system. No sign-up, right here. The video is currently available in Slovak only.",
+      playAria: "Play the Esblu product demo",
+      posterAlt:
+        "Esblu interface — company overview with modules and alerts for upcoming deadlines",
+      audioLanguage: "Audio in Slovak",
+      chaptersLabel: "Jump to a chapter",
+      chapter: {
+        intro: "Intro",
+        documents: "Documents",
+        vehicles: "Vehicles",
+        machines: "Machines",
+        inventory: "Inventory",
+        invoices: "Invoices",
+        search: "Search",
+        collaboration: "Collaboration",
+        security: "Roles and security",
+      },
+      ctaTitle: "Want to find out whether Esblu fits your company?",
+      ctaDescription:
+        "Tell us what kind of company you run and what you handle on paper, in Excel or over WhatsApp today. We will get back to you and see whether Esblu can help.",
+      ctaPrimary: "Request beta access",
+      ctaSecondary: "See the features",
+      betaNotice:
+        "The video is public and requires no sign-up. Beta access is arranged individually by e-mail.",
     },
     features: {
       kicker: "Six modules, one app",
@@ -2211,6 +2242,8 @@ const en = {
       itemQuantityLabel: "Quantity",
       itemUnitLabel: "Unit",
       itemUnitPriceLabel: "Unit price",
+      itemUnitPriceGrossLabel: "Unit price incl. VAT",
+      itemUnitPriceNetLabel: "Unit price excl. VAT",
       itemVatCategoryLabel: "VAT category",
       itemVatRateLabel: "VAT rate (%)",
       vatRateNotPercentageHint: "For this category (Z/E/AE) the rate is not a percentage — the VAT amount is always 0.",

@@ -9,6 +9,7 @@ import {
   renderToBuffer,
 } from "@react-pdf/renderer";
 import type { Invoice, InvoiceItem, InvoiceParty, InvoiceTaxBreakdown } from "@/lib/invoices";
+import { invoicePriceMode, unitPriceLabelKey } from "@/lib/invoicing/price-mode";
 import { formatDate, formatNumber } from "@/lib/i18n/format";
 import { translate } from "@/lib/i18n/translate";
 import type { Locale } from "@/lib/i18n/locales";
@@ -382,8 +383,12 @@ function InvoicePdfDocument({ invoice, seller, buyer, items, taxBreakdowns, loca
             <Text style={[styles.th, styles.colQuantity]}>
               {translate(locale, "invoices.newInvoice.itemQuantityLabel")}
             </Text>
+            {/* Na daňovom doklade sa nesmie dať pomýliť, či cena daň už
+                obsahuje. Popis stĺpca to preto hovorí priamo — a keby sa
+                riadky v režime nezhodovali, radšej neutrálny popis než
+                tvrdenie, ktoré pre časť riadkov neplatí. */}
             <Text style={[styles.th, styles.colUnitPrice]}>
-              {translate(locale, "invoices.newInvoice.itemUnitPriceLabel")}
+              {translate(locale, unitPriceLabelKey(invoicePriceMode(items)))}
             </Text>
             <Text style={[styles.th, styles.colVat]}>
               {translate(locale, "invoices.newInvoice.itemVatCategoryLabel")}

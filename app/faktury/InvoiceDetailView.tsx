@@ -48,6 +48,12 @@ import {
   type InvoiceTaxBreakdown,
   type VatCategoryCode,
 } from "@/lib/invoices";
+import {
+  DEFAULT_PRICE_MODE,
+  invoicePriceMode,
+  unitPriceLabelKey,
+  type PriceMode,
+} from "@/lib/invoicing/price-mode";
 import { listBusinessPartners, type BusinessPartner } from "@/lib/business-partners";
 import {
   DocumentPageShell,
@@ -85,12 +91,19 @@ const TODAY = todayLocalDate();
 // default nemá nastavený, sadzba zostáva nerozlíšená (`NaN` sentinel — pozri
 // findUnresolvedVatRateErrors v lib/invoices.ts) a používateľ ju musí zadať
 // sám pred uložením/finalizáciou.
-function emptyItem(defaultVatRate: number | null): DraftInvoiceItemInput {
+function emptyItem(
+  defaultVatRate: number | null,
+  // Nový riadok dedí režim ceny dokladu. Keby dostal predvolený "net" na
+  // doklade so sumami s daňou, vznikol by doklad, kde dva riadky s rovnakým
+  // číslom znamenajú dve rôzne sumy — a nikto by si to nevšimol.
+  priceMode: PriceMode = DEFAULT_PRICE_MODE
+): DraftInvoiceItemInput {
   return {
     description: "",
     quantity: 1,
     unit: "ks",
     unit_price: 0,
+    price_mode: priceMode,
     vat_category_code: "S",
     vat_rate: defaultVatRate ?? NaN,
   };
@@ -269,6 +282,11 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
                 quantity: item.quantity,
                 unit: item.unit,
                 unit_price: item.unit_price,
+                // Režim ceny MUSÍ prejsť editorom nedotknutý. Keby sa tu
+                // stratil, uloženie bez jedinej zmeny by z dokladu so sumami
+                // s daňou spravilo doklad bez dane — tá istá čísla, o celú
+                // daň iný doklad.
+                price_mode: item.price_mode,
                 vat_category_code: item.vat_category_code,
                 vat_rate: item.vat_rate,
               }))
@@ -317,7 +335,7 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
   }
 
   function addDraftItem() {
-    setDraftItems((previous) => [...previous, emptyItem(companyDefaultVatRate)]);
+    setDraftItems((previous) => [...previous, emptyItem(companyDefaultVatRate, draftPriceMode ?? DEFAULT_PRICE_MODE)]);
   }
 
   function removeDraftItem(index: number) {
@@ -387,7 +405,7 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
       await replaceDraftInvoiceItems(invoice.id, cleanedItems);
 
       setInvoice(updated);
-      setDraftItems(cleanedItems.length > 0 ? cleanedItems : [emptyItem(companyDefaultVatRate)]);
+      setDraftItems(cleanedItems.length > 0 ? cleanedItems : [emptyItem(companyDefaultVatRate, draftPriceMode ?? DEFAULT_PRICE_MODE)]);
       setSaveNotice(t("invoices.detail.draftSavedNotice"));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -607,6 +625,10 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
   const seller = parties.find((party) => party.role === "seller");
   const buyer = parties.find((party) => party.role === "buyer");
   const preview = previewDraftTotals(draftItems.filter((item) => item.description.trim()));
+  // Režim ceny dokladu sa ODVODZUJE z riadkov, neukladá sa druhýkrát. `null`
+  // = riadky sa nezhodujú; Esblu taký doklad nevytvára, ale ak by vznikol,
+  // popis stĺpca radšej nebude tvrdiť nič.
+  const draftPriceMode = invoicePriceMode(draftItems);
 
   return (
     <DocumentPageShell uiContext={{ module: "invoice", entityType: "invoice", entityId: entityId }}>
@@ -817,7 +839,7 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
                     type="number"
                     step="any"
                     className="rounded-doc-sm border border-doc-border bg-surface-2 p-2 text-sm text-primary outline-none focus:border-accent-cyan sm:col-span-2"
-                    placeholder={t("invoices.newInvoice.itemUnitPriceLabel")}
+                    placeholder={t(unitPriceLabelKey(item.price_mode ?? DEFAULT_PRICE_MODE))}
                     value={item.unit_price}
                     disabled={!canEdit}
                     onChange={(event) =>
@@ -1308,7 +1330,7 @@ function ItemsTableLoader({
           <tr className="text-left text-secondary">
             <th className="pb-2">{t("invoices.newInvoice.itemDescriptionLabel")}</th>
             <th className="pb-2 text-right">{t("invoices.newInvoice.itemQuantityLabel")}</th>
-            <th className="pb-2 text-right">{t("invoices.newInvoice.itemUnitPriceLabel")}</th>
+            <th className="pb-2 text-right">{t(unitPriceLabelKey(invoicePriceMode(items)))}</th>
             <th className="pb-2 text-right">{t("invoices.newInvoice.totalLabel")}</th>
           </tr>
         </thead>
@@ -1354,7 +1376,7 @@ function ItemsTableLoader({
               </div>
               <div>
                 <p className="text-xs font-semibold text-secondary">
-                  {t("invoices.newInvoice.itemUnitPriceLabel")}
+                  {t(unitPriceLabelKey(invoicePriceMode(items)))}
                 </p>
                 <p className="text-sm text-primary">
                   {formatNumber(item.unit_price, locale, { style: "currency", currency })}

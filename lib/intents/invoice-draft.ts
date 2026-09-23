@@ -9,7 +9,7 @@ import {
   previewDraftTotals,
   type DraftInvoiceItemInput,
 } from "@/lib/invoices";
-import { netUnitPriceFromGross, type VatCategoryCode } from "@/lib/invoicing/vat-engine";
+import { type VatCategoryCode } from "@/lib/invoicing/vat-engine";
 import { matchPartnersByName, type PartnerMatchTier } from "@/lib/partner-matching";
 import { checkVoiceInvoiceDraft } from "@/lib/invoicing/voice-financial-validator";
 import { findCurrency, findVatRate } from "@/lib/intents/number-words";
@@ -512,15 +512,14 @@ export async function createInvoiceDraftFromSlots(
 
   // REŽIM CENY.
   //
-  // Esblu ukladá do `unit_price` cenu BEZ dane. Keď používateľ povedal, že
-  // vyslovené sumy už daň obsahujú, prepočíta sa základ — deterministicky,
-  // v tom istom VAT engine, ktorý počíta zvyšok dokladu. Model ani parser
-  // o daň nezavadia.
+  // Vyslovená suma sa NEPREPOČÍTAVA. Uloží sa presne tak, ako zaznela, a
+  // `price_mode` povie, čo znamená — základ dane si z nej dopočíta VAT
+  // engine a DB pri finalizácii, obe rovnakým pravidlom.
   //
-  // Vyslovená suma zostáva presne taká, akú človek povedal: 250 € s 23 %
-  // DPH dá základ 203,252033 a riadok so sumou 250,00 €. Práve preto sa
-  // základ nezaokrúhľuje na dve miesta — zaokrúhľovanie patrí až na
-  // riadkové súčty.
+  // Predtým sa tu cena s daňou delila sadzbou a do `unit_price` išiel
+  // výsledok. Vyslovená suma tým prestala v modeli existovať, takže sa
+  // nemalo čo skontrolovať — a 750 + 250 + 800 vyšlo v produkcii ako
+  // 1800,01. Pozri KANONICKÝ PEŇAŽNÝ MODEL v lib/invoicing/vat-engine.ts.
   const priceMode = effectivePriceMode(slots);
 
   // MNOŽSTVO A CENA SA MIEŠAŤ NESMÚ.
@@ -532,10 +531,8 @@ export async function createInvoiceDraftFromSlots(
     description: item.description,
     quantity: item.quantity ?? DEFAULT_QUANTITY,
     unit: item.unit ?? DEFAULT_UNIT,
-    unit_price:
-      priceMode === "gross"
-        ? Number(netUnitPriceFromGross(item.unitPrice as number, vatCategoryCode, vatRate))
-        : (item.unitPrice as number),
+    unit_price: item.unitPrice as number,
+    price_mode: priceMode,
     vat_category_code: vatCategoryCode,
     vat_rate: vatRate,
   }));
@@ -583,10 +580,13 @@ export async function createInvoiceDraftFromSlots(
             items.length > 1
               ? `${index + 1}. ${translate(locale, "invoices.newInvoice.itemDescriptionLabel")}`
               : translate(locale, "invoices.newInvoice.itemDescriptionLabel"),
+          // Riadková suma z toho istého výpočtu, ktorý sa práve uložil — nie
+          // druhé, nezávislé číslo. V režime s daňou je to vyslovená suma,
+          // v režime bez dane základ. V oboch prípadoch to, čo človek zadal.
           value: `${row.description} — ${
             priceMode === "gross"
               ? totals.lines[index].lineGrossAmount
-              : formatAmount(row.unit_price)
+              : totals.lines[index].lineNetAmount
           } ${currency}`,
         })),
         {

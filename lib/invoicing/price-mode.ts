@@ -196,3 +196,36 @@ export const DEFAULT_PRICE_MODE: PriceMode = "net";
 export function isPriceMode(value: unknown): value is PriceMode {
   return value === "net" || value === "gross";
 }
+
+/**
+ * Režim celého dokladu odvodený z jeho riadkov — žiadny druhý uložený údaj.
+ *
+ * Doklad nemá vlastný stĺpec s režimom zámerne: dva zdroje pravdy sa raz
+ * rozídu a potom sa nedá zistiť, ktorý platí. Režim vie každý riadok sám a
+ * doklad sa ho spýta vtedy, keď treba popísať stĺpec s cenou.
+ *
+ * `null` znamená, že riadky sa nezhodujú. Esblu taký doklad nevytvára (hlas
+ * sa radšej spýta), ale keby sa raz zjavil, žiadny popis stĺpca by o ňom
+ * nehovoril pravdu — tak sa nebude tvrdiť nič.
+ */
+/**
+ * Preklad popisu stĺpca s jednotkovou cenou podľa režimu. Pri nezhodných
+ * riadkoch (`null`) zostáva neutrálny popis — tvrdiť o všetkých riadkoch
+ * niečo, čo platí len pre časť, je horšie než nepovedať nič.
+ */
+export function unitPriceLabelKey(mode: PriceMode | null): string {
+  if (mode === "gross") return "invoices.newInvoice.itemUnitPriceGrossLabel";
+  if (mode === "net") return "invoices.newInvoice.itemUnitPriceNetLabel";
+  return "invoices.newInvoice.itemUnitPriceLabel";
+}
+
+export function invoicePriceMode(
+  items: readonly { price_mode?: PriceMode | null }[]
+): PriceMode | null {
+  if (items.length === 0) return DEFAULT_PRICE_MODE;
+  const first = items[0].price_mode ?? DEFAULT_PRICE_MODE;
+  for (const item of items) {
+    if ((item.price_mode ?? DEFAULT_PRICE_MODE) !== first) return null;
+  }
+  return first;
+}

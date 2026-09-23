@@ -346,6 +346,7 @@ const sk = {
   landing: {
     nav: {
       features: "Funkcie",
+      demo: "Ukážka",
       freePlan: "Bezplatný plán",
       contact: "Kontakt",
       login: "Prihlásiť sa",
@@ -359,6 +360,7 @@ const sk = {
         "Esblu pomáha menším stavebným, servisným, dopravným a technickým firmám spravovať dokumenty, vozidlá, stroje, sklad, obchodných partnerov a faktúry v jednej aplikácii.",
       ctaPrimary: "Požiadať o beta prístup",
       ctaSecondary: "Prihlásiť sa",
+      ctaVideo: "Pozrieť ukážku",
       betaNotice:
         "Esblu je momentálne v uzavretej beta verzii. Nové účty sú dostupné len pre schválených testerov.",
       cardKicker: "Firemná evidencia a fakturácia",
@@ -370,6 +372,35 @@ const sk = {
       moduleInventoryDesc: "Položky a množstvo",
       moduleBusinessPartnersDesc: "Zákazníci a dodávatelia",
       moduleInvoicesDesc: "Fakturácia a úhrady",
+    },
+    video: {
+      kicker: "Produktová ukážka",
+      title: "Pozrite si Esblu v praxi",
+      subtitle:
+        "Za pár minút uvidíte, ako Esblu spája dokumenty, vozidlá, stroje, servis, sklad a faktúry do jedného firemného systému. Bez registrácie, priamo tu.",
+      playAria: "Prehrať produktovú ukážku Esblu",
+      posterAlt:
+        "Rozhranie Esblu — firemný prehľad s modulmi a upozorneniami na blížiace sa termíny",
+      audioLanguage: "Zvuk v slovenčine",
+      chaptersLabel: "Preskočiť na kapitolu",
+      chapter: {
+        intro: "Úvod",
+        documents: "Dokumenty",
+        vehicles: "Vozidlá",
+        machines: "Stroje",
+        inventory: "Sklad",
+        invoices: "Faktúry",
+        search: "Vyhľadávanie",
+        collaboration: "Spolupráca",
+        security: "Roly a bezpečnosť",
+      },
+      ctaTitle: "Chcete zistiť, či Esblu dáva zmysel aj pre vašu firmu?",
+      ctaDescription:
+        "Napíšte nám, o akú firmu ide a čo dnes riešite cez papiere, Excel alebo WhatsApp. Ozveme sa a povieme si, či vám Esblu vie pomôcť.",
+      ctaPrimary: "Požiadať o beta prístup",
+      ctaSecondary: "Prejsť na funkcie",
+      betaNotice:
+        "Ukážka je verejná a nevyžaduje registráciu. Beta prístup riešime individuálne e-mailom.",
     },
     features: {
       kicker: "Šesť modulov, jedna aplikácia",
@@ -2236,6 +2267,8 @@ const sk = {
       itemQuantityLabel: "Množstvo",
       itemUnitLabel: "Jednotka",
       itemUnitPriceLabel: "Jednotková cena",
+      itemUnitPriceGrossLabel: "Jednotková cena s DPH",
+      itemUnitPriceNetLabel: "Jednotková cena bez DPH",
       itemVatCategoryLabel: "Kategória DPH",
       itemVatRateLabel: "Sadzba DPH (%)",
       vatRateNotPercentageHint: "Pre túto kategóriu (Z/E/AE) nie je sadzba percento — suma DPH je vždy 0.",
