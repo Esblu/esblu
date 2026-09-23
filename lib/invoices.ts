@@ -7,6 +7,7 @@ import {
   type VatEngineLineInput,
 } from "@/lib/invoicing/vat-engine";
 import { DEFAULT_PRICE_MODE, type PriceMode } from "@/lib/invoicing/price-mode";
+import { normalizeCurrency } from "@/lib/invoices-currency";
 
 export type { VatCategoryCode } from "@/lib/invoicing/vat-engine";
 export type { PriceMode } from "@/lib/invoicing/price-mode";
@@ -278,6 +279,13 @@ export async function listInvoicePayments(invoiceId: string): Promise<InvoicePay
 // Draft: hlavička faktúry
 // -----------------------------------------------------------------------------
 
+// Normalizácia meny žije v bezimportovom module, aby sa dala odskúšať v
+// obyčajnom Node — pozri lib/invoices-currency.ts. Tu sa iba re-exportuje,
+// takže doterajší import z "@/lib/invoices" funguje ďalej.
+export { normalizeCurrency } from "@/lib/invoices-currency";
+
+
+
 export type DraftInvoiceHeaderInput = {
   direction: InvoiceDirection;
   kind: InvoiceKind;
@@ -322,7 +330,7 @@ export async function createDraftInvoice(
       company_id: companyId,
       direction: input.direction,
       kind: input.kind,
-      currency: input.currency,
+      currency: normalizeCurrency(input.currency),
       issue_date: input.issue_date,
       due_date: input.due_date,
       customer_business_partner_id: input.customer_business_partner_id,
@@ -349,7 +357,14 @@ export async function updateDraftInvoiceHeader(
 ): Promise<Invoice> {
   const { data, error } = await supabase
     .from("invoices")
-    .update({ ...input, updated_by: userId, updated_at: new Date().toISOString() })
+    .update({
+      ...input,
+      // Mena sa normalizuje aj pri úprave, nie len pri založení — inak by
+      // sa „EUR " dalo do existujúceho dokladu doplniť neskôr.
+      ...(input.currency !== undefined ? { currency: normalizeCurrency(input.currency) } : {}),
+      updated_by: userId,
+      updated_at: new Date().toISOString(),
+    })
     .eq("id", id)
     .select("*")
     .single();
@@ -752,7 +767,7 @@ export async function createReceivedInvoiceDraft(
     p_due_date: input.due_date ?? null,
     p_delivery_date: input.delivery_date ?? null,
     p_tax_point_date: input.tax_point_date ?? null,
-    p_currency: input.currency ?? "EUR",
+    p_currency: normalizeCurrency(input.currency ?? "EUR"),
     p_iban: input.iban ?? null,
     p_bic: input.bic ?? null,
     p_payment_reference: input.payment_reference ?? null,

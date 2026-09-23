@@ -20,7 +20,7 @@ import {
 } from "@/lib/invoicing/accounting-state";
 import type { AccountingStatus } from "@/lib/invoicing/accounting-lifecycle";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
-import { formatDate, formatNumber } from "@/lib/i18n/format";
+import { formatDate, formatNumber, formatMoney as formatMoneyIntl } from "@/lib/i18n/format";
 import type { Locale } from "@/lib/i18n/locales";
 import {
   addInvoicePayment,
@@ -597,8 +597,9 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
     }
   }
 
-  function formatMoney(amount: number, curr: string): string {
-    return formatNumber(amount, locale, { style: "currency", currency: curr });
+  // Pozri lib/i18n/format.ts — neplatná mena sa zobrazí, nespôsobí pád.
+  function formatMoney(amount: number, curr: string | null): string {
+    return formatMoneyIntl(amount, curr, locale);
   }
 
   if (loading) {
@@ -1342,13 +1343,10 @@ function ItemsTableLoader({
                 {formatNumber(item.quantity, locale)} {item.unit}
               </td>
               <td className="py-2 text-right">
-                {formatNumber(item.unit_price, locale, { style: "currency", currency })}
+                {formatMoneyIntl(item.unit_price, currency, locale)}
               </td>
               <td className="py-2 text-right">
-                {formatNumber(item.line_gross_amount, locale, {
-                  style: "currency",
-                  currency,
-                })}
+                {formatMoneyIntl(item.line_gross_amount, currency, locale)}
               </td>
             </tr>
           ))}
@@ -1379,7 +1377,7 @@ function ItemsTableLoader({
                   {t(unitPriceLabelKey(invoicePriceMode(items)))}
                 </p>
                 <p className="text-sm text-primary">
-                  {formatNumber(item.unit_price, locale, { style: "currency", currency })}
+                  {formatMoneyIntl(item.unit_price, currency, locale)}
                 </p>
               </div>
               <div>
@@ -1395,10 +1393,7 @@ function ItemsTableLoader({
                   {t("invoices.newInvoice.totalLabel")}
                 </p>
                 <p className="text-sm font-semibold text-primary">
-                  {formatNumber(item.line_gross_amount, locale, {
-                    style: "currency",
-                    currency,
-                  })}
+                  {formatMoneyIntl(item.line_gross_amount, currency, locale)}
                 </p>
               </div>
             </div>

@@ -10,7 +10,7 @@ import {
 } from "@react-pdf/renderer";
 import type { Invoice, InvoiceItem, InvoiceParty, InvoiceTaxBreakdown } from "@/lib/invoices";
 import { invoicePriceMode, unitPriceLabelKey } from "@/lib/invoicing/price-mode";
-import { formatDate, formatNumber } from "@/lib/i18n/format";
+import { formatDate, formatNumber, formatMoney as formatMoneyIntl } from "@/lib/i18n/format";
 import { translate } from "@/lib/i18n/translate";
 import type { Locale } from "@/lib/i18n/locales";
 
@@ -224,8 +224,10 @@ const styles = StyleSheet.create({
   },
 });
 
-function formatMoney(amount: number, currency: string, locale: Locale): string {
-  return formatNumber(amount, locale, { style: "currency", currency });
+// Pozri lib/i18n/format.ts. PDF sa generuje na serveri a `RangeError` z
+// Intl by tu neznamenal len škaredé číslo — znamenal by 500 namiesto dokladu.
+function formatMoney(amount: number, currency: string | null, locale: Locale): string {
+  return formatMoneyIntl(amount, currency, locale);
 }
 
 /**

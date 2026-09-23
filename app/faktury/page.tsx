@@ -12,7 +12,7 @@ import {
 } from "@/lib/company";
 import { useCompanyDpaLegalHold } from "@/app/components/CompanyDpaGate";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
-import { formatDate, formatNumber } from "@/lib/i18n/format";
+import { formatDate, formatNumber, formatMoney as formatMoneyIntl } from "@/lib/i18n/format";
 import InvoicesIcon from "@/app/components/icons/InvoicesIcon";
 import { invoiceDetailHref } from "@/lib/entity-links";
 import { isInvoiceOverdue, listInvoices, listInvoiceItems, type Invoice } from "@/lib/invoices";
@@ -251,8 +251,11 @@ export default function FakturyPage() {
     return invoice.invoice_number ?? t("invoices.numberFallback");
   }
 
-  function formatMoney(amount: number, currency: string): string {
-    return formatNumber(amount, locale, { style: "currency", currency });
+  // Jedna spoločná, nepadajúca implementácia pre celý projekt — pozri
+  // lib/i18n/format.ts. Lokálna kópia tu kedysi volala Intl priamo a pri
+  // mene „EUR " (s medzerou) zhodila celý register faktúr.
+  function formatMoney(amount: number, currency: string | null): string {
+    return formatMoneyIntl(amount, currency, locale);
   }
 
   function accountingStatusOf(invoice: Invoice): AccountingStatus {
