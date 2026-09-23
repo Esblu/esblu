@@ -1,5 +1,5 @@
 import { supabase } from "@/lib/supabase";
-import type { AccountingStatus } from "@/lib/invoicing/accounting-lifecycle";
+import type { AccountingStatus, HandoffStatus } from "@/lib/invoicing/accounting-lifecycle";
 
 // =============================================================================
 // Čítanie a zápis účtovného stavu dokladov.
@@ -22,6 +22,8 @@ export type InvoiceAccountingState = {
 
 export type HandoffExport = {
   id: string;
+  /** Čo sa naozaj exportovalo. Pozri accounting-lifecycle.ts. */
+  export_kind: "metadata_xlsx" | "complete_package";
   created_at: string;
   created_by: string | null;
   period_from: string | null;
@@ -44,14 +46,41 @@ export async function listAccountingStates(): Promise<Record<string, InvoiceAcco
   return Object.fromEntries(rows.map((row) => [row.invoice_id, row]));
 }
 
-/** Identifikátory faktúr, ktoré už boli aspoň raz odovzdané. */
-export async function listExportedInvoiceIds(): Promise<Set<string>> {
+/**
+ * Stav odovzdania pre každú faktúru, ktorej sa už nejaký export dotkol.
+ *
+ * Rozlišuje sa DRUH exportu, nie jeho existencia. Stiahnutý zošit s
+ * údajmi nie je odovzdanie dokladov — originály v ňom nie sú — a preto z
+ * neho nikdy nesmie vyplynúť, že doklad môže z Esblu zmiznúť.
+ */
+export async function listHandoffStatuses(): Promise<Record<string, HandoffStatus>> {
   const { data, error } = await supabase
     .from("accounting_handoff_export_items")
-    .select("invoice_id");
+    .select("invoice_id, accounting_handoff_exports!inner(export_kind)");
 
   if (error) throw error;
-  return new Set(((data as { invoice_id: string }[]) ?? []).map((row) => row.invoice_id));
+
+  // PostgREST vracia vnorený vzťah ako pole aj pri väzbe many-to-one;
+  // normalizuje sa tu, aby sa volajúci nemusel starať o tvar odpovede.
+  const rows =
+    (data as unknown as {
+      invoice_id: string;
+      accounting_handoff_exports: { export_kind: string } | { export_kind: string }[] | null;
+    }[]) ?? [];
+
+  const out: Record<string, HandoffStatus> = {};
+  for (const row of rows) {
+    const related = row.accounting_handoff_exports;
+    const kind = Array.isArray(related) ? related[0]?.export_kind : related?.export_kind;
+    // Úplné odovzdanie prebíja export údajov; opačne nikdy.
+    if (kind === "complete_package") {
+      out[row.invoice_id] = "complete_handoff";
+    } else if (out[row.invoice_id] !== "complete_handoff") {
+      out[row.invoice_id] = "metadata_exported";
+    }
+  }
+
+  return out;
 }
 
 /**
@@ -82,14 +111,14 @@ export async function setAccountingStatus(
 }
 
 /**
- * Zapíše, že sa doklady odovzdali účtovníkovi.
+ * Zapíše, že sa z dokladov exportovali ÚDAJE.
  *
- * Udalosť vzniká AŽ po tom, čo sa súbor naozaj vytvoril — inak by v
- * evidencii bolo odovzdanie, ktoré sa nestalo. Pri čiastočnom zlyhaní
- * (hlavička prejde, položky nie) sa nič nedopočítava: volajúci dostane
- * chybu a export zopakuje.
+ * Nie je to záznam o odovzdaní účtovníkovi — ten by tvrdil niečo, čo
+ * Esblu nevie overiť. Udalosť vzniká AŽ po tom, čo sa súbor naozaj
+ * vytvoril; pri čiastočnom zlyhaní (hlavička prejde, položky nie) sa nič
+ * nedopočítava a volajúci export zopakuje.
  */
-export async function recordHandoffExport(input: {
+export async function recordMetadataExport(input: {
   invoiceIds: string[];
   periodFrom: string | null;
   periodTo: string | null;
@@ -101,6 +130,7 @@ export async function recordHandoffExport(input: {
   const { data, error } = await supabase
     .from("accounting_handoff_exports")
     .insert({
+      export_kind: "metadata_xlsx",
       created_by: input.userId,
       period_from: input.periodFrom,
       period_to: input.periodTo,
@@ -127,11 +157,39 @@ export async function recordHandoffExport(input: {
   return exportId;
 }
 
-/** Posledné odovzdania, najnovšie prvé. */
+export type AccountingStateLogEntry = {
+  id: string;
+  accounting_status: AccountingStatus;
+  changed_at: string;
+  changed_by: string | null;
+};
+
+/**
+ * História označení „zaúčtované" pre jeden doklad, najnovšia prvá.
+ *
+ * Označenie sa dá odvolať, ale odvolanie nesmie zmazať stopu. Riadky píše
+ * výhradne trigger v databáze; appka do denníka nemá zápis, takže dôkaz o
+ * zmene nevyrába ten, koho sa týka.
+ */
+export async function listAccountingStateLog(
+  invoiceId: string
+): Promise<AccountingStateLogEntry[]> {
+  const { data, error } = await supabase
+    .from("invoice_accounting_state_log")
+    .select("id, accounting_status, changed_at, changed_by")
+    .eq("invoice_id", invoiceId)
+    .order("changed_at", { ascending: false })
+    .limit(20);
+
+  if (error) throw error;
+  return (data as AccountingStateLogEntry[]) ?? [];
+}
+
+/** Posledné exporty, najnovšie prvé. */
 export async function listHandoffExports(limit = 20): Promise<HandoffExport[]> {
   const { data, error } = await supabase
     .from("accounting_handoff_exports")
-    .select("id, created_at, created_by, period_from, period_to, direction, invoice_count, manifest_sha256, note")
+    .select("id, export_kind, created_at, created_by, period_from, period_to, direction, invoice_count, manifest_sha256, note")
     .order("created_at", { ascending: false })
     .limit(limit);
 

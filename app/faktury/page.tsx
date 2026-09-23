@@ -18,8 +18,8 @@ import { invoiceDetailHref } from "@/lib/entity-links";
 import { isInvoiceOverdue, listInvoices, listInvoiceItems, type Invoice } from "@/lib/invoices";
 import {
   listAccountingStates,
-  listExportedInvoiceIds,
-  recordHandoffExport,
+  listHandoffStatuses,
+  recordMetadataExport,
   type InvoiceAccountingState,
 } from "@/lib/invoicing/accounting-state";
 import {
@@ -29,6 +29,7 @@ import {
 import {
   retentionStatus,
   type AccountingStatus,
+  type HandoffStatus,
 } from "@/lib/invoicing/accounting-lifecycle";
 import { todayLocalDate } from "@/lib/local-date";
 import {
@@ -96,9 +97,11 @@ export default function FakturyPage() {
   const [accountingStates, setAccountingStates] = useState<
     Record<string, InvoiceAccountingState>
   >({});
-  const [exportedIds, setExportedIds] = useState<Set<string>>(new Set());
-  const [handoffBusy, setHandoffBusy] = useState(false);
-  const [handoffFeedback, setHandoffFeedback] = useState<
+  // Stav odovzdania podľa DRUHU exportu. Stiahnutý zošit s údajmi nie je
+  // odovzdanie dokladov, takže sa ani nesmie takto volať.
+  const [handoffStatuses, setHandoffStatuses] = useState<Record<string, HandoffStatus>>({});
+  const [exportBusy, setExportBusy] = useState(false);
+  const [exportFeedback, setExportFeedback] = useState<
     { type: "success" | "error"; text: string } | null
   >(null);
 
@@ -144,12 +147,12 @@ export default function FakturyPage() {
         listInvoices(activeCompanyId),
         listBusinessPartners(activeCompanyId),
         listAccountingStates(),
-        listExportedInvoiceIds(),
+        listHandoffStatuses(),
       ]);
       setInvoices(invoiceRows);
       setPartnersById(Object.fromEntries(partnerRows.map((partner) => [partner.id, partner])));
       setAccountingStates(states);
-      setExportedIds(exported);
+      setHandoffStatuses(exported);
     } catch (error) {
       console.error("Načítanie faktúr zlyhalo:", error);
       setLoadError(t("invoices.errors.loadFailed"));
@@ -245,17 +248,20 @@ export default function FakturyPage() {
   }
 
   /**
-   * Odovzdanie účtovníkovi.
+   * Export ÚDAJOV pre účtovníka.
+   *
+   * Vzniká zošit s údajmi o dokladoch — nie balík s originálmi. Esblu
+   * preto nikde netvrdí, že doklady niekto prevzal alebo archivoval;
+   * tvrdí iba to, čo vie: že sa vytvoril súbor a s akým odtlačkom.
    *
    * Exportuje sa presne to, čo je práve v zozname — teda to, čo má
-   * používateľ pred očami. Udalosť sa zapisuje AŽ po vytvorení súboru;
-   * záznam o odovzdaní, ktoré sa nestalo, by bol horší než žiadny.
+   * používateľ pred očami. Udalosť sa zapisuje AŽ po vytvorení súboru.
    */
-  async function handleHandoffExport() {
-    if (handoffBusy || filteredInvoices.length === 0) return;
+  async function handleMetadataExport() {
+    if (exportBusy || filteredInvoices.length === 0) return;
 
-    setHandoffBusy(true);
-    setHandoffFeedback(null);
+    setExportBusy(true);
+    setExportFeedback(null);
 
     try {
       const {
@@ -294,7 +300,7 @@ export default function FakturyPage() {
 
       const result = await exportAccountingHandoff(withItems, t);
 
-      await recordHandoffExport({
+      await recordMetadataExport({
         invoiceIds: withItems.map((invoice) => invoice.id),
         periodFrom: null,
         periodTo: null,
@@ -303,16 +309,22 @@ export default function FakturyPage() {
         userId: session.user.id,
       });
 
-      setExportedIds(new Set([...exportedIds, ...withItems.map((invoice) => invoice.id)]));
-      setHandoffFeedback({
+      // Označí sa iba to, čo sa naozaj stalo: export údajov.
+      const next = { ...handoffStatuses };
+      for (const invoice of withItems) {
+        if (next[invoice.id] !== "complete_handoff") next[invoice.id] = "metadata_exported";
+      }
+      setHandoffStatuses(next);
+
+      setExportFeedback({
         type: "success",
         text: t("handoff.exported", { count: result.exportedCount, file: result.fileName }),
       });
     } catch (error) {
-      console.error("Odovzdanie účtovníkovi zlyhalo:", error);
-      setHandoffFeedback({ type: "error", text: t("handoff.errors.failed") });
+      console.error("Export údajov pre účtovníka zlyhal:", error);
+      setExportFeedback({ type: "error", text: t("handoff.errors.failed") });
     } finally {
-      setHandoffBusy(false);
+      setExportBusy(false);
     }
   }
 
@@ -334,17 +346,18 @@ export default function FakturyPage() {
         aside={
           canView && canEdit ? (
             <div className="flex flex-wrap gap-2">
-              {/* Odovzdanie účtovníkovi. Esblu nie je zákonný archív —
-                  dlhodobé uchovávanie prebieha u účtovníka, a toto je
-                  cesta, ktorou sa k nemu doklady dostanú. */}
+              {/* Export ÚDAJOV, nie odovzdanie dokladov. Tlačidlo sa volá
+                  tak, ako sa volá to, čo naozaj urobí — sľubovať prevzatie,
+                  ktoré Esblu nevie overiť, by znamenalo neskôr z toho
+                  odvodiť, že doklad smie zmiznúť. */}
               <button
                 type="button"
-                onClick={handleHandoffExport}
-                disabled={handoffBusy || filteredInvoices.length === 0}
-                aria-busy={handoffBusy}
+                onClick={handleMetadataExport}
+                disabled={exportBusy || filteredInvoices.length === 0}
+                aria-busy={exportBusy}
                 className={`${docButtonPrimary} disabled:pointer-events-none disabled:opacity-40`}
               >
-                {handoffBusy ? t("handoff.exporting") : t("handoff.exportButton")}
+                {exportBusy ? t("handoff.exporting") : t("handoff.exportButton")}
               </button>
               <Link
                 href="/faktury/new"
@@ -361,10 +374,10 @@ export default function FakturyPage() {
         }
       />
 
-      {handoffFeedback && (
+      {exportFeedback && (
         <div className="mt-4">
-          <DocumentNotice tone={handoffFeedback.type === "error" ? "critical" : undefined}>
-            {handoffFeedback.text}
+          <DocumentNotice tone={exportFeedback.type === "error" ? "critical" : undefined}>
+            {exportFeedback.text}
           </DocumentNotice>
         </div>
       )}
@@ -459,10 +472,11 @@ export default function FakturyPage() {
                   const overdue = isInvoiceOverdue(invoice.due_date, invoice.payment_status);
                   // Prevádzková lehota v Esblu. Nie je to zákonná lehota
                   // uchovávania — tú plní zákazník mimo Esblu.
+                  const handoffStatus = handoffStatuses[invoice.id] ?? "none";
                   const retention = retentionStatus({
                     issueDate: invoice.issue_date,
                     today: todayLocalDate(),
-                    handoffStatus: exportedIds.has(invoice.id) ? "exported" : "not_exported",
+                    handoffStatus,
                   });
                   return (
                     <DataRow
@@ -527,15 +541,15 @@ export default function FakturyPage() {
                               {t("handoff.accountingStatus.accounted")}
                             </span>
                           )}
-                          {exportedIds.has(invoice.id) && (
+                          {handoffStatus !== "none" && (
                             <span className="rounded-doc-sm bg-surface-2 px-2 py-0.5 text-xs font-medium text-secondary">
-                              {t("handoff.handoffStatus.exported")}
+                              {t(`handoff.handoffStatus.${handoffStatus}`)}
                             </span>
                           )}
                           {retention.state !== "active" && (
                             <span
                               className={`rounded-doc-sm px-2 py-0.5 text-xs font-medium ${
-                                retention.state === "overdue_not_handed_off"
+                                retention.state === "retention_exceeded"
                                   ? "badge-danger"
                                   : "bg-warning-soft text-warning"
                               }`}

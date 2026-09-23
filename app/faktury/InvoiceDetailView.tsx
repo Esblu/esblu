@@ -14,7 +14,9 @@ import {
 import { useCompanyDpaLegalHold } from "@/app/components/CompanyDpaGate";
 import {
   listAccountingStates,
+  listAccountingStateLog,
   setAccountingStatus as saveAccountingStatus,
+  type AccountingStateLogEntry,
 } from "@/lib/invoicing/accounting-state";
 import type { AccountingStatus } from "@/lib/invoicing/accounting-lifecycle";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
@@ -119,6 +121,9 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
   // daňového dokladu.
   const [accountingStatus, setAccountingStatus] = useState<AccountingStatus>("unprocessed");
   const [accountingBusy, setAccountingBusy] = useState(false);
+  // História označení. Odvolanie „zaúčtované" prepíše aktuálny stav, ale
+  // stopu po ňom nezmaže — denník píše trigger v databáze.
+  const [accountingLog, setAccountingLog] = useState<AccountingStateLogEntry[]>([]);
 
   async function handleToggleAccounted() {
     if (!invoice || accountingBusy || !userId) return;
@@ -130,6 +135,7 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
     try {
       await saveAccountingStatus(invoice.id, next, userId);
       setAccountingStatus(next);
+      setAccountingLog(await listAccountingStateLog(invoice.id));
     } catch (error) {
       console.error("Zmena účtovného stavu zlyhala:", error);
     } finally {
@@ -224,8 +230,12 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
       // doklad zobrazí ako nezaúčtovaný, čo je pravda aj vtedy, keď stav
       // ešte nikto nenastavil.
       try {
-        const states = await listAccountingStates();
+        const [states, log] = await Promise.all([
+          listAccountingStates(),
+          listAccountingStateLog(inv.id),
+        ]);
         setAccountingStatus(states[inv.id]?.accounting_status ?? "unprocessed");
+        setAccountingLog(log);
       } catch (error) {
         console.error("Načítanie účtovného stavu zlyhalo:", error);
       }
@@ -1097,6 +1107,28 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
                     </Link>
                   )}
                 </div>
+
+                {/* HISTÓRIA OZNAČENÍ.
+                    Označenie „zaúčtované" sa dá odvolať a odvolanie
+                    prepíše aktuálny stav — ale nezmaže stopu. Denník píše
+                    trigger v databáze a používateľ doň nemá zápis, takže
+                    dôkaz o zmene nevyrába ten, koho sa týka. */}
+                {accountingLog.length > 0 && (
+                  <div className="mt-4 rounded-doc border border-doc-border bg-surface-2 p-4">
+                    <p className="text-sm font-medium text-secondary">
+                      {t("invoices.detail.accountingHistoryTitle")}
+                    </p>
+                    <ul className="mt-2 space-y-1">
+                      {accountingLog.map((entry) => (
+                        <li key={entry.id} className="text-sm text-muted-esblu">
+                          {formatDate(entry.changed_at, locale)} ·{" "}
+                          {t(`handoff.accountingStatus.${entry.accounting_status}`)}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
                 <p className="mt-3 text-xs text-muted-esblu">
                   {t("invoices.detail.finalizedNotice")}
                 </p>

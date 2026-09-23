@@ -25,26 +25,45 @@
 /** Stav spracovania v účtovníctve. Oddelený od stavu úhrady. */
 export type AccountingStatus = "unprocessed" | "accounted";
 
-/** Bol doklad odovzdaný účtovníkovi (existuje export)? */
-export type HandoffStatus = "not_exported" | "exported";
+/**
+ * Ako ďaleko je doklad na ceste von z Esblu.
+ *
+ * STIAHNUTÝ ZOŠIT NIE JE ODOVZDANIE.
+ * ---------------------------------
+ * `metadata_exported` znamená, že si niekto stiahol súbor s ÚDAJMI o
+ * dokladoch. Nie je to dôkaz, že účtovník čokoľvek dostal, a už vôbec nie,
+ * že má originály — tie v takom súbore nie sú. Preto je to samostatný
+ * stav a preto z neho NIKDY nevyplýva, že doklad môže z Esblu zmiznúť.
+ *
+ * `complete_handoff` znamená odovzdaný úplný balík vrátane originálov
+ * prijatých dokladov, PDF vydaných faktúr, príloh a manifestu. Dnes ho
+ * nič nevytvára; hodnota existuje preto, aby sa oprávnenosť na
+ * odstránenie dala naviazať na niečo konkrétne namiesto na „veď sa niečo
+ * exportovalo".
+ */
+export type HandoffStatus = "none" | "metadata_exported" | "complete_handoff";
 
 /**
  * Prevádzkové uchovávanie v Esblu.
  *
- *   "active"                  bežný stav
- *   "approaching_limit"       do konca prevádzkovej lehoty ≤ 30 dní
- *   "eligible_for_removal"    lehota uplynula A doklad je odovzdaný
- *   "overdue_not_handed_off"  lehota uplynula, ale odovzdaný NIE JE
+ *   "active"                          bežný stav
+ *   "approaching_limit"               do konca prevádzkovej lehoty ≤ 30 dní
+ *   "retention_exceeded"              lehota uplynula; úplné odovzdanie NIE JE
+ *   "eligible_for_removal"            lehota uplynula A doklad bol úplne odovzdaný
  *
- * Posledný stav je úmyselne samostatný. Je to upozornenie pre človeka, nie
- * povolenie na čokoľvek: doklad, ktorý nikto neodovzdal, sa z Esblu
- * odstrániť nesmie, aj keby bol akokoľvek starý.
+ * `retention_exceeded` je upozornenie pre človeka, NIE povolenie na
+ * čokoľvek. Platí aj vtedy, keď sa z dokladu exportovali údaje — zošit s
+ * údajmi nie je odovzdanie dokladov.
+ *
+ * `eligible_for_removal` je dnes nedosiahnuteľný, lebo úplný balík zatiaľ
+ * nič nevytvára. Je to zámer, nie nedostatok: podmienka existuje skôr než
+ * mazanie, aby sa mazanie nedalo zapnúť bez nej.
  */
 export type RetentionState =
   | "active"
   | "approaching_limit"
-  | "eligible_for_removal"
-  | "overdue_not_handed_off";
+  | "retention_exceeded"
+  | "eligible_for_removal";
 
 /** Produktový cieľ prevádzkového uchovávania plného dokladu v Esblu. */
 export const OPERATIONAL_RETENTION_MONTHS = 24;
@@ -135,8 +154,12 @@ export function retentionStatus(input: RetentionInput): RetentionResult {
     return { state: "approaching_limit", deadline, daysRemaining };
   }
 
+  // Lehota uplynula. O tom, či sa doklad smie stať odstrániteľným,
+  // rozhoduje VÝHRADNE úplné odovzdanie. Export údajov sem nesiaha —
+  // originál dokladu v zošite nie je, takže po odstránení by neexistoval
+  // nikde.
   return {
-    state: input.handoffStatus === "exported" ? "eligible_for_removal" : "overdue_not_handed_off",
+    state: input.handoffStatus === "complete_handoff" ? "eligible_for_removal" : "retention_exceeded",
     deadline,
     daysRemaining,
   };
@@ -147,11 +170,79 @@ export function retentionStatus(input: RetentionInput): RetentionResult {
  *
  * Nie je to príkaz na zmazanie a nikdy ním nebude — je to podmienka, bez
  * ktorej sa o odstránení nesmie ani uvažovať. Samotné odstránenie ostáva
- * vedomým krokom oprávneného človeka.
+ * vedomým krokom oprávneného človeka a dnes ho nič nevykonáva.
+ *
+ * Dnes vracia vždy `false`, pretože `complete_handoff` nemá kto nastaviť.
+ * Tak to má byť: podmienka je na mieste skôr, než existuje čokoľvek, čo
+ * by podľa nej mazalo.
  */
 export function isEligibleForRemoval(input: RetentionInput): boolean {
   return retentionStatus(input).state === "eligible_for_removal";
 }
+
+/**
+ * Čo ešte chýba, aby sa doklad mohol z Esblu odstrániť?
+ *
+ * Zoznam je zámerne konkrétny. „Nie je odovzdané" nikomu nepovie, čo s
+ * tým — a pri dokladoch, ktoré inde neexistujú, je vágna odpoveď horšia
+ * než žiadna.
+ */
+export type RemovalBlocker =
+  | "retention_not_reached"
+  | "complete_handoff_missing"
+  | "only_metadata_exported";
+
+export function removalBlockers(input: RetentionInput): RemovalBlocker[] {
+  const blockers: RemovalBlocker[] = [];
+  const status = retentionStatus(input);
+
+  if (status.state === "active" || status.state === "approaching_limit") {
+    blockers.push("retention_not_reached");
+  }
+
+  if (input.handoffStatus !== "complete_handoff") {
+    blockers.push(
+      input.handoffStatus === "metadata_exported"
+        ? "only_metadata_exported"
+        : "complete_handoff_missing"
+    );
+  }
+
+  return blockers;
+}
+
+/**
+ * Čo musí úplný balík obsahovať, aby sa dal považovať za odovzdanie.
+ *
+ * Zoznam je tu preto, že sa naň odvoláva compliance poznámka aj budúci
+ * export, a dve kópie toho istého zoznamu by sa o pár mesiacov rozišli.
+ * NIE JE to výmenný formát — Esblu si žiadny nevymýšľa a netvrdí, že
+ * niektorý spĺňa.
+ */
+export const COMPLETE_HANDOFF_CONTENTS = {
+  received: [
+    "original_document",
+    "invoice_metadata",
+    "line_items",
+    "vat_breakdown",
+    "partner_snapshot",
+    "attachments",
+  ],
+  issued: [
+    "invoice_pdf",
+    "invoice_metadata",
+    "line_items",
+    "vat_breakdown",
+    "partner_snapshot",
+    "attachments",
+  ],
+  manifest: [
+    "company",
+    "invoice_identifiers",
+    "export_timestamp",
+    "integrity_hashes",
+  ],
+} as const;
 
 /**
  * Uhradené ≠ zaúčtované.

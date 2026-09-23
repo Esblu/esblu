@@ -2060,22 +2060,23 @@ const de = {
   },
 
   handoff: {
-    exportButton: "An Buchhaltung übergeben",
+    exportButton: "Daten für die Buchhaltung exportieren",
     exporting: "Wird vorbereitet…",
-    exported: "Übergeben: {{count}} Belege in Datei {{file}}.",
+    exported: "Daten zu {{count}} Belegen in Datei {{file}} exportiert. Die Originalbelege sind nicht enthalten — es ist keine Übergabe der Belege.",
     accountingStatus: {
       unprocessed: "Nicht verbucht",
       accounted: "Verbucht",
     },
     handoffStatus: {
-      not_exported: "Nicht übergeben",
-      exported: "Übergeben",
+      none: "Nicht exportiert",
+      metadata_exported: "Daten exportiert",
+      complete_handoff: "Belege übergeben",
     },
     retention: {
       active: "In Bearbeitung",
       approaching_limit: "Betriebsfrist endet",
+      retention_exceeded: "Betriebsfrist abgelaufen",
       eligible_for_removal: "Zur Entfernung bereit",
-      overdue_not_handed_off: "Frist abgelaufen, nicht übergeben",
     },
     sheet: {
       invoices: "Belege",
@@ -2111,7 +2112,7 @@ const de = {
       vatAmount: "MwSt-Betrag",
     },
     errors: {
-      failed: "Die Übergabe ist fehlgeschlagen. Bitte versuchen Sie es erneut.",
+      failed: "Der Export ist fehlgeschlagen. Bitte versuchen Sie es erneut.",
       hashUnavailable: "Die Prüfsumme der Datei konnte nicht berechnet werden, daher wurde die Übergabe nicht erfasst.",
     },
   },
@@ -2285,6 +2286,7 @@ const de = {
       supplierPartnerLabel: "Lieferant",
       externalPartyNote: "externes Unternehmen",
       ourCompanyNote: "Ihr Unternehmen",
+      accountingHistoryTitle: "Verlauf der Verbuchungsmarkierung",
       markAccountedButton: "Als verbucht markieren",
       markUnaccountedButton: "Markierung verbucht aufheben",
       openSourceDocumentButton: "Originalbeleg öffnen",

@@ -2064,22 +2064,23 @@ const sk = {
   },
 
   handoff: {
-    exportButton: "Odovzdať účtovníkovi",
+    exportButton: "Exportovať údaje pre účtovníka",
     exporting: "Pripravujem…",
-    exported: "Odovzdané: {{count}} dokladov v súbore {{file}}.",
+    exported: "Exportované údaje o {{count}} dokladoch do súboru {{file}}. Originály dokladov súbor neobsahuje — nejde o odovzdanie dokladov účtovníkovi.",
     accountingStatus: {
       unprocessed: "Nezaúčtované",
       accounted: "Zaúčtované",
     },
     handoffStatus: {
-      not_exported: "Neodovzdané",
-      exported: "Odovzdané",
+      none: "Nevyexportované",
+      metadata_exported: "Údaje exportované",
+      complete_handoff: "Doklady odovzdané",
     },
     retention: {
       active: "V prevádzke",
       approaching_limit: "Končí prevádzková lehota",
+      retention_exceeded: "Po prevádzkovej lehote",
       eligible_for_removal: "Pripravené na odstránenie",
-      overdue_not_handed_off: "Po lehote, neodovzdané",
     },
     sheet: {
       invoices: "Doklady",
@@ -2115,7 +2116,7 @@ const sk = {
       vatAmount: "Suma DPH",
     },
     errors: {
-      failed: "Odovzdanie sa nepodarilo. Skúste to, prosím, znova.",
+      failed: "Export sa nepodaril. Skúste to, prosím, znova.",
       hashUnavailable: "Nepodarilo sa vypočítať odtlačok súboru, preto som odovzdanie nezaznamenal.",
     },
   },
@@ -2289,6 +2290,7 @@ const sk = {
       supplierPartnerLabel: "Dodávateľ",
       externalPartyNote: "externá firma",
       ourCompanyNote: "naša firma",
+      accountingHistoryTitle: "História označenia zaúčtované",
       markAccountedButton: "Označiť ako zaúčtované",
       markUnaccountedButton: "Zrušiť označenie zaúčtované",
       openSourceDocumentButton: "Otvoriť originál dokladu",

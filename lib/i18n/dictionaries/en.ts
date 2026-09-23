@@ -2039,22 +2039,23 @@ const en = {
   },
 
   handoff: {
-    exportButton: "Hand off to accountant",
+    exportButton: "Export data for accountant",
     exporting: "Preparing…",
-    exported: "Handed off: {{count}} documents in file {{file}}.",
+    exported: "Exported data for {{count}} documents to file {{file}}. The original documents are not included — this is not a handoff of the documents.",
     accountingStatus: {
       unprocessed: "Not accounted",
       accounted: "Accounted",
     },
     handoffStatus: {
-      not_exported: "Not handed off",
-      exported: "Handed off",
+      none: "Not exported",
+      metadata_exported: "Data exported",
+      complete_handoff: "Documents handed off",
     },
     retention: {
       active: "In operation",
       approaching_limit: "Operational period ending",
+      retention_exceeded: "Operational period exceeded",
       eligible_for_removal: "Ready for removal",
-      overdue_not_handed_off: "Past period, not handed off",
     },
     sheet: {
       invoices: "Documents",
@@ -2090,7 +2091,7 @@ const en = {
       vatAmount: "VAT amount",
     },
     errors: {
-      failed: "The handoff failed. Please try again.",
+      failed: "The export failed. Please try again.",
       hashUnavailable: "The file checksum could not be computed, so the handoff was not recorded.",
     },
   },
@@ -2264,6 +2265,7 @@ const en = {
       supplierPartnerLabel: "Supplier",
       externalPartyNote: "external company",
       ourCompanyNote: "your company",
+      accountingHistoryTitle: "History of the accounted mark",
       markAccountedButton: "Mark as accounted",
       markUnaccountedButton: "Remove accounted mark",
       openSourceDocumentButton: "Open original document",
