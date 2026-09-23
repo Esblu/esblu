@@ -1,6 +1,6 @@
 // Relatívny import (rovnako ako v lib/i18n/*) — vďaka nemu sa modul dá
 // spustiť priamo v Node, takže testy nepotrebujú bundler ani závislosť.
-import { findNumber, findCurrency } from "./number-words.ts";
+import { findNumber, findCurrency, tokenize } from "./number-words.ts";
 
 // =============================================================================
 // Rozpoznanie RIADKOVÝCH POLOŽIEK z jednej vyslovenej vety.
@@ -116,18 +116,14 @@ const HARD_SEPARATORS = /(?<!\d)[,;]\s*|\s*[,;](?!\d)|\s+\+\s+/;
 const CONJUNCTIONS = ["a", "und", "and", "plus"];
 
 /**
- * Frázy, ktoré uvádzajú predmet fakturácie. Všetko pred prvou z nich je
- * hlavička príkazu („Vytvor faktúru pre Tester1") a do položiek nepatrí.
+ * Frázy, ktoré uvádzajú predmet fakturácie.
+ *
+ * Už sa NEPOUŽÍVAJÚ na orezanie celej vety — to bola príčina dokladu za
+ * 1 € (podrobnosti v `extractItemsSection`). Slúžia iba na jednu úzku
+ * vec: oddeliť príkazovú hlavičku od prvej položky VNÚTRI úseku, v ktorom
+ * obe stoja vedľa seba („Vytvor faktúru pre Tester1 **za** kopanie 300").
  */
-const ITEMS_LEAD_PHRASES = [
-  " za ",
-  " fuer ",
-  " für ",
-  " for ",
-  " ueber ",
-  " über ",
-  ":",
-];
+const ITEMS_LEAD_PHRASES = [" za ", " fuer ", " für ", " for ", " ueber ", " über ", ":"];
 
 /**
  * Frázy, ktoré uvádzajú DPH. Úsek od nich dozadu do položiek nepatrí —
@@ -155,65 +151,89 @@ const VAT_TAIL_PHRASES = [
 /**
  * Odstrihne hlavičku príkazu a chvost o DPH. Vráti iba úsek s položkami.
  *
- * KTORÁ UVÁDZACIA FRÁZA
- * ---------------------
- * Tá istá predložka uvádza aj odberateľa, aj predmet: „Rechnung **für**
- * Tester1 **für** Erdarbeiten", „invoice **for** X **for** excavation".
- * Prvý výskyt je preto takmer vždy ten nesprávny — berie sa POSLEDNÝ,
- * pretože položky stoja vo vete na konci, hneď pred zmienkou o DPH.
- * Dvojbodka má prednosť, keď je prítomná: je jednoznačná.
+ * POSTUP
+ * ------
+ * 1. Odreže sa chvost o DPH (prvá zmienka).
+ * 2. Ak je známe meno partnera, odreže sa VŠETKO PO NEHO vrátane. Meno je
+ *    jediná časť príkazu, ktorá môže obsahovať číslo („Tester 1"), a je to
+ *    zároveň jediný bod, ktorý vie appka overiť proti evidencii.
+ * 3. Bez známeho mena sa berie veta od začiatku a príkazovú hlavičku
+ *    vyradí až klasifikácia úsekov.
  *
- * Známe obmedzenie: veta, ktorej POPIS sám obsahuje uvádzaciu predložku
- * („za práce za september 300 eur"), sa odreže na poslednom výskyte a
- * popisom sa stane „september". Nie je to tichá strata sumy ani položky —
- * popis je v koncepte vidieť a dá sa prepísať.
+ * PREČO SA UŽ NEHĽADÁ „POSLEDNÁ" UVÁDZACIA FRÁZA
+ * ----------------------------------------------
+ * Skoršia verzia začínala úsek za POSLEDNÝM „za"/„für"/„for". Vo vete
+ * „kopanie za 300 eur, dovoz za 45 eur" je posledné „za" to, ktoré uvádza
+ * cenu DRUHEJ položky — úsek sa tým zredukoval na „45 eur", z ktorého
+ * nevyšla ani jedna položka, a náhradná cesta potom zložila doklad z
+ * popisu jednej časti vety a ceny z úplne inej. Tak vznikol riadok
+ * „300 eur, dovoz" za 1 € — tá jednotka pochádzala z mena „Tester 1".
+ *
+ * Predložka pred cenou sa preto rieši tam, kam patrí: v jednotlivom úseku
+ * (`segmentToItem`), nie orezaním celej vety.
  */
-function extractItemsSection(rawText: string): { section: string; hadLeadPhrase: boolean } {
+function extractItemsSection(
+  rawText: string,
+  partnerHint?: string
+): { section: string; partnerRemoved: boolean } {
   const folded = fold(rawText);
 
-  // Začiatok: za POSLEDNOU uvádzacou frázou.
-  let start = 0;
-  let bestIndex = -1;
-  for (const phrase of ITEMS_LEAD_PHRASES) {
-    const index = folded.lastIndexOf(fold(phrase));
-    if (index !== -1 && index > bestIndex) {
-      bestIndex = index;
-      start = index + phrase.length;
-    }
-  }
-
-  // Bez uvádzacej frázy sa berie veta od začiatku. Hlavičku príkazu a meno
-  // partnera z nej vyradí až klasifikácia úsekov nižšie — pozri
-  // `extractInvoiceItems`. Skoršia verzia tu vracala prázdno, čo znamenalo,
-  // že bežne vyslovená veta „Vytvor faktúru, Tester1, kopanie 300 euro,
-  // dovoz 50 euro, 23 % DPH" neposkytla ANI JEDNU položku — a vrstva nad
-  // ňou ju potom doplnila jediným riadkom z modelu. Druhý riadok tak
-  // zmizol bez stopy. To je presne tá tichá strata, ktorej má tento modul
-  // brániť.
-  const hadLeadPhrase = bestIndex !== -1;
-  if (!hadLeadPhrase) start = 0;
-
-  // Koniec: pred najskoršou zmienkou o DPH, ktorá nasleduje za začiatkom.
+  // Koniec: pred najskoršou zmienkou o DPH.
   let end = rawText.length;
   for (const phrase of VAT_TAIL_PHRASES) {
-    const index = folded.indexOf(fold(phrase), start);
+    const index = folded.indexOf(fold(phrase));
     if (index !== -1 && index < end) end = index;
   }
 
-  // Zmienka o DPH patrí CELÉMU svojmu úseku, nie len sebe. Bez tohto kroku
-  // by z „…dovoz 50 euro, 23 % DPH" zostal na konci útržok „23", ktorý sa
-  // tvári ako ďalší, nezrozumiteľný úsek a zbytočne vyvolá otázku. Krok
-  // späť sa robí iba po oddeľovač, ktorý leží za začiatkom — inak by veta
-  // bez čiarky („…a dopravu 50 eur s 23 % DPH") prišla o položky úplne.
-  if (end < rawText.length) {
-    const separator = Math.max(
-      rawText.lastIndexOf(",", end),
-      rawText.lastIndexOf(";", end)
-    );
-    if (separator > start) end = separator;
+  let start = 0;
+  let partnerRemoved = false;
+
+  if (partnerHint && partnerHint.trim()) {
+    const found = findPartnerMention(rawText, partnerHint);
+    if (found && found.end <= end) {
+      start = found.end;
+      partnerRemoved = true;
+    }
   }
 
-  return { section: rawText.slice(start, end).trim(), hadLeadPhrase };
+  return { section: rawText.slice(start, end).trim(), partnerRemoved };
+}
+
+/**
+ * Nájde vo vete meno partnera aj vtedy, keď sa medzery nezhodujú
+ * („Tester 1" v evidencii, „tester1" v prepise a naopak).
+ *
+ * Porovnáva sa nad textom bez diakritiky a bez nepísmenových znakov, a
+ * pozícia sa prepočíta späť na pôvodný reťazec. Bez tohto by sa meno s
+ * číslom stalo položkou za jedno euro — presne to sa v produkcii stalo.
+ */
+function findPartnerMention(
+  rawText: string,
+  partnerHint: string
+): { start: number; end: number } | null {
+  const folded = fold(rawText);
+
+  // Mapovanie: pre každý „hustý" znak si pamätáme index v pôvodnom texte.
+  const denseChars: string[] = [];
+  const originalIndex: number[] = [];
+  for (let i = 0; i < folded.length; i++) {
+    if (/[a-z0-9]/.test(folded[i])) {
+      denseChars.push(folded[i]);
+      originalIndex.push(i);
+    }
+  }
+
+  const dense = denseChars.join("");
+  const needle = fold(partnerHint).replace(/[^a-z0-9]/g, "");
+  if (!needle) return null;
+
+  const at = dense.indexOf(needle);
+  if (at === -1) return null;
+
+  return {
+    start: originalIndex[at],
+    end: originalIndex[at + needle.length - 1] + 1,
+  };
 }
 
 // -----------------------------------------------------------------------------
@@ -228,10 +248,51 @@ function extractItemsSection(rawText: string): { section: string; hadLeadPhrase:
 const CREATE_VERBS = /(vytvor|vystav|sprav|urob|zaloz|nova|novu|erstell|schreib|create|make|issue|new)/;
 const INVOICE_NOUNS = /(faktur|rechnung|invoice)/;
 
-/** „Vytvor faktúru" — príkazová hlavička, nie predmet fakturácie. */
+/**
+ * „Vytvor faktúru pre Tester1" — príkazová hlavička, nie predmet.
+ *
+ * Sloveso nestačí vyžadovať: ľudia ho pri diktovaní často vynechajú
+ * („Faktúru pre Tester1 za kopanie…"). Rozhoduje preto podstatné meno
+ * dokladu spolu so slovesom ALEBO s predložkou, ktorá uvádza odberateľa.
+ */
+// Porovnáva sa nad textom BEZ diakritiky, preto „fur" (z „für") a „uber"
+// (z „über") — nie tvary s prehláskou, tie sa sem nikdy nedostanú.
+const CUSTOMER_PREPOSITIONS = /(^|[^a-z])(pre|pro|fuer|fur|for|uber)([^a-z]|$)/;
+
 function looksLikeCommandHeader(segment: string): boolean {
   const folded = fold(segment);
-  return CREATE_VERBS.test(folded) && INVOICE_NOUNS.test(folded);
+  if (!INVOICE_NOUNS.test(folded)) return false;
+  return CREATE_VERBS.test(folded) || CUSTOMER_PREPOSITIONS.test(folded);
+}
+
+/**
+ * Oddelí príkaz od prvej položky vnútri jedného úseku.
+ *
+ * „Vytvor faktúru pre Tester1 za kopanie 300 eur" je jeden úsek, v ktorom
+ * stojí príkaz aj položka. Rez sa robí na PRVEJ uvádzacej fráze za
+ * hlavičkou — tam, kde sa hovorí o predmete. Keď v úseku s hlavičkou
+ * žiadna fráza nie je, nie je v ňom ani položka a úsek zaniká.
+ *
+ * Toto je jediné miesto, kde uvádzacia fráza ešte niečo reže, a reže vždy
+ * najviac jeden úsek — nikdy nie celú vetu.
+ */
+function stripCommandHeader(segment: string): string | null {
+  if (!looksLikeCommandHeader(segment)) return segment;
+
+  // POSLEDNÁ fráza v tomto úseku, nie prvá: tá istá predložka uvádza aj
+  // odberateľa, aj predmet („invoice **for** X **for** excavation"), a
+  // odberateľ stojí vždy skôr. Reže sa pritom IBA tento jeden úsek —
+  // presne v tom je rozdiel oproti chybe, ktorá orezávala celú vetu.
+  const folded = fold(segment);
+  let cut = -1;
+  for (const phrase of ITEMS_LEAD_PHRASES) {
+    const index = folded.lastIndexOf(fold(phrase));
+    if (index !== -1 && index + phrase.length > cut) cut = index + phrase.length;
+  }
+
+  if (cut === -1) return null;
+  const rest = segment.slice(cut).trim();
+  return rest.length > 0 ? rest : null;
 }
 
 /**
@@ -256,6 +317,51 @@ function hasCurrencyMarker(segment: string): boolean {
 }
 
 /**
+ * Útržok, ktorý zostal po odrezaní chvosta o DPH („…, 23" z „…, 23 % DPH").
+ *
+ * Nie je to obsah od používateľa, ale stopa po NAŠOM reze. Zahodí sa ticho;
+ * všetko ostatné, čomu parser nerozumie, skončí ako dôvod na otázku.
+ */
+function isCutRemnant(segment: string): boolean {
+  return /^[\s\d.,;:%-]*$/.test(segment);
+}
+
+// -----------------------------------------------------------------------------
+// Rekonciliácia peňažných hodnôt
+// -----------------------------------------------------------------------------
+//
+// Účtovná poistka, nie jazyková. Každá suma vyslovená v úseku o položkách
+// musí skončiť ako cena PRÁVE JEDNEJ položky. Keď sa počty nerovnajú,
+// niekde sa suma stratila, zdvojila alebo prepadla do popisu — a vtedy sa
+// doklad nezakladá, nech by výsledok vyzeral akokoľvek rozumne.
+//
+// Percento DPH sa medzi peňažné hodnoty nepočíta; rozoznáva sa podľa toho,
+// že za číslom stojí „percent"/„%", nie podľa jeho veľkosti.
+
+/** Všetky čísla v texte, ktoré nie sú percentom. */
+export function moneyTokens(text: string): number[] {
+  const tokens = tokenize(text);
+  const out: number[] = [];
+
+  let from = 0;
+  // Strop na počet prechodov je poistka proti nekonečnu, nie obchodné
+  // pravidlo: každý prechod posúva kurzor aspoň o jeden token.
+  for (let guard = 0; guard < 64; guard++) {
+    const found = findNumber(text, from);
+    if (!found) break;
+
+    const next = tokens[found.endToken + 1] ?? "";
+    const self = tokens[found.endToken] ?? "";
+    const isPercent = /percent|prozent|%/.test(next) || /%/.test(self);
+
+    if (!isPercent) out.push(found.value);
+    from = found.endToken + 1;
+  }
+
+  return out;
+}
+
+/**
  * Rozdelí úsek na kandidátske segmenty.
  *
  * Najprv podľa jednoznačných oddeľovačov. Segment, ktorý obsahuje spojku
@@ -277,6 +383,22 @@ function splitIntoSegments(section: string): string[] {
   return out;
 }
 
+/**
+ * Stojí suma na konci úseku (po vynechaní názvu meny)?
+ *
+ * „kopanie 300", „kopanie 300 eur" → áno. „50 doprava" → nie.
+ */
+function amountIsTrailing(segment: string): boolean {
+  const found = findNumber(segment);
+  if (!found) return false;
+
+  const tokens = tokenize(segment);
+  for (let i = found.endToken + 1; i < tokens.length; i++) {
+    if (!findCurrency(tokens[i])) return false;
+  }
+  return true;
+}
+
 function splitOnConjunctionIfTwoPrices(segment: string): string[] {
   const words = segment.split(/\s+/);
 
@@ -286,9 +408,12 @@ function splitOnConjunctionIfTwoPrices(segment: string): string[] {
     const left = words.slice(0, i).join(" ");
     const right = words.slice(i + 1).join(" ");
 
-    // Rozdeľuje sa IBA keď má cenu každá strana. Inak je spojka časťou
-    // popisu a segment zostáva celý.
-    if (findNumber(left) && findNumber(right)) {
+    // Rozdeľuje sa IBA keď má cenu každá strana A ZÁROVEŇ stojí suma na
+    // oboch stranách rovnako. „kopanie 300 a doprava 50" sú dve položky
+    // rovnakého tvaru; „kopanie 300 a 50 doprava" tvar mení, a zmena tvaru
+    // uprostred výpočtu je presne to, čo sa nemá dohadovať. Taký segment
+    // zostane celý a rekonciliácia súm ho pošle na otázku.
+    if (findNumber(left) && findNumber(right) && amountIsTrailing(left) === amountIsTrailing(right)) {
       return [
         ...splitOnConjunctionIfTwoPrices(left),
         ...splitOnConjunctionIfTwoPrices(right),
@@ -305,6 +430,13 @@ function splitOnConjunctionIfTwoPrices(segment: string): string[] {
 
 /** Slová, ktoré v popise nemajú čo robiť (zvyšky po oddelení sumy). */
 const PRICE_NOISE = /\b(eur|euro|eura|eurov|euros|czk|usd|dolar\w*|dollars?|kc|kč|pln|gbp)\b/gi;
+
+/**
+ * Predložky, ktoré vnútri úseku uvádzajú predmet alebo cenu („**za**
+ * kopanie", „kopanie **za** 300 eur"). Odstraňujú sa z popisu, nie z vety —
+ * orezávanie celej vety podľa nich bolo príčinou chyby s 1 €.
+ */
+const SEGMENT_PREPOSITIONS = /(^|\s)(za|fuer|für|for|ueber|über)(\s|$)/gi;
 
 function segmentToItem(segment: string): InvoiceItemCandidate | null {
   const amount = findNumber(segment);
@@ -323,6 +455,7 @@ function segmentToItem(segment: string): InvoiceItemCandidate | null {
 
   description = description
     .replace(PRICE_NOISE, " ")
+    .replace(SEGMENT_PREPOSITIONS, " ")
     .replace(/[.,;:!?]+\s*$/, "")
     .replace(/^\s*[-–—]\s*/, "")
     .replace(/\s+/g, " ")
@@ -369,22 +502,22 @@ export function extractInvoiceItems(
     unresolved: [],
   });
 
-  const { section, hadLeadPhrase } = extractItemsSection(rawText);
+  const { section, partnerRemoved } = extractItemsSection(rawText, partnerHint);
   if (!section) return empty();
 
   const allSegments = splitIntoSegments(section);
   if (allSegments.length === 0) return empty();
 
-  // Príkazová hlavička a meno partnera nie sú položky. Vyraďujú sa vždy,
-  // nielen pri vete bez uvádzacej frázy: tá istá predložka uvádza aj
-  // odberateľa, aj predmet („invoice **for** Tester1, excavation 300"),
-  // takže meno prepadne do úseku s položkami aj vtedy, keď fráza je.
-  // Rozhoduje sa podľa overiteľných znakov — slovesa príkazu a zhody s
-  // menom, ktoré už rozpoznala vrstva nad parserom — nie podľa poradia
-  // slov, ktoré v reči spoľahlivé nie je.
-  const segments = allSegments.filter(
-    (segment) => !looksLikeCommandHeader(segment) && !matchesPartnerHint(segment, partnerHint)
-  );
+  // Príkazová hlavička a meno partnera nie sú položky. Meno sa väčšinou
+  // odrezalo už pri hľadaní úseku; toto je poistka pre prípad, že stojí vo
+  // vete druhýkrát. Útržok po reze chvosta o DPH („23") sa zahodí ticho —
+  // je to stopa po našom reze, nie obsah od používateľa.
+  const segments = allSegments
+    .map(stripCommandHeader)
+    .filter((segment): segment is string => segment !== null)
+    .filter(
+      (segment) => !matchesPartnerHint(segment, partnerHint) && !isCutRemnant(segment)
+    );
 
   if (segments.length === 0) return empty();
 
@@ -421,16 +554,15 @@ export function extractInvoiceItems(
     return fail("ambiguous");
   }
 
-  // ROZDIELNE ZNAČENIE MENY — iba pri vete bez uvádzacej frázy.
+  // ROZDIELNE ZNAČENIE MENY — keď meno partnera nebolo známe.
   //
-  // Tam, kde uvádzacia fráza chýba, je jediným dôkazom o hranici položiek
-  // samotný tvar úsekov. Keď časť z nich menu nesie a časť nie, je to
-  // typicky stopa po niečom, čo položka nie je („Tester 1" vedľa „kopanie
-  // 300 euro"). Vtedy sa nič nevracia a asistent sa spýta.
+  // Bez overeného mena sa nedá odlíšiť „Tester 1" od položky za jedno
+  // euro. Keď časť úsekov menu nesie a časť nie, je to typicky stopa po
+  // niečom, čo položka nie je — vtedy sa nič nevracia a asistent sa spýta.
   //
-  // Pri vete S uvádzacou frázou sa toto pravidlo NEUPLATŇUJE: hranicu
-  // určuje fráza a „Erdarbeiten 300 Euro und Transport 50" je legitímne.
-  if (!hadLeadPhrase && items.length > 1) {
+  // Keď meno známe BOLO a odrezalo sa, pravidlo sa neuplatňuje:
+  // „Erdarbeiten 300 Euro und Transport 50" je legitímne.
+  if (!partnerRemoved && items.length > 1) {
     const withCurrency = segments.filter(hasCurrencyMarker).length;
     if (withCurrency > 0 && withCurrency < segments.length) {
       return fail("ambiguous");
@@ -449,6 +581,33 @@ export function extractInvoiceItems(
         item.unitPrice > MAX_VOICE_UNIT_PRICE)
   );
   if (outOfRange) return fail("ambiguous");
+
+  // ------------------------------------------------------------------
+  // REKONCILIÁCIA: každá vyslovená suma musí skončiť ako cena práve
+  // jednej položky.
+  //
+  // Toto je posledná a najdôležitejšia kontrola tohto modulu. Pravidlá
+  // vyššie hovoria, či sa veta dala rozdeliť; toto hovorí, či sa pri tom
+  // nestratili peniaze. Porovnáva sa MULTIMNOŽINA hodnôt, nie ich počet —
+  // dve položky po 50 € sú v poriadku, ale „50" navyše nie je.
+  //
+  // Percentá sa do peňažných hodnôt nepočítajú; rozoznávajú sa podľa
+  // slova za číslom, nie podľa veľkosti.
+  // ------------------------------------------------------------------
+  // Porovnáva sa nad ÚSEKMI, ktoré zostali — nie nad celou vetou. Meno
+  // partnera („Tester 1") a útržok po reze chvosta o DPH sa vyradili vyššie
+  // a ich čísla sem nepatria; všetko ostatné áno, vrátane úsekov, z ktorých
+  // položka nevyšla. Práve tie sú dôvod, prečo rekonciliácia existuje.
+  const spoken = moneyTokens(segments.join(" ; ")).slice().sort((a, b) => a - b);
+  const used = items
+    .map((item) => item.unitPrice as number)
+    .slice()
+    .sort((a, b) => a - b);
+
+  const reconciled =
+    spoken.length === used.length && spoken.every((value, index) => value === used[index]);
+
+  if (!reconciled) return fail("ambiguous");
 
   return { items, problem: null, recognized: items, unresolved };
 }

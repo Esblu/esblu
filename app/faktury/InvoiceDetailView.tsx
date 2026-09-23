@@ -12,6 +12,11 @@ import {
   type MyActiveMembership,
 } from "@/lib/company";
 import { useCompanyDpaLegalHold } from "@/app/components/CompanyDpaGate";
+import {
+  listAccountingStates,
+  setAccountingStatus as saveAccountingStatus,
+} from "@/lib/invoicing/accounting-state";
+import type { AccountingStatus } from "@/lib/invoicing/accounting-lifecycle";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import { formatDate, formatNumber } from "@/lib/i18n/format";
 import type { Locale } from "@/lib/i18n/locales";
@@ -109,6 +114,29 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
   const [notFound, setNotFound] = useState(false);
   const [loading, setLoading] = useState(true);
 
+  // Stav spracovania v účtovníctve. Žije mimo `invoices`, lebo finalizovaný
+  // doklad je immutable a „zaúčtované" je stav nášho procesu, nie vlastnosť
+  // daňového dokladu.
+  const [accountingStatus, setAccountingStatus] = useState<AccountingStatus>("unprocessed");
+  const [accountingBusy, setAccountingBusy] = useState(false);
+
+  async function handleToggleAccounted() {
+    if (!invoice || accountingBusy || !userId) return;
+
+    const next: AccountingStatus =
+      accountingStatus === "accounted" ? "unprocessed" : "accounted";
+
+    setAccountingBusy(true);
+    try {
+      await saveAccountingStatus(invoice.id, next, userId);
+      setAccountingStatus(next);
+    } catch (error) {
+      console.error("Zmena účtovného stavu zlyhala:", error);
+    } finally {
+      setAccountingBusy(false);
+    }
+  }
+
   const [parties, setParties] = useState<InvoiceParty[]>([]);
   const [taxBreakdowns, setTaxBreakdowns] = useState<InvoiceTaxBreakdown[]>([]);
   const [payments, setPayments] = useState<InvoicePayment[]>([]);
@@ -191,6 +219,16 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
       }
 
       setInvoice(inv);
+
+      // Účtovný stav. Zlyhanie tu nesmie zhodiť celý detail — bez neho sa
+      // doklad zobrazí ako nezaúčtovaný, čo je pravda aj vtedy, keď stav
+      // ešte nikto nenastavil.
+      try {
+        const states = await listAccountingStates();
+        setAccountingStatus(states[inv.id]?.accounting_status ?? "unprocessed");
+      } catch (error) {
+        console.error("Načítanie účtovného stavu zlyhalo:", error);
+      }
 
       if (inv.document_status === "draft") {
         const [items, partnerRows, billingProfile] = await Promise.all([
@@ -1030,6 +1068,25 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
                     <p className="text-sm text-muted-esblu">
                       {t("invoices.detail.noSourceDocument")}
                     </p>
+                  )}
+
+                  {/* ZAÚČTOVANÉ NIE JE UHRADENÉ.
+                      Stav účtovníctva je samostatná otázka a odpovedá na
+                      ňu človek, nie appka. Neodvodzuje sa z úhrady ani z
+                      ničoho iného a dá sa vziať späť — kto označuje, ten
+                      sa aj pomýli. */}
+                  {canEdit && (
+                    <button
+                      type="button"
+                      onClick={handleToggleAccounted}
+                      disabled={accountingBusy}
+                      aria-busy={accountingBusy}
+                      className={docButtonSecondary}
+                    >
+                      {accountingStatus === "accounted"
+                        ? t("invoices.detail.markUnaccountedButton")
+                        : t("invoices.detail.markAccountedButton")}
+                    </button>
                   )}
 
                   {/* Opravný doklad dedí smer opravovanej faktúry — krížiť ich

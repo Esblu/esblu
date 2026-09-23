@@ -15,7 +15,22 @@ import { useLocale } from "@/lib/i18n/LocaleProvider";
 import { formatDate, formatNumber } from "@/lib/i18n/format";
 import InvoicesIcon from "@/app/components/icons/InvoicesIcon";
 import { invoiceDetailHref } from "@/lib/entity-links";
-import { isInvoiceOverdue, listInvoices, type Invoice } from "@/lib/invoices";
+import { isInvoiceOverdue, listInvoices, listInvoiceItems, type Invoice } from "@/lib/invoices";
+import {
+  listAccountingStates,
+  listExportedInvoiceIds,
+  recordHandoffExport,
+  type InvoiceAccountingState,
+} from "@/lib/invoicing/accounting-state";
+import {
+  exportAccountingHandoff,
+  type HandoffInvoice,
+} from "@/lib/invoicing/export-accounting-handoff";
+import {
+  retentionStatus,
+  type AccountingStatus,
+} from "@/lib/invoicing/accounting-lifecycle";
+import { todayLocalDate } from "@/lib/local-date";
 import {
   matchesDirection,
   matchesSection,
@@ -75,6 +90,18 @@ export default function FakturyPage() {
   const [section, setSection] = useState<SectionKey>("all");
   const [directionFilter, setDirectionFilter] = useState<DirectionFilter>("all");
 
+  // Účtovný lifecycle. Stav spracovania a stav odovzdania sú dve rôzne
+  // veci a držia sa oddelene od samotného dokladu — pozri
+  // supabase/migrations/20260923100000_add_accounting_handoff_lifecycle.sql.
+  const [accountingStates, setAccountingStates] = useState<
+    Record<string, InvoiceAccountingState>
+  >({});
+  const [exportedIds, setExportedIds] = useState<Set<string>>(new Set());
+  const [handoffBusy, setHandoffBusy] = useState(false);
+  const [handoffFeedback, setHandoffFeedback] = useState<
+    { type: "success" | "error"; text: string } | null
+  >(null);
+
   useEffect(() => {
     void init();
   }, []);
@@ -113,12 +140,16 @@ export default function FakturyPage() {
     setLoadError("");
 
     try {
-      const [invoiceRows, partnerRows] = await Promise.all([
+      const [invoiceRows, partnerRows, states, exported] = await Promise.all([
         listInvoices(activeCompanyId),
         listBusinessPartners(activeCompanyId),
+        listAccountingStates(),
+        listExportedInvoiceIds(),
       ]);
       setInvoices(invoiceRows);
       setPartnersById(Object.fromEntries(partnerRows.map((partner) => [partner.id, partner])));
+      setAccountingStates(states);
+      setExportedIds(exported);
     } catch (error) {
       console.error("Načítanie faktúr zlyhalo:", error);
       setLoadError(t("invoices.errors.loadFailed"));
@@ -209,6 +240,82 @@ export default function FakturyPage() {
     return formatNumber(amount, locale, { style: "currency", currency });
   }
 
+  function accountingStatusOf(invoice: Invoice): AccountingStatus {
+    return accountingStates[invoice.id]?.accounting_status ?? "unprocessed";
+  }
+
+  /**
+   * Odovzdanie účtovníkovi.
+   *
+   * Exportuje sa presne to, čo je práve v zozname — teda to, čo má
+   * používateľ pred očami. Udalosť sa zapisuje AŽ po vytvorení súboru;
+   * záznam o odovzdaní, ktoré sa nestalo, by bol horší než žiadny.
+   */
+  async function handleHandoffExport() {
+    if (handoffBusy || filteredInvoices.length === 0) return;
+
+    setHandoffBusy(true);
+    setHandoffFeedback(null);
+
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (!session) throw new Error("no session");
+
+      const withItems: HandoffInvoice[] = [];
+      for (const invoice of filteredInvoices) {
+        const items = await listInvoiceItems(invoice.id);
+        const partnerId =
+          invoice.direction === "received"
+            ? invoice.supplier_business_partner_id
+            : invoice.customer_business_partner_id;
+        const partner = partnerId ? partnersById[partnerId] : undefined;
+
+        withItems.push({
+          ...invoice,
+          counterpartyName: partner?.legal_name ?? "",
+          counterpartyIco: partner?.ico ?? null,
+          counterpartyIcDph: partner?.ic_dph ?? null,
+          accountingStatus: accountingStatusOf(invoice),
+          items: items.map((item) => ({
+            description: item.description,
+            quantity: item.quantity,
+            unit: item.unit,
+            unit_price: item.unit_price,
+            vat_category_code: item.vat_category_code,
+            vat_rate: item.vat_rate,
+            line_net_amount: item.line_net_amount,
+            line_vat_amount: item.line_vat_amount,
+            line_gross_amount: item.line_gross_amount,
+          })),
+        });
+      }
+
+      const result = await exportAccountingHandoff(withItems, t);
+
+      await recordHandoffExport({
+        invoiceIds: withItems.map((invoice) => invoice.id),
+        periodFrom: null,
+        periodTo: null,
+        direction: directionFilter === "all" ? null : directionFilter,
+        manifestSha256: result.manifestSha256,
+        userId: session.user.id,
+      });
+
+      setExportedIds(new Set([...exportedIds, ...withItems.map((invoice) => invoice.id)]));
+      setHandoffFeedback({
+        type: "success",
+        text: t("handoff.exported", { count: result.exportedCount, file: result.fileName }),
+      });
+    } catch (error) {
+      console.error("Odovzdanie účtovníkovi zlyhalo:", error);
+      setHandoffFeedback({ type: "error", text: t("handoff.errors.failed") });
+    } finally {
+      setHandoffBusy(false);
+    }
+  }
+
   const createDisabled = !canEdit || legalHold;
 
   return (
@@ -226,19 +333,41 @@ export default function FakturyPage() {
         meta={t("invoices.subtitle")}
         aside={
           canView && canEdit ? (
-            <Link
-              href="/faktury/new"
-              aria-disabled={createDisabled}
-              onClick={(event) => {
-                if (createDisabled) event.preventDefault();
-              }}
-              className={`${docButtonPrimary} aria-disabled:pointer-events-none aria-disabled:opacity-40`}
-            >
-              {t("invoices.addButton")}
-            </Link>
+            <div className="flex flex-wrap gap-2">
+              {/* Odovzdanie účtovníkovi. Esblu nie je zákonný archív —
+                  dlhodobé uchovávanie prebieha u účtovníka, a toto je
+                  cesta, ktorou sa k nemu doklady dostanú. */}
+              <button
+                type="button"
+                onClick={handleHandoffExport}
+                disabled={handoffBusy || filteredInvoices.length === 0}
+                aria-busy={handoffBusy}
+                className={`${docButtonPrimary} disabled:pointer-events-none disabled:opacity-40`}
+              >
+                {handoffBusy ? t("handoff.exporting") : t("handoff.exportButton")}
+              </button>
+              <Link
+                href="/faktury/new"
+                aria-disabled={createDisabled}
+                onClick={(event) => {
+                  if (createDisabled) event.preventDefault();
+                }}
+                className={`${docButtonPrimary} aria-disabled:pointer-events-none aria-disabled:opacity-40`}
+              >
+                {t("invoices.addButton")}
+              </Link>
+            </div>
           ) : undefined
         }
       />
+
+      {handoffFeedback && (
+        <div className="mt-4">
+          <DocumentNotice tone={handoffFeedback.type === "error" ? "critical" : undefined}>
+            {handoffFeedback.text}
+          </DocumentNotice>
+        </div>
+      )}
 
       {!canView && membershipLoaded && (
         <div className="mt-6">
@@ -328,6 +457,13 @@ export default function FakturyPage() {
               <ul className="mt-2 space-y-1.5">
                 {filteredInvoices.map((invoice) => {
                   const overdue = isInvoiceOverdue(invoice.due_date, invoice.payment_status);
+                  // Prevádzková lehota v Esblu. Nie je to zákonná lehota
+                  // uchovávania — tú plní zákazník mimo Esblu.
+                  const retention = retentionStatus({
+                    issueDate: invoice.issue_date,
+                    today: todayLocalDate(),
+                    handoffStatus: exportedIds.has(invoice.id) ? "exported" : "not_exported",
+                  });
                   return (
                     <DataRow
                       key={invoice.id}
@@ -382,6 +518,31 @@ export default function FakturyPage() {
                             <DocumentStatusBadge kind={invoice.payment_status} />
                           )}
                           {overdue && <DocumentStatusBadge kind="overdue" />}
+
+                          {/* Uhradené, zaúčtované a odovzdané sú TRI rôzne
+                              veci. Preto tri samostatné označenia a žiadne
+                              sa neodvodzuje z iného. */}
+                          {accountingStatusOf(invoice) === "accounted" && (
+                            <span className="rounded-doc-sm bg-surface-2 px-2 py-0.5 text-xs font-medium text-secondary">
+                              {t("handoff.accountingStatus.accounted")}
+                            </span>
+                          )}
+                          {exportedIds.has(invoice.id) && (
+                            <span className="rounded-doc-sm bg-surface-2 px-2 py-0.5 text-xs font-medium text-secondary">
+                              {t("handoff.handoffStatus.exported")}
+                            </span>
+                          )}
+                          {retention.state !== "active" && (
+                            <span
+                              className={`rounded-doc-sm px-2 py-0.5 text-xs font-medium ${
+                                retention.state === "overdue_not_handed_off"
+                                  ? "badge-danger"
+                                  : "bg-warning-soft text-warning"
+                              }`}
+                            >
+                              {t(`handoff.retention.${retention.state}`)}
+                            </span>
+                          )}
                         </div>
                       </div>
                     </DataRow>

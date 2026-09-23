@@ -27,6 +27,7 @@ import {
   type InvoiceDraftSlots,
   type PartnerCandidate,
 } from "@/lib/intents/invoice-draft";
+import { mentionsGrossPrice } from "@/lib/invoicing/voice-financial-validator";
 
 // =============================================================================
 // Viackrokový dialóg pre hlasové vytvorenie draftu faktúry.
@@ -97,6 +98,31 @@ export async function startInvoiceDraftFlow(
   // z modelu — ten vracia vždy nanajvýš jednu položku, takže by
   // odmietnutie prebil a druhý riadok by ticho zanikol.
   // ------------------------------------------------------------------
+  // CENA S DPH NIE JE CENA BEZ DPH.
+  //
+  // „kopanie 300 eur s DPH" a „kopanie 300 eur s 23 % DPH" sa líšia o 56 €.
+  // Esblu ukladá jednotkovú cenu bez dane, takže prvú vetu by musela
+  // prepočítať — a to je rozhodnutie o daňovom základe, nie o jazyku.
+  // Cena sa preto zahodí a asistent si vypýta sumu bez dane.
+  if (mentionsGrossPrice(rawText) && slots.vatRate === undefined) {
+    if (slots.items) {
+      // Cena sa zahadzuje zámerne: v tejto vete znamená niečo iné, než
+      // čo Esblu ukladá.
+      slots.items = slots.items.map((item) => ({
+        description: item.description,
+        ...(item.quantity === undefined ? {} : { quantity: item.quantity }),
+        ...(item.unit === undefined ? {} : { unit: item.unit }),
+        ...(item.currency === undefined ? {} : { currency: item.currency }),
+      }));
+    }
+    slots.spokenAmounts = [];
+    return askAgain(supabase, locale, ctx, slots, {
+      kind: "clarify",
+      question: translate(locale, "search.voice.invoice.grossPriceUnsupported"),
+      conversationId: ctx.conversationId,
+    });
+  }
+
   const parse = describeItemParse(rawText, partnerQuery);
   if (parse.problem) {
     const partial = buildPartialItemsMessage(locale, parse);

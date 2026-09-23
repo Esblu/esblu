@@ -22,8 +22,6 @@ import {
   visibleInvoices,
   DIRECTION_ORDER,
   SECTION_ORDER,
-  type DirectionFilter,
-  type SectionKey,
 } from "../lib/invoicing/invoice-register-filters.ts";
 import {
   receivedInvoiceRoute,

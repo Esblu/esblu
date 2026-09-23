@@ -61,6 +61,19 @@ export type InvoiceDraftSlots = {
   currency?: string;
   vatCategoryCode?: VatCategoryCode;
   vatRate?: number;
+  /**
+   * Sumy, ktoré v úseku o položkách naozaj zazneli.
+   *
+   * Nesú sa cez celý dialóg, aby sa tesne pred zápisom dalo overiť, že
+   * každá z nich skončila ako cena práve jednej položky. Bez toho sa
+   * strata riadku prejaví až na hotovom doklade — čo je presne prípad,
+   * keď sa z dvoch položiek stala jedna za 1 €.
+   *
+   * Po prvej vete ich naplní parser. Odpovede na otázky menia vždy jedno
+   * pole naraz a sami si ich udržiavajú v súlade s položkami; hodnota
+   * preto nikdy nechýba a rekonciliácia sa nedá preskočiť.
+   */
+  spokenAmounts?: number[];
 };
 
 /** Poradie, v akom sa asistent pýta. Zhora nadol, vždy jedna otázka. */
@@ -79,7 +92,24 @@ const SLOT_KEYS: (keyof InvoiceDraftSlots)[] = [
   "currency",
   "vatCategoryCode",
   "vatRate",
+  "spokenAmounts",
 ];
+
+/**
+ * Zosúladí zoznam vyslovených súm s položkami.
+ *
+ * Volá sa po KAŽDEJ zmene položiek v dialógu. Odpoveď na otázku mení vždy
+ * jedno pole a appka vie, ktoré — takže po nej je stav zo svojej podstaty
+ * v súlade. Riziková je prvá veta a tú rekonciluje parser; táto funkcia
+ * drží invariant ďalej, aby sa kontrola pred zápisom nedala obísť tým, že
+ * hodnota jednoducho chýba.
+ */
+export function syncSpokenAmounts(slots: InvoiceDraftSlots): InvoiceDraftSlots {
+  const prices = (slots.items ?? [])
+    .map((item) => item.unitPrice)
+    .filter((price): price is number => typeof price === "number");
+  return { ...slots, spokenAmounts: prices };
+}
 
 
 /**
@@ -165,6 +195,21 @@ export function readSlots(raw: unknown): InvoiceDraftSlots {
     slots.vatRate = source.vatRate;
   }
 
+  // Vyslovené sumy prechádzajú rovnakou kontrolou ako ceny. Podvrhnutá
+  // hodnota by rekonciláciu neoslabila — musela by sa trafiť do cien,
+  // ktoré prešli vlastnou validáciou — ale nedôveryhodný vstup sa tu
+  // zásadne nevalidný neprepúšťa.
+  if (Array.isArray(source.spokenAmounts)) {
+    const amounts = source.spokenAmounts.filter(
+      (value): value is number =>
+        typeof value === "number" &&
+        Number.isFinite(value) &&
+        value >= 0 &&
+        value <= MAX_VOICE_UNIT_PRICE
+    );
+    if (amounts.length === source.spokenAmounts.length) slots.spokenAmounts = amounts;
+  }
+
   return slots;
 }
 
@@ -225,6 +270,17 @@ const VAT_CATEGORY_KEYWORDS: { code: VatCategoryCode; words: string[] }[] = [
  * položenú otázku by sa asistent musel domýšľať, čo používateľ myslel.
  */
 export function applyAnswer(
+  slots: InvoiceDraftSlots,
+  field: InvoiceDraftField,
+  rawAnswer: string,
+  candidates: PartnerCandidate[]
+): InvoiceDraftSlots {
+  // Invariant o vyslovených sumách drží obal, nie jednotlivé vetvy — inak
+  // by ho ďalšia pridaná vetva ticho porušila.
+  return syncSpokenAmounts(applyAnswerToSlots(slots, field, rawAnswer, candidates));
+}
+
+function applyAnswerToSlots(
   slots: InvoiceDraftSlots,
   field: InvoiceDraftField,
   rawAnswer: string,
@@ -365,7 +421,7 @@ export function appendItemFromAnswer(
   const existing = slots.items ?? [];
   if (existing.length >= MAX_VOICE_ITEMS) return null;
 
-  return { ...slots, items: [...existing, item] };
+  return syncSpokenAmounts({ ...slots, items: [...existing, item] });
 }
 
 /**

@@ -11,18 +11,15 @@ import {
 } from "@/lib/invoices";
 import { type VatCategoryCode } from "@/lib/invoicing/vat-engine";
 import { matchPartnersByName, type PartnerMatchTier } from "@/lib/partner-matching";
-import { findNumber, findCurrency, findVatRate } from "@/lib/intents/number-words";
-import {
-  extractInvoiceItems,
-  MAX_VOICE_ITEMS,
-  MAX_VOICE_UNIT_PRICE,
-  MAX_DESCRIPTION_LENGTH,
-} from "@/lib/intents/invoice-items";
+import { checkVoiceInvoiceDraft } from "@/lib/invoicing/voice-financial-validator";
+import { findCurrency, findVatRate } from "@/lib/intents/number-words";
+import { extractInvoiceItems } from "@/lib/intents/invoice-items";
 // Čisté funkcie nad slotmi žijú vedľa, aby sa dali odskúšať bez databázy.
 // Re-export nižšie drží doterajšie importy volajúcich nezmenené; sem sa
 // dovážajú iba tie, ktoré tento súbor naozaj volá.
 import {
   firstItemWithoutPrice,
+  missingInvoiceFields,
   type InvoiceDraftSlots,
   type InvoiceDraftField,
   type PartnerCandidate,
@@ -109,57 +106,12 @@ const FALLBACK_CURRENCY = "EUR";
 // Extrakcia z vety
 // -----------------------------------------------------------------------------
 
-/**
- * Frázy, za ktorými nasleduje predmet fakturácie ("za kopanie", "für
- * Erdarbeiten", "for excavation"). Popis je jediná hodnota, ktorú appka
- * berie ako voľný text — nemá overiteľný tvar, iba dĺžku.
- */
-const DESCRIPTION_PHRASES = [
-  "za ",
-  "fuer ",
-  "für ",
-  "for ",
-  "ueber ",
-  "über ",
-];
-
 // Meno odberateľa sa z vety ZÁMERNE nevyberá deterministicky. "pre" a
 // "für" uvádzajú v týchto vetách aj predmet fakturácie ("faktúru pre
 // Tester1 za kopanie" vs. "Rechnung für Erdarbeiten") a rozlíšiť ich bez
 // znalosti jazyka a kontextu sa nedá spoľahlivo. Meno preto rozpoznáva
 // klasifikátor (`partnerQuery`) a server ho VŽDY overí proti reálnym
 // partnerom firmy — chybný odhad tak skončí otázkou, nie zlým dokladom.
-
-function fold(value: string): string {
-  return value.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
-}
-
-/** Text medzi frázou a ďalším predelom vety. */
-function extractAfterPhrase(rawText: string, phrases: string[]): string | undefined {
-  const folded = fold(rawText);
-
-  let bestIndex = -1;
-  let bestLength = 0;
-
-  for (const phrase of phrases) {
-    const foldedPhrase = fold(phrase);
-    const index = folded.indexOf(foldedPhrase);
-    if (index === -1) continue;
-    // Najskorší výskyt vyhráva; pri zhode dlhšia fráza.
-    if (bestIndex === -1 || index < bestIndex || (index === bestIndex && foldedPhrase.length > bestLength)) {
-      bestIndex = index;
-      bestLength = foldedPhrase.length;
-    }
-  }
-
-  if (bestIndex === -1) return undefined;
-
-  const tail = rawText.slice(bestIndex + bestLength);
-  // Popis/meno končí tam, kde začína ďalšia časť príkazu.
-  const cut = tail.split(/\s+(?:za|für|fuer|for|s\s|so\s|mit|with|plus|über|ueber|a\s|und\s|and\s)\s*/i)[0];
-  const cleaned = cut.replace(/[.,;:!?]+\s*$/, "").trim();
-  return cleaned.length > 0 ? cleaned.slice(0, 200) : undefined;
-}
 
 /**
  * Vytiahne z jednej vety všetko, čo sa z nej dá bezpečne vyčítať.
@@ -196,6 +148,11 @@ export function extractInvoiceSlotsFromText(
   const parsed = extractInvoiceItems(rawText, partnerHint);
   if (parsed.items.length > 0 && parsed.problem !== "ambiguous") {
     slots.items = parsed.items;
+    // Sumy z vety sa nesú ďalej, aby sa dali tesne pred zápisom porovnať
+    // s cenami na doklade. Pozri lib/invoicing/voice-financial-validator.ts.
+    slots.spokenAmounts = parsed.items
+      .map((item) => item.unitPrice)
+      .filter((price): price is number => typeof price === "number");
   }
 
   // Keď parser rozdelenie ODMIETOL, náhradná jednopoložková cesta nižšie sa
@@ -206,25 +163,15 @@ export function extractInvoiceSlotsFromText(
     return slots;
   }
 
-  // Jediná položka bez ceny sa smie prevziať — je to bežný prípad („za
-  // kopanie") a chýbajúca cena je ďalšia otázka, nie chyba rozdelenia.
-  if (!slots.items) {
-    const description = extractAfterPhrase(rawText, DESCRIPTION_PHRASES);
-    if (description) {
-      const cleaned = stripTrailingAmount(description);
-      if (cleaned) {
-        const amount = findAmountExcludingVat(rawText);
-        slots.items = [
-          {
-            description: cleaned.slice(0, MAX_DESCRIPTION_LENGTH),
-            ...(amount !== null && amount >= 0 && amount <= MAX_VOICE_UNIT_PRICE
-              ? { unitPrice: amount }
-              : {}),
-          },
-        ];
-      }
-    }
-  }
+  // NÁHRADNÁ JEDNOPOLOŽKOVÁ CESTA JE ZRUŠENÁ.
+  //
+  // Brala popis z jedného miesta vety a cenu z iného, pričom tie dve
+  // miesta nič nespájalo. Vo vete „Vytvor faktúru Tester 1, kopanie za 300
+  // eur, dovoz za 45 eur" tak vznikol riadok „300 eur, dovoz" za 1 € —
+  // jednotka pochádzala z mena partnera, lebo to bolo prvé číslo v texte.
+  //
+  // Keď z vety nevyjde ani jedna položka, je to otázka („Za čo má byť
+  // faktúra?"), nie príležitosť poskladať doklad z úlomkov.
 
   return slots;
 }
@@ -272,36 +219,6 @@ export function describeItemParse(
   };
 }
 
-/**
- * Suma z vety, s vylúčením čísla, ktoré patrí k percentu DPH.
- */
-function findAmountExcludingVat(rawText: string): number | null {
-  const vatRate = findVatRate(rawText);
-
-  let searchFrom = 0;
-  for (let attempt = 0; attempt < 4; attempt++) {
-    const found = findNumber(rawText, searchFrom);
-    if (!found) return null;
-    if (vatRate !== null && found.value === vatRate && isPercentContext(rawText, found.endToken)) {
-      searchFrom = found.endToken + 1;
-      continue;
-    }
-    return found.value;
-  }
-  return null;
-}
-
-/** Stojí hneď za týmto tokenom slovo "percent"/"%"? */
-function isPercentContext(rawText: string, endToken: number): boolean {
-  const tokens = fold(rawText).split(/\s+/).filter(Boolean);
-  const next = tokens[endToken + 1] ?? "";
-  return /percent|prozent|%/.test(next) || /%/.test(tokens[endToken] ?? "");
-}
-
-/** "kopanie 300" → "kopanie" (suma sa už uložila do ceny). */
-function stripTrailingAmount(description: string): string {
-  return description.replace(/[\s,]*\d[\d.,\s]*$/, "").trim() || description;
-}
 
 // -----------------------------------------------------------------------------
 // Resolvovanie partnera
@@ -507,46 +424,72 @@ export async function createInvoiceDraftFromSlots(
    */
   issueDate: string
 ): Promise<IntentResult> {
-  if (!slots.partnerId || !slots.items || slots.items.length === 0) {
-    return { kind: "error", text: translate(locale, "search.errors.generic") };
-  }
-  if (!slots.vatCategoryCode || slots.vatRate === undefined) {
-    return { kind: "error", text: translate(locale, "search.errors.generic") };
-  }
-  if (slots.items.length > MAX_VOICE_ITEMS) {
-    return { kind: "error", text: translate(locale, "search.voice.invoice.tooManyItems") };
-  }
-
-  // Posledná kontrola pred zápisom: každá položka musí mať cenu v rozsahu.
-  // `missingInvoiceFields` to už overil, ale sloty prišli z databázy a
-  // medzi overením a zápisom je vždy nejaká vzdialenosť. Cena sa tu nikdy
-  // nedosadzuje — chýbajúca znamená odmietnutie, nie nulu.
-  const invalidItem = slots.items.find(
-    (item) =>
-      item.unitPrice === undefined ||
-      !Number.isFinite(item.unitPrice) ||
-      item.unitPrice < 0 ||
-      item.unitPrice > MAX_VOICE_UNIT_PRICE ||
-      !item.description.trim()
-  );
-  if (invalidItem) {
-    return { kind: "error", text: translate(locale, "search.errors.generic") };
-  }
-
   const currency =
-    slots.currency ?? (await readPartnerCurrency(supabase, slots.partnerId)) ?? FALLBACK_CURRENCY;
+    slots.currency ?? (await readPartnerCurrency(supabase, slots.partnerId ?? "")) ?? FALLBACK_CURRENCY;
+
+  // ------------------------------------------------------------------
+  // FINANČNÁ BRÁNA.
+  //
+  // Jediné miesto v hlasovej ceste, kde vzniká doklad, a preto jediné
+  // miesto, kde sa rozhoduje, či smie vzniknúť. Kontroluje DETERMINISTICKÝ
+  // validátor — nie model a nie parser. Tí dvaja rozumejú vete; o tom, či
+  // sa z porozumenia smie stať účtovný doklad, rozhoduje toto.
+  //
+  // Kontroluje sa tu znova aj to, čo už overil `missingInvoiceFields`:
+  // sloty prišli z databázy a medzi overením a zápisom je vždy nejaká
+  // vzdialenosť. Nič sa nedopĺňa — chýbajúca hodnota znamená odmietnutie,
+  // nikdy nulu ani jednotku.
+  // ------------------------------------------------------------------
+  const rejection = checkVoiceInvoiceDraft({
+    financeManage: true, // route ho overila pred vstupom do dialógu
+    partnerId: slots.partnerId,
+    items: slots.items ?? [],
+    currency,
+    vatCategoryCode: slots.vatCategoryCode,
+    vatRate: slots.vatRate,
+    spokenAmounts: slots.spokenAmounts ?? [],
+    parserAmbiguous: false, // ambiguitu zachytáva flow skôr, než sa sem dôjde
+    pendingQuestions: missingInvoiceFields(slots).length,
+    grossPriceAmbiguous: false,
+    localDate: issueDate,
+    idempotencyClaimed: true, // claim prebehol v continueFlow
+  });
+
+  if (rejection) {
+    console.error("createInvoiceDraftFromSlots: finančná brána odmietla doklad:", rejection);
+    return {
+      kind: "error",
+      text: translate(
+        locale,
+        rejection === "too_many_items"
+          ? "search.voice.invoice.tooManyItems"
+          : "search.voice.invoice.notConfident"
+      ),
+    };
+  }
+
+  // Po bráne sú tieto hodnoty overené. Zúžia sa raz a ďalej sa používajú
+  // iba ony — nie `slots`, aby sa nedalo omylom siahnuť na neoverené pole.
+  const partnerId = slots.partnerId as string;
+  const checkedItems = slots.items ?? [];
+  const vatCategoryCode = slots.vatCategoryCode as VatCategoryCode;
 
   // Sadzba a kategória DPH platia pre celý doklad — presne tak, ako ich
   // používateľ vyslovil. Per-riadková daň by znamenala, že o niektorom
   // riadku rozhodla appka.
-  const vatRate = slots.vatCategoryCode === "S" ? slots.vatRate : 0;
+  const vatRate = vatCategoryCode === "S" ? (slots.vatRate as number) : 0;
 
-  const items: DraftInvoiceItemInput[] = slots.items.map((item) => ({
+  // MNOŽSTVO A CENA SA MIEŠAŤ NESMÚ.
+  //
+  // Množstvo má predvolenú hodnotu, cena nikdy — `unit_price` sa berie
+  // výhradne z `unitPrice`, ktoré brána overila ako kladné konečné číslo.
+  // Keby sa sem dostalo `DEFAULT_QUANTITY`, vznikol by doklad za 1 €.
+  const items: DraftInvoiceItemInput[] = checkedItems.map((item) => ({
     description: item.description,
     quantity: item.quantity ?? DEFAULT_QUANTITY,
     unit: item.unit ?? DEFAULT_UNIT,
     unit_price: item.unitPrice as number,
-    vat_category_code: slots.vatCategoryCode as VatCategoryCode,
+    vat_category_code: vatCategoryCode,
     vat_rate: vatRate,
   }));
 
@@ -560,7 +503,7 @@ export async function createInvoiceDraftFromSlots(
         currency,
         issue_date: issueDate,
         due_date: null,
-        customer_business_partner_id: slots.partnerId,
+        customer_business_partner_id: partnerId,
         variable_symbol: null,
         payment_terms_days: null,
         corrects_invoice_id: null,
@@ -571,7 +514,7 @@ export async function createInvoiceDraftFromSlots(
     await replaceDraftInvoiceItems(invoice.id, items, supabase);
 
     const totals = previewDraftTotals(items);
-    const partner = (await readPartnerLabels(supabase, [slots.partnerId]))[0];
+    const partner = (await readPartnerLabels(supabase, [partnerId]))[0];
 
     return {
       kind: "draft_created",

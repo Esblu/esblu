@@ -42,6 +42,8 @@ next-env.d.ts
 
 # next.js stale build dirs
 /.next.stale-*/
+# overovaci build (distDir), ktory sa v tomto prostredi neda zmazat
+/.next-verify/
 # local agent/tooling state
 .claude/
 Claude outputs/
