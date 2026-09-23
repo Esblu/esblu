@@ -8,7 +8,6 @@ import {
   VIDEO_POSTER,
   VIDEO_CAPTIONS_SK,
   VIDEO_DURATION_SECONDS,
-  VIDEO_CHAPTERS,
   formatVideoTime,
 } from "@/lib/landing-video";
 
@@ -27,11 +26,7 @@ import {
  *    štvrtinový prenos), desktop 1080p. <source media> sa na <video>
  *    naprieč prehliadačmi nespráva spoľahlivo, preto sa rozhoduje v JS.
  *
- * 3. KAPITOLY — video má cez šesť minút. Bez navigácie by ho na landing page
- *    nikto nedopozeral. Kapitoly umožnia skočiť rovno na modul, ktorý
- *    návštevníka zaujíma.
- *
- * 4. MERANIE — projekt zatiaľ nemá žiadnu analytiku. Komponent preto iba
+ * 3. MERANIE — projekt zatiaľ nemá žiadnu analytiku. Komponent preto iba
  *    vysiela `window` CustomEvent `esblu:video`. Nič ho dnes nepočúva,
  *    neukladá sa žiadna cookie ani sa nikam neposiela request, takže to
  *    nemá vplyv na Cookie Policy. Keď pribudne analytika, stačí sa na
@@ -51,72 +46,29 @@ export default function EsbluDemoVideo() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
   const [started, setStarted] = useState(false);
-  const [activeChapter, setActiveChapter] = useState(0);
   // Aby sa každý míľnik dopozerania ohlásil najviac raz.
   const reachedRef = useRef<Set<number>>(new Set());
 
-  const start = useCallback(
-    (chapterIndex = 0) => {
-      setActiveChapter(chapterIndex);
-      setStarted(true);
-      emit("play", {
-        chapter: VIDEO_CHAPTERS[chapterIndex]?.key ?? "intro",
-        from: VIDEO_CHAPTERS[chapterIndex]?.start ?? 0,
-      });
-    },
-    []
-  );
+  const start = useCallback(() => {
+    setStarted(true);
+    emit("play");
+  }, []);
 
-  /** Skok na kapitolu — funguje pred prvým spustením aj počas prehrávania. */
-  const goToChapter = useCallback(
-    (index: number) => {
-      const chapter = VIDEO_CHAPTERS[index];
-      if (!chapter) return;
-
-      if (!started) {
-        start(index);
-        return;
-      }
-
-      const el = videoRef.current;
-      if (!el) return;
-      el.currentTime = chapter.start;
-      setActiveChapter(index);
-      emit("chapter", { chapter: chapter.key, from: chapter.start });
-      void el.play().catch(() => {
-        // Prehliadač môže prehrávanie odmietnuť (napr. úsporný režim) —
-        // používateľ si ho spustí natívnym tlačidlom, nie je to chyba.
-      });
-    },
-    [started, start]
-  );
-
-  /** Po vykreslení <video> ho rovno spustíme od zvolenej kapitoly. */
+  /** Po vykreslení <video> ho rovno spustíme. */
   const handleLoaded = useCallback(() => {
     const el = videoRef.current;
     if (!el) return;
-    const from = VIDEO_CHAPTERS[activeChapter]?.start ?? 0;
-    if (from > 0) el.currentTime = from;
     void el.play().catch(() => {
       // Ak autoplay so zvukom prehliadač zablokuje, zostane viditeľný
       // natívny play button — video sa neprehrá samo, čo je v poriadku.
     });
-  }, [activeChapter]);
+  }, []);
 
   const handleTimeUpdate = useCallback(() => {
     const el = videoRef.current;
     if (!el || !el.duration) return;
 
-    // Zvýraznenie práve prebiehajúcej kapitoly.
-    const now = el.currentTime;
-    let idx = 0;
-    for (let i = 0; i < VIDEO_CHAPTERS.length; i += 1) {
-      if (now >= VIDEO_CHAPTERS[i].start) idx = i;
-    }
-    setActiveChapter((prev) => (prev === idx ? prev : idx));
-
-    // Míľniky dopozerania.
-    const pct = (now / el.duration) * 100;
+    const pct = (el.currentTime / el.duration) * 100;
     for (const milestone of [25, 50, 75, 95]) {
       if (pct >= milestone && !reachedRef.current.has(milestone)) {
         reachedRef.current.add(milestone);
@@ -160,7 +112,7 @@ export default function EsbluDemoVideo() {
           ) : (
             <button
               type="button"
-              onClick={() => start(0)}
+              onClick={start}
               aria-label={t("landing.video.playAria")}
               className="group absolute inset-0 h-full w-full cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-cyan focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950"
             >
@@ -205,36 +157,6 @@ export default function EsbluDemoVideo() {
               </span>
             </button>
           )}
-        </div>
-      </div>
-
-      {/* Kapitoly */}
-      <div className="mt-6">
-        <p className="text-sm font-bold uppercase tracking-[0.16em] text-muted-esblu">
-          {t("landing.video.chaptersLabel")}
-        </p>
-        <div className="mt-3 flex flex-wrap gap-2">
-          {VIDEO_CHAPTERS.map((chapter, index) => {
-            const isActive = started && index === activeChapter;
-            return (
-              <button
-                key={chapter.key}
-                type="button"
-                onClick={() => goToChapter(index)}
-                aria-current={isActive ? "true" : undefined}
-                className={`inline-flex min-h-11 items-center gap-2 rounded-full border px-4 py-2 text-sm font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-cyan ${
-                  isActive
-                    ? "border-accent-cyan bg-accent-cyan/12 text-accent-cyan"
-                    : "border-subtle bg-surface-2 text-secondary hover:border-border-strong hover:text-primary"
-                }`}
-              >
-                {t(`landing.video.chapter.${chapter.key}`)}
-                <span className="text-xs font-bold tabular-nums text-muted-esblu">
-                  {formatVideoTime(chapter.start)}
-                </span>
-              </button>
-            );
-          })}
         </div>
       </div>
     </div>

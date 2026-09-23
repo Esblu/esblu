@@ -367,18 +367,6 @@ const de = {
       posterAlt:
         "Esblu Oberfläche — Firmenübersicht mit Modulen und Hinweisen auf anstehende Fristen",
       audioLanguage: "Ton auf Slowakisch",
-      chaptersLabel: "Zum Kapitel springen",
-      chapter: {
-        intro: "Einleitung",
-        documents: "Dokumente",
-        vehicles: "Fahrzeuge",
-        machines: "Maschinen",
-        inventory: "Lager",
-        invoices: "Rechnungen",
-        search: "Suche",
-        collaboration: "Zusammenarbeit",
-        security: "Rollen und Sicherheit",
-      },
       ctaTitle: "Möchten Sie wissen, ob Esblu zu Ihrem Betrieb passt?",
       ctaDescription:
         "Schreiben Sie uns, um was für einen Betrieb es geht und was Sie heute über Papier, Excel oder WhatsApp lösen. Wir melden uns und klären, ob Esblu Ihnen helfen kann.",

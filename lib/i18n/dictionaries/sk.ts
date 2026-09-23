@@ -382,18 +382,6 @@ const sk = {
       posterAlt:
         "Rozhranie Esblu — firemný prehľad s modulmi a upozorneniami na blížiace sa termíny",
       audioLanguage: "Zvuk v slovenčine",
-      chaptersLabel: "Preskočiť na kapitolu",
-      chapter: {
-        intro: "Úvod",
-        documents: "Dokumenty",
-        vehicles: "Vozidlá",
-        machines: "Stroje",
-        inventory: "Sklad",
-        invoices: "Faktúry",
-        search: "Vyhľadávanie",
-        collaboration: "Spolupráca",
-        security: "Roly a bezpečnosť",
-      },
       ctaTitle: "Chcete zistiť, či Esblu dáva zmysel aj pre vašu firmu?",
       ctaDescription:
         "Napíšte nám, o akú firmu ide a čo dnes riešite cez papiere, Excel alebo WhatsApp. Ozveme sa a povieme si, či vám Esblu vie pomôcť.",

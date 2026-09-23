@@ -368,18 +368,6 @@ const en = {
       posterAlt:
         "Esblu interface — company overview with modules and alerts for upcoming deadlines",
       audioLanguage: "Audio in Slovak",
-      chaptersLabel: "Jump to a chapter",
-      chapter: {
-        intro: "Intro",
-        documents: "Documents",
-        vehicles: "Vehicles",
-        machines: "Machines",
-        inventory: "Inventory",
-        invoices: "Invoices",
-        search: "Search",
-        collaboration: "Collaboration",
-        security: "Roles and security",
-      },
       ctaTitle: "Want to find out whether Esblu fits your company?",
       ctaDescription:
         "Tell us what kind of company you run and what you handle on paper, in Excel or over WhatsApp today. We will get back to you and see whether Esblu can help.",

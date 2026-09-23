@@ -7,8 +7,7 @@
  *
  * PRI VÝMENE VIDEA ZA NOVÚ VERZIU SKONTROLUJ:
  *   1. VIDEO_DURATION_SECONDS — musí sedieť s reálnym súborom
- *   2. VIDEO_CHAPTERS — časy sa pri novom strihu posunú
- *   3. VIDEO_PUBLISHED_AT — dátum zverejnenia (ISO 8601)
+ *   2. VIDEO_PUBLISHED_AT — dátum zverejnenia (ISO 8601)
  *
  * Súbory pripraví `scripts/prepare-landing-video.sh`.
  */
@@ -46,25 +45,6 @@ export const VIDEO_PUBLISHED_AT = "2026-09-23";
 
 /** Jazyk zvukovej stopy videa (BCP 47). */
 export const VIDEO_AUDIO_LOCALE = "sk";
-
-export type VideoChapter = { key: string; start: number };
-
-/**
- * Kapitoly zodpovedajú kapitolám vyrenderovaného videa. `start` je sekunda,
- * na ktorú prehrávač skočí; `key` sa dopĺňa do i18n kľúča
- * `landing.video.chapter.<key>`.
- */
-export const VIDEO_CHAPTERS: VideoChapter[] = [
-  { key: "intro", start: 0 },
-  { key: "documents", start: 56 },
-  { key: "vehicles", start: 128 },
-  { key: "machines", start: 176 },
-  { key: "inventory", start: 213 },
-  { key: "invoices", start: 236 },
-  { key: "search", start: 280 },
-  { key: "collaboration", start: 324 },
-  { key: "security", start: 349 },
-];
 
 /** Je video reálne nasadené? Riadi vykreslenie celej sekcie aj schémy. */
 export const isVideoPublished = () => VIDEO_PUBLISHED_AT.trim().length > 0;
