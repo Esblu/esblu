@@ -267,16 +267,71 @@ dátum, suma, mena). Overené v produkcii: po zmazaní faktúry riadok zostal a
 snímka bola čitateľná. História sa navyše nedá ani prepísať, ani zmazať —
 `authenticated` nemá na tieto tabuľky UPDATE ani DELETE.
 
-### Čo z toho NEVYPLÝVA
+### Čo presne `complete_handoff` znamená
 
-`complete_handoff` je **technický** stav: balík sa podaril a dá sa overiť.
-Nie je to právny záver, že archivačná povinnosť je splnená, a Esblu to
-nikde netvrdí — ani v UI, ani v manifeste, ani v README balíka. Otázky v §6
-zostávajú otvorené v plnom rozsahu.
+**Znamená:** balík sa zložil, overil, spočítali sa odtlačky, zapísal sa
+záznam a HTTP odpoveď začala odchádzať.
 
-**Mazanie sa nezaviedlo.** Brána `eligible_for_removal` sa týmto stáva
-dosiahnuteľnou, ale za ňou nie je nič — žiadne tlačidlo, žiadna úloha,
-žiadny plán. To je samostatné rozhodnutie, ktoré čaká na §6.
+**Neznamená:** že sa súbor stiahol, že sa uložil, ani že ho niekto poslal
+účtovníkovi. Prenos v prehliadači sa môže prerušiť kedykoľvek po odoslaní
+hlavičiek a server sa to spoľahlivo nedozvie. Prevzatie účtovníkom prebieha
+mimo Esblu a Esblu o ňom nemá žiadny záznam.
+
+Toto je technická hranica, nie opomenutie. Vymyslieť si potvrdenie prevzatia,
+ktoré nikto nedal, by bola tá istá chyba ako vydávať stiahnutý zošit za
+odovzdanie dokladov.
+
+Preto sa v UI stav volá **„Kompletný balík vytvorený"**, nie „Doklady
+odovzdané". Názov hodnoty v databáze (`complete_handoff`) zostáva —
+premenovať ho by znamenalo migráciu bez úžitku a riziko, že sa niekde rozíde.
+
+Ak by sa niekedy malo zaznamenávať skutočné odovzdanie, musí to byť
+**samostatná udalosť s vlastným úkonom používateľa** („odovzdal som balík
+účtovníkovi dňa…"), nie vedľajší produkt stiahnutia súboru.
+
+### Trvalá závora pred mazaním
+
+`REMOVAL_DESIGN_APPROVED = false` v `lib/invoicing/accounting-lifecycle.ts`.
+
+`removalBlockers()` preto vracia `pending_removal_design` **vždy**, na prvom
+mieste zoznamu, a `isRemovalAuthorized()` vracia `false` pre každý vstup —
+vrátane dokladu, ktorý má úplný balík aj prekročenú lehotu.
+
+Vytvorenie balíka je technický úkon. Sám osebe nesmie stačiť na to, aby sa
+účtovný doklad stal zmazateľným. Otvoriť závoru znamená zmeniť kód, prejsť
+revíziou a vedome prevziať zodpovednosť — nie prekliknúť nastavenie.
+
+`retentionStatus()` naďalej hlási stav `eligible_for_removal`, ale je to
+**popis** („balík vytvorený, po lehote"), nie povolenie. Budúce mazanie sa
+smie pýtať výhradne `isRemovalAuthorized()`.
+
+**Mazanie sa nezaviedlo.** Žiadne tlačidlo, žiadne RPC, žiadny plánovač,
+žiadne automatické odstraňovanie. To je samostatné rozhodnutie, ktoré čaká
+na §6.
+
+### Originál verzus príloha
+
+Originál prijatého dokladu sa berie **výhradne** z
+`invoices.source_document_id`. Dokumenty prepojené cez `document_links` idú
+do balíka ako **sprievodné** (`supporting/`) a nikdy nenahradia chýbajúci
+originál od dodávateľa.
+
+Pôvodná implementácia hľadala originál cez `document_links` a stačila jej
+existencia hociktorého prepojeného dokumentu — prijatá faktúra bez originálu,
+ale s pripnutým potvrdením o úhrade, by tak prešla ako úplne odovzdaná.
+Opravené a pokryté testom.
+
+### Koncepty
+
+Bežný koncept sa z balíka **vynechá** a povie sa to („Vynechaných konceptov:
+N"). Nezastaví balík a nezabráni odovzdaniu dokladov, ktoré sú v poriadku.
+
+Koncept, ktorý je navyše pokazený (bez položiek, s nesediacimi sumami), balík
+zastaví — vtedy už nejde o rozpracovanosť, ale o chybný údaj.
+
+Ak vo výbere nie je ani jeden finalizovaný doklad, balík **nevznikne** a
+používateľ dostane jasnú vetu. Prázdny „hotový" balík by tvrdil, že sa niečo
+odovzdalo.
 
 **Dôvod odkladu mazania:** bez odpovedí na otázky v §6 by sa rozhodovalo o
 tom, čo smie zmiznúť a čo musí zostať, na základe odhadu. Pri účtovných

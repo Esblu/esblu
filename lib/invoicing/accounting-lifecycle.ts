@@ -35,11 +35,20 @@ export type AccountingStatus = "unprocessed" | "accounted";
  * že má originály — tie v takom súbore nie sú. Preto je to samostatný
  * stav a preto z neho NIKDY nevyplýva, že doklad môže z Esblu zmiznúť.
  *
- * `complete_handoff` znamená odovzdaný úplný balík vrátane originálov
- * prijatých dokladov, PDF vydaných faktúr, príloh a manifestu. Dnes ho
- * nič nevytvára; hodnota existuje preto, aby sa oprávnenosť na
- * odstránenie dala naviazať na niečo konkrétne namiesto na „veď sa niečo
- * exportovalo".
+ * `complete_handoff` ZNAMENÁ PRESNE TOTO:
+ * ---------------------------------------
+ * Úplný balík sa zložil, overil a zapísal. Server vie doložiť, že súbory
+ * existovali, že ich odtlačky sedia a že odpoveď začala odchádzať.
+ *
+ * NEZNAMENÁ to, že sa balík stiahol, že sa uložil, ani že ho niekto poslal
+ * účtovníkovi. Prenos v prehliadači sa môže prerušiť kedykoľvek po odoslaní
+ * hlavičiek a server sa to spoľahlivo nedozvie. Prevzatie účtovníkom je vec,
+ * ktorá sa deje mimo Esblu, a Esblu o nej nemá záznam.
+ *
+ * Preto sa v UI volá „kompletný balík vytvorený", nie „doklady odovzdané".
+ * Názov hodnoty v databáze zostáva — premenovať ho by znamenalo migráciu bez
+ * úžitku a riziko, že sa niekde rozíde. Význam je popísaný tu a v
+ * docs/retention-handoff-compliance-delta-for-clia.md.
  */
 export type HandoffStatus = "none" | "metadata_exported" | "complete_handoff";
 
@@ -166,15 +175,25 @@ export function retentionStatus(input: RetentionInput): RetentionResult {
 }
 
 /**
- * Smie sa prevádzková kópia dokladu ponúknuť na odstránenie?
+ * Smie sa prevádzková kópia dokladu odstrániť?
  *
- * Nie je to príkaz na zmazanie a nikdy ním nebude — je to podmienka, bez
- * ktorej sa o odstránení nesmie ani uvažovať. Samotné odstránenie ostáva
- * vedomým krokom oprávneného človeka a dnes ho nič nevykonáva.
+ * Vracia `false` vždy, a nie preto, že by úplný balík nikto nevedel vytvoriť
+ * — odkedy existuje, vytvoriť sa dá. Vracia `false` preto, že za závorou
+ * `REMOVAL_DESIGN_APPROVED` zatiaľ nie je rozhodnutie o tom, čo sa smie
+ * mazať.
  *
- * Dnes vracia vždy `false`, pretože `complete_handoff` nemá kto nastaviť.
- * Tak to má byť: podmienka je na mieste skôr, než existuje čokoľvek, čo
- * by podľa nej mazalo.
+ * Toto je jediná funkcia, ktorej sa má budúce mazanie pýtať. Nepýta sa
+ * `retentionStatus`, lebo ten iba POPISUJE, kde doklad je — vrátane stavu
+ * „balík vytvorený, po lehote". Popis nie je povolenie.
+ */
+export function isRemovalAuthorized(input: RetentionInput): boolean {
+  return removalBlockers(input).length === 0;
+}
+
+/**
+ * @deprecated Používaj `isRemovalAuthorized`. Tento názov znel ako povolenie,
+ * hoci hovoril iba o stave lehoty a balíka. Zostáva, aby sa staršie volania
+ * nerozbili, a vracia to isté čo predtým — teda POPIS, nie povolenie.
  */
 export function isEligibleForRemoval(input: RetentionInput): boolean {
   return retentionStatus(input).state === "eligible_for_removal";
@@ -190,11 +209,32 @@ export function isEligibleForRemoval(input: RetentionInput): boolean {
 export type RemovalBlocker =
   | "retention_not_reached"
   | "complete_handoff_missing"
-  | "only_metadata_exported";
+  | "only_metadata_exported"
+  | "pending_removal_design";
+
+/**
+ * TRVALÁ ZÁVORA.
+ *
+ * Kým nie je rozhodnuté, čo sa smie z Esblu odstrániť a za akých podmienok,
+ * nesmie sa odstrániť nič — ani doklad, ktorý má úplný balík aj po lehote.
+ *
+ * Je to konštanta, nie prepínač v nastaveniach. Otvoriť ju znamená zmeniť
+ * kód, prejsť revíziou a vedome prevziať zodpovednosť. Presne tak to má byť:
+ * vytvorenie balíka je technický úkon a nesmie sám osebe stačiť na to, aby
+ * sa účtovný doklad stal zmazateľným.
+ *
+ * Pozri docs/retention-handoff-compliance-delta-for-clia.md §6 — otvorené
+ * otázky, bez ktorých sa o odstraňovaní rozhodovať nedá.
+ */
+export const REMOVAL_DESIGN_APPROVED = false;
 
 export function removalBlockers(input: RetentionInput): RemovalBlocker[] {
   const blockers: RemovalBlocker[] = [];
   const status = retentionStatus(input);
+
+  // Prvá a zatiaľ neodstrániteľná prekážka. Stojí na začiatku zoznamu, aby
+  // sa na ňu nedalo pozerať ako na poznámku pod čiarou.
+  if (!REMOVAL_DESIGN_APPROVED) blockers.push("pending_removal_design");
 
   if (status.state === "active" || status.state === "approaching_limit") {
     blockers.push("retention_not_reached");

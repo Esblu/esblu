@@ -402,19 +402,32 @@ export default function FakturyPage() {
 
       await downloadBlob(blob, fileName);
 
-      // Stav sa mení AŽ TERAZ a iba pre doklady, ktoré v balíku naozaj boli.
+      // Stav sa mení iba tým dokladom, ktoré v balíku naozaj boli. Koncepty
+      // server vynechal, takže si svoj doterajší stav ponechajú.
+      //
+      // Aj tak je to len „balík vytvorený". Že sa súbor stiahol a že ho
+      // niekto poslal účtovníkovi, Esblu nevie a netvrdí.
       const next = { ...handoffStatuses };
-      for (const invoice of filteredInvoices) next[invoice.id] = "complete_handoff";
+      for (const invoice of filteredInvoices) {
+        if (invoice.document_status === "finalized") next[invoice.id] = "complete_handoff";
+      }
       setHandoffStatuses(next);
+
+      // Koľko dokladov v balíku NAOZAJ je, hovorí server — nie dĺžka filtra
+      // v prehliadači. Koncepty sa vynechávajú a vynechanie, o ktorom sa
+      // mlčí, je to isté ako strata.
+      const packagedCount = Number(response.headers.get("x-esblu-invoice-count") ?? 0);
+      const excludedDrafts = Number(response.headers.get("x-esblu-excluded-drafts") ?? 0);
 
       setExportFeedback({
         type: "success",
-        text: t("handoff.packageDone", {
-          file: fileName,
-          invoices: filteredInvoices.length,
-          files: response.headers.get("x-esblu-file-count") ?? "?",
-          size: formatBytes(blob.size),
-        }),
+        text:
+          t("handoff.packageDone", {
+            file: fileName,
+            invoices: packagedCount,
+            files: response.headers.get("x-esblu-file-count") ?? "?",
+            size: formatBytes(blob.size),
+          }) + (excludedDrafts > 0 ? t("handoff.packageDrafts", { count: excludedDrafts }) : ""),
       });
     } catch (error) {
       console.error("Vytvorenie balíka pre účtovníka zlyhalo:", error);

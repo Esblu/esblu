@@ -340,11 +340,13 @@ const sk = {
         transcriptionFailed: "Prepis hlasu zlyhal. Skúste to prosím znova.",
         tryAgain: "Skúste hovoriť znova.",
       },
+      noFinalizedDocuments: "Vo výbere nie je ani jeden finalizovaný doklad. Kompletný balík obsahuje iba vystavené a prijaté doklady, nie koncepty.",
       badRequest: "Požiadavke nerozumiem.",
       notEligible: "Niektoré doklady sa do kompletného balíka nedajú zaradiť. Balík som preto nevytvoril.",
       tooManyInvoices: "Naraz viem zabaliť najviac {{max}} dokladov. Skúste kratšie obdobie.",
       recordFailed: "Balík vznikol, ale nepodarilo sa zapísať záznam o odovzdaní. Balík som preto nevydal.",
       package: {
+        missing_supporting_document: "Sprievodný dokument dokladu sa nepodarilo načítať.",
         missing_original_document: "K prijatému dokladu sa nenašiel originál v úložisku. Bez neho to nie je odovzdanie dokladov.",
         original_hash_mismatch: "Originál dokladu sa od nahratia zmenil. Balík by tvrdil niečo, čo neplatí.",
         missing_attachment: "Prílohu dokladu sa nepodarilo načítať.",
@@ -2113,7 +2115,8 @@ const sk = {
   handoff: {
     packageButton: "Vytvoriť kompletný balík pre účtovníka",
     packageBusy: "Skladám balík…",
-    packageDone: "Balík {{file}} je hotový: {{invoices}} dokladov, {{files}} súborov, {{size}}.",
+    packageDone: "Balík {{file}} je vytvorený: {{invoices}} dokladov, {{files}} súborov, {{size}}. Skontrolujte, či sa stiahol, a odovzdajte ho účtovníkovi — Esblu prevzatie nevie overiť.",
+    packageDrafts: " Vynechaných konceptov: {{count}} — koncepty do účtovného balíka nepatria.",
     packageWarningTitle: "Čo balík obsahuje",
     packageWarningBody: "Balík obsahuje kópie účtovných dokladov vrátane originálov prijatých faktúr. Je určený na odovzdanie účtovníkovi, do účtovného softvéru alebo do vášho archívu. Vytvorením balíka sa z Esblu nič nemaže a nevyplýva z neho, že je splnená zákonná povinnosť uchovávať doklady — za to zodpovedáte vy a váš účtovník.",
     packagePreview: "Na odovzdanie: {{invoices}} dokladov ({{issued}} vydaných, {{received}} prijatých).",
@@ -2134,13 +2137,13 @@ const sk = {
     handoffStatus: {
       none: "Nevyexportované",
       metadata_exported: "Údaje exportované",
-      complete_handoff: "Doklady odovzdané",
+      complete_handoff: "Kompletný balík vytvorený",
     },
     retention: {
       active: "V prevádzke",
       approaching_limit: "Končí prevádzková lehota",
       retention_exceeded: "Po prevádzkovej lehote",
-      eligible_for_removal: "Pripravené na odstránenie",
+      eligible_for_removal: "Balík vytvorený, po lehote",
     },
     sheet: {
       invoices: "Doklady",

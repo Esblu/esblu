@@ -37,6 +37,8 @@ import {
   retentionStatus,
   removalBlockers,
   isEligibleForRemoval,
+  isRemovalAuthorized,
+  REMOVAL_DESIGN_APPROVED,
 } from "../lib/invoicing/accounting-lifecycle.ts";
 
 let passed = 0;
@@ -430,20 +432,21 @@ check(
   retentionStatus({ issueDate: "2026-01-15", today: "2026-09-23", handoffStatus: "complete_handoff" }).state,
   "active"
 );
+// Trvalá závora stojí pred každou ďalšou prekážkou — pozri oddiel 13.
 check(
   "zošit sa nevydáva za odovzdanie",
   removalBlockers({ ...OLD, handoffStatus: "metadata_exported" }),
-  ["only_metadata_exported"]
+  ["pending_removal_design", "only_metadata_exported"]
 );
 check(
   "bez ničoho chýba odovzdanie",
   removalBlockers({ ...OLD, handoffStatus: "none" }),
-  ["complete_handoff_missing"]
+  ["pending_removal_design", "complete_handoff_missing"]
 );
 check(
-  "s úplným balíkom po lehote už nič nebráni",
+  "ani s úplným balíkom po lehote nie je otvorené",
   removalBlockers({ ...OLD, handoffStatus: "complete_handoff" }),
-  []
+  ["pending_removal_design"]
 );
 check(
   "eligible iba pri úplnom odovzdaní",
@@ -455,6 +458,146 @@ check(
   [false, false, true]
 );
 
+
+// -----------------------------------------------------------------------------
+// 12. KONCEPT VYNECHÁ, NEZASTAVÍ  (regresia A/B zo zadania)
+//
+// Koncept nie je pokazený doklad — je to rozpracovaná vec. Keby kvôli nemu
+// zlyhal celý balík, používateľ by nedostal ani doklady, ktoré sú v poriadku,
+// a jediné riešenie by bolo koncept zmazať. To je zlá rada.
+//
+// Toto je pravidlo, podľa ktorého route triedi. Drží sa tu, aby sa nedalo
+// zmeniť bez toho, aby o tom niekto vedel.
+// -----------------------------------------------------------------------------
+const DRAFT_ONLY_PROBLEMS = new Set(["not_finalized", "missing_invoice_number"]);
+
+type Triage = "zabalit" | "vynechat" | "zastavit";
+
+function triage(invoice: PackageInvoice, itemCount: number, hasOriginal: boolean): Triage {
+  const problems = eligibilityProblems({ invoice, itemCount, hasOriginalDocument: hasOriginal });
+  if (problems.length === 0) return "zabalit";
+  if (invoice.document_status === "draft" && problems.every((p) => DRAFT_ONLY_PROBLEMS.has(p))) {
+    return "vynechat";
+  }
+  return "zastavit";
+}
+
+const DRAFT: PackageInvoice = {
+  ...ISSUED,
+  id: "44444444-4444-4444-8444-444444444444",
+  document_status: "draft",
+  invoice_number: null,
+};
+
+check("A: finalizovaná vydaná sa zabalí", triage(ISSUED, 2, false), "zabalit");
+check("A: finalizovaná prijatá s originálom sa zabalí", triage(RECEIVED, 2, true), "zabalit");
+check("A: bežný koncept sa VYNECHÁ, nezastaví", triage(DRAFT, 2, false), "vynechat");
+
+// Dva finalizované + jeden koncept: balík vznikne s dvoma, koncept sa vynechá.
+{
+  const vyber: [PackageInvoice, number, boolean][] = [
+    [ISSUED, 2, false],
+    [RECEIVED, 2, true],
+    [DRAFT, 2, false],
+  ];
+  const vysledky = vyber.map(([i, n, o]) => triage(i, n, o));
+  check("A: 2 finalizované + 1 koncept", vysledky, ["zabalit", "zabalit", "vynechat"]);
+  check("A: balík nezastaví nič", vysledky.includes("zastavit"), false);
+  check("A: v balíku sú dva doklady", vysledky.filter((v) => v === "zabalit").length, 2);
+  check("A: vynechaný je jeden", vysledky.filter((v) => v === "vynechat").length, 1);
+}
+
+// B: samé koncepty → nie je čo baliť.
+{
+  const vysledky = [DRAFT, { ...DRAFT, id: "55555555-5555-4555-8555-555555555555" }]
+    .map((i) => triage(i, 2, false));
+  check("B: samé koncepty sa vynechajú", vysledky, ["vynechat", "vynechat"]);
+  check("B: oprávnených je nula", vysledky.filter((v) => v === "zabalit").length, 0);
+  // Route na to odpovie samostatnou hláškou a NEVYTVORÍ prázdny balík.
+  check("B: prázdny balík by neprešiel ani kontrolou", packageProblems([], 0), [
+    { code: "empty_package" },
+  ]);
+}
+
+// Koncept, ktorý je navyše pokazený, balík ZASTAVÍ — nie je to bežný koncept.
+check(
+  "koncept bez položiek balík zastaví",
+  triage(DRAFT, 0, false),
+  "zastavit"
+);
+check(
+  "koncept s nesediacimi sumami balík zastaví",
+  triage({ ...DRAFT, subtotal_amount: 1, vat_total_amount: 1, total_amount: 99 }, 2, false),
+  "zastavit"
+);
+
+// C: prijatá faktúra bez kanonického originálu balík ZASTAVÍ, aj keď má prílohy.
+//
+// `hasOriginalDocument` sa v route počíta VÝHRADNE zo `source_document_id`.
+// Prepojené sprievodné dokumenty sa doň nezapočítavajú — inak by potvrdenie
+// o úhrade nahradilo chýbajúci doklad od dodávateľa.
+check(
+  "C: prijatá bez originálu zastaví aj s prílohami",
+  triage(RECEIVED, 2, false),
+  "zastavit"
+);
+check(
+  "C: a s originálom prejde",
+  triage(RECEIVED, 2, true),
+  "zabalit"
+);
+check(
+  "C: dôvodom je práve chýbajúci originál",
+  eligibilityProblems({ invoice: RECEIVED, itemCount: 2, hasOriginalDocument: false }),
+  ["missing_original_document"]
+);
+
+// -----------------------------------------------------------------------------
+// 13. TRVALÁ ZÁVORA PRED MAZANÍM  (regresia zo zadania, bod 4)
+//
+// Vytvorenie balíka je technický úkon. Sám osebe nesmie stačiť na to, aby sa
+// účtovný doklad stal zmazateľným.
+// -----------------------------------------------------------------------------
+check("závora je zatvorená", REMOVAL_DESIGN_APPROVED, false);
+
+check(
+  "úplný balík + po lehote NESTAČÍ na povolenie",
+  isRemovalAuthorized({ ...OLD, handoffStatus: "complete_handoff" }),
+  false
+);
+check(
+  "a dôvodom je chýbajúce rozhodnutie o mazaní",
+  removalBlockers({ ...OLD, handoffStatus: "complete_handoff" }),
+  ["pending_removal_design"]
+);
+check(
+  "prekážka stojí na prvom mieste zoznamu",
+  removalBlockers({ ...OLD, handoffStatus: "none" })[0],
+  "pending_removal_design"
+);
+check(
+  "žiadny vstup závoru neotvorí",
+  [
+    { ...OLD, handoffStatus: "none" as const },
+    { ...OLD, handoffStatus: "metadata_exported" as const },
+    { ...OLD, handoffStatus: "complete_handoff" as const },
+    { issueDate: "1999-01-01", today: "2026-09-23", handoffStatus: "complete_handoff" as const },
+  ].map(isRemovalAuthorized),
+  [false, false, false, false]
+);
+
+// Popis stavu zostáva popisom — hovorí, kde doklad je, nie čo sa s ním smie.
+check(
+  "popis stavu sa nezmenil",
+  retentionStatus({ ...OLD, handoffStatus: "complete_handoff" }).state,
+  "eligible_for_removal"
+);
+check(
+  "ale popis nie je povolenie",
+  isEligibleForRemoval({ ...OLD, handoffStatus: "complete_handoff" }) &&
+    !isRemovalAuthorized({ ...OLD, handoffStatus: "complete_handoff" }),
+  true
+);
 // -----------------------------------------------------------------------------
 
 console.log(`\n${passed} prešlo, ${failed} zlyhalo`);

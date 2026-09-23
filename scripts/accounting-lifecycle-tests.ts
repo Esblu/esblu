@@ -147,17 +147,20 @@ check(
 check(
   "nový doklad: bráni lehota aj chýbajúce odovzdanie",
   removalBlockers({ ...NOVY, handoffStatus: "none" }),
-  ["retention_not_reached", "complete_handoff_missing"]
+  ["pending_removal_design", "retention_not_reached", "complete_handoff_missing"]
 );
 check(
-  "po lehote s exportom údajov: bráni už len odovzdanie a vie sa to pomenovať",
+  "po lehote s exportom údajov: zošit sa nevydáva za odovzdanie",
   removalBlockers({ ...PO_LEHOTE, handoffStatus: "metadata_exported" }),
-  ["only_metadata_exported"]
+  ["pending_removal_design", "only_metadata_exported"]
 );
+// Od zavedenia trvalej závory (REMOVAL_DESIGN_APPROVED = false) nie je
+// „nič nebráni" dosiahnuteľné. Vytvorenie balíka je technický úkon a sám
+// osebe nesmie stačiť na to, aby sa doklad stal zmazateľným.
 check(
-  "po lehote a úplne odovzdaný: nič nebráni",
+  "po lehote a úplne odovzdaný: bráni už len chýbajúce rozhodnutie o mazaní",
   removalBlockers({ ...PO_LEHOTE, handoffStatus: "complete_handoff" }),
-  []
+  ["pending_removal_design"]
 );
 
 // Obsah úplného balíka je definovaný na JEDNOM mieste, aby sa

@@ -326,11 +326,13 @@ const en = {
         transcriptionFailed: "Voice transcription failed. Please try again.",
         tryAgain: "Try speaking again.",
       },
+      noFinalizedDocuments: "There is not a single finalised document in the selection. A complete package contains issued and received documents only, not drafts.",
       badRequest: "I could not read that request.",
       notEligible: "Some documents cannot go into a complete package, so none was created.",
       tooManyInvoices: "I can package at most {{max}} documents at once. Try a shorter period.",
       recordFailed: "The package was built, but the handoff record could not be saved, so the package was not released.",
       package: {
+        missing_supporting_document: "A supporting document could not be read.",
         missing_original_document: "No original was found in storage for a received document. Without it this is not a handover of documents.",
         original_hash_mismatch: "The original has changed since it was uploaded.",
         missing_attachment: "An attachment could not be read.",
@@ -2088,7 +2090,8 @@ const en = {
   handoff: {
     packageButton: "Create complete accountant package",
     packageBusy: "Building the package…",
-    packageDone: "Package {{file}} is ready: {{invoices}} documents, {{files}} files, {{size}}.",
+    packageDone: "Package {{file}} has been created: {{invoices}} documents, {{files}} files, {{size}}. Check that it downloaded, then hand it to your accountant — Esblu cannot confirm receipt.",
+    packageDrafts: " Drafts left out: {{count}} — drafts do not belong in an accounting package.",
     packageWarningTitle: "What the package contains",
     packageWarningBody: "The package contains copies of accounting documents, including the originals of received invoices. It is meant for handing over to your accountant, accounting software or archive. Creating it deletes nothing from Esblu, and it does not mean your statutory retention obligation has been met — that remains yours and your accountant's.",
     packagePreview: "Ready to hand over: {{invoices}} documents ({{issued}} issued, {{received}} received).",
@@ -2109,13 +2112,13 @@ const en = {
     handoffStatus: {
       none: "Not exported",
       metadata_exported: "Data exported",
-      complete_handoff: "Documents handed off",
+      complete_handoff: "Complete package created",
     },
     retention: {
       active: "In operation",
       approaching_limit: "Operational period ending",
       retention_exceeded: "Operational period exceeded",
-      eligible_for_removal: "Ready for removal",
+      eligible_for_removal: "Package created, period exceeded",
     },
     sheet: {
       invoices: "Documents",

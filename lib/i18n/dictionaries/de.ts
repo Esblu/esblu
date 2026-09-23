@@ -325,11 +325,13 @@ const de = {
         transcriptionFailed: "Die Sprachübertragung ist fehlgeschlagen. Bitte versuchen Sie es erneut.",
         tryAgain: "Sprechen Sie noch einmal.",
       },
+      noFinalizedDocuments: "In der Auswahl ist kein einziger finalisierter Beleg. Das vollständige Paket enthält nur ausgestellte und eingegangene Belege, keine Entwürfe.",
       badRequest: "Die Anfrage ist unverständlich.",
       notEligible: "Einige Belege können nicht in das vollständige Paket aufgenommen werden. Das Paket wurde nicht erstellt.",
       tooManyInvoices: "Es können höchstens {{max}} Belege auf einmal gepackt werden. Bitte einen kürzeren Zeitraum wählen.",
       recordFailed: "Das Paket wurde erstellt, aber der Übergabedatensatz konnte nicht gespeichert werden. Das Paket wurde daher nicht ausgegeben.",
       package: {
+        missing_supporting_document: "Ein Begleitdokument konnte nicht geladen werden.",
         missing_original_document: "Zum eingegangenen Beleg wurde kein Original im Speicher gefunden. Ohne das ist es keine Belegübergabe.",
         original_hash_mismatch: "Das Original hat sich seit dem Hochladen verändert.",
         missing_attachment: "Eine Anlage konnte nicht geladen werden.",
@@ -2109,7 +2111,8 @@ const de = {
   handoff: {
     packageButton: "Vollständiges Paket für die Buchhaltung erstellen",
     packageBusy: "Paket wird erstellt…",
-    packageDone: "Paket {{file}} ist fertig: {{invoices}} Belege, {{files}} Dateien, {{size}}.",
+    packageDone: "Paket {{file}} wurde erstellt: {{invoices}} Belege, {{files}} Dateien, {{size}}. Prüfen Sie, ob es heruntergeladen wurde, und übergeben Sie es der Buchhaltung — Esblu kann den Empfang nicht bestätigen.",
+    packageDrafts: " Ausgelassene Entwürfe: {{count}} — Entwürfe gehören nicht in ein Buchhaltungspaket.",
     packageWarningTitle: "Was das Paket enthält",
     packageWarningBody: "Das Paket enthält Kopien der Buchhaltungsbelege einschließlich der Originale eingegangener Rechnungen. Es ist für die Übergabe an die Buchhaltung, an eine Buchhaltungssoftware oder in Ihr Archiv bestimmt. Durch das Erstellen wird in Esblu nichts gelöscht, und es bedeutet nicht, dass die gesetzliche Aufbewahrungspflicht erfüllt ist — dafür sind Sie und Ihre Buchhaltung verantwortlich.",
     packagePreview: "Zur Übergabe: {{invoices}} Belege ({{issued}} ausgestellt, {{received}} eingegangen).",
@@ -2130,13 +2133,13 @@ const de = {
     handoffStatus: {
       none: "Nicht exportiert",
       metadata_exported: "Daten exportiert",
-      complete_handoff: "Belege übergeben",
+      complete_handoff: "Vollständiges Paket erstellt",
     },
     retention: {
       active: "In Bearbeitung",
       approaching_limit: "Betriebsfrist endet",
       retention_exceeded: "Betriebsfrist abgelaufen",
-      eligible_for_removal: "Zur Entfernung bereit",
+      eligible_for_removal: "Paket erstellt, Frist abgelaufen",
     },
     sheet: {
       invoices: "Belege",

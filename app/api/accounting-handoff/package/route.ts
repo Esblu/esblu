@@ -45,6 +45,20 @@ import type {
 // vydávaný za odovzdanie by bol horší než žiadne odovzdanie, lebo na
 // `complete_handoff` sa má raz viazať odstránenie prevádzkovej kópie.
 //
+// ČO TENTO ENDPOINT DOKÁŽE A ČO NIE
+// ----------------------------------
+// Dokáže: balík sa zložil, overil, spočítali sa odtlačky a odpoveď začala
+// odchádzať. To je všetko, a preto sa do databázy zapisuje presne to.
+//
+// NEDOKÁŽE: či sa súbor v prehliadači naozaj uložil, či sa prenos dokončil,
+// a už vôbec nie, či ho niekto poslal účtovníkovi. Server o tom nemá ako
+// vedieť — HTTP odpoveď sa môže prerušiť kedykoľvek po odoslaní hlavičiek a
+// klient to serveru spoľahlivo neoznámi.
+//
+// Preto sa stav volá „balík vytvorený", nie „doklady odovzdané". Tvrdiť
+// prevzatie, ktoré Esblu nevie doložiť, by bolo to isté ako tvrdiť ho o
+// stiahnutom zošite — chyba, ktorú tento projekt už raz opravoval.
+//
 // PREČO SA BALÍK NEUKLADÁ
 // -----------------------
 // ZIP sa vracia priamo a nikde sa neukladá. Uložiť ho by znamenalo nový
@@ -205,25 +219,54 @@ export async function POST(req: Request) {
   const partiesByInvoice = groupBy(partiesRes.data ?? [], (x) => x.invoice_id);
   const taxByInvoice = groupBy(taxRes.data ?? [], (x) => x.invoice_id);
 
-  // Dokumenty naviazané na doklad. Fotky vozidiel a strojov sem nevedú —
-  // document_links.invoice_id je jediná cesta, ktorou sa sem dokument dostane,
-  // a tá vzniká iba pri účtovnom prepojení.
-  const linkedDocIds = Array.from(new Set((linksRes.data ?? []).map((l) => l.document_id)));
-  const docsByInvoice = new Map<string, string[]>();
-  for (const link of linksRes.data ?? []) {
-    docsByInvoice.set(link.invoice_id, [...(docsByInvoice.get(link.invoice_id) ?? []), link.document_id]);
+  // ---------------------------------------------------------------------------
+  // ČO JE ORIGINÁL A ČO JE LEN PRÍLOHA
+  //
+  // `invoices.source_document_id` je JEDINÝ zdroj originálu prijatého dokladu.
+  // Je to ten súbor, ktorý prišiel od dodávateľa a z ktorého doklad vznikol.
+  //
+  // `document_links` je niečo iné: ľubovoľné účtovné prepojenie dokumentu na
+  // doklad. Môže tam byť dodací list, potvrdenie o úhrade, druhý sken. Také
+  // dokumenty do balíka patria — ale ako SPRIEVODNÉ, pod vlastným menom.
+  //
+  // Predtým sa originál hľadal iba cez `document_links` a stačila existencia
+  // akéhokoľvek prepojeného dokumentu. Prijatá faktúra bez originálu, ale s
+  // pripnutým potvrdením o úhrade, by tak prešla ako úplne odovzdaná — a
+  // účtovník by dostal balík bez jediného dokladu od dodávateľa. To je presne
+  // tá zámena, ktorá sa stať nesmie.
+  // ---------------------------------------------------------------------------
+  const originalDocIdByInvoice = new Map<string, string>();
+  for (const invoice of invoices) {
+    if (invoice.source_document_id) originalDocIdByInvoice.set(invoice.id, invoice.source_document_id);
   }
+
+  const supportingDocsByInvoice = new Map<string, string[]>();
+  for (const link of linksRes.data ?? []) {
+    // Originál sa medzi sprievodné dokumenty nezaradí, aj keď je naň aj link.
+    if (originalDocIdByInvoice.get(link.invoice_id) === link.document_id) continue;
+    supportingDocsByInvoice.set(link.invoice_id, [
+      ...(supportingDocsByInvoice.get(link.invoice_id) ?? []),
+      link.document_id,
+    ]);
+  }
+
+  const allDocIds = Array.from(
+    new Set([
+      ...originalDocIdByInvoice.values(),
+      ...Array.from(supportingDocsByInvoice.values()).flat(),
+    ])
+  );
 
   let documents: DocumentRow[] = [];
   let attachments: AttachmentRow[] = [];
-  if (linkedDocIds.length > 0) {
+  if (allDocIds.length > 0) {
     const [docRes, attRes] = await Promise.all([
       db.from("documents")
         .select("id, storage_bucket, storage_path, original_filename, mime_type, file_size, content_sha256, deleted_at")
-        .in("id", linkedDocIds).returns<DocumentRow[]>(),
+        .in("id", allDocIds).returns<DocumentRow[]>(),
       db.from("document_attachments")
         .select("id, document_id, storage_bucket, storage_path, original_filename, mime_type, file_size")
-        .in("document_id", linkedDocIds).returns<AttachmentRow[]>(),
+        .in("document_id", allDocIds).returns<AttachmentRow[]>(),
     ]);
     if (docRes.error || attRes.error) {
       console.error("handoff/package: načítanie dokumentov/príloh zlyhalo.");
@@ -237,35 +280,67 @@ export async function POST(req: Request) {
   const attachmentsByDoc = groupBy(attachments, (a) => a.document_id);
 
   // ---------------------------------------------------------------------------
-  // 4. Oprávnenosť. Chybný doklad balík zastaví — nepreskočí sa.
+  // 4. Kto do balíka ide, kto sa vynechá a kto ho zastaví
+  //
+  // Sú to TRI rôzne veci a miešať ich bola chyba.
+  //
+  //   koncept          → vynechá sa a povie sa to
+  //   pokazený doklad  → zastaví celý balík
+  //   ostatné          → zabalí sa
+  //
+  // Koncept nie je pokazený doklad. Je to rozpracovaná vec, ktorá do
+  // účtovníctva ešte nepatrí. Keby kvôli nemu zlyhal celý balík, používateľ
+  // by nedostal ani tie doklady, ktoré sú v poriadku — a jediné riešenie by
+  // bolo koncept zmazať. To je zlá rada.
+  //
+  // Doklad, ktorý si protirečí alebo ktorému chýba originál, je iná vec.
+  // Ten balík zastaví, lebo ticho vynechaný účtovný doklad by bol horší než
+  // žiadny balík.
   // ---------------------------------------------------------------------------
+  const DRAFT_ONLY_PROBLEMS = new Set(["not_finalized", "missing_invoice_number"]);
+
+  const eligible: Invoice[] = [];
+  const excludedDrafts: { invoice_id: string; label: string }[] = [];
   const rejected: { invoice_id: string; label: string; problems: string[] }[] = [];
 
   for (const invoice of invoices) {
-    const invoiceDocs = (docsByInvoice.get(invoice.id) ?? [])
-      .map((id) => documentById.get(id))
-      .filter((d): d is DocumentRow => Boolean(d));
-
+    const label = invoice.invoice_number ?? invoice.supplier_invoice_number ?? invoice.id;
     const problems = eligibilityProblems({
       invoice,
       itemCount: (itemsByInvoice.get(invoice.id) ?? []).length,
-      hasOriginalDocument: invoiceDocs.length > 0,
+      // IBA kanonický originál. Sprievodné dokumenty sa sem nezapočítavajú.
+      hasOriginalDocument: Boolean(
+        documentById.get(originalDocIdByInvoice.get(invoice.id) ?? "")
+      ),
     });
 
-    if (problems.length > 0) {
-      rejected.push({
-        invoice_id: invoice.id,
-        label: invoice.invoice_number ?? invoice.supplier_invoice_number ?? invoice.id,
-        problems,
-      });
+    if (problems.length === 0) {
+      eligible.push(invoice);
+      continue;
     }
+
+    // Bežný koncept: iba chýbajúca finalizácia (a s ňou číslo dokladu).
+    if (invoice.document_status === "draft" && problems.every((p) => DRAFT_ONLY_PROBLEMS.has(p))) {
+      excludedDrafts.push({ invoice_id: invoice.id, label });
+      continue;
+    }
+
+    rejected.push({ invoice_id: invoice.id, label, problems });
   }
 
   if (rejected.length > 0) {
     // Zámerne sa NEZAPISUJE záznam `failed`: nič sa nezačalo vyrábať, iba sa
     // zistilo, že výber je nevhodný. Zapisovať zlyhanie za zle zvolený filter
     // by zahltilo históriu odovzdaní šumom.
-    return failed(translate(locale, "handoff.errors.notEligible"), { rejected });
+    return failed(translate(locale, "handoff.errors.notEligible"), { rejected, excludedDrafts });
+  }
+
+  // Samé koncepty. Prázdny „hotový" balík by tvrdil, že sa niečo odovzdalo.
+  if (eligible.length === 0) {
+    return failed(translate(locale, "handoff.errors.noFinalizedDocuments"), {
+      excludedDrafts,
+      eligibleCount: 0,
+    });
   }
 
   // ---------------------------------------------------------------------------
@@ -293,7 +368,7 @@ export async function POST(req: Request) {
   };
 
   try {
-    for (const invoice of invoices) {
+    for (const invoice of eligible) {
       const folder = directionFolder(invoice.direction);
       if (!folder) throw new HandoffFailure("unknown_direction", invoice.id);
 
@@ -384,35 +459,48 @@ export async function POST(req: Request) {
         artifactCount++;
       }
 
-      // --- originály a prílohy
-      const invoiceDocs = (docsByInvoice.get(invoice.id) ?? [])
+      // --- originál (kanonický) a sprievodné dokumenty
+      //
+      // `original.<ext>` dostane VÝHRADNE dokument z `source_document_id`.
+      // Ostatné prepojené dokumenty idú do `supporting/` a nikdy sa netvária
+      // ako doklad od dodávateľa.
+      const originalDoc = documentById.get(originalDocIdByInvoice.get(invoice.id) ?? "");
+      const supportingDocs = (supportingDocsByInvoice.get(invoice.id) ?? [])
         .map((id) => documentById.get(id))
         .filter((d): d is DocumentRow => Boolean(d));
 
-      let originalIndex = 0;
-      for (const doc of invoiceDocs) {
+      const packDocument = async (doc: DocumentRow, isOriginal: boolean, index: number) => {
         const bytes = await fetchObject(doc.storage_bucket, doc.storage_path);
-        if (!bytes) throw new HandoffFailure("missing_original_document", invoice.id);
+        if (!bytes) {
+          throw new HandoffFailure(
+            isOriginal ? "missing_original_document" : "missing_supporting_document",
+            invoice.id
+          );
+        }
 
         // Originál sa nikdy neprepisuje ani neprebaľuje. Keď Esblu pozná
         // jeho odtlačok z času nahratia, musí sedieť — inak sa bajty medzitým
         // zmenili a balík by tvrdil niečo nepravdivé.
-        const hash = sha256Hex(bytes);
-        if (doc.content_sha256 && doc.content_sha256 !== hash) {
+        if (doc.content_sha256 && doc.content_sha256 !== sha256Hex(bytes)) {
           throw new HandoffFailure("original_hash_mismatch", invoice.id);
         }
 
         const ext = safeExtension(doc.original_filename, doc.mime_type);
-        const suffix = originalIndex === 0 ? "" : `-${originalIndex + 1}`;
-        const name =
-          invoice.direction === "received" ? `original${suffix}.${ext}` : `source${suffix}.${ext}`;
-        originalIndex++;
+        const path = isOriginal
+          ? `${dir}/original.${ext}`
+          : `${dir}/supporting/${safeSegment(
+              (doc.original_filename ?? doc.id).replace(/\.[A-Za-z0-9]{1,8}$/, ""),
+              `dokument-${index + 1}`
+            )}.${ext}`;
 
         addFile(
           {
-            path: `${dir}/${name}`,
-            kind: "received_original", invoice_id: invoice.id, source_document_id: doc.id,
-            provenance: "original", mime_type: doc.mime_type,
+            path,
+            kind: isOriginal ? "received_original" : "attachment",
+            invoice_id: invoice.id,
+            source_document_id: doc.id,
+            provenance: "original",
+            mime_type: doc.mime_type,
             original_filename: doc.original_filename,
           },
           bytes
@@ -440,6 +528,11 @@ export async function POST(req: Request) {
           );
           artifactCount++;
         }
+      };
+
+      if (originalDoc) await packDocument(originalDoc, true, 0);
+      for (const [index, doc] of supportingDocs.entries()) {
+        await packDocument(doc, false, index);
       }
 
       manifestInvoices.push({
@@ -551,7 +644,7 @@ export async function POST(req: Request) {
     }
 
     const { error: itemsError } = await db.from("accounting_handoff_export_items").insert(
-      invoices.map((invoice) => {
+      eligible.map((invoice) => {
         const mi = manifestInvoices.find((m) => m.invoice_id === invoice.id);
         return {
           export_id: exportId,
@@ -583,6 +676,10 @@ export async function POST(req: Request) {
         "X-Esblu-Package-Sha256": packageSha256,
         "X-Esblu-Manifest-Sha256": manifestSha256,
         "X-Esblu-File-Count": String(manifest.file_count),
+        "X-Esblu-Invoice-Count": String(eligible.length),
+        // Koľko konceptov sa vynechalo. UI to povie nahlas — vynechanie,
+        // o ktorom sa mlčí, je to isté ako strata.
+        "X-Esblu-Excluded-Drafts": String(excludedDrafts.length),
         "Cache-Control": "private, no-store",
       },
     });
@@ -602,7 +699,7 @@ export async function POST(req: Request) {
       created_by: user.id,
       export_kind: "complete_package",
       status: "failed",
-      invoice_count: invoices.length,
+      invoice_count: eligible.length,
       manifest_sha256: "0".repeat(64),
       failure_reason: invoiceId ? `${reason}:${invoiceId}` : reason,
       note,
