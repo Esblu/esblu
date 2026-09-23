@@ -3,7 +3,14 @@ import JSZip from "jszip";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { verifyRequestUser } from "@/lib/server-auth";
 import { getRequestLocale } from "@/lib/i18n/request-locale";
-import { translate } from "@/lib/i18n/translate";
+import type { Locale } from "@/lib/i18n/locales";
+import { translate, translateWithFallback } from "@/lib/i18n/translate";
+import {
+  handoffErrorCode,
+  handoffErrorKey,
+  HANDOFF_GENERIC_ERROR_KEY,
+  type HandoffErrorCode,
+} from "@/lib/invoicing/handoff-errors";
 import { renderInvoicePdfBuffer } from "@/lib/invoicing/pdf-renderer";
 import {
   buildManifest,
@@ -107,9 +114,32 @@ type AttachmentRow = {
   file_size: number | null;
 };
 
-function errorResponse(status: number, message: string, extra?: Record<string, unknown>): Response {
+/**
+ * Odpoveď s chybou.
+ *
+ * ČO IDE VON A ČO NIE
+ * -------------------
+ * Von ide strojový kód a preložená veta pre človeka. NIKDY nie hlásenie z
+ * databázy, cesta v úložisku, názov objektu, id dokumentu ani stack trace —
+ * to všetko patrí do serverového logu, kam sa používateľ nepozerá a útočník
+ * tiež nie.
+ *
+ * `reason` a `invoice_id` sa v odpovedi zámerne NEVRACAJÚ. Vnútorný dôvod je
+ * podrobnejší než kód a jeho jediný účel je hľadanie chyby v logu.
+ */
+function errorResponse(
+  locale: Locale,
+  status: number,
+  code: HandoffErrorCode,
+  vars?: Record<string, string | number>,
+  extra?: Record<string, unknown>
+): Response {
   return Response.json(
-    { error: message, ...extra },
+    {
+      code,
+      error: translateWithFallback(locale, handoffErrorKey(code), HANDOFF_GENERIC_ERROR_KEY, vars),
+      ...extra,
+    },
     { status, headers: { "Cache-Control": "private, no-store" } }
   );
 }
@@ -120,8 +150,8 @@ function sha256Hex(bytes: Uint8Array): string {
 
 export async function POST(req: Request) {
   const locale = getRequestLocale(req);
-  const failed = (message: string, extra?: Record<string, unknown>) =>
-    errorResponse(422, message, extra);
+  const failed = (code: HandoffErrorCode, extra?: Record<string, unknown>, vars?: Record<string, string | number>) =>
+    errorResponse(locale, 422, code, vars, extra);
 
   // ---------------------------------------------------------------------------
   // 1. Vstup
@@ -136,16 +166,14 @@ export async function POST(req: Request) {
     );
     if (typeof body.note === "string" && body.note.trim()) note = body.note.trim().slice(0, 500);
   } catch {
-    return errorResponse(400, translate(locale, "handoff.errors.badRequest"));
+    return errorResponse(locale, 400, "BAD_REQUEST");
   }
 
   if (invoiceIds.length === 0) {
-    return errorResponse(400, translate(locale, "xlsxExport.noDocumentsToExport"));
+    return errorResponse(locale, 400, "NO_DOCUMENTS_SELECTED");
   }
   if (invoiceIds.length > PACKAGE_LIMITS.maxInvoices) {
-    return failed(
-      translate(locale, "handoff.errors.tooManyInvoices", { max: PACKAGE_LIMITS.maxInvoices })
-    );
+    return failed("TOO_MANY_INVOICES", undefined, { max: PACKAGE_LIMITS.maxInvoices });
   }
 
   // ---------------------------------------------------------------------------
@@ -153,7 +181,7 @@ export async function POST(req: Request) {
   // ---------------------------------------------------------------------------
   const { user, error: authError } = await verifyRequestUser(req, locale);
   if (authError || !user) {
-    return errorResponse(401, translate(locale, "invoices.errors.pdfNotAuthenticated"));
+    return errorResponse(locale, 401, "UNAUTHORIZED");
   }
 
   const accessToken = (req.headers.get("authorization") ?? "").slice("Bearer ".length).trim();
@@ -161,7 +189,7 @@ export async function POST(req: Request) {
   const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   if (!supabaseUrl || !supabaseAnonKey || !accessToken) {
     console.error("handoff/package: chýba Supabase konfigurácia alebo token.");
-    return errorResponse(500, translate(locale, "handoff.errors.failed"));
+    return errorResponse(locale, 500, "INTERNAL_ERROR");
   }
 
   const db: SupabaseClient = createClient(supabaseUrl, supabaseAnonKey, {
@@ -174,8 +202,8 @@ export async function POST(req: Request) {
     db.rpc("esblu_my_finance_manage"),
   ]);
 
-  if (!companyId) return errorResponse(403, translate(locale, "invoices.errors.pdfNoActiveCompany"));
-  if (!canManage) return errorResponse(403, translate(locale, "invoices.errors.pdfForbidden"));
+  if (!companyId) return errorResponse(locale, 403, "NO_ACTIVE_COMPANY");
+  if (!canManage) return errorResponse(locale, 403, "FORBIDDEN");
 
   // ---------------------------------------------------------------------------
   // 3. Zber. Každý dotaz beží pod RLS ako prihlásený používateľ.
@@ -189,13 +217,13 @@ export async function POST(req: Request) {
 
   if (invoiceError) {
     console.error("handoff/package: načítanie faktúr zlyhalo:", invoiceError.code);
-    return errorResponse(500, translate(locale, "handoff.errors.failed"));
+    return errorResponse(locale, 500, "INTERNAL_ERROR");
   }
 
   // Cudzia firma sa sem cez RLS nedostane; explicitný filter je druhá vrstva.
   const invoices = (invoiceRows ?? []).filter((i) => i.company_id === companyId);
   if (invoices.length === 0) {
-    return errorResponse(404, translate(locale, "xlsxExport.noDocumentsToExport"));
+    return errorResponse(locale, 404, "NO_DOCUMENTS_SELECTED");
   }
 
   const ids = invoices.map((i) => i.id);
@@ -212,7 +240,7 @@ export async function POST(req: Request) {
 
   if (itemsRes.error || partiesRes.error || taxRes.error || linksRes.error) {
     console.error("handoff/package: načítanie súvisiacich záznamov zlyhalo.");
-    return errorResponse(500, translate(locale, "handoff.errors.failed"));
+    return errorResponse(locale, 500, "INTERNAL_ERROR");
   }
 
   const itemsByInvoice = groupBy(itemsRes.data ?? [], (x) => x.invoice_id);
@@ -270,7 +298,7 @@ export async function POST(req: Request) {
     ]);
     if (docRes.error || attRes.error) {
       console.error("handoff/package: načítanie dokumentov/príloh zlyhalo.");
-      return errorResponse(500, translate(locale, "handoff.errors.failed"));
+      return errorResponse(locale, 500, "INTERNAL_ERROR");
     }
     documents = (docRes.data ?? []).filter((d) => !d.deleted_at);
     attachments = attRes.data ?? [];
@@ -332,15 +360,12 @@ export async function POST(req: Request) {
     // Zámerne sa NEZAPISUJE záznam `failed`: nič sa nezačalo vyrábať, iba sa
     // zistilo, že výber je nevhodný. Zapisovať zlyhanie za zle zvolený filter
     // by zahltilo históriu odovzdaní šumom.
-    return failed(translate(locale, "handoff.errors.notEligible"), { rejected, excludedDrafts });
+    return failed("NOT_ELIGIBLE", { rejected, excludedDrafts });
   }
 
   // Samé koncepty. Prázdny „hotový" balík by tvrdil, že sa niečo odovzdalo.
   if (eligible.length === 0) {
-    return failed(translate(locale, "handoff.errors.noFinalizedDocuments"), {
-      excludedDrafts,
-      eligibleCount: 0,
-    });
+    return failed("NO_FINALIZED_DOCUMENTS", { excludedDrafts, eligibleCount: 0 });
   }
 
   // ---------------------------------------------------------------------------
@@ -640,7 +665,7 @@ export async function POST(req: Request) {
 
     if (exportError) {
       console.error("handoff/package: zápis záznamu zlyhal:", exportError.code, exportError.message);
-      return errorResponse(500, translate(locale, "handoff.errors.recordFailed"));
+      return errorResponse(locale, 500, "RECORD_FAILED");
     }
 
     const { error: itemsError } = await db.from("accounting_handoff_export_items").insert(
@@ -663,7 +688,7 @@ export async function POST(req: Request) {
 
     if (itemsError) {
       console.error("handoff/package: zápis položiek zlyhal:", itemsError.code, itemsError.message);
-      return errorResponse(500, translate(locale, "handoff.errors.recordFailed"));
+      return errorResponse(locale, 500, "RECORD_FAILED");
     }
 
     return new Response(new Uint8Array(zipBytes), {
@@ -705,10 +730,7 @@ export async function POST(req: Request) {
       note,
     });
 
-    return failed(translate(locale, `handoff.errors.package.${reason}`), {
-      reason,
-      invoice_id: invoiceId,
-    });
+    return failed(handoffErrorCode(reason));
   }
 }
 
@@ -732,17 +754,17 @@ function groupBy<T>(rows: readonly T[], key: (row: T) => string): Map<string, T[
   return map;
 }
 
-function readmeText(locale: string, invoiceCount: number): string {
+function readmeText(locale: Locale, invoiceCount: number): string {
   return [
-    translate(locale as never, "handoff.package.readmeTitle"),
+    translate(locale, "handoff.package.readmeTitle"),
     "",
-    translate(locale as never, "handoff.package.readmeIntro", { count: invoiceCount }),
+    translate(locale, "handoff.package.readmeIntro", { count: invoiceCount }),
     "",
-    translate(locale as never, "handoff.package.readmeStructure"),
+    translate(locale, "handoff.package.readmeStructure"),
     "",
-    translate(locale as never, "handoff.package.readmeIntegrity"),
+    translate(locale, "handoff.package.readmeIntegrity"),
     "",
-    translate(locale as never, "handoff.package.readmeDisclaimer"),
+    translate(locale, "handoff.package.readmeDisclaimer"),
     "",
   ].join("\n");
 }

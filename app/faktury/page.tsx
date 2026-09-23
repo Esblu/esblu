@@ -36,6 +36,13 @@ import { apiUrl } from "@/lib/api-url";
 import { REQUEST_LOCALE_HEADER } from "@/lib/i18n/request-locale";
 import { downloadBlob } from "@/lib/file-actions";
 import {
+  handoffErrorKey,
+  isHandoffErrorCode,
+  HANDOFF_GENERIC_ERROR_KEY,
+} from "@/lib/invoicing/handoff-errors";
+import { hasTranslation, translate } from "@/lib/i18n/translate";
+import { PACKAGE_LIMITS } from "@/lib/invoicing/handoff-package";
+import {
   matchesDirection,
   matchesSection,
   DIRECTION_ORDER,
@@ -88,6 +95,25 @@ function formatBytes(bytes: number): string {
 
 export default function FakturyPage() {
   const { t, locale } = useLocale();
+
+  /**
+   * Preklad s poistkou. Keď kľúč chýba, nastúpi náhradná veta — používateľ
+   * nikdy neuvidí názov premennej. Konkrétna hláška má prednosť vždy, keď
+   * existuje.
+   */
+  function tFallback(
+    key: string,
+    fallbackKey: string,
+    vars?: Record<string, string | number>
+  ): string {
+    if (hasTranslation(locale, key)) return translate(locale, key, vars);
+    return translate(locale, fallbackKey, vars);
+  }
+
+  /** Preklad, ktorý sa smie vynechať — vráti `null`, ak kľúč neexistuje. */
+  function tOptional(key: string): string | null {
+    return hasTranslation(locale, key) ? translate(locale, key) : null;
+  }
   const { legalHold } = useCompanyDpaLegalHold();
 
   const [membership, setMembership] = useState<MyActiveMembership | null>(null);
@@ -377,24 +403,45 @@ export default function FakturyPage() {
       });
 
       if (!response.ok) {
-        // Server posiela dôvod, nie len „nepodarilo sa". Keď sa doklad do
-        // balíka nedá zaradiť, používateľ musí vedieť ktorý a prečo —
-        // inak nemá čo opraviť.
+        // Server posiela STROJOVÝ KÓD, nie vetu, podľa ktorej by sa tu
+        // rozhodovalo. Text sa skladá tu, v jazyku používateľa.
+        //
+        // Rozhodovať sa podľa anglickej vety by znamenalo, že preklep v
+        // preklade rozbije logiku — a to je presne ten druh závislosti,
+        // ktorý sa nedá otestovať a pri ktorom nikto netuší, prečo padla.
         const payload = (await response.json().catch(() => null)) as
-          | { error?: string; rejected?: { label: string; problems: string[] }[] }
+          | {
+              code?: string;
+              error?: string;
+              rejected?: { label: string; problems: string[] }[];
+            }
           | null;
 
+        // Kód z odpovede sa overuje voči známemu zoznamu. Bez toho by sa z
+        // odpovede servera dal vyrobiť ľubovoľný prekladový kľúč.
+        const message = isHandoffErrorCode(payload?.code)
+          ? tFallback(handoffErrorKey(payload.code), HANDOFF_GENERIC_ERROR_KEY, {
+              max: PACKAGE_LIMITS.maxInvoices,
+            })
+          : tFallback(HANDOFF_GENERIC_ERROR_KEY, HANDOFF_GENERIC_ERROR_KEY);
+
+        // Ktorý doklad a prečo. Bez toho používateľ nemá čo opraviť.
+        // `problems` sú vnútorné kódy oprávnenosti — prekladajú sa, a keď
+        // preklad chýba, radšej sa vynechajú, než by sa zobrazil názov
+        // premennej.
         const detail = payload?.rejected?.length
           ? ` (${payload.rejected
               .slice(0, 5)
-              .map((item) => `${item.label}: ${item.problems.join(", ")}`)
+              .map((item) => {
+                const reasons = item.problems
+                  .map((problem) => tOptional(`handoff.errors.eligibility.${problem}`))
+                  .filter((text): text is string => Boolean(text));
+                return reasons.length ? `${item.label}: ${reasons.join(", ")}` : item.label;
+              })
               .join("; ")})`
           : "";
 
-        setExportFeedback({
-          type: "error",
-          text: (payload?.error ?? t("handoff.errors.failed")) + detail,
-        });
+        setExportFeedback({ type: "error", text: message + detail });
         return;
       }
 

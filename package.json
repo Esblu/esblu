@@ -22,7 +22,8 @@
     "test:vat": "node --experimental-strip-types --no-warnings scripts/vat-arithmetic-tests.ts",
     "test:gross": "node --experimental-strip-types --no-warnings scripts/gross-rounding-tests.ts",
     "test:handoff": "node --experimental-strip-types --no-warnings scripts/handoff-package-tests.ts",
-    "test:format": "node --experimental-strip-types --no-warnings scripts/money-format-tests.ts"
+    "test:format": "node --experimental-strip-types --no-warnings scripts/money-format-tests.ts",
+    "test:i18n": "node --experimental-strip-types --no-warnings scripts/i18n-handoff-tests.ts"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.9.0",
