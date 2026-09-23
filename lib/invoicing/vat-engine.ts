@@ -1,6 +1,9 @@
 import Decimal from "decimal.js";
-import { todayLocalDate } from "@/lib/local-date";
-import { type VatCategoryCode } from "./vat-categories";
+// Relatívny import (rovnako ako v lib/intents/*): vďaka nemu sa modul dá
+// spustiť priamo v Node, takže peňažná matematika má vlastné testy bez
+// bundlera. `local-date.ts` sám žiadne importy nemá.
+import { todayLocalDate } from "../local-date.ts";
+import { type VatCategoryCode } from "./vat-categories.ts";
 
 // -----------------------------------------------------------------------------
 // Deterministický VAT engine (Fáza 2 — fakturačné jadro).
@@ -76,7 +79,7 @@ export {
   VAT_CATEGORY_CODES,
   isVatCategoryCode,
   type VatCategoryCode,
-} from "./vat-categories";
+} from "./vat-categories.ts";
 
 export interface VatEngineLineInput {
   quantity: number | string;
@@ -151,6 +154,48 @@ export function computeInvoiceLine(input: VatEngineLineInput): VatEngineLineResu
     lineVatAmount: lineVat.toFixed(2),
     lineGrossAmount: lineGross.toFixed(2),
   };
+}
+
+/**
+ * Jednotková cena BEZ dane z ceny S DAŇOU.
+ *
+ * KEDY SA POUŽIJE
+ * ---------------
+ * Keď používateľ povie „uvedené ceny sú už s DPH". Esblu ukladá do
+ * `invoice_items.unit_price` cenu bez dane, takže sa musí prepočítať —
+ * a prepočítať sa musí TU, jediným miestom, kde v appke beží peňažná
+ * matematika. Model ani parser o daň nezavadia.
+ *
+ * PRESNOSŤ A JEDEN CENT
+ * ---------------------
+ * Základ sa zaokrúhľuje na centy, lebo to je tvar, v akom cena na doklade
+ * naozaj stojí a v akom ju človek v koncepte uvidí a prípadne prepíše.
+ *
+ * Dôsledok treba povedať nahlas: pri časti súm sa spätný prepočet od
+ * vyslovenej sumy odchýli o jeden cent. „0,99 € s 23 % DPH" dá základ
+ * 0,80 € a riadok 0,98 €, pretože žiadna cena v centoch nedá po pripočítaní
+ * dane presne 0,99. Nie je to chyba zaokrúhľovania, ktorú by sa dalo
+ * „opraviť" väčšou presnosťou — overené: šesť desatinných miest dá presne
+ * tie isté výsledky, lebo riadkový základ sa aj tak počíta na centy.
+ *
+ * Odchýlka je najviac 1 cent na riadok a používateľ vidí skutočné súčty v
+ * koncepte skôr, než čokoľvek vystaví.
+ *
+ * Pri nulovej sadzbe (alebo kategórii bez dane) je cena s daňou totožná s
+ * cenou bez dane a nič sa nedelí.
+ */
+export function netUnitPriceFromGross(
+  grossUnitPrice: number | string,
+  vatCategoryCode: VatCategoryCode,
+  vatRate: number | string
+): string {
+  const gross = new Decimal(grossUnitPrice);
+  const rate = effectiveVatRate(vatCategoryCode, vatRate);
+
+  if (rate.isZero()) return round2(gross).toFixed(2);
+
+  const divisor = rate.dividedBy(100).plus(1);
+  return round2(gross.dividedBy(divisor)).toFixed(2);
 }
 
 /**

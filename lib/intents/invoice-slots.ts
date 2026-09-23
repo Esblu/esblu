@@ -8,6 +8,12 @@ import {
   type InvoiceItemCandidate,
 } from "./invoice-items.ts";
 import { isVatCategoryCode, type VatCategoryCode } from "../invoicing/vat-categories.ts";
+import {
+  detectPriceModeStatement,
+  isPriceMode,
+  DEFAULT_PRICE_MODE,
+  type PriceMode,
+} from "../invoicing/price-mode.ts";
 
 // =============================================================================
 // Stav rozpracovanej hlasovej faktúry — čisté funkcie nad slotmi.
@@ -74,7 +80,18 @@ export type InvoiceDraftSlots = {
    * preto nikdy nechýba a rekonciliácia sa nedá preskočiť.
    */
   spokenAmounts?: number[];
+  /**
+   * Sú vyslovené sumy s daňou, alebo bez nej?
+   *
+   * Samostatný slot, lebo je to samostatná otázka. „Uvedené ceny sú už s
+   * DPH" hovorí, AKO sú sumy vyjadrené; sadzbu z toho odvodiť nemožno a
+   * appka sa na ňu preto pýta ďalej. Keď o režime nepovedal nikto nič,
+   * platí `DEFAULT_PRICE_MODE` — to isté, čo predvolí formulár v UI.
+   */
+  priceMode?: PriceMode;
 };
+
+export type { PriceMode };
 
 /** Poradie, v akom sa asistent pýta. Zhora nadol, vždy jedna otázka. */
 export type InvoiceDraftField =
@@ -93,6 +110,7 @@ const SLOT_KEYS: (keyof InvoiceDraftSlots)[] = [
   "vatCategoryCode",
   "vatRate",
   "spokenAmounts",
+  "priceMode",
 ];
 
 /**
@@ -199,6 +217,10 @@ export function readSlots(raw: unknown): InvoiceDraftSlots {
   // hodnota by rekonciláciu neoslabila — musela by sa trafiť do cien,
   // ktoré prešli vlastnou validáciou — ale nedôveryhodný vstup sa tu
   // zásadne nevalidný neprepúšťa.
+  if (isPriceMode(source.priceMode)) {
+    slots.priceMode = source.priceMode;
+  }
+
   if (Array.isArray(source.spokenAmounts)) {
     const amounts = source.spokenAmounts.filter(
       (value): value is number =>
@@ -360,6 +382,21 @@ function applyAnswerToSlots(
     }
 
     case "vat": {
+      // REŽIM CENY JE INÁ OTÁZKA NEŽ SADZBA.
+      //
+      // „Uvedené ceny sú už s DPH" je platná a dôležitá odpoveď — hovorí
+      // však o tom, AKO sú sumy vyjadrené, nie o tom, AKÁ daň platí.
+      // Uloží sa a dialóg sa pýta ďalej. Bez tohto kroku appka zopakovala
+      // tú istú otázku, akoby používateľ nič nepovedal; presne to hlásil
+      // reálny test.
+      //
+      // Zmiešané režimy („prvá cena je s DPH") sa nepodporujú a zámerne sa
+      // NEUKLADAJÚ — vrstva nad tým sa spýta.
+      const priceModeStatement = detectPriceModeStatement(answer);
+      if (priceModeStatement === "net" || priceModeStatement === "gross") {
+        next.priceMode = priceModeStatement;
+      }
+
       const rate = findVatRate(answer);
       const bareNumber = rate === null ? findNumber(answer) : null;
 
@@ -390,6 +427,16 @@ function applyAnswerToSlots(
       return next;
     }
   }
+}
+
+/**
+ * Aký je platný režim ceny — vrátane predvoleného.
+ *
+ * Existuje preto, aby sa `?? DEFAULT_PRICE_MODE` nepísalo na piatich
+ * miestach a na šiestom sa zabudlo.
+ */
+export function effectivePriceMode(slots: InvoiceDraftSlots): PriceMode {
+  return slots.priceMode ?? DEFAULT_PRICE_MODE;
 }
 
 /** Index prvej položky bez ceny, alebo `null`. */

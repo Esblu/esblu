@@ -22,12 +22,13 @@ import {
   appendItemFromAnswer,
   looksLikeItemAppend,
   buildItemPriceQuestion,
+  buildVatQuestion,
   describeItemParse,
   type InvoiceDraftField,
   type InvoiceDraftSlots,
   type PartnerCandidate,
 } from "@/lib/intents/invoice-draft";
-import { mentionsGrossPrice } from "@/lib/invoicing/voice-financial-validator";
+import { detectPriceModeStatement } from "@/lib/invoicing/price-mode";
 
 // =============================================================================
 // Viackrokový dialóg pre hlasové vytvorenie draftu faktúry.
@@ -98,30 +99,24 @@ export async function startInvoiceDraftFlow(
   // z modelu — ten vracia vždy nanajvýš jednu položku, takže by
   // odmietnutie prebil a druhý riadok by ticho zanikol.
   // ------------------------------------------------------------------
-  // CENA S DPH NIE JE CENA BEZ DPH.
+  // REŽIM CENY UŽ V PRVEJ VETE.
   //
-  // „kopanie 300 eur s DPH" a „kopanie 300 eur s 23 % DPH" sa líšia o 56 €.
-  // Esblu ukladá jednotkovú cenu bez dane, takže prvú vetu by musela
-  // prepočítať — a to je rozhodnutie o daňovom základe, nie o jazyku.
-  // Cena sa preto zahodí a asistent si vypýta sumu bez dane.
-  if (mentionsGrossPrice(rawText) && slots.vatRate === undefined) {
-    if (slots.items) {
-      // Cena sa zahadzuje zámerne: v tejto vete znamená niečo iné, než
-      // čo Esblu ukladá.
-      slots.items = slots.items.map((item) => ({
-        description: item.description,
-        ...(item.quantity === undefined ? {} : { quantity: item.quantity }),
-        ...(item.unit === undefined ? {} : { unit: item.unit }),
-        ...(item.currency === undefined ? {} : { currency: item.currency }),
-      }));
-    }
-    slots.spokenAmounts = [];
+  // „…250 eur s DPH" hovorí, AKO sú sumy vyjadrené. Sumy sa preto
+  // ZACHOVAJÚ — iba sa zapamätá, že v sebe daň už majú. Sadzba z toho
+  // nevyplýva a asistent sa na ňu spýta ďalej.
+  //
+  // Skoršia verzia tu ceny zahadzovala a pýtala si sumy bez dane. Bolo to
+  // bezpečné, ale zbytočné: prepočet je deterministický a robí ho VAT
+  // engine, takže niet dôvodu žiadať človeka, aby delil v hlave.
+  const statedMode = detectPriceModeStatement(rawText);
+  if (statedMode === "mixed") {
     return askAgain(supabase, locale, ctx, slots, {
       kind: "clarify",
-      question: translate(locale, "search.voice.invoice.grossPriceUnsupported"),
+      question: translate(locale, "search.voice.invoice.priceModeMixed"),
       conversationId: ctx.conversationId,
     });
   }
+  if (statedMode) slots.priceMode = statedMode;
 
   const parse = describeItemParse(rawText, partnerQuery);
   if (parse.problem) {
@@ -295,6 +290,18 @@ export async function continueInvoiceDraftFlow(
     return continueFlow(supabase, locale, ctx, slots);
   }
 
+  // „Prvá cena je s DPH" — reč je o jednom riadku. Zmiešané režimy Esblu
+  // nepodporuje a kým ich nepodporuje, je jediná správna odpoveď otázka:
+  // doklad, kde je polovica riadkov prepočítaná inak než druhá, sa na
+  // prvý pohľad nedá odlíšiť od správneho.
+  if (field === "vat" && detectPriceModeStatement(rawAnswer) === "mixed") {
+    return askAgain(supabase, locale, ctx, slots, {
+      kind: "clarify",
+      question: translate(locale, "search.voice.invoice.priceModeMixed"),
+      conversationId: ctx.conversationId,
+    });
+  }
+
   const candidates =
     field === "partnerChoice"
       ? await readPartnerLabels(supabase, slots.partnerCandidateIds ?? [])
@@ -418,8 +425,14 @@ async function continueFlow(
 
   // Pri viacerých položkách musí otázka pomenovať TÚ, ktorej chýba cena —
   // inak používateľ priradí sumu k nesprávnemu riadku.
-  const questionText =
-    missing[0] === "itemPrice" ? buildItemPriceQuestion(locale, slots) : question.question;
+  let questionText = question.question;
+  if (missing[0] === "itemPrice") {
+    questionText = buildItemPriceQuestion(locale, slots);
+  } else if (missing[0] === "vat") {
+    // Otázka zopakuje, čo už používateľ o režime ceny povedal. Pýtať sa
+    // znova na to isté, akoby odpoveď nezaznela, je horšie než mlčať.
+    questionText = buildVatQuestion(locale, slots);
+  }
 
   return {
     kind: "clarify",

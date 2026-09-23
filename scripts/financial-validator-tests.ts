@@ -19,9 +19,9 @@
 import assert from "node:assert/strict";
 import {
   checkVoiceInvoiceDraft,
-  mentionsGrossPrice,
   type VoiceDraftCheckInput,
 } from "../lib/invoicing/voice-financial-validator.ts";
+import { detectPriceModeStatement } from "../lib/invoicing/price-mode.ts";
 import { extractInvoiceItems, moneyTokens } from "../lib/intents/invoice-items.ts";
 
 let passed = 0;
@@ -56,7 +56,7 @@ function validDraft(overrides: Partial<VoiceDraftCheckInput> = {}): VoiceDraftCh
     spokenAmounts: [300, 45],
     parserAmbiguous: false,
     pendingQuestions: 0,
-    grossPriceAmbiguous: false,
+    priceModeMixed: false,
     localDate: "2026-09-23",
     idempotencyClaimed: true,
     ...overrides,
@@ -245,24 +245,23 @@ check("chýbajúca DPH kategória", checkVoiceInvoiceDraft(validDraft({ vatCateg
 check("sadzba mimo rozsahu", checkVoiceInvoiceDraft(validDraft({ vatRate: 250 })), "vat_invalid");
 check("nedokončený dialóg", checkVoiceInvoiceDraft(validDraft({ pendingQuestions: 1 })), "clarification_pending");
 check("parser si nebol istý", checkVoiceInvoiceDraft(validDraft({ parserAmbiguous: true })), "parser_ambiguous");
-check("cena s DPH", checkVoiceInvoiceDraft(validDraft({ grossPriceAmbiguous: true })), "gross_price_ambiguous");
+check("zmiešané režimy ceny", checkVoiceInvoiceDraft(validDraft({ priceModeMixed: true })), "price_mode_mixed");
 check("neplatný dátum", checkVoiceInvoiceDraft(validDraft({ localDate: "2026-02-31" })), "local_date_invalid");
 check("chýbajúci dátum", checkVoiceInvoiceDraft(validDraft({ localDate: null })), "local_date_invalid");
 check("neuplatnená idempotencia", checkVoiceInvoiceDraft(validDraft({ idempotencyClaimed: false })), "idempotency_not_claimed");
 
 // -----------------------------------------------------------------------------
-// 6. Cena s DPH sa rozpozná
+// 6. Režim ceny sa rozpozná — a NEZAMIEŇA sa so sadzbou
+//
+// Podrobné jazykové varianty má scripts/price-mode-tests.ts; tu ide o to,
+// že brána a detektor hovoria o tom istom.
 // -----------------------------------------------------------------------------
-check("SK: „s DPH“", mentionsGrossPrice("kopanie 300 eur s DPH"), true);
-check("SK: „vrátane DPH“", mentionsGrossPrice("kopanie 300 eur vrátane DPH"), true);
-check("DE: „inkl. MwSt“", mentionsGrossPrice("Erdarbeiten 300 Euro inkl. MwSt"), true);
-check("DE: „brutto“", mentionsGrossPrice("Erdarbeiten 300 Euro brutto"), true);
-check("EN: „including VAT“", mentionsGrossPrice("excavation 300 euros including VAT"), true);
-check("EN: „incl. VAT“", mentionsGrossPrice("excavation 300 euros incl. VAT"), true);
-// So SADZBOU je veta jednoznačná a pravidlo sa neuplatňuje.
-check("SK: „s 23 percent DPH“ NIE JE cena s DPH", mentionsGrossPrice("kopanie 300 eur s 23 percent DPH"), false);
-check("DE: „mit 23 Prozent MwSt“ NIE JE", mentionsGrossPrice("Erdarbeiten 300 Euro mit 23 Prozent MwSt"), false);
-check("EN: „with 23 percent VAT“ NIE JE", mentionsGrossPrice("excavation 300 euros with 23 percent VAT"), false);
+check('SK: „ceny sú s DPH"', detectPriceModeStatement("Uvedené ceny sú už s DPH."), "gross");
+check('SK: „ceny sú bez DPH"', detectPriceModeStatement("Nie, ceny sú bez DPH."), "net");
+check('SK: „s 23 percent DPH" NIE JE režim ceny', detectPriceModeStatement("kopanie 300 eur s 23 percent DPH"), null);
+check('SK: „prvá cena je s DPH" je zmiešaný režim', detectPriceModeStatement("Prvá cena je s DPH."), "mixed");
+check('DE: „inkl. MwSt"', detectPriceModeStatement("Die Preise sind inkl. MwSt."), "gross");
+check('EN: „prices include VAT"', detectPriceModeStatement("Prices include VAT."), "gross");
 
 // -----------------------------------------------------------------------------
 // 7. Reťaz parser → brána na reálnom prepise

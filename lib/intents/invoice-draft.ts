@@ -9,7 +9,7 @@ import {
   previewDraftTotals,
   type DraftInvoiceItemInput,
 } from "@/lib/invoices";
-import { type VatCategoryCode } from "@/lib/invoicing/vat-engine";
+import { netUnitPriceFromGross, type VatCategoryCode } from "@/lib/invoicing/vat-engine";
 import { matchPartnersByName, type PartnerMatchTier } from "@/lib/partner-matching";
 import { checkVoiceInvoiceDraft } from "@/lib/invoicing/voice-financial-validator";
 import { findCurrency, findVatRate } from "@/lib/intents/number-words";
@@ -18,6 +18,7 @@ import { extractInvoiceItems } from "@/lib/intents/invoice-items";
 // Re-export nižšie drží doterajšie importy volajúcich nezmenené; sem sa
 // dovážajú iba tie, ktoré tento súbor naozaj volá.
 import {
+  effectivePriceMode,
   firstItemWithoutPrice,
   missingInvoiceFields,
   type InvoiceDraftSlots,
@@ -27,6 +28,8 @@ import {
 
 export {
   applyAnswer,
+  effectivePriceMode,
+  type PriceMode,
   type PartnerCandidate,
   appendItemFromAnswer,
   looksLikeItemAppend,
@@ -372,8 +375,36 @@ export function buildQuestion(
     case "itemPrice":
       return { question: translate(locale, "search.voice.invoice.askAmount") };
     case "vat":
+      // Znenie dopĺňa `buildVatQuestion` — potrebuje sloty, ktoré sem
+      // nechodia. Toto je východisko pre prípad bez kontextu.
       return { question: translate(locale, "search.voice.invoice.askVat") };
   }
+}
+
+/**
+ * Otázka na DPH, ktorá nezahodí, čo už používateľ povedal.
+ *
+ * Keď oznámil, že ceny sú s daňou, otázka to zopakuje — inak to vyzerá,
+ * akoby ho appka nepočula. Presne to sa v reálnom teste stalo: človek
+ * odpovedal „uvedené ceny sú už s DPH" a dostal späť tú istú otázku, slovo
+ * za slovom.
+ *
+ * Sadzba sa z režimu NEODVODZUJE. „S DPH" nehovorí, akou sadzbou, a Esblu
+ * si ju nedomýšľa ani z krajiny, ani z partnera, ani zo sumy.
+ */
+export function buildVatQuestion(locale: Locale, slots: InvoiceDraftSlots): string {
+  const mode = effectivePriceMode(slots);
+
+  if (slots.priceMode === undefined) {
+    return translate(locale, "search.voice.invoice.askVat");
+  }
+
+  return translate(
+    locale,
+    mode === "gross"
+      ? "search.voice.invoice.askVatAfterGross"
+      : "search.voice.invoice.askVatAfterNet"
+  );
 }
 
 /**
@@ -450,7 +481,7 @@ export async function createInvoiceDraftFromSlots(
     spokenAmounts: slots.spokenAmounts ?? [],
     parserAmbiguous: false, // ambiguitu zachytáva flow skôr, než sa sem dôjde
     pendingQuestions: missingInvoiceFields(slots).length,
-    grossPriceAmbiguous: false,
+    priceModeMixed: false, // zmiešané režimy zachytáva flow skôr, než sa sem dôjde
     localDate: issueDate,
     idempotencyClaimed: true, // claim prebehol v continueFlow
   });
@@ -479,6 +510,19 @@ export async function createInvoiceDraftFromSlots(
   // riadku rozhodla appka.
   const vatRate = vatCategoryCode === "S" ? (slots.vatRate as number) : 0;
 
+  // REŽIM CENY.
+  //
+  // Esblu ukladá do `unit_price` cenu BEZ dane. Keď používateľ povedal, že
+  // vyslovené sumy už daň obsahujú, prepočíta sa základ — deterministicky,
+  // v tom istom VAT engine, ktorý počíta zvyšok dokladu. Model ani parser
+  // o daň nezavadia.
+  //
+  // Vyslovená suma zostáva presne taká, akú človek povedal: 250 € s 23 %
+  // DPH dá základ 203,252033 a riadok so sumou 250,00 €. Práve preto sa
+  // základ nezaokrúhľuje na dve miesta — zaokrúhľovanie patrí až na
+  // riadkové súčty.
+  const priceMode = effectivePriceMode(slots);
+
   // MNOŽSTVO A CENA SA MIEŠAŤ NESMÚ.
   //
   // Množstvo má predvolenú hodnotu, cena nikdy — `unit_price` sa berie
@@ -488,7 +532,10 @@ export async function createInvoiceDraftFromSlots(
     description: item.description,
     quantity: item.quantity ?? DEFAULT_QUANTITY,
     unit: item.unit ?? DEFAULT_UNIT,
-    unit_price: item.unitPrice as number,
+    unit_price:
+      priceMode === "gross"
+        ? Number(netUnitPriceFromGross(item.unitPrice as number, vatCategoryCode, vatRate))
+        : (item.unitPrice as number),
     vat_category_code: vatCategoryCode,
     vat_rate: vatRate,
   }));
@@ -527,16 +574,36 @@ export async function createInvoiceDraftFromSlots(
         },
         // Každý riadok samostatne. Súhrn, ktorý by položky zlúčil do jednej
         // sumy, by zakryl práve to, čo má používateľ skontrolovať.
+        //
+        // Pri cenách S DAŇOU sa v riadku ukazuje suma S DAŇOU — teda to,
+        // čo človek povedal. Základ, ktorý z nej appka dopočítala, by na
+        // kontrolu nesedel: nikto nediktoval 203,25.
         ...items.map((row, index) => ({
           label:
             items.length > 1
               ? `${index + 1}. ${translate(locale, "invoices.newInvoice.itemDescriptionLabel")}`
               : translate(locale, "invoices.newInvoice.itemDescriptionLabel"),
-          value: `${row.description} — ${formatAmount(row.unit_price)} ${currency}`,
+          value: `${row.description} — ${
+            priceMode === "gross"
+              ? totals.lines[index].lineGrossAmount
+              : formatAmount(row.unit_price)
+          } ${currency}`,
         })),
         {
           label: translate(locale, "invoices.newInvoice.itemVatCategoryLabel"),
           value: `${items[0].vat_category_code} · ${formatAmount(items[0].vat_rate)} %`,
+        },
+        // Režim ceny patrí do kontroly. Bez neho sa dva rôzne doklady —
+        // jeden so sumami s daňou a druhý bez — na prvý pohľad nedajú
+        // odlíšiť, hoci sa líšia o celú daň.
+        {
+          label: translate(locale, "search.voice.invoice.priceModeLabel"),
+          value: translate(
+            locale,
+            priceMode === "gross"
+              ? "search.voice.invoice.priceModeGross"
+              : "search.voice.invoice.priceModeNet"
+          ),
         },
         // Základ a daň, nie iba celková suma. Pri jednej položke sa dali
         // dopočítať z hlavy; pri dvoch už nie, a práve vtedy má kontrola

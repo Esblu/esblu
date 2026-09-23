@@ -40,7 +40,7 @@ export type VoiceDraftRejection =
   | "money_not_reconciled"
   | "parser_ambiguous"
   | "clarification_pending"
-  | "gross_price_ambiguous"
+  | "price_mode_mixed"
   | "local_date_invalid"
   | "idempotency_not_claimed";
 
@@ -62,8 +62,12 @@ export type VoiceDraftCheckInput = {
   parserAmbiguous: boolean;
   /** Ešte beží otázka — dialóg nie je dokončený. */
   pendingQuestions: number;
-  /** Veta hovorí o cene s DPH, ale sadzba nezaznela. */
-  grossPriceAmbiguous: boolean;
+  /**
+   * Veta hovorí o RÔZNYCH režimoch ceny pre rôzne riadky („prvá je s
+   * DPH"). Jeden spoločný režim Esblu podporuje a prepočíta ho; zmiešané
+   * riadky nie, a preto sa doklad nezakladá.
+   */
+  priceModeMixed: boolean;
   /** Kalendárny deň používateľa, už overený serverom. */
   localDate: string | null | undefined;
   /** Jednorazové uplatnenie dialógu prebehlo. */
@@ -76,31 +80,10 @@ export const MAX_VOICE_DRAFT_QUANTITY = 100_000;
 
 const VAT_CATEGORIES = ["S", "Z", "E", "AE"];
 
-/**
- * Frázy, ktoré hovoria, že suma UŽ obsahuje daň.
- *
- * „kopanie 300 eur s DPH" a „kopanie 300 eur s 23 % DPH" znamenajú dve
- * rôzne veci a líšia sa o 56 €. Esblu ukladá jednotkovú cenu bez dane,
- * takže prvú vetu by musela prepočítať — a to je rozhodnutie o daňovom
- * základe, nie o jazyku. Preto sa nepočíta, ale pýta.
- *
- * Zámerne sa NEuplatňuje, keď vo vete zaznela sadzba: „s 23 percent DPH"
- * je bežné a jednoznačné vyjadrenie dane navyše.
- */
-export function mentionsGrossPrice(rawText: string): boolean {
-  const folded = rawText
-    .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
-    .toLowerCase();
-
-  return (
-    /(^|\s)(s|so|vratane|vcetne)\s+(dph|dane)(\s|$|[.,])/.test(folded) ||
-    /(^|\s)inkl\.?\s*(mwst|ust|steuer)/.test(folded) ||
-    /(^|\s)(brutto|bruttopreis)(\s|$|[.,])/.test(folded) ||
-    /includ\w*\s+(vat|tax)/.test(folded) ||
-    /(^|\s)incl\.?\s*(vat|tax)(\s|$|[.,])/.test(folded)
-  );
-}
+// Rozpoznanie „ceny sú s DPH" sa presťahovalo do lib/invoicing/price-mode.ts.
+// Nie je to totiž dôvod na odmietnutie, ale platná odpoveď: hovorí, AKO sú
+// sumy vyjadrené. Sem zostal iba dôsledok — zmiešané režimy doklad
+// nezaložia.
 
 function isCalendarDate(value: unknown): boolean {
   if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
@@ -125,7 +108,7 @@ export function checkVoiceInvoiceDraft(input: VoiceDraftCheckInput): VoiceDraftR
 
   if (input.pendingQuestions > 0) return "clarification_pending";
   if (input.parserAmbiguous) return "parser_ambiguous";
-  if (input.grossPriceAmbiguous) return "gross_price_ambiguous";
+  if (input.priceModeMixed) return "price_mode_mixed";
 
   if (!isCalendarDate(input.localDate)) return "local_date_invalid";
   if (!input.idempotencyClaimed) return "idempotency_not_claimed";

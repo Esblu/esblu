@@ -17,7 +17,9 @@
     "test:state": "node --experimental-strip-types --no-warnings scripts/draft-state-tests.ts",
     "test:register": "node --experimental-strip-types --no-warnings scripts/invoice-register-tests.ts",
     "test:money": "node --experimental-strip-types --no-warnings scripts/financial-validator-tests.ts",
-    "test:lifecycle": "node --experimental-strip-types --no-warnings scripts/accounting-lifecycle-tests.ts"
+    "test:lifecycle": "node --experimental-strip-types --no-warnings scripts/accounting-lifecycle-tests.ts",
+    "test:pricemode": "node --experimental-strip-types --no-warnings scripts/price-mode-tests.ts",
+    "test:vat": "node --experimental-strip-types --no-warnings scripts/vat-arithmetic-tests.ts"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.9.0",
