@@ -20,13 +20,15 @@
     "test:lifecycle": "node --experimental-strip-types --no-warnings scripts/accounting-lifecycle-tests.ts",
     "test:pricemode": "node --experimental-strip-types --no-warnings scripts/price-mode-tests.ts",
     "test:vat": "node --experimental-strip-types --no-warnings scripts/vat-arithmetic-tests.ts",
-    "test:gross": "node --experimental-strip-types --no-warnings scripts/gross-rounding-tests.ts"
+    "test:gross": "node --experimental-strip-types --no-warnings scripts/gross-rounding-tests.ts",
+    "test:handoff": "node --experimental-strip-types --no-warnings scripts/handoff-package-tests.ts"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.9.0",
     "@supabase/supabase-js": "^2.110.0",
     "decimal.js": "^10.6.0",
     "exceljs": "^4.4.0",
+    "jszip": "^3.10.1",
     "next": "16.2.9",
     "openai": "^6.45.0",
     "react": "19.2.4",

@@ -189,15 +189,94 @@ primalý, a či `issue_date` a `invoice_number` smú zostať po výmaze osobnýc
 **Implementované (nedeštruktívne):**
 stav zaúčtovania · denník jeho zmien vrátane odvolaní · udalosť exportu s
 druhom a odtlačkom · export ÚDAJOV pre účtovníka (XLSX: doklady, položky,
-rozpis DPH) · výpočet prevádzkovej lehoty · upozornenie 30 dní vopred ·
-označenia v registri, ktoré netvrdia viac, než Esblu vie doložiť
+rozpis DPH) · **úplný balík odovzdania (ZIP)** · výpočet prevádzkovej lehoty ·
+upozornenie 30 dní vopred · označenia v registri, ktoré netvrdia viac, než
+Esblu vie doložiť
 
 **Odložené (vedome):**
 mazanie prevádzkovej kópie v ktorejkoľvek podobe · tombstone tabuľka ·
-konfigurovateľná lehota · **úplný balík odovzdania** vrátane originálov,
-PDF a príloh v ZIP (bez neho je `complete_handoff` nedosiahnuteľný, a teda
-aj mazanie) · štandardizovaný výmenný formát (Esblu si žiadny nevymýšľa a
-netvrdí, že niektorý spĺňa)
+konfigurovateľná lehota · štandardizovaný výmenný formát (Esblu si žiadny
+nevymýšľa a netvrdí, že niektorý spĺňa)
+
+---
+
+## 8. Úplný balík odovzdania — čo pribudlo (2026-09-23)
+
+`complete_handoff` prestal byť nedosiahnuteľný. Doplnené je to, čo ho robí
+dosiahnuteľným, **nie** to, čo by z neho niečo mazalo.
+
+### Čo balík obsahuje
+
+ZIP s koreňovým priečinkom `esblu-accounting-handoff-RRRR-MM-DD-HHMM/`:
+
+| súbor | čo to je |
+| --- | --- |
+| `manifest.json` | zoznam všetkých súborov s SHA-256, identifikátormi dokladov a pôvodom |
+| `README.txt` | čo balík je a čo nie je |
+| `issued/<doklad>/invoice.pdf` | PDF vydanej faktúry z finalizovaného dokladu |
+| `issued|received/<doklad>/metadata.json` | kanonické údaje: hlavička, strany, položky, rozpis DPH |
+| `received/<doklad>/original.<ext>` | **originál od dodávateľa**, bajt po bajte |
+| `<doklad>/attachments/` | prílohy naviazané na ten doklad |
+
+Prijatý doklad dostane originál, nie prerozprávanie. Esblu naň nevygeneruje
+vlastné PDF a nevydáva ho za doklad dodávateľa.
+
+### Integrita
+
+`manifest.json` obsahuje SHA-256 každého súboru v balíku **okrem seba
+samého** — sám seba obsiahnuť nemôže, lebo zapísaním odtlačku by sa zmenil.
+Odtlačok manifestu (`manifest_sha256`) a odtlačok celého ZIP-u
+(`package_sha256`) sú uložené v Esblu v zázname o odovzdaní. Reťaz je úplná
+a nikde sa nezacyklí:
+
+    súbory → manifest.json → záznam v Esblu
+    celý ZIP ──────────────→ záznam v Esblu
+
+Balík sa po zbalení otvorí znova a každý súbor sa porovná s manifestom.
+Až keď to sedí, vznikne záznam a až potom sa balík vydá.
+
+### Fail-closed
+
+Stav `complete_handoff` vznikne iba vtedy, keď sa podarilo **všetko**.
+Zastaví ho okrem iného: chýbajúci originál prijatého dokladu, originál,
+ktorého bajty sa od nahratia zmenili, neúspešné generovanie PDF, doklad
+v stave koncept, doklad bez položiek a doklad, ktorého základ + daň sa
+nerovná celkovej sume. Neúspešný pokus sa zapíše so stavom `failed` a
+dôvodom; `completed` bez odtlačku, veľkosti a času dokončenia nepustí ani
+databázový CHECK.
+
+### Čo balík NEOBSAHUJE
+
+Koncepty (nemajú číslo ani finalizáciu, môžu sa ešte zmeniť), fotky vozidiel,
+strojov a skladu, prílohy chatu a akýkoľvek dokument, ktorý nie je na doklad
+naviazaný cez `document_links.invoice_id`.
+
+### Balík sa neukladá
+
+ZIP sa vydá priamo do prehliadača a nikde sa neukladá. Uložiť ho by znamenalo
+držať kópiu všetkých dokladov firmy na ďalšom mieste a odpovedať na otázku,
+ako dlho tam má ležať — čo je presne otázka z §6, na ktorú odpoveď zatiaľ
+nemáme. Dôkazom o odovzdaní je záznam s odtlačkami, nie uložená kópia.
+
+### Dôkaz o odovzdaní prežije zmazanie dokladu
+
+`accounting_handoff_export_items` malo `ON DELETE CASCADE` na faktúru —
+zmazanie dokladu by ticho zmazalo aj riadok, ktorý hovorí, že bol odovzdaný.
+Odkaz sa teraz pri zmazaní vynuluje a v riadku zostane snímka (číslo, smer,
+dátum, suma, mena). Overené v produkcii: po zmazaní faktúry riadok zostal a
+snímka bola čitateľná. História sa navyše nedá ani prepísať, ani zmazať —
+`authenticated` nemá na tieto tabuľky UPDATE ani DELETE.
+
+### Čo z toho NEVYPLÝVA
+
+`complete_handoff` je **technický** stav: balík sa podaril a dá sa overiť.
+Nie je to právny záver, že archivačná povinnosť je splnená, a Esblu to
+nikde netvrdí — ani v UI, ani v manifeste, ani v README balíka. Otázky v §6
+zostávajú otvorené v plnom rozsahu.
+
+**Mazanie sa nezaviedlo.** Brána `eligible_for_removal` sa týmto stáva
+dosiahnuteľnou, ale za ňou nie je nič — žiadne tlačidlo, žiadna úloha,
+žiadny plán. To je samostatné rozhodnutie, ktoré čaká na §6.
 
 **Dôvod odkladu mazania:** bez odpovedí na otázky v §6 by sa rozhodovalo o
 tom, čo smie zmiznúť a čo musí zostať, na základe odhadu. Pri účtovných

@@ -32,6 +32,9 @@ import {
   type HandoffStatus,
 } from "@/lib/invoicing/accounting-lifecycle";
 import { todayLocalDate } from "@/lib/local-date";
+import { apiUrl } from "@/lib/api-url";
+import { REQUEST_LOCALE_HEADER } from "@/lib/i18n/request-locale";
+import { downloadBlob } from "@/lib/file-actions";
 import {
   matchesDirection,
   matchesSection,
@@ -54,6 +57,7 @@ import {
   DocumentHeader,
   DocumentNotice,
   docButtonPrimary,
+  docButtonSecondary,
 } from "@/app/components/document/DocumentLayout";
 import {
   DocumentStatusBadge,
@@ -74,6 +78,13 @@ const isOverdueInvoice = (invoice: Invoice) =>
 /** Jedna šablóna stĺpcov pre hlavičku aj riadky — nesmú sa rozísť. */
 const INVOICE_COLUMNS =
   "sm:grid-cols-[minmax(0,2.2fr)_minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)]";
+
+/** Veľkosť balíka v tvare, ktorý človek prečíta na prvý pohľad. */
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} kB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 export default function FakturyPage() {
   const { t, locale } = useLocale();
@@ -101,6 +112,7 @@ export default function FakturyPage() {
   // odovzdanie dokladov, takže sa ani nesmie takto volať.
   const [handoffStatuses, setHandoffStatuses] = useState<Record<string, HandoffStatus>>({});
   const [exportBusy, setExportBusy] = useState(false);
+  const [packageBusy, setPackageBusy] = useState(false);
   const [exportFeedback, setExportFeedback] = useState<
     { type: "success" | "error"; text: string } | null
   >(null);
@@ -328,6 +340,90 @@ export default function FakturyPage() {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // ÚPLNÝ BALÍK — iná vec než export údajov vyššie.
+  //
+  // Zošit s údajmi je prehľad. Balík je odovzdanie: originály prijatých
+  // dokladov, PDF vydaných faktúr, prílohy, manifest s odtlačkami. Preto sú
+  // to dve tlačidlá a dva stavy, nie jedno tlačidlo s prepínačom — z prvého
+  // nikdy nesmie vyplynúť, že doklad môže z Esblu zmiznúť.
+  //
+  // Balík skladá server (app/api/accounting-handoff/package/route.ts).
+  // Prehliadač by na originály v súkromných bucketoch aj tak nedosiahol
+  // jedným autorizovaným krokom a PDF sa generuje v Node runtime.
+  // ---------------------------------------------------------------------------
+  async function handleCompletePackage() {
+    if (packageBusy || filteredInvoices.length === 0) return;
+
+    setPackageBusy(true);
+    setExportFeedback(null);
+
+    try {
+      const { data } = await supabase.auth.getSession();
+      const session = data.session;
+      if (!session) throw new Error("no-session");
+
+      const response = await fetch(apiUrl("/api/accounting-handoff/package"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.access_token}`,
+          [REQUEST_LOCALE_HEADER]: locale,
+        },
+        body: JSON.stringify({ invoiceIds: filteredInvoices.map((invoice) => invoice.id) }),
+      });
+
+      if (!response.ok) {
+        // Server posiela dôvod, nie len „nepodarilo sa". Keď sa doklad do
+        // balíka nedá zaradiť, používateľ musí vedieť ktorý a prečo —
+        // inak nemá čo opraviť.
+        const payload = (await response.json().catch(() => null)) as
+          | { error?: string; rejected?: { label: string; problems: string[] }[] }
+          | null;
+
+        const detail = payload?.rejected?.length
+          ? ` (${payload.rejected
+              .slice(0, 5)
+              .map((item) => `${item.label}: ${item.problems.join(", ")}`)
+              .join("; ")})`
+          : "";
+
+        setExportFeedback({
+          type: "error",
+          text: (payload?.error ?? t("handoff.errors.failed")) + detail,
+        });
+        return;
+      }
+
+      const blob = await response.blob();
+      const fileName =
+        response.headers.get("content-disposition")?.match(/filename="([^"]+)"/)?.[1] ??
+        "esblu-accounting-handoff.zip";
+
+      await downloadBlob(blob, fileName);
+
+      // Stav sa mení AŽ TERAZ a iba pre doklady, ktoré v balíku naozaj boli.
+      const next = { ...handoffStatuses };
+      for (const invoice of filteredInvoices) next[invoice.id] = "complete_handoff";
+      setHandoffStatuses(next);
+
+      setExportFeedback({
+        type: "success",
+        text: t("handoff.packageDone", {
+          file: fileName,
+          invoices: filteredInvoices.length,
+          files: response.headers.get("x-esblu-file-count") ?? "?",
+          size: formatBytes(blob.size),
+        }),
+      });
+    } catch (error) {
+      console.error("Vytvorenie balíka pre účtovníka zlyhalo:", error);
+      setExportFeedback({ type: "error", text: t("handoff.errors.failed") });
+    } finally {
+      setPackageBusy(false);
+    }
+  }
+
   const createDisabled = !canEdit || legalHold;
 
   return (
@@ -358,6 +454,18 @@ export default function FakturyPage() {
                 className={`${docButtonPrimary} disabled:pointer-events-none disabled:opacity-40`}
               >
                 {exportBusy ? t("handoff.exporting") : t("handoff.exportButton")}
+              </button>
+              {/* Odovzdanie dokladov. Iné tlačidlo, iný stav, iná veta —
+                  zámerne sa nedá zameniť s exportom údajov vedľa. */}
+              <button
+                type="button"
+                onClick={handleCompletePackage}
+                disabled={packageBusy || exportBusy || filteredInvoices.length === 0}
+                aria-busy={packageBusy}
+                title={t("handoff.packageWarningBody")}
+                className={`${docButtonSecondary} disabled:pointer-events-none disabled:opacity-40`}
+              >
+                {packageBusy ? t("handoff.packageBusy") : t("handoff.packageButton")}
               </button>
               <Link
                 href="/faktury/new"
