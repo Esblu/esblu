@@ -6,6 +6,7 @@ import CompanyDpaGate from "./components/CompanyDpaGate";
 import FloatingChatWidget from "./components/chat/FloatingChatWidget";
 import { LocaleProvider } from "@/lib/i18n/LocaleProvider";
 import { DEFAULT_LOCALE } from "@/lib/i18n/locales";
+import { SITE_URL } from "@/lib/landing-video";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -30,6 +31,10 @@ const LANDING_SOCIAL_DESCRIPTION =
   "Esblu spája firemnú evidenciu dokumentov, vozidiel, strojov, skladu, obchodných partnerov a faktúr v jednej aplikácii. Aktuálne v uzavretej beta verzii.";
 
 export const metadata: Metadata = {
+  // metadataBase je potrebná na to, aby Next.js vedel relatívne cesty
+  // (OG obrázok, thumbnail demo videa) prepísať na absolútne URL. Bez nej
+  // by sociálne siete a vyhľadávače dostali nepoužiteľné relatívne odkazy.
+  metadataBase: new URL(SITE_URL),
   title: LANDING_SOCIAL_TITLE,
   description: LANDING_SOCIAL_DESCRIPTION,
   manifest: "/manifest.json",

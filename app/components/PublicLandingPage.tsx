@@ -5,6 +5,9 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import LanguageSwitcher from "./LanguageSwitcher";
+import EsbluDemoVideo, { emitVideoCtaClick } from "./EsbluDemoVideo";
+import LandingVideoJsonLd from "./LandingVideoJsonLd";
+import { isVideoPublished } from "@/lib/landing-video";
 import InboxDocumentIcon from "./icons/InboxDocumentIcon";
 import ChatBubbleIcon from "./icons/ChatBubbleIcon";
 import BusinessPartnersIcon from "./icons/BusinessPartnersIcon";
@@ -234,6 +237,10 @@ const DOT_ACCENT_BG: Record<FeatureAccent, string> = {
 export default function PublicLandingPage() {
   const currentYear = new Date().getFullYear();
   const { t } = useLocale();
+  // Sekcia s produktovou ukážkou sa zapne až vtedy, keď sú video súbory
+  // reálne nasadené (pozri lib/landing-video.ts). Dovtedy sa nevykreslí ani
+  // sekcia, ani odkazy na ňu — landing page zostáva presne taká, aká bola.
+  const videoPublished = isVideoPublished();
 
   return (
     <div className="min-h-screen overflow-x-hidden bg-page-bg text-primary">
@@ -251,6 +258,14 @@ export default function PublicLandingPage() {
             aria-label={t("landing.nav.mainNavAriaLabel")}
             className="order-3 flex w-full items-center justify-center gap-2 text-sm font-semibold text-slate-300 sm:order-none sm:w-auto sm:gap-5"
           >
+            {videoPublished && (
+              <a
+                href="#ukazka"
+                className="rounded-lg px-2 py-2 transition hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-cyan"
+              >
+                {t("landing.nav.demo")}
+              </a>
+            )}
             <a
               href="#funkcie"
               className="rounded-lg px-2 py-2 transition hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-cyan"
@@ -317,13 +332,33 @@ export default function PublicLandingPage() {
                 {t("landing.hero.subtitle")}
               </p>
 
-              <div className="mt-8 flex flex-col gap-3 sm:flex-row">
+              {/* CTA — poradie je zámerné: obchodný kontakt, potom ukážka
+                  produktu, až potom prihlásenie. Návštevník z obchodného
+                  e-mailu musí vidieť odkaz na demo video hneď v hero časti,
+                  bez skrolovania a bez hľadania v menu. */}
+              <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
                 <a
                   href="mailto:info@esblu.com"
                   className="btn-primary inline-flex min-h-12 items-center justify-center px-6 py-3"
                 >
                   {t("landing.hero.ctaPrimary")}
                 </a>
+                {videoPublished && (
+                  <a
+                    href="#ukazka"
+                    className="btn-secondary inline-flex min-h-12 items-center justify-center gap-2 px-6 py-3"
+                  >
+                    <svg
+                      viewBox="0 0 24 24"
+                      className="h-4 w-4 shrink-0"
+                      fill="currentColor"
+                      aria-hidden="true"
+                    >
+                      <path d="M8 5.14v13.72a1 1 0 0 0 1.53.85l10.74-6.86a1 1 0 0 0 0-1.7L9.53 4.29A1 1 0 0 0 8 5.14Z" />
+                    </svg>
+                    {t("landing.hero.ctaVideo")}
+                  </a>
+                )}
                 <Link
                   href="/login"
                   className="btn-secondary inline-flex min-h-12 items-center justify-center px-6 py-3"
@@ -414,6 +449,71 @@ export default function PublicLandingPage() {
             </div>
           </div>
         </section>
+
+        {/* UKÁŽKA PRODUKTU — zámerne hneď pod hero, ešte pred zoznamom
+            funkcií. Landing page slúži aj ako cieľ obchodných e-mailov:
+            návštevník, ktorý príde priamo na esblu.com, musí demo nájsť
+            v prvom skrolovaní, nie až na konci stránky. Video je verejné,
+            bez registrácie — beta prístup je až následný krok pod ním. */}
+        {videoPublished && (
+        <section
+          id="ukazka"
+          className="scroll-mt-28 border-y border-subtle bg-slate-950 py-20 sm:py-24"
+        >
+          <div className="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8">
+            <div className="max-w-3xl">
+              <p className="text-sm font-bold uppercase tracking-[0.18em] text-accent-cyan">
+                {t("landing.video.kicker")}
+              </p>
+              <h2 className="mt-3 text-3xl font-black tracking-tight text-white sm:text-4xl">
+                {t("landing.video.title")}
+              </h2>
+              <p className="mt-4 text-lg leading-8 text-slate-300">
+                {t("landing.video.subtitle")}
+              </p>
+            </div>
+
+            <EsbluDemoVideo />
+            <LandingVideoJsonLd />
+
+            {/* CTA pod videom — používa existujúci beta workflow appky
+                (mailto na info@esblu.com), nezavádza nový formulár ani
+                endpoint, ktorý dnes neexistuje. */}
+            <div className="mt-12 rounded-3xl border border-subtle bg-gradient-to-br from-slate-900 to-slate-950 p-6 sm:p-10">
+              {/* Dva stĺpce až od lg — na tablete (≈834 px) by sa nadpis lámal
+                  do štyroch úzkych riadkov vedľa tlačidiel. */}
+              <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
+                <div className="max-w-2xl">
+                  <h3 className="text-2xl font-black tracking-tight text-white sm:text-3xl">
+                    {t("landing.video.ctaTitle")}
+                  </h3>
+                  <p className="mt-3 text-base leading-7 text-slate-300">
+                    {t("landing.video.ctaDescription")}
+                  </p>
+                </div>
+                <div className="flex shrink-0 flex-col gap-3 sm:flex-row">
+                  <a
+                    href="mailto:info@esblu.com"
+                    onClick={emitVideoCtaClick}
+                    className="btn-primary inline-flex min-h-12 items-center justify-center px-6 py-3"
+                  >
+                    {t("landing.video.ctaPrimary")}
+                  </a>
+                  <a
+                    href="#funkcie"
+                    className="btn-secondary inline-flex min-h-12 items-center justify-center px-6 py-3"
+                  >
+                    {t("landing.video.ctaSecondary")}
+                  </a>
+                </div>
+              </div>
+              <p className="mt-6 text-sm text-muted-esblu">
+                {t("landing.video.betaNotice")}
+              </p>
+            </div>
+          </div>
+        </section>
+        )}
 
         {/* FUNKCIE — moduly (Inbox/Vozidlá/Stroje/Sklad) + Firemný chat v
             rovnakom vizuálnom jazyku ako ModuleCard na Dashboarde
