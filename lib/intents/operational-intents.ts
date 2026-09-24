@@ -3,7 +3,8 @@ import type { Locale } from "@/lib/i18n/locales";
 import { translate } from "@/lib/i18n/translate";
 import { normalizeSpz } from "@/lib/normalize-spz";
 import { vehicleDetailHref, machineDetailHref, inventoryItemDetailHref } from "@/lib/entity-links";
-import type { EntityRef, IntentName, IntentResult, ParsedIntent } from "@/lib/intents/types";
+import type { ClarificationSlot, EntityRef, IntentName, IntentResult, ParsedIntent } from "@/lib/intents/types";
+import { resolveEntityByName, type NameConfidence } from "@/lib/intents/entity-resolution";
 import type { ResolvedUiEntity } from "@/lib/intents/ui-context";
 
 // =============================================================================
@@ -94,41 +95,31 @@ export function stemVariants(query: string): string[] {
 type Named = { id: string; name: string | null };
 
 /**
- * Presná alebo jednoznačná zhoda mena. Pri zápise sa berie iba PRESNÁ zhoda
- * (po normalizácii), alebo jediný kandidát, ktorého meno začína tým, čo
- * zaznelo. Viac kandidátov → `ambiguous`, nikdy tichý výber.
+ * Zhoda mena vo vrstvách (lib/intents/entity-resolution.ts): presná →
+ * bez skloňovania → predpona. Viac kandidátov → `ambiguous`, nikdy tichý
+ * výber. `confidence` hovorí, ako istá zhoda je — mazanie berie bez otázky
+ * iba `exact`.
  */
 export function resolveByName<T extends Named>(
   rows: readonly T[],
   spoken: string
-): { match: T } | { ambiguous: T[] } | { none: true } {
-  const key = normalizeKey(spoken);
-  if (!key) return { none: true };
-  const exact = rows.filter((row) => normalizeKey(row.name) === key);
-  if (exact.length === 1) return { match: exact[0] };
-  if (exact.length > 1) return { ambiguous: exact };
-
-  const variants = stemVariants(spoken);
-  const partial = rows.filter((row) => {
-    const name = normalizeKey(row.name);
-    return variants.some((variant) => name.startsWith(variant) || name.split(" ").some((word) => word.startsWith(variant)));
-  });
-  if (partial.length === 1) return { match: partial[0] };
-  if (partial.length > 1) return { ambiguous: partial };
-  return { none: true };
+): { match: T; confidence: NameConfidence } | { ambiguous: T[] } | { none: true } {
+  return resolveEntityByName(rows, spoken, (row) => row.name);
 }
 
+type Found<T> = { match: T; confidence: NameConfidence } | { ambiguous: T[] } | { none: true };
+
 /**
- * Nebezpečné akcie (zmazanie) potrebujú PRESNÉ meno. Jediná približná zhoda
- * sa neberie potichu — asistent ju ukáže a poprosí o celé meno.
+ * Nebezpečné akcie (zmazanie) potrebujú PRESNÉ meno. Jediná zhoda cez
+ * skloňovanie/predponu sa neberie potichu — asistent sa spýta „Myslíte …?"
+ * a až po „Áno" ukáže deštruktívny náhľad (s ďalším potvrdením).
  */
 function requireExact<T extends Named>(
-  found: { match: T } | { ambiguous: T[] } | { none: true },
-  spoken: string,
+  found: Found<T>,
   exact: boolean
-): { match: T } | { ambiguous: T[] } | { none: true } {
-  if (!exact || !("match" in found)) return found;
-  return normalizeKey(found.match.name) === normalizeKey(spoken) ? found : { ambiguous: [found.match] };
+): Found<T> | { candidate: T } {
+  if (!exact || !("match" in found) || found.confidence === "exact") return found;
+  return { candidate: found.match };
 }
 
 function cleanName(raw: string | undefined): string | null {
@@ -183,73 +174,108 @@ function vehicleRef(row: VehicleRow): EntityRef {
   return { type: "vehicle", id: row.id, label: vehicleLabel(row), href: vehicleDetailHref(row.id) };
 }
 
-function disambiguate(title: string, items: EntityRef[]): IntentResult {
-  return { kind: "list", title, items: items.slice(0, 12) };
+function disambiguate(title: string, items: EntityRef[], slot?: ClarificationSlot): IntentResult {
+  return { kind: "list", title, items: items.slice(0, 12), ...(slot ? { awaiting: { slot } } : {}) };
+}
+
+function ask(text: string, slot: ClarificationSlot): IntentResult {
+  return { kind: "answer", text, awaiting: { slot } };
+}
+
+function askCandidate(text: string, slot: ClarificationSlot, ref: EntityRef): IntentResult {
+  return { kind: "answer", text, entity: ref, awaiting: { slot, candidate: { id: ref.id, label: ref.label } } };
 }
 
 type Resolution<T> = { entity: T } | { result: IntentResult };
 
-async function resolveMachine(
-  db: SupabaseClient,
-  locale: Locale,
-  query: string | undefined,
-  useContext: boolean | undefined,
-  context: ResolvedUiEntity | null,
-  exact = false
-): Promise<Resolution<MachineRow>> {
+/** Spoločné vstupy rozlíšenia entity. `entityId` pochádza VÝHRADNE z potvrdeného kandidáta. */
+type ResolveInput = {
+  query: string | undefined;
+  useContext: boolean | undefined;
+  context: ResolvedUiEntity | null;
+  entityId?: string;
+  exact?: boolean;
+};
+
+async function resolveMachine(db: SupabaseClient, locale: Locale, input: ResolveInput): Promise<Resolution<MachineRow>> {
+  const { query, useContext, context, entityId, exact = false } = input;
+  if (entityId) {
+    // Potvrdený kandidát — znova pod RLS; cudzí/zmazaný záznam = nenájdený.
+    const { data } = await db.from("machines").select("id, name, manufacturer, model").eq("id", entityId).maybeSingle();
+    if (data) return { entity: data as MachineRow };
+    return { result: { kind: "not_found", text: t(locale, "assistant.machine.notFound", { name: query ?? "" }) } };
+  }
   if ((useContext || !query) && context?.entityType === "machine") {
     return { entity: { id: context.entityId, name: context.label, manufacturer: null, model: null } };
   }
-  if (!query) return { result: answer(t(locale, "assistant.machine.whichMachine")) };
+  if (!query) return { result: ask(t(locale, "assistant.machine.whichMachine"), "machine") };
   const rows = await loadMachines(db);
-  const found = requireExact(resolveByName(rows, query), query, exact);
+  const found = requireExact(resolveByName(rows, query), exact);
   if ("match" in found) return { entity: found.match };
-  if ("ambiguous" in found) return { result: disambiguate(t(locale, "assistant.machine.whichOne", { query }), found.ambiguous.map(machineRef)) };
-  return { result: { kind: "not_found", text: t(locale, "assistant.machine.notFound", { name: query }) } };
+  if ("candidate" in found) {
+    return { result: askCandidate(t(locale, "assistant.machine.confirmCandidate", { name: found.candidate.name ?? "" }), "machine", machineRef(found.candidate)) };
+  }
+  if ("ambiguous" in found) return { result: disambiguate(t(locale, "assistant.machine.whichOne", { query }), found.ambiguous.map(machineRef), "machine") };
+  return { result: { kind: "not_found", text: t(locale, "assistant.machine.notFound", { name: query }), awaiting: { slot: "machine" } } };
 }
 
-async function resolveVehicle(
-  db: SupabaseClient,
-  locale: Locale,
-  query: string | undefined,
-  useContext: boolean | undefined,
-  context: ResolvedUiEntity | null,
-  exact = false
-): Promise<Resolution<VehicleRow>> {
+async function resolveVehicle(db: SupabaseClient, locale: Locale, input: ResolveInput): Promise<Resolution<VehicleRow>> {
+  const { query, useContext, context, entityId, exact = false } = input;
+  if (entityId) {
+    const { data } = await db.from("vehicles").select("id, spz, znacka, model").eq("id", entityId).maybeSingle();
+    if (data) return { entity: data as VehicleRow };
+    return { result: { kind: "not_found", text: t(locale, "assistant.vehicle.notFound", { name: query ?? "" }) } };
+  }
   if ((useContext || !query) && context?.entityType === "vehicle") {
     return { entity: { id: context.entityId, spz: context.label, znacka: null, model: null } };
   }
-  if (!query) return { result: answer(t(locale, "assistant.vehicle.whichVehicle")) };
+  if (!query) return { result: ask(t(locale, "assistant.vehicle.whichVehicle"), "vehicle") };
   const rows = await loadVehicles(db);
   const plate = normalizeSpz(query);
   if (plate) {
+    // ŠPZ je presný identifikátor — zhoda po normalizácii je `exact`.
     const byPlate = rows.filter((row) => normalizeSpz(row.spz) === plate);
     if (byPlate.length === 1) return { entity: byPlate[0] };
   }
   const named = rows.map((row) => ({ ...row, name: `${row.znacka ?? ""} ${row.model ?? ""}`.trim() || row.spz }));
-  const found = requireExact(resolveByName(named, query), query, exact);
+  const found = requireExact(resolveByName(named, query), exact);
   if ("match" in found) return { entity: found.match };
-  if ("ambiguous" in found) return { result: disambiguate(t(locale, "assistant.vehicle.whichOne", { query }), found.ambiguous.map(vehicleRef)) };
-  return { result: { kind: "not_found", text: t(locale, "assistant.vehicle.notFound", { name: query }) } };
+  if ("candidate" in found) {
+    return { result: askCandidate(t(locale, "assistant.vehicle.confirmCandidate", { name: vehicleLabel(found.candidate) }), "vehicle", vehicleRef(found.candidate)) };
+  }
+  if ("ambiguous" in found) return { result: disambiguate(t(locale, "assistant.vehicle.whichOne", { query }), found.ambiguous.map(vehicleRef), "vehicle") };
+  return { result: { kind: "not_found", text: t(locale, "assistant.vehicle.notFound", { name: query }), awaiting: { slot: "vehicle" } } };
 }
 
 async function resolveInventory(
   db: SupabaseClient,
   locale: Locale,
-  query: string | undefined,
-  useContext: boolean | undefined,
-  context: ResolvedUiEntity | null,
-  exact = false
+  input: ResolveInput
 ): Promise<Resolution<InventoryRow> | { missing: true }> {
-  if ((useContext || !query) && context?.entityType === "inventory_item") {
-    const { data } = await db.from("inventory_items").select("id, name, quantity, unit").eq("id", context.entityId).maybeSingle();
-    if (data) return { entity: { ...(data as InventoryRow), quantity: (data as InventoryRow).quantity === null ? null : Number((data as InventoryRow).quantity) } };
+  const { query, useContext, context, entityId, exact = false } = input;
+  const byId = async (id: string): Promise<InventoryRow | null> => {
+    const { data } = await db.from("inventory_items").select("id, name, quantity, unit").eq("id", id).maybeSingle();
+    if (!data) return null;
+    const row = data as InventoryRow;
+    return { ...row, quantity: row.quantity === null ? null : Number(row.quantity) };
+  };
+  if (entityId) {
+    const row = await byId(entityId);
+    if (row) return { entity: row };
+    return { result: { kind: "not_found", text: t(locale, "assistant.inventory.gone") } };
   }
-  if (!query) return { result: answer(t(locale, "assistant.inventory.whichItem")) };
+  if ((useContext || !query) && context?.entityType === "inventory_item") {
+    const row = await byId(context.entityId);
+    if (row) return { entity: row };
+  }
+  if (!query) return { result: ask(t(locale, "assistant.inventory.whichItem"), "inventory_item") };
   const rows = await loadInventory(db);
-  const found = requireExact(resolveByName(rows, query), query, exact);
+  const found = requireExact(resolveByName(rows, query), exact);
   if ("match" in found) return { entity: found.match };
-  if ("ambiguous" in found) return { result: disambiguate(t(locale, "assistant.inventory.whichOne", { query }), found.ambiguous.map(inventoryRef)) };
+  if ("candidate" in found) {
+    return { result: askCandidate(t(locale, "assistant.inventory.confirmCandidate", { name: found.candidate.name ?? "" }), "inventory_item", inventoryRef(found.candidate)) };
+  }
+  if ("ambiguous" in found) return { result: disambiguate(t(locale, "assistant.inventory.whichOne", { query }), found.ambiguous.map(inventoryRef), "inventory_item") };
   return { missing: true };
 }
 
@@ -308,7 +334,7 @@ export async function handleOperationalIntent(
       const amount = typeof args.quantity === "number" && Number.isFinite(args.quantity) ? Math.abs(args.quantity) : null;
       const mode = args.quantityMode;
       if (amount === null || !mode) return answer(t(locale, "assistant.inventory.askQuantity"));
-      const resolved = await resolveInventory(db, locale, args.query ?? args.entityName, args.useContext, ctx.resolvedEntity);
+      const resolved = await resolveInventory(db, locale, { query: args.query ?? args.entityName, useContext: args.useContext, context: ctx.resolvedEntity, entityId: args.entityId });
       if ("result" in resolved) return resolved.result;
       if ("missing" in resolved) {
         const name = cleanName(args.entityName ?? args.query);
@@ -321,7 +347,7 @@ export async function handleOperationalIntent(
             t(locale, "assistant.inventory.createInsteadSummary", { name, quantity: formatQuantity(amount, unit) }),
             id, "assistant.confirm.create");
         }
-        return { kind: "not_found", text: t(locale, "assistant.inventory.notFound", { name: name ?? "" }) };
+        return { kind: "not_found", text: t(locale, "assistant.inventory.notFound", { name: name ?? "" }), awaiting: { slot: "inventory_item" } };
       }
       const item = resolved.entity;
       const current = item.quantity ?? 0;
@@ -345,9 +371,11 @@ export async function handleOperationalIntent(
     }
 
     case "INVENTORY_ITEM_DELETE": {
-      const resolved = await resolveInventory(db, locale, args.query ?? args.entityName, args.useContext, ctx.resolvedEntity, true);
+      const resolved = await resolveInventory(db, locale, { query: args.query ?? args.entityName, useContext: args.useContext, context: ctx.resolvedEntity, entityId: args.entityId, exact: true });
       if ("result" in resolved) return resolved.result;
-      if ("missing" in resolved) return { kind: "not_found", text: t(locale, "assistant.inventory.notFound", { name: args.query ?? "" }) };
+      if ("missing" in resolved) {
+        return { kind: "not_found", text: t(locale, "assistant.inventory.notFound", { name: args.query ?? "" }), awaiting: { slot: "inventory_item" } };
+      }
       const item = resolved.entity;
       const id = await createConfirmation("INVENTORY_ITEM_DELETE", { itemId: item.id, name: item.name }, null);
       if (!id) return failed();
@@ -374,42 +402,48 @@ export async function handleOperationalIntent(
         intent.name === "VEHICLE_SERVICE_ADD" ||
         (!args.targetModule && ctx.resolvedEntity?.entityType === "vehicle");
       const isMachine = !isVehicle && (intent.name === "MACHINE_SERVICE_ADD");
-      if (!args.targetModule && !args.query && !ctx.resolvedEntity) {
-        return answer(t(locale, "assistant.service.whichEntity"));
+      if (!args.targetModule && !args.query && !args.entityId && !ctx.resolvedEntity) {
+        return ask(t(locale, "assistant.service.whichEntity"), "machine_or_vehicle");
       }
       const title = cleanName(args.serviceTitle) ?? t(locale, "assistant.service.defaultTitle");
+      // Suma iba ak zaznela („za 250 eur"); nič sa nedopĺňa.
+      const cost = typeof args.amount === "number" && Number.isFinite(args.amount) && args.amount > 0 ? Math.round(args.amount * 100) / 100 : null;
+      const summary = (entity: string) =>
+        cost !== null
+          ? t(locale, "assistant.service.addSummaryCost", { entity, title, cost: cost.toFixed(2) })
+          : t(locale, "assistant.service.addSummary", { entity, title });
       if (isVehicle) {
-        const resolved = await resolveVehicle(db, locale, args.query, args.useContext, ctx.resolvedEntity);
+        const resolved = await resolveVehicle(db, locale, { query: args.query, useContext: args.useContext, context: ctx.resolvedEntity, entityId: args.entityId });
         if ("result" in resolved) return resolved.result;
         const label = vehicleLabel(resolved.entity);
-        const id = await createConfirmation("VEHICLE_SERVICE_ADD", { vehicleId: resolved.entity.id, title, serviceDate: ctx.today }, null);
+        const id = await createConfirmation("VEHICLE_SERVICE_ADD", { vehicleId: resolved.entity.id, title, serviceDate: ctx.today, cost }, null);
         if (!id) return failed();
-        return preview(locale, "VEHICLE_SERVICE_ADD", t(locale, "assistant.service.addSummary", { entity: label, title }), id, "assistant.confirm.add");
+        return preview(locale, "VEHICLE_SERVICE_ADD", summary(label), id, "assistant.confirm.add");
       }
       if (isMachine) {
-        let resolved = await resolveMachine(db, locale, args.query, args.useContext, ctx.resolvedEntity);
+        let resolved = await resolveMachine(db, locale, { query: args.query, useContext: args.useContext, context: ctx.resolvedEntity, entityId: args.entityId });
         // Modul nezaznel a stroj sa nenašiel — možno je to vozidlo.
-        if ("result" in resolved && !args.targetModule && args.query && resolved.result.kind === "not_found") {
-          const asVehicle = await resolveVehicle(db, locale, args.query, false, null);
+        if ("result" in resolved && !args.targetModule && args.query && !args.entityId && resolved.result.kind === "not_found") {
+          const asVehicle = await resolveVehicle(db, locale, { query: args.query, useContext: false, context: null });
           if ("entity" in asVehicle) {
             const label = vehicleLabel(asVehicle.entity);
-            const id = await createConfirmation("VEHICLE_SERVICE_ADD", { vehicleId: asVehicle.entity.id, title, serviceDate: ctx.today }, null);
+            const id = await createConfirmation("VEHICLE_SERVICE_ADD", { vehicleId: asVehicle.entity.id, title, serviceDate: ctx.today, cost }, null);
             if (!id) return failed();
-            return preview(locale, "VEHICLE_SERVICE_ADD", t(locale, "assistant.service.addSummary", { entity: label, title }), id, "assistant.confirm.add");
+            return preview(locale, "VEHICLE_SERVICE_ADD", summary(label), id, "assistant.confirm.add");
           }
-          if (asVehicle.result.kind === "list") return asVehicle.result;
-          resolved = { result: { kind: "not_found", text: t(locale, "assistant.service.entityNotFound", { name: args.query }) } };
+          if (asVehicle.result.kind === "list") return { ...asVehicle.result, awaiting: { slot: "machine_or_vehicle" } };
+          resolved = { result: { kind: "not_found", text: t(locale, "assistant.service.entityNotFound", { name: args.query }), awaiting: { slot: "machine_or_vehicle" } } };
         }
         if ("result" in resolved) return resolved.result;
-        const id = await createConfirmation("MACHINE_SERVICE_ADD", { machineId: resolved.entity.id, title, serviceDate: ctx.today }, null);
+        const id = await createConfirmation("MACHINE_SERVICE_ADD", { machineId: resolved.entity.id, title, serviceDate: ctx.today, cost }, null);
         if (!id) return failed();
-        return preview(locale, "MACHINE_SERVICE_ADD", t(locale, "assistant.service.addSummary", { entity: resolved.entity.name ?? "", title }), id, "assistant.confirm.add");
+        return preview(locale, "MACHINE_SERVICE_ADD", summary(resolved.entity.name ?? ""), id, "assistant.confirm.add");
       }
-      return answer(t(locale, "assistant.service.whichEntity"));
+      return ask(t(locale, "assistant.service.whichEntity"), "machine_or_vehicle");
     }
 
     case "MACHINE_DELETE": {
-      const resolved = await resolveMachine(db, locale, args.query, args.useContext, ctx.resolvedEntity, true);
+      const resolved = await resolveMachine(db, locale, { query: args.query, useContext: args.useContext, context: ctx.resolvedEntity, entityId: args.entityId, exact: true });
       if ("result" in resolved) return resolved.result;
       const machine = resolved.entity;
       const [{ count: services }, { count: photos }] = await Promise.all([
@@ -428,7 +462,7 @@ export async function handleOperationalIntent(
         const entity: EntityRef = { type: "vehicle", id: ctx.resolvedEntity.entityId, label: ctx.resolvedEntity.label, href: vehicleDetailHref(ctx.resolvedEntity.entityId) };
         return answer(t(locale, "assistant.photo.openDetail"), entity);
       }
-      const resolved = await resolveMachine(db, locale, args.query, args.useContext, ctx.resolvedEntity);
+      const resolved = await resolveMachine(db, locale, { query: args.query, useContext: args.useContext, context: ctx.resolvedEntity, entityId: args.entityId });
       if ("result" in resolved) return resolved.result;
       return answer(t(locale, "assistant.photo.openDetail"), machineRef(resolved.entity));
     }
@@ -445,7 +479,7 @@ export async function handleOperationalIntent(
     }
 
     case "VEHICLE_DELETE": {
-      const resolved = await resolveVehicle(db, locale, args.query, args.useContext, ctx.resolvedEntity, true);
+      const resolved = await resolveVehicle(db, locale, { query: args.query, useContext: args.useContext, context: ctx.resolvedEntity, entityId: args.entityId, exact: true });
       if ("result" in resolved) return resolved.result;
       const vehicle = resolved.entity;
       const [{ count: services }, { count: photos }] = await Promise.all([
@@ -460,7 +494,7 @@ export async function handleOperationalIntent(
     }
 
     case "VEHICLE_PHOTO_ADD": {
-      const resolved = await resolveVehicle(db, locale, args.query, args.useContext, ctx.resolvedEntity);
+      const resolved = await resolveVehicle(db, locale, { query: args.query, useContext: args.useContext, context: ctx.resolvedEntity, entityId: args.entityId });
       if ("result" in resolved) return resolved.result;
       return answer(t(locale, "assistant.photo.openDetail"), vehicleRef(resolved.entity));
     }
@@ -564,6 +598,7 @@ export async function executeOperationalAction(
         user_id: ctx.userId,
         title: str(args.title),
         service_date: str(args.serviceDate),
+        ...(num(args.cost) !== null ? { cost: num(args.cost) } : {}),
         ...(isVehicle ? { vehicle_id: entityId } : { machine_id: entityId }),
       };
       const { error } = await db.from(isVehicle ? "vehicle_services" : "machine_services").insert(row);

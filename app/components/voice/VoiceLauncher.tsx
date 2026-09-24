@@ -133,6 +133,10 @@ export function VoiceLauncher({
   const [clarifyAnswer, setClarifyAnswer] = useState("");
   // Priečinok z tohto rozhovoru („daj TAM bločky"). Iba UUID, server ho overí.
   const recentFolderIdRef = useRef<string | null>(null);
+  // Rozpracovaná otázka asistenta („Ku ktorému stroju?"). Nepriehľadný token
+  // zapečatený serverom — prehliadač ho iba vráti s ďalšou vetou; server
+  // overí používateľa, firmu aj čas (lib/intents/pending-clarification.ts).
+  const pendingClarificationRef = useRef<string | null>(null);
 
   // Náhľad, ktorý práve čaká na potvrdenie. V ref, aby ho hlasový prepis
   // videl aj z callbacku nahrávania (bez zastaraného uzáveru).
@@ -220,6 +224,7 @@ export function VoiceLauncher({
           ...(structuredAnswer ? { answer: structuredAnswer } : {}),
           ...(selection && selection.items.length > 0 ? { selectionContext: selection } : {}),
           ...(moduleContext ? { moduleContext } : {}),
+          ...(pendingClarificationRef.current ? { pendingClarification: pendingClarificationRef.current } : {}),
           ...((recentFolderIdRef.current ?? folderContextId)
             ? { folderContext: { folderId: recentFolderIdRef.current ?? folderContextId } }
             : {}),
@@ -227,6 +232,9 @@ export function VoiceLauncher({
       });
 
       const data = await response.json();
+      // Každá odpoveď nahradí rozpracovanú otázku: nová otázka = nový token,
+      // inak (vykonaný nový príkaz, zrušenie, chyba) sa zahodí.
+      pendingClarificationRef.current = typeof data?.pendingClarification === "string" ? data.pendingClarification : null;
 
       // 401/403 znamená, že server rolu odmietol. Používateľovi sa ukáže
       // zrozumiteľná veta, nie stavový kód ani telo odpovede.
@@ -354,6 +362,7 @@ export function VoiceLauncher({
   function resetDialog() {
     conversationIdRef.current = newConversationId();
     recentFolderIdRef.current = null;
+    pendingClarificationRef.current = null;
     setIntentResult(null);
     setClarifyAnswer("");
     setPhase("idle");

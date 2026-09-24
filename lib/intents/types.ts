@@ -204,6 +204,12 @@ export const INTENT_NAMES = [
   // „Vytvor novú položku" bez modulu — modul doplní kontext obrazovky, inak
   // sa asistent spýta. Nikdy sa nehádá.
   "ENTITY_CREATE",
+
+  // Inbox — nepriradené doklady (rovnaký filter ako Inbox UI). Zoznam/počet
+  // je čítanie; hromadné zmazanie ide cez náhľad s presnými ID a
+  // jednorazové potvrdenie (lib/intents/inbox-intents.ts).
+  "INBOX_LIST_UNASSIGNED",
+  "INBOX_DELETE_UNASSIGNED",
 ] as const;
 
 export type IntentName = (typeof INTENT_NAMES)[number];
@@ -361,6 +367,13 @@ export type IntentArgs = {
   // (overenú serverom). Na nástenke taká nie je → otázka.
   useContext?: boolean;
   serviceTitle?: string;
+  // Inbox: iba nepriradené doklady (definícia Inbox UI) / iba počet.
+  unassignedOnly?: boolean;
+  countOnly?: boolean;
+  // Presný cieľ z POTVRDENÉHO kandidáta („Myslíte …? — Áno"). Nastavuje ho
+  // VÝHRADNE server z vlastnej zapečatenej otázky (lib/intents/
+  // pending-clarification.ts); z parsera, AI ani klienta sa nikdy neprijme.
+  entityId?: string;
 };
 
 // Stavy faktúr, na ktoré sa dá pýtať. Zámerne "priateľské" hodnoty, nie
@@ -407,9 +420,21 @@ export type EntityRef = {
 // presne to, čo žiada bod 13 zadania: navigácia priamo, alebo compact
 // result panel, alebo výber pri nejednoznačnosti, alebo bezpečná chybová
 // hláška.
+/**
+ * Asistent sa na niečo spýtal a čaká na odpoveď (viackrokový dialóg). Route
+ * z toho urobí zapečatený, krátkodobý stav (lib/intents/pending-
+ * clarification.ts) — klientovi sa pole samo nikdy neposiela.
+ */
+export type ClarificationSlot = "machine" | "vehicle" | "machine_or_vehicle" | "inventory_item" | "folder";
+export type AwaitingClarification = {
+  slot: ClarificationSlot;
+  /** „Myslíte …?" — kandidát, ktorého používateľ potvrdí („Áno"). */
+  candidate?: { id: string; label: string };
+};
+
 export type IntentResult =
   | { kind: "navigate"; entity: EntityRef }
-  | { kind: "answer"; text: string; entity?: EntityRef }
+  | { kind: "answer"; text: string; entity?: EntityRef; awaiting?: AwaitingClarification }
   | {
       kind: "report";
       reportType: "vehicle" | "machine";
@@ -420,7 +445,7 @@ export type IntentResult =
       // (bod 5 zadania), nikdy prázdny reťazec/undefined.
       sections: { title: string; rows: { label: string; value: string }[] }[];
     }
-  | { kind: "list"; title: string; items: EntityRef[] }
+  | { kind: "list"; title: string; items: EntityRef[]; awaiting?: AwaitingClarification }
   | {
       kind: "deadline_list";
       title: string;
@@ -452,7 +477,7 @@ export type IntentResult =
       }[];
     }
   | { kind: "disambiguate"; candidates: EntityRef[] }
-  | { kind: "not_found"; text: string }
+  | { kind: "not_found"; text: string; awaiting?: AwaitingClarification }
   | { kind: "error"; text: string }
   // ---------------------------------------------------------------------
   // WRITE intent preview/výsledok (doplnenie zadania, sekcia 6/23; hardened
@@ -496,7 +521,8 @@ export type IntentResult =
         | "MACHINE_DELETE"
         | "VEHICLE_CREATE"
         | "VEHICLE_SERVICE_ADD"
-        | "VEHICLE_DELETE";
+        | "VEHICLE_DELETE"
+        | "INBOX_DELETE_UNASSIGNED";
       /** Nebezpečná (nevratná) akcia — UI zvýrazní potvrdenie. */
       destructive?: boolean;
       summary: string;

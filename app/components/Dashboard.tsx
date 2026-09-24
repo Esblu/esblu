@@ -95,6 +95,9 @@ export default function Dashboard() {
   const currentIntentResult = intentResult;
   // Náhľad čakajúci na potvrdenie — pre hlasové „Áno" (ref: číta ho callback nahrávania).
   const pendingPreviewRef = useRef<IntentResult | null>(null);
+  // Rozpracovaná otázka asistenta („Ku ktorému stroju?") — zapečatený token
+  // servera. V ref, nie v poli hľadania: zápis prepisu do poľa ju nezmaže.
+  const pendingClarificationRef = useRef<string | null>(null);
   useEffect(() => {
     pendingPreviewRef.current = intentResult?.kind === "action_preview" ? intentResult : null;
   }, [intentResult]);
@@ -358,12 +361,15 @@ export default function Dashboard() {
             // Nástenka = globálny kontext: žiadny otvorený doklad ani výber.
             moduleContext: "dashboard",
             ...(recentFolderId ? { folderContext: { folderId: recentFolderId } } : {}),
+            ...(pendingClarificationRef.current ? { pendingClarification: pendingClarificationRef.current } : {}),
           }),
         });
 
         const data = await response.json();
 
         if (cancelled) return;
+        // Nová otázka = nový token; vykonaný nový príkaz alebo zrušenie ho zahodí.
+        pendingClarificationRef.current = typeof data?.pendingClarification === "string" ? data.pendingClarification : null;
 
         if (response.ok && data.success && data.recognized) {
           const recognized = data.result as IntentResult;
@@ -931,7 +937,12 @@ export default function Dashboard() {
               {!hasUsableIntentResult &&
                 (searchResults.length === 0 ? (
                   <p className="rounded-2xl border border-subtle bg-surface-1/60 p-4 text-sm text-secondary">
-                    {t("dashboard.noResults")}
+                    {/* Konkrétna veta asistenta („Stroj „Aman“ sa nenašiel.",
+                        odmietnutie) má prednosť pred všeobecným „Nič sa
+                        nenašlo." — inak používateľ nevie, čo sa stalo. */}
+                    {intentResult && (intentResult.kind === "not_found" || intentResult.kind === "error") && query.length >= 2
+                      ? intentResult.text
+                      : t("dashboard.noResults")}
                   </p>
                 ) : (
                   searchResults.map((result, index) => (

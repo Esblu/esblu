@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { INBOX_UNASSIGNED_SELECT, isInboxUnassignedType, isUnassignedInboxDocument, type InboxDocumentRow } from "@/lib/inbox-unassigned";
 import type { Locale } from "@/lib/i18n/locales";
 import { translate } from "@/lib/i18n/translate";
 import { formatDate, formatMoney } from "@/lib/i18n/format";
@@ -160,10 +161,10 @@ async function resolveFolder(
     if (match && "folder" in match) return { folder: match.folder };
     if (match && "ambiguous" in match) {
       return {
-        result: { kind: "list", title: t(locale, "folders.intent.whichFolderList"), items: match.ambiguous.map(folderEntity) },
+        result: { kind: "list", title: t(locale, "folders.intent.whichFolderList"), items: match.ambiguous.map(folderEntity), awaiting: { slot: "folder" } },
       };
     }
-    return { result: { kind: "not_found", text: t(locale, "folders.intent.notFound", { name: spokenName }) } };
+    return { result: { kind: "not_found", text: t(locale, "folders.intent.notFound", { name: spokenName }), awaiting: { slot: "folder" } } };
   }
 
   // Bez mena: priečinok z tohto rozhovoru (overený pod RLS — je v zozname),
@@ -172,8 +173,10 @@ async function resolveFolder(
   if (fromContext) return { folder: fromContext };
   if (folders.length === 1) return { folder: folders[0] };
   if (folders.length === 0) return { result: answer(t(locale, "folders.empty")) };
+  // Otázka „Do ktorého priečinka?" — odpoveď (napr. „August 2026") doplní
+  // meno a pokračuje sa pôvodným príkazom (lib/intents/pending-clarification.ts).
   return {
-    result: { kind: "list", title: t(locale, "folders.intent.whichFolder"), items: folders.slice(0, 12).map(folderEntity) },
+    result: { kind: "list", title: t(locale, "folders.intent.whichFolder"), items: folders.slice(0, 12).map(folderEntity), awaiting: { slot: "folder" } },
   };
 }
 
@@ -182,6 +185,7 @@ async function resolveFolder(
 // -----------------------------------------------------------------------------
 
 async function collectByFilter(db: SupabaseClient, args: IntentArgs): Promise<LabeledRef[]> {
+  if (args.unassignedOnly) return collectUnassigned(db, args);
   const types = args.documentTypes ?? [];
   const wantsInvoices = types.length === 0 || types.includes("invoice");
   const documentTypes = types.length === 0 ? ["receipt"] : types.filter((type) => type !== "invoice" && isFolderDocumentType(type));
@@ -244,6 +248,43 @@ async function collectByFilter(db: SupabaseClient, args: IntentArgs): Promise<La
     }
   }
 
+  return refs;
+}
+
+/**
+ * „Nepriradené bločky / faktúry" — presne tie doklady, ktoré Inbox ukazuje
+ * v zložkách Bločky a Faktúry (lib/inbox-unassigned.ts). Riadne faktúry
+ * z modulu Faktúry sem nepatria.
+ */
+async function collectUnassigned(db: SupabaseClient, args: IntentArgs): Promise<LabeledRef[]> {
+  const types = (args.documentTypes ?? []).filter(isInboxUnassignedType);
+  if (types.length === 0) return [];
+  const { data } = await db
+    .from("documents")
+    .select(INBOX_UNASSIGNED_SELECT)
+    .in("document_type", types)
+    .is("deleted_at", null)
+    .is("archived_from_inbox_at", null)
+    .limit(1000);
+  const refs: LabeledRef[] = [];
+  for (const row of ((data ?? []) as unknown as (InboxDocumentRow & {
+    extracted_fields: Record<string, unknown> | null; original_filename: string | null; created_at: string | null;
+  })[]).filter(isUnassignedInboxDocument)) {
+    const date = documentDate(row.extracted_fields) ?? row.created_at;
+    if (!inRange(date, args.dateFrom, args.dateTo)) continue;
+    const fields = row.extracted_fields ?? {};
+    const amount = Number(String(fields.totalAmount ?? "").replace(",", "."));
+    refs.push({
+      type: "document",
+      id: row.id,
+      kind: row.document_type === "receipt" ? "receipt" : "other_document",
+      label: String(fields.merchant ?? fields.supplier ?? row.original_filename ?? ""),
+      date,
+      amount: String(fields.totalAmount ?? "") !== "" && Number.isFinite(amount) ? amount : null,
+      currency: typeof fields.currency === "string" ? fields.currency : null,
+      finalized: true,
+    });
+  }
   return refs;
 }
 
@@ -564,22 +605,33 @@ export async function handleFolderIntent(
 
     case "FOLDER_DELETE": {
       // Nebezpečné: iba PRESNÉ meno. Približná zhoda = otázka, nikdy tichý výber.
-      if (!args.folderName) {
-        const folders = await listDocumentFolders(db);
+      const folders = await listDocumentFolders(db);
+      // Potvrdený kandidát („Myslíte priečinok X? — Áno") — ID zo zapečatenej
+      // otázky servera, overené znova v zozname pod RLS.
+      const confirmed = args.entityId ? folders.find((f) => f.id === args.entityId) : undefined;
+      if (args.entityId && !confirmed) return { kind: "not_found", text: t(locale, "folders.intent.notFound", { name: args.folderName ?? "" }) };
+      if (!confirmed && !args.folderName) {
         return folders.length
-          ? { kind: "list", title: t(locale, "folders.intent.whichFolderList"), items: folders.slice(0, 12).map(folderEntity) }
+          ? { kind: "list", title: t(locale, "folders.intent.whichFolderList"), items: folders.slice(0, 12).map(folderEntity), awaiting: { slot: "folder" } }
           : answer(t(locale, "folders.empty"));
       }
-      const folders = await listDocumentFolders(db);
       // Presná totožnosť mena; hlasový prepis „test1" = „Test 1" (medzery,
-      // pomlčky, číslovky). Stále žiadna približná zhoda — tá vedie na výber.
+      // pomlčky, číslovky). Stále žiadna približná zhoda — tá vedie na otázku.
       const spokenKey = folderSpokenKey(args.folderName ?? "");
-      const exact = spokenKey ? folders.filter((f) => folderSpokenKey(f.name) === spokenKey) : [];
+      const exact = confirmed ? [confirmed] : spokenKey ? folders.filter((f) => folderSpokenKey(f.name) === spokenKey) : [];
       if (exact.length !== 1) {
-        const match = matchFolderByName(folders, args.folderName);
-        if (!match) return { kind: "not_found", text: t(locale, "folders.intent.notFound", { name: args.folderName }) };
-        const candidates = "folder" in match ? [match.folder] : match.ambiguous;
-        return { kind: "list", title: t(locale, "folders.intent.whichFolderList"), items: candidates.map(folderEntity) };
+        const match = matchFolderByName(folders, args.folderName ?? "");
+        if (!match) return { kind: "not_found", text: t(locale, "folders.intent.notFound", { name: args.folderName ?? "" }), awaiting: { slot: "folder" } };
+        if ("folder" in match) {
+          const ref = folderEntity(match.folder);
+          return {
+            kind: "answer",
+            text: t(locale, "folders.intent.confirmCandidate", { name: match.folder.name }),
+            entity: ref,
+            awaiting: { slot: "folder", candidate: { id: match.folder.id, label: match.folder.name } },
+          };
+        }
+        return { kind: "list", title: t(locale, "folders.intent.whichFolderList"), items: match.ambiguous.map(folderEntity), awaiting: { slot: "folder" } };
       }
       const folder = exact[0];
       const confirmationId = await createConfirmation("FOLDER_DELETE", { folderId: folder.id, name: folder.name }, folder.itemCount);

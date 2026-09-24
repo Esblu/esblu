@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { normalizeSpz } from "@/lib/normalize-spz";
+import { tokenStem } from "@/lib/intents/entity-resolution";
 
 // =============================================================================
 // Esblu — deterministické vyhľadávanie entít (vozidlo/stroj/skladová
@@ -84,6 +85,10 @@ const STEM_MATCH_MIN_LENGTH = 3;
  */
 function tokensShareStem(a: string, b: string): boolean {
   if (!a || !b) return false;
+  // Krátke slová („na", „z", „CAT") sa porovnávajú presne; skloňovanie
+  // s pohyblivým „e" (bager/bagra) rieši zdieľaný kmeň z entity-resolution.
+  if (a === b) return true;
+  if (tokenStem(a) === tokenStem(b)) return true;
   const shorter = a.length <= b.length ? a : b;
   const longer = a.length <= b.length ? b : a;
   if (shorter.length < STEM_MATCH_MIN_LENGTH) return false;

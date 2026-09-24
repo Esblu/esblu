@@ -911,14 +911,14 @@ const OP_NEW = ["novy", "nova", "nove", "novu", "new", "neue", "neuen", "neues",
 const OP_DELETE = ["zmaz", "vymaz", "odstran", "zrus", "delete", "remove", "losch", "loesch", "entfern"];
 const OP_READ = ["ukaz", "zobraz", "historia", "historiu", "show", "zeige", "vypis", "otvor", "open"];
 const OP_PHOTO = ["fotk", "foto", "photo", "bild", "obrazok"];
-const OP_ADD_QTY = ["pridaj", "naskladni", "prijmi", "dopln", "add", "hinzufug", "hinzufueg", "buche"];
-const OP_SUB_QTY = ["odober", "odstran", "uber", "odpocitaj", "vydaj", "zober", "subtract", "remove", "take", "entnehm", "entferne", "abziehen"];
+const OP_ADD_QTY = ["zvys", "zvacsi", "pridaj", "naskladni", "prijmi", "dopln", "add", "hinzufug", "hinzufueg", "buche"];
+const OP_SUB_QTY = ["zniz", "zmensi", "odober", "odstran", "uber", "odpocitaj", "vydaj", "zober", "subtract", "remove", "take", "entnehm", "entferne", "abziehen"];
 const OP_SET_QTY = ["nastav", "zmen", "uprav", "set", "setze", "change"];
 const OP_CONTEXT = ["tento", "tejto", "toto", "tomuto", "tuto", "tohto", "this", "diese", "dieses", "diesem", "diesen", "dieser"];
 const OP_INTAKE = ["pridaj", "nahraj", "odfot", "naskenuj", "skenuj", "vloz", "prilož", "priloz", "upload", "scan", "photograph", "hochladen", "lade", "scanne", "fotografier", "hinzufug"];
 const OP_UNITS = ["ks", "kus", "kusov", "kusy", "kg", "kilo", "g", "l", "litrov", "m", "metrov", "bal", "balenie", "baleni", "vrece", "vriec", "pcs", "pieces", "stuck", "stueck", "sack"];
 const OP_NEEDS_SERVICE = ["potrebuj", "need service", "needs service", "due for service", "brauchen wartung", "wartung fallig", "wartung faellig"];
-const OP_FILLERS = ["do", "zo", "z", "na", "v", "vo", "k", "ku", "pre", "a", "the", "to", "from", "into", "in", "zum", "zur", "vom", "den", "die", "der", "das", "ein", "eine", "einen", "ins", "im", "zu", "mi", "me"];
+const OP_FILLERS = ["do", "zo", "z", "na", "v", "vo", "k", "ku", "pre", "a", "the", "to", "from", "into", "in", "zum", "zur", "vom", "den", "die", "der", "das", "ein", "eine", "einen", "ins", "im", "zu", "mi", "me", "o", "by", "um"];
 
 function tokensOf(rawText: string): string[] {
   return rawText.trim().replace(/[.?!]+$/, "").split(/\s+/).filter(Boolean);
@@ -927,12 +927,20 @@ function tokensOf(rawText: string): string[] {
 
 /** Pôvodné slová vety bez príkazových slov, podstatných mien a výplne. */
 function remainderName(rawText: string, drop: readonly string[]): string | undefined {
-  const kept = tokensOf(rawText).filter((token) => {
-    const clean = normalizeText(token).replace(/[.?!,;:]+$/, "");
-    if (!clean) return false;
-    if (OP_FILLERS.includes(clean)) return false;
-    return !drop.some((stem) => clean.startsWith(stem));
-  });
+  // Výplňové slová („na", „do", „z") sa zahadzujú iba na OKRAJOCH mena —
+  // vnútri mena patria k nemu: „Kotúč na asfalt" nie je „Kotúč asfalt".
+  // (Produkčná chyba: „Vymaž skladovú položku kotúča na asfalt" hľadala
+  // „Kotúča asfalt" a nenašla nič.)
+  const tokens = tokensOf(rawText).map((token) => ({ token, clean: normalizeText(token).replace(/[.?!,;:]+$/, "") }));
+  const content = tokens.map(({ clean }) => Boolean(clean) && !OP_FILLERS.includes(clean) && !drop.some((stem) => clean.startsWith(stem)));
+  const first = content.indexOf(true);
+  const last = content.lastIndexOf(true);
+  const kept = first < 0
+    ? []
+    : tokens
+        .map(({ token, clean }, index) => ({ token, clean, index }))
+        .filter(({ clean, index }) => index >= first && index <= last && (content[index] || OP_FILLERS.includes(clean)))
+        .map(({ token }) => token);
   const name = kept.join(" ").replace(/^[„"'“]+|[”"'“.?!,;:]+$/g, "").trim();
   if (!name) return undefined;
   return name.charAt(0).toUpperCase() + name.slice(1);
@@ -966,6 +974,34 @@ function readQuantity(text: string): { quantity: number; unit?: string } | undef
   return { quantity, unit };
 }
 
+/** „za 250 eur", „250 €", „for 250 euro" — iba výslovná suma v EUR. */
+function readServiceCost(rawText: string): { amount: number; match: string } | undefined {
+  const match = rawText.match(/(?:\b(?:za|for|für)\s+)?(\d+(?:[.,]\d{1,2})?)\s*(?:eur\w*|€)/i);
+  if (!match) return undefined;
+  const amount = Number(match[1].replace(",", "."));
+  return Number.isFinite(amount) && amount > 0 ? { amount, match: match[0] } : undefined;
+}
+
+/**
+ * Popis servisu za slovom „servis". Odstráni sa typ entity na začiatku
+ * („stroja, …") a entita uvedená predložkou („k stroju X"). Nič sa
+ * nedomýšľa — bez popisu handler použije predvolený názov.
+ */
+function serviceDescription(rawText: string): string | undefined {
+  const match = rawText.match(/\b(?:servis\S*|service\S*|wartung\S*)\s+(.+)$/i);
+  if (!match) return undefined;
+  let rest = match[1].trim();
+  // „servis stroja, výmena oleja" / „servis vozidla BA123CD: …"
+  const typed = rest.match(/^(?:stroj\S*|vozidl\S*|aut\S*|machine\S*|vehicle\S*|maschine\S*|fahrzeug\S*)[^,:–]*[,:–]\s*(.+)$/i);
+  if (typed) rest = typed[1];
+  else if (/^(?:stroj\S*|vozidl\S*|aut\S*|machine\S*|vehicle\S*|maschine\S*|fahrzeug\S*)\b/i.test(rest)) return undefined;
+  // Entita predložkou patrí inam („… k stroju X").
+  if (/^(?:k|ku|pre|for|to|zu|zum|zur|do|na)\s/i.test(rest)) return undefined;
+  rest = rest.replace(/\s+(?:k|ku|pre|for|to|zu|zum|zur)\s+(?:stroj\S*|vozidl\S*|machine\S*|vehicle\S*|maschine\S*|fahrzeug\S*).*$/i, "");
+  rest = rest.replace(/^[„"'“]+|[”"'“.?!,;:]+$/g, "").trim();
+  return rest || undefined;
+}
+
 export function parseOperationalIntent(rawText: string, hints: ParseHints = {}): ParsedIntent | null {
   const text = normalizeText(rawText);
   if (!text) return null;
@@ -980,7 +1016,9 @@ export function parseOperationalIntent(rawText: string, hints: ParseHints = {}):
   const isCreate = hasWord(text, OP_CREATE) || hasWord(text, OP_NEW);
   const isDelete = hasWord(text, OP_DELETE);
   const isRead = hasWord(text, OP_READ);
-  const inInventory = hasInventoryStrong || (hints.module === "inventory" && !hasMachine && !hasVehicle);
+  // „Zníž množstvo o 5" — množstvo/stav má iba skladová položka.
+  const hasQuantityNoun = hasWord(text, ["mnozstv", "quantity", "menge", "bestand"]) && /\d/.test(text);
+  const inInventory = hasInventoryStrong || ((hints.module === "inventory" || hasQuantityNoun) && !hasMachine && !hasVehicle);
   const nounCount = [hasInventoryStrong, hasMachine, hasVehicle].filter(Boolean).length;
 
   // Finančné doklady tu nikdy nerieši tento parser (okrem príjmu nižšie).
@@ -1033,13 +1071,18 @@ export function parseOperationalIntent(rawText: string, hints: ParseHints = {}):
   // --- Servisný záznam
   if (hasService && isCreate && !isRead) {
     // „… k CAT 320, výmena oleja" / „… ku stroju X: výmena oleja"
-    const after = rawText.match(/\b(?:k|ku|pre|for|to|zu|zum|zur)\s+(.+)$/i)?.[1] ?? "";
-    const [entityPart, titlePart] = after.split(/\s*[,:–-]\s*/, 2);
+    const cost = readServiceCost(rawText);
+    const withoutCost = cost ? rawText.replace(cost.match, " ") : rawText;
+    const after = withoutCost.match(/\b(?:k|ku|pre|for|to|zu|zum|zur)\s+(.+)$/i)?.[1] ?? "";
+    const [entityPart, titlePart] = after.split(/\s*[,:–]\s*/, 2);
     const entityQuery = plate ?? (entityPart
       ? remainderName(entityPart, [...OP_MACHINE_CLASS, ...OP_VEHICLE, ...OP_CONTEXT, ...SERVICE_WORDS])
       : undefined);
-    const serviceTitle = titlePart?.trim() || undefined;
-    const args = { query: useContext ? undefined : entityQuery, useContext, serviceTitle };
+    // Popis servisu: text za slovom „servis", ak nie je súčasťou entity
+    // („Zaeviduj servis výmena filtra a oleja", „… servis stroja, výmena
+    // oleja"). Predtým sa bral IBA za čiarkou po „k …" a inak sa stratil.
+    const serviceTitle = titlePart?.trim().replace(/[.?!]+$/, "") || serviceDescription(withoutCost) || undefined;
+    const args = { query: useContext ? undefined : entityQuery, useContext, serviceTitle, amount: cost?.amount };
     if (hasVehicle && !hasMachine) return build("VEHICLE_SERVICE_ADD", { ...args, targetModule: "vehicles" });
     if (hasMachine && !hasVehicle) return build("MACHINE_SERVICE_ADD", { ...args, targetModule: "machines" });
     if (hints.module === "vehicles") return build("VEHICLE_SERVICE_ADD", { ...args, targetModule: "vehicles" });
@@ -1075,7 +1118,7 @@ export function parseOperationalIntent(rawText: string, hints: ParseHints = {}):
           ? "add"
           : undefined;
     if (mode) {
-      const drop = [...OP_ADD_QTY, ...OP_SUB_QTY, ...OP_SET_QTY, ...OP_INVENTORY_STRONG, ...OP_GENERIC_ITEM, ...OP_UNITS, "stav", "mnozstvo", "stand", "menge", "quantity", "stock"];
+      const drop = [...OP_ADD_QTY, ...OP_SUB_QTY, ...OP_SET_QTY, ...OP_INVENTORY_STRONG, ...OP_GENERIC_ITEM, ...OP_UNITS, "stav", "mnozstv", "stand", "menge", "quantity", "stock", "bestand"];
       const name = remainderName(rawText.replace(/-?\d+(?:[.,]\d+)?/g, " "), drop);
       return build("INVENTORY_QUANTITY_ADJUST", {
         quantity: Math.abs(qty.quantity),
@@ -1115,6 +1158,33 @@ export function parseOperationalIntent(rawText: string, hints: ParseHints = {}):
   return null;
 }
 
+// =============================================================================
+// Inbox — „nepriradené bločky / faktúry". Rovnaká definícia ako Inbox UI
+// (app/ai-evidencia: bez väzby na vozidlo/stroj, bez vlastnej zložky;
+// faktúra navyše bez vzniknutej faktúry). Filter vyhodnocuje handler
+// (lib/intents/inbox-intents.ts), parser iba rozpozná zámer a typy.
+// =============================================================================
+
+const UNASSIGNED_WORDS = ["nepriraden", "nezaraden", "unassigned", "not assigned", "nicht zugeordnet", "unzugeordnet", "ohne zuordnung"];
+const INBOX_DELETE_VERBS = ["zmaz", "vymaz", "odstran", "delete", "remove", "losch", "loesch", "entfern"];
+
+export function parseInboxUnassignedIntent(rawText: string): ParsedIntent | null {
+  const text = normalizeText(rawText);
+  if (!containsAny(text, UNASSIGNED_WORDS)) return null;
+  const detected = detectDocumentTypes(text).filter((t) => t === "receipt" || t === "invoice" || t === "delivery_note");
+  const documentTypes: DocumentTypeFilter[] = detected.length > 0 ? detected : ["receipt", "invoice"];
+
+  // „Priraď nepriradené bločky do priečinka X", „Stiahni nepriradené bločky"
+  // — existujúce priečinkové intenty, len s filtrom nepriradených.
+  const folderIntent = parseFolderIntent(rawText);
+  if (folderIntent && (folderIntent.name === "FOLDER_ADD_ITEMS" || folderIntent.name === "DOCUMENTS_EXPORT")) {
+    return build(folderIntent.name, { ...folderIntent.args, documentTypes, unassignedOnly: true });
+  }
+  if (hasWord(text, INBOX_DELETE_VERBS)) return build("INBOX_DELETE_UNASSIGNED", { documentTypes });
+  if (containsAny(text, HOW_MANY_WORDS)) return build("INBOX_LIST_UNASSIGNED", { documentTypes, countOnly: true });
+  return build("INBOX_LIST_UNASSIGNED", { documentTypes });
+}
+
 export function parseIntentDeterministic(rawText: string, hints: ParseHints = {}): ParsedIntent | null {
   const text = normalizeText(rawText);
   if (!text) return null;
@@ -1138,6 +1208,8 @@ export function parseIntentDeterministic(rawText: string, hints: ParseHints = {}
     "VEHICLE_DELETE",
   ]);
   if (!sendLike) {
+    const inboxIntent = parseInboxUnassignedIntent(rawText);
+    if (inboxIntent) return inboxIntent;
     const folderIntent = parseFolderIntent(rawText);
     if (folderIntent && (!unsupported || ALLOWED_DESPITE_UNSUPPORTED.has(folderIntent.name))) return folderIntent;
     if (!folderIntent) {

@@ -42,6 +42,7 @@ import {
   type OperationalWriteIntent,
 } from "@/lib/intents/operational-intents";
 import { checkIntentAccess } from "@/lib/intents/permissions";
+import { executeInboxDelete } from "@/lib/intents/inbox-intents";
 
 // =============================================================================
 // Esblu — Intent Engine WRITE akcie (doplnenie zadania, body 5-13, 22; HARDENED
@@ -209,6 +210,8 @@ const CONFIRMATION_BOUND_INTENTS = [
   "VEHICLE_CREATE",
   "VEHICLE_SERVICE_ADD",
   "VEHICLE_DELETE",
+  // Inbox — hromadné zmazanie nepriradených dokladov (lib/intents/inbox-intents.ts).
+  "INBOX_DELETE_UNASSIGNED",
 ] as const;
 
 type ConfirmationBoundIntentName = (typeof CONFIRMATION_BOUND_INTENTS)[number];
@@ -303,6 +306,17 @@ export function createFolderActionConfirmation(
   intent: FolderWriteIntent,
   canonicalArgs: Record<string, unknown>,
   expectedCount: number | null
+): Promise<string | null> {
+  return insertActionConfirmation(supabase, ctx, intent, canonicalArgs, expectedCount);
+}
+
+/** Potvrdenie hromadného zmazania v Inboxe — viazané na presný zoznam ID. */
+export function createInboxActionConfirmation(
+  supabase: SupabaseClient,
+  ctx: ActionContext,
+  intent: "INBOX_DELETE_UNASSIGNED",
+  canonicalArgs: Record<string, unknown>,
+  expectedCount: number
 ): Promise<string | null> {
   return insertActionConfirmation(supabase, ctx, intent, canonicalArgs, expectedCount);
 }
@@ -1075,6 +1089,25 @@ export async function executeAction(
   const claimed = await claimActionConfirmation(supabase, confirmationId);
   if (!claimed || !isConfirmationBoundIntentName(claimed.intent)) {
     return actionResult(false, translate(locale, "search.actions.confirmation.invalidOrExpired"));
+  }
+
+  if (claimed.intent === "INBOX_DELETE_UNASSIGNED") {
+    // Znova pri vykonaní: rola a finance.manage sa mohli medzi náhľadom a
+    // potvrdením zmeniť. Zamestnanec / admin bez financií → odmietnuté.
+    const [roleRes, operateRes, viewRes, manageRes] = await Promise.all([
+      supabase.rpc("esblu_my_active_role"),
+      supabase.rpc("esblu_role_can_operate"),
+      supabase.rpc("esblu_my_finance_view"),
+      supabase.rpc("esblu_my_finance_manage"),
+    ]);
+    const denial = checkIntentAccess(claimed.intent, {}, {
+      role: typeof roleRes.data === "string" ? roleRes.data : "",
+      canOperate: operateRes.data === true,
+      financeView: viewRes.data === true,
+      financeManage: manageRes.data === true,
+    });
+    if (denial) return actionResult(false, translate(locale, "search.voice.states.denied"));
+    return executeInboxDelete(supabase, locale, { companyId: ctx.companyId }, claimed.canonical_args, claimed.expected_count);
   }
 
   if (isOperationalWriteIntent(claimed.intent)) {

@@ -303,8 +303,8 @@ await check("resolveByName: presná, jednoznačná, nejednoznačná, žiadna", (
     { id: "2", name: "Cement biely" },
     { id: "3", name: "Vruty 5x60" },
   ];
-  assert.deepEqual(resolveByName(rows, "cement"), { match: rows[0] });
-  assert.deepEqual(resolveByName(rows, "vrutov"), { match: rows[2] });
+  assert.deepEqual(resolveByName(rows, "cement"), { match: rows[0], confidence: "exact" });
+  assert.deepEqual(resolveByName(rows, "vrutov"), { match: rows[2], confidence: "partial" });
   assert.ok("ambiguous" in resolveByName(rows, "cem"));
   assert.deepEqual(resolveByName(rows, "piesok"), { none: true });
   assert.deepEqual(resolveByName(rows, "  "), { none: true });
@@ -367,11 +367,13 @@ await check("zmazanie položky: približné meno → výber, žiadne potvrdenie"
   assert.equal(c.calls.length, 0);
 });
 
-await check("zmazanie položky: jediná približná zhoda sa NEBERIE potichu", async () => {
+await check("zmazanie položky: jediná približná zhoda sa NEBERIE potichu — otázka „Myslíte …?“", async () => {
   const { db } = fakeDb(INVENTORY);
   const c = confirmations();
-  const result = await handleOperationalIntent(db, "sk", intent("INVENTORY_ITEM_DELETE", { query: "vrut" }), CTX, c.create);
-  assert.equal(result.kind, "list");
+  const result = await handleOperationalIntent(db, "sk", intent("INVENTORY_ITEM_DELETE", { query: "vrut" }), CTX, c.create) as { kind: string; text: string; awaiting?: { candidate?: { id: string } } };
+  assert.equal(result.kind, "answer");
+  assert.equal(result.text, "Myslíte skladovú položku „Vruty“?");
+  assert.equal(result.awaiting?.candidate?.id, "i3");
   assert.equal(c.calls.length, 0);
 });
 

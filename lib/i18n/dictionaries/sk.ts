@@ -2647,6 +2647,7 @@ const sk = {
       dataChanged: "Doklady sa medzitým zmenili. Zopakujte príkaz, aby ste videli aktuálny počet.",
       deleteSummary: "Priečinok „{{name}}“ obsahuje {{count}} dokladov. Zmaže sa iba priečinok a zaradenie dokladov. Samotné doklady zostanú v Esblu. Naozaj ho chcete zmazať?",
       deleteConfirm: "Zmazať priečinok",
+      confirmCandidate: "Myslíte priečinok „{{name}}“?",
       deleted: "Priečinok „{{name}}“ je zmazaný. Doklady zostali v Esblu.",
       typeReceipts: "bločky",
       typeReceivedInvoices: "prijaté faktúry",
@@ -2656,7 +2657,46 @@ const sk = {
     },
   },
   assistant: {
+    inbox: {
+      what: {
+        receipts_one: "nepriradený bloček",
+        receipts_few: "nepriradené bločky",
+        receipts_many: "nepriradených bločkov",
+        invoices_one: "nepriradenú faktúru",
+        invoices_few: "nepriradené faktúry",
+        invoices_many: "nepriradených faktúr",
+        documents_one: "nepriradený doklad",
+        documents_few: "nepriradené doklady",
+        documents_many: "nepriradených dokladov",
+      },
+      none: {
+        receipts: "Žiadne nepriradené bločky sa nenašli.",
+        invoices: "Žiadne nepriradené faktúry sa nenašli.",
+        documents: "Žiadne nepriradené doklady sa nenašli.",
+      },
+      count: "{{label}} v Inboxe: {{count}}.",
+      label: {
+        receipts: "Nepriradené bločky",
+        invoices: "Nepriradené faktúry",
+        documents: "Nepriradené doklady",
+      },
+      listTitle: "{{count}} {{what}} v Inboxe",
+      allProtected: "Našiel som {{count}} {{what}}, ale všetky sú súčasťou faktúry, priečinka, odovzdania alebo už boli stiahnuté. Hlasom ich nezmažem — ak treba, zmažte ich jednotlivo v Inboxe.",
+      tooMany: "Ide o {{count}} dokladov. Hlasom zmažem naraz najviac {{limit}} — zúžte prosím výber, napríklad podľa mesiaca, alebo použite Inbox.",
+      deleteSummary: "Našiel som {{count}} {{what}}. Zmažú sa tieto doklady z Inboxu aj s pôvodnými súbormi. Táto akcia sa nedá vrátiť.",
+      deleteSkipped: "{{count}} ďalších vynechám, lebo sú súčasťou faktúry, priečinka, odovzdania alebo už boli stiahnuté.",
+      deleteLarge: "Pozor: ide o veľký počet dokladov ({{count}}).",
+      deleteQuestion: "Naozaj ich chcete zmazať?",
+      deleteConfirm: "Zmazať {{count}}",
+      deleted: "Zmazané doklady: {{count}}.",
+      dataChanged: "Doklady sa medzičasom zmenili, preto som nezmazal nič. Zopakujte prosím príkaz.",
+      deliveryNotesUnsupported: "Dodacie listy Inbox nerozlišuje na priradené a nepriradené. Otvorte ich prosím v Inboxe.",
+      whichType: "Ktoré nepriradené doklady myslíte — bločky alebo faktúry?",
+      untitled: "Doklad bez názvu",
+    },
     clarify: {
+      cancelled: "Dobre, nechávam to tak. Nič sa nezmenilo.",
+      expired: "Táto otázka už vypršala. Zopakujte prosím celý príkaz.",
       createModule: "V ktorom module ju chcete vytvoriť? Napríklad „Vytvor novú položku v sklade“, „Pridaj nový stroj“ alebo „Pridaj nové vozidlo“.",
     },
     confirm: {
@@ -2684,6 +2724,7 @@ const sk = {
       openInbox: "Otvoriť Inbox",
     },
     inventory: {
+      confirmCandidate: "Myslíte skladovú položku „{{name}}“?",
       askName: "Aký názov má mať nová skladová položka?",
       askQuantity: "O koľko kusov ide? Napríklad „pridaj do skladu 20 vrutov“.",
       alreadyExists: "Skladová položka „{{name}}“ už existuje.",
@@ -2702,6 +2743,7 @@ const sk = {
       readOnlyNotice: "Sklad máte iba na čítanie. Položky zakladá a upravuje vlastník alebo administrátor.",
     },
     machine: {
+      confirmCandidate: "Myslíte stroj „{{name}}“?",
       askName: "Ako sa má nový stroj volať? Napríklad „zaeviduj bager CAT 320“.",
       alreadyExists: "Stroj „{{name}}“ už existuje.",
       createSummary: "Zaevidujem nový stroj „{{name}}“.",
@@ -2713,6 +2755,7 @@ const sk = {
       deleted: "Stroj „{{name}}“ je zmazaný.",
     },
     vehicle: {
+      confirmCandidate: "Myslíte vozidlo {{name}}?",
       askPlate: "Akú ŠPZ má nové vozidlo?",
       alreadyExists: "Vozidlo s ŠPZ {{plate}} už existuje.",
       createSummary: "Pridám vozidlo s ŠPZ {{plate}}.",
@@ -2724,6 +2767,7 @@ const sk = {
       deleted: "Vozidlo {{name}} je zmazané.",
     },
     service: {
+      addSummaryCost: "Pridám servisný záznam „{{title}}“ k {{entity}} s dnešným dátumom a sumou {{cost}} €.",
       whichEntity: "Ku ktorému stroju alebo vozidlu? Povedzte jeho názov alebo ŠPZ, alebo otvorte jeho detail.",
       entityNotFound: "Stroj ani vozidlo „{{name}}“ sa nenašli.",
       defaultTitle: "Servis",

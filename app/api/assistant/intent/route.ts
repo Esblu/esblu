@@ -14,8 +14,16 @@ import {
   buildActionPreview,
   createFolderActionConfirmation,
   createOperationalActionConfirmation,
+  createInboxActionConfirmation,
 } from "@/lib/intents/actions";
 import { checkIntentAccess, denialMessageKey, restrictedAssistantDenial } from "@/lib/intents/permissions";
+import { handleInboxIntent } from "@/lib/intents/inbox-intents";
+import {
+  classifyClarificationReply,
+  resumePendingIntent,
+  sealPendingClarification,
+  unsealPendingClarification,
+} from "@/lib/intents/pending-clarification";
 import { handleOperationalIntent, isOperationalFamilyIntent } from "@/lib/intents/operational-intents";
 import type { ParseHints } from "@/lib/intents/parse";
 import {
@@ -190,6 +198,7 @@ export async function POST(req: Request) {
       | {
           text?: string;
           conversationId?: string;
+          pendingClarification?: unknown;
           localDate?: string;
           uiContext?: unknown;
           answer?: unknown;
@@ -326,7 +335,51 @@ export async function POST(req: Request) {
     }
 
     const moduleContext = readModuleContext(body?.moduleContext);
-    let intent: ParsedIntent | null = parseIntentDeterministic(rawText, { module: moduleContext });
+
+    // ------------------------------------------------------------------
+    // Rozpracovaná otázka asistenta („Ku ktorému stroju?" → „Aman.").
+    //
+    // Token je zapečatený serverom a viazaný na používateľa a AKTÍVNU firmu
+    // (lib/intents/pending-clarification.ts). Odpoveď doplní chýbajúci slot
+    // a pokračuje sa PÔVODNÝM intentom — cez tú istú bránu oprávnení nižšie.
+    // Nový príkaz („Ukáž sklad.") otázku zahodí; „Nechaj tak." ju zruší.
+    // ------------------------------------------------------------------
+    const binding = { userId: user.id, companyId: membership.company_id as string };
+    let intent: ParsedIntent | null = null;
+    let resumed = false;
+    if (typeof body?.pendingClarification === "string" && body.pendingClarification) {
+      const pending = unsealPendingClarification(body.pendingClarification, binding);
+      if (!pending) {
+        // Vypršaná / cudzia otázka: nikdy nepokračovať v starej akcii.
+        if (classifyClarificationReply(rawText, {}).kind === "answer") {
+          return Response.json({
+            success: true,
+            recognized: true,
+            source: "conversation",
+            result: { kind: "answer", text: translate(locale, "assistant.clarify.expired") },
+            pendingClarification: null,
+          });
+        }
+      } else {
+        const reply = classifyClarificationReply(rawText, pending);
+        if (reply.kind === "cancel") {
+          return Response.json({
+            success: true,
+            recognized: true,
+            intent: pending.intent,
+            source: "conversation",
+            result: { kind: "answer", text: translate(locale, "assistant.clarify.cancelled") },
+            pendingClarification: null,
+          });
+        }
+        if (reply.kind === "answer" || reply.kind === "confirm_candidate") {
+          intent = resumePendingIntent(pending, reply);
+          resumed = true;
+        }
+      }
+    }
+
+    if (!intent) intent = parseIntentDeterministic(rawText, { module: moduleContext });
 
     // Zamestnanec nemá všeobecný asistent: prejde iba príjem dokladu.
     // Rozhoduje sa pred AI klasifikáciou a pred akýmkoľvek dotazom; odpoveď
@@ -344,6 +397,16 @@ export async function POST(req: Request) {
 
     if (!intent) {
       intent = await classifyIntentWithAi(rawText);
+      // Rozsah hromadného mazania nesmie vybrať model („Vymaž všetko" nie je
+      // „nepriradené bločky"). Iba presne rozpoznaná veta z parsera.
+      if (intent?.name === "INBOX_DELETE_UNASSIGNED") intent = null;
+    }
+    // Presný cieľ (`entityId`) smie prísť IBA z potvrdeného kandidáta vlastnej
+    // zapečatenej otázky — nikdy z parsera, AI ani tela požiadavky.
+    if (intent && !resumed && intent.args.entityId !== undefined) {
+      const args = { ...intent.args };
+      delete args.entityId;
+      intent = { ...intent, args };
     }
 
     if (
@@ -440,7 +503,17 @@ export async function POST(req: Request) {
 
     let result;
 
-    if (isOperationalFamilyIntent(intent.name)) {
+    if (intent.name === "INBOX_LIST_UNASSIGNED" || intent.name === "INBOX_DELETE_UNASSIGNED") {
+      // Oprávnenie už rozhodla brána vyššie (finance_view / finance_manage).
+      const actionCtx = {
+        companyId: membership.company_id as string,
+        userId: user.id,
+        role: membership.role as CompanyMemberRole,
+      };
+      result = await handleInboxIntent(supabase, locale, intent, { companyId: actionCtx.companyId }, (name, canonicalArgs, expectedCount) =>
+        createInboxActionConfirmation(supabase, actionCtx, name, canonicalArgs, expectedCount)
+      );
+    } else if (isOperationalFamilyIntent(intent.name)) {
       const actionCtx = {
         companyId: membership.company_id as string,
         userId: user.id,
@@ -545,12 +618,22 @@ export async function POST(req: Request) {
       );
     }
 
+    // Otázka asistenta → zapečatený krátkodobý stav pre ďalšiu vetu.
+    let pendingClarification: string | null = null;
+    if (result && "awaiting" in result && result.awaiting) {
+      pendingClarification = sealPendingClarification(intent.name, intent.args, result.awaiting, binding);
+      const { awaiting: _awaiting, ...rest } = result;
+      void _awaiting;
+      result = rest as typeof result;
+    }
+
     return Response.json({
       success: true,
       recognized: true,
       intent: intent.name,
-      source: intent.source,
+      source: resumed ? "conversation" : intent.source,
       result,
+      pendingClarification,
     });
   } catch (error) {
     console.error(

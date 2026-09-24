@@ -157,6 +157,10 @@ const STATIC_REQUIREMENTS: Partial<Record<IntentName, AccessRequirement>> = {
   FOLDER_EXPORT: "finance_manage",
   FOLDER_DELETE: "finance_manage",
   DOCUMENTS_EXPORT: "finance_manage",
+  // Inbox: nepriradené bločky/faktúry sú finančné podklady. Zmazanie =
+  // rovnaké právo ako RLS documents_delete_finance_manager.
+  INBOX_LIST_UNASSIGNED: "finance_view",
+  INBOX_DELETE_UNASSIGNED: "finance_manage",
 
   // Zložky Inboxu — owner/admin/accountant (zrkadlí RLS custom_document_categories)
   CREATE_DOCUMENT_CATEGORY: "category_manage",

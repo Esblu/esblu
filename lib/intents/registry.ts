@@ -404,6 +404,18 @@ export const INTENT_REGISTRY: Record<IntentName, IntentDefinition> = {
     requiresConfirmation: false,
     description: "Vytvorenie bez modulu — modul z kontextu obrazovky, inak otázka.",
   },
+  INBOX_LIST_UNASSIGNED: {
+    name: "INBOX_LIST_UNASSIGNED",
+    readOnly: true,
+    requiresConfirmation: false,
+    description: "Nepriradené bločky/faktúry v Inboxe (filter Inbox UI) — zoznam alebo počet. Finance view.",
+  },
+  INBOX_DELETE_UNASSIGNED: {
+    name: "INBOX_DELETE_UNASSIGNED",
+    readOnly: false,
+    requiresConfirmation: true,
+    description: "Hromadné zmazanie nepriradených dokladov z Inboxu (ten istý zásah ako mazanie v UI). Náhľad s presnými ID a potvrdenie.",
+  },
   CREATE_INVOICE_DRAFT: {
     name: "CREATE_INVOICE_DRAFT",
     readOnly: false,

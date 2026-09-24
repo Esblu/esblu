@@ -2618,6 +2618,7 @@ const en = {
       dataChanged: "The documents have changed in the meantime. Repeat the command to see the current count.",
       deleteSummary: "Folder “{{name}}” contains {{count}} documents. Only the folder and the grouping are deleted. The documents themselves stay in Esblu. Do you really want to delete it?",
       deleteConfirm: "Delete folder",
+      confirmCandidate: "Do you mean the folder “{{name}}”?",
       deleted: "Folder “{{name}}” was deleted. The documents stay in Esblu.",
       typeReceipts: "receipts",
       typeReceivedInvoices: "received invoices",
@@ -2627,7 +2628,46 @@ const en = {
     },
   },
   assistant: {
+    inbox: {
+      what: {
+        receipts_one: "unassigned receipt",
+        receipts_few: "unassigned receipts",
+        receipts_many: "unassigned receipts",
+        invoices_one: "unassigned invoice",
+        invoices_few: "unassigned invoices",
+        invoices_many: "unassigned invoices",
+        documents_one: "unassigned document",
+        documents_few: "unassigned documents",
+        documents_many: "unassigned documents",
+      },
+      none: {
+        receipts: "No unassigned receipts were found.",
+        invoices: "No unassigned invoices were found.",
+        documents: "No unassigned documents were found.",
+      },
+      count: "{{label}} in the Inbox: {{count}}.",
+      label: {
+        receipts: "Unassigned receipts",
+        invoices: "Unassigned invoices",
+        documents: "Unassigned documents",
+      },
+      listTitle: "{{count}} {{what}} in the Inbox",
+      allProtected: "I found {{count}} {{what}}, but all of them belong to an invoice, a folder, a handoff or were already downloaded. I won't delete them by voice — delete them individually in the Inbox if needed.",
+      tooMany: "That is {{count}} documents. By voice I delete at most {{limit}} at once — please narrow it down, e.g. by month, or use the Inbox.",
+      deleteSummary: "I found {{count}} {{what}}. These documents will be deleted from the Inbox together with their original files. This cannot be undone.",
+      deleteSkipped: "I will skip {{count}} more because they belong to an invoice, a folder, a handoff or were already downloaded.",
+      deleteLarge: "Warning: this is a large number of documents ({{count}}).",
+      deleteQuestion: "Do you really want to delete them?",
+      deleteConfirm: "Delete {{count}}",
+      deleted: "Deleted documents: {{count}}.",
+      dataChanged: "The documents changed in the meantime, so nothing was deleted. Please repeat the command.",
+      deliveryNotesUnsupported: "The Inbox does not split delivery notes into assigned and unassigned. Please open them in the Inbox.",
+      whichType: "Which unassigned documents do you mean — receipts or invoices?",
+      untitled: "Untitled document",
+    },
     clarify: {
+      cancelled: "OK, I'll leave it. Nothing was changed.",
+      expired: "That question has expired. Please repeat the whole command.",
       createModule: "In which module do you want to create it? For example “create a new inventory item”, “add a new machine” or “add a new vehicle”.",
     },
     confirm: {
@@ -2655,6 +2695,7 @@ const en = {
       openInbox: "Open Inbox",
     },
     inventory: {
+      confirmCandidate: "Do you mean the inventory item “{{name}}”?",
       askName: "What should the new inventory item be called?",
       askQuantity: "How many? For example “add 20 screws to inventory”.",
       alreadyExists: "Inventory item “{{name}}” already exists.",
@@ -2673,6 +2714,7 @@ const en = {
       readOnlyNotice: "You have read-only access to inventory. Items are created and edited by the owner or an administrator.",
     },
     machine: {
+      confirmCandidate: "Do you mean the machine “{{name}}”?",
       askName: "What should the new machine be called? For example “register excavator CAT 320”.",
       alreadyExists: "Machine “{{name}}” already exists.",
       createSummary: "I will register the new machine “{{name}}”.",
@@ -2684,6 +2726,7 @@ const en = {
       deleted: "Machine “{{name}}” was deleted.",
     },
     vehicle: {
+      confirmCandidate: "Do you mean the vehicle {{name}}?",
       askPlate: "What is the licence plate of the new vehicle?",
       alreadyExists: "A vehicle with plate {{plate}} already exists.",
       createSummary: "I will add a vehicle with plate {{plate}}.",
@@ -2695,6 +2738,7 @@ const en = {
       deleted: "Vehicle {{name}} was deleted.",
     },
     service: {
+      addSummaryCost: "I will add the service record “{{title}}” to {{entity}} with today's date and an amount of €{{cost}}.",
       whichEntity: "For which machine or vehicle? Say its name or plate, or open its detail.",
       entityNotFound: "No machine or vehicle “{{name}}” was found.",
       defaultTitle: "Service",

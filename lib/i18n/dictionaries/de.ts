@@ -2639,6 +2639,7 @@ const de = {
       dataChanged: "Die Dokumente haben sich inzwischen geändert. Wiederholen Sie den Befehl, um die aktuelle Anzahl zu sehen.",
       deleteSummary: "Der Ordner „{{name}}“ enthält {{count}} Dokumente. Gelöscht werden nur der Ordner und die Zuordnung. Die Dokumente selbst bleiben in Esblu. Wirklich löschen?",
       deleteConfirm: "Ordner löschen",
+      confirmCandidate: "Meinen Sie den Ordner „{{name}}“?",
       deleted: "Der Ordner „{{name}}“ wurde gelöscht. Die Dokumente bleiben in Esblu.",
       typeReceipts: "Belege",
       typeReceivedInvoices: "Eingangsrechnungen",
@@ -2648,7 +2649,46 @@ const de = {
     },
   },
   assistant: {
+    inbox: {
+      what: {
+        receipts_one: "nicht zugeordneten Beleg",
+        receipts_few: "nicht zugeordnete Belege",
+        receipts_many: "nicht zugeordnete Belege",
+        invoices_one: "nicht zugeordnete Rechnung",
+        invoices_few: "nicht zugeordnete Rechnungen",
+        invoices_many: "nicht zugeordnete Rechnungen",
+        documents_one: "nicht zugeordnetes Dokument",
+        documents_few: "nicht zugeordnete Dokumente",
+        documents_many: "nicht zugeordnete Dokumente",
+      },
+      none: {
+        receipts: "Keine nicht zugeordneten Belege gefunden.",
+        invoices: "Keine nicht zugeordneten Rechnungen gefunden.",
+        documents: "Keine nicht zugeordneten Dokumente gefunden.",
+      },
+      count: "{{label}} im Inbox: {{count}}.",
+      label: {
+        receipts: "Nicht zugeordnete Belege",
+        invoices: "Nicht zugeordnete Rechnungen",
+        documents: "Nicht zugeordnete Dokumente",
+      },
+      listTitle: "{{count}} {{what}} im Inbox",
+      allProtected: "Ich habe {{count}} {{what}} gefunden, aber alle gehören zu einer Rechnung, einem Ordner, einer Übergabe oder wurden bereits heruntergeladen. Per Sprache lösche ich sie nicht — löschen Sie sie bei Bedarf einzeln im Inbox.",
+      tooMany: "Das sind {{count}} Dokumente. Per Sprache lösche ich höchstens {{limit}} auf einmal — bitte schränken Sie die Auswahl ein, z. B. nach Monat, oder nutzen Sie den Inbox.",
+      deleteSummary: "Ich habe {{count}} {{what}} gefunden. Diese Dokumente werden samt Originaldateien aus dem Inbox gelöscht. Dies kann nicht rückgängig gemacht werden.",
+      deleteSkipped: "{{count}} weitere überspringe ich, weil sie zu einer Rechnung, einem Ordner, einer Übergabe gehören oder bereits heruntergeladen wurden.",
+      deleteLarge: "Achtung: Es handelt sich um viele Dokumente ({{count}}).",
+      deleteQuestion: "Wirklich löschen?",
+      deleteConfirm: "{{count}} löschen",
+      deleted: "Gelöschte Dokumente: {{count}}.",
+      dataChanged: "Die Dokumente haben sich inzwischen geändert, daher wurde nichts gelöscht. Bitte wiederholen Sie den Befehl.",
+      deliveryNotesUnsupported: "Der Inbox unterscheidet bei Lieferscheinen nicht zwischen zugeordnet und nicht zugeordnet. Bitte öffnen Sie sie im Inbox.",
+      whichType: "Welche nicht zugeordneten Dokumente meinen Sie — Belege oder Rechnungen?",
+      untitled: "Dokument ohne Namen",
+    },
     clarify: {
+      cancelled: "Gut, ich lasse es. Es wurde nichts geändert.",
+      expired: "Diese Frage ist abgelaufen. Bitte wiederholen Sie den ganzen Befehl.",
       createModule: "In welchem Modul möchten Sie es anlegen? Zum Beispiel „Neue Lagerposition anlegen“, „Neue Maschine anlegen“ oder „Neues Fahrzeug hinzufügen“.",
     },
     confirm: {
@@ -2676,6 +2716,7 @@ const de = {
       openInbox: "Inbox öffnen",
     },
     inventory: {
+      confirmCandidate: "Meinen Sie die Lagerposition „{{name}}“?",
       askName: "Wie soll die neue Lagerposition heißen?",
       askQuantity: "Wie viele? Zum Beispiel „20 Schrauben ins Lager buchen“.",
       alreadyExists: "Die Lagerposition „{{name}}“ existiert bereits.",
@@ -2694,6 +2735,7 @@ const de = {
       readOnlyNotice: "Sie haben nur Lesezugriff auf das Lager. Positionen legt der Inhaber oder ein Administrator an.",
     },
     machine: {
+      confirmCandidate: "Meinen Sie die Maschine „{{name}}“?",
       askName: "Wie soll die neue Maschine heißen? Zum Beispiel „Bagger CAT 320 erfassen“.",
       alreadyExists: "Die Maschine „{{name}}“ existiert bereits.",
       createSummary: "Ich erfasse die neue Maschine „{{name}}“.",
@@ -2705,6 +2747,7 @@ const de = {
       deleted: "Die Maschine „{{name}}“ wurde gelöscht.",
     },
     vehicle: {
+      confirmCandidate: "Meinen Sie das Fahrzeug {{name}}?",
       askPlate: "Welches Kennzeichen hat das neue Fahrzeug?",
       alreadyExists: "Ein Fahrzeug mit Kennzeichen {{plate}} existiert bereits.",
       createSummary: "Ich füge ein Fahrzeug mit Kennzeichen {{plate}} hinzu.",
@@ -2716,6 +2759,7 @@ const de = {
       deleted: "Das Fahrzeug {{name}} wurde gelöscht.",
     },
     service: {
+      addSummaryCost: "Ich füge den Wartungseintrag „{{title}}“ zu {{entity}} mit heutigem Datum und einem Betrag von {{cost}} € hinzu.",
       whichEntity: "Zu welcher Maschine oder welchem Fahrzeug? Nennen Sie Namen oder Kennzeichen oder öffnen Sie das Detail.",
       entityNotFound: "Keine Maschine und kein Fahrzeug „{{name}}“ gefunden.",
       defaultTitle: "Wartung",
