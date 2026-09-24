@@ -2649,6 +2649,9 @@ const de = {
     },
   },
   assistant: {
+    invoice: {
+      useVoice: "Erstellen Sie die Rechnung per Sprache — tippen Sie auf das Mikrofon und sagen Sie z. B. „Erstelle eine Rechnung für Tester1“.",
+    },
     inbox: {
       what: {
         receipts_one: "nicht zugeordneten Beleg",

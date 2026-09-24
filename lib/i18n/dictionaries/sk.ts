@@ -2657,6 +2657,9 @@ const sk = {
     },
   },
   assistant: {
+    invoice: {
+      useVoice: "Faktúru pripravíte hlasom — ťuknite na mikrofón a povedzte napríklad „Vytvor faktúru pre Tester1“.",
+    },
     inbox: {
       what: {
         receipts_one: "nepriradený bloček",

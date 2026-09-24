@@ -244,6 +244,63 @@ check("append: prázdny → null", extractSingleAppendedItem(""), null);
   check("žiadny vstup nevyrobí položku za 0", zeroLeak.length, 0);
 }
 
+
+// -----------------------------------------------------------------------------
+// Množstvo × jednotková cena („10 hodín po 35 eur")
+// -----------------------------------------------------------------------------
+//
+// Parser iba rozpozná množstvo, jednotku a jednotkovú cenu. Sumy riadkov a
+// dokladu počíta kanonický model (pozri scripts/voice-conversation-tests.ts,
+// cent-sensitive prípady cez previewDraftTotals).
+
+function qp(text: string): unknown {
+  const result = extractInvoiceItems(`za ${text}`);
+  if (result.problem === "ambiguous" || result.items.length === 0) return result.problem ?? "none";
+  return result.items.map((item) => ({ d: item.description, q: item.quantity, u: item.unit, p: item.unitPrice }));
+}
+
+check("A: Výkopové práce, 10 hodín po 35 eur", qp("Výkopové práce, 10 hodín po 35 eur."), [{ d: "Výkopové práce", q: 10, u: "hod", p: 35 }]);
+check("A2: bez čiarky", qp("Výkopové práce 10 hodín po 35 eur."), [{ d: "Výkopové práce", q: 10, u: "hod", p: 35 }]);
+check("A3: množstvo pred popisom", qp("10 hodín výkopových prác po 35 eur."), [{ d: "výkopových prác", q: 10, u: "hod", p: 35 }]);
+check("A4: za … za hodinu", qp("Výkopové práce, 10 hodín za 35 eur za hodinu."), [{ d: "Výkopové práce", q: 10, u: "hod", p: 35 }]);
+check("B: Betón, 5 kusov po 12 eur", qp("Betón, 5 kusov po 12 eur."), [{ d: "Betón", q: 5, u: "ks", p: 12 }]);
+check("B2: Filter, 2 kusy po 25 eur", qp("Filter, 2 kusy po 25 eur."), [{ d: "Filter", q: 2, u: "ks", p: 25 }]);
+check("B3: Štrk, 3 tony po 30 eur", qp("Štrk, 3 tony po 30 eur."), [{ d: "Štrk", q: 3, u: "t", p: 30 }]);
+check("B4: Doprava, 3 hodiny po 40 eur", qp("Doprava, 3 hodiny po 40 eur."), [{ d: "Doprava", q: 3, u: "hod", p: 40 }]);
+check("C: 10 h po 35 €", qp("Výkopové práce, 10 h po 35 €."), [{ d: "Výkopové práce", q: 10, u: "hod", p: 35 }]);
+check("D: 2,5 hodiny", qp("Práca, 2,5 hodiny po 40 eur"), [{ d: "Práca", q: 2.5, u: "hod", p: 40 }]);
+check("D2: 10.5 hodiny", qp("Práca, 10.5 hodiny po 40 eur"), [{ d: "Práca", q: 10.5, u: "hod", p: 40 }]);
+check("E: 10 hodín za 350 eur → nie jednotková cena (otázka)", qp("Výkopové práce 10 hodín za 350 eur"), "ambiguous");
+check("E2: nikdy 10 × 350", JSON.stringify(extractInvoiceItems("za Výkopové práce 10 hodín za 350 eur").items).includes('"quantity":10'), false);
+check("H: EN at … per hour", qp("Excavation work, 10 hours at 35 euros per hour."), [{ d: "Excavation work", q: 10, u: "hod", p: 35 }]);
+check("H2: EN each", qp("10 hours of excavation at 35 euros each."), [{ d: "excavation", q: 10, u: "hod", p: 35 }]);
+check("H3: DE zu", qp("Baggerarbeiten, 10 Stunden zu 35 Euro."), [{ d: "Baggerarbeiten", q: 10, u: "hod", p: 35 }]);
+check("H4: DE à", qp("10 Stunden Baggerarbeiten à 35 Euro."), [{ d: "Baggerarbeiten", q: 10, u: "hod", p: 35 }]);
+check("množstvo × cena bez popisu → otázka, nie riadok s vetou", qp("10 hodín po 35 eur."), "ambiguous");
+check("nulové množstvo → otázka", qp("Práca, 0 hodín po 35 eur"), "ambiguous");
+check("záporné množstvo → otázka", qp("Práca, -2 hodiny po 35 eur"), "ambiguous");
+check("neznáma jednotka → otázka", qp("Práca 10 kopaní po 35 eur"), "ambiguous");
+check("dve položky s množstvom", qp("Výkopové práce, 10 hodín po 35 eur, doprava, 2 hodiny po 40 eur"), [
+  { d: "Výkopové práce", q: 10, u: "hod", p: 35 },
+  { d: "doprava", q: 2, u: "hod", p: 40 },
+]);
+check("zmiešané: množstvo × cena + paušál", qp("Výkopové práce, 10 hodín po 35 eur, doprava 80 eur"), [
+  { d: "Výkopové práce", q: 10, u: "hod", p: 35 },
+  { d: "doprava", q: undefined, u: undefined, p: 80 },
+]);
+check("regresia: kopanie 300 a doprava 50 bez množstva", qp("kopanie 300 eur a doprava 50 eur"), [
+  { d: "kopanie", q: undefined, u: undefined, p: 300 },
+  { d: "doprava", q: undefined, u: undefined, p: 50 },
+]);
+check("F: doplnenie — Pridaj ešte dopravu, 2 hodiny po 40 eur", extractSingleAppendedItem("Pridaj ešte dopravu, 2 hodiny po 40 eur."), {
+  description: "dopravu", quantity: 2, unit: "hod", unitPrice: 40, currency: "EUR",
+});
+check("F2: doplnenie bez množstva ostáva", extractSingleAppendedItem("Pridaj ešte dopravu 80 eur."), { description: "dopravu", unitPrice: 80, currency: "EUR" });
+check("F3: doplnenie so záporným množstvom → null", extractSingleAppendedItem("Pridaj ešte dopravu, -2 hodiny po 40 eur."), null);
+check("prvá veta s partnerom", extractInvoiceItems("Vytvor faktúru pre Tester1 za výkopové práce, 10 hodín po 35 eur.", "Tester1").items, [
+  { description: "výkopové práce", quantity: 10, unit: "hod", unitPrice: 35, currency: "EUR" },
+]);
+
 // -----------------------------------------------------------------------------
 
 console.log(`\n${passed} prešlo, ${failed} zlyhalo`);

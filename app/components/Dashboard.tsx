@@ -98,6 +98,12 @@ export default function Dashboard() {
   // Rozpracovaná otázka asistenta („Ku ktorému stroju?") — zapečatený token
   // servera. V ref, nie v poli hľadania: zápis prepisu do poľa ju nezmaže.
   const pendingClarificationRef = useRef<string | null>(null);
+  // Dialóg faktúry („Vytvor faktúru pre Tester1" → „Čo má byť na faktúre?").
+  // Stav drží server podľa tohto identifikátora. Posiela sa IBA s hlasovým
+  // prepisom — písaný text sa vyhodnocuje počas písania a rozpísané slovo
+  // by sa inak zapísalo ako odpoveď do faktúry.
+  const invoiceConversationIdRef = useRef<string>(newDashboardConversationId());
+  const voiceTranscriptRef = useRef<string>("");
   useEffect(() => {
     pendingPreviewRef.current = intentResult?.kind === "action_preview" ? intentResult : null;
   }, [intentResult]);
@@ -362,6 +368,7 @@ export default function Dashboard() {
             moduleContext: "dashboard",
             ...(recentFolderId ? { folderContext: { folderId: recentFolderId } } : {}),
             ...(pendingClarificationRef.current ? { pendingClarification: pendingClarificationRef.current } : {}),
+            ...(trimmed === voiceTranscriptRef.current.trim() ? { conversationId: invoiceConversationIdRef.current } : {}),
           }),
         });
 
@@ -432,6 +439,7 @@ export default function Dashboard() {
       }
       // Prepis ide do toho istého poľa ako písaný text — spustí ten istý
       // debounced Intent Engine efekt a ostáva viditeľný na opravu.
+      voiceTranscriptRef.current = text;
       setSearch(text);
       setVoiceTranscript(text);
     },
@@ -921,7 +929,20 @@ export default function Dashboard() {
                   nevyrenderuje — pozri `hasUsableIntentResult` vyššie —
                   aby appka nikdy súčasne netvrdila "našlo sa" aj "nič sa
                   nenašlo". */}
-              {hasUsableIntentResult ? (
+              {hasUsableIntentResult && intentResult?.kind === "clarify" ? (
+                // Otázka dialógu faktúry. Odpovedá sa hlasom (mikrofón vyššie);
+                // kandidáti sú iba na prečítanie — výber vyhodnocuje server.
+                <div className="rounded-2xl border border-subtle bg-surface-1/60 p-4 text-sm text-primary">
+                  <p className="font-medium">{intentResult.question}</p>
+                  {intentResult.choices && intentResult.choices.length > 0 && (
+                    <ul className="mt-2 list-disc space-y-1 pl-5 text-secondary">
+                      {intentResult.choices.map((choice) => (
+                        <li key={choice.value}>{choice.label}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              ) : hasUsableIntentResult ? (
                 <IntentResultView
                   intentResult={intentResult}
                   actionSubmitting={actionSubmitting}
@@ -1170,4 +1191,12 @@ function MicrophoneIcon() {
       <path d="M8 22h8" />
     </svg>
   );
+}
+
+/** Identifikátor dialógu (32 hex znakov — tvar overuje server aj databáza). */
+function newDashboardConversationId(): string {
+  const bytes = new Uint8Array(16);
+  if (typeof crypto !== "undefined" && "getRandomValues" in crypto) crypto.getRandomValues(bytes);
+  else for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }

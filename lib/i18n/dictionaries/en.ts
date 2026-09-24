@@ -2628,6 +2628,9 @@ const en = {
     },
   },
   assistant: {
+    invoice: {
+      useVoice: "Create the invoice by voice — tap the microphone and say, for example, “Create an invoice for Tester1”.",
+    },
     inbox: {
       what: {
         receipts_one: "unassigned receipt",

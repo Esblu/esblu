@@ -408,6 +408,25 @@ const INVOICE_CREATION_VERBS = [
 ];
 const INVOICE_CREATION_NOUNS = ["faktur", "rechnung", "invoice"];
 
+/**
+ * „Vytvor / Priprav / Založ / Vystav faktúru pre X", „Nová faktúra pre X",
+ * „Erstelle eine Rechnung für X", „Create an invoice for X". Iba keď za
+ * menom nič nenasleduje — veta s položkami či sumou patrí existujúcej
+ * ceste (extractInvoiceSlotsFromText / klasifikátor).
+ */
+const SIMPLE_INVOICE_REGEX =
+  /^\s*(?:(?:vytvor|priprav|zaloz|založ|vystav|sprav|urob|erstelle|erstellen|schreibe|create|make|issue|raise|prepare)(?:\s+mi)?\s+)?(?:(?:nov[úuáaý]|new|neue|eine|eine\s+neue|an|a)\s+)?(?:fakt[úu]r[ua]|rechnung|invoice)\s+(?:pre|pro|für|fur|fuer|for)\s+(.+?)\s*[.!?]?\s*$/i;
+
+export function parseSimpleInvoiceCreation(rawText: string): ParsedIntent | null {
+  const match = SIMPLE_INVOICE_REGEX.exec(rawText);
+  if (!match) return null;
+  const name = match[1].replace(/^[„"'“]+|[”"'“]+$/g, "").trim();
+  if (!name || name.split(/\s+/).length > 6) return null;
+  // Suma, čiarka či „za …" znamenajú položky — to nie je holé založenie.
+  if (/[,;:]|\d+\s*(?:eur|€)|\b(?:za|for|über|ueber)\b/i.test(name)) return null;
+  return build("CREATE_INVOICE_DRAFT", { partnerQuery: name });
+}
+
 function matchesInvoiceCreation(text: string): boolean {
   return (
     INVOICE_CREATION_VERBS.some((verb) => text.includes(verb)) &&
@@ -974,6 +993,36 @@ function readQuantity(text: string): { quantity: number; unit?: string } | undef
   return { quantity, unit };
 }
 
+/** Slovesá zápisu servisu, ktoré nie sú všeobecným „vytvor" („Service eintragen", „Log service"). */
+const SERVICE_CREATE_EXTRA = ["eintrag", "trage", "log", "record"];
+
+/**
+ * Meno stroja vložené vo vete o servise. Berie slová ZA triednym slovom
+ * („stroja", „machine", „Maschine") alebo za predložkou („bei", „für",
+ * „for") až po sloveso, slovo „servis" alebo čiarku/dvojbodku. Nič sa
+ * nedomýšľa; bez mena `undefined` → asistent sa spýta.
+ */
+function inlineServiceEntity(rawText: string): string | undefined {
+  const tokens = rawText.trim().replace(/[.?!]+$/, "").split(/\s+/).filter(Boolean);
+  const clean = (token: string) => normalizeText(token).replace(/[.?!,;:]+$/, "");
+  let start = tokens.findIndex((token) => OP_MACHINE_CLASS.some((stem) => clean(token).startsWith(stem)));
+  if (start < 0) {
+    const prep = tokens.findIndex((token) => ["bei", "fur", "fuer", "for"].includes(clean(token)));
+    if (prep < 0) return undefined;
+    start = prep;
+  }
+  const stopStems = [...OP_CREATE, ...SERVICE_CREATE_EXTRA, ...SERVICE_WORDS, "zaeviduj", "pridaj", "zapis", "eintragen", "hinzufug", "hinzufueg"];
+  const name: string[] = [];
+  for (let i = start + 1; i < tokens.length; i++) {
+    const word = clean(tokens[i]);
+    if (!word) break;
+    if (stopStems.some((stem) => word.startsWith(stem))) break;
+    name.push(tokens[i].replace(/[,;:]+$/, ""));
+    if (/[,;:]$/.test(tokens[i])) break;
+  }
+  return name.length > 0 ? remainderName(name.join(" "), [...OP_MACHINE_CLASS, "the", "dem"]) : undefined;
+}
+
 /** „za 250 eur", „250 €", „for 250 euro" — iba výslovná suma v EUR. */
 function readServiceCost(rawText: string): { amount: number; match: string } | undefined {
   const match = rawText.match(/(?:\b(?:za|for|für)\s+)?(\d+(?:[.,]\d{1,2})?)\s*(?:eur\w*|€)/i);
@@ -995,6 +1044,8 @@ function serviceDescription(rawText: string): string | undefined {
   const typed = rest.match(/^(?:stroj\S*|vozidl\S*|aut\S*|machine\S*|vehicle\S*|maschine\S*|fahrzeug\S*)[^,:–]*[,:–]\s*(.+)$/i);
   if (typed) rest = typed[1];
   else if (/^(?:stroj\S*|vozidl\S*|aut\S*|machine\S*|vehicle\S*|maschine\S*|fahrzeug\S*)\b/i.test(rest)) return undefined;
+  // „Service eintragen: Ölwechsel", „Service hinzufügen, …" — sloveso nie je popis.
+  rest = rest.replace(/^(?:eintragen|hinzuf(?:ü|ue|u)gen|anlegen|erfassen|zaeviduj|pridaj)\s*[,:–]?\s*/i, "");
   // Entita predložkou patrí inam („… k stroju X").
   if (/^(?:k|ku|pre|for|to|zu|zum|zur|do|na)\s/i.test(rest)) return undefined;
   rest = rest.replace(/\s+(?:k|ku|pre|for|to|zu|zum|zur)\s+(?:stroj\S*|vozidl\S*|machine\S*|vehicle\S*|maschine\S*|fahrzeug\S*).*$/i, "");
@@ -1069,15 +1120,20 @@ export function parseOperationalIntent(rawText: string, hints: ParseHints = {}):
   }
 
   // --- Servisný záznam
-  if (hasService && isCreate && !isRead) {
+  const isServiceCreate = isCreate || hasWord(text, SERVICE_CREATE_EXTRA);
+  if (hasService && isServiceCreate && !isRead) {
     // „… k CAT 320, výmena oleja" / „… ku stroju X: výmena oleja"
     const cost = readServiceCost(rawText);
     const withoutCost = cost ? rawText.replace(cost.match, " ") : rawText;
     const after = withoutCost.match(/\b(?:k|ku|pre|for|to|zu|zum|zur)\s+(.+)$/i)?.[1] ?? "";
     const [entityPart, titlePart] = after.split(/\s*[,:–]\s*/, 2);
+    // Entita: „… k CAT 320", alebo vložená v texte — „Do stroja Takeuchi 323
+    // zaeviduj servis", „Stroju X pridaj servis", „Bei X Service …".
+    // (Produkčná chyba: meno medzi „Do stroja" a slovesom sa zahodilo a
+    // asistent sa pýtal „Ku ktorému stroju?", hoci stroj zaznel.)
     const entityQuery = plate ?? (entityPart
       ? remainderName(entityPart, [...OP_MACHINE_CLASS, ...OP_VEHICLE, ...OP_CONTEXT, ...SERVICE_WORDS])
-      : undefined);
+      : inlineServiceEntity(withoutCost));
     // Popis servisu: text za slovom „servis", ak nie je súčasťou entity
     // („Zaeviduj servis výmena filtra a oleja", „… servis stroja, výmena
     // oleja"). Predtým sa bral IBA za čiarkou po „k …" a inak sa stratil.
@@ -1243,6 +1299,13 @@ export function parseIntentDeterministic(rawText: string, hints: ParseHints = {}
   //
   //     Odovzdanie modelu tu NIE JE oslabenie: klasifikátor môže vrátiť
   //     jedine intent z allowlistu a oprávnenia aj tak drží server a RLS.
+  // „Vytvor faktúru pre Tester1." — holé založenie draftu s odberateľom.
+  // Deterministicky, aby nezáležalo na AI klasifikátore a aby „Nová
+  // faktúra pre X" nespadla do vyhľadávania dokladov. Bohatšie vety
+  // (položky, sumy) idú ďalej ako doteraz.
+  const simpleInvoice = parseSimpleInvoiceCreation(rawText);
+  if (simpleInvoice) return simpleInvoice;
+
   if (matchesInvoiceCreation(text)) {
     return null;
   }

@@ -348,6 +348,11 @@ function applyAnswerToSlots(
         next.items = parsed.items.slice(0, MAX_VOICE_ITEMS);
         const currency = findCurrency(answer);
         if (currency) next.currency = currency;
+        // „… po 35 eur s DPH / bez DPH" — ten istý detektor a to isté
+        // pravidlo ako pri prvej vete (startInvoiceDraftFlow). Zmiešané
+        // alebo nevyslovené = nič sa nenastaví; na režim sa spýta otázka o DPH.
+        const statedMode = detectPriceModeStatement(answer);
+        if (statedMode === "net" || statedMode === "gross") next.priceMode = statedMode;
         return next;
       }
 

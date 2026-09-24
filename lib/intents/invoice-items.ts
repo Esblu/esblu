@@ -20,8 +20,9 @@ import { findNumber, findCurrency, tokenize } from "./number-words.ts";
 // ---------------------
 // Nerozhoduje o DPH (to je právne rozhodnutie — pozri invoice-draft.ts),
 // neopravuje prepis reči a nedopĺňa ceny, ktoré vo vete nie sú. Množstvo
-// a jednotku nechává nevyplnené; predvolené hodnoty dosadzuje až vrstva
-// nad ním, a to iba tie, ktoré dosadí aj formulár v UI.
+// a jednotku vyplní IBA pri výslovnom „10 hodín po 35 eur" (pozri
+// readQuantityPrice); inak ich nechá prázdne a predvolené hodnoty dosadí
+// až vrstva nad ním, a to iba tie, ktoré dosadí aj formulár v UI.
 // =============================================================================
 
 /**
@@ -438,7 +439,157 @@ const PRICE_NOISE = /\b(eur|euro|eura|eurov|euros|czk|usd|dolar\w*|dollars?|kc|k
  */
 const SEGMENT_PREPOSITIONS = /(^|\s)(za|fuer|für|for|ueber|über)(\s|$)/gi;
 
+// -----------------------------------------------------------------------------
+// Množstvo × jednotková cena („10 hodín po 35 eur")
+// -----------------------------------------------------------------------------
+//
+// Jazyk tu iba ROZPOZNÁ tri hodnoty — množstvo, jednotku a jednotkovú cenu.
+// Riadkovú sumu, základ, daň ani súčty NEPOČÍTA: tie vzniknú z uložených
+// `quantity` a `unit_price` v kanonickom peňažnom modeli (VAT engine
+// a finalizácia v DB), rovnako ako pri položke zadanej vo formulári.
+//
+// Prísne pravidlá, aby sa nič nehádalo:
+//   - množstvo MUSÍ mať známu jednotku („10 hodín", „5 kusov", „3 tony"),
+//   - cena MUSÍ byť uvedená spojkou jednotkovej ceny („po", „à", „zu",
+//     „at", „je") alebo „za … za hodinu / per hour / each",
+//   - v úseku sú práve dve čísla (množstvo a cena) a cena má menu.
+// „10 hodín za 350 eur" nie je jednotková cena — ostáva na doterajšej
+// ceste (dve sumy bez jednoznačného vzťahu → otázka).
+
+/** Jednotky, ktorým rozumieme, na zaužívané označenie v doklade („hod", „ks" …). */
+const UNIT_WORDS: Record<string, string> = {
+  h: "hod", hod: "hod", hodina: "hod", hodiny: "hod", hodin: "hod", hodinu: "hod", hodinami: "hod",
+  hour: "hod", hours: "hod", hr: "hod", hrs: "hod", stunde: "hod", stunden: "hod", std: "hod",
+  ks: "ks", kus: "ks", kusy: "ks", kusov: "ks", kusu: "ks", piece: "ks", pieces: "ks", pcs: "ks", pc: "ks", stuck: "ks", stueck: "ks",
+  t: "t", tona: "t", tony: "t", ton: "t", tonu: "t", tonne: "t", tonnes: "t", tons: "t", tonnen: "t",
+  kg: "kg", kilo: "kg", kila: "kg", kilogram: "kg", kilogramov: "kg", kilograms: "kg", kilogramm: "kg",
+  m: "m", meter: "m", metre: "m", metrov: "m", meters: "m", metres: "m",
+  m2: "m2", "m²": "m2", m3: "m3", "m³": "m3", kubik: "m3", kubiky: "m3", kubikov: "m3",
+  l: "l", liter: "l", litre: "l", litrov: "l", liters: "l", litres: "l",
+  km: "km", kilometer: "km", kilometrov: "km", kilometers: "km",
+  den: "deň", dni: "deň", day: "deň", days: "deň", tag: "deň", tage: "deň",
+};
+
+/** Spojky, za ktorými nasleduje JEDNOTKOVÁ cena. „à" sa porovnáva v pôvodnom tvare (zložené „a" je spojka „a"). */
+const UNIT_PRICE_CONNECTORS = new Set(["po", "zu", "at", "je", "@"]);
+
+/** „… za hodinu", „per hour", „pro Stunde", „each" za cenou — cena je za jednotku. */
+const PER_UNIT_WORDS = new Set(["za", "na", "per", "pro", "je", "/", "a"]);
+const EACH_WORDS = new Set(["each", "apiece", "kus", "stuck", "stueck", "jeden", "jednu"]);
+
+/** Slová bez významu na okraji popisu („of excavation", „… bez" po reze „DPH"). */
+const DESCRIPTION_EDGE_NOISE = /^(?:of|von|der|die|das|z|zo)\s+|(?:^|\s+)(?:bez|s|so|ohne|mit|without|with|inkl|vratane|vrátane)$/i;
+
+/** „-2 hodiny" — záporné množstvo sa neprijíma (ani ako súčasť popisu). */
+function hasNegativeQuantity(segment: string): boolean {
+  const match = /(?:^|\s)[-−–]\s*\d+(?:[.,]\d+)?\s+(\S+)/.exec(segment);
+  return Boolean(match && UNIT_WORDS[tokenize(match[1])[0] ?? ""]);
+}
+
+type QuantityPrice = {
+  quantity: number;
+  unit: string;
+  unitPrice: number;
+  /** Indexy tokenov, ktoré do popisu nepatria. */
+  consumed: Set<number>;
+};
+
+function readQuantityPrice(segment: string): QuantityPrice | null {
+  const tokens = tokenize(segment);
+  const raw = segment.trim().split(/\s+/);
+  const qty = findNumber(segment);
+  if (!qty || qty.startToken !== qty.endToken) return null;
+  const unit = UNIT_WORDS[tokens[qty.endToken + 1] ?? ""];
+  if (!unit || !Number.isFinite(qty.value) || qty.value <= 0) return null;
+
+  const price = findNumber(segment, qty.endToken + 2);
+  if (!price || price.startToken !== price.endToken) return null;
+  const connectorIndex = price.startToken - 1;
+  const connector = tokens[connectorIndex] ?? "";
+  const rawConnector = (raw[connectorIndex] ?? "").toLowerCase();
+
+  // Mena hneď za cenou (35 eur / 35 €).
+  const currencyIndex = price.endToken + 1;
+  if (!findCurrency(tokens[currencyIndex] ?? "")) return null;
+
+  const consumed = new Set<number>([qty.startToken, qty.endToken + 1, price.startToken, currencyIndex]);
+
+  let isUnitPrice = false;
+  if (UNIT_PRICE_CONNECTORS.has(connector) || rawConnector === "à") {
+    isUnitPrice = true;
+    consumed.add(connectorIndex);
+  }
+  // „za 35 eur za hodinu", „35 euros per hour", „35 euros each"
+  const after = tokens[currencyIndex + 1] ?? "";
+  const afterUnit = tokens[currencyIndex + 2] ?? "";
+  if (PER_UNIT_WORDS.has(after) && UNIT_WORDS[afterUnit] === unit) {
+    isUnitPrice = true;
+    consumed.add(currencyIndex + 1).add(currencyIndex + 2);
+    if (connector === "za" || connector === "for" || connector === "fur" || connector === "fuer") consumed.add(connectorIndex);
+  } else if (EACH_WORDS.has(after)) {
+    isUnitPrice = true;
+    consumed.add(currencyIndex + 1);
+    if (connector === "za" || connector === "for") consumed.add(connectorIndex);
+  }
+  if (!isUnitPrice) return null;
+
+  // Práve dve čísla: množstvo a cena. Iné číslo = nejasné → doterajšia cesta.
+  if (moneyTokens(segment).length !== 2) return null;
+  if (!Number.isFinite(price.value) || price.value < 0 || price.value > MAX_VOICE_UNIT_PRICE) return null;
+
+  return { quantity: qty.value, unit, unitPrice: price.value, consumed };
+}
+
+function quantityPriceItem(segment: string, qp: QuantityPrice): InvoiceItemCandidate | null {
+  const words = segment.trim().split(/\s+/);
+  let description = words.filter((_, index) => !qp.consumed.has(index)).join(" ");
+  description = description
+    .replace(PRICE_NOISE, " ")
+    .replace(SEGMENT_PREPOSITIONS, " ")
+    .replace(/[.,;:!?]+\s*$/, "")
+    .replace(/^\s*[-–—]\s*/, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  for (let i = 0; i < 3; i++) description = description.replace(DESCRIPTION_EDGE_NOISE, "").trim();
+  if (!description) return null;
+
+  const item: InvoiceItemCandidate = {
+    description: description.slice(0, MAX_DESCRIPTION_LENGTH),
+    quantity: qp.quantity,
+    unit: qp.unit,
+    unitPrice: qp.unitPrice,
+  };
+  const currency = findCurrency(segment);
+  if (currency) item.currency = currency;
+  return item;
+}
+
+/**
+ * „Výkopové práce, 10 hodín po 35 eur" — čiarka tu nedelí dve položky:
+ * úsek bez čísla, za ktorým nasleduje množstvo × cena bez popisu, je jeho
+ * popis. Spojí sa IBA táto dvojica; všetko ostatné ostáva rozdelené.
+ */
+function mergeQuantityContinuations(segments: string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < segments.length; i++) {
+    const next = segments[i + 1];
+    if (next !== undefined && !findNumber(segments[i])) {
+      const qp = readQuantityPrice(next);
+      if (qp && quantityPriceItem(next, qp) === null) {
+        out.push(`${segments[i]} ${next}`);
+        i++;
+        continue;
+      }
+    }
+    out.push(segments[i]);
+  }
+  return out;
+}
+
 function segmentToItem(segment: string): InvoiceItemCandidate | null {
+  const qp = readQuantityPrice(segment);
+  if (qp) return quantityPriceItem(segment, qp);
+
   const amount = findNumber(segment);
 
   // Popis = segment bez čísla a bez názvu meny.
@@ -520,6 +671,9 @@ export function extractInvoiceItems(
     );
 
   if (segments.length === 0) return empty();
+  const merged = mergeQuantityContinuations(segments);
+  segments.length = 0;
+  segments.push(...merged);
 
   if (segments.length > MAX_VOICE_ITEMS) {
     // Veta, z ktorej vyšlo príliš mnoho úsekov, sa takmer isto rozdelila
@@ -534,6 +688,14 @@ export function extractInvoiceItems(
     const item = segmentToItem(segment);
     if (item) items.push(item);
     else unresolved.push(segment);
+  }
+
+  // Množstvo × cena bez popisu („10 hodín po 35 eur") alebo záporné
+  // množstvo: vieme, že ide o položku, ale nie ČO to je / nedá sa prijať.
+  // Nesmie z toho vzniknúť riadok s celou vetou ako popisom a cenou
+  // doplnenou neskôr (35 € namiesto 350 €) — preto „nejasné" → otázka.
+  if (segments.some(hasNegativeQuantity) || unresolved.some((segment) => readQuantityPrice(segment) !== null)) {
+    return { items: [], problem: "ambiguous", recognized: items, unresolved };
   }
 
   if (items.length === 0) return empty();
@@ -598,7 +760,15 @@ export function extractInvoiceItems(
   // partnera („Tester 1") a útržok po reze chvosta o DPH sa vyradili vyššie
   // a ich čísla sem nepatria; všetko ostatné áno, vrátane úsekov, z ktorých
   // položka nevyšla. Práve tie sú dôvod, prečo rekonciliácia existuje.
-  const spoken = moneyTokens(segments.join(" ; ")).slice().sort((a, b) => a - b);
+  // Množstvo („10 hodín") je číslo, nie peniaze — z vyslovených súm sa
+  // odoberie práve raz za každú položku, ktorá ho má.
+  const spokenAll = moneyTokens(segments.join(" ; "));
+  for (const item of items) {
+    if (item.quantity === undefined) continue;
+    const at = spokenAll.indexOf(item.quantity);
+    if (at !== -1) spokenAll.splice(at, 1);
+  }
+  const spoken = spokenAll.slice().sort((a, b) => a - b);
   const used = items
     .map((item) => item.unitPrice as number)
     .slice()
@@ -627,8 +797,9 @@ export function extractSingleAppendedItem(rawAnswer: string): InvoiceItemCandida
     ""
   );
 
-  const segments = splitIntoSegments(stripped.trim());
+  const segments = mergeQuantityContinuations(splitIntoSegments(stripped.trim()));
   if (segments.length !== 1) return null;
+  if (hasNegativeQuantity(segments[0])) return null;
 
   const item = segmentToItem(segments[0]);
   if (!item || item.unitPrice === undefined) return null;

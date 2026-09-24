@@ -584,10 +584,11 @@ export async function POST(req: Request) {
         result = { kind: "error" as const, text: translate(locale, "search.voice.states.denied") };
       } else if (!conversationId) {
         // Dialóg bez identifikátora sa viesť nedá — a bez neho by sa prvá
-        // chýbajúca hodnota už nemala kam doplniť.
+        // chýbajúca hodnota už nemala kam doplniť. (Nástenka ho posiela iba
+        // s hlasovým prepisom; písaný text sa vyhodnocuje počas písania.)
         result = {
           kind: "error" as const,
-          text: translate(locale, "search.errors.commandNotUnderstood"),
+          text: translate(locale, "assistant.invoice.useVoice"),
         };
       } else {
         result = await startInvoiceDraftFlow(
