@@ -8,6 +8,7 @@ import {
   createDocumentFolder,
   deleteDocumentFolder,
   folderNameKey,
+  folderSpokenKey,
   listDocumentFolders,
   listFolderItemViews,
   matchFolderByName,
@@ -570,7 +571,10 @@ export async function handleFolderIntent(
           : answer(t(locale, "folders.empty"));
       }
       const folders = await listDocumentFolders(db);
-      const exact = folders.filter((f) => folderNameKey(f.name) === folderNameKey(args.folderName ?? ""));
+      // Presná totožnosť mena; hlasový prepis „test1" = „Test 1" (medzery,
+      // pomlčky, číslovky). Stále žiadna približná zhoda — tá vedie na výber.
+      const spokenKey = folderSpokenKey(args.folderName ?? "");
+      const exact = spokenKey ? folders.filter((f) => folderSpokenKey(f.name) === spokenKey) : [];
       if (exact.length !== 1) {
         const match = matchFolderByName(folders, args.folderName);
         if (!match) return { kind: "not_found", text: t(locale, "folders.intent.notFound", { name: args.folderName }) };

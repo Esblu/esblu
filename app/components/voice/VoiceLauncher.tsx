@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { apiUrl } from "@/lib/api-url";
 import { REQUEST_LOCALE_HEADER } from "@/lib/i18n/request-locale";
@@ -17,6 +17,7 @@ import {
 } from "@/app/components/document/DocumentLayout";
 import { CloseIcon } from "@/app/components/icons/AppIcons";
 import type { IntentResult } from "@/lib/intents/types";
+import { classifyConfirmationReply } from "@/lib/intents/confirmation-reply";
 import { downloadDocumentPackage, PackageDownloadError } from "@/lib/document-package-client";
 import { describePackageError, describePackageOutcome } from "@/app/components/folders/package-messages";
 
@@ -121,6 +122,7 @@ export function VoiceLauncher({
   const [open, setOpen] = useState(false);
   const [transcript, setTranscript] = useState("");
   const [intentResult, setIntentResult] = useState<IntentResult | null>(null);
+  const currentIntentResult = intentResult;
   const [actionSubmitting, setActionSubmitting] = useState(false);
   const [phase, setPhase] = useState<Phase>("idle");
   const [message, setMessage] = useState("");
@@ -132,10 +134,41 @@ export function VoiceLauncher({
   // Priečinok z tohto rozhovoru („daj TAM bločky"). Iba UUID, server ho overí.
   const recentFolderIdRef = useRef<string | null>(null);
 
+  // Náhľad, ktorý práve čaká na potvrdenie. V ref, aby ho hlasový prepis
+  // videl aj z callbacku nahrávania (bez zastaraného uzáveru).
+  const pendingPreviewRef = useRef<IntentResult | null>(null);
+  useEffect(() => {
+    pendingPreviewRef.current = phase === "awaitingConfirmation" ? intentResult : null;
+  }, [phase, intentResult]);
+
+  /**
+   * Hlasové „Áno, zmaž ho" / „Nie" pri čakajúcom potvrdení. Predtým sa
+   * prepis poslal ako nový príkaz: náhľad (a jeho confirmationId) sa zahodil
+   * a zmazanie sa hlasom nedalo dokončiť. Potvrdí sa VÝHRADNE práve
+   * zobrazený náhľad; server confirmationId aj oprávnenie overí znova.
+   */
+  function handleSpokenConfirmation(text: string): boolean {
+    const pending = pendingPreviewRef.current;
+    if (!pending || pending.kind !== "action_preview") return false;
+    const reply = classifyConfirmationReply(text);
+    if (reply === "confirm") {
+      pendingPreviewRef.current = null; // žiadne dvojité odoslanie
+      void handleConfirm(pending);
+      return true;
+    }
+    if (reply === "cancel") {
+      pendingPreviewRef.current = null;
+      resetDialog();
+      return true;
+    }
+    return false;
+  }
+
   const { voiceState, voiceError, handleMicButtonClick, cancelVoiceRecording } =
     useVoiceCapture({
       onTranscript: (text) => {
         setTranscript(text);
+        if (handleSpokenConfirmation(text)) return;
         void runIntent(text);
       },
     });
@@ -244,7 +277,8 @@ export function VoiceLauncher({
    * Potvrdenie rizikovej akcie. Na server ide VÝHRADNE confirmationId —
    * žiadny intent ani argumenty, aby sa cestou nedalo nič podstrčiť.
    */
-  async function handleConfirm() {
+  async function handleConfirm(target?: IntentResult) {
+    const intentResult = target ?? currentIntentResult;
     if (!intentResult || intentResult.kind !== "action_preview") return;
 
     // Stiahnutie priečinka / dokladov — bez zápisu cez /action/execute.
@@ -501,7 +535,7 @@ export function VoiceLauncher({
           <IntentResultView
             intentResult={intentResult}
             actionSubmitting={actionSubmitting}
-            onConfirm={handleConfirm}
+            onConfirm={() => void handleConfirm()}
             onCancel={handleCancel}
           />
         </div>

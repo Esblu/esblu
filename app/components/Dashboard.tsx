@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
@@ -23,6 +23,7 @@ import { buildLegacyDashboardAlerts } from "@/lib/deadlines";
 import { apiUrl } from "@/lib/api-url";
 import { REQUEST_LOCALE_HEADER } from "@/lib/i18n/request-locale";
 import type { IntentResult } from "@/lib/intents/types";
+import { classifyConfirmationReply } from "@/lib/intents/confirmation-reply";
 import { useVoiceCapture } from "@/hooks/use-voice-capture";
 import { IntentResultView } from "@/app/components/voice/IntentResultView";
 import { todayLocalDate } from "@/lib/local-date";
@@ -91,6 +92,12 @@ export default function Dashboard() {
   // (zadanie: "Search UX preferujúci centrálne pole" — JEDNO pole, dve
   // vrstvy výsledkov, žiadna duplicitná UI).
   const [intentResult, setIntentResult] = useState<IntentResult | null>(null);
+  const currentIntentResult = intentResult;
+  // Náhľad čakajúci na potvrdenie — pre hlasové „Áno" (ref: číta ho callback nahrávania).
+  const pendingPreviewRef = useRef<IntentResult | null>(null);
+  useEffect(() => {
+    pendingPreviewRef.current = intentResult?.kind === "action_preview" ? intentResult : null;
+  }, [intentResult]);
   const [intentLoading, setIntentLoading] = useState(false);
   // Action Engine (doplnenie zadania, bod 6/23) — potvrdzovací tok pre WRITE
   // intenty (EXPORT_DOCUMENTS/CREATE_DOCUMENT_CATEGORY/RENAME_DOCUMENT_CATEGORY/
@@ -398,6 +405,25 @@ export default function Dashboard() {
     handleMicButtonClick,
   } = useVoiceCapture({
     onTranscript: (text) => {
+      // Hlasové „Áno, zmaž ho" pri zobrazenom náhľade = ťuknutie na
+      // Potvrdiť. Predtým prepis prepísal pole hľadania, náhľad zmizol a
+      // zobrazilo sa „Nič sa nenašlo." (pozri lib/intents/confirmation-reply.ts).
+      const pending = pendingPreviewRef.current;
+      if (pending && pending.kind === "action_preview") {
+        const reply = classifyConfirmationReply(text);
+        if (reply === "confirm") {
+          pendingPreviewRef.current = null;
+          setVoiceTranscript(text);
+          void handleActionConfirm(pending);
+          return;
+        }
+        if (reply === "cancel") {
+          pendingPreviewRef.current = null;
+          setVoiceTranscript(text);
+          handleActionCancel();
+          return;
+        }
+      }
       // Prepis ide do toho istého poľa ako písaný text — spustí ten istý
       // debounced Intent Engine efekt a ostáva viditeľný na opravu.
       setSearch(text);
@@ -549,7 +575,8 @@ export default function Dashboard() {
   // NIKDY znova `args` — server si kanonické filtre/count sám nanovo
   // načíta z assistant_action_confirmations, appka ich tu už nemá k
   // dispozícii (typ `action_preview` pole `args` už neobsahuje).
-  async function handleActionConfirm() {
+  async function handleActionConfirm(target?: IntentResult) {
+    const intentResult = target ?? currentIntentResult;
     if (!intentResult || intentResult.kind !== "action_preview") return;
     setActionSubmitting(true);
 
@@ -892,7 +919,7 @@ export default function Dashboard() {
                 <IntentResultView
                   intentResult={intentResult}
                   actionSubmitting={actionSubmitting}
-                  onConfirm={handleActionConfirm}
+                  onConfirm={() => void handleActionConfirm()}
                   onCancel={handleActionCancel}
                 />
               ) : query.length >= 2 && intentLoading ? (

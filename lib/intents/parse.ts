@@ -938,6 +938,24 @@ function remainderName(rawText: string, drop: readonly string[]): string | undef
   return name.charAt(0).toUpperCase() + name.slice(1);
 }
 
+/**
+ * Výslovne pomenované meno: „… s názvom Aman", „… called Aman",
+ * „… namens Aman". Keď zaznie, je to meno — nič sa nedomýšľa a nepýta.
+ */
+const EXPLICIT_NAME_REGEX =
+  /(?:^|\s)(?:s\s+n[áa]zvom|pod\s+n[áa]zvom|n[áa]zvom|s\s+menom|menom|s\s+ozna[čc]en[íi]m|called|named|with\s+(?:the\s+)?name|namens|mit\s+(?:dem\s+)?namen|genannt)\s+(.+)$/i;
+
+function explicitEntityName(rawText: string): string | undefined {
+  const match = EXPLICIT_NAME_REGEX.exec(rawText.trim());
+  if (!match) return undefined;
+  const name = match[1]
+    .replace(/\s+(anlegen|erstellen|hinzuf[üu]gen|erfassen)\s*$/i, "")
+    .replace(/^[„"'“]+|[”"'“.?!,;:]+$/g, "")
+    .trim();
+  if (!name) return undefined;
+  return name.charAt(0).toUpperCase() + name.slice(1);
+}
+
 function readQuantity(text: string): { quantity: number; unit?: string } | undefined {
   const match = text.match(/(-?\d+(?:[.,]\d+)?)\s*([a-z]+)?/);
   if (!match) return undefined;
@@ -1076,18 +1094,20 @@ export function parseOperationalIntent(rawText: string, hints: ParseHints = {}):
       return build("VEHICLE_CREATE", { query: plate ?? undefined });
     }
     if (hasMachine && !hasVehicle && !hasInventoryStrong) {
-      const name = remainderName(rawText, [...OP_CREATE, ...OP_NEW, "stroj", "machine", "maschine"]);
+      const name = explicitEntityName(rawText) ?? remainderName(rawText, [...OP_CREATE, ...OP_NEW, "stroj", "machine", "maschine"]);
       return build("MACHINE_CREATE", { entityName: name });
     }
     if (inInventory && !hasMachine && !hasVehicle && (hasInventoryStrong || hasGenericItem)) {
-      const name = remainderName(rawText, [...OP_CREATE, ...OP_NEW, ...OP_INVENTORY_STRONG, ...OP_GENERIC_ITEM, ...OP_UNITS]);
+      const name = explicitEntityName(rawText) ?? remainderName(rawText, [...OP_CREATE, ...OP_NEW, ...OP_INVENTORY_STRONG, ...OP_GENERIC_ITEM, ...OP_UNITS]);
       return build("INVENTORY_ITEM_CREATE", { entityName: name, quantity: qty?.quantity, unit: qty?.unit });
     }
     // „Vytvor novú položku" bez modulu
     if (hasGenericItem && nounCount === 0) {
-      if (hints.module === "machines") return build("MACHINE_CREATE", {});
-      if (hints.module === "vehicles") return build("VEHICLE_CREATE", {});
-      const name = remainderName(rawText, [...OP_CREATE, ...OP_NEW, ...OP_GENERIC_ITEM]);
+      // Meno sa vytiahne VŽDY — aj keď modul určí kontext obrazovky.
+      // (Predtým sa pri kontexte Strojov zahodilo a asistent sa naň pýtal.)
+      const name = explicitEntityName(rawText) ?? remainderName(rawText, [...OP_CREATE, ...OP_NEW, ...OP_GENERIC_ITEM]);
+      if (hints.module === "machines") return build("MACHINE_CREATE", { entityName: name });
+      if (hints.module === "vehicles") return build("VEHICLE_CREATE", { query: plate ?? undefined, entityName: name });
       return build("ENTITY_CREATE", { entityName: name });
     }
   }

@@ -48,6 +48,27 @@ export function folderNameKey(name: string): string {
   return name.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
 }
 
+const SPOKEN_NUMBERS: Record<string, string> = {
+  nula: "0", jeden: "1", jedna: "1", jedno: "1", dva: "2", dve: "2", tri: "3", styri: "4", pat: "5",
+  sest: "6", sedem: "7", osem: "8", devat: "9", desat: "10",
+  zero: "0", one: "1", two: "2", three: "3", four: "4", five: "5", six: "6", seven: "7", eight: "8", nine: "9", ten: "10",
+  null: "0", eins: "1", zwei: "2", drei: "3", vier: "4", funf: "5", fuenf: "5", sechs: "6", sieben: "7", acht: "8", neun: "9", zehn: "10",
+};
+
+/**
+ * Totožnosť mena pre HLAS: prepis reči nerozlišuje medzery, pomlčky ani
+ * číslovky („test1", „Test 1", „test-1", „test jedna" sú to isté meno).
+ * Nie je to približná zhoda — odlišné písmená či čísla sa nikdy nezhodujú;
+ * dva priečinky s rovnakým kľúčom sú nejednoznačné a asistent sa spýta.
+ */
+export function folderSpokenKey(name: string): string {
+  return folderNameKey(name)
+    .split(/[\s\-_.,/]+/)
+    .map((token) => SPOKEN_NUMBERS[token] ?? token)
+    .join("")
+    .replace(/[^a-z0-9]/g, "");
+}
+
 /**
  * Nájde priečinok podľa vysloveného mena. Presná zhoda má prednosť; inak
  * jediný priečinok, ktorého meno vyslovený text obsahuje alebo naopak.
@@ -62,6 +83,10 @@ export function matchFolderByName<T extends { name: string }>(
   const exact = folders.filter((f) => folderNameKey(f.name) === key);
   if (exact.length === 1) return { folder: exact[0] };
   if (exact.length > 1) return { ambiguous: exact };
+  const spokenKey = folderSpokenKey(spoken);
+  const spokenExact = spokenKey ? folders.filter((f) => folderSpokenKey(f.name) === spokenKey) : [];
+  if (spokenExact.length === 1) return { folder: spokenExact[0] };
+  if (spokenExact.length > 1) return { ambiguous: spokenExact };
 
   const partial = folders.filter((f) => {
     const fk = folderNameKey(f.name);
