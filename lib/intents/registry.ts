@@ -263,6 +263,63 @@ export const INTENT_REGISTRY: Record<IntentName, IntentDefinition> = {
       "Otvor kontrolu prijatej faktúry pre PRÁVE OTVORENÝ dokument z Inboxu. Nič nezapisuje, nič nefinalizuje a nezakladá dodávateľa.",
   },
 
+  FOLDER_CREATE: {
+    name: "FOLDER_CREATE",
+    readOnly: false,
+    requiresConfirmation: true,
+    description: "Vytvor priečinok dokladov (document_folders). Iba finance.manage.",
+  },
+  FOLDER_OPEN: {
+    name: "FOLDER_OPEN",
+    readOnly: true,
+    requiresConfirmation: false,
+    description: "Otvor priečinok dokladov podľa mena.",
+  },
+  FOLDER_ADD_ITEMS: {
+    name: "FOLDER_ADD_ITEMS",
+    readOnly: false,
+    requiresConfirmation: true,
+    description:
+      "Pridaj doklady (výber alebo filter: bločky/faktúry/obdobie) do priečinka. Pridáva iba odkazy; nič nepresúva. Vždy s náhľadom počtu.",
+  },
+  FOLDER_REMOVE_ITEMS: {
+    name: "FOLDER_REMOVE_ITEMS",
+    readOnly: false,
+    requiresConfirmation: true,
+    description: "Odober doklady z priečinka. Doklady sa nemažú.",
+  },
+  FOLDER_LIST_ITEMS: {
+    name: "FOLDER_LIST_ITEMS",
+    readOnly: true,
+    requiresConfirmation: false,
+    description: "Vypíš doklady v priečinku.",
+  },
+  FOLDER_EXPORT: {
+    name: "FOLDER_EXPORT",
+    readOnly: false,
+    requiresConfirmation: true,
+    description:
+      "Priprav stiahnutie priečinka ako ZIP s originálmi (nezapisuje do DB; stiahnutie sa eviduje až po prijatí bajtov).",
+  },
+  DOCUMENTS_EXPORT: {
+    name: "DOCUMENTS_EXPORT",
+    readOnly: false,
+    requiresConfirmation: true,
+    description: "Priprav stiahnutie dokladov podľa filtra ako ZIP s originálmi.",
+  },
+  DOCUMENTS_LIST_UNDOWNLOADED: {
+    name: "DOCUMENTS_LIST_UNDOWNLOADED",
+    readOnly: true,
+    requiresConfirmation: false,
+    description: "Zobraz doklady, ktoré ešte nikto nestiahol (voliteľne typ a obdobie).",
+  },
+  DOCUMENTS_DOWNLOAD_STATUS: {
+    name: "DOCUMENTS_DOWNLOAD_STATUS",
+    readOnly: true,
+    requiresConfirmation: false,
+    description: "Koľko dokladov (napr. účtovník) ešte nestiahol.",
+  },
+
   CREATE_INVOICE_DRAFT: {
     name: "CREATE_INVOICE_DRAFT",
     readOnly: false,

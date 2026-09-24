@@ -36,6 +36,24 @@ import { apiUrl } from "@/lib/api-url";
 import { REQUEST_LOCALE_HEADER } from "@/lib/i18n/request-locale";
 import { downloadBlob } from "@/lib/file-actions";
 import {
+  confirmPackageDownload,
+  downloadDocumentPackage,
+  loadDownloadStates,
+  receiveVerifiedPackage,
+  PackageDownloadError,
+} from "@/lib/document-package-client";
+import {
+  downloadStateOf,
+  matchesDownloadFilter,
+  DOWNLOAD_FILTERS,
+  type DownloadFilter,
+  type DownloadState,
+} from "@/lib/invoicing/document-package";
+import { DownloadStateBadge } from "@/app/components/folders/DownloadStateBadge";
+import { FolderPickerModal } from "@/app/components/folders/FolderPickerModal";
+import { describePackageError, describePackageOutcome } from "@/app/components/folders/package-messages";
+import { CheckIcon, FolderIcon } from "@/app/components/icons/AppIcons";
+import {
   handoffErrorKey,
   isHandoffErrorCode,
   HANDOFF_GENERIC_ERROR_KEY,
@@ -140,8 +158,18 @@ export default function FakturyPage() {
   const [exportBusy, setExportBusy] = useState(false);
   const [packageBusy, setPackageBusy] = useState(false);
   const [exportFeedback, setExportFeedback] = useState<
-    { type: "success" | "error"; text: string } | null
+    { type: "success" | "error" | "warning"; text: string } | null
   >(null);
+
+  // Stav stiahnutia — nemenná história udalostí, nie zámok. Pozri
+  // lib/invoicing/document-package.ts, čo presne znamená „Stiahnuté".
+  const [downloadStates, setDownloadStates] = useState<Map<string, DownloadState>>(new Map());
+  const [downloadFilter, setDownloadFilter] = useState<DownloadFilter>("all");
+  // Výber dokladov pre „Pridať do priečinka" / „Stiahnuť vybrané".
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [folderPickerOpen, setFolderPickerOpen] = useState(false);
+  const [userId, setUserId] = useState("");
 
   useEffect(() => {
     void init();
@@ -156,6 +184,7 @@ export default function FakturyPage() {
       window.location.href = "/login";
       return;
     }
+    setUserId(session.user.id);
 
     const activeMembership = await getMyActiveMembership();
     setMembership(activeMembership);
@@ -181,12 +210,14 @@ export default function FakturyPage() {
     setLoadError("");
 
     try {
-      const [invoiceRows, partnerRows, states, exported] = await Promise.all([
+      const [invoiceRows, partnerRows, states, exported, downloads] = await Promise.all([
         listInvoices(activeCompanyId),
         listBusinessPartners(activeCompanyId),
         listAccountingStates(),
         listHandoffStatuses(),
+        loadDownloadStates(),
       ]);
+      setDownloadStates(downloads);
       setInvoices(invoiceRows);
       setPartnersById(Object.fromEntries(partnerRows.map((partner) => [partner.id, partner])));
       setAccountingStates(states);
@@ -246,10 +277,62 @@ export default function FakturyPage() {
     return counts;
   }, [directionScopedInvoices]);
 
-  const filteredInvoices = useMemo(
+  const sectionAndDirectionInvoices = useMemo(
     () => directionScopedInvoices.filter((invoice) => matchesSection(invoice, section, isOverdueInvoice)),
     [directionScopedInvoices, section]
   );
+
+  // Filter stiahnutia sa počíta nad tým istým zoznamom, aký používateľ vidí.
+  const downloadCounts = useMemo(() => {
+    const counts: Record<DownloadFilter, number> = { all: 0, not_downloaded: 0, downloaded: 0 };
+    for (const invoice of sectionAndDirectionInvoices) {
+      const state = downloadStateOf(downloadStates, "invoice", invoice.id);
+      for (const key of DOWNLOAD_FILTERS) if (matchesDownloadFilter(state, key)) counts[key] += 1;
+    }
+    return counts;
+  }, [sectionAndDirectionInvoices, downloadStates]);
+
+  const filteredInvoices = useMemo(
+    () =>
+      sectionAndDirectionInvoices.filter((invoice) =>
+        matchesDownloadFilter(downloadStateOf(downloadStates, "invoice", invoice.id), downloadFilter)
+      ),
+    [sectionAndDirectionInvoices, downloadStates, downloadFilter]
+  );
+
+  function toggleSelected(invoiceId: string) {
+    setSelectedIds((current) =>
+      current.includes(invoiceId) ? current.filter((id) => id !== invoiceId) : [...current, invoiceId]
+    );
+  }
+
+  function exitSelection() {
+    setSelectionMode(false);
+    setSelectedIds([]);
+  }
+
+  /** ZIP s originálmi iba pre vybrané doklady (priečinková cesta, nie odovzdanie). */
+  async function handleDownloadSelected() {
+    if (packageBusy || selectedIds.length === 0) return;
+    setPackageBusy(true);
+    setExportFeedback(null);
+    try {
+      const outcome = await downloadDocumentPackage(
+        { kind: "selection", items: selectedIds.map((id) => ({ type: "invoice" as const, id })) },
+        locale
+      );
+      const message = describePackageOutcome(t, outcome);
+      setExportFeedback({ type: message.tone === "warning" ? "warning" : "success", text: message.text });
+      setDownloadStates(await loadDownloadStates());
+    } catch (error) {
+      setExportFeedback({
+        type: "error",
+        text: describePackageError(t, error instanceof PackageDownloadError ? error : null),
+      });
+    } finally {
+      setPackageBusy(false);
+    }
+  }
 
   /**
    * Protistrana podľa smeru: pri vydanej faktúre odberateľ, pri prijatej
@@ -445,12 +528,17 @@ export default function FakturyPage() {
         return;
       }
 
-      const blob = await response.blob();
+      // Celá odpoveď musí prísť a sedieť s odtlačkom zo servera — až potom
+      // sa súbor uloží a doklady sa označia ako stiahnuté.
+      const { bytes, sha256 } = await receiveVerifiedPackage(response);
+      const blob = new Blob([bytes as unknown as BlobPart], { type: "application/zip" });
       const fileName =
         response.headers.get("content-disposition")?.match(/filename="([^"]+)"/)?.[1] ??
         "esblu-accounting-handoff.zip";
 
       await downloadBlob(blob, fileName);
+      const recorded = await confirmPackageDownload(response.headers.get("x-esblu-package-id"), sha256);
+      setDownloadStates(await loadDownloadStates());
 
       // Stav sa mení iba tým dokladom, ktoré v balíku naozaj boli. Koncepty
       // server vynechal, takže si svoj doterajší stav ponechajú.
@@ -477,11 +565,19 @@ export default function FakturyPage() {
             invoices: packagedCount,
             files: response.headers.get("x-esblu-file-count") ?? "?",
             size: formatBytes(blob.size),
-          }) + (excludedDrafts > 0 ? t("handoff.packageDrafts", { count: excludedDrafts }) : ""),
+          }) +
+          (excludedDrafts > 0 ? t("handoff.packageDrafts", { count: excludedDrafts }) : "") +
+          (recorded === null ? t("folders.downloadRecordFailed") : ""),
       });
     } catch (error) {
       console.error("Vytvorenie balíka pre účtovníka zlyhalo:", error);
-      setExportFeedback({ type: "error", text: t("handoff.errors.failed") });
+      setExportFeedback({
+        type: "error",
+        text:
+          error instanceof PackageDownloadError
+            ? describePackageError(t, error)
+            : t("handoff.errors.failed"),
+      });
     } finally {
       setPackageBusy(false);
     }
@@ -490,7 +586,14 @@ export default function FakturyPage() {
   const createDisabled = !canEdit || legalHold;
 
   return (
-    <DocumentPageShell wide>
+    <DocumentPageShell
+      wide
+      voiceSelection={
+        selectionMode && selectedIds.length > 0
+          ? { items: selectedIds.map((id) => ({ type: "invoice" as const, id })) }
+          : null
+      }
+    >
       <BackLink href="/" label={t("nav.dashboard")} className="mb-6" />
 
       <DocumentHeader
@@ -530,6 +633,10 @@ export default function FakturyPage() {
               >
                 {packageBusy ? t("handoff.packageBusy") : t("handoff.packageButton")}
               </button>
+              <Link href="/priecinky" className={`${docButtonSecondary} gap-2`}>
+                <FolderIcon size={16} />
+                {t("folders.navLabel")}
+              </Link>
               <Link
                 href="/faktury/new"
                 aria-disabled={createDisabled}
@@ -547,7 +654,15 @@ export default function FakturyPage() {
 
       {exportFeedback && (
         <div className="mt-4">
-          <DocumentNotice tone={exportFeedback.type === "error" ? "critical" : undefined}>
+          <DocumentNotice
+            tone={
+              exportFeedback.type === "error"
+                ? "critical"
+                : exportFeedback.type === "warning"
+                  ? "warning"
+                  : undefined
+            }
+          >
             {exportFeedback.text}
           </DocumentNotice>
         </div>
@@ -606,19 +721,99 @@ export default function FakturyPage() {
               /* Stav je sekundárna os. Na mobile žije za tlačidlom
                  "Filtre" (§A1) — šesť piluliek nad zoznamom zabralo
                  polovicu obrazovky telefónu. */
-              <FilterChips
-                label={t("invoices.register.statusFilterLabel")}
-                active={section}
-                onSelect={(key) => setSection(key as SectionKey)}
-                options={SECTION_ORDER.map((key) => ({
-                  key,
-                  label: t(`invoices.sections.${key}`),
-                  count: sectionCounts[key],
-                }))}
-              />
+              <div className="space-y-3">
+                <FilterChips
+                  label={t("invoices.register.statusFilterLabel")}
+                  active={section}
+                  onSelect={(key) => setSection(key as SectionKey)}
+                  options={SECTION_ORDER.map((key) => ({
+                    key,
+                    label: t(`invoices.sections.${key}`),
+                    count: sectionCounts[key],
+                  }))}
+                />
+                <FilterChips
+                  label={t("folders.filter.label")}
+                  active={downloadFilter}
+                  onSelect={(key) => setDownloadFilter(key as DownloadFilter)}
+                  options={DOWNLOAD_FILTERS.map((key) => ({
+                    key,
+                    label: t(`folders.filter.${key}`),
+                    count: downloadCounts[key],
+                  }))}
+                />
+              </div>
             }
           />
         </div>
+      )}
+
+      {canView && canEdit && filteredInvoices.length > 0 && (
+        <div className="mt-4 flex justify-end">
+          <button
+            type="button"
+            onClick={() => (selectionMode ? exitSelection() : setSelectionMode(true))}
+            className={docButtonSecondary}
+          >
+            {selectionMode ? t("folders.selectionCancel") : t("folders.select")}
+          </button>
+        </div>
+      )}
+
+      {selectionMode && (
+        <div className="sticky bottom-4 z-10 mt-3 rounded-doc border border-doc-border bg-surface-1/95 p-3 backdrop-blur">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center gap-3">
+              <p className="text-sm font-medium text-primary">
+                {t("folders.selectedCount", { count: selectedIds.length })}
+              </p>
+              <button
+                type="button"
+                onClick={() => setSelectedIds(filteredInvoices.map((invoice) => invoice.id))}
+                className="min-h-11 text-sm font-medium text-accent-cyan"
+              >
+                {t("folders.selectAll")}
+              </button>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                disabled={selectedIds.length === 0}
+                onClick={() => setFolderPickerOpen(true)}
+                className={docButtonPrimary}
+              >
+                {t("folders.addToFolder")}
+              </button>
+              <button
+                type="button"
+                disabled={selectedIds.length === 0 || packageBusy}
+                onClick={() => void handleDownloadSelected()}
+                className={docButtonSecondary}
+              >
+                {packageBusy ? t("folders.downloading") : t("folders.downloadSelected")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {folderPickerOpen && membership && (
+        <FolderPickerModal
+          companyId={membership.company_id}
+          userId={userId}
+          refs={selectedIds.map((id) => ({ type: "invoice" as const, id }))}
+          onClose={() => setFolderPickerOpen(false)}
+          onDone={(result) => {
+            setFolderPickerOpen(false);
+            setExportFeedback({
+              type: "success",
+              text:
+                t("folders.addedToFolder", { name: result.folderName, count: result.affected }) +
+                (result.skipped > 0 ? t("folders.addedSkipped", { count: result.skipped }) : ""),
+            });
+            exitSelection();
+          }}
+        />
       )}
 
       {canView && (
@@ -652,13 +847,26 @@ export default function FakturyPage() {
                   return (
                     <DataRow
                       key={invoice.id}
-                      href={invoiceDetailHref(invoice.id)}
+                      href={selectionMode ? undefined : invoiceDetailHref(invoice.id)}
+                      onClick={selectionMode ? () => toggleSelected(invoice.id) : undefined}
                       columns={INVOICE_COLUMNS}
                       ariaLabel={`${invoiceNumberLabel(invoice)} · ${counterpartyName(invoice) || "—"}`}
                     >
                       {/* 1 číslo + smer */}
                       <div className="min-w-0">
                         <div className="flex flex-wrap items-center gap-2">
+                          {selectionMode && (
+                            <span
+                              aria-hidden="true"
+                              className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-[4px] border ${
+                                selectedIds.includes(invoice.id)
+                                  ? "border-transparent bg-accent-esblu text-on-accent"
+                                  : "border-doc-border"
+                              }`}
+                            >
+                              {selectedIds.includes(invoice.id) && <CheckIcon size={12} />}
+                            </span>
+                          )}
                           <span className="truncate font-medium text-primary">
                             {invoiceNumberLabel(invoice)}
                           </span>
@@ -717,6 +925,9 @@ export default function FakturyPage() {
                               {t(`handoff.handoffStatus.${handoffStatus}`)}
                             </span>
                           )}
+                          <DownloadStateBadge
+                            state={downloadStateOf(downloadStates, "invoice", invoice.id)}
+                          />
                           {retention.state !== "active" && (
                             <span
                               className={`rounded-doc-sm px-2 py-0.5 text-xs font-medium ${

@@ -692,9 +692,192 @@ function parseWithinDays(text: string): number | undefined {
   return undefined;
 }
 
+// =============================================================================
+// Priečinky dokladov a stav stiahnutia.
+//
+// Slovník je zámerne odlišný od „zložiek" (custom_document_categories):
+//   SK „priečinok"  |  EN „accounting folder"  |  DE „Belegordner"
+// Holé „folder"/„Ordner" ostáva pri zložkách, aby sa existujúce príkazy
+// nezmenili potichu.
+//
+// Názov priečinka sa berie z PÔVODNÉHO textu (s diakritikou a veľkými
+// písmenami) a nikdy sa nedomýšľa. Filter dokladov (typy, obdobie) sa číta
+// z textu BEZ názvu priečinka — inak by priečinok „August 2026" sám osebe
+// znamenal filter „za august".
+// =============================================================================
+
+const FOLDER_NOUN_REGEX = /(priečin\S*|priecin\S*|accounting\s+folders?|belegordner\S*|buchhaltungsordner\S*)/i;
+const FOLDER_CREATE_VERBS = ["vytvor", "zaloz", "novy priecin", "create", "new accounting folder", "erstelle", "neuer belegordner", "anlegen"];
+const FOLDER_OPEN_VERBS = ["otvor", "ukaz", "zobraz", "open", "show", "offne", "oeffne", "zeige"];
+const FOLDER_LIST_WORDS = ["co je v", "obsah", "co obsahuje", "what is in", "whats in", "contents", "was ist in", "inhalt"];
+const FOLDER_ADD_VERBS = ["daj", "pridaj", "vloz", "zarad", "presun", "hod", "add", "put", "move", "fuge", "fuege", "verschieb", "lege"];
+const FOLDER_MOVE_VERBS = ["presun", "move", "verschieb"];
+const FOLDER_REMOVE_VERBS = ["odober", "vyrad", "odstran", "remove", "take out", "entfern"];
+/**
+ * Rozkaz „stiahni", nie prídavné meno „stiahnuté". „Ukáž stiahnuté faktúry"
+ * nesmie spustiť sťahovanie — preto iba rozkazovacie tvary a celé slovo
+ * „download" (nie „downloaded").
+ */
+function wantsDownloadCommand(text: string): boolean {
+  return (
+    /(^|\s)(stiahni|stiahnite|stiahnime)(\s|$|[.,!?])/.test(text) ||
+    /\bdownload\b(?!ed)/.test(text) ||
+    /\bherunterladen\b/.test(text) ||
+    /(^|\s)lade\s.*\bherunter\b/.test(text)
+  );
+}
+const NOT_DOWNLOADED_WORDS = ["nestiahn", "nestiahl", "nestiahol", "not downloaded", "undownloaded", "not yet downloaded", "nicht heruntergeladen", "noch nicht heruntergeladen"];
+const HOW_MANY_WORDS = ["kolko", "how many", "wie viele", "wieviele"];
+const ACCOUNTANT_WORDS = ["uctovn", "accountant", "buchhalter", "steuerberater"];
+const SELECTION_WORDS = ["tieto", "tento", "tuto", "tieto doklady", "these", "this document", "diese", "dieses"];
+const THERE_WORDS = ["tam", "don", "do neho", "there", "into it", "dort", "dorthin", "hinein"];
+const RECEIVED_WORDS = ["prijat", "received", "eingang", "incoming"];
+const ISSUED_WORDS = ["vydan", "vystaven", "issued", "outgoing", "ausgang", "ausgestellt"];
+const GENERIC_DOCUMENT_WORDS = ["doklad", "dokument", "document", "beleg", "podklad"];
+
+/** „tento rok"/„tento mesiac" je obdobie, nie výber na obrazovke. */
+function mentionsSelection(text: string): boolean {
+  const withoutPeriods = [...THIS_MONTH_WORDS, ...THIS_YEAR_WORDS].reduce(
+    (acc, phrase) => acc.split(phrase).join(" "),
+    text
+  );
+  return hasWord(withoutPeriods, SELECTION_WORDS);
+}
+
+function hasWord(text: string, words: readonly string[]): boolean {
+  return words.some((word) => new RegExp(`(^|[^a-z])${word.replace(/\s+/g, "\\s+")}`).test(text));
+}
+
+/** Názov za podstatným menom priečinka, bez chvosta s filtrom („… aj prijaté faktúry"). */
+function extractFolderName(rawText: string): string | undefined {
+  const match = FOLDER_NOUN_REGEX.exec(rawText);
+  if (!match) return undefined;
+  let tail = rawText.slice(match.index + match[0].length).trim();
+  if (!tail) return undefined;
+
+  // Chvost s ďalším filtrom alebo spojkou nepatrí do mena.
+  const cut = tail.search(/\s(aj|tiež|tiez|a tiež|also|too|auch|a|and|und)\s/i);
+  if (cut > 0) tail = tail.slice(0, cut);
+  const normalizedTail = normalizeText(tail);
+  for (const entry of DOCUMENT_TYPE_KEYWORDS) {
+    for (const word of entry.words) {
+      const at = normalizedTail.indexOf(word);
+      if (at > 0) tail = tail.slice(0, at);
+    }
+  }
+  const cleaned = tail.replace(/^[„"'“]+|[”"'“.?!,;:]+$/g, "").trim();
+  return cleaned || undefined;
+}
+
+/** Dátumový rozsah z filtra; „za august 2025" použije uvedený rok. */
+function extractFilterDateRange(filterText: string): { dateFrom: string; dateTo: string } | undefined {
+  const range = extractDateRange(filterText);
+  if (!range) return undefined;
+  const year = /\b(20\d{2})\b/.exec(filterText)?.[1];
+  if (!year) return { dateFrom: range.dateFrom, dateTo: range.dateTo };
+  return { dateFrom: `${year}${range.dateFrom.slice(4)}`, dateTo: `${year}${range.dateTo.slice(4)}` };
+}
+
+function detectInvoiceDirection(text: string): "issued" | "received" | undefined {
+  if (containsAny(text, RECEIVED_WORDS)) return "received";
+  if (containsAny(text, ISSUED_WORDS)) return "issued";
+  return undefined;
+}
+
+/**
+ * Priečinkové a stiahnutové príkazy. `null` = veta sem nepatrí a pokračuje
+ * bežnými vetvami parsera.
+ */
+export function parseFolderIntent(rawText: string): ParsedIntent | null {
+  const text = normalizeText(rawText);
+  const hasFolderNoun = FOLDER_NOUN_REGEX.test(rawText) || FOLDER_NOUN_REGEX.test(text);
+  const folderName = hasFolderNoun ? extractFolderName(rawText) : undefined;
+  const filterText = folderName ? text.replace(normalizeText(folderName), " ") : text;
+
+  const documentTypes = detectDocumentTypes(filterText);
+  const invoiceDirection = detectInvoiceDirection(filterText);
+  if (invoiceDirection && !documentTypes.includes("invoice")) documentTypes.push("invoice");
+  const range = extractFilterDateRange(filterText);
+  const hasFilter = documentTypes.length > 0 || Boolean(range) || containsAny(filterText, GENERIC_DOCUMENT_WORDS);
+  const filterArgs = {
+    documentTypes: documentTypes.length > 0 ? documentTypes : undefined,
+    invoiceDirection,
+    dateFrom: range?.dateFrom,
+    dateTo: range?.dateTo,
+  };
+
+  // --- Stav stiahnutia (nemusí obsahovať priečinok)
+  if (containsAny(text, NOT_DOWNLOADED_WORDS)) {
+    if (containsAny(text, HOW_MANY_WORDS)) {
+      return build("DOCUMENTS_DOWNLOAD_STATUS", {
+        ...filterArgs,
+        byAccountant: containsAny(text, ACCOUNTANT_WORDS) || undefined,
+      });
+    }
+    return build("DOCUMENTS_LIST_UNDOWNLOADED", filterArgs);
+  }
+
+  const wantsDownload = wantsDownloadCommand(text);
+
+  if (hasFolderNoun) {
+    if (hasWord(text, FOLDER_REMOVE_VERBS)) {
+      return build("FOLDER_REMOVE_ITEMS", {
+        folderName,
+        ...filterArgs,
+        useSelection: mentionsSelection(filterText) || undefined,
+      });
+    }
+    if (wantsDownload) return build("FOLDER_EXPORT", { folderName });
+    if (containsAny(text, FOLDER_CREATE_VERBS) && !hasWord(filterText, FOLDER_ADD_VERBS.filter((v) => v !== "lege"))) {
+      return folderName ? build("FOLDER_CREATE", { folderName }) : null;
+    }
+    if (hasWord(text, FOLDER_ADD_VERBS) || /\bdo\s+priecin/.test(text) || /\binto\s+accounting/.test(text) || /\bin\s+den\s+belegordner/.test(text)) {
+      const useSelection = mentionsSelection(filterText);
+      if (!useSelection && !hasFilter) return build("FOLDER_ADD_ITEMS", { folderName });
+      return build("FOLDER_ADD_ITEMS", {
+        folderName,
+        ...filterArgs,
+        useSelection: useSelection || undefined,
+        move: hasWord(text, FOLDER_MOVE_VERBS) || undefined,
+      });
+    }
+    if (containsAny(text, FOLDER_LIST_WORDS)) return build("FOLDER_LIST_ITEMS", { folderName });
+    if (hasWord(text, FOLDER_OPEN_VERBS) || folderName) return build("FOLDER_OPEN", { folderName });
+    return build("FOLDER_OPEN", {});
+  }
+
+  // --- „Daj tam bločky za august" — priečinok z kontextu rozhovoru.
+  if (hasWord(text, FOLDER_ADD_VERBS) && hasWord(text, THERE_WORDS) && hasFilter) {
+    return build("FOLDER_ADD_ITEMS", {
+      ...filterArgs,
+      useSelection: mentionsSelection(text) || undefined,
+    });
+  }
+
+  // --- „Stiahni …" bez slova priečinok
+  if (wantsDownload) {
+    if (documentTypes.length > 0 || containsAny(text, GENERIC_DOCUMENT_WORDS)) {
+      return build("DOCUMENTS_EXPORT", filterArgs);
+    }
+    // „Stiahni August 2026" — zvyšok vety je meno priečinka.
+    const rest = rawText.replace(/^\s*\S+\s*/, "").replace(/[.?!]+$/, "").trim();
+    if (rest && !/\d{5,}/.test(rest)) return build("FOLDER_EXPORT", { folderName: rest });
+  }
+
+  return null;
+}
+
 export function parseIntentDeterministic(rawText: string): ParsedIntent | null {
   const text = normalizeText(rawText);
   if (!text) return null;
+
+  // Priečinky dokladov a stav stiahnutia — pred ostatnými vetvami, lebo
+  // „faktúry" by inak spadli do vyhľadávania dokladov a „vytvor" do zložiek.
+  // Nepodporované (mazacie, odosielacie) príkazy sa kontrolujú aj tu prvé.
+  if (!containsAny(text, UNSUPPORTED_ACTION_STEMS)) {
+    const folderIntent = parseFolderIntent(rawText);
+    if (folderIntent) return folderIntent;
+  }
 
   const plate = extractPlateCandidate(rawText);
   const hasMachineContext = containsAny(text, MACHINE_CONTEXT_WORDS);

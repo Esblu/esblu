@@ -95,6 +95,12 @@ const INTENT_CLASSIFICATION_SCHEMA = {
     // Model tu nič neoveruje ani nedopĺňa; partnera resolvuje server proti
     // reálnym dátam firmy a pri viacerých zhodách sa pýta.
     partnerQuery: { type: ["string", "null"] },
+    // Priečinky dokladov (FOLDER_*) — meno presne z textu, nikdy vymyslené.
+    folderName: { type: ["string", "null"] },
+    invoiceDirection: { type: ["string", "null"], enum: ["issued", "received", null] },
+    useSelection: { type: ["boolean", "null"] },
+    move: { type: ["boolean", "null"] },
+    byAccountant: { type: ["boolean", "null"] },
   },
   required: [
     "intent",
@@ -113,6 +119,11 @@ const INTENT_CLASSIFICATION_SCHEMA = {
     "targetCategoryName",
     "invoiceStatus",
     "partnerQuery",
+    "folderName",
+    "invoiceDirection",
+    "useSelection",
+    "move",
+    "byAccountant",
   ],
 } as const;
 
@@ -211,6 +222,26 @@ ${INVOICE_STATUS_FILTERS.map((s) => `  - ${s}`).join("\n")}
   "process this as an invoice". Nič nevypĺňaj — ani "query". Keď text
   pomenúva KONKRÉTNY doklad menom alebo číslom, nie je to tento intent,
   ale SEARCH_DOCUMENTS alebo SEARCH_INVOICE.
+- PRIEČINKY DOKLADOV (SK „priečinok", EN „accounting folder", DE
+  „Belegordner") sú iné než zložky (SK „zložka", holé „folder"/„Ordner"):
+    * FOLDER_CREATE — "vytvor priečinok X" → folderName: "X".
+    * FOLDER_OPEN — "otvor priečinok X"; FOLDER_LIST_ITEMS — "čo je v
+      priečinku X".
+    * FOLDER_ADD_ITEMS — "daj/pridaj/presuň [doklady] do priečinka X":
+      folderName, documentTypes (bločky → receipt, faktúry → invoice),
+      invoiceDirection ("prijaté" → received, "vydané" → issued), dateFrom/
+      dateTo. "tieto doklady"/"these" → useSelection: true. "presuň"/"move"
+      → move: true. Keď priečinok nie je pomenovaný ("daj tam …"),
+      folderName nechaj null.
+    * FOLDER_REMOVE_ITEMS — "odober z priečinka X …".
+    * FOLDER_EXPORT — "stiahni priečinok X", "stiahni X" (X je meno
+      priečinka) → folderName.
+    * DOCUMENTS_EXPORT — "stiahni bločky za august" (doklady podľa filtra
+      ako ZIP s originálmi). "exportuj" bez „stiahni" ostáva EXPORT_DOCUMENTS.
+    * DOCUMENTS_LIST_UNDOWNLOADED — "ukáž nestiahnuté doklady za august".
+    * DOCUMENTS_DOWNLOAD_STATUS — "koľko faktúr ešte účtovníčka nestiahla"
+      → byAccountant: true, keď sa hovorí o účtovníkovi.
+  Ostatné z týchto polí nechaj null.
 - Príkazy, ktoré appka zatiaľ nepodporuje, VŽDY klasifikuj ako intent:
   null (NIKDY sa nesnaž vynútiť ich do najbližšieho povoleného intentu).
   Sem patrí najmä: zmazanie dokumentu ("Vymaž všetky faktúry."),
@@ -291,6 +322,11 @@ export async function classifyIntentWithAi(
       targetCategoryName: string | null;
       invoiceStatus: string | null;
       partnerQuery: string | null;
+      folderName: string | null;
+      invoiceDirection: string | null;
+      useSelection: boolean | null;
+      move: boolean | null;
+      byAccountant: boolean | null;
     };
 
     if (!parsed.intent || !(INTENT_NAMES as readonly string[]).includes(parsed.intent)) {
@@ -339,6 +375,14 @@ export async function classifyIntentWithAi(
         // Voľný text; skutočné overenie proti partnerom firmy robí server
         // (lib/intents/invoice-draft.ts). Model iba naznačuje.
         partnerQuery: parsed.partnerQuery ?? undefined,
+        folderName: parsed.folderName ?? undefined,
+        invoiceDirection:
+          parsed.invoiceDirection === "issued" || parsed.invoiceDirection === "received"
+            ? parsed.invoiceDirection
+            : undefined,
+        useSelection: parsed.useSelection ?? undefined,
+        move: parsed.move ?? undefined,
+        byAccountant: parsed.byAccountant ?? undefined,
       },
       source: "ai",
     };

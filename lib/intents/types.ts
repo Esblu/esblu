@@ -150,6 +150,29 @@ export const INTENT_NAMES = [
   // ui-context.ts, prečo je odvodzovanie z databázy tichá chyba.
   // ---------------------------------------------------------------------
   "PROCESS_CURRENT_DOCUMENT_AS_RECEIVED_INVOICE",
+
+  // ---------------------------------------------------------------------
+  // Priečinky dokladov naprieč modulmi a stav stiahnutia.
+  //
+  // Priečinok je zbierka ODKAZOV (document_folder_items) — žiadny z týchto
+  // intentov nepresúva ani nekopíruje faktúru či dokument. Všetky vyžadujú
+  // finance.manage (priečinky) alebo finance.view (stav stiahnutia) EŠTE
+  // PRED dotazom do DB — rovnaké RPC ako RLS, nie rola z klienta.
+  //
+  // Zápisy (vytvorenie, pridanie, odobratie) idú cez ten istý HMAC
+  // potvrdzovací tok ako zložky: nástenka posiela text do Intent Engine už
+  // počas písania, takže zápis bez ťuknutia na „Potvrdiť" by vytváral
+  // priečinky z rozpísaných slov.
+  // ---------------------------------------------------------------------
+  "FOLDER_CREATE",
+  "FOLDER_OPEN",
+  "FOLDER_ADD_ITEMS",
+  "FOLDER_REMOVE_ITEMS",
+  "FOLDER_LIST_ITEMS",
+  "FOLDER_EXPORT",
+  "DOCUMENTS_EXPORT",
+  "DOCUMENTS_LIST_UNDOWNLOADED",
+  "DOCUMENTS_DOWNLOAD_STATUS",
 ] as const;
 
 export type IntentName = (typeof INTENT_NAMES)[number];
@@ -285,6 +308,17 @@ export type IntentArgs = {
   // Handler ho VŽDY overí proti reálnym partnerom firmy a pri viacerých
   // zhodách sa spýta; nikdy nevyberá sám a nikdy nezakladá nového partnera.
   partnerQuery?: string;
+  // Priečinky dokladov — meno tak, ako zaznelo. Nikdy sa nedomýšľa.
+  folderName?: string;
+  // Smer faktúry pri priečinkových/stavových príkazoch („prijaté faktúry").
+  invoiceDirection?: "issued" | "received";
+  // „Tieto doklady" — použi VÝBER z obrazovky, nie filter. Bez výberu sa
+  // asistent spýta; na nástenke výber neexistuje nikdy.
+  useSelection?: boolean;
+  // „Presuň" namiesto „pridaj" — pri výbere z iného priečinka odoberie zdroj.
+  move?: boolean;
+  // „Koľko ešte ÚČTOVNÍČKA nestiahla" — počíta sa iba stiahnutie účtovníkom.
+  byAccountant?: boolean;
 };
 
 // Stavy faktúr, na ktoré sa dá pýtať. Zámerne "priateľské" hodnoty, nie
@@ -320,7 +354,7 @@ export type ParsedIntent = {
 };
 
 export type EntityRef = {
-  type: "vehicle" | "machine" | "inventory_item" | "document";
+  type: "vehicle" | "machine" | "inventory_item" | "document" | "invoice" | "folder";
   id: string;
   label: string;
   href: string;
@@ -405,7 +439,12 @@ export type IntentResult =
         | "RENAME_DOCUMENT_CATEGORY"
         | "ASSIGN_DOCUMENTS_TO_CATEGORY"
         | "DELETE_DOCUMENT_CATEGORY"
-        | "MOVE_DOCUMENTS_TO_CATEGORY";
+        | "MOVE_DOCUMENTS_TO_CATEGORY"
+        | "FOLDER_CREATE"
+        | "FOLDER_ADD_ITEMS"
+        | "FOLDER_REMOVE_ITEMS"
+        | "FOLDER_EXPORT"
+        | "DOCUMENTS_EXPORT";
       summary: string;
       confirmLabel: string;
       cancelLabel: string;
@@ -429,6 +468,13 @@ export type IntentResult =
       // exportAiInboxFolderToExcel/exportAiEvidenceToExcel — BEZ ďalšieho
       // network volania na /action/execute (to je vyhradené pre skutočné
       // DB zápisy — CREATE/RENAME/ASSIGN vyššie, cez confirmationId).
+      // VÝHRADNE FOLDER_EXPORT / DOCUMENTS_EXPORT — čo sa má stiahnuť. Nie je
+      // to oprávnenie: /api/document-packages si finance.manage aj každý
+      // doklad overí znova pod RLS. Nič sa tu nezapisuje; „Stiahnuté" sa
+      // zapíše až po prijatí celých bajtov v prehliadači.
+      packageRequest?:
+        | { kind: "folder"; folderId: string; folderName: string }
+        | { kind: "selection"; items: { type: "invoice" | "document"; id: string }[] };
       exportPayload?: {
         inboxDocuments: {
           kind: "receipt" | "invoice";
@@ -465,7 +511,15 @@ export type IntentResult =
         }[];
       };
     }
-  | { kind: "action_result"; success: boolean; text: string }
+  | {
+      kind: "action_result";
+      success: boolean;
+      text: string;
+      // Priečinok, ktorého sa výsledok týka — nástenka si ho zapamätá, aby
+      // „daj tam bločky" vedelo, kam „tam" je. Server ho pri ďalšom príkaze
+      // aj tak overí pod RLS.
+      folder?: { id: string; name: string };
+    }
   // ---------------------------------------------------------------------
   // Voice Phase 2 — viackrokový dialóg.
   //

@@ -10,7 +10,13 @@ import {
   isRegisteredReviewableDraftIntent,
 } from "@/lib/intents/registry";
 import { executeIntent } from "@/lib/intents/handlers";
-import { buildActionPreview } from "@/lib/intents/actions";
+import { buildActionPreview, createFolderActionConfirmation } from "@/lib/intents/actions";
+import {
+  folderIntentPermission,
+  handleFolderIntent,
+  isFolderFamilyIntent,
+} from "@/lib/intents/folder-intents";
+import type { FolderRef } from "@/lib/document-folders";
 import { isValidConversationId } from "@/lib/intents/conversation";
 import { resolveClientCalendarDate } from "@/lib/local-date";
 import {
@@ -113,6 +119,36 @@ const CONTEXTUAL_QUERY_INTENTS: Record<string, UiContextEntityType> = {
   SEARCH_INVOICE: "invoice",
 };
 
+/**
+ * Výber dokladov z obrazovky („tieto doklady"). Iba tvar: najviac 500
+ * odkazov, typ z uzavretého zoznamu, UUID. Či doklady existujú a patria
+ * volajúcemu, overuje handler pod RLS. Na nástenke výber neexistuje.
+ */
+function readSelectionContext(raw: unknown): { items: FolderRef[]; folderId: string | null } | null {
+  if (!raw || typeof raw !== "object") return null;
+  const source = raw as { items?: unknown; folderId?: unknown };
+  if (!Array.isArray(source.items) || source.items.length === 0 || source.items.length > 500) return null;
+  const items: FolderRef[] = [];
+  for (const item of source.items) {
+    if (!item || typeof item !== "object") continue;
+    const { type, id } = item as { type?: unknown; id?: unknown };
+    if ((type === "invoice" || type === "document") && typeof id === "string" && ANSWER_UUID_PATTERN.test(id)) {
+      items.push({ type, id });
+    }
+  }
+  if (items.length === 0) return null;
+  const folderId =
+    typeof source.folderId === "string" && ANSWER_UUID_PATTERN.test(source.folderId) ? source.folderId : null;
+  return { items, folderId };
+}
+
+/** Naposledy použitý priečinok v rozhovore — iba UUID; overí sa pod RLS. */
+function readFolderContext(raw: unknown): string | null {
+  if (!raw || typeof raw !== "object") return null;
+  const folderId = (raw as { folderId?: unknown }).folderId;
+  return typeof folderId === "string" && ANSWER_UUID_PATTERN.test(folderId) ? folderId : null;
+}
+
 function withContextualQuery(
   intent: ParsedIntent,
   entity: Awaited<ReturnType<typeof resolveUiEntity>>
@@ -142,6 +178,8 @@ export async function POST(req: Request) {
           localDate?: string;
           uiContext?: unknown;
           answer?: unknown;
+          selectionContext?: unknown;
+          folderContext?: unknown;
         }
       | null;
     const rawText = typeof body?.text === "string" ? body.text.trim() : "";
@@ -318,7 +356,41 @@ export async function POST(req: Request) {
 
     let result;
 
-    if (intent.name === "PROCESS_CURRENT_DOCUMENT_AS_RECEIVED_INVOICE") {
+    if (isFolderFamilyIntent(intent.name)) {
+      // ----------------------------------------------------------------
+      // Priečinky dokladov a stav stiahnutia.
+      //
+      // Oprávnenie sa overí PRED akýmkoľvek dotazom — zamestnanec na
+      // „stiahni všetky faktúry" nedostane ani počet, ani zoznam. Tie isté
+      // RPC ako RLS; nič z klienta.
+      // ----------------------------------------------------------------
+      const required = folderIntentPermission(intent.name);
+      const allowed = required === "manage" ? financeManage : readCtx.financeView;
+      if (!allowed) {
+        result = { kind: "error" as const, text: translate(locale, "folders.intent.denied") };
+      } else {
+        const selection = readSelectionContext(body?.selectionContext);
+        const actionCtx = {
+          companyId: membership.company_id as string,
+          userId: user.id,
+          role: membership.role as CompanyMemberRole,
+        };
+        result = await handleFolderIntent(
+          supabase,
+          locale,
+          intent,
+          {
+            companyId: actionCtx.companyId,
+            userId: actionCtx.userId,
+            selection: selection?.items ?? null,
+            sourceFolderId: selection?.folderId ?? null,
+            folderContextId: readFolderContext(body?.folderContext),
+          },
+          (name, canonicalArgs, expectedCount) =>
+            createFolderActionConfirmation(supabase, actionCtx, name, canonicalArgs, expectedCount)
+        );
+      }
+    } else if (intent.name === "PROCESS_CURRENT_DOCUMENT_AS_RECEIVED_INVOICE") {
       result = handleProcessCurrentDocumentAsReceivedInvoice(
         locale,
         resolvedEntity,

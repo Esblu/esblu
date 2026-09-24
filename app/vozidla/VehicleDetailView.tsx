@@ -1066,7 +1066,20 @@ export default function VehicleDetailView({
             )}
           </>
         }
-        meta={vehicle.vin || undefined}
+        meta={
+          vehicle.vin ? (
+            // VIN je 17 znakov bez medzier — neproporcionálne písmo a
+            // zalomenie kdekoľvek, aby na úzkom telefóne nevytlačil stránku do šírky.
+            <span className="inline-flex max-w-full flex-wrap items-baseline gap-x-2">
+              <span className="text-xs font-medium uppercase tracking-wide text-muted-esblu">
+                {t("inbox.fields.vin")}
+              </span>
+              <span className="break-all font-mono text-[15px] tracking-wide text-primary sm:text-sm">
+                {vehicle.vin}
+              </span>
+            </span>
+          ) : undefined
+        }
       />
 
       <div className="mt-6">
@@ -1123,7 +1136,7 @@ export default function VehicleDetailView({
       <div
         role="tablist"
         aria-label={t("vehicles.detail.sectionsLabel")}
-        className="mt-6 -mx-1 flex gap-1 overflow-x-auto px-1"
+        className="mt-6 -mx-1 flex snap-x gap-1 overflow-x-auto px-1 pb-1 [scrollbar-width:thin]"
       >
         {TABS.map((item) => (
           <button
@@ -1132,7 +1145,7 @@ export default function VehicleDetailView({
             type="button"
             aria-selected={tab === item.key}
             onClick={() => setTab(item.key)}
-            className={`whitespace-nowrap rounded-doc-sm border px-3 py-2 text-sm font-medium transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
+            className={`min-h-11 shrink-0 snap-start whitespace-nowrap rounded-doc-sm border px-3.5 py-2 text-sm font-medium transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
               tab === item.key
                 ? "border-border-strong bg-surface-hover text-primary"
                 : "border-doc-border text-secondary hover:text-primary"
@@ -1326,14 +1339,14 @@ export default function VehicleDetailView({
                   <div className="flex gap-2">
                     <button
                       onClick={() => startEditVignette(item)}
-                      className={`${docButtonSecondary} px-2.5 text-xs`}
+                      className={`${docButtonSecondary} px-2.5 text-sm sm:text-xs`}
                     >
                       {t("vehicles.vignettes.edit")}
                     </button>
                     <button
                       onClick={() => deleteVignette(item.id)}
                       disabled={deletingVignetteId !== null}
-                      className={`${docButtonDanger} px-2.5 text-xs`}
+                      className={`${docButtonDanger} px-2.5 text-sm sm:text-xs`}
                     >
                       {deletingVignetteId === String(item.id)
                         ? t("inbox.deleting")
@@ -1383,7 +1396,7 @@ export default function VehicleDetailView({
                     )}
 
                     {doc.created_at && (
-                      <p className="mt-1 text-xs text-muted-esblu">
+                      <p className="mt-1 text-sm text-muted-esblu sm:text-xs">
                         {t("vehicles.detail.uploadedOn", {
                           date: formatDate(doc.created_at, locale),
                         })}
@@ -1399,7 +1412,7 @@ export default function VehicleDetailView({
                           const url = doc.signedUrl;
                           if (url) openExternalUrl(url);
                         }}
-                        className={`${docButtonSecondary} px-2.5 text-xs`}
+                        className={`${docButtonSecondary} px-2.5 text-sm sm:text-xs`}
                       >
                         {t("inbox.open")}
                       </button>
@@ -1417,7 +1430,7 @@ export default function VehicleDetailView({
                           type="button"
                           onClick={() => deleteLinkedDocument(doc)}
                           disabled={deletingDocumentId !== null}
-                          className={`${docButtonDanger} px-2.5 text-xs`}
+                          className={`${docButtonDanger} px-2.5 text-sm sm:text-xs`}
                         >
                           {deletingDocumentId === doc.id
                             ? t("inbox.deleting")
@@ -1438,7 +1451,7 @@ export default function VehicleDetailView({
                           key={attachment.id}
                           type="button"
                           onClick={() => openExternalUrl(attachmentUrl)}
-                          className="rounded-lg border border-subtle bg-surface-1 px-3 py-2 text-xs font-semibold text-secondary hover:bg-surface-hover"
+                          className="min-h-11 rounded-lg border border-subtle bg-surface-1 px-3 py-2 text-sm font-semibold text-secondary hover:bg-surface-hover sm:min-h-0 sm:text-xs"
                         >
                           {linkedAttachmentTypeLabels[
                             attachment.attachment_type
@@ -1679,7 +1692,7 @@ export default function VehicleDetailView({
                       type="button"
                       onClick={() => startEditService(item)}
                       aria-label={`${t("vehicles.services.editButton")}: ${item.title}`}
-                      className={`${docButtonSecondary} px-2.5 text-xs`}
+                      className={`${docButtonSecondary} px-2.5 text-sm sm:text-xs`}
                     >
                       {t("vehicles.services.editButton")}
                     </button>
@@ -1688,7 +1701,7 @@ export default function VehicleDetailView({
                         type="button"
                         onClick={() => deleteService(item.id)}
                         aria-label={`${t("vehicles.buttons.deleteWithIcon")}: ${item.title}`}
-                        className={`${docButtonDanger} px-2.5 text-xs`}
+                        className={`${docButtonDanger} px-2.5 text-sm sm:text-xs`}
                       >
                         {t("vehicles.buttons.deleteWithIcon")}
                       </button>

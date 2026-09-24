@@ -218,11 +218,19 @@ export function IntentResultView({
 
       case "action_result":
         return (
-          <p className={boxClass}>
-            <span className={intentResult.success ? "text-primary" : "text-secondary"}>
+          <div className={boxClass}>
+            <p className={intentResult.success ? "text-primary" : "text-secondary"}>
               {intentResult.text}
-            </span>
-          </p>
+            </p>
+            {intentResult.folder && (
+              <Link
+                href={`/priecinky/${intentResult.folder.id}`}
+                className="mt-2 inline-block min-h-11 py-2 text-sm font-bold text-accent-cyan"
+              >
+                {intentResult.folder.name} →
+              </Link>
+            )}
+          </div>
         );
 
       // Draft, ktorý sa MUSÍ skontrolovať. Súhrn je tu preto, aby

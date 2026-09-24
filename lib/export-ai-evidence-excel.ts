@@ -44,6 +44,8 @@ export type AiEvidenceExcelRecord = {
 type ExportResult = {
   exportedCount: number;
   fileName: string;
+  /** Iba pri `deliver: false` — zošit na zabalenie do ZIP-u s fotkami. */
+  blob?: Blob;
 };
 
 type UnknownUnitSummary = {
@@ -452,7 +454,8 @@ function addDocumentSheet(
 export async function exportAiEvidenceToExcel(
   records: readonly AiEvidenceExcelRecord[],
   locale: Locale,
-  t: TranslateFn
+  t: TranslateFn,
+  options: { deliver?: boolean } = {}
 ): Promise<ExportResult> {
   const intlLocale = toIntlLocale(locale);
 
@@ -586,6 +589,9 @@ export async function exportAiEvidenceToExcel(
     type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   });
   const fileName = `ai-evidencia_${getLocalDateFilePart(generatedAt)}.xlsx`;
+  if (options.deliver === false) {
+    return { exportedCount: records.length, fileName, blob };
+  }
   await downloadBlob(blob, fileName);
 
   return { exportedCount: records.length, fileName };

@@ -9,6 +9,10 @@ const nextConfig: NextConfig = {
   // .ttf). Pozri lib/invoicing/pdf-renderer.tsx.
   outputFileTracingIncludes: {
     "/api/invoices/**": ["./assets/fonts/**"],
+    // Balíky dokladov (priečinok / výber) aj úplný balík pre účtovníka
+    // renderujú PDF vydaných faktúr tým istým rendererom.
+    "/api/document-packages/**": ["./assets/fonts/**"],
+    "/api/accounting-handoff/**": ["./assets/fonts/**"],
   },
 };
 

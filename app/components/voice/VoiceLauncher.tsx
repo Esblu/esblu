@@ -17,6 +17,18 @@ import {
 } from "@/app/components/document/DocumentLayout";
 import { CloseIcon } from "@/app/components/icons/AppIcons";
 import type { IntentResult } from "@/lib/intents/types";
+import { downloadDocumentPackage, PackageDownloadError } from "@/lib/document-package-client";
+import { describePackageError, describePackageOutcome } from "@/app/components/folders/package-messages";
+
+/**
+ * Výber dokladov na obrazovke („tieto doklady"). Posiela sa iba typ a UUID;
+ * server každý doklad overí pod RLS. Bez výberu sa „tieto" nikdy nenahrádza
+ * posledným otvoreným záznamom.
+ */
+export type VoiceSelection = {
+  items: { type: "invoice" | "document"; id: string }[];
+  folderId?: string | null;
+};
 
 // =============================================================================
 // Globálny hlasový launcher.
@@ -90,7 +102,15 @@ type Phase =
   | "denied"
   | "failed";
 
-export function VoiceLauncher({ uiContext = null }: { uiContext?: UiContext | null } = {}) {
+export function VoiceLauncher({
+  uiContext = null,
+  selection = null,
+  folderContextId = null,
+}: {
+  uiContext?: UiContext | null;
+  selection?: VoiceSelection | null;
+  folderContextId?: string | null;
+} = {}) {
   const { t, locale } = useLocale();
 
   const [open, setOpen] = useState(false);
@@ -104,6 +124,8 @@ export function VoiceLauncher({ uiContext = null }: { uiContext?: UiContext | nu
   // v callbacku hneď po jej nastavení, bez čakania na prekreslenie.
   const conversationIdRef = useRef<string>(newConversationId());
   const [clarifyAnswer, setClarifyAnswer] = useState("");
+  // Priečinok z tohto rozhovoru („daj TAM bločky"). Iba UUID, server ho overí.
+  const recentFolderIdRef = useRef<string | null>(null);
 
   const { voiceState, voiceError, handleMicButtonClick, cancelVoiceRecording } =
     useVoiceCapture({
@@ -158,6 +180,10 @@ export function VoiceLauncher({ uiContext = null }: { uiContext?: UiContext | nu
           localDate: todayLocalDate(),
           ...(uiContext ? { uiContext } : {}),
           ...(structuredAnswer ? { answer: structuredAnswer } : {}),
+          ...(selection && selection.items.length > 0 ? { selectionContext: selection } : {}),
+          ...((recentFolderIdRef.current ?? folderContextId)
+            ? { folderContext: { folderId: recentFolderIdRef.current ?? folderContextId } }
+            : {}),
         }),
       });
 
@@ -174,6 +200,9 @@ export function VoiceLauncher({ uiContext = null }: { uiContext?: UiContext | nu
       if (response.ok && data.success && data.recognized) {
         const result = data.result as IntentResult;
         setIntentResult(result);
+        if (result.kind === "navigate" && result.entity.type === "folder") {
+          recentFolderIdRef.current = result.entity.id;
+        }
         setClarifyAnswer("");
 
         if (result.kind === "clarify") setPhase("clarification");
@@ -211,6 +240,28 @@ export function VoiceLauncher({ uiContext = null }: { uiContext?: UiContext | nu
    */
   async function handleConfirm() {
     if (!intentResult || intentResult.kind !== "action_preview") return;
+
+    // Stiahnutie priečinka / dokladov — bez zápisu cez /action/execute.
+    // Server oprávnenie aj doklady overí znova; „Stiahnuté" sa zapíše až po
+    // prijatí celých bajtov.
+    if (intentResult.packageRequest) {
+      setActionSubmitting(true);
+      try {
+        const outcome = await downloadDocumentPackage(intentResult.packageRequest, locale);
+        setIntentResult({ kind: "action_result", success: true, text: describePackageOutcome(t, outcome).text });
+      } catch (error) {
+        setIntentResult({
+          kind: "action_result",
+          success: false,
+          text: describePackageError(t, error instanceof PackageDownloadError ? error : null),
+        });
+      } finally {
+        setActionSubmitting(false);
+        setPhase("complete");
+      }
+      return;
+    }
+
     if (!intentResult.confirmationId) return;
 
     setActionSubmitting(true);
@@ -238,7 +289,9 @@ export function VoiceLauncher({ uiContext = null }: { uiContext?: UiContext | nu
       });
 
       const data = await response.json();
-      setIntentResult((data?.result as IntentResult) ?? null);
+      const executed = (data?.result as IntentResult) ?? null;
+      setIntentResult(executed);
+      if (executed?.kind === "action_result" && executed.folder) recentFolderIdRef.current = executed.folder.id;
       setPhase("complete");
     } catch (error) {
       console.error("VoiceLauncher: vykonanie akcie zlyhalo:", error);
@@ -260,6 +313,7 @@ export function VoiceLauncher({ uiContext = null }: { uiContext?: UiContext | nu
    */
   function resetDialog() {
     conversationIdRef.current = newConversationId();
+    recentFolderIdRef.current = null;
     setIntentResult(null);
     setClarifyAnswer("");
     setPhase("idle");

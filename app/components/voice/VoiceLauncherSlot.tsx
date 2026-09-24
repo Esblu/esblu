@@ -1,6 +1,6 @@
 "use client";
 
-import { VoiceLauncher } from "@/app/components/voice/VoiceLauncher";
+import { VoiceLauncher, type VoiceSelection } from "@/app/components/voice/VoiceLauncher";
 import type { UiContext } from "@/lib/intents/ui-context";
 
 // =============================================================================
@@ -14,6 +14,20 @@ import type { UiContext } from "@/lib/intents/ui-context";
 // bez zásahu do schránky.
 // =============================================================================
 
-export function VoiceLauncherSlot({ uiContext }: { uiContext?: UiContext | null }) {
-  return <VoiceLauncher uiContext={uiContext ?? null} />;
+export function VoiceLauncherSlot({
+  uiContext,
+  selection,
+  folderContextId,
+}: {
+  uiContext?: UiContext | null;
+  selection?: VoiceSelection | null;
+  folderContextId?: string | null;
+}) {
+  return (
+    <VoiceLauncher
+      uiContext={uiContext ?? null}
+      selection={selection ?? null}
+      folderContextId={folderContextId ?? null}
+    />
+  );
 }

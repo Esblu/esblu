@@ -2,6 +2,7 @@
 
 import { Suspense, useEffect, useRef, useState, type ReactNode } from "react";
 import { useSearchParams } from "next/navigation";
+import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 import { apiUrl } from "@/lib/api-url";
 import { openExternalUrl, downloadBlob } from "@/lib/file-actions";
@@ -73,6 +74,24 @@ import {
   parseWeightValue,
 } from "@/lib/weight-utils";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
+import {
+  downloadDocumentPackage,
+  loadDownloadStates,
+  PackageDownloadError,
+} from "@/lib/document-package-client";
+import {
+  downloadStateOf,
+  isFolderDocumentType,
+  matchesDownloadFilter,
+  DOWNLOAD_FILTERS,
+  type DownloadFilter,
+  type DownloadState,
+} from "@/lib/invoicing/document-package";
+import type { FolderRef } from "@/lib/document-folders";
+import { DownloadStateBadge } from "@/app/components/folders/DownloadStateBadge";
+import { FolderPickerModal } from "@/app/components/folders/FolderPickerModal";
+import { describePackageError, describePackageOutcome } from "@/app/components/folders/package-messages";
+import { FilterChips } from "@/app/components/ui/Primitives";
 import {
   countDocumentsInCategory,
   deleteCustomCategory,
@@ -887,9 +906,17 @@ export default function AiEvidenciaPage() {
   const [openCustomCategoryId, setOpenCustomCategoryId] = useState<string | null>(null);
   const [folderExportLoading, setFolderExportLoading] = useState(false);
   const [folderExportFeedback, setFolderExportFeedback] = useState<{
-    type: "success" | "error";
+    type: "success" | "error" | "warning";
     text: string;
   } | null>(null);
+  // Balík s originálmi (bločky a iné účtovné doklady). Stav „Stiahnuté" je
+  // história udalostí, nie zámok — pozri lib/invoicing/document-package.ts.
+  const [downloadStates, setDownloadStates] = useState<Map<string, DownloadState>>(new Map());
+  const [receiptDownloadFilter, setReceiptDownloadFilter] = useState<DownloadFilter>("all");
+  const [packageBusy, setPackageBusy] = useState(false);
+  const [folderPickerRefs, setFolderPickerRefs] = useState<FolderRef[] | null>(null);
+  const [evidenceZipLoading, setEvidenceZipLoading] = useState(false);
+  const [sessionUserId, setSessionUserId] = useState("");
   // Prílohy PZP dokumentu (bod 3 zadania) — načítané pre aktuálne otvorený
   // detail dokumentu typu insurance.
   const [attachments, setAttachments] = useState<AttachmentRow[]>([]);
@@ -1012,7 +1039,15 @@ const otherDocumentsFlatList = otherDocuments.filter((doc) => {
 
   return true;
 });
-const openFolderDocuments = openFolder === "receipt" ? unassignedReceipts : [];
+const openFolderAllDocuments = openFolder === "receipt" ? unassignedReceipts : [];
+const openFolderDocuments = openFolderAllDocuments.filter((doc) =>
+  matchesDownloadFilter(downloadStateOf(downloadStates, "document", doc.id), receiptDownloadFilter)
+);
+const receiptDownloadCounts: Record<DownloadFilter, number> = { all: 0, not_downloaded: 0, downloaded: 0 };
+for (const doc of openFolderAllDocuments) {
+  const state = downloadStateOf(downloadStates, "document", doc.id);
+  for (const key of DOWNLOAD_FILTERS) if (matchesDownloadFilter(state, key)) receiptDownloadCounts[key] += 1;
+}
 
 // "Vlastné zložky" (Intent Engine CREATE/RENAME/ASSIGN_DOCUMENTS_TO_CATEGORY,
 // pozri lib/intents/actions.ts) — dokumenty zoskupené podľa
@@ -1156,6 +1191,65 @@ const openCustomCategoryDocuments = openCustomCategoryId
       });
     } finally {
       setFolderExportLoading(false);
+    }
+  }
+
+  /**
+   * ZIP s originálmi: prehľad (XLSX), pôvodné nahrané fotky/súbory, údaje a
+   * manifest. Toto je plnohodnotný export dokladov — XLSX vedľa je iba
+   * prehľad bez originálov a tak sa aj volá.
+   */
+  async function handleDownloadDocumentsWithOriginals(docs: OtherDocumentRow[]) {
+    if (packageBusy) return;
+    const refs = docs
+      .filter((doc) => isFolderDocumentType(doc.document_type))
+      .map((doc) => ({ type: "document" as const, id: doc.id }));
+    if (refs.length === 0) {
+      setFolderExportFeedback({ type: "error", text: t("inbox.errors.noDocumentsToExport") });
+      return;
+    }
+    setPackageBusy(true);
+    setFolderExportFeedback(null);
+    try {
+      const outcome = await downloadDocumentPackage({ kind: "inbox_selection", items: refs }, locale);
+      const message = describePackageOutcome(t, outcome);
+      setFolderExportFeedback({ type: message.tone === "warning" ? "warning" : "success", text: message.text });
+      setDownloadStates(await loadDownloadStates());
+    } catch (error) {
+      setFolderExportFeedback({
+        type: "error",
+        text: describePackageError(t, error instanceof PackageDownloadError ? error : null),
+      });
+    } finally {
+      setPackageBusy(false);
+    }
+  }
+
+  /** Vážne lístky: zošit + pôvodné fotky v jednom ZIP-e. */
+  async function handleExportEvidenceZip() {
+    if (evidenceZipLoading || visibleDocuments.length === 0) return;
+    setEvidenceZipLoading(true);
+    setExportFeedback(null);
+    try {
+      const { exportAiEvidenceZip } = await import("@/lib/export-ai-evidence-zip");
+      const result = await exportAiEvidenceZip(visibleDocuments, locale, t);
+      setExportFeedback({
+        type: "success",
+        text:
+          t("folders.inbox.evidenceZipDone", {
+            file: result.fileName,
+            count: result.exportedCount,
+            photos: result.photoCount,
+          }) +
+          (result.missingPhotos > 0
+            ? t("folders.inbox.evidenceMissingPhotos", { count: result.missingPhotos })
+            : ""),
+      });
+    } catch (zipError) {
+      console.error("Export s fotkami zlyhal:", zipError);
+      setExportFeedback({ type: "error", text: t("folders.inbox.evidenceZipFailed") });
+    } finally {
+      setEvidenceZipLoading(false);
     }
   }
 
@@ -2823,12 +2917,16 @@ useEffect(() => {
 useEffect(() => {
   async function initialize() {
     const activeCompanyId = await loadMembership();
+    const { data: sessionData } = await supabase.auth.getSession();
+    setSessionUserId(sessionData.session?.user.id ?? "");
 
     await Promise.all([
       loadRecords(activeCompanyId || ""),
       loadVehicleAndMachineOptions(activeCompanyId || ""),
       loadOtherDocuments(activeCompanyId || ""),
       loadCustomCategories(activeCompanyId || ""),
+      // Stav stiahnutia vidí iba finance.view (RLS); ostatní dostanú prázdnu mapu.
+      loadDownloadStates().then(setDownloadStates),
     ]);
   }
 
@@ -3684,15 +3782,28 @@ function renderDocumentRegister(
           </p>
         </div>
 
-        <button
-          type="button"
-          onClick={handleExportExcel}
-          disabled={exportLoading || visibleDocuments.length === 0}
-          aria-busy={exportLoading}
-          className={`shrink-0 ${docButtonSecondary}`}
-        >
-          {exportLoading ? t("inbox.generatingExcel") : t("inbox.exportDocuments")}
-        </button>
+        <div className="flex shrink-0 flex-wrap gap-2">
+          {/* Hlavný export: zošit + pôvodné fotky dokladov. */}
+          <button
+            type="button"
+            onClick={() => void handleExportEvidenceZip()}
+            disabled={evidenceZipLoading || visibleDocuments.length === 0}
+            aria-busy={evidenceZipLoading}
+            className={docButtonPrimary}
+          >
+            {evidenceZipLoading ? t("folders.downloading") : t("folders.inbox.evidenceWithPhotos")}
+          </button>
+          {/* Iba riadky — pomenované tak, aby sa nezamenili s plným exportom. */}
+          <button
+            type="button"
+            onClick={handleExportExcel}
+            disabled={exportLoading || visibleDocuments.length === 0}
+            aria-busy={exportLoading}
+            className={docButtonSecondary}
+          >
+            {exportLoading ? t("inbox.generatingExcel") : t("folders.inbox.overviewOnly")}
+          </button>
+        </div>
       </div>
 
       {visibleDocuments.length === 0 && (
@@ -3753,9 +3864,17 @@ function renderDocumentRegister(
     {/* Zložka "Bločky" — nepriradené dokumenty. */}
     {!openFolder && !openCustomCategoryId && (
       <div className="mt-10">
-        <h2 className="text-lg font-semibold text-primary">
-          {t("inbox.foldersTitle")}
-        </h2>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-lg font-semibold text-primary">
+            {t("inbox.foldersTitle")}
+          </h2>
+          {canManageFinance && (
+            <Link href="/priecinky" className={`${docButtonSecondary} gap-2`}>
+              <FolderIcon size={16} />
+              {t("folders.openFolders")}
+            </Link>
+          )}
+        </div>
 
         <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
           <FolderTile
@@ -3847,6 +3966,21 @@ function renderDocumentRegister(
             <Notice tone={folderNotice.tone}>{folderNotice.text}</Notice>
           </div>
         )}
+        {folderExportFeedback && (
+          <div className="mt-3">
+            <Notice
+              tone={
+                folderExportFeedback.type === "error"
+                  ? "critical"
+                  : folderExportFeedback.type === "warning"
+                    ? "warning"
+                    : "info"
+              }
+            >
+              {folderExportFeedback.text}
+            </Notice>
+          </div>
+        )}
 
         {/* Lišta hromadného presunu. Drží sa pri spodku obrazovky, aby bola
             na telefóne dosiahnuteľná aj pri dlhom zozname. */}
@@ -3867,6 +4001,35 @@ function renderDocumentRegister(
                 >
                   {t("inbox.folders.moveTo")}
                 </button>
+                {canManageFinance && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setFolderPickerRefs(
+                          openCustomCategoryDocuments
+                            .filter((doc) => selectedDocumentIds.includes(doc.id) && isFolderDocumentType(doc.document_type))
+                            .map((doc) => ({ type: "document" as const, id: doc.id }))
+                        )
+                      }
+                      className={docButtonSecondary}
+                    >
+                      {t("folders.addToFolder")}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={packageBusy}
+                      onClick={() =>
+                        void handleDownloadDocumentsWithOriginals(
+                          openCustomCategoryDocuments.filter((doc) => selectedDocumentIds.includes(doc.id))
+                        )
+                      }
+                      className={docButtonSecondary}
+                    >
+                      {packageBusy ? t("folders.downloading") : t("folders.downloadSelected")}
+                    </button>
+                  </>
+                )}
                 <button type="button" onClick={exitSelectionMode} className={docButtonSecondary}>
                   {t("common.buttons.cancel")}
                 </button>
@@ -3936,25 +4099,102 @@ function renderDocumentRegister(
             </p>
           </div>
 
-          {isOwnerOrAdmin(role) && (
-          <button
-            type="button"
-            onClick={() => handleExportFolder(openFolder)}
-            disabled={folderExportLoading || openFolderDocuments.length === 0}
-            aria-busy={folderExportLoading}
-            className={`shrink-0 ${docButtonSecondary}`}
-          >
-            {folderExportLoading ? t("inbox.generatingExcel") : t("inbox.exportFolder")}
-          </button>
-          )}
+          <div className="flex shrink-0 flex-wrap gap-2">
+            {/* Plnohodnotný export: prehľad + ORIGINÁLNE fotky/súbory + manifest. */}
+            {canManageFinance && (
+              <button
+                type="button"
+                onClick={() => void handleDownloadDocumentsWithOriginals(openFolderDocuments)}
+                disabled={packageBusy || openFolderDocuments.length === 0}
+                aria-busy={packageBusy}
+                className={docButtonPrimary}
+              >
+                {packageBusy ? t("folders.downloading") : t("folders.inbox.downloadWithOriginals")}
+              </button>
+            )}
+            {isOwnerOrAdmin(role) && (
+              <button
+                type="button"
+                onClick={() => handleExportFolder(openFolder)}
+                disabled={folderExportLoading || openFolderDocuments.length === 0}
+                aria-busy={folderExportLoading}
+                className={docButtonSecondary}
+              >
+                {folderExportLoading ? t("inbox.generatingExcel") : t("folders.inbox.overviewOnly")}
+              </button>
+            )}
+            {canManageFinance && openFolderAllDocuments.length > 0 && (
+              <button
+                type="button"
+                onClick={() => (selectionMode ? exitSelectionMode() : setSelectionMode(true))}
+                className={docButtonSecondary}
+              >
+                {selectionMode ? t("folders.selectionCancel") : t("folders.select")}
+              </button>
+            )}
+          </div>
         </div>
+
+        {canManageFinance && (
+          <p className="mt-3 text-sm text-muted-esblu">{t("folders.inbox.originalsHint")}</p>
+        )}
+
+        {canViewFinance && openFolderAllDocuments.length > 0 && (
+          <div className="mt-4">
+            <FilterChips
+              label={t("folders.filter.label")}
+              active={receiptDownloadFilter}
+              onSelect={(key) => setReceiptDownloadFilter(key as DownloadFilter)}
+              options={DOWNLOAD_FILTERS.map((key) => ({
+                key,
+                label: t(`folders.filter.${key}`),
+                count: receiptDownloadCounts[key],
+              }))}
+            />
+          </div>
+        )}
+
+        {selectionMode && selectedDocumentIds.length > 0 && (
+          <div className="sticky bottom-4 z-10 mt-3 rounded-doc border border-doc-border bg-surface-1/95 p-3 backdrop-blur">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm font-medium text-primary">
+                {t("folders.selectedCount", { count: selectedDocumentIds.length })}
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setFolderPickerRefs(selectedDocumentIds.map((id) => ({ type: "document" as const, id })))
+                  }
+                  className={docButtonPrimary}
+                >
+                  {t("folders.addToFolder")}
+                </button>
+                <button
+                  type="button"
+                  disabled={packageBusy}
+                  onClick={() =>
+                    void handleDownloadDocumentsWithOriginals(
+                      openFolderAllDocuments.filter((doc) => selectedDocumentIds.includes(doc.id))
+                    )
+                  }
+                  className={docButtonSecondary}
+                >
+                  {packageBusy ? t("folders.downloading") : t("folders.downloadSelected")}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {folderExportFeedback && (
           <p
             className={`mt-4 rounded-doc-sm px-4 py-3 text-sm font-medium ${
               folderExportFeedback.type === "success"
                 ? "badge-success"
-                : "badge-danger"
+                : folderExportFeedback.type === "warning"
+                  ? "bg-warning-soft text-warning"
+                  : "badge-danger"
             }`}
           >
             {folderExportFeedback.text}
@@ -3988,17 +4228,32 @@ function renderDocumentRegister(
                   <DataRow
                     key={doc.id}
                     columns={FOLDER_COLUMNS}
-                    onClick={() => setSelectedOtherDocument(doc)}
-                    ariaLabel={`${t("inbox.openDetail")}: ${name}`}
+                    onClick={() =>
+                      selectionMode ? toggleDocumentSelection(doc.id) : setSelectedOtherDocument(doc)
+                    }
+                    ariaLabel={`${selectionMode ? t("inbox.folders.selectDocument") : t("inbox.openDetail")}: ${name}`}
                   >
                     <div className="flex min-w-0 items-start gap-2.5">
-                      <span aria-hidden="true" className="mt-0.5 shrink-0 text-muted-esblu">
-                        {openFolder === "receipt" ? (
-                          <ReceiptIcon size={18} />
-                        ) : (
-                          <FileIcon size={18} />
-                        )}
-                      </span>
+                      {selectionMode ? (
+                        <span
+                          aria-hidden="true"
+                          className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-[4px] border ${
+                            selectedDocumentIds.includes(doc.id)
+                              ? "border-transparent bg-accent-esblu text-on-accent"
+                              : "border-doc-border"
+                          }`}
+                        >
+                          {selectedDocumentIds.includes(doc.id) && <CheckIcon size={12} />}
+                        </span>
+                      ) : (
+                        <span aria-hidden="true" className="mt-0.5 shrink-0 text-muted-esblu">
+                          {openFolder === "receipt" ? (
+                            <ReceiptIcon size={18} />
+                          ) : (
+                            <FileIcon size={18} />
+                          )}
+                        </span>
+                      )}
                       <div className="min-w-0">
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="truncate font-medium text-primary">{name}</span>
@@ -4008,6 +4263,7 @@ function renderDocumentRegister(
                               label={t("inbox.needsReview")}
                             />
                           )}
+                          <DownloadStateBadge state={downloadStateOf(downloadStates, "document", doc.id)} />
                         </div>
                         <p className="mt-0.5 truncate text-sm text-muted-esblu">
                           {formatDocDate(
@@ -4208,6 +4464,25 @@ function renderDocumentRegister(
           </a>
         </div>
       ) : null}
+
+      {canManageFinance && isFolderDocumentType(selectedOtherDocument.document_type) && (
+        <div className="mt-5 flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            onClick={() =>
+              setFolderPickerRefs([{ type: "document", id: selectedOtherDocument.id }])
+            }
+            className={`${docButtonSecondary} gap-2`}
+          >
+            <FolderIcon size={16} />
+            {t("folders.addToFolder")}
+          </button>
+          <DownloadStateBadge
+            state={downloadStateOf(downloadStates, "document", selectedOtherDocument.id)}
+            showNever
+          />
+        </div>
+      )}
 
       {selectedOtherDocument.note && (
         <div className="mt-5 rounded-doc border border-warning/30 bg-warning-soft p-4">
@@ -4472,6 +4747,22 @@ function renderDocumentRegister(
   </DocumentModal>
 )}
       </div>
+      {folderPickerRefs && companyId && (
+        <FolderPickerModal
+          companyId={companyId}
+          userId={sessionUserId}
+          refs={folderPickerRefs}
+          onClose={() => setFolderPickerRefs(null)}
+          onDone={(done) => {
+            setFolderPickerRefs(null);
+            const text =
+              t("folders.addedToFolder", { name: done.folderName, count: done.affected }) +
+              (done.skipped > 0 ? t("folders.addedSkipped", { count: done.skipped }) : "");
+            setFolderExportFeedback({ type: "success", text });
+            exitSelectionMode();
+          }}
+        />
+      )}
     </main>
   );
 }

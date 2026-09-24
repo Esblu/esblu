@@ -691,6 +691,51 @@ export async function POST(req: Request) {
       return errorResponse(locale, 500, "RECORD_FAILED");
     }
 
+    // -------------------------------------------------------------------------
+    // 10. Podklad pre stav „Stiahnuté"
+    //
+    // Balík sa zaregistruje aj medzi balíkmi dokladov, aby klient mohol po
+    // prijatí CELÝCH bajtov potvrdiť stiahnutie (esblu_confirm_package_download).
+    // Toto NIE JE stiahnutie — iba zoznam dokladov, ktoré v balíku naozaj sú.
+    //
+    // Best effort: odovzdanie je už zaznamenané a overené; keby táto evidencia
+    // zlyhala, balík sa aj tak vráti, iba sa pri ňom stav stiahnutia nezapíše.
+    // -------------------------------------------------------------------------
+    let downloadTrackable = false;
+    const { error: trackPackageError } = await db.from("document_export_packages").insert({
+      id: exportId,
+      company_id: companyId,
+      created_by: user.id,
+      export_kind: "accounting_handoff",
+      item_count: manifestInvoices.length,
+      file_count: manifest.file_count,
+      package_bytes: zipBytes.byteLength,
+      package_sha256: packageSha256,
+      manifest_sha256: manifestSha256,
+      package_filename: fileName,
+      manifest_schema_version: MANIFEST_SCHEMA_VERSION,
+      app_commit: process.env.VERCEL_GIT_COMMIT_SHA ?? null,
+    });
+    if (trackPackageError) {
+      console.error("handoff/package: evidencia pre stiahnutie zlyhala:", trackPackageError.code);
+    } else {
+      const { error: trackItemsError } = await db.from("document_export_package_items").insert(
+        eligible.map((invoice) => ({
+          package_id: exportId,
+          company_id: companyId,
+          entity_type: "invoice",
+          entity_ref: invoice.id,
+          invoice_id: invoice.id,
+          label_snapshot: invoice.invoice_number ?? invoice.supplier_invoice_number ?? null,
+        }))
+      );
+      if (trackItemsError) {
+        console.error("handoff/package: evidencia položiek pre stiahnutie zlyhala:", trackItemsError.code);
+      } else {
+        downloadTrackable = true;
+      }
+    }
+
     return new Response(new Uint8Array(zipBytes), {
       status: 200,
       headers: {
@@ -705,6 +750,8 @@ export async function POST(req: Request) {
         // Koľko konceptov sa vynechalo. UI to povie nahlas — vynechanie,
         // o ktorom sa mlčí, je to isté ako strata.
         "X-Esblu-Excluded-Drafts": String(excludedDrafts.length),
+        // Id balíka pre potvrdenie stiahnutia; chýba, keď evidencia zlyhala.
+        ...(downloadTrackable ? { "X-Esblu-Package-Id": exportId } : {}),
         "Cache-Control": "private, no-store",
       },
     });

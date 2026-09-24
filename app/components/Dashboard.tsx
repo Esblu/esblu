@@ -16,6 +16,7 @@ import ModuleCard, { type ModuleAccent } from "./ModuleCard";
 import InboxDocumentIcon from "./icons/InboxDocumentIcon";
 import BusinessPartnersIcon from "./icons/BusinessPartnersIcon";
 import InvoicesIcon from "./icons/InvoicesIcon";
+import SettingsIcon from "./icons/SettingsIcon";
 import type { VehicleVignette } from "@/lib/vehicle-vignettes";
 import { vehicleDetailHref } from "@/lib/entity-links";
 import { buildLegacyDashboardAlerts } from "@/lib/deadlines";
@@ -25,6 +26,9 @@ import type { IntentResult } from "@/lib/intents/types";
 import { useVoiceCapture } from "@/hooks/use-voice-capture";
 import { IntentResultView } from "@/app/components/voice/IntentResultView";
 import { todayLocalDate } from "@/lib/local-date";
+import { FolderIcon } from "@/app/components/icons/AppIcons";
+import { downloadDocumentPackage, PackageDownloadError } from "@/lib/document-package-client";
+import { describePackageError, describePackageOutcome } from "@/app/components/folders/package-messages";
 
 function getGreeting(t: (key: string) => string) {
   const hour = new Date().getHours();
@@ -37,7 +41,7 @@ function getGreeting(t: (key: string) => string) {
 }
 
 const OPERATIONAL_HREFS = ["/vozidla", "/stroje", "/sklad"];
-const FINANCE_HREFS = ["/obchodni-partneri", "/faktury"];
+const FINANCE_HREFS = ["/obchodni-partneri", "/faktury", "/priecinky"];
 
 /**
  * Jedno pravidlo viditeľnosti modulu pre dlaždice aj navigáciu.
@@ -96,6 +100,11 @@ export default function Dashboard() {
   // volania (export/EXPORT_DOCUMENTS je klientske, ostatné idú na
   // /api/assistant/action/execute).
   const [actionSubmitting, setActionSubmitting] = useState(false);
+  // Priečinok, s ktorým sa v tomto rozhovore naposledy pracovalo — aby
+  // „daj tam bločky za august" vedelo, kam je „tam". Posiela sa iba jeho
+  // UUID; server ho overí pod RLS a bez neho sa radšej spýta. Nástenka
+  // pritom NIKDY nemá „tento doklad" — výber dokladov sa odtiaľto neposiela.
+  const [recentFolderId, setRecentFolderId] = useState<string | null>(null);
   // Hlasové vyhľadávanie (zadanie, sekcia B/C) — TENKÁ vstupná vrstva NAD
   // existujúcim Intent Enginom vyššie: mikrofón iba naplní `search` presne
   // tak, ako keby používateľ text napísal (spustí ten istý debounced efekt
@@ -336,7 +345,11 @@ export default function Dashboard() {
           // Dashboard dnes doklad nezakladá, ale posiela sa na ten istý
           // endpoint; keby to tu chýbalo, správal by sa o polnoci inak než
           // launcher a rozdiel by sa hľadal ťažko.
-          body: JSON.stringify({ text: trimmed, localDate: todayLocalDate() }),
+          body: JSON.stringify({
+            text: trimmed,
+            localDate: todayLocalDate(),
+            ...(recentFolderId ? { folderContext: { folderId: recentFolderId } } : {}),
+          }),
         });
 
         const data = await response.json();
@@ -344,7 +357,11 @@ export default function Dashboard() {
         if (cancelled) return;
 
         if (response.ok && data.success && data.recognized) {
-          setIntentResult(data.result as IntentResult);
+          const recognized = data.result as IntentResult;
+          setIntentResult(recognized);
+          if (recognized.kind === "navigate" && recognized.entity.type === "folder") {
+            setRecentFolderId(recognized.entity.id);
+          }
         } else {
           setIntentResult(null);
         }
@@ -364,6 +381,9 @@ export default function Dashboard() {
       cancelled = true;
       clearTimeout(timer);
     };
+    // recentFolderId sa zámerne nesleduje: zmena kontextu nemá znova
+    // spustiť rozpoznanie toho istého textu.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search, locale]);
 
   // Hlasový vstup beží cez zdieľaný hook — tá istá implementácia, akú
@@ -394,7 +414,7 @@ export default function Dashboard() {
   // okraja, preto najväčší dopočet). Každá hodnota ostáva bezpečne pod
   // hranicou, pri ktorej by orez orezal samotný motív (min. nameraný okraj
   // motívu vs. skutočne použitý orez má rezervu min. ~3 percentuálne
-  // body). Nastavenia (settings.png) a Inbox (SVG icon) imageZoom nemajú —
+  // body). Nastavenia a Inbox (SVG ikony) imageZoom nemajú —
   // ich vzhľad je nezmenený.
   const allModules: {
     title: string;
@@ -458,7 +478,9 @@ export default function Dashboard() {
       title: t("nav.settings"),
       subtitle: t("dashboard.moduleSettingsSubtitle"),
       href: "/nastavenia",
-      image: "/images/settings.png",
+      // Vektorová ikona namiesto /images/settings.png — rovnaký vizuálny
+      // jazyk ako Inbox, Partneri a Faktúry, bez rastrového assetu.
+      icon: <SettingsIcon size={56} className="h-11 w-11 sm:h-14 sm:w-14" />,
       accent: "blue",
     },
   ];
@@ -498,7 +520,12 @@ export default function Dashboard() {
       label: t("nav.invoices"),
       icon: <InvoicesIcon size={20} />,
     },
-    { href: "/nastavenia", label: t("nav.settings"), image: "/images/settings.png" },
+    {
+      href: "/priecinky",
+      label: t("folders.navLabel"),
+      icon: <FolderIcon size={20} />,
+    },
+    { href: "/nastavenia", label: t("nav.settings"), icon: <SettingsIcon size={20} /> },
     // Finance Access Hardening — rovnaký filter ako pri "modules" vyššie.
   ].filter((item) => isModuleVisible(item.href, financeAccess, operationalAccess));
 
@@ -525,6 +552,27 @@ export default function Dashboard() {
     setActionSubmitting(true);
 
     try {
+      // Stiahnutie priečinka / dokladov: ten istý overený tok ako tlačidlo
+      // „Stiahnuť priečinok". Server znova overí oprávnenie a každý doklad;
+      // „Stiahnuté" sa zapíše až po prijatí celých bajtov.
+      if (
+        (intentResult.action === "FOLDER_EXPORT" || intentResult.action === "DOCUMENTS_EXPORT") &&
+        intentResult.packageRequest
+      ) {
+        try {
+          const outcome = await downloadDocumentPackage(intentResult.packageRequest, locale);
+          const message = describePackageOutcome(t, outcome);
+          setIntentResult({ kind: "action_result", success: true, text: message.text });
+        } catch (error) {
+          setIntentResult({
+            kind: "action_result",
+            success: false,
+            text: describePackageError(t, error instanceof PackageDownloadError ? error : null),
+          });
+        }
+        return;
+      }
+
       if (intentResult.action === "EXPORT_DOCUMENTS") {
         const payload = intentResult.exportPayload;
         const hasAnything =
@@ -587,7 +635,9 @@ export default function Dashboard() {
       const data = await response.json();
 
       if (response.ok && data?.success && data?.result) {
-        setIntentResult(data.result as IntentResult);
+        const executed = data.result as IntentResult;
+        setIntentResult(executed);
+        if (executed.kind === "action_result" && executed.folder) setRecentFolderId(executed.folder.id);
       } else {
         setIntentResult({ kind: "action_result", success: false, text: t("search.errors.generic") });
       }

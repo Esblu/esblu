@@ -324,9 +324,11 @@ export function Metric({
 
   return (
     <div className="rounded-doc-sm border border-doc-border bg-surface-2 px-3 py-2.5">
-      <p className="text-[11px] font-medium uppercase tracking-wide text-muted-esblu">{label}</p>
-      <p className={`mt-1 text-lg font-semibold tabular-nums ${valueTone}`}>{value}</p>
-      {hint && <p className="mt-0.5 text-xs text-muted-esblu">{hint}</p>}
+      <p className="text-xs font-medium uppercase tracking-wide text-secondary sm:text-[11px] sm:text-muted-esblu">
+        {label}
+      </p>
+      <p className={`mt-1 break-words text-lg font-semibold tabular-nums ${valueTone}`}>{value}</p>
+      {hint && <p className="mt-0.5 text-sm text-muted-esblu sm:text-xs">{hint}</p>}
     </div>
   );
 }
@@ -409,7 +411,7 @@ export function TimelineItem({
       <div className="min-w-0 flex-1 rounded-doc border border-doc-border bg-doc-surface px-3 py-2.5">
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div className="min-w-0">
-            <p className="break-words text-sm font-semibold text-primary">{title}</p>
+            <p className="break-words text-base font-semibold text-primary sm:text-sm">{title}</p>
             {meta && <div className="mt-0.5 text-sm text-secondary">{meta}</div>}
           </div>
           {actions && <div className="flex shrink-0 items-center gap-1">{actions}</div>}
@@ -559,7 +561,8 @@ export function PlateBadge({
   plate: string;
   size?: "sm" | "md";
 }) {
-  const scale = size === "sm" ? "px-2 py-0.5 text-sm" : "px-3 py-1 text-base";
+  // Mobil: ŠPZ musí byť čitateľná bez priblíženia aj v menšej variante.
+  const scale = size === "sm" ? "px-2 py-0.5 text-[15px] sm:text-sm" : "px-3 py-1 text-base";
   return (
     <span
       className={`inline-block rounded-[0.25rem] border border-slate-900 bg-white font-semibold tracking-widest text-slate-900 ${scale}`}

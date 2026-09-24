@@ -31,6 +31,11 @@ import {
   verifyActionConfirmation,
   type ActionConfirmationPayload,
 } from "@/lib/intents/action-confirmation-proof";
+import {
+  executeFolderAction,
+  isFolderWriteIntent,
+  type FolderWriteIntent,
+} from "@/lib/intents/folder-intents";
 
 // =============================================================================
 // Esblu — Intent Engine WRITE akcie (doplnenie zadania, body 5-13, 22; HARDENED
@@ -183,6 +188,10 @@ const CONFIRMATION_BOUND_INTENTS = [
   "ASSIGN_DOCUMENTS_TO_CATEGORY",
   "DELETE_DOCUMENT_CATEGORY",
   "MOVE_DOCUMENTS_TO_CATEGORY",
+  // Priečinky dokladov (lib/intents/folder-intents.ts) — rovnaký tok.
+  "FOLDER_CREATE",
+  "FOLDER_ADD_ITEMS",
+  "FOLDER_REMOVE_ITEMS",
 ] as const;
 
 type ConfirmationBoundIntentName = (typeof CONFIRMATION_BOUND_INTENTS)[number];
@@ -264,6 +273,21 @@ async function insertActionConfirmation(
   }
 
   return data as string;
+}
+
+/**
+ * Potvrdenie pre zápis do priečinka. Tenký obal nad insertActionConfirmation,
+ * aby lib/intents/folder-intents.ts nemusel importovať tento súbor (a
+ * nevznikol kruhový import) — route mu ho odovzdá ako funkciu.
+ */
+export function createFolderActionConfirmation(
+  supabase: SupabaseClient,
+  ctx: ActionContext,
+  intent: FolderWriteIntent,
+  canonicalArgs: Record<string, unknown>,
+  expectedCount: number | null
+): Promise<string | null> {
+  return insertActionConfirmation(supabase, ctx, intent, canonicalArgs, expectedCount);
 }
 
 /**
@@ -1023,6 +1047,24 @@ export async function executeAction(
   const claimed = await claimActionConfirmation(supabase, confirmationId);
   if (!claimed || !isConfirmationBoundIntentName(claimed.intent)) {
     return actionResult(false, translate(locale, "search.actions.confirmation.invalidOrExpired"));
+  }
+
+  if (isFolderWriteIntent(claimed.intent)) {
+    // Oprávnenie sa overuje ZNOVA pri vykonaní — medzi náhľadom a potvrdením
+    // mohla rola alebo finance.manage zmiznúť. RLS by zápis aj tak odmietla;
+    // toto je zrozumiteľné odmietnutie namiesto surovej chyby.
+    const { data: canManage } = await supabase.rpc("esblu_my_finance_manage");
+    if (canManage !== true) {
+      return actionResult(false, translate(locale, "folders.intent.denied"));
+    }
+    return executeFolderAction(
+      supabase,
+      locale,
+      { companyId: ctx.companyId, userId: ctx.userId },
+      claimed.intent,
+      claimed.canonical_args,
+      claimed.expected_count
+    );
   }
 
   switch (claimed.intent) {

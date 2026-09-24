@@ -3,6 +3,7 @@
 import type { ReactNode } from "react";
 import type { UiContext } from "@/lib/intents/ui-context";
 import { VoiceLauncherSlot } from "@/app/components/voice/VoiceLauncherSlot";
+import type { VoiceSelection } from "@/app/components/voice/VoiceLauncher";
 
 // =============================================================================
 // Kancelárske primitívy pre dokumentové plochy.
@@ -22,6 +23,8 @@ export function DocumentPageShell({
   children,
   wide = false,
   uiContext,
+  voiceSelection,
+  folderContextId,
 }: {
   children: ReactNode;
   /** Register/zoznam potrebuje viac šírky než detail jedného dokladu. */
@@ -32,6 +35,10 @@ export function DocumentPageShell({
    * overuje znova.
    */
   uiContext?: UiContext | null;
+  /** Výber dokladov na obrazovke („tieto doklady") — iba typ a UUID. */
+  voiceSelection?: VoiceSelection | null;
+  /** Otvorený priečinok dokladov („daj to sem"). */
+  folderContextId?: string | null;
 }) {
   return (
     <div className={`mx-auto ${wide ? "max-w-6xl" : "max-w-5xl"} px-4 pb-28 pt-6 sm:px-6`}>
@@ -41,7 +48,11 @@ export function DocumentPageShell({
           prekryl. Takto je dostupný na každej stránke, ktorá používa túto
           schránku, a kolidovať nemá s čím. */}
       <div className="mb-4 flex justify-end">
-        <VoiceLauncherSlot uiContext={uiContext} />
+        <VoiceLauncherSlot
+          uiContext={uiContext}
+          selection={voiceSelection}
+          folderContextId={folderContextId}
+        />
       </div>
       {children}
     </div>
@@ -72,13 +83,13 @@ export function DocumentHeader({
     <header className="flex flex-col gap-4 border-b border-doc-border pb-5 sm:flex-row sm:items-start sm:justify-between">
       <div className="min-w-0">
         {eyebrow && (
-          <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-esblu">
+          <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-esblu sm:text-[11px]">
             {eyebrow}
           </p>
         )}
         <h1 className="mt-1 break-words text-2xl font-semibold text-primary">{title}</h1>
         {badges && <div className="mt-2 flex flex-wrap items-center gap-2">{badges}</div>}
-        {meta && <div className="mt-2 text-sm text-secondary">{meta}</div>}
+        {meta && <div className="mt-2 text-[15px] text-secondary sm:text-sm">{meta}</div>}
       </div>
       {aside && <div className="shrink-0 sm:text-right">{aside}</div>}
     </header>
@@ -106,8 +117,8 @@ export function DocumentSection({
       {(title || actions) && (
         <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
           <div className="min-w-0">
-            {title && <h2 className="text-sm font-semibold text-primary">{title}</h2>}
-            {description && <p className="mt-0.5 text-xs text-muted-esblu">{description}</p>}
+            {title && <h2 className="text-base font-semibold text-primary sm:text-sm">{title}</h2>}
+            {description && <p className="mt-0.5 text-sm text-muted-esblu sm:text-xs">{description}</p>}
           </div>
           {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
         </div>
@@ -139,10 +150,12 @@ export function DocumentMetadataGrid({
     >
       {visible.map((item, index) => (
         <div key={index} className={item.full ? "sm:col-span-full" : undefined}>
-          <dt className="text-[11px] font-medium uppercase tracking-wide text-muted-esblu">
+          {/* Mobil: 12 px štítok s vyšším kontrastom a 16 px hodnota —
+              čitateľné bez priblíženia. Desktop ostáva kompaktný. */}
+          <dt className="text-xs font-medium uppercase tracking-wide text-secondary sm:text-[11px] sm:text-muted-esblu">
             {item.label}
           </dt>
-          <dd className="mt-0.5 break-words text-sm text-primary">{item.value}</dd>
+          <dd className="mt-0.5 break-words text-base text-primary sm:text-sm">{item.value}</dd>
         </div>
       ))}
     </dl>
@@ -368,7 +381,7 @@ export function DocumentNotice({
         : "border-doc-border bg-surface-2 text-secondary";
 
   return (
-    <div className={`rounded-doc border px-4 py-3 text-sm ${toneClass}`}>
+    <div className={`rounded-doc border px-4 py-3 text-[15px] leading-snug sm:text-sm ${toneClass}`}>
       {title && <p className="font-semibold">{title}</p>}
       <div className={title ? "mt-1" : undefined}>{children}</div>
     </div>
