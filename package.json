@@ -24,7 +24,8 @@
     "test:handoff": "node --experimental-strip-types --no-warnings scripts/handoff-package-tests.ts",
     "test:format": "node --experimental-strip-types --no-warnings scripts/money-format-tests.ts",
     "test:i18n": "node --experimental-strip-types --no-warnings scripts/i18n-handoff-tests.ts",
-    "test:folders": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/document-folders-tests.ts"
+    "test:folders": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/document-folders-tests.ts",
+    "test:intent-permissions": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/intent-permissions-tests.ts"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.9.0",

@@ -137,6 +137,9 @@ export default function SkladPage() {
     refresh: refreshPlanUsage,
   } = usePlanUsage("inventory_items");
   const { legalHold } = useCompanyDpaLegalHold();
+  // Sklad upravuje iba owner/admin. Zamestnanec ho vidí iba na čítanie —
+  // rovnaké pravidlo drží RLS (inventory_items_*_manager). Toto je iba UI.
+  const [canManageInventory, setCanManageInventory] = useState(false);
   const isItemCreationUnavailable =
     planUsageLoading || isPlanLimited || legalHold;
 
@@ -183,6 +186,7 @@ function inventoryPhotoUrl(path: string) {
     }
 
     setCompanyId(membership.company_id);
+    setCanManageInventory(membership.role === "owner" || membership.role === "admin");
     loadItems(membership.company_id);
   }
 
@@ -515,7 +519,7 @@ function inventoryPhotoUrl(path: string) {
   }
 
   return (
-    <PageShell wide>
+    <PageShell wide moduleContext="inventory">
       <BackLink href="/" label={t("inbox.backToMenu")} className="mb-6" />
 
       <PageHeader
@@ -528,21 +532,29 @@ function inventoryPhotoUrl(path: string) {
         title={t("inventory.register.title")}
         meta={t("inventory.list.subtitle")}
         aside={
-          <button
-            type="button"
-            onClick={() => {
-              setShowForm(!showForm);
-              setEditingId(null);
-              setItem(emptyItem);
-            }}
-            disabled={isItemCreationUnavailable && !showForm}
-            className={`${docButtonPrimary} gap-2`}
-          >
-            <PlusIcon size={16} />
-            {t("inventory.list.addItem")}
-          </button>
+          canManageInventory ? (
+            <button
+              type="button"
+              onClick={() => {
+                setShowForm(!showForm);
+                setEditingId(null);
+                setItem(emptyItem);
+              }}
+              disabled={isItemCreationUnavailable && !showForm}
+              className={`${docButtonPrimary} gap-2`}
+            >
+              <PlusIcon size={16} />
+              {t("inventory.list.addItem")}
+            </button>
+          ) : undefined
         }
       />
+
+      {!canManageInventory && companyId && (
+        <div className="mt-4">
+          <Notice>{t("assistant.inventory.readOnlyNotice")}</Notice>
+        </div>
+      )}
 
       {!planUsageLoading && isPlanLimited && (
         <PlanLimitNotice
@@ -559,7 +571,7 @@ function inventoryPhotoUrl(path: string) {
         </div>
       )}
 
-      {showForm && (
+      {showForm && canManageInventory && (
         <div className="mt-6">
           <SectionPanel
             title={
@@ -782,15 +794,17 @@ function inventoryPhotoUrl(path: string) {
           <EmptyState
             title={t("inventory.list.noneYet")}
             action={
-              <button
-                type="button"
-                onClick={() => setShowForm(true)}
-                disabled={isItemCreationUnavailable}
-                className={`${docButtonPrimary} gap-2`}
-              >
-                <PlusIcon size={16} />
-                {t("inventory.list.addItem")}
-              </button>
+              canManageInventory ? (
+                <button
+                  type="button"
+                  onClick={() => setShowForm(true)}
+                  disabled={isItemCreationUnavailable}
+                  className={`${docButtonPrimary} gap-2`}
+                >
+                  <PlusIcon size={16} />
+                  {t("inventory.list.addItem")}
+                </button>
+              ) : undefined
             }
           />
         ) : visibleItems.length === 0 ? (
@@ -812,6 +826,7 @@ function inventoryPhotoUrl(path: string) {
                   columns={INVENTORY_COLUMNS}
                   ariaLabel={row.name ?? t("dashboard.noName")}
                   trailing={
+                    canManageInventory ? (
                     <>
                       <button
                         type="button"
@@ -830,6 +845,7 @@ function inventoryPhotoUrl(path: string) {
                         {t("common.buttons.delete")}
                       </button>
                     </>
+                    ) : undefined
                   }
                 >
                   <div className="flex min-w-0 items-center gap-3">

@@ -85,7 +85,7 @@ export default function InventoryItemDetailView({ entityId }: { entityId: string
 
   if (loading) {
     return (
-      <PageShell>
+      <PageShell moduleContext="inventory" uiContext={{ module: "inventory", entityType: "inventory_item", entityId }}>
         <p className="py-10 text-sm text-secondary">{t("common.buttons.loading")}</p>
       </PageShell>
     );
@@ -93,7 +93,7 @@ export default function InventoryItemDetailView({ entityId }: { entityId: string
 
   if (loadError || !item) {
     return (
-      <PageShell>
+      <PageShell moduleContext="inventory" uiContext={{ module: "inventory", entityType: "inventory_item", entityId }}>
         <BackLink href="/sklad" label={t("nav.inventory")} className="mb-6" />
         <Notice tone="critical">{loadError || t("inventory.errors.notFound")}</Notice>
       </PageShell>
@@ -116,7 +116,7 @@ export default function InventoryItemDetailView({ entityId }: { entityId: string
     );
 
   return (
-    <PageShell>
+    <PageShell moduleContext="inventory" uiContext={{ module: "inventory", entityType: "inventory_item", entityId }}>
       <BackLink href="/sklad" label={t("nav.inventory")} className="mb-6" />
 
       <PageHeader

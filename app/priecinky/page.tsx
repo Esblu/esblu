@@ -83,7 +83,7 @@ export default function FoldersPage() {
   }
 
   return (
-    <DocumentPageShell wide>
+    <DocumentPageShell wide moduleContext="folders">
       <BackLink href="/" label={t("nav.dashboard")} className="mb-6" />
 
       <DocumentHeader

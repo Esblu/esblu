@@ -467,8 +467,11 @@ await check("„tento rok“ nie je výber dokladov", () => {
 await check("„Ukáž stiahnuté faktúry“ nespustí sťahovanie", () => {
   assert.notEqual(parseIntentDeterministic("Ukáž stiahnuté faktúry")?.name, "DOCUMENTS_EXPORT");
 });
-await check("mazanie cez priečinok ostáva nepodporované", () => {
-  assert.equal(parseIntentDeterministic("Vymaž priečinok August 2026"), null);
+await check("mazanie priečinka = FOLDER_DELETE (s potvrdením); „z priečinka“ = vyradenie", () => {
+  const deleted = parseIntentDeterministic("Vymaž priečinok August 2026");
+  assert.equal(deleted?.name, "FOLDER_DELETE");
+  assert.equal(deleted?.args.folderName, "August 2026");
+  assert.notEqual(parseIntentDeterministic("Vymaž tento doklad z priečinka August 2026")?.name, "FOLDER_DELETE");
 });
 
 await check("oprávnenia intentov: priečinky = manage, stav = view; zápisy s potvrdením", () => {

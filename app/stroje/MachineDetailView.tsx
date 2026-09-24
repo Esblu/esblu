@@ -662,7 +662,7 @@ export default function MachineDetailView({
 
   if (!machine) {
     return (
-      <PageShell>
+      <PageShell moduleContext="machines" uiContext={{ module: "machine", entityType: "machine", entityId }}>
         <p className="py-10 text-sm text-secondary">{t("common.buttons.loading")}</p>
       </PageShell>
     );
@@ -678,7 +678,7 @@ export default function MachineDetailView({
   const coverPhoto = photos[0] ? photoUrl(photos[0].file_path) : null;
 
   return (
-    <PageShell>
+    <PageShell moduleContext="machines" uiContext={{ module: "machine", entityType: "machine", entityId }}>
       <BackLink href="/stroje" label={t("nav.machines")} className="mb-6" />
 
       <PageHeader

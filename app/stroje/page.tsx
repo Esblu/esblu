@@ -628,7 +628,7 @@ export default function StrojePage() {
   }
 
   return (
-    <PageShell wide>
+    <PageShell wide moduleContext="machines">
       <BackLink href="/" label={t("inbox.backToMenu")} className="mb-6" />
 
       <PageHeader

@@ -980,7 +980,7 @@ export default function VehicleDetailView({
 
   if (!vehicle) {
     return (
-      <PageShell>
+      <PageShell moduleContext="vehicles" uiContext={{ module: "vehicle", entityType: "vehicle", entityId }}>
         <p className="py-10 text-sm text-secondary">{t("common.buttons.loading")}</p>
       </PageShell>
     );
@@ -1018,7 +1018,7 @@ export default function VehicleDetailView({
   }
 
   return (
-    <PageShell>
+    <PageShell moduleContext="vehicles" uiContext={{ module: "vehicle", entityType: "vehicle", entityId }}>
       <Suspense fallback={null}>
         <OpenLinkedDocumentFromQueryParam onOpenDocument={setPendingOpenDocumentId} />
       </Suspense>

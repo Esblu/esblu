@@ -193,8 +193,16 @@ export function IntentResultView({
 
       case "action_preview":
         return (
-          <div className={boxClass}>
-            <p className="text-sm font-medium text-primary">{intentResult.summary}</p>
+          <div
+            className={
+              intentResult.destructive
+                ? "rounded-2xl border border-danger/40 bg-danger-soft p-4 text-sm text-secondary"
+                : boxClass
+            }
+          >
+            <p className={`text-sm font-medium ${intentResult.destructive ? "text-danger" : "text-primary"}`}>
+              {intentResult.summary}
+            </p>
             <div className="mt-3 flex flex-wrap gap-2">
               <button
                 type="button"

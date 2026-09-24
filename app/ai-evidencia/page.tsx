@@ -917,6 +917,14 @@ export default function AiEvidenciaPage() {
   const [folderPickerRefs, setFolderPickerRefs] = useState<FolderRef[] | null>(null);
   const [evidenceZipLoading, setEvidenceZipLoading] = useState(false);
   const [sessionUserId, setSessionUserId] = useState("");
+  // Príjem finančného dokladu BEZ čítania (zamestnanec, admin bez financií):
+  // server vrátil iba typ a zapečatené údaje — nič z obsahu sa nezobrazuje.
+  const [intakeOnly, setIntakeOnly] = useState<{
+    documentType: "invoice" | "receipt" | "delivery_note";
+    sealedExtraction: string | null;
+  } | null>(null);
+  const [intakeBusy, setIntakeBusy] = useState(false);
+  const [intakeNotice, setIntakeNotice] = useState<string | null>(null);
   // Prílohy PZP dokumentu (bod 3 zadania) — načítané pre aktuálne otvorený
   // detail dokumentu typu insurance.
   const [attachments, setAttachments] = useState<AttachmentRow[]>([]);
@@ -1326,6 +1334,17 @@ const openCustomCategoryDocuments = openCustomCategoryId
       const documentType = scanned.documentType as ScanDocumentType;
 
       setSelectedFile(compressedFile);
+
+      if (scanned.intakeOnly) {
+        // Bez finance.view: žiadne polia na kontrolu, iba odoslanie.
+        setIntakeOnly({
+          documentType: documentType as "invoice" | "receipt" | "delivery_note",
+          sealedExtraction: typeof scanned.sealedExtraction === "string" ? scanned.sealedExtraction : null,
+        });
+        setIntakeNotice(null);
+        return;
+      }
+
       setScanDocumentType(documentType);
 
       if (documentType === "weigh_ticket" || documentType === "delivery_note") {
@@ -1497,7 +1516,72 @@ const openCustomCategoryDocuments = openCustomCategoryId
     setError("");
   }
 
+  /**
+   * Odoslanie finančného dokladu na spracovanie bez čítania. Fotka ide do
+   * vlastného priečinka v Storage, záznam uloží server z pečate. Odpoveď je
+   * iba potvrdenie — obsah dokladu sa používateľovi nezobrazí.
+   */
+  async function submitIntakeDocument() {
+    if (!intakeOnly || !selectedFile || intakeBusy) return;
+    setIntakeBusy(true);
+    setError("");
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (!session) throw new Error(t("inbox.errors.notLoggedIn"));
+
+      const documentId = crypto.randomUUID();
+      const bucket = intakeOnly.documentType === "delivery_note" ? "ai-evidence-documents" : "ai-inbox-documents";
+      const storagePath = `${session.user.id}/${documentId}/${crypto.randomUUID()}.webp`;
+      const { error: uploadError } = await supabase.storage.from(bucket).upload(storagePath, selectedFile, {
+        contentType: selectedFile.type || "image/webp",
+        cacheControl: "3600",
+        upsert: false,
+      });
+      if (uploadError) throw new Error(t("inbox.errors.photoSaveFailed", { message: uploadError.message }));
+
+      const contentSha256 = await computeFileSha256(selectedFile).catch(() => null);
+      const response = await fetch(apiUrl("/api/inbox/intake"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.access_token}`,
+          [REQUEST_LOCALE_HEADER]: locale,
+        },
+        body: JSON.stringify({
+          documentId,
+          documentType: intakeOnly.documentType,
+          storagePath,
+          sealedExtraction: intakeOnly.sealedExtraction,
+          originalFilename: fileName || null,
+          mimeType: selectedFile.type || null,
+          fileSize: selectedFile.size,
+          contentSha256,
+          note: documentNote.trim() || null,
+        }),
+      });
+      const payload = (await response.json().catch(() => null)) as { success?: boolean; message?: string; error?: string } | null;
+      if (!response.ok || !payload?.success) {
+        // Záznam nevznikol → fotku zmažeme, aby nezostala osirelá.
+        await supabase.storage.from(bucket).remove([storagePath]);
+        throw new Error(payload?.error || t("assistant.intake.failed"));
+      }
+      setIntakeNotice(payload.message || t("assistant.intake.submitted"));
+      setIntakeOnly(null);
+      setSelectedFile(null);
+      setFileName("");
+      setDocumentNote("");
+      clearImagePreview();
+    } catch (intakeError) {
+      setError(intakeError instanceof Error ? intakeError.message : t("assistant.intake.failed"));
+    } finally {
+      setIntakeBusy(false);
+    }
+  }
+
   function resetScanReview() {
+    setIntakeOnly(null);
     setResult(null);
     setOtherResult(null);
     setScanDocumentType(null);
@@ -1690,6 +1774,9 @@ const resolvedMovementType = resolveMovementType(result);
         machine_label: machineLabel,
         spz: canonicalSpz,
         document_type: result.documentType || null,
+        // Kanonický druh — document_type je iba preložený popisok. Dodací
+        // list je finančný podklad (RLS ai_evidence_select_scoped).
+        evidence_kind: scanDocumentType === "delivery_note" ? "delivery_note" : "weigh_ticket",
         movement_type: resolvedMovementType,
         supplier: result.supplier || null,
         document_number: result.documentNumber || null,
@@ -3129,6 +3216,7 @@ function renderDocumentRegister(
             namiesto odhadovania „posledného". */}
         <div className="mb-4 flex justify-end">
           <VoiceLauncherSlot
+            moduleContext="inbox"
             uiContext={
               selectedOtherDocument
                 ? {
@@ -3278,6 +3366,56 @@ function renderDocumentRegister(
             {error && (
               <p className="mt-4 font-semibold text-red-400">{t("inbox.errorPrefix", { message: error })}</p>
             )}
+          </div>
+        )}
+
+        {intakeNotice && !intakeOnly && (
+          <div className="mt-6">
+            <Notice>{intakeNotice}</Notice>
+          </div>
+        )}
+
+        {intakeOnly && (
+          <div className="mt-8 space-y-4 rounded-doc border border-doc-border bg-doc-surface p-4 sm:p-5">
+            <h2 className="text-lg font-semibold text-primary">
+              {t("assistant.intake.title", { type: documentTypeLabels[intakeOnly.documentType] })}
+            </h2>
+            <p className="text-sm text-secondary">{t("assistant.intake.explanation")}</p>
+            <label className="block">
+              <span className={docLabel}>{t("inbox.noteLabel")}</span>
+              <textarea
+                value={documentNote}
+                onChange={(e) => setDocumentNote(e.target.value)}
+                rows={3}
+                maxLength={1000}
+                placeholder={t("inbox.notePlaceholder")}
+                className="mt-1 w-full rounded-xl border border-subtle bg-surface-1 px-4 py-3 outline-none"
+              />
+            </label>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => void submitIntakeDocument()}
+                disabled={intakeBusy}
+                aria-busy={intakeBusy}
+                className={docButtonPrimary}
+              >
+                {intakeBusy ? t("assistant.intake.submitting") : t("assistant.intake.submit")}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setIntakeOnly(null);
+                  setSelectedFile(null);
+                  setFileName("");
+                  clearImagePreview();
+                }}
+                disabled={intakeBusy}
+                className={docButtonSecondary}
+              >
+                {t("common.buttons.cancel")}
+              </button>
+            </div>
           </div>
         )}
 

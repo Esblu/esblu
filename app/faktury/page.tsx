@@ -588,6 +588,7 @@ export default function FakturyPage() {
   return (
     <DocumentPageShell
       wide
+      moduleContext="invoices"
       voiceSelection={
         selectionMode && selectedIds.length > 0
           ? { items: selectedIds.map((id) => ({ type: "invoice" as const, id })) }

@@ -3,7 +3,7 @@
 import type { ReactNode } from "react";
 import type { UiContext } from "@/lib/intents/ui-context";
 import { VoiceLauncherSlot } from "@/app/components/voice/VoiceLauncherSlot";
-import type { VoiceSelection } from "@/app/components/voice/VoiceLauncher";
+import type { VoiceModuleContext, VoiceSelection } from "@/app/components/voice/VoiceLauncher";
 
 // =============================================================================
 // Kancelárske primitívy pre dokumentové plochy.
@@ -25,6 +25,7 @@ export function DocumentPageShell({
   uiContext,
   voiceSelection,
   folderContextId,
+  moduleContext,
 }: {
   children: ReactNode;
   /** Register/zoznam potrebuje viac šírky než detail jedného dokladu. */
@@ -39,6 +40,8 @@ export function DocumentPageShell({
   voiceSelection?: VoiceSelection | null;
   /** Otvorený priečinok dokladov („daj to sem"). */
   folderContextId?: string | null;
+  /** Modul obrazovky pre vety bez modulu („Vytvor novú položku"). */
+  moduleContext?: VoiceModuleContext | null;
 }) {
   return (
     <div className={`mx-auto ${wide ? "max-w-6xl" : "max-w-5xl"} px-4 pb-28 pt-6 sm:px-6`}>
@@ -52,6 +55,7 @@ export function DocumentPageShell({
           uiContext={uiContext}
           selection={voiceSelection}
           folderContextId={folderContextId}
+          moduleContext={moduleContext}
         />
       </div>
       {children}

@@ -36,6 +36,12 @@ import {
   isFolderWriteIntent,
   type FolderWriteIntent,
 } from "@/lib/intents/folder-intents";
+import {
+  executeOperationalAction,
+  isOperationalWriteIntent,
+  type OperationalWriteIntent,
+} from "@/lib/intents/operational-intents";
+import { checkIntentAccess } from "@/lib/intents/permissions";
 
 // =============================================================================
 // Esblu — Intent Engine WRITE akcie (doplnenie zadania, body 5-13, 22; HARDENED
@@ -192,6 +198,17 @@ const CONFIRMATION_BOUND_INTENTS = [
   "FOLDER_CREATE",
   "FOLDER_ADD_ITEMS",
   "FOLDER_REMOVE_ITEMS",
+  "FOLDER_DELETE",
+  // Prevádzkové zápisy (lib/intents/operational-intents.ts).
+  "INVENTORY_ITEM_CREATE",
+  "INVENTORY_QUANTITY_ADJUST",
+  "INVENTORY_ITEM_DELETE",
+  "MACHINE_CREATE",
+  "MACHINE_SERVICE_ADD",
+  "MACHINE_DELETE",
+  "VEHICLE_CREATE",
+  "VEHICLE_SERVICE_ADD",
+  "VEHICLE_DELETE",
 ] as const;
 
 type ConfirmationBoundIntentName = (typeof CONFIRMATION_BOUND_INTENTS)[number];
@@ -284,6 +301,17 @@ export function createFolderActionConfirmation(
   supabase: SupabaseClient,
   ctx: ActionContext,
   intent: FolderWriteIntent,
+  canonicalArgs: Record<string, unknown>,
+  expectedCount: number | null
+): Promise<string | null> {
+  return insertActionConfirmation(supabase, ctx, intent, canonicalArgs, expectedCount);
+}
+
+/** Potvrdenie pre prevádzkový zápis — rovnaký tok ako priečinky. */
+export function createOperationalActionConfirmation(
+  supabase: SupabaseClient,
+  ctx: ActionContext,
+  intent: OperationalWriteIntent,
   canonicalArgs: Record<string, unknown>,
   expectedCount: number | null
 ): Promise<string | null> {
@@ -1047,6 +1075,31 @@ export async function executeAction(
   const claimed = await claimActionConfirmation(supabase, confirmationId);
   if (!claimed || !isConfirmationBoundIntentName(claimed.intent)) {
     return actionResult(false, translate(locale, "search.actions.confirmation.invalidOrExpired"));
+  }
+
+  if (isOperationalWriteIntent(claimed.intent)) {
+    // Oprávnenie ZNOVA pri vykonaní — rola sa mohla medzi náhľadom a
+    // potvrdením zmeniť. Tá istá funkcia ako pri náhľade.
+    const [roleRes, operateRes, viewRes, manageRes] = await Promise.all([
+      supabase.rpc("esblu_my_active_role"),
+      supabase.rpc("esblu_role_can_operate"),
+      supabase.rpc("esblu_my_finance_view"),
+      supabase.rpc("esblu_my_finance_manage"),
+    ]);
+    const denial = checkIntentAccess(claimed.intent, {}, {
+      role: typeof roleRes.data === "string" ? roleRes.data : "",
+      canOperate: operateRes.data === true,
+      financeView: viewRes.data === true,
+      financeManage: manageRes.data === true,
+    });
+    if (denial) return actionResult(false, translate(locale, "search.voice.states.denied"));
+    return executeOperationalAction(
+      supabase,
+      locale,
+      { companyId: ctx.companyId, userId: ctx.userId },
+      claimed.intent,
+      claimed.canonical_args
+    );
   }
 
   if (isFolderWriteIntent(claimed.intent)) {

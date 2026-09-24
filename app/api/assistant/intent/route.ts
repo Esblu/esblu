@@ -10,7 +10,14 @@ import {
   isRegisteredReviewableDraftIntent,
 } from "@/lib/intents/registry";
 import { executeIntent } from "@/lib/intents/handlers";
-import { buildActionPreview, createFolderActionConfirmation } from "@/lib/intents/actions";
+import {
+  buildActionPreview,
+  createFolderActionConfirmation,
+  createOperationalActionConfirmation,
+} from "@/lib/intents/actions";
+import { checkIntentAccess, denialMessageKey, restrictedAssistantDenial } from "@/lib/intents/permissions";
+import { handleOperationalIntent, isOperationalFamilyIntent } from "@/lib/intents/operational-intents";
+import type { ParseHints } from "@/lib/intents/parse";
 import {
   folderIntentPermission,
   handleFolderIntent,
@@ -142,6 +149,14 @@ function readSelectionContext(raw: unknown): { items: FolderRef[]; folderId: str
   return { items, folderId };
 }
 
+/** Modul obrazovky — iba z uzavretého zoznamu. Nie je to oprávnenie. */
+const MODULE_CONTEXTS = ["dashboard", "inventory", "machines", "vehicles", "invoices", "inbox", "folders", "partners"] as const;
+function readModuleContext(raw: unknown): ParseHints["module"] | undefined {
+  return typeof raw === "string" && (MODULE_CONTEXTS as readonly string[]).includes(raw)
+    ? (raw as ParseHints["module"])
+    : undefined;
+}
+
 /** Naposledy použitý priečinok v rozhovore — iba UUID; overí sa pod RLS. */
 function readFolderContext(raw: unknown): string | null {
   if (!raw || typeof raw !== "object") return null;
@@ -180,6 +195,7 @@ export async function POST(req: Request) {
           answer?: unknown;
           selectionContext?: unknown;
           folderContext?: unknown;
+          moduleContext?: unknown;
         }
       | null;
     const rawText = typeof body?.text === "string" ? body.text.trim() : "";
@@ -309,7 +325,23 @@ export async function POST(req: Request) {
       }
     }
 
-    let intent: ParsedIntent | null = parseIntentDeterministic(rawText);
+    const moduleContext = readModuleContext(body?.moduleContext);
+    let intent: ParsedIntent | null = parseIntentDeterministic(rawText, { module: moduleContext });
+
+    // Zamestnanec nemá všeobecný asistent: prejde iba príjem dokladu.
+    // Rozhoduje sa pred AI klasifikáciou a pred akýmkoľvek dotazom; odpoveď
+    // je rovnaká pre každú inú vetu, takže nič neprezradí.
+    const restricted = restrictedAssistantDenial(intent, { role: membership.role as string });
+    if (restricted) {
+      return Response.json({
+        success: true,
+        recognized: Boolean(intent),
+        intent: intent?.name,
+        source: intent?.source,
+        result: { kind: "error", text: translate(locale, denialMessageKey(restricted)) },
+      });
+    }
+
     if (!intent) {
       intent = await classifyIntentWithAi(rawText);
     }
@@ -349,14 +381,80 @@ export async function POST(req: Request) {
     //
     // Firma, používateľ, rola ani oprávnenia sa z klienta NEBERÚ nikdy.
     // ------------------------------------------------------------------
+    // ------------------------------------------------------------------
+    // Kontext obrazovky pre príkazy, ktoré modul nepomenovali.
+    //
+    // „Vytvor novú položku" v Sklade = skladová položka; na nástenke sa
+    // asistent spýta. „Ukáž servisnú históriu" na detaile vozidla = vozidlo.
+    // Kontext iba vyberá význam vety — oprávnenie rozhoduje brána nižšie.
+    // ------------------------------------------------------------------
+    if (intent.name === "ENTITY_CREATE") {
+      const target =
+        moduleContext === "inventory" ? "INVENTORY_ITEM_CREATE"
+        : moduleContext === "machines" ? "MACHINE_CREATE"
+        : moduleContext === "vehicles" ? "VEHICLE_CREATE"
+        : null;
+      if (!target) {
+        return Response.json({
+          success: true,
+          recognized: true,
+          intent: intent.name,
+          source: intent.source,
+          result: { kind: "answer", text: translate(locale, "assistant.clarify.createModule") },
+        });
+      }
+      intent = { ...intent, name: target };
+    }
+    if (intent.name === "SHOW_MACHINE_SERVICE" && !intent.args.query &&
+        (uiContext?.entityType === "vehicle" || moduleContext === "vehicles")) {
+      intent = { ...intent, name: "SHOW_VEHICLE_SERVICE" };
+    }
+
+    // ------------------------------------------------------------------
+    // BRÁNA OPRÁVNENÍ — pred akýmkoľvek dotazom na dáta.
+    //
+    // Zamestnanec, účtovník mimo svojho rozsahu, admin bez finance: odmietnutie
+    // bez čísla, mena či sumy. Toto nenahrádza RLS; iba zabraňuje tomu, aby
+    // odpoveď „nič sa nenašlo" nepriamo prezradila, že dáta existujú.
+    // ------------------------------------------------------------------
+    const denial = checkIntentAccess(intent.name, intent.args, {
+      role: membership.role as string,
+      financeView: readCtx.financeView,
+      financeManage,
+      canOperate: readCtx.canOperate,
+    });
+    if (denial) {
+      return Response.json({
+        success: true,
+        recognized: true,
+        intent: intent.name,
+        source: intent.source,
+        result: { kind: "error", text: translate(locale, denialMessageKey(denial)) },
+      });
+    }
+
     const resolvedEntity =
-      uiContext && moduleMatchesEntity(uiContext)
+      uiContext && moduleMatchesEntity(uiContext) && intent.name !== "DOCUMENT_INTAKE"
         ? await resolveUiEntity(supabase, uiContext)
         : null;
 
     let result;
 
-    if (isFolderFamilyIntent(intent.name)) {
+    if (isOperationalFamilyIntent(intent.name)) {
+      const actionCtx = {
+        companyId: membership.company_id as string,
+        userId: user.id,
+        role: membership.role as CompanyMemberRole,
+      };
+      result = await handleOperationalIntent(
+        supabase,
+        locale,
+        intent,
+        { companyId: actionCtx.companyId, userId: actionCtx.userId, resolvedEntity, today: issueDate },
+        (name, canonicalArgs, expectedCount) =>
+          createOperationalActionConfirmation(supabase, actionCtx, name, canonicalArgs, expectedCount)
+      );
+    } else if (isFolderFamilyIntent(intent.name)) {
       // ----------------------------------------------------------------
       // Priečinky dokladov a stav stiahnutia.
       //

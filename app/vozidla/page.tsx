@@ -1246,7 +1246,7 @@ export default function VozidlaPage() {
   }
 
   return (
-    <PageShell wide>
+    <PageShell wide moduleContext="vehicles">
       <BackLink href="/" label={t("inbox.backToMenu")} className="mb-6" />
 
       <PageHeader

@@ -1,6 +1,6 @@
 "use client";
 
-import { VoiceLauncher, type VoiceSelection } from "@/app/components/voice/VoiceLauncher";
+import { VoiceLauncher, type VoiceModuleContext, type VoiceSelection } from "@/app/components/voice/VoiceLauncher";
 import type { UiContext } from "@/lib/intents/ui-context";
 
 // =============================================================================
@@ -18,16 +18,19 @@ export function VoiceLauncherSlot({
   uiContext,
   selection,
   folderContextId,
+  moduleContext,
 }: {
   uiContext?: UiContext | null;
   selection?: VoiceSelection | null;
   folderContextId?: string | null;
+  moduleContext?: VoiceModuleContext | null;
 }) {
   return (
     <VoiceLauncher
       uiContext={uiContext ?? null}
       selection={selection ?? null}
       folderContextId={folderContextId ?? null}
+      moduleContext={moduleContext ?? null}
     />
   );
 }

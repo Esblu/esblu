@@ -173,6 +173,37 @@ export const INTENT_NAMES = [
   "DOCUMENTS_EXPORT",
   "DOCUMENTS_LIST_UNDOWNLOADED",
   "DOCUMENTS_DOWNLOAD_STATUS",
+  // Zmazanie PRIEČINKA — iba organizačné riadky, nikdy doklady. Potvrdenie povinné.
+  "FOLDER_DELETE",
+
+  // ---------------------------------------------------------------------
+  // Prevádzkové zápisy (sklad, stroje, vozidlá).
+  //
+  // Všetky idú cez ten istý HMAC potvrdzovací tok: nástenka posiela text do
+  // Intent Engine už počas písania, takže bez ťuknutia na „Potvrdiť" by sa
+  // zapisovalo z rozpísaných slov. Oprávnenie rozhoduje
+  // lib/intents/permissions.ts PRED akýmkoľvek dotazom; zamestnanec a
+  // účtovník tu nezapíšu nič.
+  // ---------------------------------------------------------------------
+  "INVENTORY_ITEM_CREATE",
+  "INVENTORY_QUANTITY_ADJUST",
+  "INVENTORY_ITEM_DELETE",
+  "MACHINE_CREATE",
+  "MACHINE_SERVICE_ADD",
+  "MACHINE_DELETE",
+  "MACHINE_PHOTO_ADD",
+  "VEHICLE_CREATE",
+  "VEHICLE_SERVICE_ADD",
+  "VEHICLE_DELETE",
+  "VEHICLE_PHOTO_ADD",
+
+  // „Pridaj bloček / dodací list / faktúru" — iba cesta k príjmu dokladu
+  // (fotka → spracovanie). Nič nečíta, nič nezobrazuje.
+  "DOCUMENT_INTAKE",
+
+  // „Vytvor novú položku" bez modulu — modul doplní kontext obrazovky, inak
+  // sa asistent spýta. Nikdy sa nehádá.
+  "ENTITY_CREATE",
 ] as const;
 
 export type IntentName = (typeof INTENT_NAMES)[number];
@@ -319,6 +350,17 @@ export type IntentArgs = {
   move?: boolean;
   // „Koľko ešte ÚČTOVNÍČKA nestiahla" — počíta sa iba stiahnutie účtovníkom.
   byAccountant?: boolean;
+  // Prevádzkové zápisy — iba to, čo zaznelo. Chýbajúce povinné pole sa
+  // nedopĺňa; asistent sa spýta.
+  entityName?: string;
+  quantity?: number;
+  unit?: string;
+  quantityMode?: "add" | "subtract" | "set";
+  targetModule?: "inventory" | "machines" | "vehicles";
+  // „tento stroj", „toto vozidlo" — použi entitu otvorenú na obrazovke
+  // (overenú serverom). Na nástenke taká nie je → otázka.
+  useContext?: boolean;
+  serviceTitle?: string;
 };
 
 // Stavy faktúr, na ktoré sa dá pýtať. Zámerne "priateľské" hodnoty, nie
@@ -444,7 +486,19 @@ export type IntentResult =
         | "FOLDER_ADD_ITEMS"
         | "FOLDER_REMOVE_ITEMS"
         | "FOLDER_EXPORT"
-        | "DOCUMENTS_EXPORT";
+        | "DOCUMENTS_EXPORT"
+        | "FOLDER_DELETE"
+        | "INVENTORY_ITEM_CREATE"
+        | "INVENTORY_QUANTITY_ADJUST"
+        | "INVENTORY_ITEM_DELETE"
+        | "MACHINE_CREATE"
+        | "MACHINE_SERVICE_ADD"
+        | "MACHINE_DELETE"
+        | "VEHICLE_CREATE"
+        | "VEHICLE_SERVICE_ADD"
+        | "VEHICLE_DELETE";
+      /** Nebezpečná (nevratná) akcia — UI zvýrazní potvrdenie. */
+      destructive?: boolean;
       summary: string;
       confirmLabel: string;
       cancelLabel: string;

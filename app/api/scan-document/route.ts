@@ -1,4 +1,5 @@
 import OpenAI from "openai";
+import { isIntakeDocumentType, sealIntakeExtraction } from "@/lib/intake-seal";
 import { createClient } from "@supabase/supabase-js";
 import { normalizeSpz } from "@/lib/normalize-spz";
 import { normalizeAndValidateWeights } from "@/lib/weight-utils";
@@ -1473,6 +1474,37 @@ export async function POST(req: Request) {
         criticalFieldLowConfidence,
         spzSource,
       });
+    }
+
+    // ---------------------------------------------------------------------
+    // 11) Príjem finančného dokladu BEZ čítania.
+    //
+    // Kto nemá finance.view (zamestnanec, admin bez financií), smie bloček,
+    // faktúru či dodací list odoslať na spracovanie, ale nesmie vidieť ich
+    // obsah — ani vyťažený z vlastnej fotky. Údaje preto neodchádzajú v
+    // čitateľnej podobe: zapečatia sa (lib/intake-seal.ts) a uloží ich až
+    // /api/inbox/intake pod identitou používateľa. Klient dostane iba typ.
+    // ---------------------------------------------------------------------
+    if (isIntakeDocumentType(documentType)) {
+      const { data: financeView } = await userClient.rpc("esblu_my_finance_view");
+      if (financeView !== true) {
+        const sealedExtraction = sealIntakeExtraction(
+          {
+            documentType,
+            confidenceScore,
+            reviewStatus,
+            rawText,
+            documentLanguage,
+            fieldConfidence,
+            fields: (invoiceFields ?? receiptFields ?? deliveryNoteFields ?? null) as Record<string, unknown> | null,
+          },
+          user.id
+        );
+        return Response.json({
+          success: true,
+          data: { documentType, intakeOnly: true, sealedExtraction },
+        });
+      }
     }
 
     return Response.json({

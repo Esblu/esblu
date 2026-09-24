@@ -6,6 +6,7 @@ import type { EntityRef, IntentArgs, IntentName, IntentResult, ParsedIntent } fr
 import {
   addItemsToFolder,
   createDocumentFolder,
+  deleteDocumentFolder,
   folderNameKey,
   listDocumentFolders,
   listFolderItemViews,
@@ -47,7 +48,7 @@ import {
 // NIKDY nenahrádza posledným otvoreným záznamom — asistent sa spýta.
 // =============================================================================
 
-export const FOLDER_WRITE_INTENTS = ["FOLDER_CREATE", "FOLDER_ADD_ITEMS", "FOLDER_REMOVE_ITEMS"] as const;
+export const FOLDER_WRITE_INTENTS = ["FOLDER_CREATE", "FOLDER_ADD_ITEMS", "FOLDER_REMOVE_ITEMS", "FOLDER_DELETE"] as const;
 export type FolderWriteIntent = (typeof FOLDER_WRITE_INTENTS)[number];
 
 const FOLDER_FAMILY: readonly IntentName[] = [
@@ -60,6 +61,7 @@ const FOLDER_FAMILY: readonly IntentName[] = [
   "DOCUMENTS_EXPORT",
   "DOCUMENTS_LIST_UNDOWNLOADED",
   "DOCUMENTS_DOWNLOAD_STATUS",
+  "FOLDER_DELETE",
 ];
 
 export function isFolderFamilyIntent(name: string): name is IntentName {
@@ -559,6 +561,37 @@ export async function handleFolderIntent(
       );
     }
 
+    case "FOLDER_DELETE": {
+      // Nebezpečné: iba PRESNÉ meno. Približná zhoda = otázka, nikdy tichý výber.
+      if (!args.folderName) {
+        const folders = await listDocumentFolders(db);
+        return folders.length
+          ? { kind: "list", title: t(locale, "folders.intent.whichFolderList"), items: folders.slice(0, 12).map(folderEntity) }
+          : answer(t(locale, "folders.empty"));
+      }
+      const folders = await listDocumentFolders(db);
+      const exact = folders.filter((f) => folderNameKey(f.name) === folderNameKey(args.folderName ?? ""));
+      if (exact.length !== 1) {
+        const match = matchFolderByName(folders, args.folderName);
+        if (!match) return { kind: "not_found", text: t(locale, "folders.intent.notFound", { name: args.folderName }) };
+        const candidates = "folder" in match ? [match.folder] : match.ambiguous;
+        return { kind: "list", title: t(locale, "folders.intent.whichFolderList"), items: candidates.map(folderEntity) };
+      }
+      const folder = exact[0];
+      const confirmationId = await createConfirmation("FOLDER_DELETE", { folderId: folder.id, name: folder.name }, folder.itemCount);
+      if (!confirmationId) return { kind: "error", text: t(locale, "search.errors.generic") };
+      return {
+        kind: "action_preview",
+        action: "FOLDER_DELETE",
+        summary: t(locale, "folders.intent.deleteSummary", { name: folder.name, count: folder.itemCount }),
+        confirmLabel: t(locale, "folders.intent.deleteConfirm"),
+        cancelLabel: t(locale, "search.actions.cancelLabel"),
+        confirmationId,
+        affectedCount: folder.itemCount,
+        destructive: true,
+      };
+    }
+
     default:
       return { kind: "error", text: t(locale, "search.errors.generic") };
   }
@@ -605,6 +638,14 @@ export async function executeFolderAction(
   const { data: folderRow } = await db.from("document_folders").select("id, name").eq("id", folderId).maybeSingle();
   if (!folderRow) return fail("folders.errors.notFound");
   const folder = folderRow as { id: string; name: string };
+
+  if (intent === "FOLDER_DELETE") {
+    // Zmaže sa priečinok a jeho členstvá (CASCADE). Faktúry, doklady,
+    // originály, udalosti stiahnutia ani evidencia odovzdania sa netýkajú.
+    const deleted = await deleteDocumentFolder(db, folder.id);
+    if (!deleted.ok) return fail(deleted.error === "FORBIDDEN" ? "folders.intent.denied" : "search.errors.generic");
+    return actionResult(true, t(locale, "folders.intent.deleted", { name: folder.name }));
+  }
   const refs = readRefs(args.refs);
   if (expectedCount !== null && refs.length !== expectedCount) return fail("folders.intent.dataChanged");
 

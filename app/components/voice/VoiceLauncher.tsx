@@ -25,6 +25,9 @@ import { describePackageError, describePackageOutcome } from "@/app/components/f
  * server každý doklad overí pod RLS. Bez výberu sa „tieto" nikdy nenahrádza
  * posledným otvoreným záznamom.
  */
+/** Modul obrazovky — pomáha pochopiť vetu bez modulu („Vytvor novú položku"). Nie je to oprávnenie. */
+export type VoiceModuleContext = "dashboard" | "inventory" | "machines" | "vehicles" | "invoices" | "inbox" | "folders" | "partners";
+
 export type VoiceSelection = {
   items: { type: "invoice" | "document"; id: string }[];
   folderId?: string | null;
@@ -106,10 +109,12 @@ export function VoiceLauncher({
   uiContext = null,
   selection = null,
   folderContextId = null,
+  moduleContext = null,
 }: {
   uiContext?: UiContext | null;
   selection?: VoiceSelection | null;
   folderContextId?: string | null;
+  moduleContext?: VoiceModuleContext | null;
 } = {}) {
   const { t, locale } = useLocale();
 
@@ -181,6 +186,7 @@ export function VoiceLauncher({
           ...(uiContext ? { uiContext } : {}),
           ...(structuredAnswer ? { answer: structuredAnswer } : {}),
           ...(selection && selection.items.length > 0 ? { selectionContext: selection } : {}),
+          ...(moduleContext ? { moduleContext } : {}),
           ...((recentFolderIdRef.current ?? folderContextId)
             ? { folderContext: { folderId: recentFolderIdRef.current ?? folderContextId } }
             : {}),

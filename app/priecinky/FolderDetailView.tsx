@@ -215,6 +215,7 @@ export default function FolderDetailView({ folderId }: { folderId: string }) {
   return (
     <DocumentPageShell
       wide
+      moduleContext="folders"
       folderContextId={folderId}
       voiceSelection={selectedRefs.length > 0 ? { items: selectedRefs, folderId } : null}
     >

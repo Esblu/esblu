@@ -348,6 +348,8 @@ export default function Dashboard() {
           body: JSON.stringify({
             text: trimmed,
             localDate: todayLocalDate(),
+            // Nástenka = globálny kontext: žiadny otvorený doklad ani výber.
+            moduleContext: "dashboard",
             ...(recentFolderId ? { folderContext: { folderId: recentFolderId } } : {}),
           }),
         });

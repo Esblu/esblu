@@ -101,6 +101,14 @@ const INTENT_CLASSIFICATION_SCHEMA = {
     useSelection: { type: ["boolean", "null"] },
     move: { type: ["boolean", "null"] },
     byAccountant: { type: ["boolean", "null"] },
+    // Prevádzkové zápisy (sklad/stroje/vozidlá) — iba to, čo zaznelo.
+    entityName: { type: ["string", "null"] },
+    quantity: { type: ["number", "null"] },
+    unit: { type: ["string", "null"] },
+    quantityMode: { type: ["string", "null"], enum: ["add", "subtract", "set", null] },
+    targetModule: { type: ["string", "null"], enum: ["inventory", "machines", "vehicles", null] },
+    useContext: { type: ["boolean", "null"] },
+    serviceTitle: { type: ["string", "null"] },
   },
   required: [
     "intent",
@@ -124,6 +132,13 @@ const INTENT_CLASSIFICATION_SCHEMA = {
     "useSelection",
     "move",
     "byAccountant",
+    "entityName",
+    "quantity",
+    "unit",
+    "quantityMode",
+    "targetModule",
+    "useContext",
+    "serviceTitle",
   ],
 } as const;
 
@@ -242,12 +257,31 @@ ${INVOICE_STATUS_FILTERS.map((s) => `  - ${s}`).join("\n")}
     * DOCUMENTS_DOWNLOAD_STATUS — "koľko faktúr ešte účtovníčka nestiahla"
       → byAccountant: true, keď sa hovorí o účtovníkovi.
   Ostatné z týchto polí nechaj null.
+- SKLAD, STROJE, VOZIDLÁ (zápisy idú vždy cez potvrdenie; oprávnenie
+  overuje server):
+    * INVENTORY_ITEM_CREATE — "vytvor skladovú položku cement" →
+      entityName: "cement", voliteľne quantity/unit.
+    * INVENTORY_QUANTITY_ADJUST — "pridaj do skladu 20 vrutov" → quantity: 20,
+      quantityMode: "add", entityName: "vruty"; "odober 5 cementu" →
+      "subtract"; "nastav stav cementu na 40" → "set".
+    * INVENTORY_ITEM_DELETE — "zmaž skladovú položku X" → query: "X".
+    * MACHINE_CREATE — "zaeviduj bager CAT 320" → entityName: "Bager CAT 320".
+    * MACHINE_SERVICE_ADD / VEHICLE_SERVICE_ADD — "pridaj servis ku CAT 320,
+      výmena oleja" → query: "CAT 320", serviceTitle: "výmena oleja";
+      "k tomuto stroju/vozidlu" → useContext: true.
+    * MACHINE_DELETE / VEHICLE_DELETE — "zmaž stroj X" / "zmaž vozidlo BA123AB".
+    * MACHINE_PHOTO_ADD / VEHICLE_PHOTO_ADD — "pridaj fotku k stroju X".
+    * VEHICLE_CREATE — "pridaj vozidlo BA123AB" → query: ŠPZ.
+    * ENTITY_CREATE — "vytvor novú položku" bez modulu.
+    * DOCUMENT_INTAKE — "pridaj bloček", "odfoť dodací list", "nahraj
+      faktúru" (príjem dokladu na spracovanie, nič sa nečíta).
+    * FOLDER_DELETE — "zmaž priečinok X" → folderName: "X".
 - Príkazy, ktoré appka zatiaľ nepodporuje, VŽDY klasifikuj ako intent:
   null (NIKDY sa nesnaž vynútiť ich do najbližšieho povoleného intentu).
   Sem patrí najmä: zmazanie dokumentu ("Vymaž všetky faktúry."),
   odoslanie/poslanie dokumentu alebo emailu ("Pošli faktúru zákazníkovi."),
-  zmena skladového množstva ("Odpočítaj 5 kusov spreja.", "Pridaj 10
-  kusov."), úprava/vytvorenie vozidla alebo stroja príkazom,
+  hromadné mazanie ("Zmaž všetky stroje."), úprava ľubovoľných polí
+  vozidla alebo stroja okrem nižšie uvedených zápisov,
   FINALIZÁCIA/vystavenie faktúry ("Vystav tú faktúru.", "Finalizuj
   faktúru.") a označenie faktúry za uhradenú ("Označ faktúru ako
   zaplatenú.") — tie posledné dve appka zámerne rečou nerobí — a čokoľvek
@@ -327,6 +361,13 @@ export async function classifyIntentWithAi(
       useSelection: boolean | null;
       move: boolean | null;
       byAccountant: boolean | null;
+      entityName: string | null;
+      quantity: number | null;
+      unit: string | null;
+      quantityMode: string | null;
+      targetModule: string | null;
+      useContext: boolean | null;
+      serviceTitle: string | null;
     };
 
     if (!parsed.intent || !(INTENT_NAMES as readonly string[]).includes(parsed.intent)) {
@@ -383,6 +424,19 @@ export async function classifyIntentWithAi(
         useSelection: parsed.useSelection ?? undefined,
         move: parsed.move ?? undefined,
         byAccountant: parsed.byAccountant ?? undefined,
+        entityName: parsed.entityName ?? undefined,
+        quantity: typeof parsed.quantity === "number" && Number.isFinite(parsed.quantity) ? parsed.quantity : undefined,
+        unit: parsed.unit ?? undefined,
+        quantityMode:
+          parsed.quantityMode === "add" || parsed.quantityMode === "subtract" || parsed.quantityMode === "set"
+            ? parsed.quantityMode
+            : undefined,
+        targetModule:
+          parsed.targetModule === "inventory" || parsed.targetModule === "machines" || parsed.targetModule === "vehicles"
+            ? parsed.targetModule
+            : undefined,
+        useContext: parsed.useContext ?? undefined,
+        serviceTitle: parsed.serviceTitle ?? undefined,
       },
       source: "ai",
     };
