@@ -2,6 +2,7 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:
 import type { AwaitingClarification, ClarificationSlot, IntentArgs, IntentName, ParsedIntent } from "@/lib/intents/types";
 import { isKnownIntentName } from "@/lib/intents/types";
 import { classifyConfirmationReply } from "@/lib/intents/confirmation-reply";
+import { parseIntentDeterministic } from "@/lib/intents/parse";
 
 // =============================================================================
 // Rozpracovaná otázka asistenta — spoločný mechanizmus pre všetky moduly.
@@ -187,7 +188,90 @@ export function cleanClarificationAnswer(rawText: string): string {
   return tokens.join(" ").replace(/^[„"'“]+|[”"'“,;:]+$/g, "").trim();
 }
 
-export function classifyClarificationReply(rawText: string, pending: Pick<PendingClarification, "candidate">): ClarificationReply {
+// -----------------------------------------------------------------------------
+// Nový príkaz má prednosť pred doplnením starého slotu
+// -----------------------------------------------------------------------------
+//
+// Produkčná chyba: po otázke „Ku ktorému stroju alebo vozidlu?" sa ďalšia,
+// úplne nová veta bez slovesa zo zoznamu („Vystav faktúru", „Nová faktúra",
+// prepis „Faktúru pre Tester1") vyhodnotila ako ODPOVEĎ a asistent hľadal
+// stroj/vozidlo menom „Vystav faktúru". Rozhodovalo sa iba podľa slovesa.
+//
+// Teraz sa pred doplnením slotu pýtame:
+//   1. Pomenúva veta INÚ oblasť, než na akú sa pýtalo (faktúra, sklad,
+//      priečinok … pri otázke na stroj)? → nový príkaz.
+//   2. Rozumie jej parser ako celému príkazu (nie iba ako vyhľadaniu tej
+//      istej entity — „AB123CD", „Stroj Aman")? → nový príkaz.
+
+export type DialogContext = ClarificationSlot | "invoice";
+
+const DOMAIN_NOUNS: Record<string, string[]> = {
+  invoice: ["faktur", "rechnung", "invoice"],
+  document: ["blocek", "blocky", "blockov", "doklad", "dokument", "dodaci list", "receipt", "beleg"],
+  inventory: ["sklad", "zasob", "inventory", "lager"],
+  folder: ["priecin", "zlozk", "folder", "ordner"],
+  vehicle: ["vozidl", "vehicle", "fahrzeug"],
+  machine: ["stroj", "machine", "maschine"],
+};
+
+const ALLOWED_DOMAINS: Record<DialogContext, string[]> = {
+  machine: ["machine"],
+  vehicle: ["vehicle"],
+  machine_or_vehicle: ["machine", "vehicle"],
+  inventory_item: ["inventory"],
+  folder: ["folder"],
+  invoice: ["invoice"],
+};
+
+/** Vyhľadanie entity, ktorá JE odpoveďou na otázku („AB123CD" → OPEN_VEHICLE). */
+const SLOT_LOOKUPS: Record<DialogContext, readonly string[]> = {
+  machine: ["SEARCH_MACHINE", "OPEN_MACHINE"],
+  vehicle: ["OPEN_VEHICLE", "SEARCH_VEHICLE"],
+  machine_or_vehicle: ["SEARCH_MACHINE", "OPEN_MACHINE", "OPEN_VEHICLE", "SEARCH_VEHICLE"],
+  inventory_item: ["OPEN_INVENTORY_ITEM", "SEARCH_INVENTORY_ITEM", "INVENTORY_ITEM_STATUS"],
+  // „do priečinka August 2026" je odpoveď na „Do ktorého priečinka?".
+  folder: ["FOLDER_OPEN", "FOLDER_ADD_ITEMS"],
+  invoice: [],
+};
+
+const ALL_LOOKUPS = Array.from(new Set(Object.values(SLOT_LOOKUPS).flat()));
+const READ_VERBS = ["ukaz", "zobraz", "otvor", "najdi", "show", "open", "find", "zeige", "zeig", "offne", "oeffne", "finde"];
+
+function mentionsDomain(text: string, noun: string): boolean {
+  return new RegExp(`(^| )${noun.replace(/\s+/g, " ")}`).test(text);
+}
+
+/**
+ * Je veta nový, úplný príkaz — nie odpoveď na otázku v kontexte `context`?
+ *
+ * Pri rozpracovanej faktúre (`invoice`) je pravidlo užšie: odpoveď na
+ * „Za čo má byť faktúra?" smie pomenovať stroj či vozidlo („prenájom
+ * bagra 300 eur"). Novým príkazom je tam iba nové založenie faktúry alebo
+ * čítací príkaz („Ukáž sklad", „Otvor vozidlá").
+ */
+export function isClearNewCommand(rawText: string, context?: DialogContext): boolean {
+  const text = normalize(rawText);
+  if (!text) return false;
+  const parsed = parseIntentDeterministic(rawText);
+
+  if (context === "invoice") {
+    if (!parsed) return false;
+    if (parsed.name === "CREATE_INVOICE_DRAFT") return true;
+    return text.split(" ").some((word) => READ_VERBS.some((verb) => word.startsWith(verb)));
+  }
+
+  const allowed = context ? ALLOWED_DOMAINS[context] : Object.keys(DOMAIN_NOUNS).filter((d) => d !== "invoice");
+  for (const [domain, nouns] of Object.entries(DOMAIN_NOUNS)) {
+    if (!allowed.includes(domain) && nouns.some((noun) => mentionsDomain(text, noun))) return true;
+  }
+  const lookups = context ? SLOT_LOOKUPS[context] : ALL_LOOKUPS;
+  return Boolean(parsed && !lookups.includes(parsed.name));
+}
+
+export function classifyClarificationReply(
+  rawText: string,
+  pending: Pick<PendingClarification, "candidate"> & { slot?: ClarificationSlot }
+): ClarificationReply {
   const text = normalize(rawText);
   if (!text) return { kind: "new_command" };
 
@@ -205,6 +289,7 @@ export function classifyClarificationReply(rawText: string, pending: Pick<Pendin
   const words = text.split(" ");
   if (words.length > MAX_ANSWER_WORDS) return { kind: "new_command" };
   if (words.some(isCommandWord)) return { kind: "new_command" };
+  if (isClearNewCommand(rawText, pending.slot)) return { kind: "new_command" };
 
   const value = cleanClarificationAnswer(rawText);
   return value ? { kind: "answer", value } : { kind: "new_command" };

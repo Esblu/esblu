@@ -28,7 +28,7 @@ process.env.ESBLU_ACTION_CONFIRMATION_SECRET ??= "cd".repeat(32);
 process.env.NEXT_PUBLIC_SUPABASE_URL ??= "http://localhost:54321";
 process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ??= "test-anon-key";
 
-const { parseIntentDeterministic, violatesMachineCreateInvariant, isServiceUtterance, maintenanceDescription } = await import("@/lib/intents/parse");
+const { parseIntentDeterministic, violatesMachineCreateInvariant, isServiceUtterance, maintenanceDescription, isIntentCompatibleWithUtterance } = await import("@/lib/intents/parse");
 const { checkIntentAccess, restrictedAssistantDenial, denialMessageKey } = await import("@/lib/intents/permissions");
 const { handleOperationalIntent, isOperationalFamilyIntent } = await import("@/lib/intents/operational-intents");
 const { handleFolderIntent, isFolderFamilyIntent } = await import("@/lib/intents/folder-intents");
@@ -41,6 +41,7 @@ const {
 } = await import("@/lib/intents/actions");
 const {
   classifyClarificationReply,
+  isClearNewCommand,
   resumePendingIntent,
   sealPendingClarification,
   unsealPendingClarification,
@@ -232,7 +233,9 @@ async function runTurn(env: Env, text: string, pending: string | null, opts: { m
   const ctx = ACCESS[env.state.role](env.state.financeManage);
   const flowCtx = { companyId: env.companyId, userId: env.userId, conversationId: opts.conversationId ?? "", issueDate: "2026-09-24" };
   // Rozpracovaný dialóg faktúry má prednosť (route: conversationId && financeManage).
-  if (opts.conversationId && ctx.financeManage) {
+  if (opts.conversationId && ctx.financeManage && isClearNewCommand(text, "invoice")) {
+    env.state.conversations.delete(`${env.userId}|${env.companyId}|${opts.conversationId}`);
+  } else if (opts.conversationId && ctx.financeManage) {
     const continued = await continueInvoiceDraftFlow(env.db, locale, flowCtx, text, null);
     if (continued) return { intent: { name: "CREATE_INVOICE_DRAFT", args: {}, source: "deterministic" }, result: continued, pending: null };
   }
@@ -260,6 +263,13 @@ async function runTurn(env: Env, text: string, pending: string | null, opts: { m
   if (intent && violatesMachineCreateInvariant(intent.name, text)) {
     if (!isServiceUtterance(text)) return { intent: null, result: { kind: "not_found", text: "not understood" }, pending: null };
     intent = { name: "MACHINE_SERVICE_ADD", args: { targetModule: "machines", serviceTitle: maintenanceDescription(text) }, source: intent.source };
+  }
+  // Route: poistka „intent sedí s touto vetou".
+  if (intent && !isIntentCompatibleWithUtterance(intent.name, text)) {
+    const fresh = resumed ? parseIntentDeterministic(text, opts.module ? { module: opts.module as never } : {}) : null;
+    if (!fresh || !isIntentCompatibleWithUtterance(fresh.name, text)) return { intent: null, result: { kind: "not_found", text: "not understood" }, pending: null };
+    intent = fresh;
+    resumed = false;
   }
   if (intent && !resumed && intent.args.entityId !== undefined) {
     const args = { ...intent.args };
@@ -1235,6 +1245,140 @@ await check("partner nenájdený → „Obchodného partnera „X“ som nenaši
   const other = makeDb({ role: "owner", financeManage: true, companyId: COMPANY_B, tables: PARTNERS() });
   const o = await runTurn(other, "Vytvor faktúru pre Tester jeden.", null, { conversationId: CONV });
   assert.equal(o.result.kind, "not_found");
+});
+
+
+// -----------------------------------------------------------------------------
+// REGRESIA: „Vytvor faktúru." po otázke na stroj/vozidlo/priečinok
+// -----------------------------------------------------------------------------
+//
+// Príčina: nová veta sa pri rozpracovanej otázke posudzovala iba podľa
+// slovesa. „Vystav faktúru", „Nová faktúra" či prepis bez slovesa zo
+// zoznamu sa doplnili ako meno stroja/vozidla. A holé „Vytvor faktúru"
+// parser nepoznal — rozhodoval AI klasifikátor, ktorý od 29fdae3 pozná aj
+// ENTITY_CREATE / VEHICLE_CREATE (→ „Akú ŠPZ…?" / „V ktorom module…?").
+
+const INVOICE_PHRASES = ["Vytvor faktúru.", "Vystav faktúru.", "Nová faktúra.", "Faktúru pre Tester1."];
+const noEntityQueries = (env: Env) => env.state.confirmations.filter((c) => /^(MACHINE|VEHICLE)_/.test(String(c.intent))).length;
+
+await check("stará otázka na stroj → „Vytvor faktúru.“ → CREATE_INVOICE_DRAFT, otázka na odberateľa, 0 strojových akcií", async () => {
+  for (const phrase of INVOICE_PHRASES) {
+    const env = makeDb({ role: "owner", financeManage: true, tables: { ...TAKEUCHI(), ...PARTNERS() } });
+    const t1 = await runTurn(env, "Pridaj servis výmena oleja.", null, { conversationId: CONV });
+    assert.ok(t1.pending, "otázka na stroj existuje");
+    const machineReads = env.state.queries;
+    const t2 = await runTurn(env, phrase, t1.pending, { conversationId: CONV });
+    assert.equal(t2.intent?.name, "CREATE_INVOICE_DRAFT", phrase);
+    assert.equal(t2.result.kind, "clarify", `${phrase}: ${JSON.stringify(t2.result)}`);
+    assert.equal(t2.pending, null, "stará otázka zahodená");
+    assert.equal(noEntityQueries(env), 0);
+    assert.ok(!/stroj|vozidl/i.test((t2.result as { question: string }).question), phrase);
+    // Žiadne čítanie strojov/vozidiel v druhom kroku (iba partneri / dialóg faktúry).
+    assert.ok(env.state.queries - machineReads <= 1, `${phrase}: zbytočné dotazy`);
+  }
+  const bare = makeDb({ role: "owner", financeManage: true, tables: PARTNERS() });
+  const t = await runTurn(bare, "Vytvor faktúru.", null, { conversationId: CONV });
+  assert.equal((t.result as { question: string }).question, translate("sk", "search.voice.invoice.askPartner"));
+});
+
+await check("stará otázka na vozidlo (Vozidlá) → „Vytvor faktúru.“ → faktúra, žiadne vozidlo", async () => {
+  const env = makeDb({ role: "owner", financeManage: true, tables: { vehicles: [{ id: "v-1", spz: "AB123CD", znacka: "Škoda", model: "Octavia" }], ...PARTNERS() } });
+  const t1 = await runTurn(env, "Pridaj servis za 250 eur.", null, { module: "vehicles", conversationId: CONV });
+  assert.equal(text(t1.result), translate("sk", "assistant.vehicle.whichVehicle"));
+  const t2 = await runTurn(env, "Vytvor faktúru.", t1.pending, { module: "vehicles", conversationId: CONV });
+  assert.equal(t2.intent?.name, "CREATE_INVOICE_DRAFT");
+  assert.equal(t2.result.kind, "clarify");
+  assert.equal(noEntityQueries(env), 0);
+});
+
+await check("stará otázka na priečinok → „Vytvor faktúru.“ / „Pridaj nový stroj.“ → nové príkazy", async () => {
+  const env = makeDb({ role: "owner", financeManage: true, tables: {
+    ...PARTNERS(),
+    document_folders: [{ id: "f-aug", name: "August 2026", created_at: "2026-09-01" }, { id: "f-sep", name: "September 2026", created_at: "2026-09-02" }],
+    documents: [{ id: "d-1", document_type: "receipt", deleted_at: null, extracted_fields: {}, created_at: "2026-08-10" }],
+  } });
+  const selection = [{ type: "document" as const, id: "d-1" }];
+  const t1 = await runTurn(env, "Pridaj tieto doklady do priečinka.", null, { selection, conversationId: CONV });
+  assert.ok(t1.pending);
+  const t2 = await runTurn(env, "Vytvor faktúru.", t1.pending, { selection, conversationId: CONV });
+  assert.equal(t2.intent?.name, "CREATE_INVOICE_DRAFT");
+  const t3 = await runTurn(env, "Pridaj nový stroj Test 99.", t1.pending, { selection });
+  assert.equal(t3.intent?.name, "MACHINE_CREATE");
+  const t4 = await runTurn(env, "Ukáž sklad.", t1.pending, { selection });
+  assert.equal(t4.intent?.name, "SEARCH_INVENTORY_ITEM");
+  assert.equal(env.state.confirmations.filter((c) => c.intent === "FOLDER_ADD_ITEMS").length, 0);
+});
+
+await check("kontext stránky: /stroje, /vozidlá, /sklad + „Vytvor faktúru.“ → faktúra; /stroje + „Vytvor novú položku.“ → stroj", async () => {
+  for (const page of ["machines", "vehicles", "inventory"]) {
+    const env = makeDb({ role: "owner", financeManage: true, tables: PARTNERS() });
+    const t = await runTurn(env, "Vytvor faktúru.", null, { module: page, conversationId: CONV });
+    assert.equal(t.intent?.name, "CREATE_INVOICE_DRAFT", page);
+    assert.equal(t.result.kind, "clarify", page);
+  }
+  assert.equal(parseIntentDeterministic("Vytvor novú položku.", { module: "machines" })?.name, "MACHINE_CREATE");
+  assert.equal(parseIntentDeterministic("Faktúra.")?.name === "CREATE_INVOICE_DRAFT", false, "holé „Faktúra.“ nie je založenie");
+});
+
+await check("poistka: faktúra vo vete + MACHINE_/VEHICLE_/INVENTORY_/ENTITY_CREATE → nikdy (ani z AI)", async () => {
+  for (const name of ["MACHINE_CREATE", "MACHINE_SERVICE_ADD", "VEHICLE_CREATE", "VEHICLE_SERVICE_ADD", "INVENTORY_ITEM_CREATE", "ENTITY_CREATE"]) {
+    assert.equal(isIntentCompatibleWithUtterance(name, "Vytvor faktúru."), false, name);
+  }
+  assert.equal(isIntentCompatibleWithUtterance("CREATE_INVOICE_DRAFT", "Vytvor faktúru za servis stroja 300 eur"), true);
+  const env = makeDb({ role: "owner", financeManage: true, tables: TAKEUCHI() });
+  const t = await runTurn(env, "Urob mi tú faktúru hneď", null, { aiIntent: { name: "VEHICLE_CREATE", args: {}, source: "ai" } });
+  assert.equal(t.intent, null);
+  assert.equal(noEntityQueries(env), 0);
+});
+
+await check("skutočné odpovede ostávajú: „Takeuchi 323.“ → stroj, „AB123CD.“ → vozidlo, „Áno.“ → partner", async () => {
+  const m = makeDb({ role: "owner", financeManage: true, tables: TAKEUCHI() });
+  const m1 = await runTurn(m, "Do stroja zaeviduj servis výmena oleja.", null);
+  const m2 = await runTurn(m, "Takeuchi 323.", m1.pending);
+  assert.equal((m.state.confirmations[0].canonical_args as Row).machineId, "m-tak");
+  assert.equal(m2.result.kind, "action_preview");
+  const v = makeDb({ role: "owner", financeManage: true, tables: { vehicles: [{ id: "v-1", spz: "AB123CD", znacka: "Škoda", model: "Octavia" }] } });
+  const v1 = await runTurn(v, "Pridaj servis za 250 eur.", null, { module: "vehicles" });
+  await runTurn(v, "AB123CD.", v1.pending, { module: "vehicles" });
+  assert.equal((v.state.confirmations[0].canonical_args as Row).vehicleId, "v-1");
+  const p = makeDb({ role: "owner", financeManage: true, tables: PARTNERS() });
+  await runTurn(p, "Vytvor faktúru pre Tester jeden.", null, { conversationId: CONV });
+  await runTurn(p, "Áno.", null, { conversationId: CONV });
+  assert.equal(slotsOf(p).partnerId, P_T1);
+});
+
+await check("rozpracovaná faktúra: odpovede ostávajú odpoveďami, nový príkaz ju zruší", async () => {
+  const env = makeDb({ role: "owner", financeManage: true, tables: PARTNERS() });
+  await runTurn(env, "Vytvor faktúru pre Tester1.", null, { conversationId: CONV });
+  await runTurn(env, "Prenájom bagra za 300 eur.", null, { conversationId: CONV });
+  assert.deepEqual((slotsOf(env).items as Row[]).map((i) => i.description), ["Prenájom bagra"]);
+  const t = await runTurn(env, "Ukáž sklad.", null, { conversationId: CONV });
+  assert.equal(t.intent?.name, "SEARCH_INVENTORY_ITEM");
+  assert.equal(env.state.conversations.get(`${USER_A}|${COMPANY_A}|${CONV}`), undefined, "dialóg faktúry zrušený");
+  // „Vytvor faktúru pre Tester1." uprostred iného dialógu začne odznova.
+  await runTurn(env, "Vytvor faktúru pre Tester1.", null, { conversationId: CONV });
+  await runTurn(env, "Výkopové práce za 350 eur.", null, { conversationId: CONV });
+  const restart = await runTurn(env, "Vytvor faktúru.", null, { conversationId: CONV });
+  assert.equal((restart.result as { question: string }).question, translate("sk", "search.voice.invoice.askPartner"));
+  assert.equal(slotsOf(env).items, undefined, "nová faktúra, nie pokračovanie starej");
+});
+
+await check("stav: zrušenie a vypršanie; prepis sa posiela raz a nezmenený", async () => {
+  const env = makeDb({ role: "owner", financeManage: true, tables: { ...TAKEUCHI(), ...PARTNERS() } });
+  const past = Date.now() - (PENDING_CLARIFICATION_TTL_SECONDS + 60) * 1000;
+  const t1 = await runTurn(env, "Pridaj servis výmena oleja.", null, { now: past });
+  const t2 = await runTurn(env, "Vytvor faktúru.", t1.pending, { conversationId: CONV });
+  assert.equal(t2.intent?.name, "CREATE_INVOICE_DRAFT", "vypršaná otázka neblokuje nový príkaz");
+  const t3 = await runTurn(env, "Pridaj servis výmena oleja.", null);
+  const t4 = await runTurn(env, "Nechaj tak.", t3.pending);
+  assert.equal(t4.pending, null);
+  const launcher = readFileSync("app/components/voice/VoiceLauncher.tsx", "utf8");
+  assert.ok(/onTranscript: \(text\) => \{\s*setTranscript\(text\);/.test(launcher), "launcher: zobrazený prepis = odoslaný text");
+  assert.ok(launcher.includes("body: JSON.stringify({\n          text,"), "launcher posiela presne `text`");
+  assert.ok(launcher.includes("pendingClarificationRef.current = null;"), "zatvorenie/zrušenie maže otázku");
+  const dashboard = readFileSync("app/components/Dashboard.tsx", "utf8");
+  assert.ok(dashboard.includes("voiceTranscriptRef.current = text;\n      setSearch(text);"), "nástenka: prepis ide do poľa bez úprav");
+  assert.ok(dashboard.includes("text: trimmed,"), "nástenka posiela iba orezaný text poľa");
 });
 
 // -----------------------------------------------------------------------------

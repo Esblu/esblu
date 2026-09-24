@@ -415,12 +415,17 @@ const INVOICE_CREATION_NOUNS = ["faktur", "rechnung", "invoice"];
  * ceste (extractInvoiceSlotsFromText / klasifikátor).
  */
 const SIMPLE_INVOICE_REGEX =
-  /^\s*(?:(?:vytvor|priprav|zaloz|založ|vystav|sprav|urob|erstelle|erstellen|schreibe|create|make|issue|raise|prepare)(?:\s+mi)?\s+)?(?:(?:nov[úuáaý]|new|neue|eine|eine\s+neue|an|a)\s+)?(?:fakt[úu]r[ua]|rechnung|invoice)\s+(?:pre|pro|für|fur|fuer|for)\s+(.+?)\s*[.!?]?\s*$/i;
+  /^\s*(?:((?:vytvor|priprav|zaloz|založ|vystav|sprav|urob|erstelle|erstellen|schreibe|create|make|issue|raise|prepare)\S*)(?:\s+mi)?\s+)?(?:(nov[úuáaý]|new|neue|eine|eine\s+neue|an|a)\s+)?(?:fakt[úu]r[ua]|rechnung|invoice)(?:\s+(?:pre|pro|für|fur|fuer|for)\s+(.+?))?\s*[.!?]?\s*$/i;
 
 export function parseSimpleInvoiceCreation(rawText: string): ParsedIntent | null {
   const match = SIMPLE_INVOICE_REGEX.exec(rawText);
   if (!match) return null;
-  const name = match[1].replace(/^[„"'“]+|[”"'“]+$/g, "").trim();
+  // „Vytvor faktúru." bez odberateľa = ten istý draft; asistent sa spýta,
+  // pre koho. Holé „Faktúra." (bez slovesa) je hľadanie, nie založenie.
+  if (!match[3]) {
+    return match[1] || /^(nov|new|neue)/i.test(match[2] ?? "") ? build("CREATE_INVOICE_DRAFT", {}) : null;
+  }
+  const name = match[3].replace(/^[„"'“]+|[”"'“]+$/g, "").trim();
   if (!name || name.split(/\s+/).length > 6) return null;
   // Suma, čiarka či „za …" znamenajú položky — to nie je holé založenie.
   if (/[,;:]|\d+\s*(?:eur|€)|\b(?:za|for|über|ueber)\b/i.test(name)) return null;
@@ -1050,6 +1055,20 @@ export function hasExplicitMachineCreate(rawText: string): boolean {
 export function violatesMachineCreateInvariant(intentName: string, rawText: string): boolean {
   if (intentName !== "MACHINE_CREATE") return false;
   return isServiceUtterance(rawText) || !hasExplicitMachineCreate(rawText);
+}
+
+/**
+ * Úzka poistka pred náhľadom zápisu: výsledný intent musí sedieť s TOUTO
+ * vetou. „Vytvor faktúru" nikdy nevedie na stroj, vozidlo, sklad ani
+ * „vytvor položku" — ani cez starý kontext, stránku alebo AI.
+ */
+const INVOICE_NOUNS = ["faktur", "rechnung", "invoice"];
+export function isIntentCompatibleWithUtterance(intentName: string, rawText: string): boolean {
+  const text = normalizeText(rawText);
+  if (hasWord(text, INVOICE_NOUNS)) {
+    return !/^(MACHINE_|VEHICLE_|INVENTORY_)/.test(intentName) && intentName !== "ENTITY_CREATE";
+  }
+  return true;
 }
 
 /** Popis údržby bez slova „servis" („pridaj výmenu oleja a filtrov" → „výmenu oleja a filtrov"). */

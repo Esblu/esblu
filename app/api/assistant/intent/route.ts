@@ -2,7 +2,13 @@ import { verifyRequestUser } from "@/lib/server-auth";
 import { getUserScopedSupabaseClient } from "@/lib/server-supabase-user-client";
 import { getRequestLocale } from "@/lib/i18n/request-locale";
 import { translate } from "@/lib/i18n/translate";
-import { isServiceUtterance, maintenanceDescription, parseIntentDeterministic, violatesMachineCreateInvariant } from "@/lib/intents/parse";
+import {
+  isIntentCompatibleWithUtterance,
+  isServiceUtterance,
+  maintenanceDescription,
+  parseIntentDeterministic,
+  violatesMachineCreateInvariant,
+} from "@/lib/intents/parse";
 import { classifyIntentWithAi } from "@/lib/intents/ai-fallback";
 import {
   isRegisteredReadOnlyIntent,
@@ -20,6 +26,7 @@ import { checkIntentAccess, denialMessageKey, restrictedAssistantDenial } from "
 import { handleInboxIntent } from "@/lib/intents/inbox-intents";
 import {
   classifyClarificationReply,
+  isClearNewCommand,
   resumePendingIntent,
   sealPendingClarification,
   unsealPendingClarification,
@@ -32,7 +39,7 @@ import {
   isFolderFamilyIntent,
 } from "@/lib/intents/folder-intents";
 import type { FolderRef } from "@/lib/document-folders";
-import { isValidConversationId } from "@/lib/intents/conversation";
+import { clearConversationContext, isValidConversationId } from "@/lib/intents/conversation";
 import { resolveClientCalendarDate } from "@/lib/local-date";
 import {
   readUiContext,
@@ -309,7 +316,12 @@ export async function POST(req: Request) {
     // klient nejaké conversationId poslal, samo osebe neznamená, že
     // nejaký dialóg existuje.
     // ------------------------------------------------------------------
-    if (conversationId && financeManage) {
+    // Rozpracovaná faktúra NEPOHLTÍ nový príkaz: „Vytvor faktúru pre X"
+    // začne odznova, „Ukáž sklad" zruší dialóg a vykoná sa. Odpovede na
+    // otázky faktúry (položky, partner, DPH) ostávajú odpoveďami.
+    if (conversationId && financeManage && isClearNewCommand(rawText, "invoice")) {
+      await clearConversationContext(supabase, conversationId);
+    } else if (conversationId && financeManage) {
       const continued = await continueInvoiceDraftFlow(
         supabase,
         locale,
@@ -485,6 +497,21 @@ export async function POST(req: Request) {
         args: { targetModule: "machines", serviceTitle: maintenanceDescription(rawText) },
         source: intent.source,
       };
+    }
+    // Úzka poistka: intent musí sedieť s TOUTO vetou („Vytvor faktúru"
+    // nikdy nevedie na stroj/vozidlo/sklad — ani cez starú otázku či AI).
+    if (!isIntentCompatibleWithUtterance(intent.name, rawText)) {
+      const fresh = resumed ? parseIntentDeterministic(rawText, { module: moduleContext }) : null;
+      if (!fresh || !isIntentCompatibleWithUtterance(fresh.name, rawText)) {
+        return Response.json({
+          success: true,
+          recognized: false,
+          result: { kind: "not_found", text: translate(locale, "search.errors.commandNotUnderstood") },
+          pendingClarification: null,
+        });
+      }
+      intent = fresh;
+      resumed = false;
     }
     if (intent.name === "SHOW_MACHINE_SERVICE" && !intent.args.query &&
         (uiContext?.entityType === "vehicle" || moduleContext === "vehicles")) {
