@@ -20,6 +20,7 @@ import {
   partnerNameExactKey,
   partnerNameLooseKey,
   matchPartnersByName,
+  spokenDigits,
 } from "../lib/partner-matching.ts";
 
 let passed = 0;
@@ -177,6 +178,30 @@ check("EN: s pravnou formou", resolve("Alpha Works Ltd", INTL), "en");
 check("prazdny dopyt", resolve("", PROD), "NENASIEL");
 check("iba medzery", resolve("   ", PROD), "NENASIEL");
 check("iba interpunkcia", resolve("...", PROD), "NENASIEL");
+
+
+// -----------------------------------------------------------------------------
+// Vyslovené číslovky a preklepy prepisu — IBA návrh, nikdy automaticky
+// -----------------------------------------------------------------------------
+{
+  const rows = [{ n: "Tester1" }, { n: "Tester10" }, { n: "Stavby s.r.o." }];
+  const tierOf = (q: string) => {
+    const r = matchPartnersByName(q, rows, (x) => x.n);
+    return `${r.tier}:${r.autoResolvable}:${r.matches.map((x) => x.n).join("|")}`;
+  };
+  check("spoken: Tester1 presne", tierOf("Tester1"), "exact:true:Tester1");
+  check("spoken: Tester 1 → strong auto", tierOf("Tester 1"), "strong:true:Tester1");
+  check("spoken: Tester jeden → iba návrh", tierOf("Tester jeden"), "suggestion:false:Tester1");
+  check("spoken: Testér jeden → iba návrh", tierOf("Testér jeden"), "suggestion:false:Tester1");
+  check("spoken: Tester one → iba návrh", tierOf("Tester one"), "suggestion:false:Tester1");
+  check("spoken: Tester eins → iba návrh", tierOf("Tester eins"), "suggestion:false:Tester1");
+  check("spoken: jeden preklep → iba návrh", tierOf("Testr1"), "suggestion:false:Tester1");
+  check("spoken: Tester → oba, bez automatiky", tierOf("Tester"), "suggestion:false:Tester1|Tester10");
+  check("spoken: s r o", tierOf("Stavby s r o"), "exact:true:Stavby s.r.o.");
+  check("spoken: sro", tierOf("Stavby sro"), "exact:true:Stavby s.r.o.");
+  check("spoken: nič podobné", tierOf("Beta"), "none:false:");
+  check("spokenDigits nemení meno bez číslovky", spokenDigits("Stavby Jedlička"), "Stavby Jedlicka");
+}
 
 // -----------------------------------------------------------------------------
 

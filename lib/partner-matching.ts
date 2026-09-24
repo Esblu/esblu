@@ -167,6 +167,15 @@ export function matchPartnersByName<T>(
   }
 
   // Čiastočná zhoda — vždy iba ponuka na výber, nikdy rozhodnutie.
+  // SPOKEN: „Tester jeden" / „Tester one" / „Tester eins" = „Tester1".
+  // Iba NÁVRH (autoResolvable: false) — prepis reči nie je identita; asistent
+  // sa spýta „Myslíte …?". Porovnáva sa celé meno, nie jeho časť.
+  const spokenWanted = partnerNameLooseKey(spokenDigits(query));
+  if (spokenWanted && spokenWanted !== looseWanted) {
+    const spokenHits = rows.filter((row) => partnerNameLooseKey(nameOf(row)) === spokenWanted);
+    if (spokenHits.length > 0) return { tier: "suggestion", matches: spokenHits, autoResolvable: false };
+  }
+
   const partialHits = rows.filter((row) => {
     const key = partnerNameLooseKey(nameOf(row));
     return key !== null && containsWithoutSplittingNumber(key, looseWanted);
@@ -174,6 +183,17 @@ export function matchPartnersByName<T>(
 
   if (partialHits.length > 0) {
     return { tier: "suggestion", matches: partialHits, autoResolvable: false };
+  }
+
+  // CLOSE: jeden preklep v prepise („Testr1", „Tesster1"). Iba pri dlhších
+  // menách, iba JEDINÝ kandidát a vždy len návrh s otázkou.
+  const spokenLoose = spokenWanted ?? looseWanted;
+  if (spokenLoose.replace(/\s/g, "").length >= 5) {
+    const closeHits = rows.filter((row) => {
+      const key = partnerNameLooseKey(nameOf(row));
+      return key !== null && withinOneEdit(key, spokenLoose);
+    });
+    if (closeHits.length === 1) return { tier: "suggestion", matches: closeHits, autoResolvable: false };
   }
 
   return { tier: "none", matches: [], autoResolvable: false };
@@ -208,4 +228,42 @@ function containsWithoutSplittingNumber(haystack: string, needle: string): boole
     if (!cutsNumberAtStart && !cutsNumberAtEnd) return true;
     from = at + 1;
   }
+}
+
+// -----------------------------------------------------------------------------
+// Vyslovené číslovky a preklepy prepisu (iba pre NÁVRHY, nikdy automaticky)
+// -----------------------------------------------------------------------------
+
+const SPOKEN_DIGITS: Record<string, string> = {
+  NULA: "0", JEDEN: "1", JEDNA: "1", JEDNO: "1", DVA: "2", DVE: "2", TRI: "3", STYRI: "4", PAT: "5",
+  SEST: "6", SEDEM: "7", OSEM: "8", DEVAT: "9", DESAT: "10",
+  ZERO: "0", ONE: "1", TWO: "2", THREE: "3", FOUR: "4", FIVE: "5", SIX: "6", SEVEN: "7", EIGHT: "8", NINE: "9", TEN: "10",
+  NULL: "0", EINS: "1", ZWEI: "2", DREI: "3", VIER: "4", FUNF: "5", FUENF: "5", SECHS: "6", SIEBEN: "7", ACHT: "8", NEUN: "9", ZEHN: "10",
+};
+
+/** „Tester jeden" → „Tester 1" (celé slová; meno bez číslovky sa nemení). */
+export function spokenDigits(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .split(/\s+/)
+    .map((word) => SPOKEN_DIGITS[word.toUpperCase().replace(/[.,;:!?]+$/, "")] ?? word)
+    .join(" ");
+}
+
+/** Levenshtein ≤ 1 (vloženie, vynechanie alebo zámena jedného znaku). */
+function withinOneEdit(a: string, b: string): boolean {
+  if (a === b) return false; // presnú zhodu riešia vyššie vrstvy
+  if (Math.abs(a.length - b.length) > 1) return false;
+  let i = 0;
+  let j = 0;
+  let edits = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) { i++; j++; continue; }
+    if (++edits > 1) return false;
+    if (a.length > b.length) i++;
+    else if (a.length < b.length) j++;
+    else { i++; j++; }
+  }
+  return edits + (a.length - i) + (b.length - j) <= 1;
 }

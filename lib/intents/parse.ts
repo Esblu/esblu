@@ -993,6 +993,77 @@ function readQuantity(text: string): { quantity: number; unit?: string } | undef
   return { quantity, unit };
 }
 
+// =============================================================================
+// INVARIANT: VETA O SERVISE NIKDY NEZALOŽÍ STROJ.
+//
+// Produkčná chyba (2026-09-24): „Do stroja TAKEUCHI 323 pridaj výmenu oleja
+// a filtrov" nemala slovo „servis", takže servisná vetva sa nespustila a
+// vetva „vytvor" zobrala sloveso „pridaj" + „stroja" ako „založ stroj" a
+// všetko ostatné ako meno → nový stroj „TAKEUCHI 323 oleja a filtrov".
+//
+// Preto:
+//   1. údržbové slová (výmena, oprava, údržba, olej, filter, Ölwechsel,
+//      repair …) sú servisná veta rovnako ako „servis",
+//   2. MACHINE_CREATE vyžaduje VÝSLOVNÉ založenie („nový stroj", „stroj
+//      s názvom X", „Pridaj stroj X", „Add machine X", „Maschine … anlegen")
+//      — „Do stroja X pridaj …" / „Stroju X …" nie je založenie,
+//   3. servisná veta sa na založenie stroja nezmení NIKDY (ani z AI).
+// =============================================================================
+
+/** Údržbové slová — veta s nimi je o servise, nie o novom stroji. */
+const MAINTENANCE_WORDS = [
+  "vymen", "oprav", "udrzb", "olej", "oleja", "filter", "filtr", "mazan", "revizi",
+  "repair", "maintenance", "oil change", "oil and", "filters",
+  "olwechsel", "reparatur", "instandhaltung", "olfilter",
+];
+
+/** Je veta o servise/údržbe? (Pre invariant v route aj v parseri.) */
+export function isServiceUtterance(rawText: string): boolean {
+  const text = normalizeText(rawText);
+  return containsAny(text, SERVICE_WORDS) || hasWord(text, MAINTENANCE_WORDS);
+}
+
+/**
+ * Výslovné založenie stroja: „nový stroj", „stroj s názvom X", sloveso
+ * hneď pred „stroj/machine/Maschine" (nie „do stroja", „stroju"), alebo
+ * nemecký slovosled „Maschine X anlegen / hinzufügen".
+ */
+export function hasExplicitMachineCreate(rawText: string): boolean {
+  const text = normalizeText(rawText);
+  if (hasWord(text, OP_NEW)) return true;
+  if (explicitEntityName(rawText)) return true;
+  const tokens = text.replace(/[.?!,;:]/g, " ").split(/\s+/).filter(Boolean);
+  const verbs = [...OP_CREATE, "zaeviduj", "zaregistruj", "register"];
+  for (let i = 0; i < tokens.length - 1; i++) {
+    if (!verbs.some((verb) => tokens[i].startsWith(verb))) continue;
+    let j = i + 1;
+    if (["a", "an", "eine", "einen", "mi"].includes(tokens[j])) j++;
+    if (["stroj", "machine", "maschine"].includes(tokens[j] ?? "")) return true;
+  }
+  return tokens.includes("maschine") && hasWord(text, ["anlegen", "hinzufug", "hinzufueg", "erfassen"]);
+}
+
+/**
+ * Posledná poistka nad výsledkom parsera alebo AI: MACHINE_CREATE zo
+ * servisnej vety, alebo bez výslovného založenia, sa nepustí ďalej.
+ */
+export function violatesMachineCreateInvariant(intentName: string, rawText: string): boolean {
+  if (intentName !== "MACHINE_CREATE") return false;
+  return isServiceUtterance(rawText) || !hasExplicitMachineCreate(rawText);
+}
+
+/** Popis údržby bez slova „servis" („pridaj výmenu oleja a filtrov" → „výmenu oleja a filtrov"). */
+export function maintenanceDescription(rawText: string): string | undefined {
+  const tokens = rawText.trim().replace(/[.?!]+$/, "").split(/\s+/).filter(Boolean);
+  const start = tokens.findIndex((token) => MAINTENANCE_WORDS.some((word) => !word.includes(" ") && normalizeText(token).startsWith(word)));
+  if (start < 0) return undefined;
+  let rest = tokens.slice(start).join(" ");
+  // Entita predložkou na konci („… na Takeuchi 323", „… k stroju X") do popisu nepatrí.
+  rest = rest.replace(/\s+(?:na|k|ku|pre|for|to|bei|für|fur|zu|zum|zur|do)\s+.+$/i, "");
+  rest = rest.replace(/^[„"'“]+|[”"'“.?!,;:]+$/g, "").trim();
+  return rest || undefined;
+}
+
 /** Slovesá zápisu servisu, ktoré nie sú všeobecným „vytvor" („Service eintragen", „Log service"). */
 const SERVICE_CREATE_EXTRA = ["eintrag", "trage", "log", "record"];
 
@@ -1005,13 +1076,15 @@ const SERVICE_CREATE_EXTRA = ["eintrag", "trage", "log", "record"];
 function inlineServiceEntity(rawText: string): string | undefined {
   const tokens = rawText.trim().replace(/[.?!]+$/, "").split(/\s+/).filter(Boolean);
   const clean = (token: string) => normalizeText(token).replace(/[.?!,;:]+$/, "");
+  const stopStems = [...OP_CREATE, ...SERVICE_CREATE_EXTRA, ...SERVICE_WORDS, ...MAINTENANCE_WORDS, "zaeviduj", "zaevid", "pridaj", "pridat", "zapis", "vytvorit", "eintragen", "hinzufug", "hinzufueg"];
   let start = tokens.findIndex((token) => OP_MACHINE_CLASS.some((stem) => clean(token).startsWith(stem)));
   if (start < 0) {
-    const prep = tokens.findIndex((token) => ["bei", "fur", "fuer", "for"].includes(clean(token)));
-    if (prep < 0) return undefined;
-    start = prep;
+    const prep = tokens.findIndex((token) => ["bei", "fur", "fuer", "for", "na"].includes(clean(token)));
+    if (prep >= 0) start = prep;
+    // „Takeuchi 323 servis výmena oleja" — meno na začiatku, pred slovom servis.
+    else if (tokens.length > 0 && !stopStems.some((stem) => clean(tokens[0]).startsWith(stem))) start = -1;
+    else return undefined;
   }
-  const stopStems = [...OP_CREATE, ...SERVICE_CREATE_EXTRA, ...SERVICE_WORDS, "zaeviduj", "pridaj", "zapis", "eintragen", "hinzufug", "hinzufueg"];
   const name: string[] = [];
   for (let i = start + 1; i < tokens.length; i++) {
     const word = clean(tokens[i]);
@@ -1037,7 +1110,7 @@ function readServiceCost(rawText: string): { amount: number; match: string } | u
  * nedomýšľa — bez popisu handler použije predvolený názov.
  */
 function serviceDescription(rawText: string): string | undefined {
-  const match = rawText.match(/\b(?:servis\S*|service\S*|wartung\S*)\s+(.+)$/i);
+  const match = rawText.match(/(?:^|\s)(?:serv[ií]s\S*|service\S*|wartung\S*)\s+(.+)$/i);
   if (!match) return undefined;
   let rest = match[1].trim();
   // „servis stroja, výmena oleja" / „servis vozidla BA123CD: …"
@@ -1047,7 +1120,7 @@ function serviceDescription(rawText: string): string | undefined {
   // „Service eintragen: Ölwechsel", „Service hinzufügen, …" — sloveso nie je popis.
   rest = rest.replace(/^(?:eintragen|hinzuf(?:ü|ue|u)gen|anlegen|erfassen|zaeviduj|pridaj)\s*[,:–]?\s*/i, "");
   // Entita predložkou patrí inam („… k stroju X").
-  if (/^(?:k|ku|pre|for|to|zu|zum|zur|do|na)\s/i.test(rest)) return undefined;
+  if (/^(?:k|ku|pre|for|to|zu|zum|zur|do|na|bei|für|fur)\s/i.test(rest)) return undefined;
   rest = rest.replace(/\s+(?:k|ku|pre|for|to|zu|zum|zur)\s+(?:stroj\S*|vozidl\S*|machine\S*|vehicle\S*|maschine\S*|fahrzeug\S*).*$/i, "");
   rest = rest.replace(/^[„"'“]+|[”"'“.?!,;:]+$/g, "").trim();
   return rest || undefined;
@@ -1120,8 +1193,12 @@ export function parseOperationalIntent(rawText: string, hints: ParseHints = {}):
   }
 
   // --- Servisný záznam
+  // Údržbové slová (výmena, oprava, olej …) sú servisná veta aj bez slova
+  // „servis" — okrem skladu („pridaj do skladu 5 olejov" je sklad).
+  const hasMaintenance = hasWord(text, MAINTENANCE_WORDS) && !inInventory;
   const isServiceCreate = isCreate || hasWord(text, SERVICE_CREATE_EXTRA);
-  if (hasService && isServiceCreate && !isRead) {
+  const serviceAdd = isServiceCreate ? (hasService || hasMaintenance) : (hasService && hasMaintenance);
+  if (serviceAdd && !isRead) {
     // „… k CAT 320, výmena oleja" / „… ku stroju X: výmena oleja"
     const cost = readServiceCost(rawText);
     const withoutCost = cost ? rawText.replace(cost.match, " ") : rawText;
@@ -1137,7 +1214,7 @@ export function parseOperationalIntent(rawText: string, hints: ParseHints = {}):
     // Popis servisu: text za slovom „servis", ak nie je súčasťou entity
     // („Zaeviduj servis výmena filtra a oleja", „… servis stroja, výmena
     // oleja"). Predtým sa bral IBA za čiarkou po „k …" a inak sa stratil.
-    const serviceTitle = titlePart?.trim().replace(/[.?!]+$/, "") || serviceDescription(withoutCost) || undefined;
+    const serviceTitle = titlePart?.trim().replace(/[.?!]+$/, "") || serviceDescription(withoutCost) || maintenanceDescription(withoutCost) || undefined;
     const args = { query: useContext ? undefined : entityQuery, useContext, serviceTitle, amount: cost?.amount };
     if (hasVehicle && !hasMachine) return build("VEHICLE_SERVICE_ADD", { ...args, targetModule: "vehicles" });
     if (hasMachine && !hasVehicle) return build("MACHINE_SERVICE_ADD", { ...args, targetModule: "machines" });
@@ -1193,6 +1270,9 @@ export function parseOperationalIntent(rawText: string, hints: ParseHints = {}):
       return build("VEHICLE_CREATE", { query: plate ?? undefined });
     }
     if (hasMachine && !hasVehicle && !hasInventoryStrong) {
+      // „Do stroja X pridaj …" nie je založenie stroja a servisná veta nikdy
+      // (invariant vyššie) → nič; radšej otázka než nový stroj.
+      if (!hasExplicitMachineCreate(rawText) || isServiceUtterance(rawText)) return null;
       const name = explicitEntityName(rawText) ?? remainderName(rawText, [...OP_CREATE, ...OP_NEW, "stroj", "machine", "maschine"]);
       return build("MACHINE_CREATE", { entityName: name });
     }
@@ -1205,7 +1285,7 @@ export function parseOperationalIntent(rawText: string, hints: ParseHints = {}):
       // Meno sa vytiahne VŽDY — aj keď modul určí kontext obrazovky.
       // (Predtým sa pri kontexte Strojov zahodilo a asistent sa naň pýtal.)
       const name = explicitEntityName(rawText) ?? remainderName(rawText, [...OP_CREATE, ...OP_NEW, ...OP_GENERIC_ITEM]);
-      if (hints.module === "machines") return build("MACHINE_CREATE", { entityName: name });
+      if (hints.module === "machines") return isServiceUtterance(rawText) ? null : build("MACHINE_CREATE", { entityName: name });
       if (hints.module === "vehicles") return build("VEHICLE_CREATE", { query: plate ?? undefined, entityName: name });
       return build("ENTITY_CREATE", { entityName: name });
     }

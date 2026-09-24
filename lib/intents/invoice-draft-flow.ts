@@ -29,6 +29,7 @@ import {
   type PartnerCandidate,
 } from "@/lib/intents/invoice-draft";
 import { detectPriceModeStatement } from "@/lib/invoicing/price-mode";
+import { classifyConfirmationReply } from "@/lib/intents/confirmation-reply";
 
 // =============================================================================
 // Viackrokový dialóg pre hlasové vytvorenie draftu faktúry.
@@ -306,6 +307,22 @@ export async function continueInvoiceDraftFlow(
     field === "partnerChoice"
       ? await readPartnerLabels(supabase, slots.partnerCandidateIds ?? [])
       : [];
+
+  // „Myslíte obchodného partnera „Tester1“?" — „Áno" vyberie JEDINÉHO
+  // ponúknutého kandidáta (overeného cez RLS vyššie), „Nie" otázku zruší a
+  // asistent sa spýta na odberateľa znova. Iné odpovede idú bežnou cestou.
+  if (field === "partnerChoice" && candidates.length === 1) {
+    const reply = classifyConfirmationReply(rawAnswer);
+    if (reply === "confirm") {
+      slots.partnerId = candidates[0].id;
+      slots.partnerCandidateIds = undefined;
+      return continueFlow(supabase, locale, ctx, slots);
+    }
+    if (reply === "cancel") {
+      slots.partnerCandidateIds = undefined;
+      return continueFlow(supabase, locale, ctx, slots);
+    }
+  }
 
   const updated = applyAnswer(slots, field, rawAnswer, candidates);
 

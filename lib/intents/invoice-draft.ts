@@ -361,6 +361,14 @@ export function buildQuestion(
     case "partner":
       return { question: translate(locale, "search.voice.invoice.askPartner") };
     case "partnerChoice":
+      // Jediný kandidát z vysloveného mena („Tester jeden" → „Tester1"):
+      // potvrdenie „Myslíte …?", nie výber zo zoznamu.
+      if (candidates.length === 1) {
+        return {
+          question: translate(locale, "search.voice.invoice.confirmPartnerCandidate", { name: candidates[0].label }),
+          choices: [{ value: candidates[0].id, label: candidates[0].label }],
+        };
+      }
       return {
         question: translate(locale, "search.voice.invoice.askPartnerChoice", {
           names: candidates.map((candidate) => candidate.label).join(", "),

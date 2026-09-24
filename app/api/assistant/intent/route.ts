@@ -2,7 +2,7 @@ import { verifyRequestUser } from "@/lib/server-auth";
 import { getUserScopedSupabaseClient } from "@/lib/server-supabase-user-client";
 import { getRequestLocale } from "@/lib/i18n/request-locale";
 import { translate } from "@/lib/i18n/translate";
-import { parseIntentDeterministic } from "@/lib/intents/parse";
+import { isServiceUtterance, maintenanceDescription, parseIntentDeterministic, violatesMachineCreateInvariant } from "@/lib/intents/parse";
 import { classifyIntentWithAi } from "@/lib/intents/ai-fallback";
 import {
   isRegisteredReadOnlyIntent,
@@ -467,6 +467,24 @@ export async function POST(req: Request) {
         });
       }
       intent = { ...intent, name: target };
+    }
+    // INVARIANT: servisná veta nikdy nezaloží stroj — ani keď MACHINE_CREATE
+    // navrhne AI klasifikátor alebo kontext modulu. Servisná veta sa zmení
+    // na zápis servisu bez stroja (asistent sa spýta „Ku ktorému stroju?");
+    // založenie bez výslovného „nový stroj / Pridaj stroj X" sa zahodí.
+    if (violatesMachineCreateInvariant(intent.name, rawText)) {
+      if (!isServiceUtterance(rawText)) {
+        return Response.json({
+          success: true,
+          recognized: false,
+          result: { kind: "not_found", text: translate(locale, "search.errors.commandNotUnderstood") },
+        });
+      }
+      intent = {
+        name: "MACHINE_SERVICE_ADD",
+        args: { targetModule: "machines", serviceTitle: maintenanceDescription(rawText) },
+        source: intent.source,
+      };
     }
     if (intent.name === "SHOW_MACHINE_SERVICE" && !intent.args.query &&
         (uiContext?.entityType === "vehicle" || moduleContext === "vehicles")) {
