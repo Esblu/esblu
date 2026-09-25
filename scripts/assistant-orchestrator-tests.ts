@@ -398,18 +398,18 @@ await check("obnova bez „faktúru“ sa NESPUSTÍ pri inej oblasti, servise, b
 await check("KONTRAKT: prepis z /api/assistant/transcribe ide do /api/assistant/intent bez prepisovania", () => {
   const transcribe = readFileSync("app/api/assistant/transcribe/route.ts", "utf8");
   assert.ok(transcribe.includes('const text = transcription.text?.trim() || "";') && transcribe.includes("Response.json({ success: true, text })"));
-  const hook = readFileSync("hooks/use-voice-capture.ts", "utf8");
-  assert.ok(hook.includes("onTranscript(data.text);"), "hook odovzdá presne text servera");
+  const hook = readFileSync("hooks/use-voice-session.ts", "utf8");
+  assert.ok(hook.includes("return data.text as string;") && hook.includes('dispatch({ type: "TRANSCRIPT", text });'), "relácia odovzdá presne text servera");
   const launcher = readFileSync("app/components/voice/VoiceLauncher.tsx", "utf8");
-  assert.ok(launcher.includes("setTranscript(text);") && launcher.includes("void runIntent(text);"), "launcher: zobrazený = odoslaný");
+  assert.ok(launcher.includes("setTranscript(text);") && launcher.includes("await runIntent(text);"), "launcher: zobrazený = odoslaný");
   assert.match(launcher, /body: JSON\.stringify\(\{\s*text,/);
   const dashboard = readFileSync("app/components/Dashboard.tsx", "utf8");
-  assert.ok(dashboard.includes("voiceTranscriptRef.current = text;") && dashboard.includes("setSearch(text);") && dashboard.includes("setVoiceTranscript(text);"));
+  assert.ok(dashboard.includes("voiceTranscriptRef.current = trimmed;") && dashboard.includes("setSearch(trimmed);") && dashboard.includes("setVoiceTranscript(trimmed);"));
   assert.ok(dashboard.includes("text: trimmed,"), "nástenka posiela obsah poľa (iba orezaný o medzery ako server)");
   const route = readFileSync("app/api/assistant/intent/route.ts", "utf8");
   assert.ok(route.includes('const rawText = typeof body?.text === "string" ? body.text.trim() : "";'));
   // Normalizácia súm je VÝHRADNE interná — klient ani route ju nepoužívajú.
-  for (const file of ["hooks/use-voice-capture.ts", "app/components/voice/VoiceLauncher.tsx", "app/components/Dashboard.tsx", "app/api/assistant/intent/route.ts", "app/api/assistant/transcribe/route.ts", "lib/intents/orchestrator.ts"]) {
+  for (const file of ["hooks/use-voice-capture.ts", "hooks/use-voice-session.ts", "lib/voice/voice-session.ts", "app/components/voice/VoiceLauncher.tsx", "app/components/Dashboard.tsx", "app/api/assistant/intent/route.ts", "app/api/assistant/transcribe/route.ts", "lib/intents/orchestrator.ts"]) {
     assert.ok(!readFileSync(file, "utf8").includes("normalizeSpokenAmounts"), file);
   }
 });

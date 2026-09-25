@@ -16,7 +16,12 @@ function clip(text: string): string {
   return clean.length > MAX_SPOKEN_LENGTH ? `${clean.slice(0, MAX_SPOKEN_LENGTH - 1)}…` : clean;
 }
 
-export function spokenTextFor(result: IntentResult | null | undefined): string | null {
+/**
+ * `confirmPrompt` — v súvislom hlasovom režime sa za náhľad zápisu pridá
+ * otázka („Potvrdiť? Povedzte áno alebo nie."), aby používateľ vedel, že
+ * stačí odpovedať hlasom.
+ */
+export function spokenTextFor(result: IntentResult | null | undefined, options: { confirmPrompt?: string } = {}): string | null {
   if (!result) return null;
   switch (result.kind) {
     case "clarify":
@@ -29,7 +34,7 @@ export function spokenTextFor(result: IntentResult | null | undefined): string |
     case "partner_review":
       return clip(result.text);
     case "action_preview":
-      return clip(result.summary);
+      return options.confirmPrompt ? `${clip(result.summary)} ${options.confirmPrompt}` : clip(result.summary);
     case "draft_created":
       // Bez riadkov a súm — tie si používateľ skontroluje na obrazovke.
       return clip(`${result.title}. ${result.note}`);

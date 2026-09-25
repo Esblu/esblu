@@ -5,12 +5,14 @@ import { supabase } from "@/lib/supabase";
 import { apiUrl } from "@/lib/api-url";
 import { REQUEST_LOCALE_HEADER } from "@/lib/i18n/request-locale";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
-import { useVoiceCapture } from "@/hooks/use-voice-capture";
+import { useVoiceSession } from "@/hooks/use-voice-session";
 import { todayLocalDate } from "@/lib/local-date";
 import type { UiContext } from "@/lib/intents/ui-context";
 import { IntentResultView, QuickReplies } from "@/app/components/voice/IntentResultView";
 import { VoiceReplyToggle } from "@/app/components/voice/VoiceReplyToggle";
-import { cancelSpeech, speak } from "@/lib/voice/speech";
+import { cancelSpeech } from "@/lib/voice/speech";
+import { decideVoiceConfirmation } from "@/lib/voice/voice-session";
+import { VoiceSessionControl, voiceSessionStatusText } from "@/app/components/voice/VoiceSessionControl";
 import { spokenTextFor } from "@/lib/voice/spoken-text";
 import {
   docButtonSecondary,
@@ -20,7 +22,6 @@ import {
 } from "@/app/components/document/DocumentLayout";
 import { CloseIcon } from "@/app/components/icons/AppIcons";
 import type { IntentResult } from "@/lib/intents/types";
-import { classifyConfirmationReply } from "@/lib/intents/confirmation-reply";
 import { downloadDocumentPackage, PackageDownloadError } from "@/lib/document-package-client";
 import { describePackageError, describePackageOutcome } from "@/app/components/folders/package-messages";
 
@@ -109,6 +110,13 @@ type Phase =
   | "denied"
   | "failed";
 
+type RunOutcome = {
+  result: IntentResult | null;
+  message: string | null;
+  denied?: boolean;
+  unauthenticated?: boolean;
+};
+
 export function VoiceLauncher({
   uiContext = null,
   selection = null,
@@ -143,64 +151,56 @@ export function VoiceLauncher({
   // Čaká sa na odpoveď na otázku faktúry? → necitlivý kontext pre prepis reči.
   const invoiceQuestionRef = useRef(false);
 
-  // Hovoril používateľ (hlas), alebo písal? Esblu odpovedá nahlas IBA na
-  // hlasový dialóg — písaný text nikdy nečakane nerozpráva.
-  const voiceTurnRef = useRef(false);
-  useEffect(() => {
-    if (!voiceTurnRef.current) return;
-    const spoken = spokenTextFor(intentResult) ?? (message || null);
-    if (spoken) speak(spoken, locale);
-    // locale sa mení iba pri prepnutí jazyka; nová odpoveď = nový výsledok.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [intentResult, message]);
-
-  // Náhľad, ktorý práve čaká na potvrdenie. V ref, aby ho hlasový prepis
-  // videl aj z callbacku nahrávania (bez zastaraného uzáveru).
+  // Náhľad, ktorý práve čaká na potvrdenie. V ref, aby ho hlasová veta
+  // videla aj z callbacku relácie (bez zastaraného uzáveru).
   const pendingPreviewRef = useRef<IntentResult | null>(null);
   useEffect(() => {
     pendingPreviewRef.current = phase === "awaitingConfirmation" ? intentResult : null;
   }, [phase, intentResult]);
 
-  /**
-   * Hlasové „Áno, zmaž ho" / „Nie" pri čakajúcom potvrdení. Predtým sa
-   * prepis poslal ako nový príkaz: náhľad (a jeho confirmationId) sa zahodil
-   * a zmazanie sa hlasom nedalo dokončiť. Potvrdí sa VÝHRADNE práve
-   * zobrazený náhľad; server confirmationId aj oprávnenie overí znova.
-   */
-  function handleSpokenConfirmation(text: string): boolean {
+  // ---------------------------------------------------------------------------
+  // SÚVISLÝ HLASOVÝ REŽIM: jedno ťuknutie → rozhovor. Každá veta ide tou
+  // istou cestou ako písaný text (server, oprávnenia, jednorazové
+  // potvrdenia); relácia iba povie odpoveď a znova počúva.
+  //
+  // Pri čakajúcom náhľade: „Áno" = to isté ako ťuknutie na Potvrdiť (ten
+  // istý podpísaný confirmationId), „Nie" = zrušiť, nejasná krátka veta =
+  // spýtať sa znova (NIKDY tichý súhlas), dlhšia veta = nový príkaz.
+  // ---------------------------------------------------------------------------
+  async function handleVoiceUtterance(text: string): Promise<{ spoken: string | null; endSession?: boolean }> {
+    setTranscript(text);
     const pending = pendingPreviewRef.current;
-    if (!pending || pending.kind !== "action_preview") return false;
-    const reply = classifyConfirmationReply(text);
-    if (reply === "confirm") {
-      pendingPreviewRef.current = null; // žiadne dvojité odoslanie
-      void handleConfirm(pending);
-      return true;
+    if (pending && pending.kind === "action_preview") {
+      const decision = decideVoiceConfirmation(text);
+      if (decision === "confirm") {
+        pendingPreviewRef.current = null; // žiadne dvojité odoslanie
+        const executed = await handleConfirm(pending);
+        return { spoken: spokenTextFor(executed) ?? t("search.voice.states.complete") };
+      }
+      if (decision === "cancel") {
+        pendingPreviewRef.current = null;
+        resetDialog();
+        return { spoken: t("search.voice.session.cancelled") };
+      }
+      if (decision === "ask_again") return { spoken: t("search.voice.session.confirmAgain") };
     }
-    if (reply === "cancel") {
-      pendingPreviewRef.current = null;
-      resetDialog();
-      return true;
-    }
-    return false;
+    const outcome = await runIntent(text);
+    if (outcome.denied) return { spoken: outcome.message, endSession: outcome.unauthenticated };
+    return {
+      spoken: spokenTextFor(outcome.result, { confirmPrompt: t("search.voice.session.confirmPrompt") }) ?? outcome.message,
+    };
   }
 
-  const { voiceState, voiceError, handleMicButtonClick, cancelVoiceRecording } =
-    useVoiceCapture({
-      getTranscriptionContext: () => (invoiceQuestionRef.current ? "invoice" : null),
-      onTranscript: (text) => {
-        voiceTurnRef.current = true;
-        cancelSpeech();
-        setTranscript(text);
-        if (handleSpokenConfirmation(text)) return;
-        void runIntent(text);
-      },
-    });
+  const voice = useVoiceSession({
+    getTranscriptionContext: () => (invoiceQuestionRef.current ? "invoice" : null),
+    onUtterance: handleVoiceUtterance,
+  });
 
   /** Prepis alebo napísaný text -> intent. Presne tá istá cesta. */
   async function runIntent(
     text: string,
     structuredAnswer?: { type: "partner_selection"; partnerId: string }
-  ) {
+  ): Promise<RunOutcome> {
     setPhase("understanding");
     setIntentResult(null);
     setMessage("");
@@ -212,7 +212,7 @@ export function VoiceLauncher({
     if (!session) {
       setPhase("denied");
       setMessage(t("search.voice.states.denied"));
-      return;
+      return { result: null, message: t("search.voice.states.denied"), denied: true, unauthenticated: true };
     }
 
     try {
@@ -260,7 +260,7 @@ export function VoiceLauncher({
       if (response.status === 403 || response.status === 401) {
         setPhase("denied");
         setMessage(t("search.voice.states.denied"));
-        return;
+        return { result: null, message: t("search.voice.states.denied"), denied: true, unauthenticated: response.status === 401 };
       }
 
       if (response.ok && data.success && data.recognized) {
@@ -277,7 +277,7 @@ export function VoiceLauncher({
         else if (result.kind === "draft_created" || result.kind === "partner_review") setPhase("review");
         else if (result.kind === "error") setPhase("failed");
         else setPhase("complete");
-        return;
+        return { result, message: null };
       }
 
       // 400 = server vetu odmietol pred spracovaním (napr. príliš dlhý
@@ -286,16 +286,20 @@ export function VoiceLauncher({
       if (response.status === 400 && typeof data?.error === "string" && data.error) {
         setPhase("failed");
         setMessage(data.error);
-        return;
+        return { result: null, message: data.error };
       }
 
       setPhase("complete");
       setMessage(t("search.errors.commandNotUnderstood"));
+      return { result: null, message: t("search.errors.commandNotUnderstood") };
     } catch (error) {
       // Nikdy nevypisujeme technický detail do rozhrania.
       console.error("VoiceLauncher: rozpoznanie príkazu zlyhalo:", error);
       setPhase("failed");
       setMessage(t("search.errors.generic"));
+      // Sieťová chyba NIE JE odpoveď — relácia povie „Spojenie zlyhalo" a
+      // text chyby sa nikdy nepošle ako nový príkaz.
+      throw error;
     }
   }
 
@@ -308,42 +312,50 @@ export function VoiceLauncher({
   ) {
     const answer = value.trim();
     if (!answer) return;
-    if (!keepVoiceMode) voiceTurnRef.current = false;
+    // Tlačidlo „Áno"/„Nie" počas hlasovej relácie → tá istá cesta, relácia
+    // odpoveď povie a počúva ďalej. Písanie = ručný režim (relácia končí).
+    if (keepVoiceMode && voice.active && !structuredAnswer) {
+      voice.manualTurn(answer);
+      return;
+    }
+    if (voice.active) voice.stop("manual");
     cancelSpeech();
     setTranscript(answer);
-    void runIntent(answer, structuredAnswer);
+    void runIntent(answer, structuredAnswer).catch(() => undefined);
   }
 
   /**
    * Potvrdenie rizikovej akcie. Na server ide VÝHRADNE confirmationId —
    * žiadny intent ani argumenty, aby sa cestou nedalo nič podstrčiť.
    */
-  async function handleConfirm(target?: IntentResult) {
+  async function handleConfirm(target?: IntentResult): Promise<IntentResult | null> {
     const intentResult = target ?? currentIntentResult;
-    if (!intentResult || intentResult.kind !== "action_preview") return;
+    if (!intentResult || intentResult.kind !== "action_preview") return null;
 
     // Stiahnutie priečinka / dokladov — bez zápisu cez /action/execute.
     // Server oprávnenie aj doklady overí znova; „Stiahnuté" sa zapíše až po
     // prijatí celých bajtov.
     if (intentResult.packageRequest) {
       setActionSubmitting(true);
+      let packaged: IntentResult;
       try {
         const outcome = await downloadDocumentPackage(intentResult.packageRequest, locale);
-        setIntentResult({ kind: "action_result", success: true, text: describePackageOutcome(t, outcome).text });
+        packaged = { kind: "action_result", success: true, text: describePackageOutcome(t, outcome).text };
       } catch (error) {
-        setIntentResult({
+        packaged = {
           kind: "action_result",
           success: false,
           text: describePackageError(t, error instanceof PackageDownloadError ? error : null),
-        });
+        };
       } finally {
         setActionSubmitting(false);
         setPhase("complete");
       }
-      return;
+      setIntentResult(packaged);
+      return packaged;
     }
 
-    if (!intentResult.confirmationId) return;
+    if (!intentResult.confirmationId) return null;
 
     setActionSubmitting(true);
 
@@ -355,7 +367,7 @@ export function VoiceLauncher({
       setActionSubmitting(false);
       setPhase("denied");
       setMessage(t("search.voice.states.denied"));
-      return;
+      return null;
     }
 
     try {
@@ -374,16 +386,21 @@ export function VoiceLauncher({
       setIntentResult(executed);
       if (executed?.kind === "action_result" && executed.folder) recentFolderIdRef.current = executed.folder.id;
       setPhase("complete");
+      return executed;
     } catch (error) {
       console.error("VoiceLauncher: vykonanie akcie zlyhalo:", error);
       setPhase("failed");
       setMessage(t("search.errors.generic"));
+      return { kind: "error", text: t("search.errors.generic") };
     } finally {
       setActionSubmitting(false);
     }
   }
 
   function handleCancel() {
+    // Ťuknutie na Zrušiť = ručný zásah: relácia končí, reč sa preruší.
+    if (voice.active) voice.stop("manual");
+    cancelSpeech();
     resetDialog();
   }
 
@@ -393,8 +410,6 @@ export function VoiceLauncher({
    * zavrel — a dostal by otázku na niečo, čo už nechce.
    */
   function resetDialog() {
-    cancelSpeech();
-    voiceTurnRef.current = false;
     conversationIdRef.current = newConversationId();
     recentFolderIdRef.current = null;
     pendingClarificationRef.current = null;
@@ -406,7 +421,7 @@ export function VoiceLauncher({
   }
 
   function closePanel() {
-    if (voiceState === "recording") cancelVoiceRecording();
+    voice.stop("navigation");
     setOpen(false);
     setTranscript("");
     resetDialog();
@@ -421,12 +436,11 @@ export function VoiceLauncher({
     : "";
 
   // Jedna veta o tom, čo sa práve deje. Žiadne technické výpisy.
+  const sessionStatus = voiceSessionStatusText(t, voice.session);
   const statusText =
-    voiceState === "recording"
-      ? t("search.voice.states.listening")
-      : voiceState === "processing"
-        ? t("search.voice.states.transcribing")
-        : phase === "understanding"
+    sessionStatus
+      ? sessionStatus
+      : phase === "understanding"
           ? t("search.voice.states.understanding")
           : phase === "clarification"
             ? t("search.voice.states.clarification")
@@ -463,23 +477,7 @@ export function VoiceLauncher({
       className="rounded-doc border border-doc-border bg-doc-surface p-3 sm:p-4"
     >
       <div className="flex flex-wrap items-center gap-2">
-        <button
-          type="button"
-          onClick={() => {
-            cancelSpeech();
-            handleMicButtonClick();
-          }}
-          disabled={voiceState === "processing"}
-          aria-pressed={voiceState === "recording"}
-          className={`${docButtonSecondary} gap-2 ${
-            voiceState === "recording" ? "border-danger/40 text-danger" : ""
-          }`}
-        >
-          <MicGlyph />
-          {voiceState === "recording"
-            ? t("search.voice.stop")
-            : t("search.voice.start")}
-        </button>
+        <VoiceSessionControl session={voice.session} onTap={voice.tap} onStop={() => voice.stop("user")} />
 
         <span aria-live="polite" className={`min-w-0 flex-1 ${VOICE_TEXT} text-secondary`}>
           {statusText || t("search.voice.hint")}
@@ -504,8 +502,6 @@ export function VoiceLauncher({
           {t("search.voice.context.workingWith")} {contextLabel}
         </p>
       )}
-
-      {voiceError && <p className={`mt-2 ${VOICE_TEXT} text-danger`}>{voiceError}</p>}
 
       {transcript && (
         <p className={`mt-2 break-words ${VOICE_TEXT} text-muted-esblu`}>
@@ -590,7 +586,12 @@ export function VoiceLauncher({
           <IntentResultView
             intentResult={intentResult}
             actionSubmitting={actionSubmitting}
-            onConfirm={() => void handleConfirm()}
+            onConfirm={() => {
+              // Ťuknutie počas relácie = ručný zásah; relácia skončí, aby
+              // mikrofón nepočúval popri vykonávaní.
+              if (voice.active) voice.stop("manual");
+              void handleConfirm();
+            }}
             onCancel={handleCancel}
             onQuickReply={(text) => submitClarifyAnswer(text, undefined, true)}
           />

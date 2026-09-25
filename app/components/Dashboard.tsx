@@ -23,11 +23,12 @@ import { buildLegacyDashboardAlerts } from "@/lib/deadlines";
 import { apiUrl } from "@/lib/api-url";
 import { REQUEST_LOCALE_HEADER } from "@/lib/i18n/request-locale";
 import type { IntentResult } from "@/lib/intents/types";
-import { classifyConfirmationReply } from "@/lib/intents/confirmation-reply";
-import { useVoiceCapture } from "@/hooks/use-voice-capture";
+import { useVoiceSession } from "@/hooks/use-voice-session";
+import { VoiceSessionControl, voiceSessionStatusText } from "@/app/components/voice/VoiceSessionControl";
+import { decideVoiceConfirmation } from "@/lib/voice/voice-session";
 import { IntentResultView, QuickReplies } from "@/app/components/voice/IntentResultView";
 import { VoiceReplyToggle } from "@/app/components/voice/VoiceReplyToggle";
-import { cancelSpeech, speak } from "@/lib/voice/speech";
+import { cancelSpeech } from "@/lib/voice/speech";
 import { spokenTextFor } from "@/lib/voice/spoken-text";
 import { disablePushOnThisDevice } from "@/lib/push/client";
 import { todayLocalDate } from "@/lib/local-date";
@@ -101,8 +102,9 @@ export default function Dashboard() {
   const pendingPreviewRef = useRef<IntentResult | null>(null);
   // Posledný výsledok pre kontext prepisu reči (čítané v callbacku nahrávania).
   const intentResultRef = useRef<IntentResult | null>(null);
-  // Odpovedať nahlas iba na hlasový prepis (písané hľadanie nikdy nerozpráva).
-  const speakNextResultRef = useRef(false);
+  // Veta už vybavená hlasovou reláciou — debounced efekt hľadania ju
+  // nesmie poslať druhýkrát (pole hľadania iba zobrazuje prepis).
+  const voiceHandledTextRef = useRef<string | null>(null);
   // Rozpracovaná otázka asistenta („Ku ktorému stroju?") — zapečatený token
   // servera. V ref, nie v poli hľadania: zápis prepisu do poľa ju nezmaže.
   const pendingClarificationRef = useRef<string | null>(null);
@@ -115,12 +117,7 @@ export default function Dashboard() {
   useEffect(() => {
     pendingPreviewRef.current = intentResult?.kind === "action_preview" ? intentResult : null;
     intentResultRef.current = intentResult;
-    if (speakNextResultRef.current && intentResult) {
-      speakNextResultRef.current = false;
-      const spoken = spokenTextFor(intentResult);
-      if (spoken) speak(spoken, locale);
-    }
-  }, [intentResult, locale]);
+  }, [intentResult]);
   const [intentLoading, setIntentLoading] = useState(false);
   // Action Engine (doplnenie zadania, bod 6/23) — potvrdzovací tok pre WRITE
   // intenty (EXPORT_DOCUMENTS/CREATE_DOCUMENT_CATEGORY/RENAME_DOCUMENT_CATEGORY/
@@ -351,6 +348,10 @@ export default function Dashboard() {
     if (trimmed.length < 2) {
       return;
     }
+    // Hlasová relácia túto vetu už poslala (a výsledok zobrazila).
+    if (voiceHandledTextRef.current !== null && trimmed === voiceHandledTextRef.current.trim()) {
+      return;
+    }
 
     let cancelled = false;
 
@@ -400,7 +401,6 @@ export default function Dashboard() {
         pendingClarificationRef.current = typeof data?.pendingClarification === "string" ? data.pendingClarification : null;
 
         const isVoiceTranscript = trimmed === voiceTranscriptRef.current.trim();
-        speakNextResultRef.current = isVoiceTranscript;
         if (response.ok && data.success && data.recognized) {
           const recognized = data.result as IntentResult;
           setIntentResult(recognized);
@@ -442,51 +442,105 @@ export default function Dashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search, locale]);
 
-  // Hlasový vstup beží cez zdieľaný hook — tá istá implementácia, akú
-  // používa globálny launcher naprieč appkou. Dashboard si ju už nedrží
-  // vlastnú.
-  const {
-    voiceState,
-    voiceError,
-    cancelVoiceRecording,
-    handleMicButtonClick,
-  } = useVoiceCapture({
+  // ---------------------------------------------------------------------------
+  // SÚVISLÝ HLASOVÝ REŽIM (Nástenka = globálne ovládanie hlasom).
+  //
+  // Jedno ťuknutie na mikrofón → Esblu počúva, odpovie nahlas a po dohovorení
+  // počúva znova — bez ďalšieho ťuknutia. Veta ide na TEN ISTÝ endpoint s
+  // tým istým dialógom (conversationId + zapečatená otázka) ako doteraz;
+  // pole hľadania iba zobrazuje prepis. Písanie do poľa reláciu ukončí
+  // (ručný režim) a nikdy ju nespustí.
+  // ---------------------------------------------------------------------------
+  async function askAssistantByVoice(text: string): Promise<{ spoken: string | null; endSession?: boolean }> {
+    const trimmed = text.trim();
+    voiceHandledTextRef.current = trimmed;
+    voiceTranscriptRef.current = trimmed;
+    setSearch(trimmed);
+    setVoiceTranscript(trimmed);
+    setIntentLoading(true);
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (!session) return { spoken: t("search.voice.states.denied"), endSession: true };
+      const response = await fetch(apiUrl("/api/assistant/intent"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.access_token}`,
+          [REQUEST_LOCALE_HEADER]: locale,
+        },
+        body: JSON.stringify({
+          text: trimmed,
+          localDate: todayLocalDate(),
+          moduleContext: "dashboard",
+          conversationId: invoiceConversationIdRef.current,
+          ...(recentFolderId ? { folderContext: { folderId: recentFolderId } } : {}),
+          ...(pendingClarificationRef.current ? { pendingClarification: pendingClarificationRef.current } : {}),
+        }),
+      });
+      const data = await response.json().catch(() => null);
+      pendingClarificationRef.current = typeof data?.pendingClarification === "string" ? data.pendingClarification : null;
+      if (response.status === 401) return { spoken: t("search.voice.states.denied"), endSession: true };
+      let result: IntentResult;
+      if (response.ok && data?.success && data.result) {
+        result = data.result as IntentResult;
+        if (data.recognized && result.kind === "navigate" && result.entity.type === "folder") setRecentFolderId(result.entity.id);
+      } else if (response.status === 400 && typeof data?.error === "string" && data.error) {
+        result = { kind: "error", text: data.error };
+      } else if (!response.ok && response.status >= 500) {
+        // Serverová chyba nie je odpoveď — relácia povie „Spojenie zlyhalo".
+        throw new Error(`intent ${response.status}`);
+      } else {
+        result = { kind: "error", text: t("search.errors.commandNotUnderstood") };
+      }
+      setIntentResult(result);
+      return { spoken: spokenTextFor(result, { confirmPrompt: t("search.voice.session.confirmPrompt") }) };
+    } finally {
+      setIntentLoading(false);
+    }
+  }
+
+  async function handleVoiceUtterance(text: string): Promise<{ spoken: string | null; endSession?: boolean }> {
+    // Hlasové „Áno" pri zobrazenom náhľade = ťuknutie na Potvrdiť (ten istý
+    // jednorazový podpísaný confirmationId). Nejasná krátka veta → otázka
+    // znova, nikdy tichý súhlas (lib/voice/voice-session.ts).
+    const pending = pendingPreviewRef.current;
+    if (pending && pending.kind === "action_preview") {
+      const decision = decideVoiceConfirmation(text);
+      if (decision === "confirm") {
+        pendingPreviewRef.current = null;
+        setVoiceTranscript(text);
+        const executed = await handleActionConfirm(pending);
+        return { spoken: spokenTextFor(executed) ?? t("search.voice.states.complete") };
+      }
+      if (decision === "cancel") {
+        pendingPreviewRef.current = null;
+        setVoiceTranscript(text);
+        handleActionCancel();
+        return { spoken: t("search.voice.session.cancelled") };
+      }
+      if (decision === "ask_again") return { spoken: t("search.voice.session.confirmAgain") };
+    }
+    return askAssistantByVoice(text);
+  }
+
+  const voice = useVoiceSession({
     // Otázka dialógu na nástenke je vždy otázka faktúry (iný dialóg tu nie je).
     getTranscriptionContext: () => (intentResultRef.current?.kind === "clarify" ? "invoice" : null),
-    onTranscript: (text) => {
-      cancelSpeech();
-      // Hlasové „Áno, zmaž ho" pri zobrazenom náhľade = ťuknutie na
-      // Potvrdiť. Predtým prepis prepísal pole hľadania, náhľad zmizol a
-      // zobrazilo sa „Nič sa nenašlo." (pozri lib/intents/confirmation-reply.ts).
-      const pending = pendingPreviewRef.current;
-      if (pending && pending.kind === "action_preview") {
-        const reply = classifyConfirmationReply(text);
-        if (reply === "confirm") {
-          pendingPreviewRef.current = null;
-          setVoiceTranscript(text);
-          speakNextResultRef.current = true; // výsledok potvrdenia povie nahlas
-          void handleActionConfirm(pending);
-          return;
-        }
-        if (reply === "cancel") {
-          pendingPreviewRef.current = null;
-          setVoiceTranscript(text);
-          handleActionCancel();
-          return;
-        }
-      }
-      // Prepis ide do toho istého poľa ako písaný text — spustí ten istý
-      // debounced Intent Engine efekt a ostáva viditeľný na opravu.
-      voiceTranscriptRef.current = text;
-      setSearch(text);
-      setVoiceTranscript(text);
-    },
+    onUtterance: handleVoiceUtterance,
   });
-
+  const voiceStatusText = voiceSessionStatusText(t, voice.session);
 
   // Tlačidlo „Áno" / „Nie" — tá istá cesta ako vyslovená odpoveď (asistent
   // s dialógom a zapečatenou otázkou), nie podreťazcové hľadanie.
   function sendQuickReply(text: string) {
+    // Počas hlasovej relácie tlačidlo pokračuje hlasom (odpoveď zaznie a
+    // Esblu počúva ďalej); inak je to obyčajná písaná odpoveď.
+    if (voice.active) {
+      voice.manualTurn(text);
+      return;
+    }
     cancelSpeech();
     voiceTranscriptRef.current = text;
     setSearch(text);
@@ -636,10 +690,16 @@ export default function Dashboard() {
   // NIKDY znova `args` — server si kanonické filtre/count sám nanovo
   // načíta z assistant_action_confirmations, appka ich tu už nemá k
   // dispozícii (typ `action_preview` pole `args` už neobsahuje).
-  async function handleActionConfirm(target?: IntentResult) {
+  async function handleActionConfirm(target?: IntentResult): Promise<IntentResult | null> {
     const intentResult = target ?? currentIntentResult;
-    if (!intentResult || intentResult.kind !== "action_preview") return;
+    if (!intentResult || intentResult.kind !== "action_preview") return null;
     setActionSubmitting(true);
+    // Výsledok sa vráti aj volajúcemu — hlasová relácia ho povie nahlas.
+    let final: IntentResult | null = null;
+    const settle = (value: IntentResult) => {
+      final = value;
+      setIntentResult(value);
+    };
 
     try {
       // Stiahnutie priečinka / dokladov: ten istý overený tok ako tlačidlo
@@ -652,15 +712,15 @@ export default function Dashboard() {
         try {
           const outcome = await downloadDocumentPackage(intentResult.packageRequest, locale);
           const message = describePackageOutcome(t, outcome);
-          setIntentResult({ kind: "action_result", success: true, text: message.text });
+          settle({ kind: "action_result", success: true, text: message.text });
         } catch (error) {
-          setIntentResult({
+          settle({
             kind: "action_result",
             success: false,
             text: describePackageError(t, error instanceof PackageDownloadError ? error : null),
           });
         }
-        return;
+        return final;
       }
 
       if (intentResult.action === "EXPORT_DOCUMENTS") {
@@ -671,12 +731,12 @@ export default function Dashboard() {
             payload.evidenceRecords.length > 0);
 
         if (!hasAnything) {
-          setIntentResult({
+          settle({
             kind: "action_result",
             success: false,
             text: t("search.actions.export.noDocuments"),
           });
-          return;
+          return final;
         }
 
         const [{ exportAiInboxFolderToExcel }, { exportAiEvidenceToExcel }] = await Promise.all([
@@ -695,12 +755,12 @@ export default function Dashboard() {
           exportedCount += result.exportedCount;
         }
 
-        setIntentResult({
+        settle({
           kind: "action_result",
           success: true,
           text: t("search.actions.export.done", { count: exportedCount }),
         });
-        return;
+        return final;
       }
 
       const {
@@ -708,8 +768,8 @@ export default function Dashboard() {
       } = await supabase.auth.getSession();
 
       if (!session) {
-        setIntentResult({ kind: "action_result", success: false, text: t("search.errors.generic") });
-        return;
+        settle({ kind: "action_result", success: false, text: t("search.errors.generic") });
+        return final;
       }
 
       const response = await fetch(apiUrl("/api/assistant/action/execute"), {
@@ -726,19 +786,20 @@ export default function Dashboard() {
 
       if (response.ok && data?.success && data?.result) {
         const executed = data.result as IntentResult;
-        setIntentResult(executed);
+        settle(executed);
         if (executed.kind === "action_result" && executed.folder) setRecentFolderId(executed.folder.id);
       } else {
-        setIntentResult({ kind: "action_result", success: false, text: t("search.errors.generic") });
+        settle({ kind: "action_result", success: false, text: t("search.errors.generic") });
       }
     } catch (error) {
       // Rovnaký fail-closed princíp ako pri Intent Engine dopyte vyššie —
       // appka pri sieťovej/neočakávanej chybe NIKDY nepredstiera úspech.
       console.error("Action Engine potvrdenie zlyhalo:", error);
-      setIntentResult({ kind: "action_result", success: false, text: t("search.errors.generic") });
+      settle({ kind: "action_result", success: false, text: t("search.errors.generic") });
     } finally {
       setActionSubmitting(false);
     }
+    return final;
   }
 
   // Kompaktný panel pre rozpoznaný Intent Engine výsledok (zadanie, bod 13:
@@ -905,63 +966,30 @@ export default function Dashboard() {
             <input
               value={search}
               onChange={(e) => {
+                // Písanie = ručný režim: hlasová relácia sa ukončí.
+                if (voice.active) voice.stop("manual");
+                voiceHandledTextRef.current = null;
                 setSearch(e.target.value);
                 setVoiceTranscript(null);
               }}
               placeholder={t("dashboard.searchPlaceholder")}
               className="w-full min-w-0 bg-transparent text-base text-primary outline-none placeholder:text-muted-esblu"
             />
-            {voiceState === "recording" && (
-              <button
-                type="button"
-                onClick={cancelVoiceRecording}
-                className="shrink-0 text-xs font-bold uppercase tracking-wide text-muted-esblu hover:text-primary"
-              >
-                {t("search.voice.ui.cancel")}
-              </button>
-            )}
-            <button
-              type="button"
-              aria-label={
-                voiceState === "recording"
-                  ? t("search.voice.ui.stop")
-                  : t("search.voice.ui.startRecording")
-              }
-              onClick={handleMicButtonClick}
-              disabled={voiceState === "processing"}
-              className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition disabled:opacity-50 ${
-                voiceState === "recording"
-                  ? "bg-red-500/15 text-red-400"
-                  : "text-muted-esblu hover:text-primary"
-              }`}
-            >
-              <MicrophoneIcon />
-            </button>
+            <VoiceSessionControl
+              variant="icon"
+              session={voice.session}
+              onTap={voice.tap}
+              onStop={() => voice.stop("user")}
+            />
           </div>
 
-          {voiceState === "recording" && (
-            <p className="mt-2 flex items-center gap-2 text-xs font-semibold text-red-400">
-              <span className="h-2 w-2 animate-pulse rounded-full bg-red-400" />
-              {t("search.voice.ui.recording")}
+          {voiceStatusText && (
+            <p aria-live="polite" className={`mt-2 flex items-center gap-2 text-xs font-semibold ${voice.session.status === "listening" ? "text-red-400" : "text-muted-esblu"}`}>
+              {voice.session.status === "listening" && <span className="h-2 w-2 animate-pulse rounded-full bg-red-400" />}
+              {voiceStatusText}
             </p>
           )}
-          {voiceState === "processing" && (
-            <p className="mt-2 text-xs font-medium text-muted-esblu">
-              {t("search.voice.ui.processing")}
-            </p>
-          )}
-          {voiceState === "error" && voiceError && (
-            <p className="mt-2 text-xs font-medium text-red-400">
-              {voiceError}
-              {/* "Skúste hovoriť znova" nemá zmysel pri principiálnej
-                  nepodpore zariadenia (notSupported) — appka ho preto
-                  pripája len pri chybách, kde opakovanie reálne pomôže. */}
-              {voiceError !== t("search.voice.errors.notSupported")
-                ? ` ${t("search.voice.errors.tryAgain")}`
-                : ""}
-            </p>
-          )}
-          {voiceState === "idle" && voiceTranscript && search === voiceTranscript && (
+          {voiceTranscript && search === voiceTranscript && (
             <div className="mt-2 flex flex-wrap items-center gap-2">
               <p className="text-[11px] text-muted-esblu">
                 {t("search.voice.ui.transcript")}: „{voiceTranscript}“
@@ -997,8 +1025,15 @@ export default function Dashboard() {
                 <IntentResultView
                   intentResult={intentResult}
                   actionSubmitting={actionSubmitting}
-                  onConfirm={() => void handleActionConfirm()}
-                  onCancel={handleActionCancel}
+                  onConfirm={() => {
+                    // Ťuknutie = ručný zásah; relácia skončí (mikrofón nepočúva popri zápise).
+                    if (voice.active) voice.stop("manual");
+                    void handleActionConfirm();
+                  }}
+                  onCancel={() => {
+                    if (voice.active) voice.stop("manual");
+                    handleActionCancel();
+                  }}
                   onQuickReply={sendQuickReply}
                 />
               ) : query.length >= 2 && intentLoading ? (
@@ -1237,17 +1272,6 @@ function SearchIcon() {
     <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 text-secondary">
       <circle cx="11" cy="11" r="7" />
       <path d="M21 21l-4.3-4.3" />
-    </svg>
-  );
-}
-
-function MicrophoneIcon() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0">
-      <rect x="9" y="2" width="6" height="12" rx="3" />
-      <path d="M5 10a7 7 0 0 0 14 0" />
-      <path d="M12 19v3" />
-      <path d="M8 22h8" />
     </svg>
   );
 }

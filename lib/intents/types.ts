@@ -373,6 +373,9 @@ export type IntentArgs = {
   quantity?: number;
   unit?: string;
   quantityMode?: "add" | "subtract" | "set";
+  // „Pridaj do Spreja" — cieľ bez slova „položka"/„sklad". Platí IBA vtedy,
+  // keď ho resolver skladu bezpečne nájde; inak veta nie je skladová.
+  implicitInventoryTarget?: boolean;
   targetModule?: "inventory" | "machines" | "vehicles";
   // „tento stroj", „toto vozidlo" — použi entitu otvorenú na obrazovke
   // (overenú serverom). Na nástenke taká nie je → otázka.
@@ -456,7 +459,13 @@ export type ClarificationSlot =
   // „Čo sa na stroji robilo?" — popis servisu k už určenému stroju/vozidlu.
   | "service_title"
   // „Faktúru, kopanie, …" bez akcie → „Chcete vytvoriť novú faktúru?"
-  | "invoice_start";
+  | "invoice_start"
+  // „Koľko kusov chcete pridať k položke X?" — chýbajúce množstvo pri zmene
+  // stavu už určenej skladovej položky.
+  | "quantity"
+  // „V ktorom module ju chcete vytvoriť?" — otázka na modul pri založení
+  // bez modulu; nesie meno, aby oprava „To je už vytvorené" nestratila cieľ.
+  | "create_module";
 export type AwaitingClarification = {
   slot: ClarificationSlot;
   /** „Myslíte …?" — kandidát, ktorého používateľ potvrdí („Áno"). */
@@ -466,7 +475,7 @@ export type AwaitingClarification = {
    * servis Takeuchi" → meno sa presunie z popisu do cieľa a otázka znie na
    * popis. Nikdy sa neprijíma od klienta.
    */
-  patch?: Partial<Pick<IntentArgs, "query" | "serviceTitle" | "targetModule">>;
+  patch?: Partial<Pick<IntentArgs, "query" | "serviceTitle" | "targetModule" | "entityName" | "implicitInventoryTarget">>;
 };
 
 /**

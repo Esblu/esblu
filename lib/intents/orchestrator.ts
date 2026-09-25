@@ -41,6 +41,7 @@ import { startInvoiceDraftFlow, continueInvoiceDraftFlow } from "@/lib/intents/i
 import { readSlots, type InvoiceDraftField } from "@/lib/intents/invoice-slots";
 import { decideInvoiceTurn, invoiceTaskFrom, isTaskCancel } from "@/lib/intents/conversation-state";
 import { handlePartnerCreate } from "@/lib/intents/partner-intents";
+import { classifyQuantityReply, isExistingTargetRepair } from "@/lib/intents/slot-replies";
 import { invoiceItemDescriptions, needsDomainClarification, readInvoiceStartChoice, type AssistantDomain } from "@/lib/intents/domain-action";
 import type { IntentName, IntentResult, ParsedIntent } from "@/lib/intents/types";
 import type { CompanyMemberRole } from "@/lib/company";
@@ -299,6 +300,8 @@ export async function runAssistantTurnDetailed(
   // „Áno, vytvor" po otázke „Chcete vytvoriť novú faktúru?" — položky zo
   // zapečatenej otázky (nie z tejto krátkej odpovede).
   let invoiceStartText: string | null = null;
+  // Oprava „To je už vytvorené" → úvodná veta pred odpoveďou handlera.
+  let repairLead: string | null = null;
   if (typeof input.pendingClarification === "string" && input.pendingClarification) {
     const pending = unsealPendingClarification(input.pendingClarification, binding, sealOptions);
     if (!pending) {
@@ -331,6 +334,74 @@ export async function runAssistantTurnDetailed(
       resumed = true;
     } else if (pending.slot === "invoice_start") {
       // Iná veta než voľba = nový príkaz (otázka sa zahodí, nič sa nedomýšľa).
+    } else if (pending.slot === "quantity") {
+      // „Koľko kusov chcete pridať k položke X?" — slot má PREDNOSŤ pred
+      // globálnym parserom: „päť", „5 kusov", „pridaj desať", „vlastne tri".
+      const mode = pending.args.quantityMode ?? "add";
+      const reply = classifyQuantityReply(rawText, mode);
+      if (reply.kind === "cancel") {
+        return done({
+          success: true,
+          recognized: true,
+          intent: pending.intent,
+          source: "conversation",
+          result: { kind: "answer", text: t("assistant.clarify.cancelled") },
+          pendingClarification: null,
+        });
+      }
+      if (reply.kind === "repair" || reply.kind === "unclear") {
+        // Úloha pokračuje — tá istá otázka, ten istý cieľ, nový token.
+        const question = translate(locale, `assistant.inventory.askQuantityFor.${mode}`, { name: pending.args.entityName ?? pending.args.query ?? "" });
+        const lead = reply.kind === "repair"
+          ? translate(locale, "assistant.repair.existing", { name: pending.args.entityName ?? pending.args.query ?? "" })
+          : t("assistant.inventory.quantityNotUnderstood");
+        return done({
+          success: true,
+          recognized: true,
+          intent: pending.intent,
+          source: "conversation",
+          result: { kind: "answer", text: `${lead} ${question}` },
+          pendingClarification: sealPendingClarification(pending.intent, pending.args, { slot: "quantity" }, binding, sealOptions),
+        });
+      }
+      if (reply.kind === "answer") {
+        intent = { name: pending.intent, args: { ...pending.args, quantity: reply.quantity, quantityMode: reply.mode }, source: "deterministic" };
+        resumed = true;
+      }
+      // new_command → globálny parser nižšie (úloha sa nahrádza).
+    } else if (pending.slot === "create_module") {
+      // „V ktorom module ju chcete vytvoriť?" → „To je už vytvorené."
+      // Cieľ existuje: nič nezakladať, pokračovať nad EXISTUJÚCOU položkou.
+      if (isExistingTargetRepair(rawText)) {
+        const name = pending.args.entityName;
+        if (!name) {
+          return done({
+            success: true,
+            recognized: true,
+            source: "conversation",
+            result: { kind: "answer", text: t("assistant.repair.noTarget") },
+            pendingClarification: null,
+          });
+        }
+        intent = pending.args.quantityMode
+          ? { name: "INVENTORY_QUANTITY_ADJUST", args: { quantityMode: pending.args.quantityMode, query: name, entityName: name }, source: "deterministic" }
+          : { name: "INVENTORY_ITEM_STATUS", args: { query: name }, source: "deterministic" };
+        resumed = true;
+        repairLead = translate(locale, "assistant.repair.existing", { name });
+      }
+    } else if (
+      pending.slot === "inventory_item" &&
+      isExistingTargetRepair(rawText)
+    ) {
+      // „Položka X sa nenašla." → „Ale už existuje." — spýtať sa na presný názov.
+      return done({
+        success: true,
+        recognized: true,
+        intent: pending.intent,
+        source: "conversation",
+        result: { kind: "answer", text: t("assistant.repair.whichExisting") },
+        pendingClarification: sealPendingClarification(pending.intent, pending.args, { slot: "inventory_item" }, binding, sealOptions),
+      });
     } else if (
       pending.slot === "partner_name" &&
       pending.candidate &&
@@ -376,6 +447,18 @@ export async function runAssistantTurnDetailed(
     });
   }
 
+  // 3b. Oprava bez rozpracovanej úlohy („Už existuje." po vykonanom príkaze):
+  //     nič nevytvárať a nehádať cieľ — povedať, ako pokračovať.
+  if (!intent && isExistingTargetRepair(rawText)) {
+    return done({
+      success: true,
+      recognized: true,
+      source: "conversation",
+      result: { kind: "answer", text: t("assistant.repair.noTarget") },
+      pendingClarification: null,
+    });
+  }
+
   // 4. AI iba interpretuje — nemaže, nezakladá bez výslovných slov.
   if (!intent) intent = sanitizeAiIntent(await deps.classifyWithAi(rawText), rawText);
 
@@ -404,12 +487,23 @@ export async function runAssistantTurnDetailed(
       : input.moduleContext === "vehicles" ? "VEHICLE_CREATE"
       : null;
     if (!target) {
+      // Otázka na modul je rozpracovaná úloha: nesie meno (a či išlo o
+      // „pridaj"), aby oprava „To je už vytvorené" pokračovala nad
+      // existujúcou položkou namiesto „Nerozumel som".
+      const addVerb = /^\s*(pridaj|prihod|dopln|add)/i.test(rawText.normalize("NFD").replace(/[̀-ͯ]/g, ""));
       return done({
         success: true,
         recognized: true,
         intent: intent.name,
         source: intent.source,
         result: { kind: "answer", text: t("assistant.clarify.createModule") },
+        pendingClarification: sealPendingClarification(
+          "ENTITY_CREATE",
+          { entityName: intent.args.entityName, ...(addVerb ? { quantityMode: "add" as const } : {}) },
+          { slot: "create_module" },
+          binding,
+          sealOptions
+        ),
       });
     }
     intent = { ...intent, name: target };
@@ -569,6 +663,10 @@ export async function runAssistantTurnDetailed(
     if (hasCandidate && pendingClarification && (result.kind === "answer" || result.kind === "not_found" || result.kind === "list")) {
       result = { ...result, quickReplies: yesNoReplies(locale) };
     }
+  }
+
+  if (repairLead && (result.kind === "answer" || result.kind === "not_found")) {
+    result = { ...result, text: `${repairLead} ${result.text}` };
   }
 
   return done({

@@ -342,9 +342,15 @@ await check("hlasová odpoveď = text na obrazovke; draft bez súm; jazyk podľa
   assert.ok(!draft.includes("1 832"), "sumy z draftu sa nečítajú");
   assert.equal(spokenTextFor({ kind: "navigate", entity: { type: "folder", id: "1", label: "x", href: "/" } }), null);
   assert.deepEqual(["sk", "de", "en", "cs"].map(speechLangFor), ["sk-SK", "de-DE", "en-GB", "cs-CZ"]);
-  // Písaný text nikdy nerozpráva: launcher hovorí iba pri hlasovom ťahu.
+  // Písaný text nikdy nerozpráva: hovorí IBA hlasová relácia (useVoiceSession);
+  // launcher ani nástenka nevolajú syntézu reči priamo a písanie reláciu končí.
   const launcher = readFileSync("app/components/voice/VoiceLauncher.tsx", "utf8");
-  assert.ok(launcher.includes("if (!voiceTurnRef.current) return;") && launcher.includes("if (!keepVoiceMode) voiceTurnRef.current = false;"));
+  const dashboard = readFileSync("app/components/Dashboard.tsx", "utf8");
+  for (const source of [launcher, dashboard]) {
+    assert.ok(!/\bspeak\(/.test(source), "žiadne priame speak() mimo relácie");
+    assert.ok(source.includes('voice.stop("manual")'), "ručný zásah reláciu ukončí");
+  }
+  assert.ok(launcher.includes('if (voice.active) voice.stop("manual");\n    cancelSpeech();\n    setTranscript(answer);'), "písaná odpoveď = ručný režim");
   assert.ok(readFileSync("lib/voice/speech.ts", "utf8").includes("synth.cancel();"), "nová odpoveď preruší starú");
 });
 

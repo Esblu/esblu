@@ -1195,11 +1195,11 @@ await check("stav: zrušenie a vypršanie; prepis sa posiela raz a nezmenený", 
   assert.equal(t4.pending, null);
   const launcher = readFileSync("app/components/voice/VoiceLauncher.tsx", "utf8");
   // (pred zobrazením sa iba zastaví predchádzajúca hlasová odpoveď)
-  assert.ok(/onTranscript: \(text\) => \{[^}]{0,120}setTranscript\(text\);[^}]{0,120}void runIntent\(text\);/.test(launcher), "launcher: zobrazený prepis = odoslaný text");
+  assert.ok(/handleVoiceUtterance\(text: string\)[^]{0,200}setTranscript\(text\);[^]{0,1200}await runIntent\(text\);/.test(launcher), "launcher: zobrazený prepis = odoslaný text");
   assert.ok(launcher.includes("body: JSON.stringify({\n          text,"), "launcher posiela presne `text`");
   assert.ok(launcher.includes("pendingClarificationRef.current = null;"), "zatvorenie/zrušenie maže otázku");
   const dashboard = readFileSync("app/components/Dashboard.tsx", "utf8");
-  assert.ok(dashboard.includes("voiceTranscriptRef.current = text;\n      setSearch(text);"), "nástenka: prepis ide do poľa bez úprav");
+  assert.ok(dashboard.includes("voiceTranscriptRef.current = trimmed;\n    setSearch(trimmed);"), "nástenka: prepis ide do poľa bez úprav");
   assert.ok(dashboard.includes("text: trimmed,"), "nástenka posiela iba orezaný text poľa");
 });
 

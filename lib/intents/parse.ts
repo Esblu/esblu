@@ -1,5 +1,6 @@
 import { normalizeSpz } from "@/lib/normalize-spz";
 import { DEADLINE_THRESHOLD_DAYS } from "@/lib/deadlines";
+import { findNumber } from "@/lib/intents/number-words";
 import type {
   DeadlineTypeFilter,
   DocumentTypeFilter,
@@ -1359,6 +1360,128 @@ function serviceDescription(rawText: string): string | undefined {
   return rest || undefined;
 }
 
+// =============================================================================
+// ZMENA STAVU EXISTUJÚCEJ POLOŽKY — sémantika slovesa, nie slovo „sklad".
+//
+// Produkčná chyba (2026-09-25): „Pridaj do položky Sprej." skončila ako
+// ZALOŽENIE bez modulu („V ktorom module ju chcete vytvoriť?"). Sloveso
+// „pridaj" je aj v zozname založenia, množstvo chýbalo, takže vetva zmeny
+// stavu (ktorá vyžadovala číslo alebo slovo „sklad") sa nespustila.
+//
+// Pravidlo: sloveso zmeny stavu + CIEĽ (predložka „do/k/ku/na" alebo
+// priamy objekt pri „zvýš/zníž/uber/nastav počet") = úprava stavu
+// existujúcej položky. Množstvo je voliteľné — chýbajúce doplní otázka
+// („Koľko kusov chcete pridať k položke X?"). Založenie („Vytvor položku X",
+// „Pridaj novú položku X", „Pridaj položku X") sem nepatrí.
+// =============================================================================
+
+type StockPhrase = {
+  mode: "add" | "subtract" | "set";
+  name?: string;
+  quantity?: number;
+  unit?: string;
+  /** Cieľ bez slova „položka"/„stav" a bez množstva — platí iba pri bezpečnej zhode v sklade. */
+  implicit: boolean;
+};
+
+const STOCK_TARGET_PREPOSITIONS = ["do", "k", "ku", "na", "to", "zu", "zum", "zur"];
+const STOCK_QUANTITY_NOUNS = ["stav", "stavu", "pocet", "poctu", "mnozstvo", "mnozstva", "quantity", "stock", "menge", "bestand", "anzahl"];
+const STOCK_VALUE_PREPOSITIONS = ["o", "by", "um", "na", "to", "auf"];
+
+function stockTokens(rawText: string): string[] {
+  return rawText
+    .replace(/[„"“”'()]/g, " ")
+    .split(/[\s;:!?]+/)
+    .map((token) => token.replace(/^[.,]+/, "").replace(/[.,]+$/, ""))
+    .filter(Boolean);
+}
+
+export function stockVerbMode(word: string): { mode: StockPhrase["mode"]; needsPreposition: boolean } | null {
+  if (/^(pridaj|prihod|dopln|naskladni)/.test(word) || word === "add") return { mode: "add", needsPreposition: true };
+  if (/^(zvys|navys|zvacsi)/.test(word) || word === "increase" || /^erh(o|oe)he/.test(word)) return { mode: "add", needsPreposition: false };
+  if (/^(zniz|zmensi|uber|odpis|odpocitaj)/.test(word) || word === "decrease" || word === "reduce" || /^(reduziere|verringere)/.test(word)) {
+    return { mode: "subtract", needsPreposition: false };
+  }
+  if (word.startsWith("nastav") || word === "set" || word === "setze") return { mode: "set", needsPreposition: false };
+  return null;
+}
+
+/**
+ * „Pridaj do položky Sprej", „Pridaj k Spreju 5", „Zníž Sprej o 2",
+ * „Nastav počet Sprej na 5", „Zvýš stav položky Sprej". `null` = veta nie je
+ * zmenou stavu existujúcej položky (rozhodne zvyšok parsera).
+ */
+export function parseInventoryStockPhrase(rawText: string): StockPhrase | null {
+  const raw = stockTokens(rawText);
+  if (raw.length < 2 || raw.length > 12) return null;
+  const norm = raw.map((token) => normalizeText(token));
+  const text = norm.join(" ");
+
+  // Iná oblasť, založenie alebo peniaze → nie je to stav skladu.
+  if (hasWord(text, OP_MACHINE) || hasWord(text, OP_VEHICLE) || extractPlateCandidate(rawText)) return null;
+  if (containsAny(text, SERVICE_WORDS) || hasWord(text, MAINTENANCE_WORDS)) return null;
+  if (hasWord(text, OP_NEW) || explicitEntityName(rawText) || FOLDER_NOUN_REGEX.test(text)) return null;
+  if (/(€|\b(eur|euro|eura|eurov|czk|usd)\b)/.test(text) || containsAny(text, DOCUMENT_SEARCH_WORDS)) return null;
+  if (hasWord(text, ["partner", "zakaznik", "odberatel", "dodavatel", "customer", "supplier", "kunde", "lieferant"])) return null;
+
+  const verb = stockVerbMode(norm[0]);
+  if (!verb) return null;
+  let rest = raw.slice(1);
+  let restNorm = norm.slice(1);
+
+  // Množstvo (číslica alebo slovo) — spolu s jednotkou a predložkou „o/na".
+  let quantity: number | undefined;
+  let unit: string | undefined;
+  let valuePreposition: string | undefined;
+  const found = findNumber(rest.join(" "));
+  if (found && found.startToken < rest.length) {
+    let start = found.startToken;
+    let end = found.endToken;
+    const before = restNorm[start - 1];
+    if (before && STOCK_VALUE_PREPOSITIONS.includes(before)) {
+      valuePreposition = before;
+      start -= 1;
+    }
+    const after = restNorm[end + 1];
+    if (after && OP_UNITS.includes(after)) {
+      unit = after;
+      end += 1;
+    }
+    quantity = Math.abs(found.value);
+    rest = [...rest.slice(0, start), ...rest.slice(end + 1)];
+    restNorm = [...restNorm.slice(0, start), ...restNorm.slice(end + 1)];
+  }
+
+  // „Pridaj …" je zmena stavu IBA s cieľom za predložkou („do / k / ku / na").
+  // „Pridaj položku X" a „Pridaj 20 vrutov" rieši iná vetva (založenie /
+  // pôvodná zmena stavu so skladom).
+  if (verb.needsPreposition) {
+    if (!STOCK_TARGET_PREPOSITIONS.includes(restNorm[0] ?? "")) return null;
+    if (hasWord(restNorm.slice(1, 2).join(" "), OP_INVENTORY_STRONG)) return null;
+  }
+
+  const mentionsItem = hasWord(restNorm.join(" "), OP_GENERIC_ITEM) || restNorm.some((word) => STOCK_QUANTITY_NOUNS.includes(word));
+  // „Nastav X" bez hodnoty aj bez slova „počet/stav" nie je jednoznačné.
+  if (verb.mode === "set" && !mentionsItem && !(quantity !== undefined && valuePreposition && ["na", "to", "auf"].includes(valuePreposition))) return null;
+
+  // Triedne slová sa zahodia iba ako CELÉ slovo (nie predpona) — „Stavebný
+  // piesok" nie je „stav", „Kusový tovar" nie je „kus".
+  const isClassWord = (word: string) =>
+    STOCK_QUANTITY_NOUNS.includes(word) || OP_UNITS.includes(word) ||
+    /^(polozk|skladov|zaznam)/.test(word) || ["item", "artikel", "eintrag", "position", "sklad", "skladu", "lager"].includes(word);
+  const nameTokens = rest.filter((_, index) => !isClassWord(restNorm[index]));
+  const name = nameTokens.length > 0 ? remainderName(nameTokens.join(" "), []) : undefined;
+  if (!name && !mentionsItem) return null;
+
+  return {
+    mode: verb.mode,
+    name,
+    quantity,
+    unit,
+    implicit: !mentionsItem && quantity === undefined,
+  };
+}
+
 export function parseOperationalIntent(rawText: string, hints: ParseHints = {}): ParsedIntent | null {
   const text = normalizeText(rawText);
   if (!text) return null;
@@ -1527,6 +1650,24 @@ export function parseOperationalIntent(rawText: string, hints: ParseHints = {}):
         entityName: name,
         query: name,
         useContext: name ? undefined : useContext,
+      });
+    }
+  }
+
+  // --- Zmena stavu EXISTUJÚCEJ položky bez slova „sklad" a aj bez množstva:
+  //     „Pridaj do položky Sprej", „Pridaj k Spreju 5", „Zvýš stav Spreja".
+  //     Pred založením — „pridaj do X" nie je „vytvor X".
+  if (!isRead && !isDelete) {
+    const stock = parseInventoryStockPhrase(rawText);
+    if (stock) {
+      return build("INVENTORY_QUANTITY_ADJUST", {
+        quantity: stock.quantity,
+        unit: stock.unit,
+        quantityMode: stock.mode,
+        entityName: stock.name,
+        query: stock.name,
+        useContext: stock.name ? undefined : true,
+        implicitInventoryTarget: stock.implicit || undefined,
       });
     }
   }

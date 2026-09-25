@@ -335,10 +335,28 @@ export async function handleOperationalIntent(
     case "INVENTORY_QUANTITY_ADJUST": {
       const amount = typeof args.quantity === "number" && Number.isFinite(args.quantity) ? Math.abs(args.quantity) : null;
       const mode = args.quantityMode;
-      if (amount === null || !mode) return answer(t(locale, "assistant.inventory.askQuantity"));
+      if (!mode) return answer(t(locale, "assistant.inventory.askQuantity"));
       const resolved = await resolveInventory(db, locale, { query: args.query ?? args.entityName, useContext: args.useContext, context: ctx.resolvedEntity, entityId: args.entityId });
       if ("result" in resolved) return resolved.result;
+      if (amount === null) {
+        // Chýba iba množstvo. Najprv cieľ (vyššie), potom otázka na JEDEN
+        // chýbajúci slot so známym cieľom — ďalšia veta („päť") je odpoveďou.
+        if ("missing" in resolved) {
+          // „Pridaj do X" bez slova „položka": veta je skladová IBA pri zhode.
+          if (args.implicitInventoryTarget) return { kind: "not_found", text: t(locale, "search.errors.commandNotUnderstood") };
+          const name = cleanName(args.entityName ?? args.query);
+          return { kind: "not_found", text: t(locale, "assistant.inventory.notFound", { name: name ?? "" }), awaiting: { slot: "inventory_item" } };
+        }
+        const item = resolved.entity;
+        return {
+          kind: "answer",
+          text: t(locale, `assistant.inventory.askQuantityFor.${mode}`, { name: item.name ?? "" }),
+          entity: inventoryRef(item),
+          awaiting: { slot: "quantity", patch: { query: item.name ?? undefined, entityName: item.name ?? undefined, implicitInventoryTarget: undefined } },
+        };
+      }
       if ("missing" in resolved) {
+        if (args.implicitInventoryTarget) return { kind: "not_found", text: t(locale, "search.errors.commandNotUnderstood") };
         const name = cleanName(args.entityName ?? args.query);
         // Pridávanie neexistujúcej položky = návrh založiť ju s týmto množstvom.
         if (mode === "add" && name) {

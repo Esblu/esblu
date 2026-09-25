@@ -51,7 +51,7 @@ type Envelope = { v: number; uid: string; cid: string; exp: number; p: PendingCl
 type Binding = { userId: string; companyId: string };
 type Options = { secret?: string; now?: number };
 
-const SLOTS: readonly ClarificationSlot[] = ["machine", "vehicle", "machine_or_vehicle", "inventory_item", "folder", "partner_name", "invoice_start", "service_title"];
+const SLOTS: readonly ClarificationSlot[] = ["machine", "vehicle", "machine_or_vehicle", "inventory_item", "folder", "partner_name", "invoice_start", "service_title", "quantity", "create_module"];
 
 function key(secret: string | undefined = process.env.ESBLU_ACTION_CONFIRMATION_SECRET): Buffer | null {
   const trimmed = secret?.trim();
@@ -226,6 +226,8 @@ const ALLOWED_DOMAINS: Record<DialogContext, string[]> = {
   partner_name: ["partner"],
   invoice_start: ["invoice"],
   service_title: ["machine", "vehicle"],
+  quantity: ["inventory"],
+  create_module: ["inventory", "machine", "vehicle"],
   invoice: ["invoice"],
 };
 
@@ -240,6 +242,8 @@ const SLOT_LOOKUPS: Record<DialogContext, readonly string[]> = {
   partner_name: ["SEARCH_PARTNER"],
   invoice_start: [],
   service_title: [],
+  quantity: [],
+  create_module: [],
   invoice: [],
 };
 

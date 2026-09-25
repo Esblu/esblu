@@ -437,14 +437,20 @@ await check("classifyConfirmationReply: SK/EN/DE súhlas, odmietnutie, nový pr�
 await check("UI: hlasové potvrdenie je zapojené v launcheri aj na nástenke (nie ako nový príkaz)", () => {
   for (const file of ["app/components/voice/VoiceLauncher.tsx", "app/components/Dashboard.tsx"]) {
     const source = readFileSync(file, "utf8");
-    assert.ok(source.includes("classifyConfirmationReply(text)"), file);
+    // Súvislý hlasový režim: „Áno"/„Nie" sa vyhodnotí PRED novým príkazom
+    // (lib/voice/voice-session.ts#decideVoiceConfirmation nad classifyConfirmationReply).
+    assert.ok(source.includes("decideVoiceConfirmation(text)"), file);
     assert.ok(source.includes("pendingPreviewRef"), file);
     // Tlačidlo nesmie odovzdať udalosť kliknutia ako „náhľad".
     assert.ok(!/onConfirm=\{handle(Action)?Confirm\}/.test(source), `${file}: onConfirm odovzdáva event`);
   }
   const launcher = readFileSync("app/components/voice/VoiceLauncher.tsx", "utf8");
-  const transcript = launcher.indexOf("if (handleSpokenConfirmation(text)) return;");
-  assert.ok(transcript > 0 && transcript < launcher.indexOf("void runIntent(text);", transcript));
+  const decision = launcher.indexOf("decideVoiceConfirmation(text)");
+  assert.ok(decision > 0 && decision < launcher.indexOf("await runIntent(text);", decision), "launcher: potvrdenie pred novým príkazom");
+  const dashboard = readFileSync("app/components/Dashboard.tsx", "utf8");
+  const dashDecision = dashboard.indexOf("decideVoiceConfirmation(text)");
+  assert.ok(dashDecision > 0 && dashDecision < dashboard.indexOf("return askAssistantByVoice(text);", dashDecision), "nástenka: potvrdenie pred novým príkazom");
+  assert.ok(readFileSync("lib/voice/voice-session.ts", "utf8").includes("classifyConfirmationReply(rawText)"));
 });
 
 console.log(`\n${passed} prešlo, ${failed} zlyhalo`);
