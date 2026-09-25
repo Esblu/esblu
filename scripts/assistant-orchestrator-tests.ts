@@ -103,6 +103,7 @@ function session(env: Env, opts: { module?: string; conversationId?: string | nu
 const say = (r: IntentResult) => ((r as { text?: string }).text ?? (r as { question?: string }).question ?? (r as { summary?: string }).summary ?? "").replace(/\u00a0/g, " ");
 const stored = (env: Env) => env.state.conversations.get(`${env.userId}|${env.companyId}|${CONV}`) as Row | undefined;
 const slots = (env: Env) => (stored(env)?.slots ?? {}) as Row;
+const slotsOfEnv = slots;
 const field = (env: Env) => ((stored(env)?.missing_fields ?? []) as string[])[0];
 const items = (env: Env) => ((slots(env).items ?? []) as Row[]).map((i) => [i.description, i.unitPrice]);
 const t = (key: string, vars?: Record<string, string | number>) => translate("sk", key, vars);
@@ -585,6 +586,124 @@ await check("ASR: necitlivý kontext faktúry iba z uzavretého zoznamu; žiadne
   assert.ok(!/from\("|supabase|business_partners/.test(route), "prepis nečíta databázu");
   const hook = readFileSync("hooks/use-voice-capture.ts", "utf8");
   assert.ok(hook.includes('export type TranscriptionContext = "invoice";'));
+});
+
+// =============================================================================
+// ZDIEĽANÝ RESOLVER PARTNERA vo všetkých tokoch (syntetické firmy)
+// =============================================================================
+
+const P_SK = "00000000-0000-4000-8000-0000000000f1";
+const P_SKP = "00000000-0000-4000-8000-0000000000f2";
+const P_MB = "00000000-0000-4000-8000-0000000000f3";
+const P_ABC = "00000000-0000-4000-8000-0000000000f4";
+const MANY = (): Tables => ({
+  business_partners: [
+    { id: P_T1, legal_name: "Tester1", ico: "12345678", company_id: COMPANY_A },
+    { id: P_SK, legal_name: "Stavby Kysuce s.r.o.", ico: "44444444", company_id: COMPANY_A },
+    { id: P_SKP, legal_name: "Stavby Kysuce Plus s.r.o.", ico: "55555555", company_id: COMPANY_A },
+    { id: P_MB, legal_name: "Müller Bau GmbH", ico: null, company_id: COMPANY_A },
+    { id: P_ABC, legal_name: "ABC Construction GmbH", ico: null, company_id: COMPANY_A },
+    { id: "00000000-0000-4000-8000-0000000000b8", legal_name: "Horák Stav s.r.o.", ico: "66666666", company_id: COMPANY_B },
+  ],
+});
+
+await check("REAL: položky zachytené → otázka na odberateľa → „Tester jedna“ → návrh Tester1, položky nedotknuté, ten istý draft", async () => {
+  const env = makeDb({ role: "owner", financeManage: true, tables: MANY() });
+  const s = session(env);
+  await s.say("Vytvor faktúru.");
+  await s.say("Kopanie 300 eur, doprava 100 eur.");
+  assert.equal(field(env), "partner");
+  const before = JSON.stringify(items(env));
+  const r = await s.say("Tester jedna.");
+  assert.equal(say(r.result), t("search.voice.invoice.confirmPartnerCandidate", { name: "Tester1 · 12345678" }));
+  assert.equal(JSON.stringify(items(env)), before, "položka „Tester“ za 1 € nevznikla");
+  assert.equal(slots(env).partnerId, undefined, "podobnosť nikdy nevyberá sama");
+  await s.say("Áno.");
+  assert.equal(slots(env).partnerId, P_T1);
+  assert.equal(JSON.stringify(items(env)), before);
+  assert.equal(field(env), "vat");
+});
+
+await check("pokračovanie: holé „Stavby Kysuce.“ na otázku o odberateľovi → partner (nie položka, hľadanie ani nový príkaz)", async () => {
+  const env = makeDb({ role: "owner", financeManage: true, tables: MANY() });
+  const s = session(env, { ai: () => { throw new Error("AI sa nesmie volať"); } });
+  await s.say("Vytvor faktúru.");
+  await s.say("Kopanie 300 eur.");
+  const r = await s.say("Stavby Kysuce.");
+  assert.equal(slots(env).partnerId, P_SK, JSON.stringify(r.result));
+  assert.deepEqual(items(env), [["Kopanie", 300]]);
+  assert.equal(s.aiCalls, 0);
+  for (const [phrase, id] of [["Stavby Kysuce es er ó.", P_SK], ["Müller Bau.", P_MB], ["ABC Construction gé em bé há.", P_ABC], ["Stavby Kysuce Plus.", P_SKP]] as const) {
+    const e = makeDb({ role: "owner", financeManage: true, tables: MANY() });
+    const ss = session(e);
+    await ss.say("Vytvor faktúru.");
+    await ss.say(phrase);
+    assert.equal(slotsOfEnv(e).partnerId, id, phrase);
+  }
+});
+
+await check("priamy príkaz používa ten istý resolver: „pre Stavby Kysuce“, „Faktúra pre Müller Bau“, „Vystav faktúru ABC Construction“", async () => {
+  for (const [phrase, id] of [
+    ["Vytvor faktúru pre Stavby Kysuce.", P_SK],
+    ["Faktúra pre Müller Bau.", P_MB],
+    ["Vystav faktúru ABC Construction.", P_ABC],
+    ["Vytvor faktúru pre Muller Bau.", P_MB],
+  ] as const) {
+    const env = makeDb({ role: "owner", financeManage: true, tables: MANY() });
+    await session(env).say(phrase);
+    assert.equal(slots(env).partnerId, id, phrase);
+  }
+});
+
+await check("podobnosť / čiastočný názov → otázka, nikdy tichý výber („Miler Bau“, „Stavby“)", async () => {
+  const env = makeDb({ role: "owner", financeManage: true, tables: MANY() });
+  const r = await session(env).say("Vytvor faktúru pre Miler Bau.");
+  assert.equal(say(r.result), t("search.voice.invoice.confirmPartnerCandidate", { name: "Müller Bau GmbH" }));
+  assert.equal(slots(env).partnerId, undefined);
+
+  const env2 = makeDb({ role: "owner", financeManage: true, tables: MANY() });
+  const r2 = await session(env2).say("Vytvor faktúru pre Stavby.");
+  assert.equal(r2.result.kind, "clarify");
+  assert.deepEqual((r2.result as { choices?: { value: string }[] }).choices?.map((c) => c.value), [P_SK, P_SKP]);
+  assert.equal(slots(env2).partnerId, undefined);
+});
+
+await check("hľadanie partnera cez ten istý resolver: „Nájdi partnera Stavby Kysuce es er ó“ → otvorí; „Nájdi partnera Miler Bau“ → iba na výber", async () => {
+  const env = makeDb({ role: "owner", financeManage: true, tables: MANY() });
+  const r = await session(env, { conversationId: null }).say("Nájdi partnera Stavby Kysuce es er ó.");
+  assert.equal(r.intent?.name, "SEARCH_PARTNER");
+  // Čítacie výsledky sa tu porovnávajú priamo z výstupu orchestrátora.
+  assert.equal(r.output.result.kind, "navigate", JSON.stringify(r.output.result));
+  const r2 = await session(env, { conversationId: null }).say("Nájdi partnera Miler Bau.");
+  assert.equal(r2.output.result.kind, "list", "podobnosť sa neotvára priamo");
+});
+
+await check("duplicita pri zakladaní cez ten istý resolver: „Vytvor partnera Stavby Kysuce es er ó“ → už existuje", async () => {
+  const env = makeDb({ role: "owner", financeManage: true, tables: MANY() });
+  const r = await session(env).say("Vytvor partnera Stavby Kysuce es er ó.");
+  assert.equal(say(r.result), t("assistant.partner.exists", { name: "Stavby Kysuce s.r.o. · 44444444" }));
+});
+
+await check("cudzia firma: partner firmy B sa nenájde ani rovnakým menom; firma B nevidí partnerov A", async () => {
+  const env = makeDb({ role: "owner", financeManage: true, tables: MANY() });
+  const r = await session(env).say("Vytvor faktúru pre Horák Stav.");
+  assert.equal(r.result.kind, "not_found");
+  const b = makeDb({ role: "owner", financeManage: true, companyId: COMPANY_B, tables: MANY() });
+  const rb = await session(b).say("Vytvor faktúru pre Stavby Kysuce.");
+  assert.equal(rb.result.kind, "not_found");
+  assert.equal(slotsOfEnv(b).partnerId, undefined);
+});
+
+await check("oprávnenia PRED dotazom na partnerov: zamestnanec a admin bez financií (faktúra aj hľadanie partnera)", async () => {
+  for (const phrase of ["Vytvor faktúru pre Stavby Kysuce.", "Nájdi partnera Stavby Kysuce."]) {
+    const employee = makeDb({ role: "employee", financeManage: false, tables: MANY() });
+    assert.equal(say((await session(employee).say(phrase)).result), t("assistant.denied.employee"), phrase);
+    assert.equal(employee.state.queries, 0, phrase);
+    const admin = makeDb({ role: "admin", financeManage: false, tables: MANY() });
+    const r = await session(admin).say(phrase);
+    assert.equal(r.result.kind, "error", phrase);
+    assert.equal(admin.state.queries, 0, phrase);
+  }
 });
 
 // =============================================================================

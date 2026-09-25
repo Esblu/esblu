@@ -772,7 +772,9 @@ export function readPartnerChange(rawAnswer: string): string | null {
  * („Kopanie 300 eur, doprava 100 eur")? Vtedy to NIE JE meno partnera.
  */
 export function looksLikeInvoiceItems(rawAnswer: string): boolean {
-  if (findCurrency(rawAnswer) !== null) return true;
+  // Iba so SUMOU V MENE. Holé číslo nestačí: „Tester jedna" / „Tester 1"
+  // je meno partnera s číslovkou, nie položka „Tester" za 1 €.
+  if (findCurrency(rawAnswer) === null) return false;
   const parsed = extractInvoiceItems(`za ${rawAnswer}`, undefined, { answerContext: true });
-  return parsed.items.some((item) => item.unitPrice !== undefined) || parsed.statedTotal !== undefined;
+  return parsed.items.some((item) => item.unitPrice !== undefined) || parsed.statedTotal !== undefined || parsed.recognized.length > 0;
 }

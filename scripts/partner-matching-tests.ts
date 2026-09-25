@@ -205,5 +205,86 @@ check("iba interpunkcia", resolve("...", PROD), "NENASIEL");
 
 // -----------------------------------------------------------------------------
 
+// -----------------------------------------------------------------------------
+// ZDIEĽANÝ RESOLVER — všeobecné mená firiem (syntetickí partneri, iba v teste)
+// -----------------------------------------------------------------------------
+{
+  const { resolvePartnerAmong } = await import("../lib/partner-resolver.ts");
+  const ROWS = [
+    ["p1", "Tester1", "11111111"], ["p2", "Stavby Kysuce s.r.o.", "22222222"], ["p3", "Stavby Kysuce Plus s.r.o.", "33333333"],
+    ["p4", "ABC Construction GmbH", null], ["p5", "Müller Bau GmbH", null], ["p6", "Ján Novák - Zemné práce", null],
+    ["p7", "KOVOSTAV SK, s. r. o.", null], ["p8", "ABC Bau", null], ["p9", "ABC Bau SK", null],
+  ].map(([id, legal_name, ico]) => ({ id: id as string, legal_name: legal_name as string, ico: ico as string | null }));
+  const r = (query: string) => {
+    const res = resolvePartnerAmong(query, ROWS);
+    return `${res.autoResolvable ? "AUTO" : res.matches.length === 0 ? "NONE" : "ASK"}:${res.matches.map((m) => m.id).join(",")}`;
+  };
+  const cases: [string, string, string][] = [
+    ["presný názov", "Stavby Kysuce s.r.o.", "AUTO:p2"],
+    ["veľkosť písmen", "stavby kysuce S.R.O.", "AUTO:p2"],
+    ["interpunkcia", "stavby kysuce, s. r. o.", "AUTO:p2"],
+    ["bez právnej formy", "Stavby Kysuce", "AUTO:p2"],
+    ["vyslovená právna forma „es er ó“", "Stavby Kysuce es er ó", "AUTO:p2"],
+    ["právna forma „sro“", "Stavby Kysuce sro", "AUTO:p2"],
+    ["iná firma s prívlastkom ostáva iná", "Stavby Kysuce Plus", "AUTO:p3"],
+    ["čiastočný názov → otázka", "Stavby", "ASK:p2,p3"],
+    ["GmbH vynechané", "ABC Construction", "AUTO:p4"],
+    ["vyslovené „gé em bé há“", "ABC Construction gé em bé há", "AUTO:p4"],
+    ["prehláska", "Müller Bau", "AUTO:p5"],
+    ["bez diakritiky", "Muller Bau", "AUTO:p5"],
+    ["„ue“ prepis → iba návrh", "Mueller Bau", "ASK:p5"],
+    ["preklep prepisu → iba návrh", "Miler Bau", "ASK:p5"],
+    ["pomlčka vynechaná", "Ján Novák zemné práce", "AUTO:p6"],
+    ["bez diakritiky s pomlčkou", "Jan Novak - Zemne prace", "AUTO:p6"],
+    ["čiarka a právna forma", "Kovostav SK", "AUTO:p7"],
+    ["kratší názov + vyslovená forma → návrh", "Kovostav es er ó", "ASK:p7"],
+    ["ABC Bau ≠ ABC Bau SK", "ABC Bau", "AUTO:p8"],
+    ["ABC Bau SK presne", "ABC Bau SK", "AUTO:p9"],
+    ["spoločný začiatok → otázka", "ABC", "ASK:p4,p8,p9"],
+    ["vyslovená číslovka „jeden“ → návrh", "Tester jeden", "ASK:p1"],
+    ["vyslovená číslovka „jedna“ → návrh", "Tester jedna", "ASK:p1"],
+    ["medzera pri číslici", "Tester 1", "AUTO:p1"],
+    ["preklep s číslom → návrh", "Testr1", "ASK:p1"],
+    ["iné číslo NIKDY nie", "Tester2", "NONE:"],
+    ["dlhšie číslo NIKDY nie", "Tester 11", "NONE:"],
+    ["žiadna zhoda", "Horák Stav", "NONE:"],
+    ["IČO", "22 222 222", "AUTO:p2"],
+  ];
+  for (const [label, query, expected] of cases) check(`resolver: ${label} („${query}“)`, r(query), expected);
+
+  // Dvaja rovnako podobní kandidáti → žiadny návrh podobnosťou (nehádať).
+  const twins = [{ id: "a", legal_name: "Malar Bau", ico: null }, { id: "b", legal_name: "Molar Bau", ico: null }];
+  check("resolver: dvaja rovnako blízki → nič sa nenavrhne", resolvePartnerAmong("Milar Bau", twins).matches.length === 1 ? "one" : "not-one", "not-one");
+}
+
+// -----------------------------------------------------------------------------
+// ŽIADNE konkrétne mená testovacích partnerov v produkčnom KÓDE
+// (komentáre a dokumentácia sa neposudzujú; texty UI áno)
+// -----------------------------------------------------------------------------
+{
+  const { readdirSync, readFileSync, statSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const files: string[] = [];
+  const walk = (dir: string) => {
+    for (const entry of readdirSync(dir)) {
+      const path = join(dir, entry);
+      if (statSync(path).isDirectory()) walk(path);
+      else if (/\.(ts|tsx)$/.test(entry)) files.push(path);
+    }
+  };
+  for (const dir of ["lib", "app", "hooks"]) walk(dir);
+  const NAMES = /tester ?\d|stavby kysuce|m(ü|u|ue)ller bau|abc construction|kovostav|zemn[ée] pr[áa]ce/i;
+  const offenders: string[] = [];
+  for (const file of files) {
+    const code = readFileSync(file, "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .split("\n")
+      .map((line) => line.replace(/(^|[^:"'`])\/\/.*$/, "$1"))
+      .join("\n");
+    if (NAMES.test(code)) offenders.push(file);
+  }
+  check("produkčný kód neobsahuje mená testovacích partnerov", offenders, []);
+}
+
 console.log(`\n${passed} prešlo, ${failed} zlyhalo`);
 if (failed > 0) process.exit(1);

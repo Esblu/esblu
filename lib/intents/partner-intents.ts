@@ -2,7 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Locale } from "@/lib/i18n/locales";
 import { translate } from "@/lib/i18n/translate";
 import type { IntentResult, ParsedIntent } from "@/lib/intents/types";
-import { matchPartnersByName } from "@/lib/partner-matching";
+import { loadCompanyPartners, resolvePartnerAmong, type PartnerRow } from "@/lib/partner-resolver";
 
 // =============================================================================
 // Nový obchodný partner hlasom — PRÍPRAVA formulára, nie zápis.
@@ -39,7 +39,6 @@ import { matchPartnersByName } from "@/lib/partner-matching";
 // navyše s explicitným filtrom na aktívnu firmu.
 // =============================================================================
 
-type PartnerRow = { id: string; legal_name: string | null; ico: string | null };
 
 function label(row: PartnerRow): string {
   return row.ico ? `${row.legal_name ?? ""} · ${row.ico}` : row.legal_name ?? "";
@@ -80,22 +79,18 @@ export async function handlePartnerCreate(
 
   // PARTNER_DUPLICATE — IBA partneri aktuálnej firmy (RLS + explicitný filter).
   if (!intent.args.confirmedNew) {
-    const { data, error } = await db
-      .from("business_partners")
-      .select("id, legal_name, ico")
-      .eq("company_id", ctx.companyId)
-      .order("legal_name", { ascending: true })
-      .limit(1000);
-    if (error) return { kind: "error", text: t("search.errors.generic") };
-    const rows = (data as PartnerRow[] | null) ?? [];
+    // ZDIEĽANÝ resolver a ten istý zdroj partnerov (iba aktívna firma).
+    const rows = await loadCompanyPartners(db, ctx.companyId);
+    if (rows === null) return { kind: "error", text: t("search.errors.generic") };
 
-    // Duplicita = rovnaké IČO alebo rovnaký názov (presná / silná zhoda —
-    // „Tester 1" = „Tester1"). Iba „podobný" názov („Tester2" vs. „Tester1")
-    // duplicitou nie je: sú to dve rôzne firmy a nový partner sa pripraví.
-    const byIco = ico ? rows.find((row) => (row.ico ?? "").replace(/[\s.\-/]/g, "") === ico) : undefined;
-    const byName = byIco ? null : matchPartnersByName(name, rows, (row) => row.legal_name);
+    // Duplicita = rovnaké IČO alebo rovnocenný názov (exact / strong: zápis,
+    // medzera pri číslici, pomlčky, právna forma). Iba „podobný" názov
+    // (návrh) duplicitou nie je: môžu to byť dve rôzne firmy.
+    const byIco = ico ? resolvePartnerAmong(ico, rows) : null;
+    const icoHit = byIco && byIco.tier === "exact" ? byIco.matches[0] : undefined;
+    const byName = icoHit ? null : resolvePartnerAmong(name, rows);
     const sameName = byName && (byName.tier === "exact" || byName.tier === "strong") ? byName.matches[0] : undefined;
-    const existing = byIco ?? sameName;
+    const existing = icoHit ?? sameName;
     if (existing) {
       return {
         kind: "answer",

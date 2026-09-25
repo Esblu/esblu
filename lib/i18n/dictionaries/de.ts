@@ -2666,7 +2666,7 @@ const de = {
   },
   assistant: {
     invoice: {
-      useVoice: "Erstellen Sie die Rechnung per Sprache — tippen Sie auf das Mikrofon und sagen Sie z. B. „Erstelle eine Rechnung für Tester1“.",
+      useVoice: "Erstellen Sie die Rechnung per Sprache — tippen Sie auf das Mikrofon und sagen Sie z. B. „Erstelle eine Rechnung für Firma Alfa“.",
     },
     inbox: {
       what: {
@@ -2724,8 +2724,8 @@ const de = {
       vehicleRead: "Ich verstehe, dass es um ein Fahrzeug geht. Welches Fahrzeug möchten Sie öffnen? Z. B. „Öffne AB123CD“.",
       inventoryManage: "Ich verstehe, dass es um das Lager geht. Möchten Sie es anzeigen, einen Artikel anlegen oder den Bestand ändern? Z. B. „Zeige Lager“.",
       inventoryRead: "Ich verstehe, dass es um das Lager geht. Z. B. „Zeige Lager“ oder „Wie viele Schrauben haben wir?“.",
-      partnerManage: "Ich verstehe, dass es um einen Geschäftspartner geht. Möchten Sie einen Partner öffnen oder neu anlegen? Z. B. „Finde Partner Tester1“ oder „Erstelle Partner Tester2“.",
-      partnerRead: "Ich verstehe, dass es um einen Geschäftspartner geht. Welchen Partner möchten Sie öffnen? Z. B. „Finde Partner Tester1“.",
+      partnerManage: "Ich verstehe, dass es um einen Geschäftspartner geht. Möchten Sie einen Partner öffnen oder neu anlegen? Z. B. „Finde Partner Firma Alfa“ oder „Erstelle Partner Firma Beta“.",
+      partnerRead: "Ich verstehe, dass es um einen Geschäftspartner geht. Welchen Partner möchten Sie öffnen? Z. B. „Finde Partner Firma Alfa“.",
       folder: "Ich verstehe, dass es um einen Ordner geht. Möchten Sie einen Ordner öffnen, erstellen oder herunterladen? Z. B. „Öffne Ordner August“.",
     },
     clarify: {

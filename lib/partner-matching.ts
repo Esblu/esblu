@@ -23,13 +23,20 @@
 // „rovnaký názov firmy", by sa časom rozišla — a rozišla by sa práve tam,
 // kde na tom záleží: pri zakladaní dokladu.
 //
-// ČO SA NEROBÍ
-// ------------
-// Nezavádza sa podobnostné porovnávanie (Levenshtein a spol.) ani žiadny
-// automatický výber „najbližšieho" partnera. Zlý odberateľ na faktúre je
-// chyba, ktorá sa ťahá do všetkých ďalších dokladov a do právne záväzného
-// výstupu. Keď si appka nie je istá, pýta sa — aj keď je kandidát len
-// jeden.
+// VRSTVY (matchPartnersByName) — prvá, ktorá niečo nájde, rozhoduje
+// ------------------------------------------------------------------
+//   exact / strong  kanonický kľúč (diakritika, veľkosť, interpunkcia,
+//                   právna forma, medzera pri číslici) — výber, ak je jediný
+//   strong (hlas)   pomlčky/lomky a vyslovená právna forma na konci
+//                   („es er ó", „gé em bé há") — výber, ak je jediný
+//   suggestion      vyslovená číslovka („Tester jeden"), čiastočný názov,
+//                   podobnosť (preklep / prepis reči) — VŽDY iba otázka
+//
+// Podobnosť (edit distance nad fonetickým kľúčom) nikdy nevyberá sama: iba
+// jediný jasný kandidát, rovnaké číslice, a asistent sa spýta „Myslíte …?".
+// Zlý odberateľ na faktúre je chyba, ktorá sa ťahá do všetkých ďalších
+// dokladov — keď si appka nie je istá, pýta sa, aj keď je kandidát jeden.
+// Žiadne konkrétne mená firiem v kóde: algoritmus je všeobecný.
 // =============================================================================
 
 /**
@@ -95,6 +102,82 @@ export function partnerNameLooseKey(value: string | null | undefined): string | 
     .replace(/(?<=\d)[\s\-_]+(?=[A-Z])/g, "");
 
   return collapsed === "" ? null : collapsed;
+}
+
+/**
+ * Vyslovené právne formy na KONCI názvu („… es er ó", „… gé em bé há").
+ * Iba na konci — uprostred názvu by „a es" mohlo byť obsahom mena.
+ * Hodnota sa porovnáva po odstránení diakritiky a malými písmenami.
+ */
+const SPOKEN_LEGAL_FORM_SUFFIX =
+  /\s+(?:es\s*er\s*o|spol(?:ocnost)?\s+s\s+rucenim\s+obmedzenym|ge\s*em\s*be\s*ha|a\s*es|ka\s*es|a\s*ge|el\s*te\s*de|sro|gmbh|as|ag)\s*$/;
+
+/**
+ * Hlasový kľúč: to isté ako `partnerNameLooseKey`, navyše
+ *   - pomlčka, lomka, „&" a „+" = medzera („Ján Novák - Zemné práce" =
+ *     „Ján Novák zemné práce"),
+ *   - vyslovená právna forma na konci sa odstráni („Stavby Kysuce es er ó").
+ *
+ * Je to EKVIVALENCIA (symetrická): mení iba zápis, nie slová. Slová sa
+ * nikdy nevynechávajú ani nespájajú — „Stavby Kysuce" a „Stavby Kysuce Plus"
+ * ostávajú rôzne.
+ */
+export function partnerNameVoiceKey(value: string | null | undefined): string | null {
+  if (typeof value !== "string") return null;
+  const cleaned = value
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/[-‐-―/&+_]/g, " ")
+    .replace(/[.,;:()"'!?]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(SPOKEN_LEGAL_FORM_SUFFIX, "")
+    .trim();
+  return partnerNameLooseKey(cleaned);
+}
+
+/**
+ * Fonetický kľúč — VÝHRADNE na návrh „Myslíte …?", nikdy na výber.
+ * Pokrýva bežné odchýlky prepisu reči bez slovníka mien: prehlásky
+ * prepísané ako „ue/oe/ae", zdvojené písmená, y/i, w/v, ck/k, ph/f, th/t.
+ * „Müller Bau" / „Mueller Bau" / „Muler Bau" → „MULERBAU".
+ */
+export function partnerNamePhoneticKey(value: string | null | undefined): string | null {
+  const voice = partnerNameVoiceKey(value);
+  if (!voice) return null;
+  const key = voice
+    .replace(/UE/g, "U")
+    .replace(/OE/g, "O")
+    .replace(/AE/g, "A")
+    .replace(/CK/g, "K")
+    .replace(/PH/g, "F")
+    .replace(/TH/g, "T")
+    .replace(/Y/g, "I")
+    .replace(/W/g, "V")
+    .replace(/([A-Z])\1+/g, "$1")
+    .replace(/\s+/g, "");
+  return key === "" ? null : key;
+}
+
+/** Číslice v názve — pri podobnosti sa NIKDY nesmú líšiť (Tester1 ≠ Tester2). */
+function digitsOf(key: string): string {
+  return key.replace(/\D/g, "");
+}
+
+/** Levenshteinova vzdialenosť (malé reťazce, názvy firiem). */
+function editDistance(a: string, b: string): number {
+  const previous = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    let diagonal = previous[0];
+    previous[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const above = previous[j];
+      previous[j] = Math.min(previous[j] + 1, previous[j - 1] + 1, diagonal + (a[i - 1] === b[j - 1] ? 0 : 1));
+      diagonal = above;
+    }
+  }
+  return previous[b.length];
 }
 
 // -----------------------------------------------------------------------------
@@ -166,34 +249,54 @@ export function matchPartnersByName<T>(
     };
   }
 
-  // Čiastočná zhoda — vždy iba ponuka na výber, nikdy rozhodnutie.
-  // SPOKEN: „Tester jeden" / „Tester one" / „Tester eins" = „Tester1".
+  // HLASOVÁ EKVIVALENCIA: pomlčky/lomky a vyslovená právna forma na konci
+  // („Stavby Kysuce es er ó", „Ján Novák zemné práce"). Mení sa iba zápis,
+  // nie slová — preto je to rovnocenné presnej zhode (jediný = výber).
+  const voiceWanted = partnerNameVoiceKey(query);
+  if (voiceWanted) {
+    const voiceHits = rows.filter((row) => partnerNameVoiceKey(nameOf(row)) === voiceWanted);
+    if (voiceHits.length > 0) return { tier: "strong", matches: voiceHits, autoResolvable: voiceHits.length === 1 };
+  }
+
+  // SPOKEN: „Tester jeden" / „Tester one" / „Tester eins" → číslica.
   // Iba NÁVRH (autoResolvable: false) — prepis reči nie je identita; asistent
   // sa spýta „Myslíte …?". Porovnáva sa celé meno, nie jeho časť.
-  const spokenWanted = partnerNameLooseKey(spokenDigits(query));
-  if (spokenWanted && spokenWanted !== looseWanted) {
-    const spokenHits = rows.filter((row) => partnerNameLooseKey(nameOf(row)) === spokenWanted);
+  const spokenWanted = partnerNameVoiceKey(spokenDigits(query));
+  if (spokenWanted && spokenWanted !== voiceWanted) {
+    const spokenHits = rows.filter((row) => partnerNameVoiceKey(nameOf(row)) === spokenWanted);
     if (spokenHits.length > 0) return { tier: "suggestion", matches: spokenHits, autoResolvable: false };
   }
 
+  // Čiastočná zhoda — vždy iba ponuka na výber, nikdy rozhodnutie
+  // („Stavby" pri „Stavby Kysuce" aj „Stavby Kysuce Plus" → otázka).
+  const partialWanted = spokenWanted ?? voiceWanted ?? looseWanted;
   const partialHits = rows.filter((row) => {
-    const key = partnerNameLooseKey(nameOf(row));
-    return key !== null && containsWithoutSplittingNumber(key, looseWanted);
+    const key = partnerNameVoiceKey(nameOf(row));
+    return key !== null && containsWithoutSplittingNumber(key, partialWanted);
   });
 
   if (partialHits.length > 0) {
     return { tier: "suggestion", matches: partialHits, autoResolvable: false };
   }
 
-  // CLOSE: jeden preklep v prepise („Testr1", „Tesster1"). Iba pri dlhších
-  // menách, iba JEDINÝ kandidát a vždy len návrh s otázkou.
-  const spokenLoose = spokenWanted ?? looseWanted;
-  if (spokenLoose.replace(/\s/g, "").length >= 5) {
-    const closeHits = rows.filter((row) => {
-      const key = partnerNameLooseKey(nameOf(row));
-      return key !== null && withinOneEdit(key, spokenLoose);
-    });
-    if (closeHits.length === 1) return { tier: "suggestion", matches: closeHits, autoResolvable: false };
+  // PODOBNOSŤ (preklep / prepis reči): „Miler Bau" → „Müller Bau GmbH",
+  // „Testr1" → „Tester1". Iba pri dostatočne dlhom mene, iba JEDINÝ jasný
+  // kandidát (žiadny iný nie je rovnako blízko), číslice sa nesmú líšiť —
+  // a vždy len návrh s otázkou, nikdy výber.
+  const phoneticWanted = partnerNamePhoneticKey(spokenDigits(query));
+  if (phoneticWanted && phoneticWanted.length >= 5) {
+    const allowed = phoneticWanted.length >= 10 ? 2 : 1;
+    const scored = rows
+      .map((row) => {
+        const key = partnerNamePhoneticKey(nameOf(row));
+        if (!key || digitsOf(key) !== digitsOf(phoneticWanted)) return null;
+        return { row, distance: editDistance(key, phoneticWanted) };
+      })
+      .filter((entry): entry is { row: T; distance: number } => entry !== null && entry.distance <= allowed)
+      .sort((a, b) => a.distance - b.distance);
+    if (scored.length === 1 || (scored.length > 1 && scored[1].distance > scored[0].distance)) {
+      return { tier: "suggestion", matches: [scored[0].row], autoResolvable: false };
+    }
   }
 
   return { tier: "none", matches: [], autoResolvable: false };
@@ -249,21 +352,4 @@ export function spokenDigits(value: string): string {
     .split(/\s+/)
     .map((word) => SPOKEN_DIGITS[word.toUpperCase().replace(/[.,;:!?]+$/, "")] ?? word)
     .join(" ");
-}
-
-/** Levenshtein ≤ 1 (vloženie, vynechanie alebo zámena jedného znaku). */
-function withinOneEdit(a: string, b: string): boolean {
-  if (a === b) return false; // presnú zhodu riešia vyššie vrstvy
-  if (Math.abs(a.length - b.length) > 1) return false;
-  let i = 0;
-  let j = 0;
-  let edits = 0;
-  while (i < a.length && j < b.length) {
-    if (a[i] === b[j]) { i++; j++; continue; }
-    if (++edits > 1) return false;
-    if (a.length > b.length) i++;
-    else if (a.length < b.length) j++;
-    else { i++; j++; }
-  }
-  return edits + (a.length - i) + (b.length - j) <= 1;
 }

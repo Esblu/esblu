@@ -529,6 +529,23 @@ function cleanPartnerName(raw: string): string {
   return name.slice(0, 200);
 }
 
+/**
+ * Hľadanie / otvorenie obchodného partnera: „Nájdi partnera X", „Otvor
+ * zákazníka X", „Ukáž obchodných partnerov", „Find partner X". Meno overí
+ * ZDIEĽANÝ resolver (lib/partner-resolver.ts) pod bránou finance view.
+ * Veta s dokladom („faktúry od dodávateľa X") sem nepatrí.
+ */
+const PARTNER_SEARCH_REGEX =
+  /^\s*(?:pros[ií]m\s+)?(?:n[aá]jdi|uk[aá][zž]|zobraz|otvor|vyh[lľ]adaj|h[lľ]adaj|find|show|open|search|finde|zeige?|[öo]ffne|oeffne|suche)\S*\s+(?:mi\s+)?(?:obchodn\S*\s+partner\S*|business\s+partners?|gesch[aä]ftspartner\S*|partner\S*|z[aá]kazn[ií]k\S*|odberate\S*|dod[aá]vate\S*|klient\S*|customers?|suppliers?|clients?|kunde\S*|lieferant\S*)(?=[\s,.:;!?]|$)[\s,:;]*(.*)$/i;
+
+export function parsePartnerSearch(rawText: string): ParsedIntent | null {
+  const match = PARTNER_SEARCH_REGEX.exec(rawText);
+  if (!match) return null;
+  if (/(faktur|rechnung|invoice|blocek|blocky|doklad|dokument)/.test(normalizeText(rawText))) return null;
+  const name = cleanPartnerName(match[1] ?? "");
+  return build("SEARCH_PARTNER", name ? { query: name } : {});
+}
+
 export function parsePartnerCreate(rawText: string): ParsedIntent | null {
   const match = PARTNER_CREATE_REGEX.exec(rawText);
   if (!match) return null;
@@ -1515,6 +1532,8 @@ export function parseIntentDeterministic(rawText: string, hints: ParseHints = {}
   // nie je nová položka) a pred faktúrou (veta s „faktúra" sem nespadne).
   const partnerCreate = parsePartnerCreate(rawText);
   if (partnerCreate) return partnerCreate;
+  const partnerSearch = parsePartnerSearch(rawText);
+  if (partnerSearch) return partnerSearch;
 
   if (!sendLike) {
     const inboxIntent = parseInboxUnassignedIntent(rawText);

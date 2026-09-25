@@ -482,7 +482,7 @@ export async function runAssistantTurnDetailed(
       ? await resolveUiEntity(db, input.uiContext)
       : null;
   const actionCtx = { companyId: input.companyId, userId: input.userId, role: input.role as CompanyMemberRole };
-  const readCtx = { role: input.role as CompanyMemberRole, financeView: input.financeView, canOperate: input.canOperate };
+  const readCtx = { role: input.role as CompanyMemberRole, financeView: input.financeView, canOperate: input.canOperate, companyId: input.companyId };
 
   // 7. Handler.
   let result: IntentResult;

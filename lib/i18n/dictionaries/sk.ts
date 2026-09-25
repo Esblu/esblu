@@ -2674,7 +2674,7 @@ const sk = {
   },
   assistant: {
     invoice: {
-      useVoice: "Faktúru pripravíte hlasom — ťuknite na mikrofón a povedzte napríklad „Vytvor faktúru pre Tester1“.",
+      useVoice: "Faktúru pripravíte hlasom — ťuknite na mikrofón a povedzte napríklad „Vytvor faktúru pre Firma Alfa“.",
     },
     inbox: {
       what: {
@@ -2732,8 +2732,8 @@ const sk = {
       vehicleRead: "Rozumiem, že ide o vozidlo. Ktoré vozidlo chcete otvoriť? Povedzte napríklad „Otvor AB123CD“.",
       inventoryManage: "Rozumiem, že ide o sklad. Chcete sklad zobraziť, pridať položku alebo zmeniť stav? Povedzte napríklad „Ukáž sklad“ alebo „Pridaj do skladu 20 vrutov“.",
       inventoryRead: "Rozumiem, že ide o sklad. Povedzte napríklad „Ukáž sklad“ alebo „Koľko máme vrutov?“.",
-      partnerManage: "Rozumiem, že ide o obchodného partnera. Chcete partnera otvoriť, alebo založiť nového? Povedzte napríklad „Nájdi partnera Tester1“ alebo „Vytvor partnera Tester2“.",
-      partnerRead: "Rozumiem, že ide o obchodného partnera. Ktorého partnera chcete otvoriť? Povedzte napríklad „Nájdi partnera Tester1“.",
+      partnerManage: "Rozumiem, že ide o obchodného partnera. Chcete partnera otvoriť, alebo založiť nového? Povedzte napríklad „Nájdi partnera Firma Alfa“ alebo „Vytvor partnera Firma Beta“.",
+      partnerRead: "Rozumiem, že ide o obchodného partnera. Ktorého partnera chcete otvoriť? Povedzte napríklad „Nájdi partnera Firma Alfa“.",
       folder: "Rozumiem, že ide o priečinok. Chcete priečinok otvoriť, vytvoriť alebo stiahnuť? Povedzte napríklad „Otvor priečinok August“.",
     },
     clarify: {

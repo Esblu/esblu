@@ -2645,7 +2645,7 @@ const en = {
   },
   assistant: {
     invoice: {
-      useVoice: "Create the invoice by voice — tap the microphone and say, for example, “Create an invoice for Tester1”.",
+      useVoice: "Create the invoice by voice — tap the microphone and say, for example, “Create an invoice for Alpha Ltd”.",
     },
     inbox: {
       what: {
@@ -2703,8 +2703,8 @@ const en = {
       vehicleRead: "I understand this is about a vehicle. Which vehicle do you want to open? For example “Open AB123CD”.",
       inventoryManage: "I understand this is about the inventory. Do you want to show it, add an item or change stock? For example “Show inventory” or “Add 20 screws to inventory”.",
       inventoryRead: "I understand this is about the inventory. For example “Show inventory” or “How many screws do we have?”.",
-      partnerManage: "I understand this is about a business partner. Do you want to open a partner or create a new one? For example “Find partner Tester1” or “Create partner Tester2”.",
-      partnerRead: "I understand this is about a business partner. Which partner do you want to open? For example “Find partner Tester1”.",
+      partnerManage: "I understand this is about a business partner. Do you want to open a partner or create a new one? For example “Find partner Alpha Ltd” or “Create partner Beta Ltd”.",
+      partnerRead: "I understand this is about a business partner. Which partner do you want to open? For example “Find partner Alpha Ltd”.",
       folder: "I understand this is about a folder. Do you want to open, create or download a folder? For example “Open folder August”.",
     },
     clarify: {

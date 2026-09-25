@@ -139,7 +139,7 @@ export async function startInvoiceDraftFlow(
   // ako obchodný partner. Teraz sa partner vyrieši hneď a každá otázka sa
   // uloží ako PRVÉ chýbajúce pole (askAgain → orderMissingFields).
   if (partnerQuery?.trim()) {
-    const resolution = await resolvePartnerCandidates(supabase, partnerQuery.trim());
+    const resolution = await resolvePartnerCandidates(supabase, partnerQuery.trim(), ctx.companyId);
 
     if (resolution.autoResolvable) {
       // Presná alebo silná zhoda a práve jeden kandidát.
@@ -263,7 +263,7 @@ export async function continueInvoiceDraftFlow(
   // ------------------------------------------------------------------
   const partnerChange = field !== "partner" ? readPartnerChange(rawAnswer) : null;
   if (partnerChange) {
-    const resolution = await resolvePartnerCandidates(supabase, partnerChange);
+    const resolution = await resolvePartnerCandidates(supabase, partnerChange, ctx.companyId);
     if (resolution.candidates.length === 0) {
       return askAgain(supabase, locale, ctx, slots, {
         kind: "not_found",
@@ -352,15 +352,18 @@ export async function continueInvoiceDraftFlow(
   // Meno partnera je jediná odpoveď, ktorá vyžaduje dotaz do databázy —
   // ostatné sa dajú prečítať z textu.
   if (field === "partner") {
-    // Odpoveď, ktorá vyzerá ako položky („Kopanie 300 eur, doprava 100
-    // eur"), NIE JE meno partnera. Položky sa zapamätajú a otázka na
-    // odberateľa sa zopakuje — nehľadá sa partner menom „Kopanie…".
-    if (looksLikeInvoiceItems(rawAnswer)) {
+    // Odpoveď na otázku o odberateľovi ide NAJPRV do zdieľaného resolvera
+    // partnera. Produkčná chyba: „Tester jedna" sa vyhodnotilo ako položka
+    // „Tester" za 1 € (slovo „jedna" je číslo), a partner sa ani nehľadal.
+    const resolution = await resolvePartnerCandidates(supabase, rawAnswer.trim(), ctx.companyId);
+
+    // Až keď sa partner nenašiel, a odpoveď zjavne nesie položky so SUMOU
+    // V MENE („Kopanie 300 eur, doprava 100 eur"), zapamätajú sa položky a
+    // otázka na odberateľa sa zopakuje.
+    if (resolution.candidates.length === 0 && looksLikeInvoiceItems(rawAnswer)) {
       const withItems = (slots.items?.length ?? 0) === 0 ? applyAnswer(slots, "items", rawAnswer, []) : slots;
       return continueFlow(supabase, locale, ctx, withItems, translate(locale, "search.voice.invoice.itemsKeptAskPartner"));
     }
-
-    const resolution = await resolvePartnerCandidates(supabase, rawAnswer.trim());
 
     if (resolution.candidates.length === 0) {
       return askAgain(supabase, locale, ctx, slots, {

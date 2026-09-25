@@ -10,7 +10,7 @@ import {
   listCompanyCustomCategories,
   findMatchingCustomCategory,
 } from "@/lib/custom-document-categories";
-import { matchPartnersByName } from "@/lib/partner-matching";
+import { loadCompanyPartners, resolvePartnerAmong } from "@/lib/partner-resolver";
 
 // =============================================================================
 // Voice Phase 1 — navigácia a účtovnícke čítanie.
@@ -37,6 +37,8 @@ export type ReadContext = {
   financeView: boolean;
   /** Zrkadlí esblu_role_can_operate(). */
   canOperate: boolean;
+  /** Aktívna firma (overená serverom) — explicitný filter popri RLS. */
+  companyId?: string;
 };
 
 function denied(locale: Locale): IntentResult {
@@ -359,40 +361,34 @@ export async function handleSearchPartner(
 
   const query = (rawQuery ?? "").trim();
 
-  const { data, error } = await supabase
-    .from("business_partners")
-    .select("id, legal_name, ico")
-    .order("legal_name", { ascending: true })
-    .limit(300);
-
-  if (error) {
+  // ZDIEĽANÝ resolver (lib/partner-resolver.ts) — ten istý ako pri faktúre.
+  // Tu je to hľadanie: výsledkom je zoznam na výber, takže sa smú ukázať aj
+  // návrhy (čiastočný názov, podobnosť); pri jedinom návrhu sa neotvára
+  // priamo, ale ukáže sa na výber.
+  const rows = await loadCompanyPartners(supabase, ctx.companyId ?? null);
+  if (rows === null) {
     return { kind: "error", text: translate(locale, "search.errors.generic") };
   }
 
-  const rows = (data as { id: string; legal_name: string; ico: string | null }[]) ?? [];
-
-  // Rovnaké kanonické porovnanie ako pri hlasovom zakladaní faktúry, aby
-  // „nájdi partnera Tester 1" našlo partnera „Tester1". Tu je to iba
-  // vyhľadávanie — výsledkom je zoznam, z ktorého si používateľ vyberá,
-  // takže sa smú ukázať aj čiastočné zhody.
-  const matches =
-    query === ""
-      ? rows
+  const resolution = query === "" ? null : resolvePartnerAmong(query, rows);
+  const matches = (query === ""
+    ? rows
+    : resolution!.matches.length > 0
+      ? resolution!.matches
       : (() => {
-          const byName = matchPartnersByName(query, rows, (row) => row.legal_name);
-          if (byName.matches.length > 0) return byName.matches;
-          // Doplnkovo IČO — identifikátor, nie názov.
+          // Doplnkovo čiastočné IČO — identifikátor, nie názov.
           const identifier = query.replace(/[\s.\-/]/g, "");
-          return identifier
+          return /^\d{3,}$/.test(identifier)
             ? rows.filter((row) => (row.ico ?? "").replace(/[\s.\-/]/g, "").includes(identifier))
             : [];
-        })();
+        })()) as { id: string; legal_name: string; ico: string | null }[];
+  const directOpen = query === "" || !resolution || resolution.autoResolvable || resolution.tier === "none";
 
   if (matches.length === 0) {
     return { kind: "not_found", text: translate(locale, "businessPartners.empty") };
   }
 
-  if (matches.length === 1) {
+  if (matches.length === 1 && directOpen) {
     return {
       kind: "navigate",
       entity: {
