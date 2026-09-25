@@ -6,6 +6,7 @@ import { vehicleDetailHref, machineDetailHref, inventoryItemDetailHref } from "@
 import type { ClarificationSlot, EntityRef, IntentName, IntentResult, ParsedIntent } from "@/lib/intents/types";
 import { resolveEntityByName, type NameConfidence } from "@/lib/intents/entity-resolution";
 import type { ResolvedUiEntity } from "@/lib/intents/ui-context";
+import { isServiceUtterance } from "@/lib/intents/parse";
 
 // =============================================================================
 // Intent Engine — prevádzkové zápisy: sklad, stroje, vozidlá.
@@ -28,6 +29,7 @@ export const OPERATIONAL_WRITE_INTENTS = [
   "INVENTORY_ITEM_CREATE",
   "INVENTORY_QUANTITY_ADJUST",
   "INVENTORY_ITEM_DELETE",
+  "INVENTORY_ITEM_RENAME",
   "MACHINE_CREATE",
   "MACHINE_SERVICE_ADD",
   "MACHINE_DELETE",
@@ -384,6 +386,27 @@ export async function handleOperationalIntent(
         id, "assistant.confirm.delete", true);
     }
 
+    case "INVENTORY_ITEM_RENAME": {
+      // Ten istý stĺpec `name`, ktorý mení formulár položky v Sklade. Cieľ
+      // iba presne (inak otázka „Myslíte …?"), nový názov presne ako zaznel.
+      const newName = cleanName(args.newName);
+      if (!newName) return answer(t(locale, "assistant.inventory.askName"));
+      const resolved = await resolveInventory(db, locale, { query: args.query ?? args.entityName, useContext: args.useContext, context: ctx.resolvedEntity, entityId: args.entityId, exact: true });
+      if ("result" in resolved) return resolved.result;
+      if ("missing" in resolved) {
+        return { kind: "not_found", text: t(locale, "assistant.inventory.notFound", { name: args.query ?? "" }), awaiting: { slot: "inventory_item" } };
+      }
+      const item = resolved.entity;
+      if (normalizeKey(item.name) === normalizeKey(newName)) {
+        return answer(t(locale, "assistant.inventory.renameSame", { name: item.name ?? "" }), inventoryRef(item));
+      }
+      const id = await createConfirmation("INVENTORY_ITEM_RENAME", { itemId: item.id, name: item.name, newName }, null);
+      if (!id) return { kind: "error", text: t(locale, "assistant.inventory.renameUnavailable") };
+      return preview(locale, "INVENTORY_ITEM_RENAME",
+        t(locale, "assistant.inventory.renameSummary", { name: item.name ?? "", newName }),
+        id, "assistant.confirm.rename");
+    }
+
     // ------------------------------------------------------------- stroje
     case "MACHINE_CREATE": {
       const name = cleanName(args.entityName);
@@ -402,8 +425,37 @@ export async function handleOperationalIntent(
         intent.name === "VEHICLE_SERVICE_ADD" ||
         (!args.targetModule && ctx.resolvedEntity?.entityType === "vehicle");
       const isMachine = !isVehicle && (intent.name === "MACHINE_SERVICE_ADD");
+      // „Pridaj servis Takeuchi" — slovo za „servis" nie je popis, ale meno
+      // stroja (žiadne údržbové slovo). Overí sa presne; potom otázka na popis.
+      if (!args.query && !args.entityId && args.serviceTitle && !isServiceUtterance(args.serviceTitle)) {
+        const asMachine = requireExact(resolveByName(await loadMachines(db), args.serviceTitle), true);
+        if ("match" in asMachine) {
+          // Meno stroja sa presunie z popisu do cieľa (zapečatená otázka).
+          return {
+            kind: "answer",
+            text: t(locale, "assistant.service.askTitle", { name: asMachine.match.name ?? "" }),
+            awaiting: { slot: "service_title", patch: { query: asMachine.match.name ?? args.serviceTitle, serviceTitle: undefined, targetModule: "machines" } },
+          };
+        }
+      }
       if (!args.targetModule && !args.query && !args.entityId && !ctx.resolvedEntity) {
         return ask(t(locale, "assistant.service.whichEntity"), "machine_or_vehicle");
+      }
+      // Stroj/vozidlo je známe, popis nie → otázka (nie záznam „Servis").
+      // (So sumou „Pridaj servis za 250 eur" je záznam úplný aj bez popisu.)
+      if (!cleanName(args.serviceTitle) && args.amount === undefined && (args.query || args.entityId || args.useContext || ctx.resolvedEntity)) {
+        const probe = isVehicle
+          ? await resolveVehicle(db, locale, { query: args.query, useContext: args.useContext, context: ctx.resolvedEntity, entityId: args.entityId })
+          : await resolveMachine(db, locale, { query: args.query, useContext: args.useContext, context: ctx.resolvedEntity, entityId: args.entityId });
+        if ("entity" in probe) {
+          const label = isVehicle ? vehicleLabel(probe.entity as VehicleRow) : (probe.entity as MachineRow).name ?? "";
+          return ask(t(locale, "assistant.service.askTitle", { name: label }), "service_title");
+        }
+        if (!isVehicle && !args.targetModule && args.query && "result" in probe && probe.result.kind === "not_found") {
+          // Môže to byť vozidlo — pokračuje sa pôvodnou cestou nižšie.
+        } else {
+          return probe.result;
+        }
       }
       const title = cleanName(args.serviceTitle) ?? t(locale, "assistant.service.defaultTitle");
       // Suma iba ak zaznela („za 250 eur"); nič sa nedopĺňa.
@@ -579,6 +631,15 @@ export async function executeOperationalAction(
       const { data, error } = await db.from("inventory_items").delete().eq("id", itemId).select("id");
       if (error || (data ?? []).length !== 1) return fail();
       return actionResult(true, t(locale, "assistant.inventory.deleted", { name: str(args.name) ?? "" }));
+    }
+
+    case "INVENTORY_ITEM_RENAME": {
+      const itemId = str(args.itemId);
+      const newName = str(args.newName);
+      if (!itemId || !newName) return fail();
+      const { data, error } = await db.from("inventory_items").update({ name: newName }).eq("id", itemId).select("id");
+      if (error || (data ?? []).length !== 1) return fail(error?.code === "42501" ? "assistant.denied.inventoryReadOnly" : "search.errors.generic");
+      return actionResult(true, t(locale, "assistant.inventory.renamed", { name: str(args.name) ?? "", newName }));
     }
 
     case "MACHINE_CREATE": {

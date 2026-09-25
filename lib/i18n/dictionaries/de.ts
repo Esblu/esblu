@@ -245,6 +245,10 @@ const de = {
       },
     },
     voice: {
+      replies: {
+        on: "Sprachantworten: an",
+        off: "Sprachantworten: aus",
+      },
       launcher: "Sprachbefehl",
       start: "Sprechen",
       stop: "Stoppen",
@@ -508,6 +512,14 @@ const de = {
   },
 
   auth: {
+    oauth: {
+      or: "oder",
+      google: "Mit Google fortfahren",
+      apple: "Mit Apple fortfahren",
+      startFailed: "Die Anmeldung beim Anbieter konnte nicht gestartet werden. Bitte versuchen Sie es erneut.",
+      cancelled: "Die Anmeldung wurde abgebrochen.",
+      failed: "Die Anmeldung ist fehlgeschlagen. Wenn Sie noch keinen Zugang zur geschlossenen Beta oder keine Einladung haben, kontaktieren Sie uns unter info@esblu.com.",
+    },
     login: {
       title: "Anmeldung",
       registerTitle: "Firma registrieren",
@@ -777,6 +789,19 @@ const de = {
       mismatch: "Die neuen Passwörter stimmen nicht überein.",
       changeFailedPrefix: "Das Passwort konnte nicht geändert werden: {{message}}",
       changed: "Das Passwort wurde erfolgreich geändert.",
+    },
+    push: {
+      title: "Benachrichtigungen auf dem Telefon",
+      description: "Esblu benachrichtigt Sie über neue Chatnachrichten und (Inhaber und Administrator) über anstehende Fristen — HU, AU, Vignette und Service — auch wenn die App geschlossen ist.",
+      enableButton: "Benachrichtigungen auf diesem Gerät aktivieren",
+      disableButton: "Benachrichtigungen auf diesem Gerät deaktivieren",
+      enabled: "Benachrichtigungen sind aktiviert.",
+      disabled: "Benachrichtigungen sind deaktiviert.",
+      denied: "Der Browser hat Benachrichtigungen blockiert. Erlauben Sie sie in den Browser-Einstellungen.",
+      failed: "Benachrichtigungen konnten nicht aktiviert werden. Bitte versuchen Sie es später erneut.",
+      unsupported: "Dieser Browser unterstützt keine Benachrichtigungen.",
+      iosHint: "Fügen Sie Esblu auf dem iPhone zum Home-Bildschirm hinzu (Teilen → Zum Home-Bildschirm) und öffnen Sie es von dort — dann aktivieren Sie hier die Benachrichtigungen.",
+      privacyHint: "Auf dem Sperrbildschirm erscheint nur ein allgemeiner Text, kein Nachrichteninhalt und keine Beträge.",
     },
     feedback: {
       title: "Feedback",
@@ -2612,6 +2637,10 @@ const de = {
       },
     },
     intent: {
+      renameSummary: "Ich benenne den Ordner „{{name}}“ in „{{newName}}“ um. Die Belege bleiben.",
+      renamed: "Den Ordner „{{name}}“ habe ich in „{{newName}}“ umbenannt.",
+      renameSame: "Der Ordner heißt bereits „{{name}}“.",
+      renameUnavailable: "Die Umbenennung konnte gerade nicht vorbereitet werden. Bitte benennen Sie den Ordner in seiner Detailansicht um.",
       createSummary: "Ich erstelle den Ordner „{{name}}“.",
       createConfirm: "Ordner erstellen",
       created: "Der Ordner „{{name}}“ wurde erstellt.",
@@ -2728,6 +2757,12 @@ const de = {
       partnerRead: "Ich verstehe, dass es um einen Geschäftspartner geht. Welchen Partner möchten Sie öffnen? Z. B. „Finde Partner Firma Alfa“.",
       folder: "Ich verstehe, dass es um einen Ordner geht. Möchten Sie einen Ordner öffnen, erstellen oder herunterladen? Z. B. „Öffne Ordner August“.",
     },
+    quick: {
+      yes: "Ja",
+      no: "Nein",
+      create: "Neu erstellen",
+      search: "Suchen",
+    },
     clarify: {
       taskCancelled: "In Ordnung, die angefangene Aktion ist abgebrochen. Es wurde nichts angelegt.",
       cancelled: "Gut, ich lasse es. Es wurde nichts geändert.",
@@ -2735,6 +2770,7 @@ const de = {
       createModule: "In welchem Modul möchten Sie es anlegen? Zum Beispiel „Neue Lagerposition anlegen“, „Neue Maschine anlegen“ oder „Neues Fahrzeug hinzufügen“.",
     },
     confirm: {
+      rename: "Umbenennen",
       create: "Anlegen",
       add: "Hinzufügen",
       adjust: "Bestand ändern",
@@ -2759,6 +2795,10 @@ const de = {
       openInbox: "Inbox öffnen",
     },
     inventory: {
+      renameSummary: "Ich benenne den Lagerartikel „{{name}}“ in „{{newName}}“ um. Die Menge bleibt.",
+      renamed: "„{{name}}“ habe ich in „{{newName}}“ umbenannt.",
+      renameSame: "Der Artikel heißt bereits „{{name}}“.",
+      renameUnavailable: "Die Umbenennung konnte gerade nicht vorbereitet werden. Bitte ändern Sie den Namen im Lager.",
       confirmCandidate: "Meinen Sie die Lagerposition „{{name}}“?",
       askName: "Wie soll die neue Lagerposition heißen?",
       askQuantity: "Wie viele? Zum Beispiel „20 Schrauben ins Lager buchen“.",
@@ -2802,6 +2842,7 @@ const de = {
       deleted: "Das Fahrzeug {{name}} wurde gelöscht.",
     },
     service: {
+      askTitle: "Was wurde an „{{name}}“ gemacht? Zum Beispiel „Öl- und Filterwechsel“.",
       addSummaryCost: "Ich füge den Wartungseintrag „{{title}}“ zu {{entity}} mit heutigem Datum und einem Betrag von {{cost}} € hinzu.",
       whichEntity: "Zu welcher Maschine oder welchem Fahrzeug? Nennen Sie Namen oder Kennzeichen oder öffnen Sie das Detail.",
       entityNotFound: "Keine Maschine und kein Fahrzeug „{{name}}“ gefunden.",

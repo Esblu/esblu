@@ -505,7 +505,8 @@ await check("hlas s výslovnou akciou alebo filtrom → čítanie povolené („
   for (const phrase of ["Ukáž faktúru.", "Nájdi faktúru 2026001.", "Otvor faktúru 2026001.", "Faktúry za august.", "Nájdi faktúru od Tester1."]) {
     const env = makeDb({ role: "owner", financeManage: true, tables: DOC_TABLES() });
     const r = await session(env).say(phrase);
-    assert.equal(r.intent?.name, "SEARCH_DOCUMENTS", phrase);
+    // Číslo faktúry → hľadanie faktúry podľa čísla; inak hľadanie dokladov.
+    assert.equal(r.intent?.name, /\d{4,}/.test(phrase) ? "SEARCH_INVOICE" : "SEARCH_DOCUMENTS", phrase);
     assert.notEqual(r.result.kind, "answer", phrase);
     assert.ok(env.state.queries > 0, phrase);
   }

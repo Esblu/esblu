@@ -134,6 +134,7 @@ const STATIC_REQUIREMENTS: Partial<Record<IntentName, AccessRequirement>> = {
   INVENTORY_ITEM_CREATE: "inventory_write",
   INVENTORY_QUANTITY_ADJUST: "inventory_write",
   INVENTORY_ITEM_DELETE: "inventory_write",
+  INVENTORY_ITEM_RENAME: "inventory_write",
 
   // Termíny sú prevádzkové (STK, EK, servis)
   UPCOMING_DEADLINES: "operational_read",
@@ -156,6 +157,7 @@ const STATIC_REQUIREMENTS: Partial<Record<IntentName, AccessRequirement>> = {
   FOLDER_LIST_ITEMS: "finance_manage",
   FOLDER_EXPORT: "finance_manage",
   FOLDER_DELETE: "finance_manage",
+  FOLDER_RENAME: "finance_manage",
   DOCUMENTS_EXPORT: "finance_manage",
   // Inbox: nepriradené bločky/faktúry sú finančné podklady. Zmazanie =
   // rovnaké právo ako RLS documents_delete_finance_manager.

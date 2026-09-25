@@ -283,9 +283,14 @@ await check("registry: všetky prevádzkové zápisy a FOLDER_DELETE vyžadujú 
 });
 
 await check("potvrdenia: allowlist v migrácii a v actions.ts pokrýva všetky nové zápisy", () => {
-  const sql = readFileSync("supabase/migrations/20260926120000_role_scope_voice_hardening.sql", "utf8");
+  // Posledná migrácia, ktorá definuje allowlist potvrdení (novší súbor ho
+  // celý nahrádza). Pozn.: 20260927100000 je navrhnutá a čaká na schválenie.
+  const allowlistFiles = readdirSync("supabase/migrations")
+    .filter((file) => file.endsWith(".sql") && readFileSync(`supabase/migrations/${file}`, "utf8").includes("assistant_action_confirmations_intent_check"))
+    .sort();
+  const sql = readFileSync(`supabase/migrations/${allowlistFiles[allowlistFiles.length - 1]}`, "utf8");
   const actions = readFileSync("lib/intents/actions.ts", "utf8");
-  for (const name of [...OPERATIONAL_WRITE_INTENTS, "FOLDER_DELETE"]) {
+  for (const name of [...OPERATIONAL_WRITE_INTENTS, "FOLDER_DELETE", "FOLDER_RENAME", "INBOX_DELETE_UNASSIGNED"]) {
     assert.ok(sql.includes(`'${name}'`), `SQL ${name}`);
     assert.ok(actions.includes(`"${name}"`), `actions ${name}`);
   }

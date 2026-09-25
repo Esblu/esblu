@@ -25,7 +25,11 @@ import { REQUEST_LOCALE_HEADER } from "@/lib/i18n/request-locale";
 import type { IntentResult } from "@/lib/intents/types";
 import { classifyConfirmationReply } from "@/lib/intents/confirmation-reply";
 import { useVoiceCapture } from "@/hooks/use-voice-capture";
-import { IntentResultView } from "@/app/components/voice/IntentResultView";
+import { IntentResultView, QuickReplies } from "@/app/components/voice/IntentResultView";
+import { VoiceReplyToggle } from "@/app/components/voice/VoiceReplyToggle";
+import { cancelSpeech, speak } from "@/lib/voice/speech";
+import { spokenTextFor } from "@/lib/voice/spoken-text";
+import { disablePushOnThisDevice } from "@/lib/push/client";
 import { todayLocalDate } from "@/lib/local-date";
 import { FolderIcon } from "@/app/components/icons/AppIcons";
 import { downloadDocumentPackage, PackageDownloadError } from "@/lib/document-package-client";
@@ -97,6 +101,8 @@ export default function Dashboard() {
   const pendingPreviewRef = useRef<IntentResult | null>(null);
   // Posledný výsledok pre kontext prepisu reči (čítané v callbacku nahrávania).
   const intentResultRef = useRef<IntentResult | null>(null);
+  // Odpovedať nahlas iba na hlasový prepis (písané hľadanie nikdy nerozpráva).
+  const speakNextResultRef = useRef(false);
   // Rozpracovaná otázka asistenta („Ku ktorému stroju?") — zapečatený token
   // servera. V ref, nie v poli hľadania: zápis prepisu do poľa ju nezmaže.
   const pendingClarificationRef = useRef<string | null>(null);
@@ -109,7 +115,12 @@ export default function Dashboard() {
   useEffect(() => {
     pendingPreviewRef.current = intentResult?.kind === "action_preview" ? intentResult : null;
     intentResultRef.current = intentResult;
-  }, [intentResult]);
+    if (speakNextResultRef.current && intentResult) {
+      speakNextResultRef.current = false;
+      const spoken = spokenTextFor(intentResult);
+      if (spoken) speak(spoken, locale);
+    }
+  }, [intentResult, locale]);
   const [intentLoading, setIntentLoading] = useState(false);
   // Action Engine (doplnenie zadania, bod 6/23) — potvrdzovací tok pre WRITE
   // intenty (EXPORT_DOCUMENTS/CREATE_DOCUMENT_CATEGORY/RENAME_DOCUMENT_CATEGORY/
@@ -176,6 +187,8 @@ export default function Dashboard() {
   }
 
   async function logout() {
+    // Toto zariadenie po odhlásení nesmie ďalej dostávať upozornenia.
+    await disablePushOnThisDevice();
     await supabase.auth.signOut();
     router.push("/login");
   }
@@ -387,6 +400,7 @@ export default function Dashboard() {
         pendingClarificationRef.current = typeof data?.pendingClarification === "string" ? data.pendingClarification : null;
 
         const isVoiceTranscript = trimmed === voiceTranscriptRef.current.trim();
+        speakNextResultRef.current = isVoiceTranscript;
         if (response.ok && data.success && data.recognized) {
           const recognized = data.result as IntentResult;
           setIntentResult(recognized);
@@ -440,6 +454,7 @@ export default function Dashboard() {
     // Otázka dialógu na nástenke je vždy otázka faktúry (iný dialóg tu nie je).
     getTranscriptionContext: () => (intentResultRef.current?.kind === "clarify" ? "invoice" : null),
     onTranscript: (text) => {
+      cancelSpeech();
       // Hlasové „Áno, zmaž ho" pri zobrazenom náhľade = ťuknutie na
       // Potvrdiť. Predtým prepis prepísal pole hľadania, náhľad zmizol a
       // zobrazilo sa „Nič sa nenašlo." (pozri lib/intents/confirmation-reply.ts).
@@ -449,6 +464,7 @@ export default function Dashboard() {
         if (reply === "confirm") {
           pendingPreviewRef.current = null;
           setVoiceTranscript(text);
+          speakNextResultRef.current = true; // výsledok potvrdenia povie nahlas
           void handleActionConfirm(pending);
           return;
         }
@@ -467,6 +483,15 @@ export default function Dashboard() {
     },
   });
 
+
+  // Tlačidlo „Áno" / „Nie" — tá istá cesta ako vyslovená odpoveď (asistent
+  // s dialógom a zapečatenou otázkou), nie podreťazcové hľadanie.
+  function sendQuickReply(text: string) {
+    cancelSpeech();
+    voiceTranscriptRef.current = text;
+    setSearch(text);
+    setVoiceTranscript(text);
+  }
 
   // ZVÄČŠENIE IKON (KOREKCIA v5): imageZoom kompenzuje vnútorný priehľadný
   // okraj rastrových produktových fotiek (van/excavator/warehouse), aby po
@@ -937,9 +962,12 @@ export default function Dashboard() {
             </p>
           )}
           {voiceState === "idle" && voiceTranscript && search === voiceTranscript && (
-            <p className="mt-2 text-[11px] text-muted-esblu">
-              {t("search.voice.ui.transcript")}: „{voiceTranscript}“
-            </p>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <p className="text-[11px] text-muted-esblu">
+                {t("search.voice.ui.transcript")}: „{voiceTranscript}“
+              </p>
+              <VoiceReplyToggle />
+            </div>
           )}
 
           {query && (
@@ -963,6 +991,7 @@ export default function Dashboard() {
                       ))}
                     </ul>
                   )}
+                  <QuickReplies replies={intentResult.quickReplies} onQuickReply={sendQuickReply} />
                 </div>
               ) : hasUsableIntentResult ? (
                 <IntentResultView
@@ -970,6 +999,7 @@ export default function Dashboard() {
                   actionSubmitting={actionSubmitting}
                   onConfirm={() => void handleActionConfirm()}
                   onCancel={handleActionCancel}
+                  onQuickReply={sendQuickReply}
                 />
               ) : query.length >= 2 && intentLoading ? (
                 <p className="text-xs font-medium text-muted-esblu">

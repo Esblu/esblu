@@ -260,6 +260,10 @@ const sk = {
     // nad rovnakým textovým poľom/Intent Enginom vyššie, nikdy nový
     // paralelný systém.
     voice: {
+      replies: {
+        on: "Hlasové odpovede: zapnuté",
+        off: "Hlasové odpovede: vypnuté",
+      },
       launcher: "Hlasový príkaz",
       start: "Hovoriť",
       stop: "Zastaviť",
@@ -520,6 +524,14 @@ const sk = {
   },
 
   auth: {
+    oauth: {
+      or: "alebo",
+      google: "Pokračovať cez Google",
+      apple: "Pokračovať cez Apple",
+      startFailed: "Prihlásenie cez poskytovateľa sa nepodarilo spustiť. Skúste to, prosím, znova.",
+      cancelled: "Prihlásenie bolo zrušené.",
+      failed: "Prihlásenie sa nepodarilo. Ak ešte nemáte prístup do uzavretej beta verzie alebo pozvánku, kontaktujte nás na info@esblu.com.",
+    },
     login: {
       title: "Prihlásenie",
       registerTitle: "Registrácia firmy",
@@ -789,6 +801,19 @@ const sk = {
       mismatch: "Nové heslá sa nezhodujú.",
       changeFailedPrefix: "Heslo sa nepodarilo zmeniť: {{message}}",
       changed: "Heslo bolo úspešne zmenené.",
+    },
+    push: {
+      title: "Upozornenia v telefóne",
+      description: "Esblu vás upozorní na novú správu v chate a (vlastníka a administrátora) na blížiace sa termíny — STK, EK, diaľničnú známku a servis — aj keď je aplikácia zatvorená.",
+      enableButton: "Zapnúť upozornenia v tomto zariadení",
+      disableButton: "Vypnúť upozornenia v tomto zariadení",
+      enabled: "Upozornenia sú zapnuté.",
+      disabled: "Upozornenia sú vypnuté.",
+      denied: "Prehliadač upozornenia zablokoval. Povoľte ich v nastaveniach prehliadača.",
+      failed: "Upozornenia sa nepodarilo zapnúť. Skúste to, prosím, neskôr.",
+      unsupported: "Tento prehliadač upozornenia nepodporuje.",
+      iosHint: "Na iPhone pridajte Esblu na plochu (Zdieľať → Pridať na plochu) a otvorte ho odtiaľ — potom tu upozornenia zapnete.",
+      privacyHint: "Na zamknutej obrazovke sa zobrazí iba všeobecný text, nie obsah správ ani sumy.",
     },
     feedback: {
       title: "Spätná väzba",
@@ -2620,6 +2645,10 @@ const sk = {
       },
     },
     intent: {
+      renameSummary: "Premenujem priečinok „{{name}}“ na „{{newName}}“. Doklady v ňom ostanú.",
+      renamed: "Priečinok „{{name}}“ som premenoval na „{{newName}}“.",
+      renameSame: "Priečinok sa už volá „{{name}}“.",
+      renameUnavailable: "Premenovanie sa teraz nepodarilo pripraviť. Premenujte priečinok, prosím, priamo v jeho detaile.",
       createSummary: "Vytvorím priečinok „{{name}}“.",
       createConfirm: "Vytvoriť priečinok",
       created: "Priečinok „{{name}}“ je vytvorený.",
@@ -2736,6 +2765,12 @@ const sk = {
       partnerRead: "Rozumiem, že ide o obchodného partnera. Ktorého partnera chcete otvoriť? Povedzte napríklad „Nájdi partnera Firma Alfa“.",
       folder: "Rozumiem, že ide o priečinok. Chcete priečinok otvoriť, vytvoriť alebo stiahnuť? Povedzte napríklad „Otvor priečinok August“.",
     },
+    quick: {
+      yes: "Áno",
+      no: "Nie",
+      create: "Vytvoriť novú",
+      search: "Vyhľadať",
+    },
     clarify: {
       taskCancelled: "Dobre, rozpracovanú akciu som zrušil. Nič sa nevytvorilo.",
       cancelled: "Dobre, nechávam to tak. Nič sa nezmenilo.",
@@ -2743,6 +2778,7 @@ const sk = {
       createModule: "V ktorom module ju chcete vytvoriť? Napríklad „Vytvor novú položku v sklade“, „Pridaj nový stroj“ alebo „Pridaj nové vozidlo“.",
     },
     confirm: {
+      rename: "Premenovať",
       create: "Vytvoriť",
       add: "Pridať",
       adjust: "Zmeniť stav",
@@ -2767,6 +2803,10 @@ const sk = {
       openInbox: "Otvoriť Inbox",
     },
     inventory: {
+      renameSummary: "Premenujem skladovú položku „{{name}}“ na „{{newName}}“. Množstvo ostane.",
+      renamed: "Položku „{{name}}“ som premenoval na „{{newName}}“.",
+      renameSame: "Položka sa už volá „{{name}}“.",
+      renameUnavailable: "Premenovanie sa teraz nepodarilo pripraviť. Upravte, prosím, názov priamo v Sklade.",
       confirmCandidate: "Myslíte skladovú položku „{{name}}“?",
       askName: "Aký názov má mať nová skladová položka?",
       askQuantity: "O koľko kusov ide? Napríklad „pridaj do skladu 20 vrutov“.",
@@ -2810,6 +2850,7 @@ const sk = {
       deleted: "Vozidlo {{name}} je zmazané.",
     },
     service: {
+      askTitle: "Čo sa na „{{name}}“ robilo? Povedzte napríklad „výmena oleja a filtrov“.",
       addSummaryCost: "Pridám servisný záznam „{{title}}“ k {{entity}} s dnešným dátumom a sumou {{cost}} €.",
       whichEntity: "Ku ktorému stroju alebo vozidlu? Povedzte jeho názov alebo ŠPZ, alebo otvorte jeho detail.",
       entityNotFound: "Stroj ani vozidlo „{{name}}“ sa nenašli.",

@@ -15,6 +15,7 @@ import {
   matchFolderByName,
   normalizeFolderName,
   removeItemsFromFolder,
+  renameDocumentFolder,
   type DocumentFolder,
   type FolderRef,
 } from "@/lib/document-folders";
@@ -50,7 +51,7 @@ import {
 // NIKDY nenahrádza posledným otvoreným záznamom — asistent sa spýta.
 // =============================================================================
 
-export const FOLDER_WRITE_INTENTS = ["FOLDER_CREATE", "FOLDER_ADD_ITEMS", "FOLDER_REMOVE_ITEMS", "FOLDER_DELETE"] as const;
+export const FOLDER_WRITE_INTENTS = ["FOLDER_CREATE", "FOLDER_ADD_ITEMS", "FOLDER_REMOVE_ITEMS", "FOLDER_DELETE", "FOLDER_RENAME"] as const;
 export type FolderWriteIntent = (typeof FOLDER_WRITE_INTENTS)[number];
 
 const FOLDER_FAMILY: readonly IntentName[] = [
@@ -64,6 +65,7 @@ const FOLDER_FAMILY: readonly IntentName[] = [
   "DOCUMENTS_LIST_UNDOWNLOADED",
   "DOCUMENTS_DOWNLOAD_STATUS",
   "FOLDER_DELETE",
+  "FOLDER_RENAME",
 ];
 
 export function isFolderFamilyIntent(name: string): name is IntentName {
@@ -547,6 +549,10 @@ export async function handleFolderIntent(
     }
 
     case "DOCUMENTS_EXPORT": {
+      // „Stiahni tieto doklady / originály" bez výberu na obrazovke = otázka,
+      // nikdy „všetko". Rovnako bez akéhokoľvek filtra.
+      if (args.useSelection && !ctx.selection?.length) return answer(t(locale, "folders.intent.noSelection"));
+      if (!args.useSelection && !hasFilter(args)) return answer(t(locale, "folders.intent.missingFilter"));
       const refs = args.useSelection && ctx.selection?.length
         ? await collectSelection(db, ctx.selection)
         : await collectByFilter(db, args);
@@ -648,6 +654,48 @@ export async function handleFolderIntent(
       };
     }
 
+    case "FOLDER_RENAME": {
+      // Rovnaká funkcia ako tlačidlo „Premenovať" v detaile priečinka. Cieľ
+      // iba PRESNE (hlasová totožnosť mena); približná zhoda = otázka.
+      const newName = normalizeFolderName(args.newName);
+      if (!newName) return answer(t(locale, "folders.intent.invalidName"));
+      const folders = await listDocumentFolders(db);
+      const confirmed = args.entityId ? folders.find((f) => f.id === args.entityId) : undefined;
+      if (args.entityId && !confirmed) return { kind: "not_found", text: t(locale, "folders.intent.notFound", { name: args.folderName ?? "" }) };
+      if (!confirmed && !args.folderName) return answer(t(locale, "folders.intent.whichFolderList"));
+      const spokenKey = folderSpokenKey(args.folderName ?? "");
+      const exact = confirmed ? [confirmed] : spokenKey ? folders.filter((f) => folderSpokenKey(f.name) === spokenKey) : [];
+      if (exact.length !== 1) {
+        const match = matchFolderByName(folders, args.folderName ?? "");
+        if (!match) return { kind: "not_found", text: t(locale, "folders.intent.notFound", { name: args.folderName ?? "" }), awaiting: { slot: "folder" } };
+        if ("folder" in match) {
+          return {
+            kind: "answer",
+            text: t(locale, "folders.intent.confirmCandidate", { name: match.folder.name }),
+            entity: folderEntity(match.folder),
+            awaiting: { slot: "folder", candidate: { id: match.folder.id, label: match.folder.name } },
+          };
+        }
+        return { kind: "list", title: t(locale, "folders.intent.whichFolderList"), items: match.ambiguous.map(folderEntity), awaiting: { slot: "folder" } };
+      }
+      const folder = exact[0];
+      if (folderNameKey(folder.name) === folderNameKey(newName)) {
+        return actionResult(true, t(locale, "folders.intent.renameSame", { name: folder.name }), folder);
+      }
+      const clash = folders.find((f) => f.id !== folder.id && folderNameKey(f.name) === folderNameKey(newName));
+      if (clash) return actionResult(false, t(locale, "folders.intent.alreadyExists", { name: clash.name }), clash);
+      const confirmationId = await createConfirmation("FOLDER_RENAME", { folderId: folder.id, name: folder.name, newName }, null);
+      if (!confirmationId) return { kind: "error", text: t(locale, "folders.intent.renameUnavailable") };
+      return {
+        kind: "action_preview",
+        action: "FOLDER_RENAME",
+        summary: t(locale, "folders.intent.renameSummary", { name: folder.name, newName }),
+        confirmLabel: t(locale, "folders.renameSave"),
+        cancelLabel: t(locale, "search.actions.cancelLabel"),
+        confirmationId,
+      };
+    }
+
     default:
       return { kind: "error", text: t(locale, "search.errors.generic") };
   }
@@ -694,6 +742,15 @@ export async function executeFolderAction(
   const { data: folderRow } = await db.from("document_folders").select("id, name").eq("id", folderId).maybeSingle();
   if (!folderRow) return fail("folders.errors.notFound");
   const folder = folderRow as { id: string; name: string };
+
+  if (intent === "FOLDER_RENAME") {
+    const renamed = await renameDocumentFolder(db, folder.id, String(args.newName ?? ""));
+    if (!renamed.ok) {
+      if (renamed.error === "DUPLICATE_NAME") return actionResult(false, t(locale, "folders.intent.alreadyExists", { name: String(args.newName ?? "") }));
+      return fail(renamed.error === "FORBIDDEN" ? "folders.intent.denied" : "search.errors.generic");
+    }
+    return actionResult(true, t(locale, "folders.intent.renamed", { name: folder.name, newName: String(args.newName ?? "") }), { id: folder.id, name: String(args.newName ?? "") });
+  }
 
   if (intent === "FOLDER_DELETE") {
     // Zmaže sa priečinok a jeho členstvá (CASCADE). Faktúry, doklady,

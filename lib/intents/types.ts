@@ -215,6 +215,12 @@ export const INTENT_NAMES = [
   // model a validácia). Nič nezapisuje; uloží ho človek v UI. Pred prípravou
   // sa overia duplicity v aktuálnej firme (lib/intents/partner-intents.ts).
   "PARTNER_CREATE",
+
+  // Premenovanie iba tam, kde to dovoľuje UI a dátový model: priečinok
+  // dokladov a skladová položka. Potvrdenie povinné (jednorazové HMAC).
+  // Doklady, faktúry, partneri ani stroje sa hlasom nepremenúvajú.
+  "FOLDER_RENAME",
+  "INVENTORY_ITEM_RENAME",
 ] as const;
 
 export type IntentName = (typeof INTENT_NAMES)[number];
@@ -387,6 +393,8 @@ export type IntentArgs = {
   // „Nie, chcem nového" po otázke na existujúceho partnera. Nastavuje ho
   // VÝHRADNE server zo svojej zapečatenej otázky (ako `entityId`).
   confirmedNew?: boolean;
+  // FOLDER_RENAME / INVENTORY_ITEM_RENAME — nový názov presne tak, ako zaznel.
+  newName?: string;
 };
 
 // Stavy faktúr, na ktoré sa dá pýtať. Zámerne "priateľské" hodnoty, nie
@@ -445,17 +453,32 @@ export type ClarificationSlot =
   | "inventory_item"
   | "folder"
   | "partner_name"
+  // „Čo sa na stroji robilo?" — popis servisu k už určenému stroju/vozidlu.
+  | "service_title"
   // „Faktúru, kopanie, …" bez akcie → „Chcete vytvoriť novú faktúru?"
   | "invoice_start";
 export type AwaitingClarification = {
   slot: ClarificationSlot;
   /** „Myslíte …?" — kandidát, ktorého používateľ potvrdí („Áno"). */
   candidate?: { id: string; label: string };
+  /**
+   * Úprava známych slotov pred zapečatením (iba server): napr. „Pridaj
+   * servis Takeuchi" → meno sa presunie z popisu do cieľa a otázka znie na
+   * popis. Nikdy sa neprijíma od klienta.
+   */
+  patch?: Partial<Pick<IntentArgs, "query" | "serviceTitle" | "targetModule">>;
 };
+
+/**
+ * Rýchla odpoveď (tlačidlo „Áno" / „Nie" / „Vytvoriť"). Pošle `text` tou
+ * istou cestou ako vyslovená alebo napísaná odpoveď — so zapečatenou
+ * otázkou servera. Nie je to oprávnenie ani skratka mimo servera.
+ */
+export type QuickReply = { label: string; text: string };
 
 export type IntentResult =
   | { kind: "navigate"; entity: EntityRef }
-  | { kind: "answer"; text: string; entity?: EntityRef; awaiting?: AwaitingClarification }
+  | { kind: "answer"; text: string; entity?: EntityRef; awaiting?: AwaitingClarification; quickReplies?: QuickReply[] }
   | {
       kind: "report";
       reportType: "vehicle" | "machine";
@@ -466,7 +489,7 @@ export type IntentResult =
       // (bod 5 zadania), nikdy prázdny reťazec/undefined.
       sections: { title: string; rows: { label: string; value: string }[] }[];
     }
-  | { kind: "list"; title: string; items: EntityRef[]; awaiting?: AwaitingClarification }
+  | { kind: "list"; title: string; items: EntityRef[]; awaiting?: AwaitingClarification; quickReplies?: QuickReply[] }
   | {
       kind: "deadline_list";
       title: string;
@@ -498,7 +521,7 @@ export type IntentResult =
       }[];
     }
   | { kind: "disambiguate"; candidates: EntityRef[] }
-  | { kind: "not_found"; text: string; awaiting?: AwaitingClarification }
+  | { kind: "not_found"; text: string; awaiting?: AwaitingClarification; quickReplies?: QuickReply[] }
   | { kind: "error"; text: string }
   // ---------------------------------------------------------------------
   // WRITE intent preview/výsledok (doplnenie zadania, sekcia 6/23; hardened
@@ -543,7 +566,9 @@ export type IntentResult =
         | "VEHICLE_CREATE"
         | "VEHICLE_SERVICE_ADD"
         | "VEHICLE_DELETE"
-        | "INBOX_DELETE_UNASSIGNED";
+        | "INBOX_DELETE_UNASSIGNED"
+        | "FOLDER_RENAME"
+        | "INVENTORY_ITEM_RENAME";
       /** Nebezpečná (nevratná) akcia — UI zvýrazní potvrdenie. */
       destructive?: boolean;
       summary: string;
@@ -644,6 +669,7 @@ export type IntentResult =
       question: string;
       conversationId: string;
       choices?: { value: string; label: string }[];
+      quickReplies?: QuickReply[];
     }
   // Draft vznikol a MUSÍ sa skontrolovať. `entity` vedie na detail
   // dokladu; `summary` je to isté, čo je v doklade, aby používateľ videl

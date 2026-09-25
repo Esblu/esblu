@@ -567,11 +567,21 @@ async function continueFlow(
     questionText = buildVatQuestion(locale, slots);
   }
 
+  // Jediný kandidát na odberateľa („Myslíte …?") → aj tlačidlá Áno / Nie.
+  const quickReplies =
+    missing[0] === "partnerChoice" && candidates.length === 1
+      ? [
+          { label: translate(locale, "assistant.quick.yes"), text: translate(locale, "assistant.quick.yes") },
+          { label: translate(locale, "assistant.quick.no"), text: translate(locale, "assistant.quick.no") },
+        ]
+      : undefined;
+
   return {
     kind: "clarify",
     question: lead ? `${lead} ${questionText}` : questionText,
     conversationId: ctx.conversationId,
     choices: question.choices,
+    ...(quickReplies ? { quickReplies } : {}),
   };
 }
 

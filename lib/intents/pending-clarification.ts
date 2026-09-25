@@ -4,6 +4,7 @@ import { isKnownIntentName } from "@/lib/intents/types";
 import { classifyConfirmationReply } from "@/lib/intents/confirmation-reply";
 import { parseIntentDeterministic } from "@/lib/intents/parse";
 import { isNewCommandDuringInvoice } from "@/lib/intents/conversation-state";
+import { hasExplicitAction } from "@/lib/intents/domain-action";
 
 // =============================================================================
 // Rozpracovaná otázka asistenta — spoločný mechanizmus pre všetky moduly.
@@ -50,7 +51,7 @@ type Envelope = { v: number; uid: string; cid: string; exp: number; p: PendingCl
 type Binding = { userId: string; companyId: string };
 type Options = { secret?: string; now?: number };
 
-const SLOTS: readonly ClarificationSlot[] = ["machine", "vehicle", "machine_or_vehicle", "inventory_item", "folder", "partner_name", "invoice_start"];
+const SLOTS: readonly ClarificationSlot[] = ["machine", "vehicle", "machine_or_vehicle", "inventory_item", "folder", "partner_name", "invoice_start", "service_title"];
 
 function key(secret: string | undefined = process.env.ESBLU_ACTION_CONFIRMATION_SECRET): Buffer | null {
   const trimmed = secret?.trim();
@@ -224,6 +225,7 @@ const ALLOWED_DOMAINS: Record<DialogContext, string[]> = {
   folder: ["folder"],
   partner_name: ["partner"],
   invoice_start: ["invoice"],
+  service_title: ["machine", "vehicle"],
   invoice: ["invoice"],
 };
 
@@ -237,6 +239,7 @@ const SLOT_LOOKUPS: Record<DialogContext, readonly string[]> = {
   folder: ["FOLDER_OPEN", "FOLDER_ADD_ITEMS"],
   partner_name: ["SEARCH_PARTNER"],
   invoice_start: [],
+  service_title: [],
   invoice: [],
 };
 
@@ -290,6 +293,15 @@ export function classifyClarificationReply(
   }
 
   const words = text.split(" ");
+  // Popis servisu je veta („výmena oleja a filtrov na prednej náprave"),
+  // nie meno — smie byť dlhší; nový príkaz rozpozná isClearNewCommand.
+  if (pending.slot === "service_title") {
+    const parsedCommand = hasExplicitAction(rawText) ? parseIntentDeterministic(rawText) : null;
+    const newCommand = parsedCommand !== null && !["MACHINE_SERVICE_ADD", "VEHICLE_SERVICE_ADD"].includes(parsedCommand.name);
+    if (words.length > 25 || newCommand) return { kind: "new_command" };
+    const value = rawText.trim().replace(/[.?!]+$/, "").trim();
+    return value ? { kind: "answer", value } : { kind: "new_command" };
+  }
   if (words.length > MAX_ANSWER_WORDS) return { kind: "new_command" };
   if (words.some(isCommandWord)) return { kind: "new_command" };
   if (isClearNewCommand(rawText, pending.slot)) return { kind: "new_command" };
@@ -339,6 +351,14 @@ export function resumePendingIntent(
       args.query = value;
       delete args.targetModule;
       break;
+    case "service_title": {
+      // „Výmena oleja za 80 eur" — suma iba ak zaznela s menou.
+      const text = reply.kind === "answer" ? reply.value : "";
+      const cost = /(\d+(?:[.,]\d{1,2})?)\s*(?:€|eur\w*)/i.exec(text);
+      args.serviceTitle = text.replace(/\s*(?:za\s+)?\d+(?:[.,]\d{1,2})?\s*(?:€|eur\w*)/i, "").replace(/[,\s]+$/, "").trim().slice(0, 120) || text.slice(0, 120);
+      if (cost) args.amount = Number(cost[1].replace(",", "."));
+      break;
+    }
     case "partner_name":
       // „Ako sa volá nový obchodný partner?" → meno; ostatné vyslovené
       // údaje (IČO …) z pôvodnej vety ostávajú.

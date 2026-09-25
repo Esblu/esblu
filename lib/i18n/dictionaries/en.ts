@@ -246,6 +246,10 @@ const en = {
       },
     },
     voice: {
+      replies: {
+        on: "Spoken replies: on",
+        off: "Spoken replies: off",
+      },
       launcher: "Voice command",
       start: "Speak",
       stop: "Stop",
@@ -506,6 +510,14 @@ const en = {
   },
 
   auth: {
+    oauth: {
+      or: "or",
+      google: "Continue with Google",
+      apple: "Continue with Apple",
+      startFailed: "Sign-in with the provider could not be started. Please try again.",
+      cancelled: "Sign-in was cancelled.",
+      failed: "Sign-in failed. If you do not yet have closed-beta access or an invitation, contact us at info@esblu.com.",
+    },
     login: {
       title: "Log in",
       registerTitle: "Register a company",
@@ -775,6 +787,19 @@ const en = {
       mismatch: "The new passwords don't match.",
       changeFailedPrefix: "The password could not be changed: {{message}}",
       changed: "The password was changed successfully.",
+    },
+    push: {
+      title: "Phone notifications",
+      description: "Esblu notifies you about new chat messages and (owner and administrator) about upcoming deadlines — inspection, emissions check, vignette and service — even when the app is closed.",
+      enableButton: "Turn on notifications on this device",
+      disableButton: "Turn off notifications on this device",
+      enabled: "Notifications are on.",
+      disabled: "Notifications are off.",
+      denied: "The browser blocked notifications. Allow them in the browser settings.",
+      failed: "Notifications could not be turned on. Please try again later.",
+      unsupported: "This browser does not support notifications.",
+      iosHint: "On iPhone, add Esblu to the Home Screen (Share → Add to Home Screen) and open it from there — then turn notifications on here.",
+      privacyHint: "The lock screen shows only a general text, not message content or amounts.",
     },
     feedback: {
       title: "Feedback",
@@ -2591,6 +2616,10 @@ const en = {
       },
     },
     intent: {
+      renameSummary: "I will rename the folder “{{name}}” to “{{newName}}”. Its documents stay.",
+      renamed: "I renamed the folder “{{name}}” to “{{newName}}”.",
+      renameSame: "The folder is already called “{{name}}”.",
+      renameUnavailable: "The rename could not be prepared right now. Please rename the folder in its detail.",
       createSummary: "I will create the folder “{{name}}”.",
       createConfirm: "Create folder",
       created: "Folder “{{name}}” was created.",
@@ -2707,6 +2736,12 @@ const en = {
       partnerRead: "I understand this is about a business partner. Which partner do you want to open? For example “Find partner Alpha Ltd”.",
       folder: "I understand this is about a folder. Do you want to open, create or download a folder? For example “Open folder August”.",
     },
+    quick: {
+      yes: "Yes",
+      no: "No",
+      create: "Create new",
+      search: "Search",
+    },
     clarify: {
       taskCancelled: "OK, I cancelled the unfinished action. Nothing was created.",
       cancelled: "OK, I'll leave it. Nothing was changed.",
@@ -2714,6 +2749,7 @@ const en = {
       createModule: "In which module do you want to create it? For example “create a new inventory item”, “add a new machine” or “add a new vehicle”.",
     },
     confirm: {
+      rename: "Rename",
       create: "Create",
       add: "Add",
       adjust: "Change stock",
@@ -2738,6 +2774,10 @@ const en = {
       openInbox: "Open Inbox",
     },
     inventory: {
+      renameSummary: "I will rename the inventory item “{{name}}” to “{{newName}}”. The quantity stays.",
+      renamed: "I renamed “{{name}}” to “{{newName}}”.",
+      renameSame: "The item is already called “{{name}}”.",
+      renameUnavailable: "The rename could not be prepared right now. Please edit the name in Inventory.",
       confirmCandidate: "Do you mean the inventory item “{{name}}”?",
       askName: "What should the new inventory item be called?",
       askQuantity: "How many? For example “add 20 screws to inventory”.",
@@ -2781,6 +2821,7 @@ const en = {
       deleted: "Vehicle {{name}} was deleted.",
     },
     service: {
+      askTitle: "What was done on “{{name}}”? For example “oil and filter change”.",
       addSummaryCost: "I will add the service record “{{title}}” to {{entity}} with today's date and an amount of €{{cost}}.",
       whichEntity: "For which machine or vehicle? Say its name or plate, or open its detail.",
       entityNotFound: "No machine or vehicle “{{name}}” was found.",

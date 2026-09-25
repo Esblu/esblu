@@ -28,16 +28,49 @@ import { storePartnerPrefill } from "@/lib/partner-prefill";
 // je horší než o riadok vyšší panel.
 // =============================================================================
 
+/**
+ * Tlačidlá rýchlej odpovede („Áno" / „Nie"). Pošlú text tou istou cestou ako
+ * vyslovená odpoveď — o význame rozhoduje server so zapečatenou otázkou.
+ */
+export function QuickReplies({
+  replies,
+  onQuickReply,
+  disabled = false,
+}: {
+  replies: { label: string; text: string }[] | undefined;
+  onQuickReply?: (text: string) => void;
+  disabled?: boolean;
+}) {
+  if (!replies || replies.length === 0 || !onQuickReply) return null;
+  return (
+    <div className="mt-3 flex flex-wrap gap-2">
+      {replies.map((reply, index) => (
+        <button
+          key={reply.text}
+          type="button"
+          disabled={disabled}
+          onClick={() => onQuickReply(reply.text)}
+          className={`${index === 0 ? "btn-primary" : "btn-secondary"} min-h-11 px-4 py-2 text-sm font-bold disabled:opacity-60`}
+        >
+          {reply.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export function IntentResultView({
   intentResult,
   actionSubmitting,
   onConfirm,
   onCancel,
+  onQuickReply,
 }: {
   intentResult: IntentResult | null;
   actionSubmitting: boolean;
   onConfirm: () => void;
   onCancel: () => void;
+  onQuickReply?: (text: string) => void;
 }) {
   const { t } = useLocale();
 
@@ -74,6 +107,7 @@ export function IntentResultView({
                 {intentResult.entity.label} →
               </Link>
             )}
+            <QuickReplies replies={intentResult.quickReplies} onQuickReply={onQuickReply} disabled={actionSubmitting} />
           </div>
         );
 
@@ -117,6 +151,7 @@ export function IntentResultView({
                 <p className="text-base font-bold text-primary">{item.label}</p>
               </Link>
             ))}
+            <QuickReplies replies={intentResult.quickReplies} onQuickReply={onQuickReply} disabled={actionSubmitting} />
           </div>
         );
 
@@ -189,6 +224,12 @@ export function IntentResultView({
         );
 
       case "not_found":
+        return (
+          <div className={boxClass}>
+            <p>{intentResult.text}</p>
+            <QuickReplies replies={intentResult.quickReplies} onQuickReply={onQuickReply} disabled={actionSubmitting} />
+          </div>
+        );
       case "error":
         return <p className={boxClass}>{intentResult.text}</p>;
 

@@ -8,7 +8,10 @@ import { useLocale } from "@/lib/i18n/LocaleProvider";
 import { useVoiceCapture } from "@/hooks/use-voice-capture";
 import { todayLocalDate } from "@/lib/local-date";
 import type { UiContext } from "@/lib/intents/ui-context";
-import { IntentResultView } from "@/app/components/voice/IntentResultView";
+import { IntentResultView, QuickReplies } from "@/app/components/voice/IntentResultView";
+import { VoiceReplyToggle } from "@/app/components/voice/VoiceReplyToggle";
+import { cancelSpeech, speak } from "@/lib/voice/speech";
+import { spokenTextFor } from "@/lib/voice/spoken-text";
 import {
   docButtonSecondary,
   docButtonPrimary,
@@ -140,6 +143,17 @@ export function VoiceLauncher({
   // Čaká sa na odpoveď na otázku faktúry? → necitlivý kontext pre prepis reči.
   const invoiceQuestionRef = useRef(false);
 
+  // Hovoril používateľ (hlas), alebo písal? Esblu odpovedá nahlas IBA na
+  // hlasový dialóg — písaný text nikdy nečakane nerozpráva.
+  const voiceTurnRef = useRef(false);
+  useEffect(() => {
+    if (!voiceTurnRef.current) return;
+    const spoken = spokenTextFor(intentResult) ?? (message || null);
+    if (spoken) speak(spoken, locale);
+    // locale sa mení iba pri prepnutí jazyka; nová odpoveď = nový výsledok.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [intentResult, message]);
+
   // Náhľad, ktorý práve čaká na potvrdenie. V ref, aby ho hlasový prepis
   // videl aj z callbacku nahrávania (bez zastaraného uzáveru).
   const pendingPreviewRef = useRef<IntentResult | null>(null);
@@ -174,6 +188,8 @@ export function VoiceLauncher({
     useVoiceCapture({
       getTranscriptionContext: () => (invoiceQuestionRef.current ? "invoice" : null),
       onTranscript: (text) => {
+        voiceTurnRef.current = true;
+        cancelSpeech();
         setTranscript(text);
         if (handleSpokenConfirmation(text)) return;
         void runIntent(text);
@@ -286,10 +302,14 @@ export function VoiceLauncher({
   /** Odpoveď na otázku asistenta — písaná alebo vybraná zo zoznamu. */
   function submitClarifyAnswer(
     value: string,
-    structuredAnswer?: { type: "partner_selection"; partnerId: string }
+    structuredAnswer?: { type: "partner_selection"; partnerId: string },
+    /** Tlačidlo rýchlej odpovede pokračuje v hlasovom dialógu; písanie nie. */
+    keepVoiceMode = false
   ) {
     const answer = value.trim();
     if (!answer) return;
+    if (!keepVoiceMode) voiceTurnRef.current = false;
+    cancelSpeech();
     setTranscript(answer);
     void runIntent(answer, structuredAnswer);
   }
@@ -373,6 +393,8 @@ export function VoiceLauncher({
    * zavrel — a dostal by otázku na niečo, čo už nechce.
    */
   function resetDialog() {
+    cancelSpeech();
+    voiceTurnRef.current = false;
     conversationIdRef.current = newConversationId();
     recentFolderIdRef.current = null;
     pendingClarificationRef.current = null;
@@ -443,7 +465,10 @@ export function VoiceLauncher({
       <div className="flex flex-wrap items-center gap-2">
         <button
           type="button"
-          onClick={handleMicButtonClick}
+          onClick={() => {
+            cancelSpeech();
+            handleMicButtonClick();
+          }}
           disabled={voiceState === "processing"}
           aria-pressed={voiceState === "recording"}
           className={`${docButtonSecondary} gap-2 ${
@@ -459,6 +484,8 @@ export function VoiceLauncher({
         <span aria-live="polite" className={`min-w-0 flex-1 ${VOICE_TEXT} text-secondary`}>
           {statusText || t("search.voice.hint")}
         </span>
+
+        <VoiceReplyToggle />
 
         <button
           type="button"
@@ -515,6 +542,11 @@ export function VoiceLauncher({
             </div>
           )}
 
+          <QuickReplies
+            replies={clarify.quickReplies}
+            onQuickReply={(text) => submitClarifyAnswer(text, undefined, true)}
+          />
+
           <form
             className="mt-3 flex flex-wrap items-end gap-2"
             onSubmit={(event) => {
@@ -560,6 +592,7 @@ export function VoiceLauncher({
             actionSubmitting={actionSubmitting}
             onConfirm={() => void handleConfirm()}
             onCancel={handleCancel}
+            onQuickReply={(text) => submitClarifyAnswer(text, undefined, true)}
           />
         </div>
       )}

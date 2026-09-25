@@ -418,6 +418,18 @@ export const INTENT_REGISTRY: Record<IntentName, IntentDefinition> = {
     requiresConfirmation: false,
     description: "Príprava formulára nového obchodného partnera (iba vyslovené údaje, kontrola duplicít). Nič neukladá. Finance manage.",
   },
+  FOLDER_RENAME: {
+    name: "FOLDER_RENAME",
+    readOnly: false,
+    requiresConfirmation: true,
+    description: "Premenovanie priečinka dokladov (rovnaká funkcia ako v UI). Presný priečinok, jednorazové potvrdenie. Finance manage.",
+  },
+  INVENTORY_ITEM_RENAME: {
+    name: "INVENTORY_ITEM_RENAME",
+    readOnly: false,
+    requiresConfirmation: true,
+    description: "Premenovanie skladovej položky (ten istý stĺpec ako úprava v UI). Presná položka, jednorazové potvrdenie. Owner/admin.",
+  },
   INBOX_DELETE_UNASSIGNED: {
     name: "INBOX_DELETE_UNASSIGNED",
     readOnly: false,

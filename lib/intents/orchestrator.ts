@@ -220,6 +220,14 @@ function domainClarification(
   return { text: t(`assistant.domain.${domain}`), invoiceItems: null };
 }
 
+/** Tlačidlá Áno / Nie — text ide tou istou cestou ako vyslovená odpoveď. */
+export function yesNoReplies(locale: Locale): { label: string; text: string }[] {
+  return [
+    { label: translate(locale, "assistant.quick.yes"), text: translate(locale, "assistant.quick.yes") },
+    { label: translate(locale, "assistant.quick.no"), text: translate(locale, "assistant.quick.no") },
+  ];
+}
+
 /** Route: iba odpoveď pre klienta. */
 export async function runAssistantTurn(deps: AssistantTurnDeps, input: AssistantTurnInput): Promise<AssistantTurnOutput> {
   return (await runAssistantTurnDetailed(deps, input)).output;
@@ -467,12 +475,20 @@ export async function runAssistantTurnDetailed(
         sealOptions
       );
     }
+    const quickReplies = clarification.invoiceItems === null
+      ? undefined
+      : clarification.invoiceItems
+        ? yesNoReplies(locale)
+        : [
+            { label: t("assistant.quick.create"), text: t("assistant.quick.create") },
+            { label: t("assistant.quick.search"), text: t("assistant.quick.search") },
+          ];
     return done({
       success: true,
       recognized: true,
       intent: intent.name,
       source: intent.source,
-      result: { kind: "answer", text: clarification.text },
+      result: { kind: "answer", text: clarification.text, ...(quickReplies && pendingToken ? { quickReplies } : {}) },
       pendingClarification: pendingToken,
     });
   }
@@ -543,10 +559,16 @@ export async function runAssistantTurnDetailed(
   // 8. Otázka handlera → zapečatený krátkodobý stav pre ďalšiu vetu.
   let pendingClarification: string | null = null;
   if (result && "awaiting" in result && result.awaiting) {
-    pendingClarification = sealPendingClarification(intent.name, intent.args, result.awaiting, binding, sealOptions);
+    const sealedArgs = result.awaiting.patch ? { ...intent.args, ...result.awaiting.patch } : intent.args;
+    pendingClarification = sealPendingClarification(intent.name, sealedArgs, result.awaiting, binding, sealOptions);
+    const hasCandidate = Boolean(result.awaiting.candidate);
     const { awaiting: _awaiting, ...rest } = result;
     void _awaiting;
     result = rest as IntentResult;
+    // „Myslíte …?" → tlačidlá Áno / Nie (tá istá cesta ako hlasová odpoveď).
+    if (hasCandidate && pendingClarification && (result.kind === "answer" || result.kind === "not_found" || result.kind === "list")) {
+      result = { ...result, quickReplies: yesNoReplies(locale) };
+    }
   }
 
   return done({

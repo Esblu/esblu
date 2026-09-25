@@ -1194,7 +1194,8 @@ await check("stav: zrušenie a vypršanie; prepis sa posiela raz a nezmenený", 
   const t4 = await runTurn(env, "Nechaj tak.", t3.pending);
   assert.equal(t4.pending, null);
   const launcher = readFileSync("app/components/voice/VoiceLauncher.tsx", "utf8");
-  assert.ok(/onTranscript: \(text\) => \{\s*setTranscript\(text\);/.test(launcher), "launcher: zobrazený prepis = odoslaný text");
+  // (pred zobrazením sa iba zastaví predchádzajúca hlasová odpoveď)
+  assert.ok(/onTranscript: \(text\) => \{[^}]{0,120}setTranscript\(text\);[^}]{0,120}void runIntent\(text\);/.test(launcher), "launcher: zobrazený prepis = odoslaný text");
   assert.ok(launcher.includes("body: JSON.stringify({\n          text,"), "launcher posiela presne `text`");
   assert.ok(launcher.includes("pendingClarificationRef.current = null;"), "zatvorenie/zrušenie maže otázku");
   const dashboard = readFileSync("app/components/Dashboard.tsx", "utf8");
