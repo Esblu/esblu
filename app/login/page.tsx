@@ -9,6 +9,7 @@ import { acceptLegalDocumentAtRegistration } from "@/lib/legal-acceptance";
 import { REQUIRED_ACCEPTANCE_DOCUMENTS } from "@/lib/legal-config";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import LanguageSwitcher from "@/app/components/LanguageSwitcher";
+import { SocialAuthButtons } from "@/app/components/auth/SocialAuthButtons";
 
 // Closed Beta (supabase/migrations/20260816130000_add_closed_beta_allowlist.sql):
 // verejná owner registrácia je dočasne obmedzená iba na schválených beta
@@ -65,6 +66,8 @@ export default function LoginPage() {
   // nie iba potvrdiť úspech.
   const [accountDeletionPartialNotice, setAccountDeletionPartialNotice] =
     useState(false);
+  // Návrat z Google/Apple bez prihlásenia (zrušené alebo chyba).
+  const [oauthNotice, setOauthNotice] = useState<"" | "cancelled" | "error">("");
 
   // Jednorazová správa po úspešnom (alebo čiastočnom) samoobslužnom zrušení
   // účtu (app/nastavenia → lib/account-deletion.ts). Číta sa priamo z
@@ -83,6 +86,14 @@ export default function LoginPage() {
       }
 
       const params = new URLSearchParams(window.location.search);
+      const oauth = params.get("oauth");
+      if (oauth === "cancelled" || oauth === "error") {
+        await Promise.resolve();
+        setOauthNotice(oauth);
+        params.delete("oauth");
+        const rest = params.toString();
+        window.history.replaceState(null, "", `${window.location.pathname}${rest ? `?${rest}` : ""}`);
+      }
       const isFullyDeleted = params.get("ucet-zruseny") === "1";
       const isPartiallyDeleted =
         params.get("ucet-zruseny-ciastocne") === "1";
@@ -323,6 +334,12 @@ async function resetPassword() {
             : t("auth.login.subtitleRegister")}
         </p>
 
+        {oauthNotice && (
+          <p className="mt-4 rounded-xl border border-subtle bg-surface-2 px-4 py-3 text-sm text-secondary">
+            {t(oauthNotice === "cancelled" ? "auth.oauth.cancelled" : "auth.oauth.failed")}
+          </p>
+        )}
+
         {accountDeletedNotice && (
           <p className="mt-4 rounded-xl border border-subtle bg-surface-2 px-4 py-3 text-sm text-secondary">
             {t("auth.login.accountDeletedShort")}
@@ -440,6 +457,14 @@ async function resetPassword() {
       ? t("auth.login.submitLogin")
       : t("auth.login.submitRegister")}
 </button>
+
+{/* Google / Apple — registrácia iba so zaškrtnutým súhlasom (rovnako ako
+    e-mail). Prístup aj tak rozhodne uzavretá beta a pozvánky. */}
+<SocialAuthButtons
+  mode={mode}
+  legalAccepted={mode === "register" && agreedTerms && agreedPrivacy}
+  disabled={loading || (mode === "register" && (!agreedTerms || !agreedPrivacy))}
+/>
 
 {mode === "login" && (
   <button

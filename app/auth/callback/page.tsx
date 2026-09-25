@@ -5,6 +5,9 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
+import { peekOAuthPending, takeOAuthPending } from "@/lib/auth/oauth-client";
+import { decideOAuthDestination } from "@/lib/auth/oauth-routing";
+import { getMyActiveMembership } from "@/lib/company";
 
 // =============================================================================
 // Esblu — Dedikovaný Auth Callback (RELEASE BLOCKER FIX, 2026-08-31)
@@ -85,6 +88,32 @@ export default function AuthCallbackPage() {
     }
 
     const searchParams = new URLSearchParams(window.location.search);
+
+    // --- Návrat z Google / Apple (OAuth). Supabase klient si session
+    // prevezme z adresy sám (detectSessionInUrl); tu sa iba rozhodne, kam
+    // ďalej — výhradne na pevné cesty Esblu (lib/auth/oauth-routing.ts).
+    if (searchParams.has("oauth")) {
+      const hash = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+      const providerError = searchParams.get("error") ?? hash.get("error") ?? searchParams.get("error_code") ?? hash.get("error_code");
+      const pending = peekOAuthPending();
+      let hasSession = false;
+      let hasActiveMembership = false;
+      if (!providerError) {
+        await supabase.auth.getSession();
+        const { data: userData, error: userError } = await supabase.auth.getUser();
+        hasSession = !userError && Boolean(userData.user);
+        if (hasSession) hasActiveMembership = Boolean(await getMyActiveMembership().catch(() => null));
+      }
+      // Tokeny ani chyby poskytovateľa nesmú ostať v adrese ani v histórii.
+      window.history.replaceState(null, "", window.location.pathname);
+      const destination = decideOAuthDestination({ providerError, hasSession, hasActiveMembership, pending });
+      // Záznam si prečíta a zmaže onboarding (súhlas pri registrácii);
+      // inde sa zmaže hneď.
+      if (destination !== "/onboarding/company") takeOAuthPending();
+      router.replace(destination);
+      return;
+    }
+
     const tokenHash = searchParams.get("token_hash");
     const type = searchParams.get("type");
 

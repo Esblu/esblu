@@ -12,6 +12,7 @@ import {
 } from "@/lib/company";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import LanguageSwitcher from "@/app/components/LanguageSwitcher";
+import { SocialAuthButtons } from "@/app/components/auth/SocialAuthButtons";
 
 // Táto stránka NIKDY nevolá ensureMyOwnerCompany() / esblu_ensure_my_owner_company().
 // Registrácia aj prihlásenie tu vždy skončí zavolaním
@@ -410,6 +411,10 @@ export default function InviteView({ token }: { token: string }) {
                 ? t("invite.submitRegister")
                 : t("invite.submitLogin")}
           </button>
+
+          {/* Google / Apple — po návrate sa otvorí táto istá pozvánka a
+              prijme sa rovnakou cestou (kontrola e-mailu na serveri). */}
+          <SocialAuthButtons mode="invite" legalAccepted={false} inviteToken={token} disabled={submitting} />
         </div>
       )}
     </Centered>

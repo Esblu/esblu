@@ -12,6 +12,8 @@ import {
 import { acceptLegalDocumentAtRegistration } from "@/lib/legal-acceptance";
 import { REQUIRED_ACCEPTANCE_DOCUMENTS } from "@/lib/legal-config";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
+import { takeOAuthPending } from "@/lib/auth/oauth-client";
+import { mayRecordRegistrationConsent } from "@/lib/auth/oauth-routing";
 
 // Explicitná, na jeden účel vyhradená route: JEDINÉ miesto (spolu s
 // register() v app/login/page.tsx pri okamžitej session) v celej aplikácii,
@@ -81,11 +83,17 @@ export default function OnboardingCompanyPage() {
       // (LegalAcceptanceGate). Zámerne "fire and forget" (nečaká sa/nerobí
       // sa blokujúci error state) — ak by toto zlyhalo, LegalAcceptanceGate
       // to pri prvom reálnom vstupe do appky odchytí ako fail-safe.
-      await Promise.all(
-        REQUIRED_ACCEPTANCE_DOCUMENTS.map((doc) =>
-          acceptLegalDocumentAtRegistration(doc.type, doc.version)
-        )
-      );
+      // Google / Apple: súhlas pri registrácii IBA ak ho používateľ zaškrtol
+      // pred odoslaním na poskytovateľa. Inak ho vyžiada LegalAcceptanceGate
+      // (nikdy sa nezapíše súhlas, ktorý nezaznel). E-mailová registrácia
+      // (bez OAuth záznamu) ostáva bez zmeny.
+      if (mayRecordRegistrationConsent(takeOAuthPending(), session.user.app_metadata?.provider ?? null)) {
+        await Promise.all(
+          REQUIRED_ACCEPTANCE_DOCUMENTS.map((doc) =>
+            acceptLegalDocumentAtRegistration(doc.type, doc.version)
+          )
+        );
+      }
 
       router.push("/");
       router.refresh();
