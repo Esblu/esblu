@@ -438,7 +438,15 @@ export type EntityRef = {
  * z toho urobí zapečatený, krátkodobý stav (lib/intents/pending-
  * clarification.ts) — klientovi sa pole samo nikdy neposiela.
  */
-export type ClarificationSlot = "machine" | "vehicle" | "machine_or_vehicle" | "inventory_item" | "folder" | "partner_name";
+export type ClarificationSlot =
+  | "machine"
+  | "vehicle"
+  | "machine_or_vehicle"
+  | "inventory_item"
+  | "folder"
+  | "partner_name"
+  // „Faktúru, kopanie, …" bez akcie → „Chcete vytvoriť novú faktúru?"
+  | "invoice_start";
 export type AwaitingClarification = {
   slot: ClarificationSlot;
   /** „Myslíte …?" — kandidát, ktorého používateľ potvrdí („Áno"). */

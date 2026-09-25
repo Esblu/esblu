@@ -80,9 +80,20 @@ const client = new OpenAI({
 // SPZ/mená/používateľské dáta. Podľa OpenAI SDK dokumentácie by mal prompt
 // zodpovedať jazyku audia, preto je per-locale.
 const DOMAIN_CONTEXT_PROMPT_BY_LOCALE: Record<"sk" | "de" | "en", string> = {
-  sk: "Prepíš celý hovorený príkaz presne a úplne, slovo po slove. Nevynechávaj žiadne slová ani časti vety, nezjednodušuj a neredukuj vetu iba na kľúčové slová alebo identifikátory. Zachovaj celé znenie vrátane čísel, názvov, skratiek a identifikátorov. Ide o firemnú aplikáciu Esblu pre vozidlá, stroje, sklad a dokumenty; v reči sa môžu vyskytnúť výrazy ako STK, EK, PZP, EČV, ŠPZ, vozidlo, stroj, bager, servis, sklad, bloček, faktúra, vážny lístok, dodací list, technický preukaz, dokument, report, export.",
-  de: "Transkribiere den gesamten gesprochenen Befehl genau und vollständig, Wort für Wort. Lasse keine Wörter oder Satzteile aus und kürze den Satz nicht auf Schlüsselwörter oder Kennungen. Erhalte den vollständigen Wortlaut einschließlich Zahlen, Namen, Abkürzungen und Kennungen. Es handelt sich um die Firmenanwendung Esblu für Fahrzeuge, Baumaschinen, Lager und Dokumente; es können Begriffe wie HU, AU, Kennzeichen, Fahrzeug, Baumaschine, Bagger, Service, Lager, Rechnung, Beleg, Fahrzeugschein, Dokument, Bericht, Export vorkommen.",
-  en: "Transcribe the entire spoken command exactly and completely, word for word. Do not omit any words or parts of the sentence, and do not shorten it to just keywords or identifiers. Preserve the full wording including numbers, names, abbreviations and identifiers. This is the Esblu company app for vehicles, machines, inventory and documents; terms like inspection, registration, license plate, vehicle, machine, excavator, service, warehouse, invoice, receipt, vehicle registration, document, report, export may occur.",
+  sk: "Prepíš celý hovorený príkaz presne a úplne, slovo po slove. Nevynechávaj žiadne slová ani časti vety, nezjednodušuj a neredukuj vetu iba na kľúčové slová alebo identifikátory. Zachovaj celé znenie vrátane slovies (vytvor, vystav, pridaj, ukáž), čísel, súm, názvov firiem, skratiek a identifikátorov. Ide o firemnú aplikáciu Esblu pre vozidlá, stroje, sklad, faktúry a dokumenty; v reči sa môžu vyskytnúť výrazy ako faktúra, odberateľ, obchodný partner, položka, kopanie, odvoz materiálu, materiál, pracovníci, suma, eur, s DPH, bez DPH, STK, EK, PZP, EČV, ŠPZ, vozidlo, stroj, bager, servis, sklad, priečinok, bloček, vážny lístok, dodací list, technický preukaz, dokument, report, export.",
+  de: "Transkribiere den gesamten gesprochenen Befehl genau und vollständig, Wort für Wort. Lasse keine Wörter oder Satzteile aus und kürze den Satz nicht auf Schlüsselwörter oder Kennungen. Erhalte den vollständigen Wortlaut einschließlich Verben (erstelle, füge hinzu, zeige), Zahlen, Beträgen, Firmennamen, Abkürzungen und Kennungen. Es handelt sich um die Firmenanwendung Esblu für Fahrzeuge, Baumaschinen, Lager, Rechnungen und Dokumente; es können Begriffe wie Rechnung, Kunde, Geschäftspartner, Position, Erdarbeiten, Transport, Material, Arbeiter, Betrag, Euro, mit MwSt, ohne MwSt, HU, AU, Kennzeichen, Fahrzeug, Baumaschine, Bagger, Service, Lager, Ordner, Beleg, Lieferschein, Fahrzeugschein, Dokument, Bericht, Export vorkommen.",
+  en: "Transcribe the entire spoken command exactly and completely, word for word. Do not omit any words or parts of the sentence, and do not shorten it to just keywords or identifiers. Preserve the full wording including verbs (create, add, show), numbers, amounts, company names, abbreviations and identifiers. This is the Esblu company app for vehicles, machines, inventory, invoices and documents; terms like invoice, customer, business partner, line item, excavation, material removal, material, workers, amount, euros, including VAT, excluding VAT, inspection, registration, license plate, vehicle, machine, excavator, service, warehouse, folder, receipt, delivery note, vehicle registration, document, report, export may occur.",
+};
+
+// Necitlivý kontext rozpracovanej úlohy (uzavretý zoznam z klienta, nič iné).
+// Jedna veta — žiadne sumy, mená, položky ani obsah dokladov. Pomáha modelu
+// nevynechať doménové slová, keď používateľ odpovedá na otázku faktúry.
+const TASK_CONTEXT_PROMPT_BY_LOCALE: Record<"invoice", Record<"sk" | "de" | "en", string>> = {
+  invoice: {
+    sk: "Používateľ práve diktuje údaje faktúry: odberateľa, položky a sumy.",
+    de: "Der Benutzer diktiert gerade Rechnungsdaten: Kunde, Positionen und Beträge.",
+    en: "The user is currently dictating invoice details: customer, line items and amounts.",
+  },
 };
 
 const ALLOWED_AUDIO_MIME_TYPES = new Set<string>(ALLOWED_VOICE_AUDIO_MIME_TYPES);
@@ -193,7 +204,9 @@ export async function POST(req: Request) {
         file: audioValue,
         model: "gpt-4o-transcribe",
         language: locale,
-        prompt: DOMAIN_CONTEXT_PROMPT_BY_LOCALE[locale],
+        prompt: formData?.get("context") === "invoice"
+          ? `${DOMAIN_CONTEXT_PROMPT_BY_LOCALE[locale]} ${TASK_CONTEXT_PROMPT_BY_LOCALE.invoice[locale]}`
+          : DOMAIN_CONTEXT_PROMPT_BY_LOCALE[locale],
       });
     } catch (transcriptionError) {
       console.error(

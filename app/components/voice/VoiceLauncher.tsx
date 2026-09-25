@@ -137,6 +137,8 @@ export function VoiceLauncher({
   // zapečatený serverom — prehliadač ho iba vráti s ďalšou vetou; server
   // overí používateľa, firmu aj čas (lib/intents/pending-clarification.ts).
   const pendingClarificationRef = useRef<string | null>(null);
+  // Čaká sa na odpoveď na otázku faktúry? → necitlivý kontext pre prepis reči.
+  const invoiceQuestionRef = useRef(false);
 
   // Náhľad, ktorý práve čaká na potvrdenie. V ref, aby ho hlasový prepis
   // videl aj z callbacku nahrávania (bez zastaraného uzáveru).
@@ -170,6 +172,7 @@ export function VoiceLauncher({
 
   const { voiceState, voiceError, handleMicButtonClick, cancelVoiceRecording } =
     useVoiceCapture({
+      getTranscriptionContext: () => (invoiceQuestionRef.current ? "invoice" : null),
       onTranscript: (text) => {
         setTranscript(text);
         if (handleSpokenConfirmation(text)) return;
@@ -247,6 +250,7 @@ export function VoiceLauncher({
       if (response.ok && data.success && data.recognized) {
         const result = data.result as IntentResult;
         setIntentResult(result);
+        invoiceQuestionRef.current = result.kind === "clarify" && data.intent === "CREATE_INVOICE_DRAFT";
         if (result.kind === "navigate" && result.entity.type === "folder") {
           recentFolderIdRef.current = result.entity.id;
         }
@@ -372,6 +376,7 @@ export function VoiceLauncher({
     conversationIdRef.current = newConversationId();
     recentFolderIdRef.current = null;
     pendingClarificationRef.current = null;
+    invoiceQuestionRef.current = false;
     setIntentResult(null);
     setClarifyAnswer("");
     setPhase("idle");

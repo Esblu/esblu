@@ -29,11 +29,22 @@ import { MAX_RECORDING_SECONDS } from "@/lib/voice-config";
 
 export type VoiceState = "idle" | "recording" | "processing" | "error";
 
+/**
+ * Necitlivý kontext pre prepis reči — iba uzavretá hodnota, žiadny obsah
+ * (suma, meno, položky). „invoice" = používateľ práve odpovedá na otázku
+ * rozpracovanej faktúry; server podľa toho doplní jednu doménovú vetu do
+ * promptu prepisu.
+ */
+export type TranscriptionContext = "invoice";
+
 export function useVoiceCapture({
   onTranscript,
+  getTranscriptionContext,
 }: {
   /** Zavolá sa s hotovým prepisom. Volajúci rozhodne, čo s ním. */
   onTranscript: (text: string) => void;
+  /** Voliteľný necitlivý kontext pre prepis (pozri TranscriptionContext). */
+  getTranscriptionContext?: () => TranscriptionContext | null;
 }) {
   const { t, locale } = useLocale();
 
@@ -260,6 +271,8 @@ export function useVoiceCapture({
             : "webm";
       const voiceFormData = new FormData();
       voiceFormData.append("audio", audioBlob, `voice-command.${extension}`);
+      const transcriptionContext = getTranscriptionContext?.() ?? null;
+      if (transcriptionContext) voiceFormData.append("context", transcriptionContext);
 
       const response = await fetch(apiUrl("/api/assistant/transcribe"), {
         method: "POST",

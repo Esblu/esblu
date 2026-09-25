@@ -430,7 +430,11 @@ function hasCurrencyMarker(segment: string): boolean {
  * všetko ostatné, čomu parser nerozumie, skončí ako dôvod na otázku.
  */
 function isCutRemnant(segment: string): boolean {
-  return /^[\s\d.,;:%-]*$/.test(segment);
+  if (/^[\s\d.,;:%-]*$/.test(segment)) return true;
+  // „…, všetko s DPH" / „…, ceny sú bez DPH" — po reze chvosta o DPH ostane
+  // iba úvod k režimu ceny. Nie je to položka; režim ceny číta
+  // detectPriceModeStatement z celej vety.
+  return /^(a\s+)?(vsetko|vsetky(\s+(ceny|sumy|polozky))?|ceny(\s+su)?(\s+uvedene)?|sumy(\s+su)?|je\s+to|to\s+je|alles|all|everything|prices(\s+are)?|preise(\s+sind)?)(\s+(je|su|sind|are|is))?[.!?]*$/.test(fold(segment).trim());
 }
 
 // -----------------------------------------------------------------------------

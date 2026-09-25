@@ -39,6 +39,7 @@ import {
   readPartnerChange,
 } from "@/lib/intents/invoice-slots";
 import { detectPriceModeStatement } from "@/lib/invoicing/price-mode";
+import { stripLeadingInvoiceNoun } from "@/lib/intents/domain-action";
 import { classifyConfirmationReply } from "@/lib/intents/confirmation-reply";
 
 // =============================================================================
@@ -216,6 +217,9 @@ export async function continueInvoiceDraftFlow(
    */
   structuredPartnerId?: string | null
 ): Promise<IntentResult | null> {
+  // „Faktúru, kopanie, odvoz …" počas rozpracovanej faktúry: úvodné slovo
+  // „faktúru" je oslovenie úlohy, nie položka ani meno odberateľa.
+  rawAnswer = stripLeadingInvoiceNoun(rawAnswer);
   const stored = await loadConversationContext(supabase, ctx.conversationId);
   if (!stored || stored.pendingIntent !== PENDING_INTENT) return null;
 

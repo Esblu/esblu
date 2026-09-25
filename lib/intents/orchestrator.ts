@@ -41,6 +41,7 @@ import { startInvoiceDraftFlow, continueInvoiceDraftFlow } from "@/lib/intents/i
 import { readSlots, type InvoiceDraftField } from "@/lib/intents/invoice-slots";
 import { decideInvoiceTurn, invoiceTaskFrom, isTaskCancel } from "@/lib/intents/conversation-state";
 import { handlePartnerCreate } from "@/lib/intents/partner-intents";
+import { invoiceItemDescriptions, needsDomainClarification, readInvoiceStartChoice, type AssistantDomain } from "@/lib/intents/domain-action";
 import type { IntentName, IntentResult, ParsedIntent } from "@/lib/intents/types";
 import type { CompanyMemberRole } from "@/lib/company";
 
@@ -188,6 +189,37 @@ function notUnderstood(locale: Locale): AssistantTurnOutput {
 
 const INVOICE_FIELDS: readonly InvoiceDraftField[] = ["partner", "partnerChoice", "items", "itemPrice", "total", "vat"];
 
+/**
+ * Otázka pri doméne bez akcie. Ponúka IBA možnosti, na ktoré má volajúci
+ * právo (brána oprávnení už prešla pre čítanie danej oblasti). Nič nečíta.
+ * `invoiceItems`: `null` = bez zapečatenej otázky; "" = otázka vytvoriť /
+ * vyhľadať bez položiek; text = zachytené popisy položiek.
+ */
+function domainClarification(
+  domain: AssistantDomain,
+  rawText: string,
+  ctx: { locale: Locale; financeManage: boolean; manager: boolean }
+): { text: string; invoiceItems: string | null } {
+  const t = (key: string, vars?: Record<string, string>) => translate(ctx.locale, key, vars);
+  if (domain === "invoice") {
+    if (!ctx.financeManage) return { text: t("assistant.domain.invoiceSearchOnly"), invoiceItems: null };
+    const items = invoiceItemDescriptions(rawText);
+    if (items.length > 0) {
+      const and = t("search.voice.invoice.and");
+      const names = items.length === 1 ? items[0] : `${items.slice(0, -1).join(", ")} ${and} ${items[items.length - 1]}`;
+      return { text: t("assistant.domain.invoiceItems", { items: names }), invoiceItems: items.join(", ") };
+    }
+    return { text: t("assistant.domain.invoiceAsk"), invoiceItems: "" };
+  }
+  if (domain === "machine" || domain === "vehicle" || domain === "inventory") {
+    return { text: t(`assistant.domain.${domain}${ctx.manager ? "Manage" : "Read"}`), invoiceItems: null };
+  }
+  if (domain === "partner") {
+    return { text: t(ctx.financeManage ? "assistant.domain.partnerManage" : "assistant.domain.partnerRead"), invoiceItems: null };
+  }
+  return { text: t(`assistant.domain.${domain}`), invoiceItems: null };
+}
+
 /** Route: iba odpoveď pre klienta. */
 export async function runAssistantTurn(deps: AssistantTurnDeps, input: AssistantTurnInput): Promise<AssistantTurnOutput> {
   return (await runAssistantTurnDetailed(deps, input)).output;
@@ -256,6 +288,9 @@ export async function runAssistantTurnDetailed(
   //     („Ku ktorému stroju?", „Myslíte …?", „Ako sa volá nový partner?").
   // ------------------------------------------------------------------
   let resumed = false;
+  // „Áno, vytvor" po otázke „Chcete vytvoriť novú faktúru?" — položky zo
+  // zapečatenej otázky (nie z tejto krátkej odpovede).
+  let invoiceStartText: string | null = null;
   if (typeof input.pendingClarification === "string" && input.pendingClarification) {
     const pending = unsealPendingClarification(input.pendingClarification, binding, sealOptions);
     if (!pending) {
@@ -269,6 +304,25 @@ export async function runAssistantTurnDetailed(
           pendingClarification: null,
         });
       }
+    } else if (pending.slot === "invoice_start" && readInvoiceStartChoice(rawText, Boolean(pending.args.query)) !== null) {
+      const choice = readInvoiceStartChoice(rawText, Boolean(pending.args.query));
+      if (choice === "cancel") {
+        return done({
+          success: true,
+          recognized: true,
+          intent: pending.intent,
+          source: "conversation",
+          result: { kind: "answer", text: t("assistant.clarify.cancelled") },
+          pendingClarification: null,
+        });
+      }
+      intent = choice === "create"
+        ? { name: "CREATE_INVOICE_DRAFT", args: {}, source: "deterministic" }
+        : { name: "SEARCH_DOCUMENTS", args: { documentTypes: ["invoice"] }, source: "deterministic" };
+      if (choice === "create" && pending.args.query) invoiceStartText = pending.args.query;
+      resumed = true;
+    } else if (pending.slot === "invoice_start") {
+      // Iná veta než voľba = nový príkaz (otázka sa zahodí, nič sa nedomýšľa).
     } else if (
       pending.slot === "partner_name" &&
       pending.candidate &&
@@ -392,6 +446,37 @@ export async function runAssistantTurnDetailed(
     });
   }
 
+  // 6b. DOMÉNA BEZ AKCIE (asistent / hlas): holé „Faktúru, …", „Stroj.",
+  //     „Sklad." sa nezmení na hľadanie — asistent sa spýta, čo s tým.
+  //     Beží PO bráne oprávnení (odmietnutý nedostane ani otázku) a PRED
+  //     akýmkoľvek dotazom. Písané hľadanie na nástenke (bez dialógu) ostáva.
+  const domain = input.conversationId && !resumed ? needsDomainClarification(intent, rawText) : null;
+  if (domain) {
+    const clarification = domainClarification(domain, rawText, {
+      locale,
+      financeManage,
+      manager: input.role === "owner" || input.role === "admin",
+    });
+    let pendingToken: string | null = null;
+    if (clarification.invoiceItems !== null) {
+      pendingToken = sealPendingClarification(
+        "CREATE_INVOICE_DRAFT",
+        clarification.invoiceItems ? { query: clarification.invoiceItems } : {},
+        { slot: "invoice_start" },
+        binding,
+        sealOptions
+      );
+    }
+    return done({
+      success: true,
+      recognized: true,
+      intent: intent.name,
+      source: intent.source,
+      result: { kind: "answer", text: clarification.text },
+      pendingClarification: pendingToken,
+    });
+  }
+
   const resolvedEntity =
     input.uiContext && moduleMatchesEntity(input.uiContext) && intent.name !== "DOCUMENT_INTAKE"
       ? await resolveUiEntity(db, input.uiContext)
@@ -446,7 +531,10 @@ export async function runAssistantTurnDetailed(
     } else if (!flowCtx) {
       result = { kind: "error", text: t("assistant.invoice.useVoice") };
     } else {
-      result = await startInvoiceDraftFlow(db, locale, flowCtx, rawText, intent.args.partnerQuery, intent.args.query, intent.args.amount);
+      // Po „Áno" na „Chcete vytvoriť novú faktúru?" sa položky berú z
+      // pôvodnej (zapečatenej) vety, nie z krátkej odpovede.
+      const flowText = invoiceStartText ? `za ${invoiceStartText}` : rawText;
+      result = await startInvoiceDraftFlow(db, locale, flowCtx, flowText, intent.args.partnerQuery, invoiceStartText ? undefined : intent.args.query, intent.args.amount);
     }
   } else {
     result = await buildActionPreview(db, locale, actionCtx, intent);

@@ -95,6 +95,8 @@ export default function Dashboard() {
   const currentIntentResult = intentResult;
   // Náhľad čakajúci na potvrdenie — pre hlasové „Áno" (ref: číta ho callback nahrávania).
   const pendingPreviewRef = useRef<IntentResult | null>(null);
+  // Posledný výsledok pre kontext prepisu reči (čítané v callbacku nahrávania).
+  const intentResultRef = useRef<IntentResult | null>(null);
   // Rozpracovaná otázka asistenta („Ku ktorému stroju?") — zapečatený token
   // servera. V ref, nie v poli hľadania: zápis prepisu do poľa ju nezmaže.
   const pendingClarificationRef = useRef<string | null>(null);
@@ -106,6 +108,7 @@ export default function Dashboard() {
   const voiceTranscriptRef = useRef<string>("");
   useEffect(() => {
     pendingPreviewRef.current = intentResult?.kind === "action_preview" ? intentResult : null;
+    intentResultRef.current = intentResult;
   }, [intentResult]);
   const [intentLoading, setIntentLoading] = useState(false);
   // Action Engine (doplnenie zadania, bod 6/23) — potvrdzovací tok pre WRITE
@@ -256,6 +259,11 @@ export default function Dashboard() {
   // hovorí "nenašlo sa"/chyba) — v týchto prípadoch zámerne padáme na
   // legacy vyhľadávanie presne ako predtým (bod 2 opravy), takže legacy
   // substring zhoda (ak nejaká existuje) má stále šancu niečo nájsť.
+  // Hlasový prepis ide VÝHRADNE cez asistenta. Podreťazcové hľadanie
+  // nástenky („Nájdené dokumenty") je iba pre písaný text — celá vyslovená
+  // veta ako hľadaný výraz by vrátila náhodné doklady.
+  const isVoiceQuery = voiceTranscript !== null && search === voiceTranscript;
+
   const hasUsableIntentResult =
     query.length >= 2 &&
     !!intentResult &&
@@ -393,6 +401,9 @@ export default function Dashboard() {
         } else if (isVoiceTranscript && response.status === 400 && typeof data?.error === "string" && data.error) {
           // Odmietnuté pred spracovaním (napr. príliš dlhý prepis) — presná príčina.
           setIntentResult({ kind: "error", text: data.error });
+        } else if (isVoiceTranscript) {
+          // Hlas NIKDY nepadá do podreťazcového hľadania nástenky.
+          setIntentResult({ kind: "error", text: t("search.errors.commandNotUnderstood") });
         } else {
           setIntentResult(null);
         }
@@ -426,6 +437,8 @@ export default function Dashboard() {
     cancelVoiceRecording,
     handleMicButtonClick,
   } = useVoiceCapture({
+    // Otázka dialógu na nástenke je vždy otázka faktúry (iný dialóg tu nie je).
+    getTranscriptionContext: () => (intentResultRef.current?.kind === "clarify" ? "invoice" : null),
     onTranscript: (text) => {
       // Hlasové „Áno, zmaž ho" pri zobrazenom náhľade = ťuknutie na
       // Potvrdiť. Predtým prepis prepísal pole hľadania, náhľad zmizol a
@@ -964,7 +977,14 @@ export default function Dashboard() {
                 </p>
               ) : null}
 
-              {!hasUsableIntentResult &&
+              {!hasUsableIntentResult && isVoiceQuery ? (
+                // Hlas: iba veta asistenta (alebo počas spracovania nič).
+                intentResult && (intentResult.kind === "not_found" || intentResult.kind === "error") ? (
+                  <p className="rounded-2xl border border-subtle bg-surface-1/60 p-4 text-sm text-secondary">
+                    {intentResult.text}
+                  </p>
+                ) : null
+              ) : !hasUsableIntentResult &&
                 (searchResults.length === 0 ? (
                   <p className="rounded-2xl border border-subtle bg-surface-1/60 p-4 text-sm text-secondary">
                     {/* Konkrétna veta asistenta („Stroj „Aman“ sa nenašiel.",

@@ -452,6 +452,142 @@ await check("OBNOVA bez „faktúru“ sa nespustí pri zápise inej oblasti, do
 });
 
 // =============================================================================
+// DOMÉNA BEZ AKCIE: poškodený hlasový prepis sa NESMIE zmeniť na hľadanie dokladov
+// =============================================================================
+
+const DEGRADED = "Faktúru, zakopanie, odvoz materiálu, materiál, pracovníci.";
+const DOC_TABLES = (): Tables => ({
+  ...PARTNERS(),
+  documents: [{ id: "doc-33084", document_type: "invoice", original_filename: "33084.png", company_id: COMPANY_A, deleted_at: null, archived_from_inbox_at: null }],
+});
+
+await check("REAL C: hlas „Faktúru, zakopanie, odvoz materiálu, materiál, pracovníci.“ → otázka faktúry, NIKDY hľadanie dokladov (0 dotazov)", async () => {
+  const env = makeDb({ role: "owner", financeManage: true, tables: DOC_TABLES() });
+  const s = session(env, { ai: () => { throw new Error("AI sa nesmie volať"); } });
+  const r = await s.say(DEGRADED);
+  assert.equal(r.result.kind, "answer", JSON.stringify(r.result));
+  assert.equal(say(r.result), "Rozumiem, že chcete pracovať s faktúrou, a zachytil som položky zakopanie, odvoz materiálu, materiál a pracovníci. Chcete vytvoriť novú faktúru?");
+  assert.equal(env.state.queries, 0, "žiadny dotaz na doklady (handler hľadania sa nevolal)");
+  assert.doesNotMatch(JSON.stringify(r.output), /33084|Nájdené dokumenty/);
+  assert.ok(s.pending, "čaká sa na odpoveď");
+  for (const table of ["machines", "vehicles", "inventory_items"]) assert.equal((env.state.tables[table] ?? []).length, 0);
+  assert.equal(env.state.tables.business_partners.length, 3);
+  assert.equal(env.state.confirmations.length, 0);
+  assert.equal(env.state.tables.invoices.length, 0, "nič sa nezapísalo");
+
+  const yes = await s.say("Áno.");
+  assert.equal(yes.intent?.name, "CREATE_INVOICE_DRAFT");
+  assert.deepEqual(items(env), [["zakopanie", undefined], ["odvoz materiálu", undefined], ["materiál", undefined], ["pracovníci", undefined]]);
+  assert.equal(field(env), "partner", "partner chýba naozaj — pýta sa naň");
+  assert.match(say(yes.result), /^Rozumiem 4 položkám — zakopanie, odvoz materiálu, materiál a pracovníci\. Pre ktorého odberateľa/);
+});
+
+await check("hlas „Faktúra.“ → otázka vytvoriť / vyhľadať; „Vytvoriť“ → draft; „Vyhľadať“ → čítanie", async () => {
+  const env = makeDb({ role: "owner", financeManage: true, tables: DOC_TABLES() });
+  const s = session(env);
+  const r = await s.say("Faktúra.");
+  assert.equal(say(r.result), t("assistant.domain.invoiceAsk"));
+  assert.equal(env.state.queries, 0);
+  const create = await s.say("Vytvoriť novú.");
+  assert.equal(create.intent?.name, "CREATE_INVOICE_DRAFT");
+  assert.equal(say(create.result), t("search.voice.invoice.askPartner"));
+
+  const env2 = makeDb({ role: "owner", financeManage: true, tables: DOC_TABLES() });
+  const s2 = session(env2);
+  await s2.say("Faktúru.");
+  const search = await s2.say("Vyhľadať existujúcu.");
+  assert.equal(search.intent?.name, "SEARCH_DOCUMENTS");
+  assert.ok(env2.state.queries > 0, "výslovná voľba hľadania smie čítať");
+});
+
+await check("hlas s výslovnou akciou alebo filtrom → čítanie povolené („Ukáž faktúru.“, „Nájdi faktúru 2026001.“, „Otvor faktúru 2026001.“, „Faktúry za august.“)", async () => {
+  for (const phrase of ["Ukáž faktúru.", "Nájdi faktúru 2026001.", "Otvor faktúru 2026001.", "Faktúry za august.", "Nájdi faktúru od Tester1."]) {
+    const env = makeDb({ role: "owner", financeManage: true, tables: DOC_TABLES() });
+    const r = await session(env).say(phrase);
+    assert.equal(r.intent?.name, "SEARCH_DOCUMENTS", phrase);
+    assert.notEqual(r.result.kind, "answer", phrase);
+    assert.ok(env.state.queries > 0, phrase);
+  }
+});
+
+await check("písané hľadanie na nástenke (bez dialógu) ostáva: „Faktúra“ → hľadanie dokladov", async () => {
+  const env = makeDb({ role: "owner", financeManage: true, tables: DOC_TABLES() });
+  const r = await session(env, { conversationId: null }).say("Faktúra");
+  assert.equal(r.intent?.name, "SEARCH_DOCUMENTS");
+  assert.notEqual(r.result.kind, "answer");
+});
+
+await check("aktívna faktúra (čaká na položky): poškodené vety sú položky, nie partner ani hľadanie", async () => {
+  for (const phrase of [DEGRADED, "kopanie, odvoz materiálu, pracovníci"]) {
+    const env = makeDb({ role: "owner", financeManage: true, tables: DOC_TABLES() });
+    const s = session(env);
+    await s.say("Vytvor faktúru pre Tester1.");
+    const r = await s.say(phrase);
+    assert.doesNotMatch(say(r.result), /partnera .* som nenašiel|Nájdené/, phrase);
+    assert.equal(slots(env).partnerId, P_T1, phrase);
+    assert.ok(!items(env).some(([d]) => /fakt/i.test(String(d))), `${phrase}: „Faktúru“ nie je položka`);
+    assert.equal(field(env), "itemPrice", phrase);
+  }
+});
+
+await check("iné oblasti bez akcie → otázka podľa práv („Stroj.“, „Sklad.“, „Vozidlo.“); bez dotazu", async () => {
+  const cases: [Role, boolean, string, string][] = [
+    ["owner", true, "Stroj.", "assistant.domain.machineManage"],
+    ["owner", true, "Sklad.", "assistant.domain.inventoryManage"],
+    ["owner", true, "Vozidlo.", "assistant.domain.vehicleManage"],
+  ];
+  for (const [role, fin, phrase, key] of cases) {
+    const env = makeDb({ role, financeManage: fin, tables: DOC_TABLES() });
+    const r = await session(env).say(phrase);
+    assert.equal(say(r.result), t(key), phrase);
+    assert.equal(env.state.queries, 0, phrase);
+  }
+  // „Stroj Takeuchi“ má konkrétny cieľ → normálne čítanie.
+  const env = makeDb({ role: "owner", financeManage: true, tables: { machines: [{ id: "m1", name: "Takeuchi 323", company_id: COMPANY_A }] } });
+  const r = await session(env).say("Stroj Takeuchi.");
+  assert.equal(r.intent?.name, "SEARCH_MACHINE");
+  assert.notEqual(r.result.kind, "answer");
+});
+
+await check("oprávnenia pred otázkou: admin bez financií „Faktúru, …“ → odmietnutie; účtovník „Stroj.“ → odmietnutie; zamestnanec → odmietnutie", async () => {
+  const admin = makeDb({ role: "admin", financeManage: false, tables: DOC_TABLES() });
+  assert.equal(say((await session(admin).say(DEGRADED)).result), t("assistant.denied.finance"));
+  assert.equal(admin.state.queries, 0);
+  const accountant = makeDb({ role: "accountant", financeManage: true, tables: DOC_TABLES() });
+  assert.equal(say((await session(accountant).say("Stroj.")).result), t("assistant.denied.operational"));
+  const employee = makeDb({ role: "employee", financeManage: false, tables: DOC_TABLES() });
+  assert.equal(say((await session(employee).say(DEGRADED)).result), t("assistant.denied.employee"));
+  assert.equal(employee.state.queries, 0);
+});
+
+await check("dlhé diktovanie (~20 s) → celé prijaté, 5 položiek, bez orezania a bez hľadania", async () => {
+  const long = "Vytvor faktúru pre Tester1 za kopanie základov rodinného domu v Čadci 3 200 eur, odvoz materiálu na skládku 1 450 eur, dovoz štrku a piesku 980 eur, práca pracovníkov na stavbe 2 400 eur a prenájom malého bagra s obsluhou 1 100 eur, všetko s DPH.";
+  assert.ok(long.length > 200 && long.length <= 600, String(long.length));
+  const env = makeDb({ role: "owner", financeManage: true, tables: DOC_TABLES() });
+  const r = await session(env).say(long);
+  assert.equal(r.intent?.name, "CREATE_INVOICE_DRAFT");
+  assert.deepEqual(items(env).map(([, p]) => p), [3200, 1450, 980, 2400, 1100]);
+  assert.equal(slots(env).priceMode, "gross");
+  assert.equal(field(env), "vat");
+});
+
+await check("UI: hlasový prepis nikdy nepadá do podreťazcového hľadania nástenky", () => {
+  const dashboard = readFileSync("app/components/Dashboard.tsx", "utf8");
+  assert.ok(dashboard.includes("const isVoiceQuery = voiceTranscript !== null && search === voiceTranscript;"));
+  assert.ok(dashboard.includes("!hasUsableIntentResult && isVoiceQuery ?"), "hlas nerenderuje zoznam „Nájdené dokumenty“");
+  assert.ok(dashboard.includes('} else if (isVoiceTranscript) {\n          // Hlas NIKDY nepadá do podreťazcového hľadania nástenky.'));
+});
+
+await check("ASR: necitlivý kontext faktúry iba z uzavretého zoznamu; žiadne dáta firmy v prompte", () => {
+  const route = readFileSync("app/api/assistant/transcribe/route.ts", "utf8");
+  assert.ok(route.includes('formData?.get("context") === "invoice"'));
+  assert.ok(route.includes('model: "gpt-4o-transcribe"') && route.includes("language: locale"));
+  assert.ok(!/from\("|supabase|business_partners/.test(route), "prepis nečíta databázu");
+  const hook = readFileSync("hooks/use-voice-capture.ts", "utf8");
+  assert.ok(hook.includes('export type TranscriptionContext = "invoice";'));
+});
+
+// =============================================================================
 // ZMENA ÚLOHY A KONTEXT OBRAZOVKY
 // =============================================================================
 
