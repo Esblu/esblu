@@ -260,6 +260,15 @@ export function VoiceLauncher({
         return;
       }
 
+      // 400 = server vetu odmietol pred spracovaním (napr. príliš dlhý
+      // prepis) a poslal preloženú vetu — tá je presnejšia než „nerozumel
+      // som", ktoré by maskovalo skutočnú príčinu.
+      if (response.status === 400 && typeof data?.error === "string" && data.error) {
+        setPhase("failed");
+        setMessage(data.error);
+        return;
+      }
+
       setPhase("complete");
       setMessage(t("search.errors.commandNotUnderstood"));
     } catch (error) {

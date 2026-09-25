@@ -324,6 +324,134 @@ await check("„Faktúra pre Horák Stav.“ (neexistuje) → nenájdený + ponu
 });
 
 // =============================================================================
+// PREPIS BEZ SLOVA „FAKTÚRU" + veľká suma je autoritatívna
+// =============================================================================
+
+const LOST_NOUN = "Vytvor testér jedna za kopanie materiál, odvoz materiálu, pracovníci za 10 831 eur s DPH.";
+
+await check("REAL H: „Vytvor testér jedna za … pracovníci za 10 831 eur s DPH.“ → draft faktúry, kandidát Tester1, 3 položky, 10 831 € s DPH, otázka na ceny", async () => {
+  const env = makeDb({ role: "owner", financeManage: true, tables: PARTNERS() });
+  const s = session(env, { ai: () => { throw new Error("AI sa nesmie volať"); } });
+  const r1 = await s.say(LOST_NOUN);
+  assert.equal(r1.intent?.name, "CREATE_INVOICE_DRAFT");
+  assert.equal(r1.intent?.source, "deterministic");
+  assert.equal(s.aiCalls, 0, "nie všeobecné hľadanie ani AI");
+  assert.equal(r1.result.kind, "clarify", JSON.stringify(r1.result));
+  assert.deepEqual(slots(env).partnerCandidateIds, [P_T1], "kandidát Tester1, nie automatický výber");
+  assert.equal(slots(env).partnerId, undefined);
+  assert.deepEqual(items(env), [["kopanie materiál", undefined], ["odvoz materiálu", undefined], ["pracovníci", undefined]]);
+  assert.equal(slots(env).statedTotal, 10831, "suma presne tak, ako zaznela");
+  assert.equal(slots(env).priceMode, "gross");
+  assert.equal(say(r1.result),
+    "Rozumiem 3 položkám — kopanie materiál, odvoz materiálu a pracovníci — a celkovej sume 10 831 € s DPH. Myslíte obchodného partnera „Tester1 · 12345678“?");
+  assert.doesNotMatch(say(r1.result), /Nič sa nenašlo/);
+
+  const r2 = await s.say("Áno.");
+  assert.equal(slots(env).partnerId, P_T1);
+  assert.equal(field(env), "itemPrice");
+  assert.equal(say(r2.result), "Rozumiem 3 položkám — kopanie materiál, odvoz materiálu a pracovníci — a celkovej sume 10 831 € s DPH. Aké sú ceny jednotlivých položiek?");
+  assert.doesNotMatch(say(r2.result), /potvr|naozaj|10 831 € správne/i, "suma sa nespochybňuje");
+
+  // Ceny so súčtom 10 831 → ďalej na DPH; žiadne zaokrúhlenie ani úprava.
+  await s.say("Kopanie materiál 5 000 eur, odvoz materiálu 2 831 eur, pracovníci 3 000 eur.");
+  assert.deepEqual(items(env), [["kopanie materiál", 5000], ["odvoz materiálu", 2831], ["pracovníci", 3000]]);
+  assert.equal(slots(env).statedTotal, 10831);
+  assert.equal(field(env), "vat");
+  assert.equal(env.state.tables.business_partners.length, 3, "partner sa nezaložil");
+  for (const table of ["machines", "vehicles", "inventory_items"]) assert.equal((env.state.tables[table] ?? []).length, 0, table);
+  assert.equal(env.state.confirmations.length, 0);
+});
+
+await check("veľká suma nie je dôvod na otázku: „Vytvor faktúru pre Tester1 za kopanie 10 831 eur s DPH.“ → rovno sadzba DPH", async () => {
+  const env = makeDb({ role: "owner", financeManage: true, tables: PARTNERS() });
+  const r = await session(env).say("Vytvor faktúru pre Tester1 za kopanie 10 831 eur s DPH.");
+  assert.deepEqual(items(env), [["kopanie", 10831]]);
+  assert.equal(slots(env).priceMode, "gross");
+  assert.equal(field(env), "vat");
+  assert.equal(say(r.result), t("search.voice.invoice.askVatAfterGross"));
+});
+
+await check("obnova bez „faktúru“ sa NESPUSTÍ pri inej oblasti, servise, bez sumy s menou; zamestnanec odmietnutý", async () => {
+  const env = makeDb({ role: "owner", financeManage: true, tables: PARTNERS() });
+  for (const phrase of [
+    "Vytvor priečinok August za 300 eur.",
+    "Vytvor nový stroj Takeuchi za 50 000 eur.",
+    "Vytvor skladovú položku Sprej za 5 eur.",
+    "Vytvor servis za 250 eur.",
+    "Vytvor testér jedna za kopanie materiál.",
+    "Vytvor obchodného partnera Tester2 za 100 eur.",
+  ]) {
+    const r = await session(env).say(phrase);
+    assert.notEqual(r.intent?.name, "CREATE_INVOICE_DRAFT", phrase);
+  }
+  const employee = makeDb({ role: "employee", financeManage: false, tables: PARTNERS() });
+  const denied = await session(employee).say(LOST_NOUN);
+  assert.equal(say(denied.result), t("assistant.denied.employee"));
+  assert.equal(employee.state.queries, 0);
+});
+
+// =============================================================================
+// HLAS: kontrakt prepisu, interná normalizácia, bezpečnosť obnovy bez „faktúru"
+// =============================================================================
+
+await check("KONTRAKT: prepis z /api/assistant/transcribe ide do /api/assistant/intent bez prepisovania", () => {
+  const transcribe = readFileSync("app/api/assistant/transcribe/route.ts", "utf8");
+  assert.ok(transcribe.includes('const text = transcription.text?.trim() || "";') && transcribe.includes("Response.json({ success: true, text })"));
+  const hook = readFileSync("hooks/use-voice-capture.ts", "utf8");
+  assert.ok(hook.includes("onTranscript(data.text);"), "hook odovzdá presne text servera");
+  const launcher = readFileSync("app/components/voice/VoiceLauncher.tsx", "utf8");
+  assert.ok(launcher.includes("setTranscript(text);") && launcher.includes("void runIntent(text);"), "launcher: zobrazený = odoslaný");
+  assert.match(launcher, /body: JSON\.stringify\(\{\s*text,/);
+  const dashboard = readFileSync("app/components/Dashboard.tsx", "utf8");
+  assert.ok(dashboard.includes("voiceTranscriptRef.current = text;") && dashboard.includes("setSearch(text);") && dashboard.includes("setVoiceTranscript(text);"));
+  assert.ok(dashboard.includes("text: trimmed,"), "nástenka posiela obsah poľa (iba orezaný o medzery ako server)");
+  const route = readFileSync("app/api/assistant/intent/route.ts", "utf8");
+  assert.ok(route.includes('const rawText = typeof body?.text === "string" ? body.text.trim() : "";'));
+  // Normalizácia súm je VÝHRADNE interná — klient ani route ju nepoužívajú.
+  for (const file of ["hooks/use-voice-capture.ts", "app/components/voice/VoiceLauncher.tsx", "app/components/Dashboard.tsx", "app/api/assistant/intent/route.ts", "app/api/assistant/transcribe/route.ts", "lib/intents/orchestrator.ts"]) {
+    assert.ok(!readFileSync(file, "utf8").includes("normalizeSpokenAmounts"), file);
+  }
+});
+
+await check("KONTRAKT: 20 s diktovania sa zmestí do limitu textu; diagnostický log bez obsahu vety", () => {
+  const route = readFileSync("app/api/assistant/intent/route.ts", "utf8");
+  const limit = Number(/const MAX_TEXT_LENGTH = (\d+);/.exec(route)?.[1]);
+  assert.ok(limit >= 500, `limit ${limit} je pod 20 s reči`);
+  const log = route.slice(route.indexOf('"esblu_assistant_turn"'), route.indexOf("return Response.json(output);"));
+  assert.ok(log.includes("textLength: rawText.length"));
+  assert.ok(!/rawText[,\s})]/.test(log.replace("rawText.length", "")), "prepis sa neloguje");
+  assert.ok(!/userId|companyId|partner|result\.text|question/.test(log), "žiadne identifikátory ani obsah výsledku");
+});
+
+await check("KONTRAKT: nástenka pri nerozpoznanej hlasovej vete ukáže vetu servera, nie „Nič sa nenašlo.“", () => {
+  const dashboard = readFileSync("app/components/Dashboard.tsx", "utf8");
+  assert.ok(dashboard.includes('isVoiceTranscript && response.ok && data?.success && data.result?.kind === "not_found"'));
+  assert.ok(dashboard.includes("isVoiceTranscript && response.status === 400"));
+  const launcher = readFileSync("app/components/voice/VoiceLauncher.tsx", "utf8");
+  assert.ok(launcher.includes("response.status === 400 && typeof data?.error === \"string\""));
+});
+
+await check("OBNOVA bez „faktúru“ sa nespustí pri zápise inej oblasti, dokladoch, exporte, servise (SK/DE/EN)", async () => {
+  const env = makeDb({ role: "owner", financeManage: true, tables: PARTNERS() });
+  for (const phrase of [
+    "Vytvor nové vozidlo Škoda za 9 000 eur.", "Vytvor auto za 9000 eur.", "Vytvor zložku August za 300 eur.",
+    "Vytvor kategóriu Palivo za 100 eur.", "Vytvor zákazníka Firma ABC za 100 eur.", "Vytvor doklad za 300 eur.",
+    "Vytvor bloček za 50 eur.", "Vytvor export bločkov za 300 eur.", "Vytvor opravu bagra za 300 eur.",
+    "Vytvor výmenu oleja za 80 eur.", "Vytvor report stroja za 100 eur.",
+    "Erstelle Ordner August für 300 Euro.", "Create a new machine Takeuchi for 50 000 euros.", "Add vehicle AB123CD for 300 euros.",
+    "Erstelle Tester1 für Erdarbeiten 300 Euro mit MwSt.", "Create Tester1 for excavation 300 euros with VAT.",
+  ]) {
+    const r = await session(env).say(phrase);
+    assert.notEqual(r.intent?.name, "CREATE_INVOICE_DRAFT", phrase);
+  }
+  // DE / EN výslovné faktúry ostávajú bez zmeny.
+  for (const phrase of ["Erstelle eine Rechnung für Tester1.", "Create an invoice for Tester1.", "Neue Rechnung für Tester1."]) {
+    const r = await session(env).say(phrase);
+    assert.equal(r.intent?.name, "CREATE_INVOICE_DRAFT", phrase);
+  }
+});
+
+// =============================================================================
 // ZMENA ÚLOHY A KONTEXT OBRAZOVKY
 // =============================================================================
 

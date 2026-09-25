@@ -378,12 +378,21 @@ export default function Dashboard() {
         // Nová otázka = nový token; vykonaný nový príkaz alebo zrušenie ho zahodí.
         pendingClarificationRef.current = typeof data?.pendingClarification === "string" ? data.pendingClarification : null;
 
+        const isVoiceTranscript = trimmed === voiceTranscriptRef.current.trim();
         if (response.ok && data.success && data.recognized) {
           const recognized = data.result as IntentResult;
           setIntentResult(recognized);
           if (recognized.kind === "navigate" && recognized.entity.type === "folder") {
             setRecentFolderId(recognized.entity.id);
           }
+        } else if (isVoiceTranscript && response.ok && data?.success && data.result?.kind === "not_found") {
+          // Hlasová veta, ktorej server nerozumel: jeho konkrétna veta
+          // („Tomuto príkazu som nerozumel.") namiesto „Nič sa nenašlo." —
+          // podreťazcové hľadanie celej vyslovenej vety nemá zmysel.
+          setIntentResult(data.result as IntentResult);
+        } else if (isVoiceTranscript && response.status === 400 && typeof data?.error === "string" && data.error) {
+          // Odmietnuté pred spracovaním (napr. príliš dlhý prepis) — presná príčina.
+          setIntentResult({ kind: "error", text: data.error });
         } else {
           setIntentResult(null);
         }

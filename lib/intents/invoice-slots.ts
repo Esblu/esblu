@@ -1,4 +1,4 @@
-import { findNumber, findCurrency, findVatRate, mentionsVat } from "./number-words.ts";
+import { findNumber, findCurrency, findVatRate, mentionsVat, normalizeSpokenAmounts } from "./number-words.ts";
 import {
   extractInvoiceItems,
   extractSingleAppendedItem,
@@ -381,7 +381,7 @@ function applyAnswerToSlots(
   candidates: PartnerCandidate[]
 ): InvoiceDraftSlots {
   const next: InvoiceDraftSlots = { ...slots };
-  const answer = rawAnswer.trim();
+  const answer = normalizeSpokenAmounts(rawAnswer.trim());
   if (!answer) return next;
 
   switch (field) {
@@ -668,7 +668,8 @@ export function findItemByMention(items: InvoiceItemCandidate[] | undefined, men
  * Priradí viac cien naraz. Vráti nové sloty, alebo `null`, keď sa odpoveď
  * nedá jednoznačne priradiť (vtedy sa nič nemení a asistent sa spýta).
  */
-export function assignItemPrices(slots: InvoiceDraftSlots, answer: string): InvoiceDraftSlots | null {
+export function assignItemPrices(slots: InvoiceDraftSlots, rawAnswer: string): InvoiceDraftSlots | null {
+  const answer = normalizeSpokenAmounts(rawAnswer);
   const items = [...(slots.items ?? [])];
   const missing = items.map((item, index) => (item.unitPrice === undefined ? index : -1)).filter((index) => index >= 0);
   if (missing.length === 0) return null;
@@ -728,7 +729,7 @@ const CHANGE_VERBS = /^(zmen|uprav|oprav|daj|nastav|change|set|andere|aendere|se
  * asistent sa spýta (nikdy nezmení nesprávny riadok).
  */
 export function readItemCorrection(slots: InvoiceDraftSlots, rawAnswer: string): ItemCorrection | null {
-  const folded = fold(rawAnswer).replace(/[.!?]+$/, "").trim();
+  const folded = fold(normalizeSpokenAmounts(rawAnswer)).replace(/[.!?]+$/, "").trim();
   const change = CHANGE_VERBS.exec(folded);
   if (change) {
     const mention = change[2].replace(/^(polozku|polozka|cenu|sumu|cena)\s+/, "");

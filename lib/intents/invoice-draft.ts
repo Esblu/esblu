@@ -446,6 +446,7 @@ export function buildItemPriceQuestion(
           count: missing.length,
           items: names,
           total: formatMoneyForSpeech(locale, slots.statedTotal),
+          mode: priceModeSuffix(locale, slots),
         })
       : translate(locale, "search.voice.invoice.askItemPrices", { items: names });
   }
@@ -453,6 +454,32 @@ export function buildItemPriceQuestion(
   return translate(locale, "search.voice.invoice.askAmountForItem", {
     item: items[index].description,
   });
+}
+
+/** „ s DPH" / „ bez DPH" — iba keď režim ceny naozaj zaznel. */
+function priceModeSuffix(locale: Locale, slots: InvoiceDraftSlots): string {
+  if (slots.priceMode === "gross") return translate(locale, "search.voice.invoice.withVatSuffix");
+  if (slots.priceMode === "net") return translate(locale, "search.voice.invoice.withoutVatSuffix");
+  return "";
+}
+
+/**
+ * „Rozumiem 3 položkám — … — a celkovej sume 10 831 € s DPH." — keď sa
+ * asistent najprv pýta na odberateľa, zopakuje, čo z vety už pochopil, aby
+ * to používateľ nemusel diktovať znova. `null`, keď nie je čo zhrnúť.
+ */
+export function buildUnderstoodSummary(locale: Locale, slots: InvoiceDraftSlots): string | null {
+  const items = slots.items ?? [];
+  if (items.length === 0 || (items.length < 2 && slots.statedTotal === undefined)) return null;
+  const names = joinNames(locale, items.map((item) => item.description));
+  return slots.statedTotal !== undefined
+    ? translate(locale, "search.voice.invoice.understoodWithTotal", {
+        count: items.length,
+        items: names,
+        total: formatMoneyForSpeech(locale, slots.statedTotal),
+        mode: priceModeSuffix(locale, slots),
+      })
+    : translate(locale, "search.voice.invoice.understoodItems", { count: items.length, items: names });
 }
 
 /** „kopanie, odvoz materiálu a pracovníci". */

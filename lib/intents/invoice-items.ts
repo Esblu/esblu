@@ -1,6 +1,6 @@
 // Relatívny import (rovnako ako v lib/i18n/*) — vďaka nemu sa modul dá
 // spustiť priamo v Node, takže testy nepotrebujú bundler ani závislosť.
-import { findNumber, findCurrency, tokenize } from "./number-words.ts";
+import { findNumber, findCurrency, normalizeSpokenAmounts, tokenize } from "./number-words.ts";
 
 // =============================================================================
 // Rozpoznanie RIADKOVÝCH POLOŽIEK z jednej vyslovenej vety.
@@ -536,7 +536,7 @@ function splitOnConjunctionIfTwoPrices(segment: string): string[] {
 // -----------------------------------------------------------------------------
 
 /** Slová, ktoré v popise nemajú čo robiť (zvyšky po oddelení sumy). */
-const PRICE_NOISE = /\b(eur|euro|eura|eurov|euros|czk|usd|dolar\w*|dollars?|kc|kč|pln|gbp)\b/gi;
+const PRICE_NOISE = /\b(eur|euro|eura|eurov|euros|czk|usd|dolar\w*|dollars?|kc|kč|pln|gbp)\b|€/gi;
 
 /**
  * Predložky, ktoré vnútri úseku uvádzajú predmet alebo cenu („**za**
@@ -778,6 +778,8 @@ export function extractInvoiceItems(
     ...(statedTotal !== undefined ? { statedTotal } : {}),
   });
 
+  // „10 831 eur" je JEDNA suma (tisíce oddelené medzerou) — interná kópia.
+  rawText = normalizeSpokenAmounts(rawText);
   const { section, partnerRemoved } = extractItemsSection(rawText, partnerHint);
   if (!section) return empty();
 
@@ -810,6 +812,28 @@ export function extractInvoiceItems(
   if (segments.length === 0 && totalSegments.length === 1) {
     segments = headerless;
     statedTotal = undefined;
+  }
+
+  // „kopanie materiál, odvoz materiálu, pracovníci za 10 831 eur" — výpočet
+  // popisov BEZ jediného čísla a suma „za …" iba na konci celého výpočtu.
+  // Suma je vyslovená za celým zoznamom → celková suma (nerozpočíta sa).
+  // Asistent sa na ceny riadkov spýta a ich súčet s ňou porovná, takže nič
+  // nevzniká odhadom. Pri inom tvare (dve sumy, suma uprostred) ostáva
+  // doterajšia prísna cesta.
+  if (statedTotal === undefined && segments.length >= 3) {
+    const last = segments[segments.length - 1];
+    const trailing = /^(.*\S)\s+(?:za|for|fuer|für)\s+(\S+(?:\s+\S+)?)$/i.exec(last.replace(/[.!?]+$/, ""));
+    const money = moneyTokens(last);
+    if (
+      trailing &&
+      money.length === 1 &&
+      hasCurrencyMarker(last) &&
+      findNumber(trailing[1]) === null &&
+      segments.slice(0, -1).every((segment) => findNumber(segment) === null)
+    ) {
+      statedTotal = money[0];
+      segments = [...segments.slice(0, -1), trailing[1]];
+    }
   }
 
   if (segments.length === 0) return empty();
@@ -957,7 +981,7 @@ export function extractInvoiceItems(
  * ceste" je presne ten prípad, kde sa tichá chyba najľahšie prehliadne.
  */
 export function extractSingleAppendedItem(rawAnswer: string): InvoiceItemCandidate | null {
-  const stripped = rawAnswer.replace(
+  const stripped = normalizeSpokenAmounts(rawAnswer).replace(
     /^\s*(pridaj( este| ešte)?|doplň|doplnit|dodaj|fuege hinzu|füge hinzu|add|(a\s+)?(este|ešte|plus|noch|also))\s+/i,
     ""
   );

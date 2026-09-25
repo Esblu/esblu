@@ -27,7 +27,11 @@ import { runAssistantTurn } from "@/lib/intents/orchestrator";
 // (app/api/assistant/action/execute) alebo draft faktúry na kontrolu.
 // -----------------------------------------------------------------------------
 
-const MAX_TEXT_LENGTH = 200;
+// Hlasový záznam má strop 20 s (lib/voice-config.ts) a pri súvislom diktovaní
+// faktúry to je bežne 250–400 znakov. Pôvodných 200 znakov odmietalo dlhé,
+// úplne správne prepisy ešte pred spracovaním (a klient ukázal „nerozumel
+// som"). 600 znakov pokryje 20 s reči s rezervou a stále drží vstup krátky.
+const MAX_TEXT_LENGTH = 600;
 
 const ANSWER_UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -229,6 +233,23 @@ export async function POST(req: Request) {
         selection,
         folderContextId: readFolderContext(body?.folderContext),
       }
+    );
+    // Prevádzková diagnostika BEZ obsahu: žiadny prepis, meno, suma ani
+    // identifikátor — iba to, ako sa veta spracovala. Stačí na rozlíšenie
+    // zlyhania smerovania (recognized=false) od otázky na chýbajúci údaj
+    // (resultKind=clarify) a od odmietnutia (resultKind=error). Zlyhanie
+    // prepisu reči loguje /api/assistant/transcribe (502/422).
+    console.info(
+      "esblu_assistant_turn",
+      JSON.stringify({
+        recognized: output.recognized,
+        intent: output.intent ?? null,
+        source: output.source ?? null,
+        resultKind: output.result.kind,
+        pending: Boolean(output.pendingClarification),
+        textLength: rawText.length,
+        voice: Boolean(conversationId),
+      })
     );
     return Response.json(output);
   } catch (error) {

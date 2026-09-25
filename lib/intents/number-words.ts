@@ -321,6 +321,27 @@ const CURRENCY_WORDS: { code: string; words: string[] }[] = [
   { code: "PLN", words: ["pln", "zloty", "zlotych"] },
 ];
 
+/**
+ * „10 831 eur" → „10831 eur". Prepis reči (aj formát čísla v SK/CZ/DE)
+ * oddeľuje tisíce medzerou, nezalomiteľnou alebo úzkou medzerou. Bez
+ * spojenia by sa z jednej sumy stali dve čísla — 10 € a „831" v popise.
+ *
+ * Spája sa IBA skupina, za ktorou hneď stojí mena (eur, €, Kč …) — prípadne
+ * desatinná časť s čiarkou („1 250,50 €") — a každá ďalšia skupina má presne
+ * tri číslice. Čiarka ani bodka sa nikdy
+ * neprekračujú („300, 650 eur" ostávajú dve sumy). Veľkosť sumy nehrá
+ * rolu — vyslovená suma je autoritatívny vstup, nič sa nezaokrúhľuje ani
+ * nespochybňuje.
+ *
+ * Vracia NOVÝ reťazec na interné spracovanie; zobrazený prepis sa nemení.
+ */
+export function normalizeSpokenAmounts(text: string): string {
+  return text.replace(
+    /(?<![\d.,])([1-9]\d{0,2})((?:[   ]\d{3})+)(?=(?:,\d{1,2})?\s*(?:€|eur|euro|eura|eurov|euros|czk|kč|kc|korún|korun|usd|\$|gbp|pln)(?![a-zá-ž]))/gi,
+    (_match, head: string, groups: string) => head + groups.replace(/[   ]/g, "")
+  );
+}
+
 export function findCurrency(text: string): string | null {
   const folded = fold(text);
   for (const currency of CURRENCY_WORDS) {

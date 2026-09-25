@@ -19,6 +19,7 @@ import {
   MAX_VOICE_ITEMS,
   MAX_VOICE_UNIT_PRICE,
 } from "../lib/intents/invoice-items.ts";
+import { normalizeSpokenAmounts } from "../lib/intents/number-words.ts";
 
 let passed = 0;
 let failed = 0;
@@ -329,6 +330,27 @@ check("dva súčty v jednej vete → nejasné", extractInvoiceItems("za kopanie,
 check("„kopanie a odvoz spolu 500 eur“ bez ďalších riadkov = jeden riadok",
   brief(extractInvoiceItems("za kopanie a odvoz spolu 500 eur")), [["kopanie a odvoz spolu", 500]]);
 check("„Ešte materiál 120 eur“ = doplnenie", extractSingleAppendedItem("Ešte materiál 120 eur."), { description: "materiál", unitPrice: 120, currency: "EUR" });
+
+{
+  const r = extractInvoiceItems("Vytvor testér jedna za kopanie materiál, odvoz materiálu, pracovníci za 10 831 eur s DPH.", "testér jedna");
+  check("H: „10 831 eur“ je jedna suma = celková suma za zoznamom", r.statedTotal, 10831);
+  check("H: 3 popisy bez ceny, nič nerozpočítané", brief(r), [["kopanie materiál", undefined], ["odvoz materiálu", undefined], ["pracovníci", undefined]]);
+}
+check("tisíce s medzerou (aj nezalomiteľnou) = jedna suma", brief(extractInvoiceItems("za kopanie 10 831 eur")), [["kopanie", 10831]]);
+check("tisíce s nezalomiteľnou medzerou", brief(extractInvoiceItems("za kopanie 1\u00a0250 eur")), [["kopanie", 1250]]);
+check("čiarka sa pri tisícoch neprekračuje", brief(extractInvoiceItems("za kopanie 300, odvoz 650 eur", undefined, { answerContext: true })), [["kopanie", 300], ["odvoz", 650]]);
+check("„10 hodín po 35 eur“ ostáva množstvo × cena", extractInvoiceItems("za práca, 10 hodín po 35 eur").items, [{ description: "práca", quantity: 10, unit: "hod", unitPrice: 35, currency: "EUR" }]);
+check("suma uprostred výpočtu nie je celková suma", extractInvoiceItems("za kopanie, odvoz za 300 eur, pracovníci").problem, "ambiguous");
+
+check("„10 831 €“ → 10831, symbol meny nie je v popise", brief(extractInvoiceItems("za kopanie 10 831 €")), [["kopanie", 10831]]);
+check("„1 250 €“ → 1250", brief(extractInvoiceItems("za kopanie 1 250 €")), [["kopanie", 1250]]);
+check("úzka nezalomiteľná medzera", brief(extractInvoiceItems("za kopanie 1\u202f250 eur")), [["kopanie", 1250]]);
+check("tisíce + desatinná čiarka „1 250,50 eur“", brief(extractInvoiceItems("za kopanie 1 250,50 eur")), [["kopanie", 1250.5]]);
+check("desatinné formáty bez zmeny", [brief(extractInvoiceItems("za kopanie 50,50 eur")), brief(extractInvoiceItems("za kopanie 50.50 eur")), brief(extractInvoiceItems("za kopanie 1.250,50 eur"))],
+  [[["kopanie", 50.5]], [["kopanie", 50.5]], [["kopanie", 1250.5]]]);
+check("množstvo × cena s tisícmi „2 hodiny po 1 200 eur“", extractInvoiceItems("za výkopové práce 2 hodiny po 1 200 eur").items,
+  [{ description: "výkopové práce", quantity: 2, unit: "hod", unitPrice: 1200, currency: "EUR" }]);
+check("čísla bez meny sa nespájajú", normalizeSpokenAmounts("Stroj 10 831 a 5 kusov"), "Stroj 10 831 a 5 kusov");
 
 // -----------------------------------------------------------------------------
 

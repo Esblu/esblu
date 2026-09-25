@@ -25,6 +25,7 @@ import {
   buildVatQuestion,
   describeItemParse,
   buildTotalMismatchQuestion,
+  buildUnderstoodSummary,
   type InvoiceDraftField,
   type InvoiceDraftSlots,
   type PartnerCandidate,
@@ -153,11 +154,13 @@ export async function startInvoiceDraftFlow(
       // mena by znamenalo doklad na firmu, ktorú nikto nezadal. Rozhovor
       // však ostáva: ďalšia veta je odpoveď na otázku o odberateľovi a
       // rozpoznané položky sa nestratia.
+      const understood = buildUnderstoodSummary(locale, slots);
+      const notFound = translate(locale, "search.voice.invoice.partnerNotFoundOfferCreate", {
+        name: partnerQuery.trim(),
+      });
       return askAgain(supabase, locale, ctx, slots, {
         kind: "not_found",
-        text: translate(locale, "search.voice.invoice.partnerNotFoundOfferCreate", {
-          name: partnerQuery.trim(),
-        }),
+        text: understood ? `${understood} ${notFound}` : notFound,
       }, "partner");
     }
   }
@@ -187,7 +190,11 @@ export async function startInvoiceDraftFlow(
     ];
   }
 
-  return continueFlow(supabase, locale, ctx, slots);
+  // Keď sa najprv pýta na odberateľa, zopakuje sa, čo z vety už je známe
+  // (položky, celková suma, režim ceny) — nič z toho sa nestratí.
+  const firstMissing = missingInvoiceFields(slots)[0];
+  const lead = firstMissing === "partner" || firstMissing === "partnerChoice" ? buildUnderstoodSummary(locale, slots) : null;
+  return continueFlow(supabase, locale, ctx, slots, lead ?? undefined);
 }
 
 /**

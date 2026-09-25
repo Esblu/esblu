@@ -469,6 +469,46 @@ export function parseInvoiceCreation(rawText: string): ParsedIntent | null {
   return build("CREATE_INVOICE_DRAFT", { partnerQuery: name });
 }
 
+/**
+ * Faktúra, z ktorej prepis reči STRATIL slovo „faktúru":
+ * „Vytvor testér jedna za kopanie materiál, odvoz materiálu, pracovníci za
+ * 10 831 eur s DPH."
+ *
+ * Rozhoduje súhrn dôkazov, nie jedno slovo:
+ *   - veta začína slovesom založenia (vytvor / vystav / priprav …),
+ *   - obsahuje predmet uvedený „za …" a sumu S MENOU,
+ *   - nepomenúva žiadnu inú oblasť (stroj, vozidlo, sklad, priečinok,
+ *     partner, doklad …) a nie je to servisná veta.
+ * Meno odberateľa je text medzi slovesom a prvým „za"; server ho VŽDY overí
+ * proti existujúcim partnerom (hovorený tvar „testér jedna" → návrh
+ * „Myslíte Tester1?"). Nič sa nezakladá — ďalej ide bežný bezpečný dialóg
+ * draftu faktúry a suma sa berie presne tak, ako zaznela.
+ */
+const RECOVERY_VERB = /^\s*(?:pros[ií]m\s+)?(vytvor|vystav|priprav|sprav|urob|zaloz|založ)\S*\s+(?:mi\s+)?(.+)$/i;
+const OTHER_DOMAIN_WORDS = [
+  "stroj", "vozidl", "auto", "spz", "sklad", "polozk", "priecin", "zlozk", "kategori", "partner", "zakazn",
+  "odberatel", "dodavatel", "firm", "spolocnost", "doklad", "bloc", "dodaci", "vazn", "dokument", "priloh",
+  "export", "stiahn", "fotk", "foto", "report", "zostav", "servis", "oprav", "udrzb",
+  "folder", "machine", "vehicle", "inventory", "rechnung", "invoice", "faktur",
+];
+
+export function recoverInvoiceWithoutNoun(rawText: string): ParsedIntent | null {
+  const match = RECOVERY_VERB.exec(rawText);
+  if (!match) return null;
+  const text = normalizeText(rawText);
+  if (OTHER_DOMAIN_WORDS.some((word) => new RegExp(`(^|[^a-z])${word}`).test(text))) return null;
+  if (isServiceUtterance(rawText)) return null;
+  const rest = match[2];
+  const za = rest.search(/(^|\s)za\s/i);
+  if (za < 0) return null;
+  // Suma s menou („10 831 eur", „300 €") — bez nej to nie je dosť dôkazov.
+  if (!/\d[\d   ]*(?:[.,]\d+)?\s*(?:€|eur|euro|eura|eurov)(?![a-z])/i.test(rest)) return null;
+  const name = rest.slice(0, za).replace(/[,;:.]+$/, "").trim();
+  if (!name) return build("CREATE_INVOICE_DRAFT", {});
+  if (name.split(/\s+/).length > 4 || /\d+\s*(?:eur|€)/i.test(name) || /^(nov|new|neu)/i.test(normalizeText(name))) return null;
+  return build("CREATE_INVOICE_DRAFT", { partnerQuery: name });
+}
+
 // -----------------------------------------------------------------------------
 // Nový obchodný partner — „Vytvor obchodného partnera Tester2", „Pridaj
 // zákazníka Firma ABC", „Vytvor firmu Stavby Kysuce s.r.o., IČO 12345678".
@@ -1521,6 +1561,9 @@ export function parseIntentDeterministic(rawText: string, hints: ParseHints = {}
 
   const richInvoice = parseInvoiceCreation(rawText);
   if (richInvoice) return richInvoice;
+  // Prepis bez slova „faktúru" — iba pri súhrne dôkazov (pozri funkciu).
+  const recoveredInvoice = recoverInvoiceWithoutNoun(rawText);
+  if (recoveredInvoice) return recoveredInvoice;
 
   if (matchesInvoiceCreation(text)) {
     return null;
