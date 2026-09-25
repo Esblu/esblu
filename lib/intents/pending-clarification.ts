@@ -3,6 +3,7 @@ import type { AwaitingClarification, ClarificationSlot, IntentArgs, IntentName, 
 import { isKnownIntentName } from "@/lib/intents/types";
 import { classifyConfirmationReply } from "@/lib/intents/confirmation-reply";
 import { parseIntentDeterministic } from "@/lib/intents/parse";
+import { isNewCommandDuringInvoice } from "@/lib/intents/conversation-state";
 
 // =============================================================================
 // Rozpracovaná otázka asistenta — spoločný mechanizmus pre všetky moduly.
@@ -49,7 +50,7 @@ type Envelope = { v: number; uid: string; cid: string; exp: number; p: PendingCl
 type Binding = { userId: string; companyId: string };
 type Options = { secret?: string; now?: number };
 
-const SLOTS: readonly ClarificationSlot[] = ["machine", "vehicle", "machine_or_vehicle", "inventory_item", "folder"];
+const SLOTS: readonly ClarificationSlot[] = ["machine", "vehicle", "machine_or_vehicle", "inventory_item", "folder", "partner_name"];
 
 function key(secret: string | undefined = process.env.ESBLU_ACTION_CONFIRMATION_SECRET): Buffer | null {
   const trimmed = secret?.trim();
@@ -212,6 +213,7 @@ const DOMAIN_NOUNS: Record<string, string[]> = {
   folder: ["priecin", "zlozk", "folder", "ordner"],
   vehicle: ["vozidl", "vehicle", "fahrzeug"],
   machine: ["stroj", "machine", "maschine"],
+  partner: ["partner", "zakaznik", "odberatel", "dodavatel", "kunde", "customer", "supplier"],
 };
 
 const ALLOWED_DOMAINS: Record<DialogContext, string[]> = {
@@ -220,6 +222,7 @@ const ALLOWED_DOMAINS: Record<DialogContext, string[]> = {
   machine_or_vehicle: ["machine", "vehicle"],
   inventory_item: ["inventory"],
   folder: ["folder"],
+  partner_name: ["partner"],
   invoice: ["invoice"],
 };
 
@@ -231,11 +234,11 @@ const SLOT_LOOKUPS: Record<DialogContext, readonly string[]> = {
   inventory_item: ["OPEN_INVENTORY_ITEM", "SEARCH_INVENTORY_ITEM", "INVENTORY_ITEM_STATUS"],
   // „do priečinka August 2026" je odpoveď na „Do ktorého priečinka?".
   folder: ["FOLDER_OPEN", "FOLDER_ADD_ITEMS"],
+  partner_name: ["SEARCH_PARTNER"],
   invoice: [],
 };
 
 const ALL_LOOKUPS = Array.from(new Set(Object.values(SLOT_LOOKUPS).flat()));
-const READ_VERBS = ["ukaz", "zobraz", "otvor", "najdi", "show", "open", "find", "zeige", "zeig", "offne", "oeffne", "finde"];
 
 function mentionsDomain(text: string, noun: string): boolean {
   return new RegExp(`(^| )${noun.replace(/\s+/g, " ")}`).test(text);
@@ -254,13 +257,11 @@ export function isClearNewCommand(rawText: string, context?: DialogContext): boo
   if (!text) return false;
   const parsed = parseIntentDeterministic(rawText);
 
-  if (context === "invoice") {
-    if (!parsed) return false;
-    if (parsed.name === "CREATE_INVOICE_DRAFT") return true;
-    return text.split(" ").some((word) => READ_VERBS.some((verb) => word.startsWith(verb)));
-  }
+  // Faktúra má vlastné (užšie) pravidlo v zdieľanom rozhodovaní
+  // lib/intents/conversation-state.ts — tu sa iba deleguje.
+  if (context === "invoice") return isNewCommandDuringInvoice(rawText);
 
-  const allowed = context ? ALLOWED_DOMAINS[context] : Object.keys(DOMAIN_NOUNS).filter((d) => d !== "invoice");
+  const allowed = context ? ALLOWED_DOMAINS[context] : Object.keys(DOMAIN_NOUNS).filter((d) => d !== "invoice" && d !== "partner");
   for (const [domain, nouns] of Object.entries(DOMAIN_NOUNS)) {
     if (!allowed.includes(domain) && nouns.some((noun) => mentionsDomain(text, noun))) return true;
   }
@@ -335,6 +336,11 @@ export function resumePendingIntent(
       // Handler skúsi stroj, potom vozidlo (ŠPZ).
       args.query = value;
       delete args.targetModule;
+      break;
+    case "partner_name":
+      // „Ako sa volá nový obchodný partner?" → meno; ostatné vyslovené
+      // údaje (IČO …) z pôvodnej vety ostávajú.
+      args.entityName = reply.kind === "answer" ? reply.value.slice(0, 200) : value;
       break;
   }
   return { name: pending.intent, args, source: "deterministic" };

@@ -432,6 +432,85 @@ export function parseSimpleInvoiceCreation(rawText: string): ParsedIntent | null
   return build("CREATE_INVOICE_DRAFT", { partnerQuery: name });
 }
 
+/**
+ * Založenie faktúry s položkami alebo s menom bez predložky:
+ * „Vytvor faktúru Tester1.", „Vytvor faktúru Tester1 za kopanie, …",
+ * „Faktúru pre Tester1 za kopanie 300 eur", „Vytvor faktúru za kopanie 300 eur".
+ *
+ * Deterministicky — aby o tom, či ide o faktúru, nerozhodoval AI
+ * klasifikátor (produkčná chyba: taká veta skončila otázkou na stroj či
+ * vozidlo). Z vety sa berie IBA meno odberateľa; položky a sumy číta
+ * extractInvoiceSlotsFromText z celej vety a partnera overí server.
+ */
+const RICH_INVOICE_REGEX =
+  /^\s*(?:((?:vytvor|priprav|zaloz|založ|vystav|sprav|urob|erstelle|erstellen|schreibe|create|make|issue|raise|prepare)\S*)(?:\s+mi)?\s+)?(?:(nov[úuáaý]|new|neue|eine\s+neue|eine|an|a)\s+)?(?:fakt[úu]r[ua]|rechnung|invoice)(?=[\s,.:;!?]|$)[\s,:;]*(.*)$/i;
+const INVOICE_CUSTOMER_PREPOSITION = /^(pre|pro|für|fur|fuer|for)\s+/i;
+const INVOICE_ITEMS_START = /\s(za|fuer|für|for|über|ueber)\s|[,;:]|\s(s|so|bez|mit|ohne|with|without)\s+(dph|mwst|vat)/i;
+
+export function parseInvoiceCreation(rawText: string): ParsedIntent | null {
+  const match = RICH_INVOICE_REGEX.exec(rawText);
+  if (!match) return null;
+  const rest = (match[3] ?? "").trim();
+  const hasPreposition = INVOICE_CUSTOMER_PREPOSITION.test(rest);
+  // Bez slovesa, bez „nová" a bez „pre X" je „Faktúra …" hľadanie, nie založenie.
+  if (!match[1] && !/^(nov|new|neue)/i.test(match[2] ?? "") && !hasPreposition) return null;
+  if (!rest || /^(za|über|ueber)\s/i.test(rest)) return build("CREATE_INVOICE_DRAFT", {});
+
+  const afterPreposition = rest.replace(INVOICE_CUSTOMER_PREPOSITION, "");
+  const cut = afterPreposition.search(INVOICE_ITEMS_START);
+  const name = (cut >= 0 ? afterPreposition.slice(0, cut) : afterPreposition)
+    .replace(/[.!?]+$/, "")
+    .replace(/^[„"'“]+|[”"'“]+$/g, "")
+    .trim();
+  // Meno s sumou („kopanie 300 eur") alebo dlhá veta nie je meno odberateľa.
+  if (!name || name.split(/\s+/).length > 6 || /\d+\s*(?:eur|euro|€|kc|czk)/i.test(name) || /^(nie|not|nicht|ale|but|aber)\b/i.test(name)) {
+    return build("CREATE_INVOICE_DRAFT", {});
+  }
+  return build("CREATE_INVOICE_DRAFT", { partnerQuery: name });
+}
+
+// -----------------------------------------------------------------------------
+// Nový obchodný partner — „Vytvor obchodného partnera Tester2", „Pridaj
+// zákazníka Firma ABC", „Vytvor firmu Stavby Kysuce s.r.o., IČO 12345678".
+//
+// Asistent partnera NEULOŽÍ: pripraví vyplnený formulár (existujúci model aj
+// validácia v lib/business-partners.ts) a uloží ho človek. Z vety sa berú
+// iba údaje, ktoré naozaj zazneli — nič sa nedopĺňa ani nevyhľadáva.
+// -----------------------------------------------------------------------------
+const PARTNER_CREATE_REGEX =
+  /^\s*(?:pros[ií]m\s+)?(?:vytvor|pridaj|zaloz|založ|zaeviduj|zaregistruj|create|add|erstelle|lege)\S*\s+(?:mi\s+)?(?:(?:nov\S*|new|neue\S*|einen|eine|an|a)\s+)?(obchodn\S*\s+partner\S*|business\s+partner|gesch[aä]ftspartner\S*|partner\S*|z[aá]kazn[ií]k\S*|odberate\S*|dod[aá]vate\S*|klient\S*|firm[ua]|spolo[cč]nos[tť]|customer|supplier|client|company|kunde\S*|lieferant\S*|firma)(?=[\s,.:;!?]|$)[\s,:;]*(.*)$/i;
+const PARTNER_FIELD_START = /,?\s*(?:i[cč]o|i[cč]\s|di[cč]|i[cč]\s*dph|so\s+s[ií]dlom|s[ií]dlo|adresa|company\s+id|firmennummer|ust|vat\s+id)\b/i;
+
+function cleanPartnerName(raw: string): string {
+  let name = raw.replace(/^[„"'“]+|[”"'“]+$/g, "").trim().replace(/[,;:]+$/, "").trim();
+  // Koncová bodka je koniec vety — okrem právnej formy („s.r.o.", „a.s.").
+  if (/\.$/.test(name) && !/(^|\s|\.)[a-z]\.$/i.test(name)) name = name.replace(/\.+$/, "").trim();
+  name = name.replace(/\s+an$/i, "").trim(); // „Lege einen Kunden X an"
+  return name.slice(0, 200);
+}
+
+export function parsePartnerCreate(rawText: string): ParsedIntent | null {
+  const match = PARTNER_CREATE_REGEX.exec(rawText);
+  if (!match) return null;
+  const text = normalizeText(rawText);
+  if (/(faktur|rechnung|invoice|blocek|blocky|doklad)/.test(text)) return null;
+  const noun = normalizeText(match[1]);
+  const rest = match[2] ?? "";
+  const args: ParsedIntent["args"] = {};
+  const cut = rest.search(PARTNER_FIELD_START);
+  const name = cleanPartnerName(cut >= 0 ? rest.slice(0, cut) : rest);
+  if (name) args.entityName = name;
+  const ico = /i[cč]o\s*[:.]?\s*((?:\d\s?){6,8})(?!\d)/i.exec(rest) ?? /(?:company\s+id|firmennummer)\s*[:.]?\s*((?:\d\s?){6,8})(?!\d)/i.exec(rest);
+  if (ico) args.partnerIco = ico[1].replace(/\s/g, "");
+  const dic = /di[cč]\s*[:.]?\s*(\d{10})(?!\d)/i.exec(rest);
+  if (dic) args.partnerDic = dic[1];
+  const icDph = /(?:i[cč]\s*dph|vat\s+id|ust-?id\w*)\s*[:.]?\s*([a-z]{2}\s?\d{8,12})(?!\d)/i.exec(rest);
+  if (icDph) args.partnerIcDph = icDph[1].replace(/\s/g, "").toUpperCase();
+  if (/^(zakazn|odberate|klient|customer|client|kunde)/.test(noun)) args.partnerKind = "customer";
+  else if (/^(dodavate|supplier|lieferant)/.test(noun)) args.partnerKind = "supplier";
+  return build("PARTNER_CREATE", args);
+}
+
 function matchesInvoiceCreation(text: string): boolean {
   return (
     INVOICE_CREATION_VERBS.some((verb) => text.includes(verb)) &&
@@ -1033,6 +1112,36 @@ export function isServiceUtterance(rawText: string): boolean {
  * hneď pred „stroj/machine/Maschine" (nie „do stroja", „stroju"), alebo
  * nemecký slovosled „Maschine X anlegen / hinzufügen".
  */
+/**
+ * Obsahuje veta VÝSLOVNÉ založenie pre daný intent? Používa sa na výsledok
+ * AI klasifikátora: model smie vetu vyložiť, ale založenie (stroj, vozidlo,
+ * položka, partner, faktúra, priečinok, zložka) musí zaznieť slovami —
+ * sloveso založenia spolu s podstatným menom danej oblasti.
+ */
+export function hasExplicitCreateWording(intentName: string, rawText: string): boolean {
+  const text = normalizeText(rawText);
+  const createVerb = /(^|[^a-z])(vytvor|zaloz|pridaj|zaeviduj|zaregistruj|vystav|priprav|sprav|urob|nov[aeyuo]|create|add|new|make|issue|register|erstell|anleg|lege|neue?[nrs]?|hinzufug|hinzufueg)/.test(text);
+  if (!createVerb) return false;
+  switch (intentName) {
+    case "MACHINE_CREATE":
+      return hasExplicitMachineCreate(rawText);
+    case "VEHICLE_CREATE":
+      return /(vozidl|auto|nakladiak|dodavk|vehicle|truck|fahrzeug|lkw)/.test(text);
+    case "INVENTORY_ITEM_CREATE":
+      return /(sklad|polozk|inventory|stock|item|lager|artikel)/.test(text);
+    case "PARTNER_CREATE":
+      return parsePartnerCreate(rawText) !== null;
+    case "CREATE_INVOICE_DRAFT":
+      return /(faktur|rechnung|invoice)/.test(text);
+    case "FOLDER_CREATE":
+      return /(priecin|folder|ordner)/.test(text);
+    case "CREATE_DOCUMENT_CATEGORY":
+      return /(zlozk|kategori|category|kategorie)/.test(text);
+    default:
+      return false;
+  }
+}
+
 export function hasExplicitMachineCreate(rawText: string): boolean {
   const text = normalizeText(rawText);
   if (hasWord(text, OP_NEW)) return true;
@@ -1362,6 +1471,11 @@ export function parseIntentDeterministic(rawText: string, hints: ParseHints = {}
     "MACHINE_DELETE",
     "VEHICLE_DELETE",
   ]);
+  // Nový obchodný partner — pred skladom/strojmi („Pridaj nového partnera X"
+  // nie je nová položka) a pred faktúrou (veta s „faktúra" sem nespadne).
+  const partnerCreate = parsePartnerCreate(rawText);
+  if (partnerCreate) return partnerCreate;
+
   if (!sendLike) {
     const inboxIntent = parseInboxUnassignedIntent(rawText);
     if (inboxIntent) return inboxIntent;
@@ -1404,6 +1518,9 @@ export function parseIntentDeterministic(rawText: string, hints: ParseHints = {}
   // (položky, sumy) idú ďalej ako doteraz.
   const simpleInvoice = parseSimpleInvoiceCreation(rawText);
   if (simpleInvoice) return simpleInvoice;
+
+  const richInvoice = parseInvoiceCreation(rawText);
+  if (richInvoice) return richInvoice;
 
   if (matchesInvoiceCreation(text)) {
     return null;

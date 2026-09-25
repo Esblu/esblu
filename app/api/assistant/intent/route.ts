@@ -2,58 +2,13 @@ import { verifyRequestUser } from "@/lib/server-auth";
 import { getUserScopedSupabaseClient } from "@/lib/server-supabase-user-client";
 import { getRequestLocale } from "@/lib/i18n/request-locale";
 import { translate } from "@/lib/i18n/translate";
-import {
-  isIntentCompatibleWithUtterance,
-  isServiceUtterance,
-  maintenanceDescription,
-  parseIntentDeterministic,
-  violatesMachineCreateInvariant,
-} from "@/lib/intents/parse";
 import { classifyIntentWithAi } from "@/lib/intents/ai-fallback";
-import {
-  isRegisteredReadOnlyIntent,
-  isRegisteredWriteIntent,
-  isRegisteredReviewableDraftIntent,
-} from "@/lib/intents/registry";
-import { executeIntent } from "@/lib/intents/handlers";
-import {
-  buildActionPreview,
-  createFolderActionConfirmation,
-  createOperationalActionConfirmation,
-  createInboxActionConfirmation,
-} from "@/lib/intents/actions";
-import { checkIntentAccess, denialMessageKey, restrictedAssistantDenial } from "@/lib/intents/permissions";
-import { handleInboxIntent } from "@/lib/intents/inbox-intents";
-import {
-  classifyClarificationReply,
-  isClearNewCommand,
-  resumePendingIntent,
-  sealPendingClarification,
-  unsealPendingClarification,
-} from "@/lib/intents/pending-clarification";
-import { handleOperationalIntent, isOperationalFamilyIntent } from "@/lib/intents/operational-intents";
 import type { ParseHints } from "@/lib/intents/parse";
-import {
-  folderIntentPermission,
-  handleFolderIntent,
-  isFolderFamilyIntent,
-} from "@/lib/intents/folder-intents";
 import type { FolderRef } from "@/lib/document-folders";
-import { clearConversationContext, isValidConversationId } from "@/lib/intents/conversation";
+import { isValidConversationId } from "@/lib/intents/conversation";
 import { resolveClientCalendarDate } from "@/lib/local-date";
-import {
-  readUiContext,
-  resolveUiEntity,
-  moduleMatchesEntity,
-  type UiContextEntityType,
-} from "@/lib/intents/ui-context";
-import { handleProcessCurrentDocumentAsReceivedInvoice } from "@/lib/intents/handlers-context";
-import {
-  startInvoiceDraftFlow,
-  continueInvoiceDraftFlow,
-} from "@/lib/intents/invoice-draft-flow";
-import type { ParsedIntent } from "@/lib/intents/types";
-import type { CompanyMemberRole } from "@/lib/company";
+import { readUiContext } from "@/lib/intents/ui-context";
+import { runAssistantTurn } from "@/lib/intents/orchestrator";
 
 // -----------------------------------------------------------------------------
 // POST /api/assistant/intent
@@ -62,30 +17,14 @@ import type { CompanyMemberRole } from "@/lib/company";
 // vyhľadávanie (zadanie "ESBLU — INTENT ENGINE + INTELIGENTNÉ TEXTOVÉ
 // VYHĽADÁVANIE + AUTOMATICKÉ UPOZORNENIA NA LEHOTY").
 //
-// Pipeline (bod 2 zadania, doslovne):
-//   TEXT → intent parser → structured intent → permission check →
-//   allowlisted server-side handler → response/navigation
-//
-//   1) verifyRequestUser  — Bearer token → auth.uid() (rovnaký vzor ako
-//      app/api/scan-document, app/api/account/preflight).
-//   2) company_members    — potvrdí AKTÍVNY membership (fail closed, ak
-//      chýba — appka nikdy "nehádá" firmu).
-//   3) parseIntentDeterministic (lib/intents/parse.ts) → ak je null,
-//      classifyIntentWithAi (lib/intents/ai-fallback.ts) ako fallback.
-//   4) isRegisteredReadOnlyIntent / isRegisteredWriteIntent (lib/intents/
-//      registry.ts) — DRUHÁ, nezávislá kontrola, že intent je naozaj v
-//      allowliste, a KTORÁ z dvoch ciest sa spustí.
-//   5a) READ intent → executeIntent (lib/intents/handlers.ts) — beží
-//      VÝHRADNE cez user-scoped Supabase klienta (getUserScopedSupabaseClient),
-//      takže RLS (company_id = esblu_my_active_company_id()) je posledná a
-//      jediná autorita nad tým, čo sa vráti (bod 12 zadania). Vykoná sa a
-//      vráti výsledok PRIAMO.
-//   5b) WRITE intent (EXPORT_DOCUMENTS/CREATE_DOCUMENT_CATEGORY/
-//      RENAME_DOCUMENT_CATEGORY/ASSIGN_DOCUMENTS_TO_CATEGORY) → NIKDY sa
-//      nespustí priamo tu — buildActionPreview (lib/intents/actions.ts)
-//      iba READ-only prepočíta, čo by sa stalo, a vráti `action_preview`
-//      (čaká na explicitné potvrdenie v UI cez samostatný endpoint
-//      app/api/assistant/action/execute) — pozri doplnenie zadania, bod 6.
+// Táto route je TENKÁ: overí prihlásenie (Bearer → auth.uid()), AKTÍVNE
+// členstvo vo firme (fail closed) a oprávnenia z tých istých RPC ako RLS,
+// prečíta TVAR vstupov z tela a zavolá orchestrátor
+// (lib/intents/orchestrator.ts#runAssistantTurn). Tam je celé poradie:
+// aktívna úloha → parser → zamestnanec → AI (bez mazania a bez založenia
+// bez výslovných slov) → poistky → brána oprávnení → handler → otázka.
+// Zápisy nikdy nevykoná priamo — iba náhľad s jednorazovým potvrdením
+// (app/api/assistant/action/execute) alebo draft faktúry na kontrolu.
 // -----------------------------------------------------------------------------
 
 const MAX_TEXT_LENGTH = 200;
@@ -112,34 +51,6 @@ function readPartnerSelectionAnswer(raw: unknown): string | null {
     ? partnerId
     : null;
 }
-
-/**
- * Ktoré intenty sa dajú doplniť z otvorenej entity, a akého typu tá entita
- * musí byť.
- *
- * Doplní sa VÝHRADNE chýbajúci hľadaný výraz. Príkaz, v ktorom používateľ
- * entitu pomenoval, sa nikdy neprepisuje — vyslovené meno má vždy
- * prednosť pred tým, čo je práve otvorené.
- */
-const CONTEXTUAL_QUERY_INTENTS: Record<string, UiContextEntityType> = {
-  SHOW_VEHICLE_DOCUMENTS: "vehicle",
-  SHOW_VEHICLE_SERVICE: "vehicle",
-  VEHICLE_STK_STATUS: "vehicle",
-  VEHICLE_EK_STATUS: "vehicle",
-  VEHICLE_VIGNETTE_STATUS: "vehicle",
-  VEHICLE_COST_SUMMARY: "vehicle",
-  VEHICLE_REPORT: "vehicle",
-  OPEN_VEHICLE: "vehicle",
-  SHOW_MACHINE_SERVICE: "machine",
-  SHOW_MACHINE_DOCUMENTS: "machine",
-  SHOW_MACHINE_PHOTOS: "machine",
-  MACHINE_REPORT: "machine",
-  OPEN_MACHINE: "machine",
-  INVENTORY_ITEM_STATUS: "inventory_item",
-  OPEN_INVENTORY_ITEM: "inventory_item",
-  SEARCH_PARTNER: "partner",
-  SEARCH_INVOICE: "invoice",
-};
 
 /**
  * Výber dokladov z obrazovky („tieto doklady"). Iba tvar: najviac 500
@@ -177,19 +88,6 @@ function readFolderContext(raw: unknown): string | null {
   if (!raw || typeof raw !== "object") return null;
   const folderId = (raw as { folderId?: unknown }).folderId;
   return typeof folderId === "string" && ANSWER_UUID_PATTERN.test(folderId) ? folderId : null;
-}
-
-function withContextualQuery(
-  intent: ParsedIntent,
-  entity: Awaited<ReturnType<typeof resolveUiEntity>>
-): ParsedIntent {
-  if (!entity || !entity.label) return intent;
-  if (intent.args.query?.trim()) return intent;
-
-  const expected = CONTEXTUAL_QUERY_INTENTS[intent.name];
-  if (!expected || expected !== entity.entityType) return intent;
-
-  return { ...intent, args: { ...intent.args, query: entity.label } };
 }
 
 export async function POST(req: Request) {
@@ -299,388 +197,40 @@ export async function POST(req: Request) {
     ]);
 
     const readCtx = {
-      role: membership.role as CompanyMemberRole,
       financeView: financeViewResult.data === true,
       canOperate: canOperateResult.data === true,
     };
     const financeManage = financeManageResult.data === true;
 
     // ------------------------------------------------------------------
-    // Prebiehajúci dialóg má prednosť pred klasifikáciou.
-    //
-    // Keď sa appka pred chvíľou spýtala "Aká suma?", je odpoveď "300 eur"
-    // odpoveďou — nie novým príkazom. Keby sa najprv klasifikovala, model
-    // by z nej urobil nezmysel alebo nič, a otázka by sa položila znova.
-    //
-    // Kontext sa NAČÍTAVA Z DATABÁZY podľa totožnosti volajúceho; to, že
-    // klient nejaké conversationId poslal, samo osebe neznamená, že
-    // nejaký dialóg existuje.
+    // Všetko ďalšie — aktívna úloha, parser, AI, poistky, brána oprávnení,
+    // handler a zapečatená otázka — rozhoduje JEDEN orchestrátor
+    // (lib/intents/orchestrator.ts). Route iba dodá overenú totožnosť,
+    // firmu a oprávnenia z RPC; z klienta sa neberie nič z toho.
     // ------------------------------------------------------------------
-    // Rozpracovaná faktúra NEPOHLTÍ nový príkaz: „Vytvor faktúru pre X"
-    // začne odznova, „Ukáž sklad" zruší dialóg a vykoná sa. Odpovede na
-    // otázky faktúry (položky, partner, DPH) ostávajú odpoveďami.
-    if (conversationId && financeManage && isClearNewCommand(rawText, "invoice")) {
-      await clearConversationContext(supabase, conversationId);
-    } else if (conversationId && financeManage) {
-      const continued = await continueInvoiceDraftFlow(
-        supabase,
-        locale,
-        {
-          companyId: membership.company_id as string,
-          userId: user.id,
-          conversationId,
-          issueDate,
-        },
+    const selection = readSelectionContext(body?.selectionContext);
+    const output = await runAssistantTurn(
+      { db: supabase, classifyWithAi: classifyIntentWithAi },
+      {
         rawText,
-        structuredPartnerId
-      );
-
-      if (continued) {
-        return Response.json({
-          success: true,
-          recognized: true,
-          intent: "CREATE_INVOICE_DRAFT",
-          source: "conversation",
-          result: continued,
-        });
-      }
-    }
-
-    const moduleContext = readModuleContext(body?.moduleContext);
-
-    // ------------------------------------------------------------------
-    // Rozpracovaná otázka asistenta („Ku ktorému stroju?" → „Aman.").
-    //
-    // Token je zapečatený serverom a viazaný na používateľa a AKTÍVNU firmu
-    // (lib/intents/pending-clarification.ts). Odpoveď doplní chýbajúci slot
-    // a pokračuje sa PÔVODNÝM intentom — cez tú istú bránu oprávnení nižšie.
-    // Nový príkaz („Ukáž sklad.") otázku zahodí; „Nechaj tak." ju zruší.
-    // ------------------------------------------------------------------
-    const binding = { userId: user.id, companyId: membership.company_id as string };
-    let intent: ParsedIntent | null = null;
-    let resumed = false;
-    if (typeof body?.pendingClarification === "string" && body.pendingClarification) {
-      const pending = unsealPendingClarification(body.pendingClarification, binding);
-      if (!pending) {
-        // Vypršaná / cudzia otázka: nikdy nepokračovať v starej akcii.
-        if (classifyClarificationReply(rawText, {}).kind === "answer") {
-          return Response.json({
-            success: true,
-            recognized: true,
-            source: "conversation",
-            result: { kind: "answer", text: translate(locale, "assistant.clarify.expired") },
-            pendingClarification: null,
-          });
-        }
-      } else {
-        const reply = classifyClarificationReply(rawText, pending);
-        if (reply.kind === "cancel") {
-          return Response.json({
-            success: true,
-            recognized: true,
-            intent: pending.intent,
-            source: "conversation",
-            result: { kind: "answer", text: translate(locale, "assistant.clarify.cancelled") },
-            pendingClarification: null,
-          });
-        }
-        if (reply.kind === "answer" || reply.kind === "confirm_candidate") {
-          intent = resumePendingIntent(pending, reply);
-          resumed = true;
-        }
-      }
-    }
-
-    if (!intent) intent = parseIntentDeterministic(rawText, { module: moduleContext });
-
-    // Zamestnanec nemá všeobecný asistent: prejde iba príjem dokladu.
-    // Rozhoduje sa pred AI klasifikáciou a pred akýmkoľvek dotazom; odpoveď
-    // je rovnaká pre každú inú vetu, takže nič neprezradí.
-    const restricted = restrictedAssistantDenial(intent, { role: membership.role as string });
-    if (restricted) {
-      return Response.json({
-        success: true,
-        recognized: Boolean(intent),
-        intent: intent?.name,
-        source: intent?.source,
-        result: { kind: "error", text: translate(locale, denialMessageKey(restricted)) },
-      });
-    }
-
-    if (!intent) {
-      intent = await classifyIntentWithAi(rawText);
-      // Rozsah hromadného mazania nesmie vybrať model („Vymaž všetko" nie je
-      // „nepriradené bločky"). Iba presne rozpoznaná veta z parsera.
-      if (intent?.name === "INBOX_DELETE_UNASSIGNED") intent = null;
-    }
-    // Presný cieľ (`entityId`) smie prísť IBA z potvrdeného kandidáta vlastnej
-    // zapečatenej otázky — nikdy z parsera, AI ani tela požiadavky.
-    if (intent && !resumed && intent.args.entityId !== undefined) {
-      const args = { ...intent.args };
-      delete args.entityId;
-      intent = { ...intent, args };
-    }
-
-    if (
-      !intent ||
-      (!isRegisteredReadOnlyIntent(intent.name) &&
-        !isRegisteredWriteIntent(intent.name) &&
-        !isRegisteredReviewableDraftIntent(intent.name))
-    ) {
-      return Response.json({
-        success: true,
-        recognized: false,
-        result: { kind: "not_found", text: translate(locale, "search.errors.commandNotUnderstood") },
-      });
-    }
-
-    // ------------------------------------------------------------------
-    // Tri cesty, tri rôzne stupne opatrnosti:
-    //
-    //  READ            — vykoná sa priamo, RLS je posledná autorita.
-    //  WRITE           — NIKDY sa nevykoná tu; vráti sa iba návrh a čaká
-    //                    sa na potvrdenie cez /action/execute.
-    //  REVIEWABLE DRAFT — zapíše sa, ale výsledok sa POVINNE otvorí na
-    //                    kontrolu (dnes výhradne draft faktúry, ktorý nemá
-    //                    číslo, nič neúčtuje a dá sa zmazať). Dôvod, prečo
-    //                    tu potvrdenie nie je, je pri CREATE_INVOICE_DRAFT
-    //                    v lib/intents/types.ts.
-    // ------------------------------------------------------------------
-    // ------------------------------------------------------------------
-    // Kontext otvorenej obrazovky.
-    //
-    // Klient identifikátor iba NAVRHUJE — server si ho overí znova cez
-    // user-scoped klienta, takže o firemnej izolácii aj o práve čítať
-    // rozhoduje RLS. Cudzí, podvrhnutý, zmazaný či nedostupný záznam
-    // skončí ako `null`, teda „nič otvorené", bez vysvetlenia prečo.
-    //
-    // Firma, používateľ, rola ani oprávnenia sa z klienta NEBERÚ nikdy.
-    // ------------------------------------------------------------------
-    // ------------------------------------------------------------------
-    // Kontext obrazovky pre príkazy, ktoré modul nepomenovali.
-    //
-    // „Vytvor novú položku" v Sklade = skladová položka; na nástenke sa
-    // asistent spýta. „Ukáž servisnú históriu" na detaile vozidla = vozidlo.
-    // Kontext iba vyberá význam vety — oprávnenie rozhoduje brána nižšie.
-    // ------------------------------------------------------------------
-    if (intent.name === "ENTITY_CREATE") {
-      const target =
-        moduleContext === "inventory" ? "INVENTORY_ITEM_CREATE"
-        : moduleContext === "machines" ? "MACHINE_CREATE"
-        : moduleContext === "vehicles" ? "VEHICLE_CREATE"
-        : null;
-      if (!target) {
-        return Response.json({
-          success: true,
-          recognized: true,
-          intent: intent.name,
-          source: intent.source,
-          result: { kind: "answer", text: translate(locale, "assistant.clarify.createModule") },
-        });
-      }
-      intent = { ...intent, name: target };
-    }
-    // INVARIANT: servisná veta nikdy nezaloží stroj — ani keď MACHINE_CREATE
-    // navrhne AI klasifikátor alebo kontext modulu. Servisná veta sa zmení
-    // na zápis servisu bez stroja (asistent sa spýta „Ku ktorému stroju?");
-    // založenie bez výslovného „nový stroj / Pridaj stroj X" sa zahodí.
-    if (violatesMachineCreateInvariant(intent.name, rawText)) {
-      if (!isServiceUtterance(rawText)) {
-        return Response.json({
-          success: true,
-          recognized: false,
-          result: { kind: "not_found", text: translate(locale, "search.errors.commandNotUnderstood") },
-        });
-      }
-      intent = {
-        name: "MACHINE_SERVICE_ADD",
-        args: { targetModule: "machines", serviceTitle: maintenanceDescription(rawText) },
-        source: intent.source,
-      };
-    }
-    // Úzka poistka: intent musí sedieť s TOUTO vetou („Vytvor faktúru"
-    // nikdy nevedie na stroj/vozidlo/sklad — ani cez starú otázku či AI).
-    if (!isIntentCompatibleWithUtterance(intent.name, rawText)) {
-      const fresh = resumed ? parseIntentDeterministic(rawText, { module: moduleContext }) : null;
-      if (!fresh || !isIntentCompatibleWithUtterance(fresh.name, rawText)) {
-        return Response.json({
-          success: true,
-          recognized: false,
-          result: { kind: "not_found", text: translate(locale, "search.errors.commandNotUnderstood") },
-          pendingClarification: null,
-        });
-      }
-      intent = fresh;
-      resumed = false;
-    }
-    if (intent.name === "SHOW_MACHINE_SERVICE" && !intent.args.query &&
-        (uiContext?.entityType === "vehicle" || moduleContext === "vehicles")) {
-      intent = { ...intent, name: "SHOW_VEHICLE_SERVICE" };
-    }
-
-    // ------------------------------------------------------------------
-    // BRÁNA OPRÁVNENÍ — pred akýmkoľvek dotazom na dáta.
-    //
-    // Zamestnanec, účtovník mimo svojho rozsahu, admin bez finance: odmietnutie
-    // bez čísla, mena či sumy. Toto nenahrádza RLS; iba zabraňuje tomu, aby
-    // odpoveď „nič sa nenašlo" nepriamo prezradila, že dáta existujú.
-    // ------------------------------------------------------------------
-    const denial = checkIntentAccess(intent.name, intent.args, {
-      role: membership.role as string,
-      financeView: readCtx.financeView,
-      financeManage,
-      canOperate: readCtx.canOperate,
-    });
-    if (denial) {
-      return Response.json({
-        success: true,
-        recognized: true,
-        intent: intent.name,
-        source: intent.source,
-        result: { kind: "error", text: translate(locale, denialMessageKey(denial)) },
-      });
-    }
-
-    const resolvedEntity =
-      uiContext && moduleMatchesEntity(uiContext) && intent.name !== "DOCUMENT_INTAKE"
-        ? await resolveUiEntity(supabase, uiContext)
-        : null;
-
-    let result;
-
-    if (intent.name === "INBOX_LIST_UNASSIGNED" || intent.name === "INBOX_DELETE_UNASSIGNED") {
-      // Oprávnenie už rozhodla brána vyššie (finance_view / finance_manage).
-      const actionCtx = {
-        companyId: membership.company_id as string,
+        locale,
         userId: user.id,
-        role: membership.role as CompanyMemberRole,
-      };
-      result = await handleInboxIntent(supabase, locale, intent, { companyId: actionCtx.companyId }, (name, canonicalArgs, expectedCount) =>
-        createInboxActionConfirmation(supabase, actionCtx, name, canonicalArgs, expectedCount)
-      );
-    } else if (isOperationalFamilyIntent(intent.name)) {
-      const actionCtx = {
         companyId: membership.company_id as string,
-        userId: user.id,
-        role: membership.role as CompanyMemberRole,
-      };
-      result = await handleOperationalIntent(
-        supabase,
-        locale,
-        intent,
-        { companyId: actionCtx.companyId, userId: actionCtx.userId, resolvedEntity, today: issueDate },
-        (name, canonicalArgs, expectedCount) =>
-          createOperationalActionConfirmation(supabase, actionCtx, name, canonicalArgs, expectedCount)
-      );
-    } else if (isFolderFamilyIntent(intent.name)) {
-      // ----------------------------------------------------------------
-      // Priečinky dokladov a stav stiahnutia.
-      //
-      // Oprávnenie sa overí PRED akýmkoľvek dotazom — zamestnanec na
-      // „stiahni všetky faktúry" nedostane ani počet, ani zoznam. Tie isté
-      // RPC ako RLS; nič z klienta.
-      // ----------------------------------------------------------------
-      const required = folderIntentPermission(intent.name);
-      const allowed = required === "manage" ? financeManage : readCtx.financeView;
-      if (!allowed) {
-        result = { kind: "error" as const, text: translate(locale, "folders.intent.denied") };
-      } else {
-        const selection = readSelectionContext(body?.selectionContext);
-        const actionCtx = {
-          companyId: membership.company_id as string,
-          userId: user.id,
-          role: membership.role as CompanyMemberRole,
-        };
-        result = await handleFolderIntent(
-          supabase,
-          locale,
-          intent,
-          {
-            companyId: actionCtx.companyId,
-            userId: actionCtx.userId,
-            selection: selection?.items ?? null,
-            sourceFolderId: selection?.folderId ?? null,
-            folderContextId: readFolderContext(body?.folderContext),
-          },
-          (name, canonicalArgs, expectedCount) =>
-            createFolderActionConfirmation(supabase, actionCtx, name, canonicalArgs, expectedCount)
-        );
+        role: membership.role as string,
+        financeView: readCtx.financeView,
+        financeManage,
+        canOperate: readCtx.canOperate,
+        conversationId,
+        pendingClarification: body?.pendingClarification,
+        structuredPartnerId,
+        issueDate,
+        uiContext,
+        moduleContext: readModuleContext(body?.moduleContext),
+        selection,
+        folderContextId: readFolderContext(body?.folderContext),
       }
-    } else if (intent.name === "PROCESS_CURRENT_DOCUMENT_AS_RECEIVED_INVOICE") {
-      result = handleProcessCurrentDocumentAsReceivedInvoice(
-        locale,
-        resolvedEntity,
-        financeManage
-      );
-    } else if (isRegisteredReadOnlyIntent(intent.name)) {
-      // Kontextové doplnenie: „ukáž dokumenty tohto vozidla" je ten istý
-      // intent ako „ukáž dokumenty vozidla BA123AB", len bez vysloveného
-      // označenia. Keď je entita správneho typu otvorená a overená,
-      // doplní sa jej označenie ako hľadaný výraz — existujúce handlery
-      // tak fungujú bez zmeny a nevzniká pre „tento" druhá vetva logiky.
-      const enriched = withContextualQuery(intent, resolvedEntity);
-      result = await executeIntent(supabase, locale, enriched, readCtx);
-    } else if (isRegisteredReviewableDraftIntent(intent.name)) {
-      // Fakturovať smie iba držiteľ finančnej správy. Kontroluje sa PRED
-      // akýmkoľvek dotazom aj pred prvou otázkou dialógu — zamestnanec
-      // nemá dostať otázku "pre koho?" na príkaz, ktorý by aj tak nesmel
-      // dokončiť. Skutočné vynútenie drží RLS pri zápise.
-      if (!financeManage) {
-        result = { kind: "error" as const, text: translate(locale, "search.voice.states.denied") };
-      } else if (!conversationId) {
-        // Dialóg bez identifikátora sa viesť nedá — a bez neho by sa prvá
-        // chýbajúca hodnota už nemala kam doplniť. (Nástenka ho posiela iba
-        // s hlasovým prepisom; písaný text sa vyhodnocuje počas písania.)
-        result = {
-          kind: "error" as const,
-          text: translate(locale, "assistant.invoice.useVoice"),
-        };
-      } else {
-        result = await startInvoiceDraftFlow(
-          supabase,
-          locale,
-          {
-            companyId: membership.company_id as string,
-            userId: user.id,
-            conversationId,
-            issueDate,
-          },
-          rawText,
-          intent.args.partnerQuery,
-          intent.args.query,
-          intent.args.amount
-        );
-      }
-    } else {
-      result = await buildActionPreview(
-        supabase,
-        locale,
-        {
-          companyId: membership.company_id as string,
-          userId: user.id,
-          role: membership.role as CompanyMemberRole,
-        },
-        intent
-      );
-    }
-
-    // Otázka asistenta → zapečatený krátkodobý stav pre ďalšiu vetu.
-    let pendingClarification: string | null = null;
-    if (result && "awaiting" in result && result.awaiting) {
-      pendingClarification = sealPendingClarification(intent.name, intent.args, result.awaiting, binding);
-      const { awaiting: _awaiting, ...rest } = result;
-      void _awaiting;
-      result = rest as typeof result;
-    }
-
-    return Response.json({
-      success: true,
-      recognized: true,
-      intent: intent.name,
-      source: resumed ? "conversation" : intent.source,
-      result,
-      pendingClarification,
-    });
+    );
+    return Response.json(output);
   } catch (error) {
     console.error(
       "api/assistant/intent: neočakávaná chyba:",

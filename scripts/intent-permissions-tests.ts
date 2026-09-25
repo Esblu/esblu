@@ -162,7 +162,9 @@ await check("odmietnutia: preložené v SK/DE/EN, bez čísel a premenných", ()
 });
 
 await check("route: brána oprávnení beží pred overením entity a pred handlermi", () => {
-  const route = readFileSync("app/api/assistant/intent/route.ts", "utf8");
+  // Logika route žije v orchestrátore; route ho iba volá.
+  assert.ok(readFileSync("app/api/assistant/intent/route.ts", "utf8").includes("runAssistantTurn("));
+  const route = readFileSync("lib/intents/orchestrator.ts", "utf8");
   const gate = route.indexOf("checkIntentAccess(intent.name");
   assert.ok(gate > 0, "brána chýba");
   for (const later of ["await resolveUiEntity(", "handleOperationalIntent(", "handleFolderIntent(", "await handleIntent("]) {
@@ -255,7 +257,9 @@ await check("nástenka: „Vytvor novú položku“ nevie modul → ENTITY_CREAT
   assert.equal(parsed("Vytvor novú položku")?.name, "ENTITY_CREATE");
   assert.equal(parsed("Vytvor novú položku", "machines")?.name, "MACHINE_CREATE");
   assert.equal(parsed("Vytvor novú položku", "vehicles")?.name, "VEHICLE_CREATE");
-  const route = readFileSync("app/api/assistant/intent/route.ts", "utf8");
+  // Logika route žije v orchestrátore; route ho iba volá.
+  assert.ok(readFileSync("app/api/assistant/intent/route.ts", "utf8").includes("runAssistantTurn("));
+  const route = readFileSync("lib/intents/orchestrator.ts", "utf8");
   assert.ok(route.includes('"assistant.clarify.createModule"'));
   assert.match(translate("sk", "assistant.clarify.createModule"), /V ktorom module ju chcete vytvoriť\?/);
 });
@@ -634,10 +638,12 @@ await check("owner/admin/accountant: brána pre obmedzené roly ich nezasahuje",
 });
 
 await check("route: brána pre zamestnanca beží pred AI klasifikáciou a pred bránou modulov", () => {
-  const route = readFileSync("app/api/assistant/intent/route.ts", "utf8");
+  // Logika route žije v orchestrátore; route ho iba volá.
+  assert.ok(readFileSync("app/api/assistant/intent/route.ts", "utf8").includes("runAssistantTurn("));
+  const route = readFileSync("lib/intents/orchestrator.ts", "utf8");
   const early = route.indexOf("restrictedAssistantDenial(intent");
   assert.ok(early > 0);
-  assert.ok(early < route.indexOf("classifyIntentWithAi(rawText)"), "pred AI");
+  assert.ok(early < route.indexOf("deps.classifyWithAi(rawText)"), "pred AI");
   assert.ok(early < route.indexOf('intent.name === "ENTITY_CREATE"'), "pred otázkou na modul");
   assert.ok(early < route.indexOf("checkIntentAccess(intent.name"), "pred bránou modulov");
 });

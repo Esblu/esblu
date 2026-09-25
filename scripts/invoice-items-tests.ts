@@ -302,6 +302,35 @@ check("prvá veta s partnerom", extractInvoiceItems("Vytvor faktúru pre Tester1
 ]);
 
 // -----------------------------------------------------------------------------
+// Produkčné vety z mobilu: výplňové „suma", počet v popise, celková suma,
+// čisté popisy bez čísel, mena iba na konci (iba v odpovedi, fail closed inde)
+// -----------------------------------------------------------------------------
+const brief = (r: { items: { description: string; unitPrice?: number }[] }) => r.items.map((i) => [i.description, i.unitPrice]);
+check("A: „suma“ a „za dvoch pracovníkov“ → 3 riadky, počet ostáva v popise",
+  brief(extractInvoiceItems("za Za kopanie suma 300 eur, za odvoz materiálu suma 650 eur a za dvoch pracovníkov suma 830 eur.")),
+  [["kopanie", 300], ["odvoz materiálu", 650], ["dvoch pracovníkov", 830]]);
+{
+  const r = extractInvoiceItems("Vytvor faktúru Tester1 za kopanie, za odvoz materiálu, za pracovníkov, suma spolu 1832 eur.", "Tester1");
+  check("B: celková suma sa nerozpočíta", r.statedTotal, 1832);
+  check("B: 3 popisy bez ceny", brief(r), [["kopanie", undefined], ["odvoz materiálu", undefined], ["pracovníkov", undefined]]);
+  check("B: problém = chýbajúce ceny (nie nejasné)", r.problem, "missing_price");
+}
+check("C: čisté popisy bez čísla", brief(extractInvoiceItems("za Kopanie, odvoz materiálu, pracovníci.")), [["Kopanie", undefined], ["odvoz materiálu", undefined], ["pracovníci", undefined]]);
+{
+  const r = extractInvoiceItems("za kopanie 300, odvoz 650, pracovníci 882, spolu 1832 eur", undefined, { answerContext: true });
+  check("súčet pri cenách sa iba zapamätá", r.statedTotal, 1832);
+}
+check("mena iba na konci — v odpovedi prenesená", brief(extractInvoiceItems("za Kopanie 300, odvoz 650, pracovníci 830 eur.", undefined, { answerContext: true })),
+  [["Kopanie", 300], ["odvoz", 650], ["pracovníci", 830]]);
+check("mena iba na konci — v prvej vete bez partnera fail closed", shape("za Kopanie 300, odvoz 650, pracovníci 830 eur."), "PROBLEM:ambiguous");
+check("mena iba na konci — nepravidelný tvar aj v odpovedi fail closed",
+  extractInvoiceItems("za Kopanie 300, 650 odvoz, pracovníci 830 eur.", undefined, { answerContext: true }).problem, "ambiguous");
+check("dva súčty v jednej vete → nejasné", extractInvoiceItems("za kopanie, odvoz, spolu 500 eur, celkom 600 eur").problem, "ambiguous");
+check("„kopanie a odvoz spolu 500 eur“ bez ďalších riadkov = jeden riadok",
+  brief(extractInvoiceItems("za kopanie a odvoz spolu 500 eur")), [["kopanie a odvoz spolu", 500]]);
+check("„Ešte materiál 120 eur“ = doplnenie", extractSingleAppendedItem("Ešte materiál 120 eur."), { description: "materiál", unitPrice: 120, currency: "EUR" });
+
+// -----------------------------------------------------------------------------
 
 console.log(`\n${passed} prešlo, ${failed} zlyhalo`);
 if (failed > 0) process.exit(1);

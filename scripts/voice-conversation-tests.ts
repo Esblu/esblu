@@ -20,7 +20,6 @@
 // =============================================================================
 
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 
 process.env.ESBLU_ACTION_CONFIRMATION_SECRET ??= "cd".repeat(32);
@@ -28,21 +27,12 @@ process.env.ESBLU_ACTION_CONFIRMATION_SECRET ??= "cd".repeat(32);
 process.env.NEXT_PUBLIC_SUPABASE_URL ??= "http://localhost:54321";
 process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ??= "test-anon-key";
 
-const { parseIntentDeterministic, violatesMachineCreateInvariant, isServiceUtterance, maintenanceDescription, isIntentCompatibleWithUtterance } = await import("@/lib/intents/parse");
-const { checkIntentAccess, restrictedAssistantDenial, denialMessageKey } = await import("@/lib/intents/permissions");
-const { handleOperationalIntent, isOperationalFamilyIntent } = await import("@/lib/intents/operational-intents");
-const { handleFolderIntent, isFolderFamilyIntent } = await import("@/lib/intents/folder-intents");
-const { handleInboxIntent } = await import("@/lib/intents/inbox-intents");
-const {
-  createFolderActionConfirmation,
-  createOperationalActionConfirmation,
-  createInboxActionConfirmation,
-  executeAction,
-} = await import("@/lib/intents/actions");
+const { parseIntentDeterministic, violatesMachineCreateInvariant, isIntentCompatibleWithUtterance } = await import("@/lib/intents/parse");
+const { isOperationalFamilyIntent } = await import("@/lib/intents/operational-intents");
+const { isFolderFamilyIntent } = await import("@/lib/intents/folder-intents");
+const { executeAction } = await import("@/lib/intents/actions");
 const {
   classifyClarificationReply,
-  isClearNewCommand,
-  resumePendingIntent,
   sealPendingClarification,
   unsealPendingClarification,
   PENDING_CLARIFICATION_TTL_SECONDS,
@@ -51,7 +41,7 @@ const { classifyConfirmationReply } = await import("@/lib/intents/confirmation-r
 const { inflectionKey, resolveEntityByName } = await import("@/lib/intents/entity-resolution");
 const { isUnassignedInboxDocument } = await import("@/lib/inbox-unassigned");
 const { translate } = await import("@/lib/i18n/translate");
-const { startInvoiceDraftFlow, continueInvoiceDraftFlow } = await import("@/lib/intents/invoice-draft-flow");
+const { runAssistantTurnDetailed } = await import("@/lib/intents/orchestrator");
 const { previewDraftTotals } = await import("@/lib/invoices");
 
 type IntentResult = import("@/lib/intents/types").IntentResult;
@@ -74,145 +64,7 @@ async function check(label: string, fn: () => void | Promise<void>): Promise<voi
 // Pamäťová databáza
 // -----------------------------------------------------------------------------
 
-type Row = Record<string, unknown>;
-type Role = "owner" | "admin" | "accountant" | "employee";
-
-const COMPANY_A = "00000000-0000-4000-8000-00000000000a";
-const COMPANY_B = "00000000-0000-4000-8000-00000000000b";
-const USER_A = "00000000-0000-4000-8000-0000000000a1";
-const USER_B = "00000000-0000-4000-8000-0000000000b1";
-
-type Tables = Record<string, Row[]>;
-
-function makeDb(opts: { role: Role; financeManage: boolean; companyId?: string; userId?: string; tables?: Tables }) {
-  const companyId = opts.companyId ?? COMPANY_A;
-  const state = {
-    role: opts.role,
-    financeManage: opts.financeManage,
-    tables: {
-      machines: [], vehicles: [], inventory_items: [], inventory_photos: [], machine_services: [], vehicle_services: [],
-      machine_photos: [], vehicle_photos: [], documents: [], business_partners: [], invoices: [], invoice_items: [], document_links: [], invoices: [], document_folders: [],
-      document_folder_items: [], document_export_package_items: [], document_download_events: [], document_attachments: [],
-      ...(opts.tables ?? {}),
-    } as Tables,
-    confirmations: [] as Row[],
-    conversations: new Map<string, Row>(),
-    storageRemoved: [] as string[],
-    queries: 0,
-  };
-  // RLS: iba riadky aktívnej firmy (riadky bez company_id patria A).
-  const visible = (row: Row) => (row.company_id ?? COMPANY_A) === companyId;
-
-  function table(name: string) {
-    state.queries++;
-    let op: "select" | "delete" | "insert" | "update" = "select";
-    let payload: Row | null = null;
-    let head = false;
-    const filters: Array<(row: Row) => boolean> = [];
-    const all = () => (state.tables[name] ?? (state.tables[name] = []));
-    const withJoins = (row: Row): Row => {
-      if (name === "documents") {
-        return { ...row, document_links: state.tables.document_links.filter((l) => l.document_id === row.id) };
-      }
-      if (name === "document_folders") {
-        return { ...row, document_folder_items: [{ count: state.tables.document_folder_items.filter((i) => i.folder_id === row.id).length }] };
-      }
-      return row;
-    };
-    const run = () => {
-      const rows = all().filter(visible).filter((row) => filters.every((f) => f(row)));
-      if (op === "insert") {
-        const list = Array.isArray(payload) ? (payload as Row[]) : [payload as Row];
-        const rows = list.map((item) => ({ id: randomUUID(), company_id: companyId, ...item }));
-        all().push(...rows);
-        return { data: rows, error: null };
-      }
-      if (op === "delete") {
-        const ids = new Set(rows.map((r) => r.id));
-        state.tables[name] = all().filter((r) => !ids.has(r.id));
-        if (name === "documents") {
-          for (const t of ["document_links", "document_folder_items", "document_attachments"]) {
-            state.tables[t] = state.tables[t].filter((r) => !ids.has(r.document_id));
-          }
-        }
-        return { data: rows.map((r) => ({ id: r.id })), error: null };
-      }
-      if (op === "update") {
-        for (const r of rows) Object.assign(r, payload);
-        return { data: rows.map((r) => ({ id: r.id })), error: null };
-      }
-      if (head) return { data: null, count: rows.length, error: null };
-      return { data: rows.map(withJoins), error: null };
-    };
-    const b: Record<string, unknown> = {
-      select(_c?: string, o?: { head?: boolean }) { head = Boolean(o?.head); return b; },
-      insert(row: Row | Row[]) { op = "insert"; payload = row as Row; return b; },
-      single() { const r = run(); return Promise.resolve({ data: (r.data as Row[] | null)?.[0] ?? null, error: null }); },
-      update(row: Row) { op = "update"; payload = row; return b; },
-      delete() { op = "delete"; return b; },
-      eq(c: string, v: unknown) { filters.push((r) => r[c] === v); return b; },
-      in(c: string, v: unknown[]) { filters.push((r) => v.includes(r[c])); return b; },
-      is(c: string, v: unknown) { filters.push((r) => (r[c] ?? null) === v); return b; },
-      gte() { return b; }, lte() { return b; }, order() { return b; }, limit() { return b; },
-      maybeSingle() { const r = run(); return Promise.resolve({ data: (r.data as Row[] | null)?.[0] ?? null, error: null }); },
-      then(res: (v: unknown) => void, rej: (e: unknown) => void) { try { res(run()); } catch (e) { rej(e); } },
-    };
-    return b;
-  }
-  const rpc: Record<string, (a: Row) => unknown> = {
-    esblu_my_finance_manage: () => state.financeManage,
-    esblu_my_finance_view: () => state.financeManage,
-    esblu_my_active_role: () => state.role,
-    esblu_role_can_operate: () => state.role !== "accountant",
-    esblu_create_action_confirmation: (a) => {
-      const id = randomUUID();
-      state.confirmations.push({
-        id, intent: a.p_intent, canonical_args: a.p_canonical_args, expected_count: a.p_expected_count, nonce: a.p_nonce,
-        server_proof: a.p_server_proof, expires_at_epoch: a.p_expires_at_epoch, user_id: opts.userId ?? USER_A, company_id: companyId, consumed_at: null,
-      });
-      return id;
-    },
-    // Dialóg faktúry (lib/intents/conversation.ts) — rovnaká väzba ako SQL:
-    // používateľ + aktívna firma + conversationId, claim iba raz.
-    esblu_upsert_conversation_context: (a) => {
-      const k = `${opts.userId ?? USER_A}|${companyId}|${a.p_conversation_id}`;
-      const prev = state.conversations.get(k);
-      const turn = Math.min((prev?.turn_count as number ?? 0) + 1, 12);
-      state.conversations.set(k, { pending_intent: a.p_pending_intent, slots: a.p_slots, missing_fields: a.p_missing_fields, turn_count: turn, consumed: false });
-      return turn;
-    },
-    esblu_load_conversation_context: (a) => {
-      const row = state.conversations.get(`${opts.userId ?? USER_A}|${companyId}|${a.p_conversation_id}`);
-      return row && !row.consumed ? row : null;
-    },
-    esblu_claim_conversation_context: (a) => {
-      const row = state.conversations.get(`${opts.userId ?? USER_A}|${companyId}|${a.p_conversation_id}`);
-      if (!row || row.consumed) return null;
-      row.consumed = true;
-      return row;
-    },
-    esblu_clear_conversation_context: (a) => {
-      state.conversations.delete(`${opts.userId ?? USER_A}|${companyId}|${a.p_conversation_id}`);
-      return null;
-    },
-    esblu_claim_action_confirmation: (a) => {
-      const row = state.confirmations.find((c) => c.id === a.p_confirmation_id && c.company_id === companyId);
-      if (!row || row.consumed_at) return null;
-      row.consumed_at = new Date().toISOString();
-      return row;
-    },
-  };
-  const db = {
-    from: table,
-    rpc(n: string, a: Row = {}) {
-      const response = { data: rpc[n] ? rpc[n](a) : null, error: null };
-      return Object.assign(Promise.resolve(response), { maybeSingle: () => Promise.resolve(response) });
-    },
-    storage: { from: (bucket: string) => ({ remove: async (paths: string[]) => { state.storageRemoved.push(...paths.map((p) => `${bucket}/${p}`)); return { error: null }; } }) },
-  };
-  return { db: db as never, state, companyId, userId: opts.userId ?? USER_A };
-}
-
+import { makeDb, COMPANY_A, COMPANY_B, USER_A, USER_B, type Row, type Role, type Tables } from "./support/memory-db.ts";
 // -----------------------------------------------------------------------------
 // Presne poradie z /api/assistant/intent (bez HTTP obalu)
 // -----------------------------------------------------------------------------
@@ -228,85 +80,45 @@ type Env = ReturnType<typeof makeDb>;
 type Turn = { intent: ParsedIntent | null; result: IntentResult | { kind: "read"; name: string }; pending: string | null };
 
 async function runTurn(env: Env, text: string, pending: string | null, opts: { module?: string; selection?: Array<{ type: "invoice" | "document"; id: string }>; now?: number; conversationId?: string; aiIntent?: ParsedIntent } = {}): Promise<Turn> {
-  const binding = { userId: env.userId, companyId: env.companyId };
-  const locale = "sk" as const;
+  // TEN ISTÝ orchestrátor, ktorý volá /api/assistant/intent — nie kópia
+  // poradia. AI klasifikátor je náhrada (vracia `aiIntent`).
   const ctx = ACCESS[env.state.role](env.state.financeManage);
-  const flowCtx = { companyId: env.companyId, userId: env.userId, conversationId: opts.conversationId ?? "", issueDate: "2026-09-24" };
-  // Rozpracovaný dialóg faktúry má prednosť (route: conversationId && financeManage).
-  if (opts.conversationId && ctx.financeManage && isClearNewCommand(text, "invoice")) {
-    env.state.conversations.delete(`${env.userId}|${env.companyId}|${opts.conversationId}`);
-  } else if (opts.conversationId && ctx.financeManage) {
-    const continued = await continueInvoiceDraftFlow(env.db, locale, flowCtx, text, null);
-    if (continued) return { intent: { name: "CREATE_INVOICE_DRAFT", args: {}, source: "deterministic" }, result: continued, pending: null };
-  }
-  let intent: ParsedIntent | null = null;
-  let resumed = false;
-  if (pending) {
-    const p = unsealPendingClarification(pending, binding, { now: opts.now });
-    if (!p) {
-      if (classifyClarificationReply(text, {}).kind === "answer") {
-        return { intent: null, result: { kind: "answer", text: translate(locale, "assistant.clarify.expired") }, pending: null };
-      }
-    } else {
-      const reply = classifyClarificationReply(text, p);
-      if (reply.kind === "cancel") return { intent: null, result: { kind: "answer", text: translate(locale, "assistant.clarify.cancelled") }, pending: null };
-      if (reply.kind === "answer" || reply.kind === "confirm_candidate") {
-        intent = resumePendingIntent(p, reply);
-        resumed = true;
-      }
+  const { output, finalIntent } = await runAssistantTurnDetailed(
+    { db: env.db, classifyWithAi: async () => opts.aiIntent ?? null, now: opts.now },
+    {
+      rawText: text,
+      locale: "sk",
+      userId: env.userId,
+      companyId: env.companyId,
+      role: env.state.role,
+      financeView: ctx.financeView,
+      financeManage: ctx.financeManage,
+      canOperate: ctx.canOperate,
+      conversationId: opts.conversationId ?? null,
+      pendingClarification: pending,
+      structuredPartnerId: null,
+      issueDate: "2026-09-24",
+      uiContext: null,
+      moduleContext: opts.module as never,
+      selection: opts.selection ? { items: opts.selection, folderId: null } : null,
+      folderContextId: null,
     }
-  }
-  if (!intent) intent = parseIntentDeterministic(text, opts.module ? { module: opts.module as never } : {});
-  // Simulácia výsledku AI klasifikátora (route ho volá, keď parser nič nevráti).
-  if (!intent && opts.aiIntent) intent = opts.aiIntent;
-  // Route: invariant „servisná veta nikdy nezaloží stroj".
-  if (intent && violatesMachineCreateInvariant(intent.name, text)) {
-    if (!isServiceUtterance(text)) return { intent: null, result: { kind: "not_found", text: "not understood" }, pending: null };
-    intent = { name: "MACHINE_SERVICE_ADD", args: { targetModule: "machines", serviceTitle: maintenanceDescription(text) }, source: intent.source };
-  }
-  // Route: poistka „intent sedí s touto vetou".
-  if (intent && !isIntentCompatibleWithUtterance(intent.name, text)) {
-    const fresh = resumed ? parseIntentDeterministic(text, opts.module ? { module: opts.module as never } : {}) : null;
-    if (!fresh || !isIntentCompatibleWithUtterance(fresh.name, text)) return { intent: null, result: { kind: "not_found", text: "not understood" }, pending: null };
-    intent = fresh;
-    resumed = false;
-  }
-  if (intent && !resumed && intent.args.entityId !== undefined) {
-    const args = { ...intent.args };
-    delete args.entityId;
-    intent = { ...intent, args };
-  }
-  const restricted = restrictedAssistantDenial(intent, ctx);
-  if (restricted) return { intent, result: { kind: "error", text: translate(locale, denialMessageKey(restricted)) }, pending: null };
-  if (!intent) return { intent, result: { kind: "not_found", text: "not understood" }, pending: null };
-  const denial = checkIntentAccess(intent.name, intent.args, ctx);
-  if (denial) return { intent, result: { kind: "error", text: translate(locale, denialMessageKey(denial)) }, pending: null };
+  );
+  // Čítacie intenty mimo rodín s vlastným handlerom (sklad/stroje/vozidlá,
+  // priečinky, Inbox) sa v týchto testoch neporovnávajú obsahom.
+  const genericRead =
+    finalIntent &&
+    !isOperationalFamilyIntent(finalIntent.name) &&
+    !isFolderFamilyIntent(finalIntent.name) &&
+    !finalIntent.name.startsWith("INBOX_") &&
+    isReadResult(output.result);
+  const readOnly = genericRead ? { kind: "read" as const, name: finalIntent.name } : null;
+  return { intent: finalIntent, result: readOnly ?? output.result, pending: output.pendingClarification ?? null };
+}
 
-  const actionCtx = { companyId: env.companyId, userId: env.userId, role: env.state.role as never };
-  let result: IntentResult;
-  if (intent.name === "INBOX_LIST_UNASSIGNED" || intent.name === "INBOX_DELETE_UNASSIGNED") {
-    result = await handleInboxIntent(env.db, locale, intent, { companyId: env.companyId }, (n, a, c) => createInboxActionConfirmation(env.db, actionCtx, n, a, c));
-  } else if (isOperationalFamilyIntent(intent.name)) {
-    result = await handleOperationalIntent(env.db, locale, intent, { companyId: env.companyId, userId: env.userId, resolvedEntity: null, today: "2026-09-24" },
-      (n, a, c) => createOperationalActionConfirmation(env.db, actionCtx, n, a, c));
-  } else if (intent.name === "CREATE_INVOICE_DRAFT") {
-    if (!ctx.financeManage) return { intent, result: { kind: "error", text: translate(locale, "search.voice.states.denied") }, pending: null };
-    if (!opts.conversationId) return { intent, result: { kind: "error", text: translate(locale, "assistant.invoice.useVoice") }, pending: null };
-    result = await startInvoiceDraftFlow(env.db, locale, flowCtx, text, intent.args.partnerQuery, intent.args.query, intent.args.amount);
-  } else if (isFolderFamilyIntent(intent.name)) {
-    result = await handleFolderIntent(env.db, locale, intent, { companyId: env.companyId, userId: env.userId, selection: opts.selection ?? null, sourceFolderId: null, folderContextId: null },
-      (n, a, c) => createFolderActionConfirmation(env.db, actionCtx, n, a, c));
-  } else {
-    return { intent, result: { kind: "read", name: intent.name }, pending: null };
-  }
-  let token: string | null = null;
-  if ("awaiting" in result && result.awaiting) {
-    token = sealPendingClarification(intent.name, intent.args, result.awaiting, binding, { now: opts.now });
-    const { awaiting: _a, ...rest } = result;
-    void _a;
-    result = rest as IntentResult;
-  }
-  return { intent, result, pending: token };
+/** Čítacie výsledky (zoznam, navigácia …) sa v týchto testoch neporovnávajú obsahom. */
+function isReadResult(result: IntentResult): boolean {
+  return ["list", "navigate", "report", "deadline_list", "document_list", "disambiguate"].includes(result.kind);
 }
 
 async function confirm(env: Env, result: Turn["result"]): Promise<IntentResult> {
@@ -908,7 +720,10 @@ await check("C: partner sa nenašiel → konkrétna veta (nie „Nič sa nenašl
   const env = makeDb({ role: "owner", financeManage: true, tables: PARTNERS() });
   const t = await runTurn(env, "Vytvor faktúru pre Neznámy Partner.", null, { conversationId: CONV });
   assert.equal(t.result.kind, "not_found");
-  assert.equal(text(t.result), translate("sk", "search.voice.invoice.partnerNotFound", { name: "Neznámy Partner" }));
+  assert.equal(text(t.result), translate("sk", "search.voice.invoice.partnerNotFoundOfferCreate", { name: "Neznámy Partner" }));
+  // Rozhovor ostáva otvorený a čaká na odberateľa (nie „Nič sa nenašlo").
+  const stored = env.state.conversations.get(`${USER_A}|${COMPANY_A}|${CONV}`)!;
+  assert.equal((stored.missing_fields as string[])[0], "partner");
 });
 
 await check("D: viac partnerov → otázka na výber", async () => {
@@ -970,7 +785,11 @@ await check("J: SK / DE / EN frázy → CREATE_INVOICE_DRAFT s partnerom; bohat�
     assert.equal(intent?.name, "CREATE_INVOICE_DRAFT", phrase);
     assert.equal(intent?.args.partnerQuery, "Tester1", phrase);
   }
-  assert.equal(parseIntentDeterministic("Vytvor faktúru pre Tester1 za kopanie 300 eur."), null);
+  // Veta s položkami je tiež deterministické založenie (nie AI): partner sa
+  // vezme z vety, položky prečíta extractInvoiceSlotsFromText.
+  const rich = parseIntentDeterministic("Vytvor faktúru pre Tester1 za kopanie 300 eur.");
+  assert.equal(rich?.name, "CREATE_INVOICE_DRAFT");
+  assert.equal(rich?.args.partnerQuery, "Tester1");
   assert.equal(parseIntentDeterministic("Ukáž faktúry pre Tester1")?.name === "CREATE_INVOICE_DRAFT", false);
 });
 
@@ -1170,9 +989,11 @@ await check("E: AI navrhne MACHINE_CREATE zo servisnej vety → odmietnuté, zme
   const odd = await runTurn(env, "Takeuchi 323 niečo", null, { aiIntent: { name: "MACHINE_CREATE", args: { entityName: "Takeuchi 323 niečo" }, source: "ai" } });
   assert.equal(odd.intent, null);
   assert.equal(machineCreates(env), 0);
-  const route = readFileSync("app/api/assistant/intent/route.ts", "utf8");
+  // Logika route žije v orchestrátore; route ho iba volá.
+  assert.ok(readFileSync("app/api/assistant/intent/route.ts", "utf8").includes("runAssistantTurn("));
+  const route = readFileSync("lib/intents/orchestrator.ts", "utf8");
   const guard = route.indexOf("violatesMachineCreateInvariant(intent.name, rawText)");
-  assert.ok(guard > route.indexOf("classifyIntentWithAi(rawText)"), "invariant až po AI");
+  assert.ok(guard > route.indexOf("deps.classifyWithAi(rawText)"), "invariant až po AI");
   assert.ok(guard < route.indexOf("checkIntentAccess(intent.name"), "invariant pred bránou a handlerom");
 });
 
@@ -1386,14 +1207,16 @@ await check("stav: zrušenie a vypršanie; prepis sa posiela raz a nezmenený", 
 // -----------------------------------------------------------------------------
 
 await check("route: otázka sa spracuje pred parserom, brána oprávnení platí aj pre pokračovanie", () => {
-  const route = readFileSync("app/api/assistant/intent/route.ts", "utf8");
-  const resume = route.indexOf("unsealPendingClarification(body.pendingClarification");
+  // Logika route žije v orchestrátore; route ho iba volá.
+  assert.ok(readFileSync("app/api/assistant/intent/route.ts", "utf8").includes("runAssistantTurn("));
+  const route = readFileSync("lib/intents/orchestrator.ts", "utf8");
+  const resume = route.indexOf("unsealPendingClarification(input.pendingClarification");
   const parse = route.indexOf("parseIntentDeterministic(rawText");
   const gate = route.indexOf("restrictedAssistantDenial(intent");
   const access = route.indexOf("checkIntentAccess(intent.name");
   assert.ok(resume > 0 && resume < parse && parse < gate && gate < access);
   assert.ok(route.includes("sealPendingClarification(intent.name"));
-  assert.ok(route.includes('intent?.name === "INBOX_DELETE_UNASSIGNED") intent = null'), "AI nesmie vybrať hromadné mazanie");
+  assert.ok(route.includes('"INBOX_DELETE_UNASSIGNED",') && route.includes("sanitizeAiIntent(await deps.classifyWithAi(rawText), rawText)"), "AI nesmie vybrať hromadné mazanie");
   assert.ok(route.includes("delete args.entityId"), "entityId z parsera/AI sa zahodí");
 });
 

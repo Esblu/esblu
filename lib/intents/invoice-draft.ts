@@ -149,6 +149,8 @@ export function extractInvoiceSlotsFromText(
   // ZÁMERNE neuloží ani čiastočne: bol by to signál, že rozdelenie
   // prebehlo zle, a čiastočný doklad je horší než otázka.
   const parsed = extractInvoiceItems(rawText, partnerHint);
+  // Vyslovená celková suma sa NErozpočítava — iba sa zapamätá na kontrolu.
+  if (parsed.statedTotal !== undefined) slots.statedTotal = parsed.statedTotal;
   if (parsed.items.length > 0 && parsed.problem !== "ambiguous") {
     slots.items = parsed.items;
     // Sumy z vety sa nesú ďalej, aby sa dali tesne pred zápisom porovnať
@@ -382,6 +384,8 @@ export function buildQuestion(
       return { question: translate(locale, "search.voice.invoice.askDescription") };
     case "itemPrice":
       return { question: translate(locale, "search.voice.invoice.askAmount") };
+    case "total":
+      return { question: translate(locale, "search.voice.invoice.askAmount") };
     case "vat":
       // Znenie dopĺňa `buildVatQuestion` — potrebuje sloty, ktoré sem
       // nechodia. Toto je východisko pre prípad bez kontextu.
@@ -432,8 +436,46 @@ export function buildItemPriceQuestion(
   if (index === null) return translate(locale, "search.voice.invoice.askAmount");
   if (items.length <= 1) return translate(locale, "search.voice.invoice.askAmount");
 
+  // Viac riadkov bez ceny: jedna otázka na všetky, s ich menami — a keď
+  // zaznela celková suma, zopakuje sa aj tá (nerozpočítava sa).
+  const missing = items.filter((item) => item.unitPrice === undefined);
+  if (missing.length > 1) {
+    const names = joinNames(locale, missing.map((item) => item.description));
+    return slots.statedTotal !== undefined
+      ? translate(locale, "search.voice.invoice.askItemPricesWithTotal", {
+          count: missing.length,
+          items: names,
+          total: formatMoneyForSpeech(locale, slots.statedTotal),
+        })
+      : translate(locale, "search.voice.invoice.askItemPrices", { items: names });
+  }
+
   return translate(locale, "search.voice.invoice.askAmountForItem", {
     item: items[index].description,
+  });
+}
+
+/** „kopanie, odvoz materiálu a pracovníci". */
+function joinNames(locale: Locale, names: string[]): string {
+  if (names.length <= 1) return names.join("");
+  const and = translate(locale, "search.voice.invoice.and");
+  return `${names.slice(0, -1).join(", ")} ${and} ${names[names.length - 1]}`;
+}
+
+/** „1 832 €" — rovnaký tvar ako v súhrne, bez zaokrúhľovania. */
+function formatMoneyForSpeech(locale: Locale, value: number): string {
+  const tag = locale === "de" ? "de-DE" : locale === "en" ? "en-GB" : "sk-SK";
+  return `${new Intl.NumberFormat(tag, { maximumFractionDigits: 2 }).format(value)} €`;
+}
+
+/**
+ * Súčet riadkov nesedí s vyslovenou celkovou sumou — otázka, nikdy tichá
+ * úprava. Nič sa nerozpočítava ani nezaokrúhľuje.
+ */
+export function buildTotalMismatchQuestion(locale: Locale, slots: InvoiceDraftSlots, sumCents: number): string {
+  return translate(locale, "search.voice.invoice.totalMismatch", {
+    sum: formatMoneyForSpeech(locale, sumCents / 100),
+    total: formatMoneyForSpeech(locale, slots.statedTotal ?? 0),
   });
 }
 

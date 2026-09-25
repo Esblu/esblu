@@ -161,6 +161,8 @@ const STATIC_REQUIREMENTS: Partial<Record<IntentName, AccessRequirement>> = {
   // rovnaké právo ako RLS documents_delete_finance_manager.
   INBOX_LIST_UNASSIGNED: "finance_view",
   INBOX_DELETE_UNASSIGNED: "finance_manage",
+  // Obchodní partneri sú finančné kmeňové dáta (UI: canEdit = finance.manage).
+  PARTNER_CREATE: "finance_manage",
 
   // Zložky Inboxu — owner/admin/accountant (zrkadlí RLS custom_document_categories)
   CREATE_DOCUMENT_CATEGORY: "category_manage",

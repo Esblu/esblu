@@ -254,7 +254,7 @@ export function VoiceLauncher({
 
         if (result.kind === "clarify") setPhase("clarification");
         else if (result.kind === "action_preview") setPhase("awaitingConfirmation");
-        else if (result.kind === "draft_created") setPhase("review");
+        else if (result.kind === "draft_created" || result.kind === "partner_review") setPhase("review");
         else if (result.kind === "error") setPhase("failed");
         else setPhase("complete");
         return;

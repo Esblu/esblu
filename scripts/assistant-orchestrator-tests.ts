@@ -1,0 +1,620 @@
+// =============================================================================
+// Asistent — stavové prechody cez TEN ISTÝ orchestrátor, ktorý volá
+// /api/assistant/intent (lib/intents/orchestrator.ts#runAssistantTurnDetailed).
+//
+// SPUSTENIE
+//   npm run test:assistant-orchestrator
+//
+// Nie je to test parsera: každá veta prejde celým poradím (aktívna úloha →
+// parser → zamestnanec → AI → poistky → brána oprávnení → handler → otázka)
+// nad pamäťovou DB s väzbou na firmu. Obsahuje presné produkčné zlyhania z
+// mobilu (A–G) a maticu rolí / cudzej firmy / AI fallbacku.
+// =============================================================================
+
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+
+process.env.ESBLU_ACTION_CONFIRMATION_SECRET ??= "cd".repeat(32);
+process.env.NEXT_PUBLIC_SUPABASE_URL ??= "http://localhost:54321";
+process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ??= "test-anon-key";
+
+import { makeDb, COMPANY_A, COMPANY_B, USER_A, type Row, type Role, type Tables } from "./support/memory-db.ts";
+
+const { runAssistantTurnDetailed, sanitizeAiIntent } = await import("@/lib/intents/orchestrator");
+const { executeAction } = await import("@/lib/intents/actions");
+const { classifyConfirmationReply } = await import("@/lib/intents/confirmation-reply");
+const { translate } = await import("@/lib/i18n/translate");
+
+type IntentResult = import("@/lib/intents/types").IntentResult;
+type ParsedIntent = import("@/lib/intents/types").ParsedIntent;
+
+let passed = 0;
+let failed = 0;
+async function check(label: string, fn: () => void | Promise<void>): Promise<void> {
+  try {
+    await fn();
+    passed++;
+  } catch (error) {
+    failed++;
+    console.error(`FAIL  ${label}\n      ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
+  }
+}
+
+const CONV = "fedcba9876543210fedcba9876543210";
+const P_T1 = "00000000-0000-4000-8000-0000000000e1";
+const P_ST = "00000000-0000-4000-8000-0000000000e2";
+
+const PARTNERS = (): Tables => ({
+  business_partners: [
+    { id: P_T1, legal_name: "Tester1", ico: "12345678", company_id: COMPANY_A },
+    { id: P_ST, legal_name: "Stavby s.r.o.", ico: "87654321", company_id: COMPANY_A },
+    { id: "00000000-0000-4000-8000-0000000000b9", legal_name: "Cudzia firma B", ico: "99999999", company_id: COMPANY_B },
+  ],
+});
+
+const ACCESS: Record<Role, (f: boolean) => { financeView: boolean; financeManage: boolean; canOperate: boolean }> = {
+  owner: () => ({ financeView: true, financeManage: true, canOperate: true }),
+  admin: (f) => ({ financeView: f, financeManage: f, canOperate: true }),
+  accountant: () => ({ financeView: true, financeManage: true, canOperate: false }),
+  // Zamestnanec — aj s podvrhnutými financiami (forge) ostáva bez asistenta.
+  employee: (f) => ({ financeView: f, financeManage: f, canOperate: true }),
+};
+
+type Env = ReturnType<typeof makeDb>;
+
+/** Relácia ako v UI: drží conversationId a zapečatenú otázku medzi vetami. */
+function session(env: Env, opts: { module?: string; conversationId?: string | null; ai?: (text: string) => ParsedIntent | null } = {}) {
+  let pending: string | null = null;
+  let aiCalls = 0;
+  const ctx = ACCESS[env.state.role](env.state.financeManage);
+  return {
+    get aiCalls() { return aiCalls; },
+    get pending() { return pending; },
+    async say(text: string, extra: { module?: string } = {}) {
+      const { output, finalIntent } = await runAssistantTurnDetailed(
+        {
+          db: env.db,
+          classifyWithAi: async (raw) => { aiCalls++; return opts.ai ? opts.ai(raw) : null; },
+        },
+        {
+          rawText: text,
+          locale: "sk",
+          userId: env.userId,
+          companyId: env.companyId,
+          role: env.state.role,
+          ...ctx,
+          conversationId: opts.conversationId === undefined ? CONV : opts.conversationId,
+          pendingClarification: pending,
+          structuredPartnerId: null,
+          issueDate: "2026-09-25",
+          uiContext: null,
+          moduleContext: (extra.module ?? opts.module) as never,
+          selection: null,
+          folderContextId: null,
+        }
+      );
+      pending = output.pendingClarification ?? null;
+      return { output, result: output.result, intent: finalIntent };
+    },
+  };
+}
+
+// Intl formátuje tisíce nezalomiteľnou medzerou — na porovnanie stačí bežná.
+const say = (r: IntentResult) => ((r as { text?: string }).text ?? (r as { question?: string }).question ?? (r as { summary?: string }).summary ?? "").replace(/\u00a0/g, " ");
+const stored = (env: Env) => env.state.conversations.get(`${env.userId}|${env.companyId}|${CONV}`) as Row | undefined;
+const slots = (env: Env) => (stored(env)?.slots ?? {}) as Row;
+const field = (env: Env) => ((stored(env)?.missing_fields ?? []) as string[])[0];
+const items = (env: Env) => ((slots(env).items ?? []) as Row[]).map((i) => [i.description, i.unitPrice]);
+const t = (key: string, vars?: Record<string, string | number>) => translate("sk", key, vars);
+const PARTNER_NOT_FOUND = /Obchodného partnera .* som nenašiel/;
+
+// =============================================================================
+// FAKTÚRA — prechody stavov
+// =============================================================================
+
+await check("INVOICE: štart → partner → viac položiek → DPH → draft (nefinalizovaný)", async () => {
+  const env = makeDb({ role: "owner", financeManage: true, tables: PARTNERS() });
+  const s = session(env);
+  assert.equal(say((await s.say("Vytvor faktúru.")).result), t("search.voice.invoice.askPartner"));
+  assert.equal(field(env), "partner");
+  assert.equal(say((await s.say("Tester1.")).result), t("search.voice.invoice.askDescription"));
+  assert.equal(field(env), "items");
+  const r3 = await s.say("Za kopanie suma 300 eur, za odvoz materiálu suma 650 eur a za dvoch pracovníkov suma 830 eur.");
+  assert.equal(r3.result.kind, "clarify");
+  assert.equal(field(env), "vat");
+  assert.deepEqual(items(env), [["kopanie", 300], ["odvoz materiálu", 650], ["dvoch pracovníkov", 830]]);
+  const r4 = await s.say("23 percent.");
+  assert.equal(r4.result.kind, "draft_created", JSON.stringify(r4.result));
+  const invoice = env.state.tables.invoices.at(-1) as Row;
+  assert.equal(invoice.customer_business_partner_id, P_T1);
+  assert.equal(invoice.invoice_number ?? null, null, "draft nemá číslo");
+  assert.notEqual(invoice.document_status, "final");
+  assert.equal(env.state.tables.invoice_items.length, 3);
+  assert.deepEqual((env.state.tables.invoice_items as Row[]).map((i) => [i.quantity, i.unit_price]), [[1, 300], [1, 650], [1, 830]], "žiadne vymyslené množstvo");
+});
+
+await check("REAL A: „Za čo má byť faktúra?“ → presná veta z mobilu = 3 položky, NIKDY hľadanie partnera", async () => {
+  const env = makeDb({ role: "owner", financeManage: true, tables: PARTNERS() });
+  const s = session(env);
+  await s.say("Vytvor faktúru pre Tester1.");
+  assert.equal(field(env), "items");
+  const r = await s.say("Za kopanie suma 300 eur, za odvoz materiálu suma 650 eur a za dvoch pracovníkov suma 830 eur.");
+  assert.doesNotMatch(say(r.result), PARTNER_NOT_FOUND);
+  assert.notEqual(say(r.result), t("search.voice.invoice.askDescription"), "otázka sa neopakuje");
+  assert.equal(slots(env).partnerId, P_T1);
+  assert.equal(items(env).length, 3);
+  assert.equal(s.aiCalls, 0, "AI sa pri aktívnej úlohe nevolá");
+});
+
+await check("REAL B: „Vytvor faktúru Tester1 za kopanie, za odvoz, za pracovníkov, suma spolu 1832 eur.“ → partner, 3 popisy, súčet, otázka na ceny", async () => {
+  const env = makeDb({ role: "owner", financeManage: true, tables: PARTNERS() });
+  const s = session(env, { ai: () => ({ name: "VEHICLE_CREATE", args: {}, source: "ai" }) });
+  const r = await s.say("Vytvor faktúru Tester1 za kopanie, za odvoz materiálu, za pracovníkov, suma spolu 1832 eur.");
+  assert.equal(r.intent?.name, "CREATE_INVOICE_DRAFT");
+  assert.equal(s.aiCalls, 0, "o faktúre nerozhoduje AI");
+  assert.equal(r.result.kind, "clarify");
+  assert.equal(slots(env).partnerId, P_T1);
+  assert.equal(slots(env).statedTotal, 1832);
+  assert.deepEqual(items(env), [["kopanie", undefined], ["odvoz materiálu", undefined], ["pracovníkov", undefined]], "nič sa nerozpočítalo");
+  assert.equal(field(env), "itemPrice");
+  assert.equal(say(r.result), "Rozumiem 3 položkám — kopanie, odvoz materiálu a pracovníkov — a celkovej sume 1 832 €. Aké sú ceny jednotlivých položiek?");
+  assert.equal(env.state.confirmations.length, 0);
+  assert.equal((env.state.tables.vehicles ?? []).length, 0);
+});
+
+await check("REAL B pokračovanie: ceny so súčtom 1832 → DPH; nesúlad → otázka, nič sa neupraví; oprava → DPH", async () => {
+  const env = makeDb({ role: "owner", financeManage: true, tables: PARTNERS() });
+  const s = session(env);
+  await s.say("Vytvor faktúru Tester1 za kopanie, za odvoz materiálu, za pracovníkov, suma spolu 1832 eur.");
+  const bad = await s.say("Kopanie 300, odvoz 650, pracovníci 800 eur.");
+  assert.equal(field(env), "total");
+  assert.match(say(bad.result), /Súčet položiek je 1 750 €, ale celková suma bola 1 832 €\. Nič som neupravil\./);
+  assert.deepEqual(items(env), [["kopanie", 300], ["odvoz materiálu", 650], ["pracovníkov", 800]]);
+  const fix = await s.say("Zmeň pracovníkov na 882 eur.");
+  assert.match(say(fix.result), /Cenu položky „pracovníkov“ som zmenil na 882\./);
+  assert.equal(field(env), "vat");
+  assert.equal(slots(env).partnerId, P_T1);
+});
+
+await check("REAL B: holé ceny v poradí otázky „300, 650 a 882 eur“ → priradené, súčet sedí", async () => {
+  const env = makeDb({ role: "owner", financeManage: true, tables: PARTNERS() });
+  const s = session(env);
+  await s.say("Vytvor faktúru Tester1 za kopanie, za odvoz materiálu, za pracovníkov, suma spolu 1832 eur.");
+  await s.say("300, 650 a 882 eur.");
+  assert.deepEqual(items(env), [["kopanie", 300], ["odvoz materiálu", 650], ["pracovníkov", 882]]);
+  assert.equal(field(env), "vat");
+});
+
+await check("REAL C: po otázke o položkách „Kopanie, odvoz materiálu, pracovníci.“ → otázka na ceny, NIKDY „partnera som nenašiel“", async () => {
+  const env = makeDb({ role: "owner", financeManage: true, tables: PARTNERS() });
+  const s = session(env);
+  await s.say("Vytvor faktúru pre Tester1.");
+  const r = await s.say("Kopanie, odvoz materiálu, pracovníci.");
+  assert.doesNotMatch(say(r.result), PARTNER_NOT_FOUND);
+  assert.equal(field(env), "itemPrice");
+  assert.match(say(r.result), /Aké sú ceny položiek Kopanie, odvoz materiálu a pracovníci\?/);
+  assert.equal(slots(env).partnerId, P_T1);
+});
+
+await check("REAL C (pôvodná príčina): nejasné položky pri štarte → uložené prvé pole je otázka o POLOŽKÁCH, nie partner", async () => {
+  const env = makeDb({ role: "owner", financeManage: true, tables: PARTNERS() });
+  const s = session(env);
+  const r = await s.say("Vytvor faktúru pre Tester1 za kopanie 300 eur, doprava.");
+  assert.equal(r.result.kind, "clarify");
+  assert.equal(slots(env).partnerId, P_T1, "partner vyriešený pred položkami");
+  assert.equal(field(env), "items");
+  const next = await s.say("Kopanie 300 eur, doprava 100 eur.");
+  assert.doesNotMatch(say(next.result), PARTNER_NOT_FOUND);
+  assert.deepEqual(items(env), [["Kopanie", 300], ["doprava", 100]]);
+});
+
+await check("čaká sa na partnera → veta s položkami NIE JE meno partnera (položky sa zapamätajú)", async () => {
+  const env = makeDb({ role: "owner", financeManage: true, tables: PARTNERS() });
+  const s = session(env);
+  await s.say("Vytvor faktúru.");
+  const r = await s.say("Kopanie 300 eur, doprava 100 eur.");
+  assert.doesNotMatch(say(r.result), PARTNER_NOT_FOUND);
+  assert.equal(say(r.result), `${t("search.voice.invoice.itemsKeptAskPartner")} ${t("search.voice.invoice.askPartner")}`);
+  assert.equal(field(env), "partner");
+  assert.deepEqual(items(env), [["Kopanie", 300], ["doprava", 100]]);
+  await s.say("Tester1.");
+  assert.equal(slots(env).partnerId, P_T1);
+  assert.equal(field(env), "vat", "položky ostali, pýta sa ďalej na DPH");
+});
+
+await check("faktúra čaká na položky → „Ukáž sklad.“ = nový príkaz, dialóg zrušený", async () => {
+  const env = makeDb({ role: "owner", financeManage: true, tables: PARTNERS() });
+  const s = session(env);
+  await s.say("Vytvor faktúru pre Tester1.");
+  const r = await s.say("Ukáž sklad.");
+  assert.equal(r.intent?.name, "SEARCH_INVENTORY_ITEM");
+  assert.equal(stored(env), undefined, "stará úloha neotráví ďalšie príkazy");
+  const later = await s.say("Tester1.");
+  assert.notEqual(later.intent?.name, "CREATE_INVOICE_DRAFT", "opustená faktúra sa implicitne neobnoví");
+});
+
+await check("faktúra čaká na položky → „Vytvor nový stroj.“ = nový príkaz (bez sumy)", async () => {
+  const env = makeDb({ role: "owner", financeManage: true, tables: PARTNERS() });
+  const s = session(env);
+  await s.say("Vytvor faktúru pre Tester1.");
+  const r = await s.say("Vytvor nový stroj.");
+  assert.equal(r.intent?.name, "MACHINE_CREATE");
+  assert.equal(stored(env), undefined);
+});
+
+await check("rozpracovaná faktúra → „Pridaj ešte dopravu 80 eur.“ a „Ešte materiál 120 eur.“ → ten istý draft, ten istý partner", async () => {
+  const env = makeDb({ role: "owner", financeManage: true, tables: PARTNERS() });
+  const s = session(env);
+  await s.say("Vytvor faktúru pre Tester1.");
+  await s.say("Kopanie 300 eur.");
+  await s.say("Pridaj ešte dopravu 80 eur.");
+  await s.say("Ešte materiál 120 eur.");
+  assert.deepEqual(items(env), [["Kopanie", 300], ["dopravu", 80], ["materiál", 120]]);
+  assert.equal(slots(env).partnerId, P_T1);
+  assert.equal(field(env), "vat");
+});
+
+await check("oprava: „Odstráň dopravu.“ / „Zmeň kopanie na 350 eur.“ / nejasná → otázka, nič sa nemení", async () => {
+  const env = makeDb({ role: "owner", financeManage: true, tables: PARTNERS() });
+  const s = session(env);
+  await s.say("Vytvor faktúru pre Tester1.");
+  await s.say("Kopanie 300 eur, doprava 100 eur, materiál 50 eur.");
+  const removed = await s.say("Odstráň dopravu.");
+  assert.match(say(removed.result), /^Odstránil som položku „doprava“\./);
+  const changed = await s.say("Zmeň kopanie na 350 eur.");
+  assert.match(say(changed.result), /^Cenu položky „Kopanie“ som zmenil na 350\./);
+  assert.deepEqual(items(env), [["Kopanie", 350], ["materiál", 50]]);
+  const unclear = await s.say("Odstráň lešenie.");
+  assert.match(say(unclear.result), /Neviem jednoznačne určiť/);
+  assert.deepEqual(items(env), [["Kopanie", 350], ["materiál", 50]]);
+});
+
+await check("„Zmeň odberateľa na Stavby s.r.o.“ — jediná cesta späť k partnerovi; položky ostanú", async () => {
+  const env = makeDb({ role: "owner", financeManage: true, tables: PARTNERS() });
+  const s = session(env);
+  await s.say("Vytvor faktúru pre Tester1.");
+  await s.say("Kopanie 300 eur.");
+  await s.say("Zmeň odberateľa na Stavby s.r.o.");
+  assert.equal(slots(env).partnerId, P_ST);
+  assert.deepEqual(items(env), [["Kopanie", 300]]);
+});
+
+await check("CANCEL: „Zrušiť.“ / „Nechaj tak.“ / „Cancel.“ / „Abbrechen.“ počas faktúry → úloha zrušená, žiadna položka „Zrušiť“", async () => {
+  for (const phrase of ["Zrušiť.", "Nechaj tak.", "Cancel.", "Abbrechen."]) {
+    const env = makeDb({ role: "owner", financeManage: true, tables: PARTNERS() });
+    const s = session(env);
+    await s.say("Vytvor faktúru pre Tester1.");
+    const r = await s.say(phrase);
+    assert.equal(say(r.result), t("assistant.clarify.taskCancelled"), phrase);
+    assert.equal(stored(env), undefined, phrase);
+    assert.equal(env.state.tables.invoices.length, 0);
+  }
+});
+
+await check("„Nie“ pri „Myslíte partnera …?“ odmieta IBA návrh, nie celú faktúru", async () => {
+  const env = makeDb({ role: "owner", financeManage: true, tables: PARTNERS() });
+  const s = session(env);
+  const r = await s.say("Vytvor faktúru pre Tester jeden.");
+  assert.equal(say(r.result), t("search.voice.invoice.confirmPartnerCandidate", { name: "Tester1 · 12345678" }));
+  const no = await s.say("Nie.");
+  assert.equal(say(no.result), t("search.voice.invoice.askPartner"));
+  assert.ok(stored(env), "faktúra pokračuje");
+});
+
+await check("„Vystav faktúru pre Tester1.“ a „Nová faktúra pre Tester1.“ → iba DRAFT dialóg, nič nefinalizované", async () => {
+  for (const phrase of ["Vystav faktúru pre Tester1.", "Nová faktúra pre Tester1.", "Vytvor faktúru Tester1."]) {
+    const env = makeDb({ role: "owner", financeManage: true, tables: PARTNERS() });
+    const r = await session(env).say(phrase);
+    assert.equal(r.intent?.name, "CREATE_INVOICE_DRAFT", phrase);
+    assert.equal(slots(env).partnerId, P_T1, phrase);
+    assert.equal(env.state.tables.invoices.length, 0, phrase);
+  }
+});
+
+await check("„Faktúra pre Horák Stav.“ (neexistuje) → nenájdený + ponuka založenia; partner sa NEZALOŽÍ; otázka na odberateľa trvá", async () => {
+  const env = makeDb({ role: "owner", financeManage: true, tables: PARTNERS() });
+  const s = session(env);
+  // („Tester2" by bol o jedno písmeno od „Tester1" → bezpečný návrh „Myslíte …?", tiež nie založenie.)
+  const r = await s.say("Faktúra pre Horák Stav.");
+  assert.equal(say(r.result), t("search.voice.invoice.partnerNotFoundOfferCreate", { name: "Horák Stav" }));
+  assert.equal(env.state.tables.business_partners.length, 3);
+  assert.equal(field(env), "partner");
+  await s.say("Tester1.");
+  assert.equal(slots(env).partnerId, P_T1);
+});
+
+// =============================================================================
+// ZMENA ÚLOHY A KONTEXT OBRAZOVKY
+// =============================================================================
+
+await check("stroj: otázka „Ku ktorému stroju?“ → „Vytvor faktúru.“ → faktúra, otázka o stroji zahodená", async () => {
+  const env = makeDb({ role: "owner", financeManage: true, tables: { ...PARTNERS(), machines: [{ id: "m1", name: "Takeuchi 323", company_id: COMPANY_A }] } });
+  const s = session(env);
+  await s.say("Zaeviduj servis výmena oleja.");
+  assert.ok(s.pending);
+  const r = await s.say("Vytvor faktúru.");
+  assert.equal(r.intent?.name, "CREATE_INVOICE_DRAFT");
+  assert.equal(say(r.result), t("search.voice.invoice.askPartner"));
+  assert.equal(s.pending, null);
+});
+
+await check("kontext obrazovky: výslovný príkaz vyhráva; všeobecná veta podľa modulu", async () => {
+  const env = makeDb({ role: "owner", financeManage: true, tables: PARTNERS() });
+  assert.equal((await session(env, { module: "machines" }).say("Vytvor faktúru.")).intent?.name, "CREATE_INVOICE_DRAFT");
+  assert.equal((await session(env, { module: "invoices" }).say("Pridaj nový stroj.")).intent?.name, "MACHINE_CREATE");
+  assert.equal((await session(env, { module: "machines" }).say("Vytvor novú položku.")).intent?.name, "MACHINE_CREATE");
+  assert.equal((await session(env, { module: "inventory" }).say("Vytvor novú položku.")).intent?.name, "INVENTORY_ITEM_CREATE");
+  assert.equal(say((await session(env, { module: "dashboard" }).say("Vytvor novú položku.")).result), t("assistant.clarify.createModule"));
+});
+
+// =============================================================================
+// OBCHODNÝ PARTNER — založenie (iba príprava formulára)
+// =============================================================================
+
+type Review = Extract<IntentResult, { kind: "partner_review" }>;
+
+await check("REAL D: „Vytvor obchodného partnera Tester2.“ → formulár nového partnera; nič sa neuložilo", async () => {
+  const env = makeDb({ role: "owner", financeManage: true, tables: PARTNERS() });
+  const r = await session(env).say("Vytvor obchodného partnera Tester2.");
+  assert.equal(r.intent?.name, "PARTNER_CREATE");
+  assert.equal(r.result.kind, "partner_review", JSON.stringify(r.result));
+  assert.deepEqual((r.result as Review).prefill, { legal_name: "Tester2" });
+  assert.equal((r.result as Review).href, "/obchodni-partneri?new=1", "údaje nie sú v URL");
+  assert.equal(env.state.tables.business_partners.length, 3);
+});
+
+await check("PARTNER: štart bez mena → „Ako sa volá …?“ → meno → formulár", async () => {
+  const env = makeDb({ role: "owner", financeManage: true, tables: PARTNERS() });
+  const s = session(env);
+  const r1 = await s.say("Vytvor obchodného partnera.");
+  assert.equal(say(r1.result), t("assistant.partner.askName"));
+  assert.ok(s.pending);
+  const r2 = await s.say("Firma ABC.");
+  assert.equal(r2.result.kind, "partner_review");
+  assert.equal((r2.result as Review).prefill.legal_name, "Firma ABC");
+});
+
+await check("PARTNER: „Vytvor firmu Stavby Kysuce s.r.o., IČO 12345679.“ → vyslovené údaje; „Pridaj zákazníka Firma ABC.“ → zákazník", async () => {
+  const env = makeDb({ role: "owner", financeManage: true, tables: PARTNERS() });
+  const a = await session(env).say("Vytvor firmu Stavby Kysuce s.r.o., IČO 12345679.");
+  assert.deepEqual((a.result as Review).prefill, { legal_name: "Stavby Kysuce s.r.o.", ico: "12345679" });
+  const b = await session(env).say("Pridaj zákazníka Firma ABC.");
+  assert.deepEqual((b.result as Review).prefill, { legal_name: "Firma ABC", kind: "customer" });
+});
+
+await check("PARTNER duplicita: rovnaký názov / IČO → „už existuje, otvoriť?“ → „Áno“ otvorí, „Nie“ pripraví nového", async () => {
+  const env = makeDb({ role: "owner", financeManage: true, tables: PARTNERS() });
+  const s = session(env);
+  const r = await s.say("Pridaj nového partnera Tester 1.");
+  assert.equal(say(r.result), t("assistant.partner.exists", { name: "Tester1 · 12345678" }));
+  const yes = await s.say("Áno.");
+  assert.equal(yes.result.kind, "navigate");
+  assert.equal((yes.result as { entity: { href: string } }).entity.href, `/obchodni-partneri/${P_T1}`);
+
+  const s2 = session(env);
+  await s2.say("Vytvor firmu Nová Firma, IČO 87654321.");
+  const no = await s2.say("Nie.");
+  assert.equal(no.result.kind, "partner_review", JSON.stringify(no.result));
+  assert.equal(env.state.tables.business_partners.length, 3, "nič sa neuložilo");
+});
+
+await check("PARTNER: partner INEJ firmy nie je duplicita (bez úniku mena)", async () => {
+  const env = makeDb({ role: "owner", financeManage: true, tables: PARTNERS() });
+  const r = await session(env).say("Vytvor obchodného partnera Cudzia firma B.");
+  assert.equal(r.result.kind, "partner_review");
+  assert.doesNotMatch(JSON.stringify(r.result), /99999999/);
+});
+
+await check("PARTNER role: admin bez financií, zamestnanec aj s podvrhnutými financiami → odmietnutie PRED dotazom; účtovník áno", async () => {
+  const admin = makeDb({ role: "admin", financeManage: false, tables: PARTNERS() });
+  assert.equal(say((await session(admin).say("Vytvor obchodného partnera Tester2.")).result), t("assistant.denied.finance"));
+  assert.equal(admin.state.queries, 0);
+  const forged = makeDb({ role: "employee", financeManage: true, tables: PARTNERS() });
+  assert.equal(say((await session(forged).say("Vytvor obchodného partnera Tester2.")).result), t("assistant.denied.employee"));
+  assert.equal(forged.state.queries, 0);
+  const accountant = makeDb({ role: "accountant", financeManage: true, tables: PARTNERS() });
+  assert.equal((await session(accountant).say("Vytvor obchodného partnera Tester2.")).result.kind, "partner_review");
+});
+
+// =============================================================================
+// STROJE, SKLAD, PRIEČINKY, INBOX — produkčné vety
+// =============================================================================
+
+await check("REAL E: „Do stroja Takeuchi 323 pridaj výmenu oleja a filtrov.“ → servis, NIKDY nový stroj", async () => {
+  const env = makeDb({ role: "owner", financeManage: true, tables: { machines: [{ id: "m1", name: "Takeuchi 323", company_id: COMPANY_A }] } });
+  const r = await session(env, { ai: () => ({ name: "MACHINE_CREATE", args: { entityName: "Takeuchi 323 oleja" }, source: "ai" }) }).say("Do stroja Takeuchi 323 pridaj výmenu oleja a filtrov.");
+  assert.equal(r.intent?.name, "MACHINE_SERVICE_ADD");
+  assert.equal(r.result.kind, "action_preview");
+  assert.equal(env.state.confirmations[0].intent, "MACHINE_SERVICE_ADD");
+  assert.deepEqual((env.state.confirmations[0].canonical_args as Row).machineId, "m1");
+});
+
+await check("MACHINE: servis → otázka na stroj → stroj → náhľad → potvrdenie", async () => {
+  const env = makeDb({ role: "owner", financeManage: true, tables: { machines: [{ id: "m1", name: "Takeuchi 323", company_id: COMPANY_A }] } });
+  const s = session(env);
+  await s.say("Zaeviduj servis výmena oleja.");
+  const r = await s.say("Takeuchi 323.");
+  assert.equal(r.result.kind, "action_preview");
+  const done = await executeAction(env.db, "sk", { companyId: COMPANY_A, userId: USER_A, role: "owner" }, (r.result as { confirmationId: string }).confirmationId);
+  assert.ok(done.kind === "action_result" && done.success);
+  assert.equal(env.state.tables.machines.length, 1, "žiadny nový stroj");
+  assert.equal(env.state.tables.machine_services.length, 1);
+});
+
+await check("REAL G: „Vymaž skladovú položku kotúča na asfalt.“ → návrh → „Áno“ → deštruktívny náhľad → potvrdenie", async () => {
+  const env = makeDb({ role: "owner", financeManage: true, tables: { inventory_items: [{ id: "i-k", name: "Kotúč na asfalt", quantity: 3, unit: "ks" }] } });
+  const s = session(env);
+  const r1 = await s.say("Vymaž skladovú položku kotúča na asfalt.");
+  assert.equal(say(r1.result), "Myslíte skladovú položku „Kotúč na asfalt“?");
+  assert.equal(env.state.confirmations.length, 0);
+  const r2 = await s.say("Áno.");
+  assert.equal(r2.result.kind, "action_preview");
+  assert.equal((r2.result as { destructive?: boolean }).destructive, true);
+  assert.equal(classifyConfirmationReply("Áno, zmaž ho."), "confirm");
+  const done = await executeAction(env.db, "sk", { companyId: COMPANY_A, userId: USER_A, role: "owner" }, (r2.result as { confirmationId: string }).confirmationId);
+  assert.ok(done.kind === "action_result" && done.success);
+  assert.equal(env.state.tables.inventory_items.length, 0);
+});
+
+await check("FOLDER: zmazanie → náhľad → potvrdenie; doklady ostanú", async () => {
+  const env = makeDb({ role: "owner", financeManage: true, tables: {
+    document_folders: [{ id: "f-aug", name: "August", created_at: "2026-09-01" }],
+    document_folder_items: [{ id: "fi1", folder_id: "f-aug", document_id: "d1", invoice_id: null }],
+    documents: [{ id: "d1", document_type: "receipt", company_id: COMPANY_A }],
+  } });
+  const r = await session(env).say("Zmaž priečinok August.");
+  assert.equal(r.intent?.name, "FOLDER_DELETE");
+  assert.equal(r.result.kind, "action_preview", JSON.stringify(r.result));
+  assert.equal((r.result as { destructive?: boolean }).destructive, true);
+  const done = await executeAction(env.db, "sk", { companyId: COMPANY_A, userId: USER_A, role: "owner" }, (r.result as { confirmationId: string }).confirmationId);
+  assert.ok(done.kind === "action_result" && done.success, JSON.stringify(done));
+  assert.equal(env.state.tables.document_folders.length, 0);
+  assert.equal(env.state.tables.documents.length, 1, "doklad prežil");
+});
+
+await check("REAL F: „Vymaž nepriradené bločky.“ → náhľad s presným počtom; nový bloček po náhľade sa nezmaže", async () => {
+  const doc = (id: string): Row => ({ id, document_type: "receipt", deleted_at: null, archived_from_inbox_at: null, custom_category_id: null,
+    original_filename: `${id}.jpg`, extracted_fields: {}, created_at: "2026-09-01", storage_bucket: "ai-inbox-documents", storage_path: `u/${id}.webp`, company_id: COMPANY_A });
+  const env = makeDb({ role: "owner", financeManage: true, tables: { documents: [doc("r1"), doc("r2")] } });
+  const r = await session(env).say("Vymaž nepriradené bločky.");
+  assert.equal(r.result.kind, "action_preview");
+  assert.equal((r.result as { affectedCount?: number }).affectedCount, 2);
+  env.state.tables.documents.push(doc("r3"));
+  const done = await executeAction(env.db, "sk", { companyId: COMPANY_A, userId: USER_A, role: "owner" }, (r.result as { confirmationId: string }).confirmationId);
+  assert.ok(done.kind === "action_result" && done.success);
+  assert.deepEqual(env.state.tables.documents.map((d) => d.id), ["r3"]);
+});
+
+// =============================================================================
+// ZAMESTNANEC — všeobecný asistent odmietnutý, VÝNIMKA: príjem finančného dokladu
+// =============================================================================
+
+const INTAKE_PHRASES: [string, string][] = [
+  ["Nahraj bloček.", "receipt"], ["Pridaj bloček.", "receipt"],
+  ["Nahraj faktúru.", "invoice"], ["Pridaj faktúru.", "invoice"],
+  ["Nahraj dodací list.", "delivery_note"], ["Pridaj dodací list.", "delivery_note"],
+];
+const EMPLOYEE_DENIED = [
+  "Ukáž bločky.", "Ukáž faktúry.", "Koľko máme faktúr?", "Stiahni faktúry.", "Vytvor faktúru.",
+  "Vytvor partnera.", "Vytvor obchodného partnera.", "Ukáž sklad.", "Pridaj stroj.", "Otvor vozidlo AB123CD.",
+  "Vytvor priečinok August.", "Stiahni priečinok August.", "Exportuj bločky za august.", "Vymaž nepriradené bločky.",
+  "Pridaj do skladu 20 vrutov.", "Zníž Sprej o 2 kusy.", "Pridaj servis k AB123CD za 250 eur.",
+];
+const SENSITIVE = (): Tables => ({
+  ...PARTNERS(),
+  documents: [{ id: "d-secret", document_type: "invoice", extracted_fields: { totalAmount: 4321.5, supplier: "Tajný dodávateľ", invoiceNumber: "FA-777" }, company_id: COMPANY_A, deleted_at: null, archived_from_inbox_at: null }],
+  inventory_items: [{ id: "i1", name: "Sprej", quantity: 12, unit: "ks" }],
+  vehicles: [{ id: "v1", plate: "AB123CD", company_id: COMPANY_A }],
+});
+
+for (const forged of [false, true]) {
+  const who = forged ? "zamestnanec s podvrhnutým permissions.finance" : "zamestnanec";
+
+  await check(`${who}: „Nahraj/Pridaj bloček/faktúru/dodací list“ → IBA bezpečný príjem, bez dotazu a bez čítania späť`, async () => {
+    for (const [phrase, type] of INTAKE_PHRASES) {
+      const env = makeDb({ role: "employee", financeManage: forged, tables: SENSITIVE() });
+      const s = session(env, { ai: () => { throw new Error("AI sa nesmie volať"); } });
+      const r = await s.say(phrase);
+      assert.equal(r.intent?.name, "DOCUMENT_INTAKE", phrase);
+      assert.deepEqual(r.intent?.args.documentTypes, [type], phrase);
+      assert.equal(r.result.kind, "answer", phrase);
+      assert.equal(say(r.result), t("assistant.intake.instructions"), phrase);
+      assert.equal((r.result as { entity?: { href: string } }).entity?.href, "/ai-evidencia", phrase);
+      assert.equal(env.state.queries, 0, `${phrase}: žiadny dotaz do DB`);
+      assert.equal(s.aiCalls, 0, phrase);
+      assert.equal(s.pending, null, phrase);
+      const body = JSON.stringify(r.output);
+      for (const leak of ["4321", "Tajný", "FA-777", "d-secret", "Tester1", "12345678"]) assert.ok(!body.includes(leak), `${phrase}: únik ${leak}`);
+    }
+  });
+
+  await check(`${who}: všetko ostatné (čítanie, faktúra, partner, sklad, stroj, vozidlo, priečinok, export) → odmietnutie PRED AI aj pred dotazom`, async () => {
+    for (const phrase of EMPLOYEE_DENIED) {
+      const env = makeDb({ role: "employee", financeManage: forged, tables: SENSITIVE() });
+      const s = session(env, { ai: () => ({ name: "SEARCH_DOCUMENTS", args: { documentTypes: ["invoice"] }, source: "ai" }) });
+      const r = await s.say(phrase);
+      assert.equal(r.result.kind, "error", phrase);
+      assert.equal(say(r.result), t("assistant.denied.employee"), phrase);
+      assert.equal(env.state.queries, 0, `${phrase}: žiadny dotaz do DB`);
+      assert.equal(env.state.confirmations.length, 0, phrase);
+      assert.equal(s.aiCalls, 0, `${phrase}: AI sa nevolá`);
+    }
+  });
+}
+
+await check("zamestnanec: nerozpoznaná veta ide na odmietnutie bez AI (text sa AI neposiela)", async () => {
+  const env = makeDb({ role: "employee", financeManage: false, tables: SENSITIVE() });
+  const s = session(env, { ai: () => ({ name: "DOCUMENT_INTAKE", args: { documentTypes: ["receipt"] }, source: "ai" }) });
+  const r = await s.say("čo máme nové vo firme");
+  assert.equal(say(r.result), t("assistant.denied.employee"));
+  assert.equal(s.aiCalls, 0);
+  assert.equal(env.state.queries, 0);
+});
+
+await check("owner / admin / účtovník: „Nahraj bloček“ ten istý bezpečný príjem; „Ukáž faktúry“ podľa doterajších práv", async () => {
+  for (const [role, fin] of [["owner", true], ["admin", true], ["admin", false], ["accountant", true]] as [Role, boolean][]) {
+    const env = makeDb({ role, financeManage: fin, tables: SENSITIVE() });
+    const intake = await session(env).say("Nahraj bloček.");
+    assert.equal(say(intake.result), t("assistant.intake.instructions"), role);
+    const read = await session(env).say("Ukáž faktúry.");
+    if (fin) assert.notEqual(read.result.kind, "error", `${role}: čítanie faktúr povolené`);
+    else assert.equal(say(read.result), t("assistant.denied.finance"), `${role} bez financií`);
+  }
+});
+
+// =============================================================================
+// AI FALLBACK — iba interpretácia
+// =============================================================================
+
+await check("AI: mazanie nikdy (stroj, vozidlo, položka, priečinok, Inbox)", async () => {
+  for (const name of ["MACHINE_DELETE", "VEHICLE_DELETE", "INVENTORY_ITEM_DELETE", "FOLDER_DELETE", "INBOX_DELETE_UNASSIGNED"] as const) {
+    const env = makeDb({ role: "owner", financeManage: true, tables: { machines: [{ id: "m1", name: "Aman", company_id: COMPANY_A }] } });
+    const r = await session(env, { ai: () => ({ name, args: { query: "Aman" }, source: "ai" }) }).say("preč s tým Aman");
+    assert.equal(r.output.recognized, false, name);
+    assert.equal(env.state.confirmations.length, 0, name);
+  }
+});
+
+await check("AI: založenie iba pri výslovných slovách; entityId z AI sa zahodí", async () => {
+  for (const name of ["MACHINE_CREATE", "VEHICLE_CREATE", "INVENTORY_ITEM_CREATE", "PARTNER_CREATE", "CREATE_INVOICE_DRAFT", "FOLDER_CREATE", "ENTITY_CREATE"] as const) {
+    assert.equal(sanitizeAiIntent({ name, args: { entityName: "X" }, source: "ai" }, "Takeuchi niečo tam"), null, name);
+  }
+  assert.equal(sanitizeAiIntent({ name: "VEHICLE_CREATE", args: {}, source: "ai" }, "Pridaj nové auto Škoda")?.name, "VEHICLE_CREATE");
+  const stripped = sanitizeAiIntent({ name: "SEARCH_MACHINE", args: { query: "Aman", entityId: "m1", confirmedNew: true }, source: "ai" }, "kde je Aman");
+  assert.equal(stripped?.args.entityId, undefined);
+  assert.equal(stripped?.args.confirmedNew, undefined);
+});
+
+// =============================================================================
+// CUDZIA FIRMA, ANON, PORADIE
+// =============================================================================
+
+await check("cudzia firma nemôže pokračovať v rozhovore o faktúre firmy A (rovnaké conversationId)", async () => {
+  const a = makeDb({ role: "owner", financeManage: true, tables: PARTNERS() });
+  await session(a).say("Vytvor faktúru pre Tester1.");
+  const b = makeDb({ role: "owner", financeManage: true, companyId: COMPANY_B, tables: PARTNERS() });
+  const r = await session(b).say("Kopanie 300 eur.");
+  assert.notEqual(r.intent?.name, "CREATE_INVOICE_DRAFT");
+  assert.equal(b.state.tables.invoices.length, 0);
+});
+
+await check("cudzia firma: partner firmy B sa pri faktúre firmy A nenájde", async () => {
+  const env = makeDb({ role: "owner", financeManage: true, tables: PARTNERS() });
+  const r = await session(env).say("Vytvor faktúru pre Cudzia firma B.");
+  assert.match(say(r.result), PARTNER_NOT_FOUND);
+});
+
+await check("route: 401 pred orchestrátorom; route nič nerozhoduje sama", () => {
+  const route = readFileSync("app/api/assistant/intent/route.ts", "utf8");
+  assert.ok(route.indexOf("status: 401") > 0 && route.indexOf("status: 401") < route.indexOf("runAssistantTurn("));
+  assert.ok(!route.includes("parseIntentDeterministic"), "parser volá iba orchestrátor");
+  const orchestrator = readFileSync("lib/intents/orchestrator.ts", "utf8");
+  const task = orchestrator.indexOf("decideInvoiceTurn(rawText");
+  const parse = orchestrator.indexOf("parseIntentDeterministic(rawText, { module");
+  const ai = orchestrator.indexOf("deps.classifyWithAi(rawText)");
+  const gate = orchestrator.indexOf("checkIntentAccess(intent.name");
+  assert.ok(task > 0 && task < parse && parse < ai && ai < gate, "aktívna úloha → parser → AI → brána");
+});
+
+console.log(`\n${passed} prešlo, ${failed} zlyhalo`);
+if (failed > 0) process.exit(1);

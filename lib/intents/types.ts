@@ -210,6 +210,11 @@ export const INTENT_NAMES = [
   // jednorazové potvrdenie (lib/intents/inbox-intents.ts).
   "INBOX_LIST_UNASSIGNED",
   "INBOX_DELETE_UNASSIGNED",
+
+  // Nový obchodný partner — iba PRÍPRAVA vyplneného formulára (existujúci
+  // model a validácia). Nič nezapisuje; uloží ho človek v UI. Pred prípravou
+  // sa overia duplicity v aktuálnej firme (lib/intents/partner-intents.ts).
+  "PARTNER_CREATE",
 ] as const;
 
 export type IntentName = (typeof INTENT_NAMES)[number];
@@ -374,6 +379,14 @@ export type IntentArgs = {
   // VÝHRADNE server z vlastnej zapečatenej otázky (lib/intents/
   // pending-clarification.ts); z parsera, AI ani klienta sa nikdy neprijme.
   entityId?: string;
+  // PARTNER_CREATE — iba hodnoty, ktoré naozaj zazneli.
+  partnerIco?: string;
+  partnerDic?: string;
+  partnerIcDph?: string;
+  partnerKind?: "customer" | "supplier";
+  // „Nie, chcem nového" po otázke na existujúceho partnera. Nastavuje ho
+  // VÝHRADNE server zo svojej zapečatenej otázky (ako `entityId`).
+  confirmedNew?: boolean;
 };
 
 // Stavy faktúr, na ktoré sa dá pýtať. Zámerne "priateľské" hodnoty, nie
@@ -425,7 +438,7 @@ export type EntityRef = {
  * z toho urobí zapečatený, krátkodobý stav (lib/intents/pending-
  * clarification.ts) — klientovi sa pole samo nikdy neposiela.
  */
-export type ClarificationSlot = "machine" | "vehicle" | "machine_or_vehicle" | "inventory_item" | "folder";
+export type ClarificationSlot = "machine" | "vehicle" | "machine_or_vehicle" | "inventory_item" | "folder" | "partner_name";
 export type AwaitingClarification = {
   slot: ClarificationSlot;
   /** „Myslíte …?" — kandidát, ktorého používateľ potvrdí („Áno"). */
@@ -628,6 +641,16 @@ export type IntentResult =
   // dokladu; `summary` je to isté, čo je v doklade, aby používateľ videl
   // výsledok skôr, než naň klikne. Žiadne potvrdzovanie pred vytvorením —
   // dôvod je pri CREATE_INVOICE_DRAFT v INTENT_NAMES vyššie.
+  // Nový obchodný partner: vyplnený formulár na kontrolu. Nič sa neuložilo;
+  // `prefill` sú IBA vyslovené hodnoty. UI ich odovzdá formuláru partnera
+  // (sessionStorage, nie URL) a uloží ich až človek existujúcou cestou.
+  | {
+      kind: "partner_review";
+      text: string;
+      openLabel: string;
+      href: string;
+      prefill: { legal_name: string; ico?: string; dic?: string; ic_dph?: string; kind?: "customer" | "supplier" };
+    }
   | {
       kind: "draft_created";
       title: string;

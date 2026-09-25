@@ -379,7 +379,9 @@ await check("B: /sklad tá istá veta → INVENTORY_ITEM_CREATE(Aman)", () => {
 await check("C: nástenka tá istá veta → ENTITY_CREATE (route sa spýta na modul)", () => {
   const intent = parseIntentDeterministic("Vytvor novú položku s názvom Aman.", { module: "dashboard" });
   assert.equal(intent?.name, "ENTITY_CREATE");
-  const route = readFileSync("app/api/assistant/intent/route.ts", "utf8");
+  // Logika route žije v orchestrátore; route ho iba volá.
+  assert.ok(readFileSync("app/api/assistant/intent/route.ts", "utf8").includes("runAssistantTurn("));
+  const route = readFileSync("lib/intents/orchestrator.ts", "utf8");
   assert.ok(route.includes('"assistant.clarify.createModule"'));
 });
 

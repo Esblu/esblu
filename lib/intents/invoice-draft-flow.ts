@@ -24,10 +24,19 @@ import {
   buildItemPriceQuestion,
   buildVatQuestion,
   describeItemParse,
+  buildTotalMismatchQuestion,
   type InvoiceDraftField,
   type InvoiceDraftSlots,
   type PartnerCandidate,
 } from "@/lib/intents/invoice-draft";
+import {
+  applyItemCorrection,
+  itemsSumCents,
+  looksLikeInvoiceItems,
+  orderMissingFields,
+  readItemCorrection,
+  readPartnerChange,
+} from "@/lib/intents/invoice-slots";
 import { detectPriceModeStatement } from "@/lib/invoicing/price-mode";
 import { classifyConfirmationReply } from "@/lib/intents/confirmation-reply";
 
@@ -115,9 +124,43 @@ export async function startInvoiceDraftFlow(
       kind: "clarify",
       question: translate(locale, "search.voice.invoice.priceModeMixed"),
       conversationId: ctx.conversationId,
-    });
+    }, "vat");
   }
   if (statedMode) slots.priceMode = statedMode;
+
+  // PARTNER SA RIEŠI PRED POLOŽKAMI.
+  //
+  // Produkčná chyba: „Vytvor faktúru Tester1 za kopanie, za odvoz, za
+  // pracovníkov, suma spolu 1832 eur" skončila otázkou o položkách skôr,
+  // než sa vyriešil partner — a uložené prvé chýbajúce pole bolo `partner`.
+  // Ďalšia veta („Kopanie, odvoz materiálu, pracovníci.") sa preto hľadala
+  // ako obchodný partner. Teraz sa partner vyrieši hneď a každá otázka sa
+  // uloží ako PRVÉ chýbajúce pole (askAgain → orderMissingFields).
+  if (partnerQuery?.trim()) {
+    const resolution = await resolvePartnerCandidates(supabase, partnerQuery.trim());
+
+    if (resolution.autoResolvable) {
+      // Presná alebo silná zhoda a práve jeden kandidát.
+      slots.partnerId = resolution.candidates[0].id;
+    } else if (resolution.candidates.length > 0) {
+      // Viac kandidátov, alebo len čiastočná zhoda. V oboch prípadoch sa
+      // asistent pýta — aj keď je kandidát jediný. „Podobný názov" nie je
+      // to isté ako „ten názov".
+      slots.partnerCandidateIds = resolution.candidates.map((candidate) => candidate.id);
+    } else {
+      // Nenašiel sa — a NEZALOŽÍ sa. Nový obchodný partner je záznam s
+      // fakturačnými a daňovými údajmi; vyrobiť ho z jedného vysloveného
+      // mena by znamenalo doklad na firmu, ktorú nikto nezadal. Rozhovor
+      // však ostáva: ďalšia veta je odpoveď na otázku o odberateľovi a
+      // rozpoznané položky sa nestratia.
+      return askAgain(supabase, locale, ctx, slots, {
+        kind: "not_found",
+        text: translate(locale, "search.voice.invoice.partnerNotFoundOfferCreate", {
+          name: partnerQuery.trim(),
+        }),
+      }, "partner");
+    }
+  }
 
   const parse = describeItemParse(rawText, partnerQuery);
   if (parse.problem) {
@@ -126,7 +169,7 @@ export async function startInvoiceDraftFlow(
       kind: "clarify",
       question: partial,
       conversationId: ctx.conversationId,
-    });
+    }, "items");
   }
 
   // Model môže popis/sumu rozpoznať lepšie než deterministická extrakcia
@@ -142,30 +185,6 @@ export async function startInvoiceDraftFlow(
           : {}),
       },
     ];
-  }
-
-  if (partnerQuery?.trim()) {
-    const resolution = await resolvePartnerCandidates(supabase, partnerQuery.trim());
-
-    if (resolution.autoResolvable) {
-      // Presná alebo silná zhoda a práve jeden kandidát.
-      slots.partnerId = resolution.candidates[0].id;
-    } else if (resolution.candidates.length > 0) {
-      // Viac kandidátov, alebo len čiastočná zhoda. V oboch prípadoch sa
-      // asistent pýta — aj keď je kandidát jediný. „Podobný názov" nie je
-      // to isté ako „ten názov".
-      slots.partnerCandidateIds = resolution.candidates.map((candidate) => candidate.id);
-    } else {
-      // Nenašiel sa — a NEZALOŽÍ sa. Nový obchodný partner je záznam s
-      // fakturačnými a daňovými údajmi; vyrobiť ho z jedného vysloveného
-      // mena by znamenalo doklad na firmu, ktorú nikto nezadal.
-      return {
-        kind: "not_found",
-        text: translate(locale, "search.voice.invoice.partnerNotFound", {
-          name: partnerQuery.trim(),
-        }),
-      };
-    }
   }
 
   return continueFlow(supabase, locale, ctx, slots);
@@ -223,7 +242,55 @@ export async function continueInvoiceDraftFlow(
   // do úvahy IBA pri otázkach o položkách; pri výbere partnera sa
   // neuvažuje vôbec, nech odpoveď obsahuje čokoľvek.
   // ------------------------------------------------------------------
-  const allowsItemAppend = field === "items" || field === "itemPrice" || field === "vat";
+  const allowsItemAppend = field === "items" || field === "itemPrice" || field === "total" || field === "vat";
+
+  // ------------------------------------------------------------------
+  // VÝSLOVNÁ ZMENA ODBERATEĽA („Zmeň odberateľa na Tester2").
+  //
+  // Jediná cesta späť k partnerovi, keď už je vyriešený. Bez nej by sa
+  // WAITING_ITEMS nesmel nikdy vrátiť do WAITING_PARTNER — a nevráti sa.
+  // ------------------------------------------------------------------
+  const partnerChange = field !== "partner" ? readPartnerChange(rawAnswer) : null;
+  if (partnerChange) {
+    const resolution = await resolvePartnerCandidates(supabase, partnerChange);
+    if (resolution.candidates.length === 0) {
+      return askAgain(supabase, locale, ctx, slots, {
+        kind: "not_found",
+        text: translate(locale, "search.voice.invoice.partnerNotFound", { name: partnerChange }),
+      }, field);
+    }
+    const next: InvoiceDraftSlots = { ...slots, partnerId: undefined, partnerCandidateIds: undefined };
+    if (resolution.autoResolvable) next.partnerId = resolution.candidates[0].id;
+    else next.partnerCandidateIds = resolution.candidates.map((candidate) => candidate.id);
+    return continueFlow(supabase, locale, ctx, next);
+  }
+
+  // ------------------------------------------------------------------
+  // OPRAVA ALEBO ODSTRÁNENIE POLOŽKY („Zmeň kopanie na 350 eur",
+  // „Odstráň dopravu"). Iba nad rozpracovanými položkami a iba pri
+  // jednoznačnej zhode — inak otázka, nikdy zmena nesprávneho riadku.
+  // ------------------------------------------------------------------
+  if (allowsItemAppend && (slots.items?.length ?? 0) > 0) {
+    const correction = readItemCorrection(slots, rawAnswer);
+    if (correction?.kind === "unclear") {
+      return askAgain(supabase, locale, ctx, slots, {
+        kind: "clarify",
+        question: translate(locale, "search.voice.invoice.correctionUnclear", {
+          items: (slots.items ?? []).map((item) => item.description).join(", "),
+        }),
+        conversationId: ctx.conversationId,
+      }, field);
+    }
+    if (correction) {
+      const description = slots.items?.[correction.index]?.description ?? "";
+      const corrected = applyItemCorrection(slots, correction);
+      return continueFlow(supabase, locale, ctx, corrected, translate(
+        locale,
+        correction.kind === "remove" ? "search.voice.invoice.itemRemoved" : "search.voice.invoice.itemPriceChanged",
+        { item: description, price: correction.kind === "change_price" ? String(correction.price) : "" }
+      ));
+    }
+  }
 
   if (allowsItemAppend && looksLikeItemAppend(rawAnswer) && (slots.items?.length ?? 0) > 0) {
     const appended = appendItemFromAnswer(slots, rawAnswer);
@@ -235,7 +302,7 @@ export async function continueInvoiceDraftFlow(
         kind: "clarify",
         question: translate(locale, "search.voice.invoice.appendUnclear"),
         conversationId: ctx.conversationId,
-      });
+      }, field);
     }
 
     return continueFlow(supabase, locale, ctx, appended);
@@ -262,7 +329,7 @@ export async function continueInvoiceDraftFlow(
             .join(", "),
         }),
         conversationId: ctx.conversationId,
-      });
+      }, field);
     }
 
     // Vyrieši sa VÝHRADNE partner. Položky, DPH ani mena sa nedotknú.
@@ -274,15 +341,23 @@ export async function continueInvoiceDraftFlow(
   // Meno partnera je jediná odpoveď, ktorá vyžaduje dotaz do databázy —
   // ostatné sa dajú prečítať z textu.
   if (field === "partner") {
+    // Odpoveď, ktorá vyzerá ako položky („Kopanie 300 eur, doprava 100
+    // eur"), NIE JE meno partnera. Položky sa zapamätajú a otázka na
+    // odberateľa sa zopakuje — nehľadá sa partner menom „Kopanie…".
+    if (looksLikeInvoiceItems(rawAnswer)) {
+      const withItems = (slots.items?.length ?? 0) === 0 ? applyAnswer(slots, "items", rawAnswer, []) : slots;
+      return continueFlow(supabase, locale, ctx, withItems, translate(locale, "search.voice.invoice.itemsKeptAskPartner"));
+    }
+
     const resolution = await resolvePartnerCandidates(supabase, rawAnswer.trim());
 
     if (resolution.candidates.length === 0) {
       return askAgain(supabase, locale, ctx, slots, {
         kind: "not_found",
-        text: translate(locale, "search.voice.invoice.partnerNotFound", {
-          name: rawAnswer.trim(),
+        text: translate(locale, "search.voice.invoice.partnerNotFoundOfferCreate", {
+          name: rawAnswer.trim().replace(/[.!?]+$/, ""),
         }),
-      });
+      }, "partner");
     }
 
     if (resolution.autoResolvable) slots.partnerId = resolution.candidates[0].id;
@@ -300,7 +375,7 @@ export async function continueInvoiceDraftFlow(
       kind: "clarify",
       question: translate(locale, "search.voice.invoice.priceModeMixed"),
       conversationId: ctx.conversationId,
-    });
+    }, "vat");
   }
 
   const candidates =
@@ -328,7 +403,30 @@ export async function continueInvoiceDraftFlow(
 
   // Odpoveď, z ktorej sa nedalo nič prečítať, nesmie posunúť dialóg ďalej —
   // inak by sa otázka stratila a chýbajúca hodnota by sa dopĺňala inde.
+  // Pri položkách a cenách sa povie, ČOMU appka nerozumela, a dá sa príklad
+  // (nie generické „Nič sa nenašlo").
+  const unchanged = JSON.stringify(serializeSlots(updated)) === JSON.stringify(serializeSlots(syncForCompare(slots)));
+  if (unchanged && (field === "items" || field === "itemPrice" || field === "total")) {
+    return askAgain(supabase, locale, ctx, slots, {
+      kind: "clarify",
+      question:
+        field === "items"
+          ? translate(locale, "search.voice.invoice.itemsNotUnderstood")
+          : field === "total"
+            ? buildTotalMismatchQuestion(locale, slots, itemsSumCents(slots.items))
+            : `${translate(locale, "search.voice.invoice.priceNotUnderstood")} ${buildItemPriceQuestion(locale, slots)}`,
+      conversationId: ctx.conversationId,
+    }, field);
+  }
   return continueFlow(supabase, locale, ctx, updated);
+}
+
+/** Na porovnanie „zmenilo sa niečo?" — applyAnswer vždy prepočíta vyslovené sumy. */
+function syncForCompare(slots: InvoiceDraftSlots): InvoiceDraftSlots {
+  const prices = (slots.items ?? [])
+    .map((item) => item.unitPrice)
+    .filter((price): price is number => typeof price === "number");
+  return { ...slots, spokenAmounts: prices };
 }
 
 /**
@@ -339,7 +437,9 @@ async function continueFlow(
   supabase: SupabaseClient,
   locale: Locale,
   ctx: InvoiceDraftFlowContext,
-  slots: InvoiceDraftSlots
+  slots: InvoiceDraftSlots,
+  /** Krátke potvrdenie pred ďalšou otázkou („Odstránil som položku doprava."). */
+  lead?: string
 ): Promise<IntentResult> {
   const missing = missingInvoiceFields(slots);
 
@@ -445,6 +545,8 @@ async function continueFlow(
   let questionText = question.question;
   if (missing[0] === "itemPrice") {
     questionText = buildItemPriceQuestion(locale, slots);
+  } else if (missing[0] === "total") {
+    questionText = buildTotalMismatchQuestion(locale, slots, itemsSumCents(slots.items));
   } else if (missing[0] === "vat") {
     // Otázka zopakuje, čo už používateľ o režime ceny povedal. Pýtať sa
     // znova na to isté, akoby odpoveď nezaznela, je horšie než mlčať.
@@ -453,7 +555,7 @@ async function continueFlow(
 
   return {
     kind: "clarify",
-    question: questionText,
+    question: lead ? `${lead} ${questionText}` : questionText,
     conversationId: ctx.conversationId,
     choices: question.choices,
   };
@@ -500,9 +602,15 @@ async function askAgain(
   locale: Locale,
   ctx: InvoiceDraftFlowContext,
   slots: InvoiceDraftSlots,
-  result: IntentResult
+  result: IntentResult,
+  /**
+   * Na ktoré pole sa TÁTO odpoveď pýta. Uloží sa ako prvé chýbajúce, aby
+   * ďalšia veta bola vyhodnotená ako odpoveď na TÚTO otázku — nie na
+   * prvé pole v pevnom poradí.
+   */
+  asked?: InvoiceDraftField
 ): Promise<IntentResult> {
-  const missing = missingInvoiceFields(slots);
+  const missing = orderMissingFields(missingInvoiceFields(slots), asked);
   await saveConversationContext(
     supabase,
     ctx.conversationId,
@@ -519,6 +627,7 @@ const FIELDS: InvoiceDraftField[] = [
   "partnerChoice",
   "items",
   "itemPrice",
+  "total",
   "vat",
 ];
 

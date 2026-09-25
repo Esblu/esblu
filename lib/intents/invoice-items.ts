@@ -59,6 +59,27 @@ export type ItemParseResult = {
   recognized: InvoiceItemCandidate[];
   /** Úseky, z ktorých sa položka spoľahlivo prečítať nedala. */
   unresolved: string[];
+  /**
+   * Celková suma, ktorú používateľ vyslovil („… spolu 1 832 eur").
+   *
+   * NIKDY sa nerozpočítava do riadkov — slúži iba na kontrolu súčtu, keď
+   * používateľ ceny riadkov povie. Nie je to položka a nie je to peňažná
+   * hodnota niektorej položky.
+   */
+  statedTotal?: number;
+};
+
+/** Voľby parsera, ktoré zapína iba volajúci so známym kontextom. */
+export type ItemParseOptions = {
+  /**
+   * Odpoveď na otázku „Za čo má byť faktúra?" / „Aké sú ceny?".
+   *
+   * Partner je v tej chvíli už vyriešený alebo sa na neho pýta iná otázka,
+   * takže číslo v odpovedi nemôže byť súčasťou jeho mena („Tester 1").
+   * Iba vtedy sa smie mena uvedená raz na konci („300, 650 a 830 eur")
+   * preniesť na všetky riadky — a aj to len pri úplne pravidelnom tvare.
+   */
+  answerContext?: boolean;
 };
 
 // -----------------------------------------------------------------------------
@@ -148,6 +169,91 @@ const VAT_TAIL_PHRASES = [
   " prozent",
   "%",
 ];
+
+// -----------------------------------------------------------------------------
+// Celková suma („spolu 1 832 eur") — nie je položka
+// -----------------------------------------------------------------------------
+
+const TOTAL_MARKERS = /(^|[^a-z])(spolu|celkom|dokopy|dohromady|celkova suma|celkovu sumu|celkovej sume|v celkovej|suma spolu|insgesamt|gesamt|zusammen|in total|total|altogether|overall)([^a-z]|$)/;
+
+/** Je úsek vyslovenou celkovou sumou („suma spolu 1832 eur")? */
+function isTotalSegment(segment: string): boolean {
+  return TOTAL_MARKERS.test(fold(segment)) && findNumber(segment) !== null;
+}
+
+/** Hodnota celkovej sumy — iba pri práve jednom čísle v úseku. */
+function readTotal(segment: string): number | null {
+  const numbers = moneyTokens(segment);
+  if (numbers.length !== 1) return null;
+  const value = numbers[0];
+  return Number.isFinite(value) && value > 0 && value <= MAX_VOICE_UNIT_PRICE * MAX_VOICE_ITEMS ? value : null;
+}
+
+// -----------------------------------------------------------------------------
+// Počet v popise („za dvoch pracovníkov 830 eur") — nie je cena ani množstvo
+// -----------------------------------------------------------------------------
+//
+// Slovná číslovka pred podstatným menom opisuje predmet („dvoch
+// pracovníkov"). Cenou nie je. Množstvom sa stane IBA vo výslovnom tvare
+// „2 hodiny po 40 eur" (readQuantityPrice) — tu sa nič neprepočítava a
+// popis ostáva tak, ako zaznel. Uplatní sa iba vtedy, keď úsek má práve
+// jednu inú sumu s menou; inak ostáva doterajšie prísne správanie.
+
+const COUNT_WORDS = new Set([
+  "dva", "dve", "dvoch", "dvaja", "dvom", "dvoma", "tri", "troch", "traja", "trom", "styri", "styroch", "styria",
+  "pat", "piati", "piatich", "sest", "siesti", "siestich", "jeden", "jedna", "jedneho", "jednej",
+  "zwei", "drei", "vier", "funf", "fuenf", "two", "three", "four", "five",
+]);
+
+type PricedNumber = { value: number; startToken: number; endToken: number; countTokens: number[] };
+
+/** Všetky čísla úseku v poradí (s pozíciami tokenov). */
+function allNumbers(segment: string): { value: number; startToken: number; endToken: number }[] {
+  const out: { value: number; startToken: number; endToken: number }[] = [];
+  let from = 0;
+  for (let guard = 0; guard < 32; guard++) {
+    const found = findNumber(segment, from);
+    if (!found) break;
+    out.push(found);
+    from = found.endToken + 1;
+  }
+  return out;
+}
+
+/**
+ * Cena úseku. Pri jednom čísle je to ono. Pri viacerých iba vtedy, keď
+ * práve jedno stojí pred menou a všetky ostatné sú slovné počty pred
+ * podstatným menom („dvoch pracovníkov"). Inak `null` = doterajšia cesta.
+ */
+function pricedNumber(segment: string): PricedNumber | null {
+  const numbers = allNumbers(segment);
+  if (numbers.length === 0) return null;
+  if (numbers.length === 1) return { ...numbers[0], countTokens: [] };
+  const tokens = tokenize(segment);
+  const withCurrency = numbers.filter((n) => findCurrency(tokens[n.endToken + 1] ?? "") !== null);
+  if (withCurrency.length !== 1) return null;
+  const price = withCurrency[0];
+  const others = numbers.filter((n) => n !== price);
+  const countTokens: number[] = [];
+  for (const other of others) {
+    if (other.startToken !== other.endToken) return null;
+    const word = tokens[other.startToken] ?? "";
+    const next = tokens[other.startToken + 1] ?? "";
+    if (!COUNT_WORDS.has(word) || !/^[a-z]{3,}$/.test(next) || next in UNIT_WORDS || findCurrency(next)) return null;
+    countTokens.push(other.startToken);
+  }
+  return { ...price, countTokens };
+}
+
+/** Peňažné hodnoty úseku — bez slovných počtov v popise. */
+function segmentMoney(segment: string): number[] {
+  const priced = pricedNumber(segment);
+  if (priced && priced.countTokens.length > 0) return [priced.value];
+  return moneyTokens(segment);
+}
+
+/** Výplňové slová pred cenou („suma", „v hodnote"), ktoré do popisu nepatria. */
+const PRICE_FILLERS = /(^|\s)(v\s+sume|v\s+hodnote|vo\s+v[yý][sš]ke|suma|sumu|sume|cena|cenu|hodnota|betrag|preis|amount|price)(?=\s|$)/gi;
 
 /**
  * Odstrihne hlavičku príkazu a chvost o DPH. Vráti iba úsek s položkami.
@@ -390,7 +496,7 @@ function splitIntoSegments(section: string): string[] {
  * „kopanie 300", „kopanie 300 eur" → áno. „50 doprava" → nie.
  */
 function amountIsTrailing(segment: string): boolean {
-  const found = findNumber(segment);
+  const found = pricedNumber(segment) ?? findNumber(segment);
   if (!found) return false;
 
   const tokens = tokenize(segment);
@@ -586,11 +692,33 @@ function mergeQuantityContinuations(segments: string[]): string[] {
   return out;
 }
 
+/**
+ * Popis bez meny, predložiek a výplňových slov. Opakuje sa, kým sa niečo
+ * mení — „za Za kopanie suma" má dve predložky za sebou a jeden prechod
+ * regulárneho výrazu by druhú nechal (medzera medzi nimi sa spotrebuje).
+ */
+function cleanDescription(value: string): string {
+  let description = value;
+  for (let i = 0; i < 4; i++) {
+    const next = description
+      .replace(PRICE_NOISE, " ")
+      .replace(SEGMENT_PREPOSITIONS, " ")
+      .replace(PRICE_FILLERS, " ")
+      .replace(/[.,;:!?]+\s*$/, "")
+      .replace(/^\s*[-–—]\s*/, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (next === description) break;
+    description = next;
+  }
+  return description;
+}
+
 function segmentToItem(segment: string): InvoiceItemCandidate | null {
   const qp = readQuantityPrice(segment);
   if (qp) return quantityPriceItem(segment, qp);
 
-  const amount = findNumber(segment);
+  const amount = pricedNumber(segment) ?? findNumber(segment);
 
   // Popis = segment bez čísla a bez názvu meny.
   let description = segment;
@@ -604,13 +732,7 @@ function segmentToItem(segment: string): InvoiceItemCandidate | null {
       .join(" ");
   }
 
-  description = description
-    .replace(PRICE_NOISE, " ")
-    .replace(SEGMENT_PREPOSITIONS, " ")
-    .replace(/[.,;:!?]+\s*$/, "")
-    .replace(/^\s*[-–—]\s*/, "")
-    .replace(/\s+/g, " ")
-    .trim();
+  description = cleanDescription(description);
 
   if (!description) return null;
 
@@ -644,13 +766,16 @@ export function extractInvoiceItems(
    * VÝHRADNE na to, aby sa úsek s menom nestal položkou; na nič iné sa
    * nepoužíva a jeho neprítomnosť nikdy nespôsobí tichý výsledok.
    */
-  partnerHint?: string
+  partnerHint?: string,
+  options: ItemParseOptions = {}
 ): ItemParseResult {
+  let statedTotal: number | undefined;
   const empty = (problem: ItemParseResult["problem"] = null): ItemParseResult => ({
     items: [],
     problem,
     recognized: [],
     unresolved: [],
+    ...(statedTotal !== undefined ? { statedTotal } : {}),
   });
 
   const { section, partnerRemoved } = extractItemsSection(rawText, partnerHint);
@@ -663,12 +788,29 @@ export function extractInvoiceItems(
   // odrezalo už pri hľadaní úseku; toto je poistka pre prípad, že stojí vo
   // vete druhýkrát. Útržok po reze chvosta o DPH („23") sa zahodí ticho —
   // je to stopa po našom reze, nie obsah od používateľa.
-  const segments = allSegments
+  const headerless = allSegments
     .map(stripCommandHeader)
     .filter((segment): segment is string => segment !== null)
     .filter(
       (segment) => !matchesPartnerHint(segment, partnerHint) && !isCutRemnant(segment)
     );
+
+  // „… suma spolu 1 832 eur" — celková suma nie je položka. Vyberie sa iba
+  // jeden taký úsek; dva súčty v jednej vete sú nejasné → otázka.
+  const totalSegments = headerless.filter(isTotalSegment);
+  if (totalSegments.length > 1) return empty("ambiguous");
+  if (totalSegments.length === 1) {
+    const total = readTotal(totalSegments[0]);
+    if (total === null) return empty("ambiguous");
+    statedTotal = total;
+  }
+  let segments = headerless.filter((segment) => !isTotalSegment(segment));
+  // „kopanie a odvoz spolu 500 eur" — bez ďalších úsekov je „spolu" iba
+  // spôsob, ako povedať cenu jedného riadku, nie celková suma k iným.
+  if (segments.length === 0 && totalSegments.length === 1) {
+    segments = headerless;
+    statedTotal = undefined;
+  }
 
   if (segments.length === 0) return empty();
   const merged = mergeQuantityContinuations(segments);
@@ -679,7 +821,7 @@ export function extractInvoiceItems(
     // Veta, z ktorej vyšlo príliš mnoho úsekov, sa takmer isto rozdelila
     // zle. Bezpečnejšie je to priznať než založiť doklad s deviatimi
     // nezmyselnými riadkami.
-    return { items: [], problem: "too_many_items", recognized: [], unresolved: segments };
+    return { items: [], problem: "too_many_items", recognized: [], unresolved: segments, ...(statedTotal !== undefined ? { statedTotal } : {}) };
   }
 
   const items: InvoiceItemCandidate[] = [];
@@ -694,8 +836,9 @@ export function extractInvoiceItems(
   // množstvo: vieme, že ide o položku, ale nie ČO to je / nedá sa prijať.
   // Nesmie z toho vzniknúť riadok s celou vetou ako popisom a cenou
   // doplnenou neskôr (35 € namiesto 350 €) — preto „nejasné" → otázka.
+  const totalPart = statedTotal !== undefined ? { statedTotal } : {};
   if (segments.some(hasNegativeQuantity) || unresolved.some((segment) => readQuantityPrice(segment) !== null)) {
-    return { items: [], problem: "ambiguous", recognized: items, unresolved };
+    return { items: [], problem: "ambiguous", recognized: items, unresolved, ...totalPart };
   }
 
   if (items.length === 0) return empty();
@@ -705,14 +848,24 @@ export function extractInvoiceItems(
     problem,
     recognized: items,
     unresolved,
+    ...totalPart,
   });
 
   // Jedna položka bez ceny je bežný, zvládnutý prípad — asistent sa
   // dopýta. Viac položiek, z ktorých niektorej chýba cena, je iné: je to
   // signál, že rozdelenie prebehlo zle, a preto sa nič nevracia.
+  //
+  // VÝNIMKA: vety bez JEDINÉHO čísla („kopanie, odvoz materiálu,
+  // pracovníci"). Tam sa nič stratiť nemohlo — nie je čo — a čiarka je
+  // jednoznačný oddeľovač. Takéto popisy sa vrátia bez ceny a asistent sa
+  // na ceny spýta. Nič sa nedopĺňa a celková suma sa nerozpočítava.
   const withoutPrice = items.filter((item) => item.unitPrice === undefined);
+  // Iba keď sú BEZ ceny všetky položky a vo vete niet ani jedného čísla —
+  // zmes riadkov s cenou a bez nej ostáva otázkou ako doteraz.
+  const pureDescriptions =
+    withoutPrice.length === items.length && segments.every((segment) => findNumber(segment) === null);
 
-  if (items.length > 1 && withoutPrice.length > 0) {
+  if (items.length > 1 && withoutPrice.length > 0 && !pureDescriptions) {
     return fail("ambiguous");
   }
 
@@ -725,14 +878,26 @@ export function extractInvoiceItems(
   // Keď meno známe BOLO a odrezalo sa, pravidlo sa neuplatňuje:
   // „Erdarbeiten 300 Euro und Transport 50" je legitímne.
   if (!partnerRemoved && items.length > 1) {
-    const withCurrency = segments.filter(hasCurrencyMarker).length;
-    if (withCurrency > 0 && withCurrency < segments.length) {
-      return fail("ambiguous");
+    const priced = segments.filter((segment) => findNumber(segment) !== null);
+    const withCurrency = priced.filter(hasCurrencyMarker).length;
+    if (withCurrency > 0 && withCurrency < priced.length) {
+      // „kopanie 300, odvoz 650, pracovníci 830 eur" v ODPOVEDI na otázku o
+      // položkách: mena raz na konci. Prenesie sa IBA pri úplne pravidelnom
+      // tvare — každý úsek má práve jednu sumu na konci a menu nesie výhradne
+      // posledný. Inak otázka ako doteraz.
+      const regular =
+        options.answerContext === true &&
+        withCurrency === 1 &&
+        hasCurrencyMarker(priced[priced.length - 1]) &&
+        priced.every((segment) => segmentMoney(segment).length === 1 && amountIsTrailing(segment));
+      if (!regular) return fail("ambiguous");
+      const currency = findCurrency(priced[priced.length - 1]);
+      if (currency) for (const item of items) if (item.unitPrice !== undefined) item.currency = currency;
     }
   }
 
   if (withoutPrice.length > 0) {
-    return { items, problem: "missing_price", recognized: items, unresolved };
+    return { items, problem: "missing_price", recognized: items, unresolved, ...totalPart };
   }
 
   const outOfRange = items.some(
@@ -762,7 +927,7 @@ export function extractInvoiceItems(
   // položka nevyšla. Práve tie sú dôvod, prečo rekonciliácia existuje.
   // Množstvo („10 hodín") je číslo, nie peniaze — z vyslovených súm sa
   // odoberie práve raz za každú položku, ktorá ho má.
-  const spokenAll = moneyTokens(segments.join(" ; "));
+  const spokenAll = segments.flatMap(segmentMoney);
   for (const item of items) {
     if (item.quantity === undefined) continue;
     const at = spokenAll.indexOf(item.quantity);
@@ -779,7 +944,7 @@ export function extractInvoiceItems(
 
   if (!reconciled) return fail("ambiguous");
 
-  return { items, problem: null, recognized: items, unresolved };
+  return { items, problem: null, recognized: items, unresolved, ...totalPart };
 }
 
 /**
@@ -793,7 +958,7 @@ export function extractInvoiceItems(
  */
 export function extractSingleAppendedItem(rawAnswer: string): InvoiceItemCandidate | null {
   const stripped = rawAnswer.replace(
-    /^\s*(pridaj( este| ešte)?|doplň|doplnit|dodaj|fuege hinzu|füge hinzu|add)\s+/i,
+    /^\s*(pridaj( este| ešte)?|doplň|doplnit|dodaj|fuege hinzu|füge hinzu|add|(a\s+)?(este|ešte|plus|noch|also))\s+/i,
     ""
   );
 

@@ -14,6 +14,7 @@ import {
 import { useCompanyDpaLegalHold } from "@/app/components/CompanyDpaGate";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import BusinessPartnersIcon from "@/app/components/icons/BusinessPartnersIcon";
+import { takePartnerPrefill, type PartnerPrefill } from "@/lib/partner-prefill";
 import {
   BUSINESS_PARTNER_DUPLICATE_ICO_ERROR,
   EMPTY_BUSINESS_PARTNER_FORM,
@@ -95,13 +96,26 @@ function PartnerField({
 // rovnaký vzor v app/ai-evidencia/page.tsx (OpenFromQueryParam). Izolované
 // do vlastného malého komponentu, aby Suspense fallback nezablokoval
 // vykreslenie celej (väčšej) stránky, iba tento jeden efekt.
-function EditFromQueryParam({ onEditId }: { onEditId: (id: string) => void }) {
+function EditFromQueryParam({
+  onEditId,
+  onNewPrefill,
+}: {
+  onEditId: (id: string) => void;
+  onNewPrefill: (prefill: PartnerPrefill) => void;
+}) {
   const searchParams = useSearchParams();
 
   useEffect(() => {
     const editId = searchParams.get("edit");
     if (editId) {
       onEditId(editId);
+      return;
+    }
+    // „Vytvor partnera X" z asistenta: vyslovené údaje prišli cez
+    // sessionStorage (nie URL). Formulár sa iba predvyplní — ukladá človek.
+    if (searchParams.get("new") === "1") {
+      const prefill = takePartnerPrefill();
+      if (prefill) onNewPrefill(prefill);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
@@ -239,6 +253,21 @@ export default function ObchodniPartneriPage() {
     setShowForm(true);
   }
 
+  function openPrefilledCreateForm(prefill: PartnerPrefill) {
+    setEditingId(null);
+    setForm({
+      ...EMPTY_BUSINESS_PARTNER_FORM,
+      kind: prefill.kind ?? EMPTY_BUSINESS_PARTNER_FORM.kind,
+      legal_name: prefill.legal_name,
+      ico: prefill.ico ?? "",
+      dic: prefill.dic ?? "",
+      ic_dph: prefill.ic_dph ?? "",
+    });
+    setFormErrors([]);
+    setFormSubmitError("");
+    setShowForm(true);
+  }
+
   function openEditForm(partner: BusinessPartner) {
     setEditingId(partner.id);
     setForm(businessPartnerToForm(partner));
@@ -329,7 +358,7 @@ export default function ObchodniPartneriPage() {
   return (
     <div className="mx-auto max-w-5xl px-4 pb-24 pt-6 sm:px-6">
       <Suspense fallback={null}>
-        <EditFromQueryParam onEditId={setPendingEditId} />
+        <EditFromQueryParam onEditId={setPendingEditId} onNewPrefill={openPrefilledCreateForm} />
       </Suspense>
 
       <BackLink href="/" label={t("nav.dashboard")} className="mb-6" />

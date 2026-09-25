@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import type { IntentResult } from "@/lib/intents/types";
+import { storePartnerPrefill } from "@/lib/partner-prefill";
 
 // =============================================================================
 // Zobrazenie výsledku Intent Enginu.
@@ -271,6 +272,24 @@ export function IntentResultView({
             </Link>
           </div>
         );
+
+      // Nový obchodný partner: nič sa neuložilo. Odkaz odovzdá vyslovené
+      // údaje formuláru (sessionStorage) a uloží ich až človek.
+      case "partner_review": {
+        const prefill = intentResult.prefill;
+        return (
+          <div className={boxClass}>
+            <p className="text-sm font-medium text-primary">{intentResult.text}</p>
+            <Link
+              href={intentResult.href}
+              onClick={() => storePartnerPrefill(prefill)}
+              className="mt-2 inline-block min-h-11 py-2 text-sm font-bold text-accent-cyan"
+            >
+              {intentResult.openLabel} →
+            </Link>
+          </div>
+        );
+      }
 
       // `clarify` sem NEPATRÍ — otázku vykresľuje launcher sám, pretože k
       // nej patrí aj pole na odpoveď, ktoré tento komponent (zámerne

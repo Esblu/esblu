@@ -410,6 +410,14 @@ export const INTENT_REGISTRY: Record<IntentName, IntentDefinition> = {
     requiresConfirmation: false,
     description: "Nepriradené bločky/faktúry v Inboxe (filter Inbox UI) — zoznam alebo počet. Finance view.",
   },
+  PARTNER_CREATE: {
+    name: "PARTNER_CREATE",
+    // Read-only, a presne: pripraví vyplnený formulár nového partnera po
+    // kontrole duplicít. Záznam uloží človek v UI (existujúca validácia a RLS).
+    readOnly: true,
+    requiresConfirmation: false,
+    description: "Príprava formulára nového obchodného partnera (iba vyslovené údaje, kontrola duplicít). Nič neukladá. Finance manage.",
+  },
   INBOX_DELETE_UNASSIGNED: {
     name: "INBOX_DELETE_UNASSIGNED",
     readOnly: false,

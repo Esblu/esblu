@@ -2,6 +2,7 @@ import { findNumber, findCurrency, findVatRate, mentionsVat } from "./number-wor
 import {
   extractInvoiceItems,
   extractSingleAppendedItem,
+  moneyTokens,
   MAX_VOICE_ITEMS,
   MAX_VOICE_UNIT_PRICE,
   MAX_DESCRIPTION_LENGTH,
@@ -89,6 +90,14 @@ export type InvoiceDraftSlots = {
    * platí `DEFAULT_PRICE_MODE` — to isté, čo predvolí formulár v UI.
    */
   priceMode?: PriceMode;
+  /**
+   * Celková suma, ktorú používateľ vyslovil („… spolu 1 832 eur").
+   *
+   * NIE JE to cena žiadnej položky a nikdy sa do riadkov nerozpočítava.
+   * Keď sú ceny riadkov známe, ich súčet sa s ňou porovná; nesúlad je
+   * otázka (pole `total`), nikdy tichá úprava súm.
+   */
+  statedTotal?: number;
 };
 
 export type { PriceMode };
@@ -99,7 +108,56 @@ export type InvoiceDraftField =
   | "partnerChoice"
   | "items"
   | "itemPrice"
+  | "total"
   | "vat";
+
+/**
+ * Explicitný stav rozhovoru o faktúre. Odvodzuje sa z PRVÉHO uloženého
+ * chýbajúceho poľa — teda z otázky, ktorá naozaj zaznela — nie zo slotov
+ * nanovo. Tým sa zabezpečuje, že WAITING_ITEMS sa nikdy „nevráti" do
+ * WAITING_PARTNER: partner, ktorý je raz vyriešený, v chýbajúcich poliach
+ * už nie je, a zmeniť ho vie iba výslovná veta „Zmeň odberateľa na …".
+ *
+ *   WAITING_PARTNER              partner
+ *   WAITING_PARTNER_CONFIRMATION partnerChoice („Myslíte …?" / výber)
+ *   WAITING_ITEMS                items
+ *   WAITING_ITEM_CLARIFICATION   itemPrice, total
+ *   WAITING_PRICE_MODE           vat (sadzba + režim ceny)
+ *   DRAFT_READY                  nič nechýba → vznikne DRAFT (nie finalizácia)
+ *
+ * WAITING_FINAL_CONFIRMATION hlasom neexistuje: finalizácia (číslo, VAT
+ * rozpis, nemennosť) je výhradne v UI cez esblu_finalize_invoice().
+ */
+export type InvoiceConversationStage =
+  | "WAITING_PARTNER"
+  | "WAITING_PARTNER_CONFIRMATION"
+  | "WAITING_ITEMS"
+  | "WAITING_ITEM_CLARIFICATION"
+  | "WAITING_PRICE_MODE"
+  | "DRAFT_READY";
+
+export function invoiceStage(field: InvoiceDraftField | undefined): InvoiceConversationStage {
+  switch (field) {
+    case "partner": return "WAITING_PARTNER";
+    case "partnerChoice": return "WAITING_PARTNER_CONFIRMATION";
+    case "items": return "WAITING_ITEMS";
+    case "itemPrice":
+    case "total": return "WAITING_ITEM_CLARIFICATION";
+    case "vat": return "WAITING_PRICE_MODE";
+    default: return "DRAFT_READY";
+  }
+}
+
+/**
+ * Uloží chýbajúce polia tak, aby PRVÉ bolo to, na ktoré sa asistent práve
+ * pýta. Produkčná chyba: otázka znela „Za čo má byť faktúra?", ale uložené
+ * prvé pole bolo `partner` — a ďalšia veta („Kopanie, odvoz materiálu,
+ * pracovníci.") sa hľadala ako obchodný partner.
+ */
+export function orderMissingFields(missing: InvoiceDraftField[], asked: InvoiceDraftField | undefined): InvoiceDraftField[] {
+  if (!asked) return missing;
+  return [asked, ...missing.filter((field) => field !== asked)];
+}
 
 
 const SLOT_KEYS: (keyof InvoiceDraftSlots)[] = [
@@ -111,6 +169,7 @@ const SLOT_KEYS: (keyof InvoiceDraftSlots)[] = [
   "vatRate",
   "spokenAmounts",
   "priceMode",
+  "statedTotal",
 ];
 
 /**
@@ -221,6 +280,15 @@ export function readSlots(raw: unknown): InvoiceDraftSlots {
     slots.priceMode = source.priceMode;
   }
 
+  if (
+    typeof source.statedTotal === "number" &&
+    Number.isFinite(source.statedTotal) &&
+    source.statedTotal > 0 &&
+    source.statedTotal <= MAX_VOICE_UNIT_PRICE * MAX_VOICE_ITEMS
+  ) {
+    slots.statedTotal = source.statedTotal;
+  }
+
   if (Array.isArray(source.spokenAmounts)) {
     const amounts = source.spokenAmounts.filter(
       (value): value is number =>
@@ -261,6 +329,10 @@ export function missingInvoiceFields(slots: InvoiceDraftSlots): InvoiceDraftFiel
     // Ktorejkoľvek položke chýba cena. Pýta sa vždy na PRVÚ takú (pozri
     // firstItemWithoutPrice) — jedna otázka na jednu chýbajúcu hodnotu.
     missing.push("itemPrice");
+  } else if (slots.statedTotal !== undefined && !totalMatches(slots)) {
+    // Všetky ceny sú známe, ale ich súčet nesedí s vyslovenou celkovou
+    // sumou. Nič sa neupraví — asistent sa spýta.
+    missing.push("total");
   }
 
   // Kategória AJ sadzba musia byť obe známe. Kategória bez sadzby je pri
@@ -342,7 +414,8 @@ function applyAnswerToSlots(
       // naraz („za kopanie 300 eur a dopravu 50"). Rozdelenie rieši ten
       // istý parser ako pri celej vete — vrátane odmietnutia, keď si nie
       // je istý.
-      const parsed = extractInvoiceItems(`za ${answer}`);
+      const parsed = extractInvoiceItems(/^\s*(za|fuer|für|for)\s/i.test(answer) ? answer : `za ${answer}`, undefined, { answerContext: true });
+      if (parsed.statedTotal !== undefined) next.statedTotal = parsed.statedTotal;
 
       if (parsed.items.length > 0 && parsed.problem !== "ambiguous") {
         next.items = parsed.items.slice(0, MAX_VOICE_ITEMS);
@@ -369,10 +442,18 @@ function applyAnswerToSlots(
     }
 
     case "itemPrice": {
+      // Viac cien naraz („kopanie 300, odvoz 650, pracovníci 882") —
+      // priradia sa k POMENOVANÝM riadkom, alebo pri holých číslach v
+      // poradí, v akom ich otázka vymenovala. Inak nič.
+      const multi = assignItemPrices(next, answer);
+      if (multi) return multi;
+
       // Cena sa dopĺňa do PRVEJ položky, ktorej chýba — presne tej, na
       // ktorú sa asistent pýtal.
       const target = firstItemWithoutPrice(next.items);
       if (target === null) return next;
+      // Viac čísel, ktoré sa nedali priradiť, nie je jedna cena.
+      if (moneyTokens(answer).length > 1) return next;
 
       const amount = findNumber(answer);
       if (amount && amount.value >= 0 && amount.value <= MAX_VOICE_UNIT_PRICE) {
@@ -383,6 +464,16 @@ function applyAnswerToSlots(
 
       const currency = findCurrency(answer);
       if (currency) next.currency = currency;
+      return next;
+    }
+
+    case "total": {
+      // „Áno, platí súčet položiek" — riadky sú autoritou, celková suma sa
+      // zahodí. Opravu ceny rieši `applyItemCorrection` o vrstvu vyššie.
+      const folded = fold(answer);
+      if (/(^|\s)(ano|áno|plati sucet|sucet poloziek|spravne|ja|yes|correct|stimmt)(\s|$)/.test(folded)) {
+        next.statedTotal = undefined;
+      }
       return next;
     }
 
@@ -432,6 +523,20 @@ function applyAnswerToSlots(
       return next;
     }
   }
+}
+
+/** Súčet riadkov (množstvo × cena) v centoch — rovnako pre oba režimy ceny. */
+export function itemsSumCents(items: InvoiceItemCandidate[] | undefined): number {
+  return (items ?? []).reduce(
+    (sum, item) => sum + Math.round((item.quantity ?? 1) * (item.unitPrice ?? 0) * 100),
+    0
+  );
+}
+
+/** Sedí súčet riadkov s vyslovenou celkovou sumou (na cent)? */
+export function totalMatches(slots: InvoiceDraftSlots): boolean {
+  if (slots.statedTotal === undefined) return true;
+  return itemsSumCents(slots.items) === Math.round(slots.statedTotal * 100);
 }
 
 /**
@@ -504,6 +609,9 @@ const APPEND_VERBS = [
 
 export function looksLikeItemAppend(rawText: string): boolean {
   const folded = fold(rawText);
+  // „Ešte materiál 120 eur." — častica „ešte" iba na ZAČIATKU vety a iba
+  // spolu so sumou (nie podreťazec: „Tester1" ju neobsahuje ako slovo).
+  if (/^(a\s+)?(este|plus|noch|also)\s+\S/.test(folded) && findNumber(rawText) !== null) return true;
   return APPEND_VERBS.some((verb) => {
     const stem = fold(verb);
     // Hranica slova na oboch stranách — „pridaj" áno, „Tester1" nie.
@@ -522,3 +630,148 @@ function readOrdinal(folded: string): number | null {
   return null;
 }
 
+
+
+// -----------------------------------------------------------------------------
+// Viac cien naraz, opravy a odstránenie položky
+// -----------------------------------------------------------------------------
+
+/** Kmeň slova na porovnanie popisov („pracovníkov" ~ „pracovníci"). */
+function stemOf(word: string): string {
+  const folded = fold(word).replace(/[^a-z0-9]/g, "");
+  return folded.length > 5 ? folded.slice(0, 5) : folded;
+}
+
+function descriptionKey(value: string): string[] {
+  return fold(value)
+    .split(/[^a-z0-9]+/)
+    .filter((word) => word.length >= 3 && !["za", "pre", "ten", "tie", "tu", "polozku", "polozka", "polozky"].includes(word))
+    .map(stemOf);
+}
+
+/**
+ * Index položky, na ktorú sa veta odvoláva („dopravu" → „doprava").
+ * `null`, keď nesedí žiadna alebo viac ako jedna — vtedy sa nič nemení.
+ */
+export function findItemByMention(items: InvoiceItemCandidate[] | undefined, mention: string): number | null {
+  const wanted = descriptionKey(mention);
+  if (wanted.length === 0) return null;
+  const hits: number[] = [];
+  (items ?? []).forEach((item, index) => {
+    const key = descriptionKey(item.description);
+    if (wanted.every((stem) => key.includes(stem)) || key.length > 0 && key.every((stem) => wanted.includes(stem))) hits.push(index);
+  });
+  return hits.length === 1 ? hits[0] : null;
+}
+
+/**
+ * Priradí viac cien naraz. Vráti nové sloty, alebo `null`, keď sa odpoveď
+ * nedá jednoznačne priradiť (vtedy sa nič nemení a asistent sa spýta).
+ */
+export function assignItemPrices(slots: InvoiceDraftSlots, answer: string): InvoiceDraftSlots | null {
+  const items = [...(slots.items ?? [])];
+  const missing = items.map((item, index) => (item.unitPrice === undefined ? index : -1)).filter((index) => index >= 0);
+  if (missing.length === 0) return null;
+
+  const parsed = extractInvoiceItems(/^\s*(za|fuer|für|for)\s/i.test(answer) ? answer : `za ${answer}`, undefined, { answerContext: true });
+
+  // 1) Pomenované riadky: každý rozpoznaný popis musí sedieť práve na jednu
+  //    položku bez ceny a žiadna položka nesmie dostať dve ceny.
+  if (parsed.problem === null && parsed.items.length >= 1 && parsed.items.every((item) => item.unitPrice !== undefined)) {
+    const used = new Set<number>();
+    const updates: { index: number; price: number; currency?: string }[] = [];
+    for (const item of parsed.items) {
+      const index = findItemByMention(items, item.description);
+      if (index === null || used.has(index) || !missing.includes(index)) {
+        updates.length = 0;
+        break;
+      }
+      used.add(index);
+      updates.push({ index, price: item.unitPrice as number, currency: item.currency });
+    }
+    if (updates.length === parsed.items.length && (updates.length > 1 || missing.length > 1)) {
+      for (const update of updates) items[update.index] = { ...items[update.index], unitPrice: update.price };
+      const currency = findCurrency(answer);
+      return syncSpokenAmounts({ ...slots, items, ...(currency ? { currency } : {}) });
+    }
+  }
+
+  // 2) Holé čísla („300, 650 a 882 eur") — iba keď ich je presne toľko, koľko
+  //    chýba cien, a odpoveď neobsahuje žiadne iné slová okrem meny/spojok.
+  if (missing.length > 1) {
+    const words = fold(answer).split(/[^a-z0-9]+/).filter(Boolean);
+    const onlyNumbers = words.every((word) => /^\d+$/.test(word) || ["a", "and", "und", "plus", "eur", "euro", "eura", "eurov", "po", "za"].includes(word) || findNumber(word) !== null);
+    const values = moneyTokens(answer);
+    if (onlyNumbers && values.length === missing.length && values.every((value) => value >= 0 && value <= MAX_VOICE_UNIT_PRICE)) {
+      missing.forEach((index, i) => {
+        items[index] = { ...items[index], unitPrice: values[i] };
+      });
+      const currency = findCurrency(answer);
+      return syncSpokenAmounts({ ...slots, items, ...(currency ? { currency } : {}) });
+    }
+  }
+  return null;
+}
+
+export type ItemCorrection =
+  | { kind: "remove"; index: number }
+  | { kind: "change_price"; index: number; price: number }
+  | { kind: "unclear" };
+
+const REMOVE_VERBS = /^(odstran|vymaz|zmaz|odober|vyhod|zrus polozku|remove|delete|entferne|losche|loesche)\S*\s+(.+)$/;
+const CHANGE_VERBS = /^(zmen|uprav|oprav|daj|nastav|change|set|andere|aendere|setze)\S*\s+(.+?)\s+(na|to|auf)\s+(.+)$/;
+
+/**
+ * „Odstráň dopravu." / „Zmeň kopanie na 350 eur." počas rozpracovanej
+ * faktúry. Vráti `null`, keď veta opravou nie je. `unclear`, keď opravou
+ * je, ale položka sa nedá určiť jednoznačne — vtedy sa nič nemení a
+ * asistent sa spýta (nikdy nezmení nesprávny riadok).
+ */
+export function readItemCorrection(slots: InvoiceDraftSlots, rawAnswer: string): ItemCorrection | null {
+  const folded = fold(rawAnswer).replace(/[.!?]+$/, "").trim();
+  const change = CHANGE_VERBS.exec(folded);
+  if (change) {
+    const mention = change[2].replace(/^(polozku|polozka|cenu|sumu|cena)\s+/, "");
+    if (/odberatel|zakaznik|partner|kunde|customer/.test(mention)) return null;
+    const amount = findNumber(change[4]);
+    const index = findItemByMention(slots.items, mention);
+    if (!amount || moneyTokens(change[4]).length !== 1 || index === null || amount.value < 0 || amount.value > MAX_VOICE_UNIT_PRICE) {
+      return { kind: "unclear" };
+    }
+    return { kind: "change_price", index, price: amount.value };
+  }
+  const remove = REMOVE_VERBS.exec(folded);
+  if (remove) {
+    const mention = remove[2].replace(/^(polozku|polozka|riadok)\s+/, "");
+    const index = findItemByMention(slots.items, mention);
+    return index === null ? { kind: "unclear" } : { kind: "remove", index };
+  }
+  return null;
+}
+
+export function applyItemCorrection(slots: InvoiceDraftSlots, correction: Exclude<ItemCorrection, { kind: "unclear" }>): InvoiceDraftSlots {
+  const items = [...(slots.items ?? [])];
+  if (correction.kind === "remove") items.splice(correction.index, 1);
+  else items[correction.index] = { ...items[correction.index], unitPrice: correction.price };
+  return syncSpokenAmounts({ ...slots, items: items.length > 0 ? items : undefined });
+}
+
+/**
+ * „Zmeň odberateľa na Tester2." — jediná cesta späť k partnerovi, keď už
+ * je vyriešený. Vráti vyslovené meno, alebo `null`.
+ */
+export function readPartnerChange(rawAnswer: string): string | null {
+  const match = /^(?:zmen|zmeň|iny|iný|ina|iná|change|andere[rn]?)\S*\s+(?:odberate\S*|zakazn\S*|zákazn\S*|partner\S*|obchodn\S+\s+partner\S*|customer|kunde\S*)\s+(?:na|to|auf)\s+(.+?)[.!?]*$/i.exec(rawAnswer.trim());
+  const name = match?.[1]?.trim();
+  return name && name.split(/\s+/).length <= 6 ? name : null;
+}
+
+/**
+ * Vyzerá odpoveď na otázku „Pre ktorého odberateľa?" ako položky faktúry
+ * („Kopanie 300 eur, doprava 100 eur")? Vtedy to NIE JE meno partnera.
+ */
+export function looksLikeInvoiceItems(rawAnswer: string): boolean {
+  if (findCurrency(rawAnswer) !== null) return true;
+  const parsed = extractInvoiceItems(`za ${rawAnswer}`, undefined, { answerContext: true });
+  return parsed.items.some((item) => item.unitPrice !== undefined) || parsed.statedTotal !== undefined;
+}
