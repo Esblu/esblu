@@ -66,17 +66,40 @@ export function primeSpeech(): void {
 export type SpeechOutcome = "ended" | "error" | "cancelled" | "skipped";
 
 /**
+ * Silné odkazy na práve hovorené vety. Chrome (aj Android) inak vetu počas
+ * rozprávania uvoľní z pamäte a `end` už nikdy nepríde — Esblu by „prestal
+ * hovoriť" a relácia by čakala.
+ */
+const liveUtterances = new Set<SpeechSynthesisUtterance>();
+
+function newUtterance(text: string, locale: string, synth: SpeechSynthesis): SpeechSynthesisUtterance {
+  const utterance = new SpeechSynthesisUtterance(text);
+  const lang = speechLangFor(locale);
+  utterance.lang = lang;
+  const prefix = lang.slice(0, 2).toLowerCase();
+  const voice = synth.getVoices().find((candidate) => candidate.lang?.toLowerCase().startsWith(prefix));
+  if (voice) utterance.voice = voice;
+  utterance.rate = 1;
+  return utterance;
+}
+
+/**
  * Povie text a počká na SKUTOČNÝ koniec reči (onend / onerror). Súvislý
  * hlasový režim zapne mikrofón až potom — Esblu tak nikdy nenahrá sám seba.
  *
  * Vypnuté hlasové odpovede / chýbajúce API → hneď „skipped" (dialóg ide
  * ďalej bez zvuku). `signal` preruší reč (barge-in, ukončenie relácie).
  *
- * POISTKA: Chrome (desktop aj Android) pri dlhších vetách občas nevyšle
- * `end`. Namiesto odhadu dĺžky sa sleduje skutočný stav syntézy
- * (`speechSynthesis.speaking/pending`): keď syntéza reálne dohovorila a
- * udalosť neprišla, považuje sa to za koniec. Kontrola beží každých 250 ms
- * (frekvencia vzorkovania stavu, nie oneskorenie).
+ * SPOĽAHLIVOSŤ NA DLHÝ ROZHOVOR (príčina „Esblu po pár kolách mlčí"):
+ *   - Po nahrávaní z mikrofónu nechá Chrome/Android syntézu občas v stave
+ *     `paused` alebo zahodí `speak()` zavolané hneď po `cancel()`. Preto:
+ *     `cancel()` iba keď naozaj niečo hovorí, vždy `resume()` pred `speak()`
+ *     a keď sa reč do 2 s nespustí, JEDEN nový pokus (cancel → resume → speak).
+ *   - Vety sa držia v pamäti až do konca (pozri `liveUtterances`).
+ *   - Chrome občas nevyšle `end`: sleduje sa skutočný stav syntézy
+ *     (`speaking/pending`) každých 250 ms — frekvencia vzorkovania stavu,
+ *     nie odhad dĺžky vety.
+ *   - Chyba jednej vety NEVYPNE ďalšie: každé volanie začína nanovo.
  */
 export function speakAndWait(text: string, locale: string, signal?: AbortSignal): Promise<SpeechOutcome> {
   if (!text || !isSpeechSupported() || !voiceRepliesEnabled()) return Promise.resolve("skipped");
@@ -85,11 +108,23 @@ export function speakAndWait(text: string, locale: string, signal?: AbortSignal)
     let settled = false;
     let started = false;
     let idleChecks = 0;
+    let attempts = 0;
+    let current: SpeechSynthesisUtterance | null = null;
     let poll: ReturnType<typeof setInterval> | null = null;
+
+    const release = () => {
+      if (current) {
+        current.onstart = null;
+        current.onend = null;
+        current.onerror = null;
+        liveUtterances.delete(current);
+      }
+    };
     const finish = (outcome: SpeechOutcome) => {
       if (settled) return;
       settled = true;
       if (poll) clearInterval(poll);
+      release();
       signal?.removeEventListener("abort", onAbort);
       resolve(outcome);
     };
@@ -101,37 +136,60 @@ export function speakAndWait(text: string, locale: string, signal?: AbortSignal)
       }
       finish("cancelled");
     };
+    const attempt = () => {
+      attempts += 1;
+      release();
+      started = false;
+      idleChecks = 0;
+      if (synth.speaking || synth.pending) synth.cancel();
+      if (synth.paused) synth.resume();
+      const utterance = newUtterance(text, locale, synth);
+      current = utterance;
+      liveUtterances.add(utterance);
+      utterance.onstart = () => {
+        started = true;
+      };
+      utterance.onend = () => finish("ended");
+      utterance.onerror = (event) => {
+        if (event.error === "interrupted" || event.error === "canceled") finish("cancelled");
+        else if (!started && attempts < 2) attempt();
+        else finish("error");
+      };
+      synth.speak(utterance);
+      // Niektoré Android WebView po speak() ostanú „paused" — odblokovať.
+      if (synth.paused) synth.resume();
+    };
+
     if (signal?.aborted) {
       finish("cancelled");
       return;
     }
     signal?.addEventListener("abort", onAbort, { once: true });
     try {
-      synth.cancel();
-      const utterance = new SpeechSynthesisUtterance(text);
-      const lang = speechLangFor(locale);
-      utterance.lang = lang;
-      const prefix = lang.slice(0, 2).toLowerCase();
-      const voice = synth.getVoices().find((candidate) => candidate.lang?.toLowerCase().startsWith(prefix));
-      if (voice) utterance.voice = voice;
-      utterance.rate = 1;
-      utterance.onstart = () => {
-        started = true;
-      };
-      utterance.onend = () => finish("ended");
-      utterance.onerror = (event) => finish(event.error === "interrupted" || event.error === "canceled" ? "cancelled" : "error");
-      synth.speak(utterance);
+      attempt();
       poll = setInterval(() => {
-        const busy = synth.speaking || synth.pending;
-        if (busy) {
+        // Pozastavená syntéza (audio fokus po mikrofóne) sa odblokuje; iba
+        // skutočné rozprávanie sa počíta ako pokrok. Zaseknuté „pending" bez
+        // rozprávania sa počíta ako nespustené → nový pokus / chyba.
+        if (synth.paused) synth.resume();
+        if (synth.speaking && !synth.paused) {
           started = true;
           idleChecks = 0;
           return;
         }
-        // Syntéza nič nerobí: po začatí = dohovorené bez udalosti; bez začatia
-        // (8 kontrol = 2 s) = hlas sa nespustil (chýbajúci hlas, blokácia).
+        if (started && synth.pending) {
+          idleChecks = 0;
+          return;
+        }
         idleChecks += 1;
-        if (started ? idleChecks >= 2 : idleChecks >= 8) finish(started ? "ended" : "error");
+        if (started) {
+          // Dohovorené bez udalosti `end`.
+          if (idleChecks >= 2) finish("ended");
+        } else if (idleChecks >= 8) {
+          // Reč sa za 2 s nespustila → jeden nový pokus, potom chyba.
+          if (attempts < 2) attempt();
+          else finish("error");
+        }
       }, 250);
     } catch {
       finish("error");

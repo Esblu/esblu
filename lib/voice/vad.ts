@@ -13,8 +13,10 @@
 //                        Krátke „áno", „päť" (~250–400 ms) prejdú bezpečne.
 //   endSilenceMs  900  — ticho po reči, ktoré znamená koniec vety. Kratšie by
 //                        sekalo vety s prirodzenou pauzou („päť… kusov").
-//   noSpeechMs   8000  — nikto nehovorí → mikrofón sa vypne (nie je to trvalé
-//                        počúvanie na pozadí).
+//   noSpeechMs   8000  — jedno TICHÉ OKNO. Čo sa po ňom stane, rozhoduje
+//                        politika nečinnosti relácie (lib/voice/voice-session.ts:
+//                        krátke ticho = počúvať ďalej, ~32 s = pripomienka,
+//                        ~2 min = koniec). Jedno okno reláciu neukončí.
 //   maxMs              — strop dĺžky nahrávky (lib/voice-config.ts).
 // =============================================================================
 

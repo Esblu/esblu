@@ -430,6 +430,12 @@ export const INTENT_REGISTRY: Record<IntentName, IntentDefinition> = {
     requiresConfirmation: true,
     description: "Premenovanie skladovej položky (ten istý stĺpec ako úprava v UI). Presná položka, jednorazové potvrdenie. Owner/admin.",
   },
+  INVENTORY_ITEM_EDIT: {
+    name: "INVENTORY_ITEM_EDIT",
+    readOnly: false,
+    requiresConfirmation: true,
+    description: "„Uprav skladovú položku X“ — overí položku a spýta sa, čo zmeniť (počet alebo názov). Sám nezapisuje; ďalší krok je INVENTORY_QUANTITY_ADJUST / INVENTORY_ITEM_RENAME s vlastným potvrdením. Owner/admin.",
+  },
   INBOX_DELETE_UNASSIGNED: {
     name: "INBOX_DELETE_UNASSIGNED",
     readOnly: false,

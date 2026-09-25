@@ -34,6 +34,7 @@ const {
   isVoiceStopCommand,
   decideVoiceConfirmation,
 } = await import("@/lib/voice/voice-session");
+const voiceSessionModule = await import("@/lib/voice/voice-session");
 const { createVad, DEFAULT_VAD } = await import("@/lib/voice/vad");
 const { spokenTextFor } = await import("@/lib/voice/spoken-text");
 
@@ -530,14 +531,37 @@ await check("relácia: hlasom „koniec“ / „prestaň počúvať“ / „stop
   for (const command of ["Zastav výrobu stroja", "koniec platnosti STK", "Ukáž stop stav"]) assert.ok(!isVoiceStopCommand(command), command);
 });
 
-await check("relácia: nikto nehovorí → mikrofón sa vypne (nie trvalé počúvanie); pozadie/offline zastaví", () => {
+await check("relácia: jedno ticho reláciu NEUKONČÍ; pripomienka po dlhšom tichu; koniec až po veľmi dlhom; pozadie/offline zastaví", () => {
+  const { IDLE_PROMPT_AFTER_WINDOWS, IDLE_STOP_AFTER_WINDOWS } = voiceSessionModule;
   const sim = simulate();
   sim.send({ type: "USER_TAP" });
   sim.send({ type: "MIC_READY" });
   sim.send({ type: "NO_SPEECH" });
-  assert.equal(sim.state.status, "stopped");
+  assert.equal(sim.state.status, "listening", "krátke ticho: počúvam ďalej");
+  assert.equal(sim.micOpen, true);
+  let prompts = 0;
+  for (let window = 2; window < IDLE_STOP_AFTER_WINDOWS; window++) {
+    const r = sim.send({ type: "NO_SPEECH" });
+    if (r.effects.some((effect) => effect.type === "speakNotice" && effect.key === "idlePrompt")) {
+      prompts++;
+      assert.equal(window, IDLE_PROMPT_AFTER_WINDOWS, "pripomienka presne raz, po dlhšom tichu");
+      sim.send({ type: "SPEECH_DONE" });
+      sim.send({ type: "MIC_READY" });
+    }
+    assert.equal(sim.state.status, "listening", `okno ${window}`);
+  }
+  assert.equal(prompts, 1);
+  sim.send({ type: "NO_SPEECH" });
+  assert.equal(sim.state.status, "stopped", "veľmi dlhé ticho → koniec");
   assert.equal(sim.state.stopReason, "no_speech");
   assert.equal(sim.micOpen, false);
+  // Veta počítadlo nuluje.
+  const again = simulate();
+  again.send({ type: "USER_TAP" });
+  again.send({ type: "MIC_READY" });
+  for (let i = 0; i < IDLE_PROMPT_AFTER_WINDOWS - 1; i++) again.send({ type: "NO_SPEECH" });
+  again.send({ type: "UTTERANCE_CAPTURED" });
+  assert.equal(again.state.idleWindows, 0);
   for (const reason of ["hidden", "offline", "mic_lost", "navigation", "session_end"] as const) {
     const s = simulate();
     s.send({ type: "USER_TAP" });

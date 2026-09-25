@@ -7,6 +7,7 @@ import { REQUEST_LOCALE_HEADER } from "@/lib/i18n/request-locale";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import { MicSession } from "@/lib/voice/utterance-capture";
 import { cancelSpeech, primeSpeech, speakAndWait } from "@/lib/voice/speech";
+import { recordVoiceDiagnostic } from "@/lib/voice/voice-diagnostics";
 import {
   INITIAL_VOICE_SESSION,
   isSessionActive,
@@ -66,29 +67,34 @@ export function useVoiceSession({
 
   const dispatchRef = useRef<(event: VoiceEvent) => void>(() => undefined);
 
-  const runEffect = useCallback((effect: VoiceEffect) => {
+  // Každý efekt dostane generáciu prechodu, v ktorom vznikol; jeho
+  // dokončenie ju pošle späť a automat oneskorené dokončenia ignoruje.
+  const runEffect = useCallback((effect: VoiceEffect, gen: number) => {
     const dispatch = (event: VoiceEvent) => dispatchRef.current(event);
     const mic = micRef.current;
+    recordVoiceDiagnostic({ kind: "effect", name: effect.type, gen });
     switch (effect.type) {
       case "acquireMic": {
         if (!mic) {
-          dispatch({ type: "MIC_FAILED", reason: "unsupported" });
+          dispatch({ type: "MIC_FAILED", reason: "unsupported", gen });
           return;
         }
         void mic.open().then((outcome) => {
-          if (outcome === "ready") dispatch({ type: "MIC_READY" });
-          else dispatch({ type: "MIC_FAILED", reason: outcome });
+          if (outcome === "cancelled") return; // zastavené medzitým; mikrofón už pustený
+          if (outcome === "ready") dispatch({ type: "MIC_READY", gen });
+          else dispatch({ type: "MIC_FAILED", reason: outcome, gen });
         });
         return;
       }
       case "listen": {
         if (!mic) return;
         void mic.listen().then((outcome) => {
+          recordVoiceDiagnostic({ kind: "capture", name: outcome.kind, gen });
           if (outcome.kind === "speech") {
             blobRef.current = { blob: outcome.blob, mimeType: outcome.mimeType };
-            dispatch({ type: "UTTERANCE_CAPTURED" });
-          } else if (outcome.kind === "no_speech") dispatch({ type: "NO_SPEECH" });
-          else if (outcome.kind === "too_long" || outcome.kind === "error") dispatch({ type: "CAPTURE_FAILED" });
+            dispatch({ type: "UTTERANCE_CAPTURED", gen });
+          } else if (outcome.kind === "no_speech") dispatch({ type: "NO_SPEECH", gen });
+          else if (outcome.kind === "too_long" || outcome.kind === "error") dispatch({ type: "CAPTURE_FAILED", gen });
           // aborted = zámerné zastavenie; automat už je v inom stave.
         });
         return;
@@ -103,14 +109,15 @@ export function useVoiceSession({
         const captured = blobRef.current;
         blobRef.current = null;
         if (!captured) {
-          dispatch({ type: "TRANSCRIBE_FAILED" });
+          dispatch({ type: "TRANSCRIBE_FAILED", gen });
           return;
         }
         void transcribe(captured, latest.current.locale, latest.current.getTranscriptionContext?.() ?? null).then((text) => {
-          if (text === null) dispatch({ type: "TRANSCRIBE_FAILED" });
+          recordVoiceDiagnostic({ kind: "transcript", name: text === null ? "failed" : "ok", gen });
+          if (text === null) dispatch({ type: "TRANSCRIBE_FAILED", gen });
           else {
             latest.current.onTranscript?.(text);
-            dispatch({ type: "TRANSCRIPT", text });
+            dispatch({ type: "TRANSCRIPT", text, gen });
           }
         });
         return;
@@ -118,8 +125,14 @@ export function useVoiceSession({
       case "sendTurn":
         void latest.current
           .onUtterance(effect.text)
-          .then((reply) => dispatch({ type: "TURN_RESULT", spoken: reply.spoken, endSession: reply.endSession }))
-          .catch(() => dispatch({ type: "TURN_FAILED" }));
+          .then((reply) => {
+            recordVoiceDiagnostic({ kind: "turn", name: reply.spoken ? "spoken" : "silent", gen });
+            dispatch({ type: "TURN_RESULT", spoken: reply.spoken, endSession: reply.endSession, gen });
+          })
+          .catch(() => {
+            recordVoiceDiagnostic({ kind: "turn", name: "failed", gen });
+            dispatch({ type: "TURN_FAILED", gen });
+          });
         return;
       case "speak":
       case "speakNotice": {
@@ -128,8 +141,10 @@ export function useVoiceSession({
         speechAbortRef.current = controller;
         const text = effect.type === "speak" ? effect.text : latest.current.t(`search.voice.session.${effect.key}`);
         void speakAndWait(text, latest.current.locale, controller.signal).then((outcome) => {
+          recordVoiceDiagnostic({ kind: "speech", name: outcome, gen });
           // Prerušenie (barge-in / stop) rieši automat sám — žiadny druhý štart.
-          if (outcome !== "cancelled") dispatch({ type: "SPEECH_DONE" });
+          // Chyba syntézy aj vypnuté odpovede → ďalej počúvať (nikdy neuviaznuť).
+          if (outcome !== "cancelled") dispatch({ type: "SPEECH_DONE", gen });
         });
         return;
       }
@@ -144,16 +159,16 @@ export function useVoiceSession({
   useEffect(() => {
     dispatchRef.current = (event: VoiceEvent) => {
       const { state, effects } = voiceSessionReducer(stateRef.current, event);
+      if (state === stateRef.current && effects.length === 0) return; // ignorované (oneskorené) dokončenie
       stateRef.current = state;
       setSession(state);
+      recordVoiceDiagnostic({ kind: "state", name: state.status, gen: state.gen });
+      effects.forEach((effect) => runEffect(effect, state.gen));
       if (!isSessionActive(state.status)) {
         // Koniec relácie: AudioContext preč až po efektoch (reč oznámenia smie dobehnúť).
-        effects.forEach(runEffect);
         micRef.current?.close();
         micRef.current = null;
-        return;
       }
-      effects.forEach(runEffect);
     };
   }, [runEffect]);
 

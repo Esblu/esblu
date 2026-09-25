@@ -21,7 +21,11 @@ function clip(text: string): string {
  * otázka („Potvrdiť? Povedzte áno alebo nie."), aby používateľ vedel, že
  * stačí odpovedať hlasom.
  */
-export function spokenTextFor(result: IntentResult | null | undefined, options: { confirmPrompt?: string } = {}): string | null {
+/**
+ * `found` — v hlasovej relácii šablóna „Našiel som „{{name}}“." pre výsledok,
+ * ktorý je iba odkazom (navigácia). Každé hlasové kolo tak niečo povie.
+ */
+export function spokenTextFor(result: IntentResult | null | undefined, options: { confirmPrompt?: string; found?: string } = {}): string | null {
   if (!result) return null;
   switch (result.kind) {
     case "clarify":
@@ -38,6 +42,8 @@ export function spokenTextFor(result: IntentResult | null | undefined, options: 
     case "draft_created":
       // Bez riadkov a súm — tie si používateľ skontroluje na obrazovke.
       return clip(`${result.title}. ${result.note}`);
+    case "navigate":
+      return options.found ? clip(options.found.replace("{{name}}", result.entity.label)) : null;
     case "list":
     case "deadline_list":
     case "document_list":

@@ -51,7 +51,7 @@ type Envelope = { v: number; uid: string; cid: string; exp: number; p: PendingCl
 type Binding = { userId: string; companyId: string };
 type Options = { secret?: string; now?: number };
 
-const SLOTS: readonly ClarificationSlot[] = ["machine", "vehicle", "machine_or_vehicle", "inventory_item", "folder", "partner_name", "invoice_start", "service_title", "quantity", "create_module"];
+const SLOTS: readonly ClarificationSlot[] = ["machine", "vehicle", "machine_or_vehicle", "inventory_item", "folder", "partner_name", "invoice_start", "service_title", "quantity", "create_module", "edit_field", "new_name", "container_type"];
 
 function key(secret: string | undefined = process.env.ESBLU_ACTION_CONFIRMATION_SECRET): Buffer | null {
   const trimmed = secret?.trim();
@@ -228,6 +228,9 @@ const ALLOWED_DOMAINS: Record<DialogContext, string[]> = {
   service_title: ["machine", "vehicle"],
   quantity: ["inventory"],
   create_module: ["inventory", "machine", "vehicle"],
+  edit_field: ["inventory"],
+  new_name: ["inventory", "folder"],
+  container_type: ["folder"],
   invoice: ["invoice"],
 };
 
@@ -244,6 +247,9 @@ const SLOT_LOOKUPS: Record<DialogContext, readonly string[]> = {
   service_title: [],
   quantity: [],
   create_module: [],
+  edit_field: [],
+  new_name: [],
+  container_type: [],
   invoice: [],
 };
 
@@ -336,7 +342,9 @@ export function resumePendingIntent(
   const value = reply.kind === "answer" ? reply.value.slice(0, 120) : "";
   switch (pending.slot) {
     case "folder":
-      args.folderName = value;
+      // „Ktorú zložku chcete zmazať?" — zložka dokladov má vlastné pole.
+      if (pending.intent === "DELETE_DOCUMENT_CATEGORY" || pending.intent === "RENAME_DOCUMENT_CATEGORY") args.categoryName = value;
+      else args.folderName = value;
       break;
     case "inventory_item":
       args.query = value;

@@ -495,7 +495,12 @@ export default function Dashboard() {
         result = { kind: "error", text: t("search.errors.commandNotUnderstood") };
       }
       setIntentResult(result);
-      return { spoken: spokenTextFor(result, { confirmPrompt: t("search.voice.session.confirmPrompt") }) };
+      // Každé hlasové kolo niečo povie (aj výsledok, ktorý je iba odkazom).
+      return {
+        spoken:
+          spokenTextFor(result, { confirmPrompt: t("search.voice.session.confirmPrompt"), found: t("search.voice.session.found") }) ??
+          t("search.voice.states.complete"),
+      };
     } finally {
       setIntentLoading(false);
     }

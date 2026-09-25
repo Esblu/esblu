@@ -399,7 +399,7 @@ await check("KONTRAKT: prepis z /api/assistant/transcribe ide do /api/assistant/
   const transcribe = readFileSync("app/api/assistant/transcribe/route.ts", "utf8");
   assert.ok(transcribe.includes('const text = transcription.text?.trim() || "";') && transcribe.includes("Response.json({ success: true, text })"));
   const hook = readFileSync("hooks/use-voice-session.ts", "utf8");
-  assert.ok(hook.includes("return data.text as string;") && hook.includes('dispatch({ type: "TRANSCRIPT", text });'), "relácia odovzdá presne text servera");
+  assert.ok(hook.includes("return data.text as string;") && hook.includes('dispatch({ type: "TRANSCRIPT", text, gen });'), "relácia odovzdá presne text servera");
   const launcher = readFileSync("app/components/voice/VoiceLauncher.tsx", "utf8");
   assert.ok(launcher.includes("setTranscript(text);") && launcher.includes("await runIntent(text);"), "launcher: zobrazený = odoslaný");
   assert.match(launcher, /body: JSON\.stringify\(\{\s*text,/);

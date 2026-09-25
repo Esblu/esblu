@@ -135,6 +135,7 @@ const STATIC_REQUIREMENTS: Partial<Record<IntentName, AccessRequirement>> = {
   INVENTORY_QUANTITY_ADJUST: "inventory_write",
   INVENTORY_ITEM_DELETE: "inventory_write",
   INVENTORY_ITEM_RENAME: "inventory_write",
+  INVENTORY_ITEM_EDIT: "inventory_write",
 
   // Termíny sú prevádzkové (STK, EK, servis)
   UPCOMING_DEADLINES: "operational_read",

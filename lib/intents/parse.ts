@@ -1,6 +1,7 @@
 import { normalizeSpz } from "@/lib/normalize-spz";
 import { DEADLINE_THRESHOLD_DAYS } from "@/lib/deadlines";
 import { findNumber } from "@/lib/intents/number-words";
+import { decomposeCommand, isWriteAction, stripActionWords, type CommandDecomposition } from "@/lib/intents/command-grammar";
 import type {
   DeadlineTypeFilter,
   DocumentTypeFilter,
@@ -178,7 +179,7 @@ const COST_WORDS = [
   "kosten",
   "ausgegeben",
 ];
-const STK_WORDS = ["stk", "technicka kontrola", "inspection", "hauptuntersuchung", " hu "];
+const STK_WORDS = ["stk", "technicka kontrola", "inspection", "hauptuntersuchung", " hu ", " tuv"];
 const EK_WORDS = ["ek", "emisna kontrola", "emission", "abgasuntersuchung", " au "];
 const VIGNETTE_WORDS = [
   "znamk",
@@ -281,6 +282,12 @@ const DEADLINE_QUERY_WORDS = [
   "whats expiring",
   "was lauft ab",
   "welche fristen",
+  "bliziace sa terminy",
+  "blizia sa terminy",
+  "ake terminy sa blizia",
+  "co nas caka",
+  "upcoming deadlines",
+  "anstehende fristen",
 ];
 // "Ktorým vozidlám končí diaľničná známka?" — sloveso "končí" BEZ frázy
 // "čo mi končí"/"čo končí" (DEADLINE_QUERY_WORDS vyššie tieto konkrétne
@@ -553,7 +560,7 @@ export function parsePartnerSearch(rawText: string): ParsedIntent | null {
  * premenovať (priečinok dokladov, skladová položka). Doklady, faktúry ani
  * partneri sa hlasom nepremenúvajú.
  */
-const RENAME_FOLDER_REGEX = /^\s*(?:premenuj|premenova[tť]|rename|benenne|umbenennen)\s+(?:mi\s+)?(?:priečin\S*|priecin\S*|folder|ordner|belegordner)\s+(.+?)\s+(?:na|to|in|zu)\s+(.+?)\s*[.!?]*$/i;
+const RENAME_FOLDER_REGEX = /^\s*(?:premenuj|premenova[tť]|rename|benenne|umbenennen)\s+(?:mi\s+)?(?:(?:the|den|účtovn\S*|uctovn\S*|accounting)\s+)?(?:priečin\S*|priecin\S*|folder|ordner|belegordner)\s+(.+?)\s+(?:na|to|in|zu)\s+(.+?)(?:\s+um)?\s*[.!?]*$/i;
 const RENAME_ITEM_REGEX = /^\s*(?:premenuj|premenova[tť]|rename|benenne|umbenennen)\s+(?:mi\s+)?(?:skladov\S*\s+)?(?:položk\S*|polozk\S*|item|artikel)\s+(.+?)\s+(?:na|to|in|zu)\s+(.+?)\s*[.!?]*$/i;
 
 export function parseRenameIntent(rawText: string): ParsedIntent | null {
@@ -1015,7 +1022,16 @@ export function parseFolderIntent(rawText: string): ParsedIntent | null {
   };
 
   // --- Stav stiahnutia (nemusí obsahovať priečinok)
-  if (containsAny(text, NOT_DOWNLOADED_WORDS)) {
+  // „Stiahla účtovníčka faktúry za august?", „Boli bločky za august stiahnuté?"
+  // — otázka na stav, nie príkaz na stiahnutie.
+  if (!containsAny(text, NOT_DOWNLOADED_WORDS) &&
+      (/(^|\s)(stiahla|stiahol|stiahli)(\s|$)/.test(text) || /(^|\s)(boli|su|was|were|wurden)\s.*(stiahnut|downloaded|heruntergeladen)/.test(text))) {
+    return build("DOCUMENTS_DOWNLOAD_STATUS", {
+      ...filterArgs,
+      byAccountant: containsAny(text, ACCOUNTANT_WORDS) || undefined,
+    });
+  }
+  if (containsAny(text, NOT_DOWNLOADED_WORDS) || /(neboli|nie su|nies?u)\s+(este\s+)?stiahnut/.test(text)) {
     if (containsAny(text, HOW_MANY_WORDS)) {
       return build("DOCUMENTS_DOWNLOAD_STATUS", {
         ...filterArgs,
@@ -1729,9 +1745,179 @@ export function parseInboxUnassignedIntent(rawText: string): ParsedIntent | null
   return build("INBOX_LIST_UNASSIGNED", { documentTypes });
 }
 
+// =============================================================================
+// VÝSLOVNÁ AKCIA + TYP má prednosť (lib/intents/command-grammar.ts).
+//
+// Iba kombinácie, ktoré predtým nemali deterministické pravidlo alebo ho
+// mali chybné: zmazanie zložky / priečinka / položky / stroja / vozidla a
+// úprava skladovej položky bez hodnoty. Ostatné vety rieši pôvodný parser.
+// =============================================================================
+
+const TRAILING_INVENTORY_CONTEXT = /\s+(?:zo|z|v|vo|from|in|aus|im)\s+(?:skladu|sklade|zasob\S*|inventory|warehouse|lager)$/i;
+
+export function parseGrammarCommand(rawText: string, grammar: CommandDecomposition | null = decomposeCommand(rawText)): ParsedIntent | null {
+  if (!grammar?.entityType) return null;
+  // Prvé písmeno veľké — rovnako ako pôvodné vetvy parsera (remainderName).
+  // „zložku dokumentov X" — upresnenie typu nie je súčasť mena.
+  const trimmed = grammar.name?.replace(TRAILING_INVENTORY_CONTEXT, "").replace(/^(?:dokument\S*|doklad\S*)\s+/i, "").trim();
+  const name = trimmed ? trimmed.charAt(0).toUpperCase() + trimmed.slice(1) : undefined;
+  if (grammar.action === "delete") {
+    switch (grammar.entityType) {
+      case "folder":
+        return build("FOLDER_DELETE", name ? { folderName: name } : {});
+      case "category":
+        // Holé „zložka" je nejednoznačné (zložka dokumentov / priečinok);
+        // typ rozhodne orchestrátor bez preferencie — pri zhode oboch sa
+        // spýta (lib/intents/orchestrator.ts#resolveAmbiguousContainer).
+        return build("DELETE_DOCUMENT_CATEGORY", name ? { categoryName: name } : {});
+      case "inventory_item":
+        return build("INVENTORY_ITEM_DELETE", name ? { query: name } : { useContext: true });
+      case "machine":
+        return build("MACHINE_DELETE", name ? { query: name } : { useContext: true });
+      case "vehicle":
+        return build("VEHICLE_DELETE", name ? { query: extractPlateCandidate(name) ?? name } : { useContext: true });
+      default:
+        return null;
+    }
+  }
+  if (grammar.action === "create" && grammar.entityType === "category" && name) {
+    // „Vytvor (novú) zložku X", „Založ zložku X".
+    return build("CREATE_DOCUMENT_CATEGORY", { categoryName: name });
+  }
+  if ((grammar.action === "open" || grammar.action === "show") && grammar.entityType === "category" && name) {
+    // „Otvor/Ukáž zložku X" (predtým OPEN_MODULE / OPEN_VEHICLE „zlozku x").
+    return build("OPEN_DOCUMENT_FOLDER", { categoryName: name });
+  }
+  if ((grammar.action === "open" || grammar.action === "show" || grammar.action === "find") && name) {
+    // Typové slovo nikdy nie je súčasťou hľadaného mena („vozidlo Škoda").
+    if (grammar.entityType === "vehicle") {
+      const plate = extractPlateCandidate(name);
+      return plate ? build("OPEN_VEHICLE", { query: plate }) : build("SEARCH_VEHICLE", { query: name });
+    }
+    if (grammar.entityType === "inventory_item" && grammar.action !== "find") {
+      // Čítanie: meno presne ako zaznelo (resolver nerozlišuje veľkosť písmen).
+      return build("OPEN_INVENTORY_ITEM", { query: trimmed });
+    }
+    if (grammar.entityType === "machine" && !/\b(servis|service|wartung|fotk|foto|photo|report|doklad|dokument)/i.test(normalizeText(name))) {
+      return build("OPEN_MACHINE", { query: name });
+    }
+  }
+  if (grammar.action === "move" && grammar.entityType === "document" && name) {
+    // „Presuň doklady zo zložky A do zložky B" (predtým hľadanie „y zo zlozky …").
+    const move = /^(?:zo|z|from|aus|von)\s+(?:zlo[žz]k\S*|kateg[oó]ri\S*|category|categories|folder|ordner|kategorie)\s+(.+?)\s+(?:do|to|into|in|nach)\s+(?:zlo[žz]k\S*|kateg[oó]ri\S*|category|folder|ordner|kategorie)\s+(.+)$/i.exec(name);
+    if (move) return build("MOVE_DOCUMENTS_TO_CATEGORY", { categoryName: move[1].trim(), targetCategoryName: move[2].trim() });
+  }
+  if (grammar.action === "update" && grammar.entityType === "inventory_item") {
+    // „Uprav položku X na 5 kusov" má hodnotu → pôvodná zmena stavu.
+    if (/\d/.test(rawText) || / (na|to|auf) /i.test(` ${name ?? ""} `)) return null;
+    return build("INVENTORY_ITEM_EDIT", name ? { query: name, entityName: name } : { useContext: true });
+  }
+  return null;
+}
+
+// =============================================================================
+// Čítacie intenty, ktoré mal predtým IBA AI klasifikátor — a deterministické
+// hľadanie dokladov ich zatienilo („Ukáž neuhradené faktúry" → všetky
+// faktúry; „Ukáž doklady stroja X" → hľadanie „y stroja x"). Keď parser
+// vráti výsledok, AI sa už nepýta, takže tieto intenty boli fakticky
+// nedosiahnuteľné bežnou vetou.
+// =============================================================================
+
+const INVOICE_NOUN = /(^|[^a-z])(faktur|rechnung|invoice)/;
+const PARTNER_OR_DATE = /(^|\s)(od|pre|from|von|fur|fuer|za|in|im|v|vo|since|seit)\s+\S/;
+
+function invoiceStatusOf(words: string[], text: string): "unpaid" | "paid" | "overdue" | "issued" | "received" | "draft" | null {
+  if (/(po (lehote )?splatnosti|overdue|uberfallig|ueberfaellig)/.test(text)) return "overdue";
+  // Zápor pred stavom („nie sú zaplatené", „not paid", „nicht bezahlt") = neuhradené.
+  if (words.some((w) => /^(neuhraden|nezaplaten|neplaten|unpaid|offene?n?)/.test(w)) ||
+      /(nie (su|je)|not|nicht|noch nicht)\s+(\S+\s+)?(zaplat|uhrad|paid|bezahlt|beglichen)/.test(text)) return "unpaid";
+  if (words.some((w) => /^(uhraden|zaplaten|bezahlt|paid)$|^(uhraden|zaplaten)/.test(w))) return "paid";
+  if (words.some((w) => /^(rozpracovan|koncept|entwurf|entwurfe|draft)/.test(w))) return "draft";
+  if (words.some((w) => /^(vydan|vystaven|ausgangsrechnung|issued|outgoing)/.test(w))) return "issued";
+  if (words.some((w) => /^(prijat|eingangsrechnung|received|incoming)/.test(w))) return "received";
+  return null;
+}
+
+export function parseShadowedReadIntent(rawText: string): ParsedIntent | null {
+  const text = normalizeText(rawText).replace(/[.?!,;:]+/g, " ").replace(/\s+/g, " ").trim();
+  const words = text.split(" ");
+
+  // „Spracuj tento doklad ako prijatú faktúru", „Toto je prijatá faktúra".
+  if (/(spracuj|zaeviduj|zauctuj|process|verarbeite|erfasse)\w*\b.*\b(ako|as|als)\s+(prijat\w*\s+fakt|a\s+received\s+invoice|received\s+invoice|eingangsrechnung)/.test(text) ||
+      /^(to|toto|this|das)\s+(je|is|ist)\s+(prijat\w*\s+fakt|a\s+received\s+invoice|eine\s+eingangsrechnung)/.test(text)) {
+    return build("PROCESS_CURRENT_DOCUMENT_AS_RECEIVED_INVOICE", {});
+  }
+
+  // Doklady / fotky stroja: „Ukáž doklady stroja X", „Fotky stroja X".
+  const readPrefix = /^(?:(?:pros[ií]m|uk[aá][zž]\S*|zobraz\S*|otvor\S*|show|open|zeige?|[öo]ffne)\s+)*(?:mi\s+|me\s+|the\s+|die\s+)?/i;
+  const machineThing = new RegExp(
+    readPrefix.source +
+      "(doklad\\S*|dokument\\S*|documents?|unterlagen|belege|fotk\\S*|fotograf\\S*|fotos?|photos?|bilder)\\s+(?:(?:k|ku|pre|for|of|the|zu|zum|zur|der|des|von)\\s+)*(?:stroj\\S*|machine|maschine)\\s+(.+?)\\s*[.!?]*$",
+    "i"
+  ).exec(rawText.trim());
+  // EN/DE poradie: „machine documents X", „Maschine Fotos X".
+  const machineThingEn = machineThing ? null : /^(?:(?:show|open|zeige?|[öo]ffne)\s+)?(?:the\s+|die\s+)?(?:machine|maschine)\s+(documents?|unterlagen|photos?|fotos?|bilder)\s+(?:(?:of|for|von)\s+)?(.+?)\s*[.!?]*$/i.exec(rawText.trim());
+  if (machineThingEn && !hasWord(text, ["upload", "hochladen"])) {
+    const photos = /^(photo|foto|bild)/i.test(machineThingEn[1]);
+    return build(photos ? "SHOW_MACHINE_PHOTOS" : "SHOW_MACHINE_DOCUMENTS", { query: machineThingEn[2].trim() });
+  }
+  if (machineThing && !hasWord(text, ["pridaj", "nahraj", "odfot", "upload", "hochladen"])) {
+    const photos = /^(fotk|fotograf|foto|photo|bild)/i.test(normalizeText(machineThing[1]));
+    return build(photos ? "SHOW_MACHINE_PHOTOS" : "SHOW_MACHINE_DOCUMENTS", { query: machineThing[2].trim() });
+  }
+
+  // Stav faktúr: „Ukáž neuhradené faktúry", „faktúry po splatnosti".
+  if (INVOICE_NOUN.test(text) && !hasWord(text, [...OP_CREATE, ...OP_NEW, "vystav", "priprav", "nahraj", "odfot", "naskenuj", "export", "stiahn"]) && !words.some((w) => /^vystav$|^nov/.test(w))) {
+    const status = invoiceStatusOf(words, text);
+    // S partnerom alebo obdobím rozhoduje podrobné hľadanie dokladov.
+    const rest = text.replace(/(po (lehote )?splatnosti|nicht bezahlt|nie (su|je))/g, " ");
+    if (status && !PARTNER_OR_DATE.test(rest)) {
+      return status === "unpaid" ? build("SHOW_UNPAID_INVOICES", {}) : build("SHOW_INVOICES_BY_STATUS", { invoiceStatus: status });
+    }
+  }
+  return null;
+}
+
+/** Meno/hľadaný výraz nikdy neobsahuje sloveso akcie („uprav sprej" → „sprej"). */
+function withoutActionWords(intent: ParsedIntent | null): ParsedIntent | null {
+  if (!intent) return intent;
+  const args = { ...intent.args };
+  for (const key of ["query", "entityName", "folderName", "categoryName"] as const) {
+    const value = args[key];
+    if (typeof value === "string") {
+      const cleaned = stripActionWords(value);
+      if (cleaned !== value) (args as Record<string, unknown>)[key] = cleaned;
+    }
+  }
+  return { ...intent, args };
+}
+
+/**
+ * Zdvorilosť a oslovenie nemenia význam: „Prosím, Esblu, vymaž zložku X",
+ * „Vymaž zložku X, prosím", „Hej Esblu …", „Please …", „Bitte …". Odstránia
+ * sa iba na okrajoch vety, nikdy uprostred mena.
+ */
+const POLITE_PREFIX = /^\s*(?:(?:hej|hey|ok|okej)[\s,]+)?(?:esblu[\s,:]+)?(?:(?:pros[ií]m(?:\s+t[ea])?|please|bitte)[\s,:]+)?(?:esblu[\s,:]+)?/i;
+const POLITE_SUFFIX = /[\s,]+(?:pros[ií]m|please|bitte|[ďd]akujem|thanks|thank you|danke)\s*[.!?]*$/i;
+
+export function stripPoliteness(rawText: string): string {
+  const stripped = rawText.replace(POLITE_PREFIX, "").replace(POLITE_SUFFIX, "").trim();
+  return stripped || rawText;
+}
+
 export function parseIntentDeterministic(rawText: string, hints: ParseHints = {}): ParsedIntent | null {
+  return withoutActionWords(parseIntentDeterministicInner(stripPoliteness(rawText), hints));
+}
+
+function parseIntentDeterministicInner(rawText: string, hints: ParseHints = {}): ParsedIntent | null {
   const text = normalizeText(rawText);
   if (!text) return null;
+
+  const grammar = decomposeCommand(rawText);
+  const explicit = parseGrammarCommand(rawText, grammar);
+  if (explicit) return explicit;
+  const shadowed = parseShadowedReadIntent(rawText);
+  if (shadowed) return shadowed;
 
   // Priečinky, doklady, sklad, stroje, vozidlá — pred ostatnými vetvami, lebo
   // „faktúry" by inak spadli do vyhľadávania dokladov a „vytvor" do zložiek.
@@ -2021,7 +2207,8 @@ export function parseIntentDeterministic(rawText: string, hints: ParseHints = {}
       if (supplier) {
         freeText = supplier.query;
       } else if (documentTypes.length === 0 && !dateRange && !amount) {
-        const remainder = stripKeywords(text, [
+        // Celé slová (nie podreťazce): „doklady" nesmie nechať zvyšok „y".
+        const remainder = stripWholeWordsStartingWith(text, [
           ...DOCUMENTS_WORDS,
           ...DOCUMENT_SEARCH_WORDS,
           ...OPEN_WORDS,
@@ -2070,6 +2257,11 @@ export function parseIntentDeterministic(rawText: string, hints: ParseHints = {}
     return build("VEHICLE_VIGNETTE_STATUS", { query: plate });
   }
 
+  // Výslovný zápis (uprav, vymaž, premenuj, presuň …), ktorému žiadna vetva
+  // vyššie nerozumela, NIE JE hľadanie — voľné hľadanie nižšie by sloveso
+  // vložilo do hľadaného výrazu („uprav sprej"). Radšej otázka/AI než tichý omyl.
+  if (grammar && isWriteAction(grammar.action)) return null;
+
   // 7) Explicitné "nájdi/otvor/ukáž/zobraz/find/show/finde" — rozhoduje
   //    kontext. Ak po odstránení kontextového slovníka NEZOSTANE žiadny
   //    voľný text (napr. "Ukáž sklad."/"Ukáž stroje." — iba príkaz +
@@ -2084,6 +2276,13 @@ export function parseIntentDeterministic(rawText: string, hints: ParseHints = {}
         ...INVENTORY_ITEM_NOISE_WORDS,
       ]);
       if (!itemQuery) return build("SEARCH_INVENTORY_ITEM", { listAll: true });
+      // „Ukáž stav skladu (Sprej)" — slovo stavu nie je meno položky.
+      const stateWords = ["stav", "stavu", "stock", "bestand"];
+      const itemTokens = itemQuery.split(/\s+/).filter(Boolean);
+      if (itemTokens.some((token) => stateWords.includes(token))) {
+        const itemName = itemTokens.filter((token) => !stateWords.includes(token)).join(" ");
+        return itemName ? build("INVENTORY_ITEM_STATUS", { query: itemName }) : build("SEARCH_INVENTORY_ITEM", { listAll: true });
+      }
       return build("OPEN_INVENTORY_ITEM", { query: itemQuery });
     }
     if (hasMachineContext) {
@@ -2105,6 +2304,13 @@ export function parseIntentDeterministic(rawText: string, hints: ParseHints = {}
   //    "Stroje." samostatne = LIST, nie vyhľadávanie prázdneho textu).
   if (hasInventoryContext) {
     const query = extractFreeQuery(text, [...INVENTORY_CONTEXT_WORDS, ...INVENTORY_ITEM_NOISE_WORDS]);
+    // „Stav skladu Sprej" — slovo stavu nie je súčasť mena; je to otázka na stav.
+    const stateWords = ["stav", "stavu", "stock", "bestand"];
+    const tokensOfQuery = (query ?? "").split(/\s+/).filter(Boolean);
+    if (tokensOfQuery.some((token) => stateWords.includes(token))) {
+      const itemName = tokensOfQuery.filter((token) => !stateWords.includes(token)).join(" ");
+      if (itemName) return build("INVENTORY_ITEM_STATUS", { query: itemName });
+    }
     if (query) return build("SEARCH_INVENTORY_ITEM", { query });
     return build("SEARCH_INVENTORY_ITEM", { listAll: true });
   }

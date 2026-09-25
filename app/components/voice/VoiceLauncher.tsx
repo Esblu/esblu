@@ -187,7 +187,11 @@ export function VoiceLauncher({
     const outcome = await runIntent(text);
     if (outcome.denied) return { spoken: outcome.message, endSession: outcome.unauthenticated };
     return {
-      spoken: spokenTextFor(outcome.result, { confirmPrompt: t("search.voice.session.confirmPrompt") }) ?? outcome.message,
+      // Každé hlasové kolo niečo povie (aj výsledok, ktorý je iba odkazom).
+      spoken:
+        spokenTextFor(outcome.result, { confirmPrompt: t("search.voice.session.confirmPrompt"), found: t("search.voice.session.found") }) ??
+        outcome.message ??
+        t("search.voice.states.complete"),
     };
   }
 

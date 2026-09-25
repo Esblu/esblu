@@ -57,6 +57,16 @@ export type VoiceSessionState = {
   status: VoiceStatus;
   /** Poradie odpovede používateľa v relácii (0 = prvá veta). */
   turn: number;
+  /**
+   * GENERÁCIA: zvýši sa pri každom prijatom prechode. Asynchrónne dokončenia
+   * (mikrofón, nahrávka, prepis, server, reč) nesú generáciu, v ktorej
+   * vznikli — oneskorené dokončenie staršieho kola (starý onend syntézy,
+   * starý MediaRecorder, stará odpoveď servera) sa ignoruje a nemôže
+   * zastaviť ani reštartovať novšie kolo.
+   */
+  gen: number;
+  /** Počet po sebe idúcich tichých okien počúvania (bez vety). */
+  idleWindows: number;
   stopReason?: StopReason;
   /** Kľúč prekladu pre zobrazenú/vyslovenú správu (bez obsahu dát). */
   noticeKey?: string;
@@ -73,78 +83,127 @@ export type VoiceEffect =
   | { type: "speakNotice"; key: string }
   | { type: "cancelSpeech" };
 
+/** Dokončenie asynchrónnej práce — nesie generáciu, v ktorej práca vznikla. */
+type Completion = { gen?: number };
+
 export type VoiceEvent =
   | { type: "START" }
-  | { type: "MIC_READY" }
-  | { type: "MIC_FAILED"; reason: "denied" | "unsupported" }
-  | { type: "UTTERANCE_CAPTURED" }
-  | { type: "NO_SPEECH" }
-  | { type: "CAPTURE_FAILED" }
-  | { type: "TRANSCRIPT"; text: string }
-  | { type: "TRANSCRIBE_FAILED" }
-  | { type: "TURN_RESULT"; spoken: string | null; endSession?: boolean }
-  | { type: "TURN_FAILED" }
-  | { type: "SPEECH_DONE" }
+  | ({ type: "MIC_READY" } & Completion)
+  | ({ type: "MIC_FAILED"; reason: "denied" | "unsupported" } & Completion)
+  | ({ type: "UTTERANCE_CAPTURED" } & Completion)
+  | ({ type: "NO_SPEECH" } & Completion)
+  | ({ type: "CAPTURE_FAILED" } & Completion)
+  | ({ type: "TRANSCRIPT"; text: string } & Completion)
+  | ({ type: "TRANSCRIBE_FAILED" } & Completion)
+  | ({ type: "TURN_RESULT"; spoken: string | null; endSession?: boolean } & Completion)
+  | ({ type: "TURN_FAILED" } & Completion)
+  | ({ type: "SPEECH_DONE" } & Completion)
   | { type: "USER_TAP" }
   | { type: "MANUAL_TURN"; text: string }
   | { type: "STOP"; reason: StopReason };
 
-export const INITIAL_VOICE_SESSION: VoiceSessionState = { status: "idle", turn: 0 };
+export const INITIAL_VOICE_SESSION: VoiceSessionState = { status: "idle", turn: 0, gen: 0, idleWindows: 0 };
+
+// -----------------------------------------------------------------------------
+// POLITIKA NEČINNOSTI
+//
+// Jedno tiché okno počúvania = DEFAULT_VAD.noSpeechMs (8 s, lib/voice/vad.ts).
+// Predtým jediné tiché okno ukončilo celú reláciu („Nič som nepočul, hlasový
+// režim som ukončil.") — používateľ, ktorý chvíľu rozmýšľal alebo čakal na
+// odpoveď, prišiel o hlasový režim.
+//
+//   krátke ticho  (okná 1–3, do ~24 s)  → počúvam ďalej, bez slova
+//   dlhšie ticho  (okno 4,  ~32 s)      → jedna krátka pripomienka
+//                                          („Som tu. Povedzte príkaz …")
+//   veľmi dlhé    (okno 15, ~2 min)     → koniec relácie, mikrofón uvoľnený
+//
+// Hranica 2 min: prirodzená pauza v rozhovore (hľadanie čísla dokladu,
+// telefonát) sa zmestí; zabudnutý mikrofón na stole nepočúva donekonečna.
+// Akákoľvek zachytená veta počítadlo nuluje.
+// -----------------------------------------------------------------------------
+
+export const IDLE_PROMPT_AFTER_WINDOWS = 4;
+export const IDLE_STOP_AFTER_WINDOWS = 15;
 
 export function isSessionActive(status: VoiceStatus): boolean {
   return status !== "idle" && status !== "stopped" && status !== "error";
 }
 
-/** Relácia sa zastaví: uvoľní mikrofón, preruší reč a nič nenaplánuje. */
-function stop(state: VoiceSessionState, reason: StopReason, noticeKey?: string): { state: VoiceSessionState; effects: VoiceEffect[] } {
-  const effects: VoiceEffect[] = [{ type: "cancelListen" }, { type: "releaseMic" }, { type: "cancelSpeech" }];
-  if (noticeKey) effects.push({ type: "speakNotice", key: noticeKey });
-  return { state: { status: "stopped", turn: state.turn, stopReason: reason, noticeKey }, effects };
-}
+type Step = { state: VoiceSessionState; effects: VoiceEffect[] };
 
-/** Esblu povie text; mikrofón je v tej chvíli vždy uvoľnený. */
-function speakThenListen(state: VoiceSessionState, text: string, noticeKey?: string): { state: VoiceSessionState; effects: VoiceEffect[] } {
+function next(state: VoiceSessionState, patch: Omit<Partial<VoiceSessionState>, "gen">, effects: VoiceEffect[]): Step {
   return {
-    state: { status: "speaking", turn: state.turn, noticeKey },
-    effects: [{ type: "releaseMic" }, noticeKey ? { type: "speakNotice", key: noticeKey } : { type: "speak", text }],
+    state: {
+      status: patch.status ?? state.status,
+      turn: patch.turn ?? state.turn,
+      gen: state.gen + 1,
+      idleWindows: patch.idleWindows ?? state.idleWindows,
+      ...(patch.stopReason ? { stopReason: patch.stopReason } : {}),
+      ...(patch.noticeKey ? { noticeKey: patch.noticeKey } : {}),
+    },
+    effects,
   };
 }
 
-function listenAgain(state: VoiceSessionState): { state: VoiceSessionState; effects: VoiceEffect[] } {
-  return { state: { status: "starting", turn: state.turn + 1 }, effects: [{ type: "acquireMic" }] };
+/** Relácia sa zastaví: uvoľní mikrofón, preruší reč a nič nenaplánuje. */
+function stop(state: VoiceSessionState, reason: StopReason, noticeKey?: string): Step {
+  const effects: VoiceEffect[] = [{ type: "cancelListen" }, { type: "releaseMic" }, { type: "cancelSpeech" }];
+  if (noticeKey) effects.push({ type: "speakNotice", key: noticeKey });
+  return next(state, { status: "stopped", stopReason: reason, noticeKey, idleWindows: 0 }, effects);
 }
 
-export function voiceSessionReducer(
-  state: VoiceSessionState,
-  event: VoiceEvent
-): { state: VoiceSessionState; effects: VoiceEffect[] } {
-  const same = { state, effects: [] as VoiceEffect[] };
+/** Esblu povie text; mikrofón je v tej chvíli vždy uvoľnený. */
+function speakThenListen(state: VoiceSessionState, text: string, noticeKey?: string, idleWindows = 0): Step {
+  return next(state, { status: "speaking", noticeKey, idleWindows }, [
+    { type: "cancelListen" },
+    { type: "releaseMic" },
+    noticeKey ? { type: "speakNotice", key: noticeKey } : { type: "speak", text },
+  ]);
+}
+
+function listenAgain(state: VoiceSessionState): Step {
+  return next(state, { status: "starting", turn: state.turn + 1 }, [{ type: "acquireMic" }]);
+}
+
+const COMPLETIONS = new Set(["MIC_READY", "MIC_FAILED", "UTTERANCE_CAPTURED", "NO_SPEECH", "CAPTURE_FAILED", "TRANSCRIPT", "TRANSCRIBE_FAILED", "TURN_RESULT", "TURN_FAILED", "SPEECH_DONE"]);
+
+export function voiceSessionReducer(state: VoiceSessionState, event: VoiceEvent): Step {
+  const same: Step = { state, effects: [] };
   const s = state.status;
+
+  // Oneskorené dokončenie staršieho kola nič nezmení.
+  if (COMPLETIONS.has(event.type)) {
+    const gen = (event as Completion).gen;
+    // (Neskoro otvorený mikrofón uvoľní sám MicSession — release() zneplatní
+    // prebiehajúce open().)
+    if (gen !== undefined && gen !== state.gen) return same;
+  }
 
   switch (event.type) {
     case "START":
       if (isSessionActive(s)) return same;
-      return { state: { status: "starting", turn: 0 }, effects: [{ type: "cancelSpeech" }, { type: "acquireMic" }] };
+      return next({ ...state, stopReason: undefined, noticeKey: undefined }, { status: "starting", turn: 0, idleWindows: 0 }, [{ type: "cancelSpeech" }, { type: "acquireMic" }]);
 
     case "MIC_READY":
-      if (s !== "starting") return { state, effects: [{ type: "releaseMic" }] }; // oneskorené — mikrofón hneď pustiť
-      return { state: { status: "listening", turn: state.turn }, effects: [{ type: "listen" }] };
+      if (s !== "starting") return same;
+      return next(state, { status: "listening" }, [{ type: "listen" }]);
 
     case "MIC_FAILED":
       if (s !== "starting") return same;
-      return {
-        state: { status: "error", turn: state.turn, stopReason: "mic_lost", noticeKey: event.reason === "denied" ? "micDenied" : "unsupported" },
-        effects: [{ type: "releaseMic" }],
-      };
+      return next(state, { status: "error", stopReason: "mic_lost", noticeKey: event.reason === "denied" ? "micDenied" : "unsupported" }, [{ type: "releaseMic" }]);
 
     case "UTTERANCE_CAPTURED":
       if (s !== "listening") return same;
-      return { state: { status: "transcribing", turn: state.turn }, effects: [{ type: "releaseMic" }, { type: "transcribe" }] };
+      return next(state, { status: "transcribing", idleWindows: 0 }, [{ type: "releaseMic" }, { type: "transcribe" }]);
 
-    case "NO_SPEECH":
+    case "NO_SPEECH": {
       if (s !== "listening") return same;
-      // Nikto nehovorí → mikrofón sa vypne (nie je to trvalé počúvanie).
-      return stop(state, "no_speech", "noSpeech");
+      const idle = state.idleWindows + 1;
+      if (idle >= IDLE_STOP_AFTER_WINDOWS) return stop(state, "no_speech", "noSpeech");
+      if (idle === IDLE_PROMPT_AFTER_WINDOWS) return speakThenListen(state, "", "idlePrompt", idle);
+      // Krátke ticho: mikrofón ostáva, počúva sa ďalšie okno.
+      return next(state, { status: "listening", idleWindows: idle }, [{ type: "listen" }]);
+    }
 
     case "CAPTURE_FAILED":
       if (s !== "listening") return same;
@@ -155,7 +214,7 @@ export function voiceSessionReducer(
       const text = event.text.trim();
       if (!text) return speakThenListen(state, "", "asrRetry");
       if (isVoiceStopCommand(text)) return stop(state, "phrase", "stopped");
-      return { state: { status: "waiting_server", turn: state.turn }, effects: [{ type: "sendTurn", text }] };
+      return next(state, { status: "waiting_server" }, [{ type: "sendTurn", text }]);
     }
 
     case "TRANSCRIBE_FAILED":
@@ -174,13 +233,14 @@ export function voiceSessionReducer(
       return speakThenListen(state, "", "networkRetry");
 
     case "SPEECH_DONE":
+      // Koniec aj chyba syntézy vedú späť na počúvanie (relácia neuviazne).
       if (s !== "speaking") return same; // po zastavení sa nič nereštartuje
-      return listenAgain(state);
+      return listenAgain({ ...state, noticeKey: undefined });
 
     case "USER_TAP":
       if (s === "speaking") {
         // Barge-in: používateľ úmyselne preruší Esblu → reč stop, hneď počúvať.
-        return { state: { status: "starting", turn: state.turn + 1 }, effects: [{ type: "cancelSpeech" }, { type: "acquireMic" }] };
+        return next(state, { status: "starting", turn: state.turn + 1, idleWindows: 0 }, [{ type: "cancelSpeech" }, { type: "acquireMic" }]);
       }
       if (isSessionActive(s)) return stop(state, "user");
       return voiceSessionReducer(state, { type: "START" });
@@ -188,10 +248,12 @@ export function voiceSessionReducer(
     case "MANUAL_TURN":
       // Ťuknutie na „Áno"/„Nie"/„Potvrdiť" počas relácie — tá istá cesta ako hlas.
       if (!isSessionActive(s) || s === "waiting_server" || s === "transcribing") return same;
-      return {
-        state: { status: "waiting_server", turn: state.turn },
-        effects: [{ type: "cancelListen" }, { type: "releaseMic" }, { type: "cancelSpeech" }, { type: "sendTurn", text: event.text }],
-      };
+      return next(state, { status: "waiting_server", idleWindows: 0 }, [
+        { type: "cancelListen" },
+        { type: "releaseMic" },
+        { type: "cancelSpeech" },
+        { type: "sendTurn", text: event.text },
+      ]);
 
     case "STOP":
       if (!isSessionActive(s)) return same;

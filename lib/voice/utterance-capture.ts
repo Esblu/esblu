@@ -51,13 +51,22 @@ export class MicSession {
     void this.context.resume().catch(() => undefined);
   }
 
-  async open(): Promise<"ready" | "denied" | "unsupported"> {
+  /** Zvýši ho každé release() — oneskorené getUserMedia potom mikrofón hneď pustí. */
+  private openToken = 0;
+
+  async open(): Promise<"ready" | "denied" | "unsupported" | "cancelled"> {
     if (!voiceSessionSupported()) return "unsupported";
     this.release();
+    const token = this.openToken;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       });
+      // Medzitým zastavené (stop, pozadie, nové kolo) → mikrofón nesmie ostať zapnutý.
+      if (token !== this.openToken || this.closed) {
+        stream.getTracks().forEach((track) => track.stop());
+        return "cancelled";
+      }
       this.stream = stream;
       for (const track of stream.getAudioTracks()) {
         track.addEventListener("ended", () => {
@@ -164,13 +173,17 @@ export class MicSession {
   }
 
   release(): void {
+    this.openToken += 1;
     this.abortListen();
     const stream = this.stream;
     this.stream = null;
     stream?.getTracks().forEach((track) => track.stop());
   }
 
+  private closed = false;
+
   close(): void {
+    this.closed = true;
     this.release();
     const context = this.context;
     this.context = null;

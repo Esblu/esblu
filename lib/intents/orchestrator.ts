@@ -41,7 +41,10 @@ import { startInvoiceDraftFlow, continueInvoiceDraftFlow } from "@/lib/intents/i
 import { readSlots, type InvoiceDraftField } from "@/lib/intents/invoice-slots";
 import { decideInvoiceTurn, invoiceTaskFrom, isTaskCancel } from "@/lib/intents/conversation-state";
 import { handlePartnerCreate } from "@/lib/intents/partner-intents";
-import { classifyQuantityReply, isExistingTargetRepair } from "@/lib/intents/slot-replies";
+import { classifyEditFieldReply, classifyNewNameReply, classifyQuantityReply, isExistingTargetRepair } from "@/lib/intents/slot-replies";
+import { decomposeCommand, isWriteAction } from "@/lib/intents/command-grammar";
+import { listCompanyCustomCategories, findMatchingCustomCategory } from "@/lib/custom-document-categories";
+import { listDocumentFolders, folderSpokenKey } from "@/lib/document-folders";
 import { invoiceItemDescriptions, needsDomainClarification, readInvoiceStartChoice, type AssistantDomain } from "@/lib/intents/domain-action";
 import type { IntentName, IntentResult, ParsedIntent } from "@/lib/intents/types";
 import type { CompanyMemberRole } from "@/lib/company";
@@ -369,6 +372,83 @@ export async function runAssistantTurnDetailed(
         resumed = true;
       }
       // new_command → globálny parser nižšie (úloha sa nahrádza).
+    } else if (pending.slot === "container_type") {
+      // „Myslíte zložku dokumentov „X“ alebo priečinok „X“?"
+      const choice = classifyContainerReply(rawText);
+      if (choice === "cancel") {
+        return done({ success: true, recognized: true, intent: pending.intent, source: "conversation", result: { kind: "answer", text: t("assistant.clarify.cancelled") }, pendingClarification: null });
+      }
+      if (choice === "category" || choice === "folder") {
+        intent = explicitContainerIntent({ name: pending.intent, args: pending.args, source: "deterministic" }, choice);
+        resumed = true;
+      } else if (choice === "unclear") {
+        const name = pending.args.categoryName ?? pending.args.folderName ?? "";
+        return done({
+          success: true,
+          recognized: true,
+          intent: pending.intent,
+          source: "conversation",
+          result: {
+            kind: "answer",
+            text: name ? translate(locale, "assistant.container.ask", { name }) : t("assistant.container.askCreate"),
+            quickReplies: [
+              { label: t("assistant.container.category"), text: t("assistant.container.category") },
+              { label: t("assistant.container.folder"), text: t("assistant.container.folder") },
+            ],
+          },
+          pendingClarification: sealPendingClarification(pending.intent, pending.args, { slot: "container_type" }, binding, sealOptions),
+        });
+      }
+      // new_command → globálny parser nižšie.
+    } else if (pending.slot === "edit_field") {
+      // „Čo chcete na položke X zmeniť? Počet alebo názov?"
+      const name = pending.args.entityName ?? pending.args.query ?? "";
+      const reply = classifyEditFieldReply(rawText);
+      if (reply.kind === "cancel") {
+        return done({ success: true, recognized: true, intent: pending.intent, source: "conversation", result: { kind: "answer", text: t("assistant.clarify.cancelled") }, pendingClarification: null });
+      }
+      if (reply.kind === "repair" || reply.kind === "unclear") {
+        return done({
+          success: true,
+          recognized: true,
+          intent: pending.intent,
+          source: "conversation",
+          result: { kind: "answer", text: translate(locale, "assistant.inventory.askEditField", { name }) },
+          pendingClarification: sealPendingClarification(pending.intent, pending.args, { slot: "edit_field" }, binding, sealOptions),
+        });
+      }
+      if (reply.kind === "quantity") {
+        intent = {
+          name: "INVENTORY_QUANTITY_ADJUST",
+          args: { query: name, entityName: name, quantityMode: reply.mode, ...(reply.quantity !== undefined ? { quantity: reply.quantity } : {}) },
+          source: "deterministic",
+        };
+        resumed = true;
+      } else if (reply.kind === "name") {
+        if (reply.newName) {
+          intent = { name: "INVENTORY_ITEM_RENAME", args: { query: name, newName: reply.newName }, source: "deterministic" };
+          resumed = true;
+        } else {
+          return done({
+            success: true,
+            recognized: true,
+            intent: "INVENTORY_ITEM_RENAME",
+            source: "conversation",
+            result: { kind: "answer", text: translate(locale, "assistant.inventory.askNewName", { name }) },
+            pendingClarification: sealPendingClarification("INVENTORY_ITEM_RENAME", { query: name }, { slot: "new_name" }, binding, sealOptions),
+          });
+        }
+      }
+      // new_command → globálny parser nižšie.
+    } else if (pending.slot === "new_name") {
+      const reply = classifyNewNameReply(rawText);
+      if (reply.kind === "cancel") {
+        return done({ success: true, recognized: true, intent: pending.intent, source: "conversation", result: { kind: "answer", text: t("assistant.clarify.cancelled") }, pendingClarification: null });
+      }
+      if (reply.kind === "answer") {
+        intent = { name: pending.intent, args: { ...pending.args, newName: reply.value }, source: "deterministic" };
+        resumed = true;
+      }
     } else if (pending.slot === "create_module") {
       // „V ktorom module ju chcete vytvoriť?" → „To je už vytvorené."
       // Cieľ existuje: nič nezakladať, pokračovať nad EXISTUJÚCOU položkou.
@@ -459,6 +539,22 @@ export async function runAssistantTurnDetailed(
     });
   }
 
+  // 3c. Výslovná akcia nad pomenovaným typom („Vymaž partnera X"), ktorú
+  //     deterministická gramatika nevie vykonať: AI ju NESMIE preložiť na
+  //     niečo iné (hľadanie, iný typ). Jasná veta namiesto náhodného výsledku.
+  if (!intent) {
+    const grammar = decomposeCommand(rawText);
+    if (grammar?.entityType && isWriteAction(grammar.action)) {
+      return done({
+        success: true,
+        recognized: true,
+        source: "deterministic",
+        result: { kind: "answer", text: t("assistant.clarify.actionNotSupported") },
+        pendingClarification: null,
+      });
+    }
+  }
+
   // 4. AI iba interpretuje — nemaže, nezakladá bez výslovných slov.
   if (!intent) intent = sanitizeAiIntent(await deps.classifyWithAi(rawText), rawText);
 
@@ -531,6 +627,42 @@ export async function runAssistantTurnDetailed(
     intent = { ...intent, name: "SHOW_VEHICLE_SERVICE" };
   }
 
+  // 5c. „Zložka" je v reči NEJEDNOZNAČNÁ: zložka dokumentov (vlastná
+  //     kategória) aj priečinok dokladov. Bez automatickej preferencie —
+  //     pri zhode oboch sa asistent spýta (najmä pred mazaním/premenovaním).
+  //     Dopyt beží IBA pre typ, na ktorý má volajúci právo.
+  if (containerNounKind(rawText) === "ambiguous" && CONTAINER_PAIRS[intent.name] && !resumed) {
+    intent = { ...intent, args: { ...intent.args, ambiguousContainer: true } };
+  }
+  if (intent.args.ambiguousContainer) {
+    const decision = await resolveAmbiguousContainer(db, intent, input.moduleContext ?? null, {
+      role: input.role,
+      financeView: input.financeView,
+      financeManage,
+      canOperate: input.canOperate,
+    });
+    if ("ask" in decision) {
+      const name = decision.name ?? "";
+      return done({
+        success: true,
+        recognized: true,
+        intent: intent.name,
+        source: intent.source,
+        result: {
+          kind: "answer",
+          text: name ? translate(locale, "assistant.container.ask", { name }) : t("assistant.container.askCreate"),
+          quickReplies: [
+            { label: t("assistant.container.category"), text: t("assistant.container.category") },
+            { label: t("assistant.container.folder"), text: t("assistant.container.folder") },
+          ],
+        },
+        // Tá istá úloha pokračuje po odpovedi „zložka dokumentov" / „priečinok".
+        pendingClarification: sealPendingClarification(intent.name, intent.args, { slot: "container_type" }, binding, sealOptions),
+      });
+    }
+    intent = decision.intent;
+  }
+
   // 6. BRÁNA OPRÁVNENÍ — pred akýmkoľvek dotazom na dáta.
   const denial = checkIntentAccess(intent.name, intent.args, {
     role: input.role,
@@ -545,6 +677,18 @@ export async function runAssistantTurnDetailed(
       intent: intent.name,
       source: intent.source,
       result: { kind: "error", text: t(denialMessageKey(denial)) },
+    });
+  }
+
+  // 6a. „Vymaž zložku" bez mena → otázka (nie „nerozumel som").
+  if ((intent.name === "DELETE_DOCUMENT_CATEGORY" || intent.name === "RENAME_DOCUMENT_CATEGORY") && !intent.args.categoryName?.trim()) {
+    return done({
+      success: true,
+      recognized: true,
+      intent: intent.name,
+      source: intent.source,
+      result: { kind: "answer", text: t(intent.name === "DELETE_DOCUMENT_CATEGORY" ? "assistant.clarify.whichCategoryDelete" : "assistant.clarify.whichCategory") },
+      pendingClarification: sealPendingClarification(intent.name, intent.args, { slot: "folder" }, binding, sealOptions),
     });
   }
 
@@ -677,4 +821,108 @@ export async function runAssistantTurnDetailed(
     result,
     pendingClarification,
   });
+}
+
+// =============================================================================
+// „ZLOŽKA" — nejednoznačné slovo pre dva typy kontajnerov.
+//
+// V Esblu sú dva rôzne kontajnery: zložka dokumentov (vlastná kategória,
+// UI „Zložky") a priečinok dokladov (UI „Priečinky"). Používateľ nemusí
+// poznať internú terminológiu a „zložka" hovorí o oboch. Preto:
+//   - výslovný pojem („priečinok", „kategória", „zložka dokumentov") platí priamo,
+//   - holé „zložka": overia sa OBA typy (iba tie, na ktoré má volajúci právo),
+//     presne jedna zhoda = ten typ, zhoda oboch = OTÁZKA (žiadna preferencia),
+//     žiadna = nenájdené v povolenom type,
+//   - založenie: typ podľa obrazovky (Priečinky / Inbox), inak otázka.
+// Mazanie ani premenovanie sa nikdy nepripraví, kým nie je typ jednoznačný.
+// =============================================================================
+
+type ContainerNoun = "ambiguous" | "category" | "folder" | null;
+
+/** Aký pojem pre kontajner zaznel? */
+export function containerNounKind(rawText: string): ContainerNoun {
+  const text = rawText.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  if (/(^|[^a-z])(priecin|belegordner|accounting folder)/.test(text)) return "folder";
+  if (/(^|[^a-z])(kategori|category|categories|kategorie)/.test(text)) return "category";
+  if (/(^|[^a-z])zlozk\S*\s+(dokument|doklad)/.test(text)) return "category";
+  if (/(^|[^a-z])zlozk/.test(text)) return "ambiguous";
+  return null;
+}
+
+type ContainerPair = { folder: IntentName; toFolderArgs: (args: ParsedIntent["args"]) => ParsedIntent["args"]; name: (args: ParsedIntent["args"]) => string | undefined };
+
+/** Zložka dokumentov ↔ priečinok dokladov pre tú istú akciu. */
+const CONTAINER_PAIRS: Partial<Record<IntentName, ContainerPair>> = {
+  DELETE_DOCUMENT_CATEGORY: { folder: "FOLDER_DELETE", toFolderArgs: (a) => ({ folderName: a.categoryName }), name: (a) => a.categoryName?.trim() || undefined },
+  RENAME_DOCUMENT_CATEGORY: { folder: "FOLDER_RENAME", toFolderArgs: (a) => ({ folderName: a.categoryName, newName: a.newCategoryName }), name: (a) => a.categoryName?.trim() || undefined },
+  OPEN_DOCUMENT_FOLDER: { folder: "FOLDER_OPEN", toFolderArgs: (a) => ({ folderName: a.categoryName ?? a.query }), name: (a) => (a.categoryName ?? a.query)?.trim() || undefined },
+  CREATE_DOCUMENT_CATEGORY: { folder: "FOLDER_CREATE", toFolderArgs: (a) => ({ folderName: a.categoryName }), name: (a) => a.categoryName?.trim() || undefined },
+};
+
+/** Výsledný intent pre zvolený typ (bez príznaku nejednoznačnosti). */
+function explicitContainerIntent(intent: ParsedIntent, kind: "category" | "folder"): ParsedIntent {
+  const args = { ...intent.args };
+  delete args.ambiguousContainer;
+  const pair = CONTAINER_PAIRS[intent.name];
+  if (kind === "category" || !pair) return { ...intent, args };
+  return { ...intent, name: pair.folder, args: pair.toFolderArgs(args) };
+}
+
+function classifyContainerReply(rawText: string): "category" | "folder" | "cancel" | "unclear" | "new_command" {
+  const text = rawText.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[.,!?]/g, " ").replace(/\s+/g, " ").trim();
+  if (isTaskCancel(rawText) || /^(nie|no|nein)$/.test(text)) return "cancel";
+  const words = text.split(" ");
+  if (words.length > 6) return "new_command";
+  const folder = /(priecin|folder|ordner|belegordner)/.test(text);
+  const category = /(dokument|doklad|kategori|category|kategorie|zlozk)/.test(text);
+  if (folder && !category) return "folder";
+  if (category && !folder) return "category";
+  if (/^(ten |to |tu )?(prv|first|erst)/.test(text)) return "category";
+  if (/^(ten |to |tu )?(druh|second|zweit)/.test(text)) return "folder";
+  if (parseIntentDeterministic(rawText)) return "new_command";
+  return "unclear";
+}
+
+/**
+ * Rozhodne typ pre holé „zložka". Oprávnenie pre KAŽDÝ typ sa overí PRED
+ * dopytom na ten typ — typ, na ktorý volajúci nemá právo, sa nečíta ani
+ * neprezradí (ani v otázke).
+ */
+async function resolveAmbiguousContainer(
+  db: SupabaseClient,
+  intent: ParsedIntent,
+  moduleContext: string | null,
+  access: { role: string; financeView: boolean; financeManage: boolean; canOperate: boolean }
+): Promise<{ intent: ParsedIntent } | { ask: true; name?: string }> {
+  const pair = CONTAINER_PAIRS[intent.name];
+  if (!pair) return { intent: explicitContainerIntent(intent, "category") };
+  const folderArgs = pair.toFolderArgs(intent.args);
+  const canCategory = !checkIntentAccess(intent.name, intent.args, access);
+  const folderRequirement = folderIntentPermission(pair.folder);
+  const canFolder = !checkIntentAccess(pair.folder, folderArgs, access) && (folderRequirement === "manage" ? access.financeManage : access.financeView);
+  const only = (kind: "category" | "folder") => ({ intent: explicitContainerIntent(intent, kind) });
+
+  if (!canCategory && !canFolder) return only("category"); // brána oprávnení odmietne
+  if (canCategory !== canFolder) return only(canCategory ? "category" : "folder");
+
+  const name = pair.name(intent.args);
+  if (intent.name === "CREATE_DOCUMENT_CATEGORY") {
+    // Založenie: typ podľa obrazovky, inak otázka (nikdy tichý výber).
+    if (moduleContext === "folders") return only("folder");
+    if (moduleContext === "inbox") return only("category");
+    return { ask: true };
+  }
+  // Bez mena: najprv otázka na meno (6a); typ sa rozhodne po odpovedi
+  // (príznak nejednoznačnosti ostáva v zapečatenej otázke).
+  if (!name) return { intent };
+
+  const categories = await listCompanyCustomCategories(db);
+  const categoryMatch = Boolean(findMatchingCustomCategory(categories, name));
+  const key = folderSpokenKey(name);
+  const folderMatch = key ? (await listDocumentFolders(db)).some((folder) => folderSpokenKey(folder.name) === key) : false;
+
+  if (categoryMatch && folderMatch) return { ask: true, name };
+  if (folderMatch) return only("folder");
+  // Iba zložka, alebo nič: nenájdené oznámi handler zložky (rovnaká veta ako doteraz).
+  return only("category");
 }

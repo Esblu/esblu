@@ -221,6 +221,8 @@ export const INTENT_NAMES = [
   // Doklady, faktúry, partneri ani stroje sa hlasom nepremenúvajú.
   "FOLDER_RENAME",
   "INVENTORY_ITEM_RENAME",
+  // „Uprav skladovú položku X" — dialóg: čo zmeniť (počet / názov). Sám nič nezapisuje.
+  "INVENTORY_ITEM_EDIT",
 ] as const;
 
 export type IntentName = (typeof INTENT_NAMES)[number];
@@ -376,6 +378,9 @@ export type IntentArgs = {
   // „Pridaj do Spreja" — cieľ bez slova „položka"/„sklad". Platí IBA vtedy,
   // keď ho resolver skladu bezpečne nájde; inak veta nie je skladová.
   implicitInventoryTarget?: boolean;
+  // Holé „zložka" (zložka dokumentov ALEBO priečinok dokladov) — typ sa ešte
+  // musí rozhodnúť (lib/intents/orchestrator.ts#resolveAmbiguousContainer).
+  ambiguousContainer?: boolean;
   targetModule?: "inventory" | "machines" | "vehicles";
   // „tento stroj", „toto vozidlo" — použi entitu otvorenú na obrazovke
   // (overenú serverom). Na nástenke taká nie je → otázka.
@@ -465,7 +470,13 @@ export type ClarificationSlot =
   | "quantity"
   // „V ktorom module ju chcete vytvoriť?" — otázka na modul pri založení
   // bez modulu; nesie meno, aby oprava „To je už vytvorené" nestratila cieľ.
-  | "create_module";
+  | "create_module"
+  // „Čo chcete na položke X zmeniť? Počet alebo názov?" (INVENTORY_ITEM_EDIT).
+  | "edit_field"
+  // „Aký nový názov má mať položka X?" — nový názov pri premenovaní.
+  | "new_name"
+  // „Myslíte zložku dokumentov „X“ alebo priečinok „X“?"
+  | "container_type";
 export type AwaitingClarification = {
   slot: ClarificationSlot;
   /** „Myslíte …?" — kandidát, ktorého používateľ potvrdí („Áno"). */
