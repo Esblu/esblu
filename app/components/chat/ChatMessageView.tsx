@@ -22,6 +22,7 @@ import {
   type ResolvedEntityCard,
 } from "@/lib/chat";
 import EntityPickerModal from "./EntityPickerModal";
+import { notifyChatMessage } from "@/lib/push/client";
 
 const PAGE_SIZE = 50;
 
@@ -420,6 +421,8 @@ export default function ChatMessageView({
       if (insertError) throw insertError;
 
       const message = inserted as ChatMessage;
+      // Push príjemcom (server overí autora, firmu a konverzáciu). Nečaká sa.
+      void notifyChatMessage(message.id);
       setMessages((current) =>
         messageIdsRef.current.has(message.id) ? current : [...current, message]
       );

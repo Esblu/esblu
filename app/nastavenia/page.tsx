@@ -45,6 +45,8 @@ import {
   type CompanyBillingProfileForm,
   type CompanyBillingProfileValidationError,
 } from "@/lib/company-billing-profile";
+import { PushNotificationSettings } from "@/app/components/push/PushNotificationSettings";
+import { disablePushOnThisDevice } from "@/lib/push/client";
 
 /**
  * Role, ktoré sa dajú pozvať. Zrkadlí DB allowlist v
@@ -785,6 +787,7 @@ export default function NastaveniaPage() {
         deletePreflight.role === "owner" ? deleteConfirmText : undefined
       );
 
+      await disablePushOnThisDevice();
       await supabase.auth.signOut();
 
       window.location.href = "/login?ucet-zruseny=1";
@@ -1282,6 +1285,8 @@ export default function NastaveniaPage() {
               : t("settings.password.changeButton")}
           </button>
         </section>
+
+        <PushNotificationSettings />
 
         <section className="rounded-3xl border border-subtle bg-surface-1 p-8 shadow-lg backdrop-blur-xl">
           <h2 className="text-2xl font-bold text-primary">
