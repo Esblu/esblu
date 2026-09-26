@@ -394,6 +394,8 @@ const sk = {
       login: "Prihlásiť sa",
       backToTop: "Esblu – späť na začiatok",
       mainNavAriaLabel: "Hlavná navigácia",
+      openMenu: "Otvoriť menu",
+      closeMenu: "Zavrieť menu",
     },
     hero: {
       badge: "Uzavretá beta",

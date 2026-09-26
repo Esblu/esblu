@@ -380,6 +380,8 @@ const en = {
       login: "Log in",
       backToTop: "Esblu – back to top",
       mainNavAriaLabel: "Main navigation",
+      openMenu: "Open menu",
+      closeMenu: "Close menu",
     },
     hero: {
       badge: "Closed beta",

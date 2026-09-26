@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import LanguageSwitcher from "./LanguageSwitcher";
 import EsbluDemoVideo, { emitVideoCtaClick } from "./EsbluDemoVideo";
@@ -214,6 +214,11 @@ function CheckIcon({ className = "text-accent-cyan" }: { className?: string }) {
   );
 }
 
+const desktopNavLinkClass =
+  "whitespace-nowrap rounded-lg px-2 py-2 transition hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-cyan";
+const mobileNavLinkClass =
+  "flex min-h-12 items-center rounded-lg px-2 text-base font-semibold text-slate-200 transition hover:bg-white/5 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-cyan";
+
 const footerLinkClass =
   "rounded text-slate-300 transition hover:text-accent-cyan hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-cyan";
 
@@ -235,67 +240,116 @@ export default function PublicLandingPage() {
   // reálne nasadené (pozri lib/landing-video.ts). Dovtedy sa nevykreslí ani
   // sekcia, ani odkazy na ňu — landing page zostáva presne taká, aká bola.
   const videoPublished = isVideoPublished();
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  // Mobilné menu: Esc ho zavrie; pri prechode na desktop šírku sa zavrie.
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMenuOpen(false);
+    };
+    const desktop = window.matchMedia("(min-width: 1024px)");
+    const onChange = () => {
+      if (desktop.matches) setMenuOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    desktop.addEventListener("change", onChange);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      desktop.removeEventListener("change", onChange);
+    };
+  }, [menuOpen]);
+
+  const navItems: { href: string; label: string; route?: boolean }[] = [
+    ...(videoPublished ? [{ href: "#ukazka", label: t("landing.nav.demo") }] : []),
+    { href: "#funkcie", label: t("landing.nav.features") },
+    { href: "#bezplatny-plan", label: t("landing.nav.freePlan") },
+    { href: "/cennik", label: t("landing.nav.pricing"), route: true },
+    { href: "#kontakt", label: t("landing.nav.contact") },
+  ];
 
   return (
     <div className="min-h-screen overflow-x-hidden bg-page-bg text-primary">
+      {/* HLAVIČKA — desktop (lg+): jeden riadok logo · navigácia · jazyk ·
+          prihlásenie. Mobil/tablet (<lg): kompaktný riadok logo ·
+          prihlásenie · menu; navigácia (a pod sm aj jazyk) je v rozbaľovacom
+          paneli, aby sa nič nemuselo tlačiť do jedného riadku. */}
       <header className="sticky top-0 z-50 border-b border-subtle bg-slate-950/95 backdrop-blur-xl">
-        <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 px-4 py-4 sm:px-6 lg:px-8">
+        <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-3 sm:px-6 lg:py-4 lg:px-8">
           <a
             href="#uvod"
             aria-label={t("landing.nav.backToTop")}
-            className="rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-cyan"
+            className="shrink-0 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-cyan"
+            onClick={() => setMenuOpen(false)}
           >
             <BrandMark />
           </a>
 
           <nav
             aria-label={t("landing.nav.mainNavAriaLabel")}
-            className="order-3 flex w-full items-center justify-center gap-2 text-sm font-semibold text-slate-300 sm:order-none sm:w-auto sm:gap-5"
+            className="hidden items-center gap-5 text-sm font-semibold text-slate-300 lg:flex"
           >
-            {videoPublished && (
-              <a
-                href="#ukazka"
-                className="rounded-lg px-2 py-2 transition hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-cyan"
-              >
-                {t("landing.nav.demo")}
-              </a>
+            {navItems.map((item) =>
+              item.route ? (
+                <Link key={item.href} href={item.href} className={desktopNavLinkClass}>
+                  {item.label}
+                </Link>
+              ) : (
+                <a key={item.href} href={item.href} className={desktopNavLinkClass}>
+                  {item.label}
+                </a>
+              )
             )}
-            <a
-              href="#funkcie"
-              className="rounded-lg px-2 py-2 transition hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-cyan"
-            >
-              {t("landing.nav.features")}
-            </a>
-            <a
-              href="#bezplatny-plan"
-              className="rounded-lg px-2 py-2 transition hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-cyan"
-            >
-              {t("landing.nav.freePlan")}
-            </a>
-            <Link
-              href="/cennik"
-              className="rounded-lg px-2 py-2 transition hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-cyan"
-            >
-              {t("landing.nav.pricing")}
-            </Link>
-            <a
-              href="#kontakt"
-              className="rounded-lg px-2 py-2 transition hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-cyan"
-            >
-              {t("landing.nav.contact")}
-            </a>
           </nav>
 
-          <div className="flex items-center gap-3">
-            <LanguageSwitcher variant="dark" />
+          <div className="flex shrink-0 items-center gap-2 sm:gap-3">
+            <div className="hidden sm:block">
+              <LanguageSwitcher variant="dark" />
+            </div>
             <Link
               href="/login"
-              className="btn-secondary inline-flex min-h-11 items-center px-4 py-2 text-sm"
+              className="btn-secondary inline-flex min-h-11 items-center whitespace-nowrap px-4 py-2 text-sm"
             >
               {t("landing.nav.login")}
             </Link>
+            <button
+              type="button"
+              onClick={() => setMenuOpen((open) => !open)}
+              aria-expanded={menuOpen}
+              aria-controls="landing-mobile-menu"
+              aria-label={menuOpen ? t("landing.nav.closeMenu") : t("landing.nav.openMenu")}
+              className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-subtle text-slate-200 transition hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-cyan lg:hidden"
+            >
+              <svg aria-hidden="true" viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                {menuOpen ? <path d="M6 6l12 12M18 6 6 18" /> : <path d="M4 7h16M4 12h16M4 17h16" />}
+              </svg>
+            </button>
           </div>
         </div>
+
+        {menuOpen && (
+          <div id="landing-mobile-menu" className="border-t border-subtle bg-slate-950 lg:hidden">
+            <nav
+              aria-label={t("landing.nav.mainNavAriaLabel")}
+              className="mx-auto flex max-w-6xl flex-col px-4 py-2 sm:px-6"
+            >
+              {navItems.map((item) =>
+                item.route ? (
+                  <Link key={item.href} href={item.href} className={mobileNavLinkClass} onClick={() => setMenuOpen(false)}>
+                    {item.label}
+                  </Link>
+                ) : (
+                  <a key={item.href} href={item.href} className={mobileNavLinkClass} onClick={() => setMenuOpen(false)}>
+                    {item.label}
+                  </a>
+                )
+              )}
+            </nav>
+            <div className="mx-auto max-w-6xl px-4 pb-4 sm:hidden">
+              <LanguageSwitcher variant="dark" />
+            </div>
+          </div>
+        )}
       </header>
 
       <main>
@@ -320,15 +374,15 @@ export default function PublicLandingPage() {
             className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-accent-cyan/40 to-transparent"
           />
 
-          <div className="relative mx-auto grid max-w-6xl items-center gap-12 px-4 py-20 sm:px-6 sm:py-24 lg:grid-cols-[1.12fr_0.88fr] lg:px-8 lg:py-28">
+          <div className="relative mx-auto grid max-w-6xl items-center gap-10 px-4 pb-14 pt-10 sm:gap-12 sm:px-6 sm:py-20 lg:grid-cols-[1.12fr_0.88fr] lg:px-8 lg:py-28">
             <div>
-              <p className="inline-flex rounded-full border border-accent-cyan/30 bg-accent-cyan/10 px-4 py-2 text-sm font-bold text-accent-cyan">
+              <p className="inline-flex rounded-full border border-accent-cyan/30 bg-accent-cyan/10 px-3.5 py-1.5 text-xs font-bold text-accent-cyan sm:px-4 sm:py-2 sm:text-sm">
                 {t("landing.hero.badge")}
               </p>
-              <h1 className="mt-6 max-w-3xl text-4xl font-black leading-tight tracking-tight text-white sm:text-5xl lg:text-6xl">
+              <h1 className="mt-5 max-w-3xl text-[2.125rem] font-black leading-[1.12] tracking-tight text-white sm:mt-6 sm:text-5xl sm:leading-tight lg:text-6xl">
                 {t("landing.hero.title")}
               </h1>
-              <p className="mt-6 max-w-2xl text-lg leading-8 text-slate-300 sm:text-xl">
+              <p className="mt-4 max-w-xl text-base leading-7 text-slate-300 sm:mt-6 sm:max-w-2xl sm:text-xl sm:leading-8">
                 {t("landing.hero.subtitle")}
               </p>
 
@@ -336,7 +390,7 @@ export default function PublicLandingPage() {
                   produktu, až potom prihlásenie. Návštevník z obchodného
                   e-mailu musí vidieť odkaz na demo video hneď v hero časti,
                   bez skrolovania a bez hľadania v menu. */}
-              <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
+              <div className="mt-7 flex flex-col gap-3 sm:mt-8 sm:flex-row sm:flex-wrap">
                 <a
                   href="mailto:info@esblu.com"
                   className="btn-primary inline-flex min-h-12 items-center justify-center px-6 py-3"
@@ -366,7 +420,7 @@ export default function PublicLandingPage() {
                   {t("landing.hero.ctaSecondary")}
                 </Link>
               </div>
-              <p className="mt-4 text-sm text-muted-esblu">
+              <p className="mt-3 text-sm leading-6 text-muted-esblu sm:mt-4">
                 {t("landing.hero.betaNotice")}
               </p>
             </div>

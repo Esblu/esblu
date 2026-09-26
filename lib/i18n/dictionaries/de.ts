@@ -379,6 +379,8 @@ const de = {
       login: "Anmelden",
       backToTop: "Esblu – zurück zum Anfang",
       mainNavAriaLabel: "Hauptnavigation",
+      openMenu: "Menü öffnen",
+      closeMenu: "Menü schließen",
     },
     hero: {
       badge: "Geschlossene Beta",

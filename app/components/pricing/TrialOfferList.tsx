@@ -40,7 +40,7 @@ export function TrialOfferList({ showExcluded = true }: { showExcluded?: boolean
   return (
     <div>
       <p className="text-sm font-bold uppercase tracking-[0.14em] text-muted-esblu">{t("pricing.trial.includesTitle")}</p>
-      <ul className="mt-3 space-y-3">
+      <ul className="mt-2.5 space-y-2 sm:mt-3 sm:space-y-3">
         {included.map((text) => (
           <li key={text} className="flex items-start gap-3 text-secondary">
             <Check />
@@ -50,8 +50,8 @@ export function TrialOfferList({ showExcluded = true }: { showExcluded?: boolean
       </ul>
       {showExcluded && !TRIAL_OFFER.includesVoice && (
         <>
-          <p className="mt-6 text-sm font-bold uppercase tracking-[0.14em] text-muted-esblu">{t("pricing.trial.excludedTitle")}</p>
-          <ul className="mt-3 space-y-3">
+          <p className="mt-5 text-sm font-bold uppercase tracking-[0.14em] text-muted-esblu">{t("pricing.trial.excludedTitle")}</p>
+          <ul className="mt-2.5 space-y-2 sm:mt-3 sm:space-y-3">
             <li className="flex items-start gap-3 text-secondary">
               <Cross />
               <span>{t("pricing.trial.voice")}</span>
