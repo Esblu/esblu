@@ -3,6 +3,13 @@ import { isIntakeDocumentType, sealIntakeExtraction } from "@/lib/intake-seal";
 import { createClient } from "@supabase/supabase-js";
 import { normalizeSpz } from "@/lib/normalize-spz";
 import { normalizeAndValidateWeights } from "@/lib/weight-utils";
+import {
+  entitlementDenialResponse,
+  finalizeAiProcessing,
+  reserveAiProcessing,
+  resolveIdempotencyKey,
+  sha256Hex,
+} from "@/lib/entitlements-server";
 import { getRequestLocale } from "@/lib/i18n/request-locale";
 import { translate } from "@/lib/i18n/translate";
 
@@ -1215,34 +1222,63 @@ export async function POST(req: Request) {
       );
     }
 
-    const base64Image = Buffer.from(await imageValue.arrayBuffer()).toString(
-      "base64"
-    );
+    const imageBytes = await imageValue.arrayBuffer();
+    const base64Image = Buffer.from(imageBytes).toString("base64");
     const imageUrl = `data:${imageValue.type};base64,${base64Image}`;
 
+    // 2b) AI spracovanie je kvóta/nárok firmy (ai_documents): 14-dňový trial
+    //     = 5 spracovaní spolu, potom iba s aktívnym modulom. Rezervuje sa
+    //     AŽ TU — po autentifikácii, firme a validácii vstupu, tesne pred
+    //     prvým volaním modelu. Retry s rovnakým Idempotency-Key a rovnakým
+    //     obsahom nespotrebuje ďalší kredit. Uloženie dokumentu bez AI sa
+    //     nepočíta a zmazanie dokumentu kredit nevracia (ledger v DB).
+    const reservation = await reserveAiProcessing(
+      userClient,
+      "scan-document",
+      resolveIdempotencyKey(req),
+      await sha256Hex(imageBytes)
+    );
+    if (!reservation.ok) {
+      if (reservation.denial) return entitlementDenialResponse(locale, reservation.denial);
+      console.error("scan-document: rezervácia AI spracovania zlyhala:", reservation.code ?? "unknown");
+      return Response.json(
+        { success: false, error: translate(locale, "inbox.errors.scanFailedGeneric") },
+        { status: reservation.code === "ESBLU_AI_IDEMPOTENCY_CONFLICT" ? 409 : 503 }
+      );
+    }
+
     // 3) Hlavné AI volanie — klasifikácia + extrakcia v jednom kroku.
-    const response = await client.responses.create({
-      model: "gpt-5.6-terra",
-      store: false,
-      reasoning: { effort: "none" },
-      text: {
-        format: {
-          type: "json_schema",
-          name: "document_scan",
-          strict: true,
-          schema: DOCUMENT_SCAN_SCHEMA,
+    //    Zlyhanie modelu (bez odpovede) sa neúčtuje; odpoveď modelu sa
+    //    účtuje aj vtedy, ak ju ďalej odmietne validácia (AI už prebehlo).
+    let response: Awaited<ReturnType<typeof client.responses.create>>;
+    try {
+      response = await client.responses.create({
+        model: "gpt-5.6-terra",
+        store: false,
+        reasoning: { effort: "none" },
+        text: {
+          format: {
+            type: "json_schema",
+            name: "document_scan",
+            strict: true,
+            schema: DOCUMENT_SCAN_SCHEMA,
+          },
         },
-      },
-      input: [
-        {
-          role: "user",
-          content: [
-            { type: "input_text", text: DOCUMENT_SCAN_PROMPT },
-            { type: "input_image", image_url: imageUrl, detail: "high" },
-          ],
-        },
-      ],
-    });
+        input: [
+          {
+            role: "user",
+            content: [
+              { type: "input_text", text: DOCUMENT_SCAN_PROMPT },
+              { type: "input_image", image_url: imageUrl, detail: "high" },
+            ],
+          },
+        ],
+      });
+    } catch (aiError) {
+      await finalizeAiProcessing(userClient, reservation.usageId, false);
+      throw aiError;
+    }
+    await finalizeAiProcessing(userClient, reservation.usageId, true);
 
     if (!response.output_text) {
       throw new Error("AI nevrátila žiadne štruktúrované údaje.");

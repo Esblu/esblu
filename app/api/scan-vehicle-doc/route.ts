@@ -2,6 +2,9 @@ import OpenAI from "openai";
 import { createClient } from "@supabase/supabase-js";
 import { normalizeSpz } from "@/lib/normalize-spz";
 import { normalizeAndValidateWeights } from "@/lib/weight-utils";
+import { getRequestLocale } from "@/lib/i18n/request-locale";
+import { getUserScopedSupabaseClient } from "@/lib/server-supabase-user-client";
+import { finalizeAiProcessing, guardAiProcessing } from "@/lib/entitlements-server";
 
 const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY!,
@@ -421,7 +424,15 @@ export async function POST(req: Request) {
     const base64Image = Buffer.from(fileBytes).toString("base64");
     const imageUrl = `data:${fileValue.type};base64,${base64Image}`;
 
-    const response = await client.responses.create({
+    // Legacy endpoint (appka ho dnes nevolá — Inbox používa /api/scan-document).
+    // Kým existuje, má rovnakú bránu: firma, abuse limit, AI kvóta/nárok.
+    const db = getUserScopedSupabaseClient(accessToken);
+    const guard = await guardAiProcessing(db, req, getRequestLocale(req), "scan-vehicle-doc", fileBytes);
+    if (!guard.ok) return guard.response;
+
+    let response;
+    try {
+      response = await client.responses.create({
       model: "gpt-5.6-terra",
       store: false,
       reasoning: { effort: "none" },
@@ -443,6 +454,11 @@ export async function POST(req: Request) {
         },
       ],
     });
+    } catch (aiError) {
+      await finalizeAiProcessing(db, guard.usageId, false);
+      throw aiError;
+    }
+    await finalizeAiProcessing(db, guard.usageId, true);
 
     if (!response.output_text) {
       throw new Error("AI nevrátila žiadne štruktúrované údaje.");

@@ -12,6 +12,7 @@ import InboxDocumentIcon from "./icons/InboxDocumentIcon";
 import ChatBubbleIcon from "./icons/ChatBubbleIcon";
 import BusinessPartnersIcon from "./icons/BusinessPartnersIcon";
 import InvoicesIcon from "./icons/InvoicesIcon";
+import { TrialOfferList } from "./pricing/TrialOfferList";
 
 // =============================================================================
 // PublicLandingPage — verejná marketingová stránka (neprihlásený návštevník
@@ -166,14 +167,7 @@ const audienceExampleKeys = [
   "landing.audience.example5",
 ];
 
-const freePlanItemKeys = [
-  "landing.freePlan.item1",
-  "landing.freePlan.item2",
-  "landing.freePlan.item3",
-  "landing.freePlan.item4",
-  "landing.freePlan.item5",
-  "landing.freePlan.item6",
-];
+// Obsah skúšobnej verzie: app/components/pricing/TrialOfferList.tsx (čísla z lib/pricing.ts).
 
 // AI transparentnosť (bod 1 zadania) — konzervatívne, vopred schválené
 // formulácie. Zámerne bez mena konkrétneho AI poskytovateľa (ten je
@@ -278,6 +272,12 @@ export default function PublicLandingPage() {
             >
               {t("landing.nav.freePlan")}
             </a>
+            <Link
+              href="/cennik"
+              className="rounded-lg px-2 py-2 transition hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-cyan"
+            >
+              {t("landing.nav.pricing")}
+            </Link>
             <a
               href="#kontakt"
               className="rounded-lg px-2 py-2 transition hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-cyan"
@@ -769,14 +769,9 @@ export default function PublicLandingPage() {
                 {t("landing.freePlan.priceNote")}
               </p>
 
-              <ul className="mt-7 space-y-3">
-                {freePlanItemKeys.map((itemKey) => (
-                  <li key={itemKey} className="flex items-start gap-3 text-secondary">
-                    <CheckIcon />
-                    <span>{t(itemKey)}</span>
-                  </li>
-                ))}
-              </ul>
+              <div className="mt-7">
+                <TrialOfferList />
+              </div>
 
               <a
                 href="mailto:info@esblu.com"
@@ -784,6 +779,12 @@ export default function PublicLandingPage() {
               >
                 {t("landing.freePlan.cta")}
               </a>
+              <Link
+                href="/cennik"
+                className="btn-secondary mt-3 flex min-h-12 w-full items-center justify-center px-6 py-3"
+              >
+                {t("pricing.landingCta")}
+              </Link>
             </div>
 
             <p className="mx-auto mt-7 max-w-2xl text-center leading-7 text-secondary">
@@ -901,6 +902,9 @@ export default function PublicLandingPage() {
             </Link>
             <Link href="/subprocessors" className={footerLinkClass}>
               {t("landing.footer.subprocessors")}
+            </Link>
+            <Link href="/cennik" className={footerLinkClass}>
+              {t("landing.nav.pricing")}
             </Link>
             <Link href="/kontakt" className={footerLinkClass}>
               {t("landing.footer.contact")}

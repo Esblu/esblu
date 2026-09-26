@@ -3,6 +3,8 @@ import { getUserScopedSupabaseClient } from "@/lib/server-supabase-user-client";
 import { getRequestLocale } from "@/lib/i18n/request-locale";
 import { translate } from "@/lib/i18n/translate";
 import { isIntakeDocumentType, isOwnStoragePath, unsealIntakeExtraction, type IntakeExtraction } from "@/lib/intake-seal";
+import { parseEntitlementDenial } from "@/lib/entitlements";
+import { entitlementDenialResponse } from "@/lib/entitlements-server";
 
 // =============================================================================
 // POST /api/inbox/intake — odoslanie finančného dokladu na spracovanie BEZ
@@ -95,6 +97,9 @@ export async function POST(req: Request) {
       photo_url: storagePath,
     });
     if (error) {
+      const denial = parseEntitlementDenial(error);
+      // Štruktúrovaná odpoveď — UI/hlas nemusia parsovať text. Nič sa neuložilo.
+      if (denial) return entitlementDenialResponse(locale, denial);
       console.error("inbox/intake: dodací list sa nepodarilo uložiť:", error.code);
       return fail(500, translate(locale, "assistant.intake.failed"));
     }

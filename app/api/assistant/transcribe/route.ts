@@ -3,6 +3,7 @@ import { verifyRequestUser } from "@/lib/server-auth";
 import { getRequestLocale } from "@/lib/i18n/request-locale";
 import { translate } from "@/lib/i18n/translate";
 import { MAX_AUDIO_SIZE_BYTES, ALLOWED_VOICE_AUDIO_MIME_TYPES } from "@/lib/voice-config";
+import { entitlementDenialResponse, requireVoiceEntitlement } from "@/lib/entitlements-server";
 
 // -----------------------------------------------------------------------------
 // POST /api/assistant/transcribe
@@ -147,6 +148,20 @@ export async function POST(req: Request) {
     const { user, error: authError } = await verifyRequestUser(req, locale);
     if (authError || !user) {
       return Response.json({ success: false, error: authError }, { status: 401 });
+    }
+
+    // 1b) Hlas je PLATENÁ schopnosť (nárok `voice`). Overuje sa na serveri
+    //     pred čítaním audia aj pred OpenAI — skrytý mikrofón v UI nie je
+    //     bezpečnosť. Firma sa odvodí z JWT v DB, nič z tela požiadavky.
+    //     Nárok hlasu NEODOMYKÁ žiadny modul ani rolu: prepis ide ďalej do
+    //     /api/assistant/intent, kde platia rovnaké brány ako pri písaní.
+    //     (Prepis ďalej nečíta žiadne dáta firmy — iba overenie nároku.)
+    const voice = await requireVoiceEntitlement(req);
+    if (!voice.ok) {
+      return entitlementDenialResponse(
+        locale,
+        voice.denial ?? { code: "ENTITLEMENT_DENIED", reason: "VOICE_ENTITLEMENT_REQUIRED", key: "voice" }
+      );
     }
 
     // 2) Validácia vstupu — až po overení používateľa.

@@ -9,6 +9,9 @@ import { isValidConversationId } from "@/lib/intents/conversation";
 import { resolveClientCalendarDate } from "@/lib/local-date";
 import { readUiContext } from "@/lib/intents/ui-context";
 import { runAssistantTurn } from "@/lib/intents/orchestrator";
+import { getCompanyEntitlements, entitlementDenialMessage } from "@/lib/entitlements-server";
+import { assistantEntitlementDenial } from "@/lib/entitlements";
+import { isRegisteredReadOnlyIntent } from "@/lib/intents/registry";
 
 // -----------------------------------------------------------------------------
 // POST /api/assistant/intent
@@ -200,6 +203,16 @@ export async function POST(req: Request) {
       supabase.rpc("esblu_role_can_operate"),
     ]);
 
+    // Komerčné nároky firmy (moduly) — z DB podľa JWT, nikdy z klienta.
+    // Čítanie existujúcich dát nárok nevyžaduje (rovnako ako ručné UI; rola
+    // a financie rozhodujú vždy). Zápisy modulu bez nároku = odmietnutie;
+    // nečitateľný stav = zápisy odmietnuté (fail closed). Písanie aj hlas.
+    const entitlements = await getCompanyEntitlements(supabase);
+    const entitlementGate = (intentName: Parameters<typeof assistantEntitlementDenial>[1]) => {
+      const denial = assistantEntitlementDenial(entitlements, intentName, isRegisteredReadOnlyIntent);
+      return denial ? entitlementDenialMessage(locale, denial) : null;
+    };
+
     const readCtx = {
       financeView: financeViewResult.data === true,
       canOperate: canOperateResult.data === true,
@@ -232,6 +245,7 @@ export async function POST(req: Request) {
         moduleContext: readModuleContext(body?.moduleContext),
         selection,
         folderContextId: readFolderContext(body?.folderContext),
+        entitlementGate,
       }
     );
     // Prevádzková diagnostika BEZ obsahu: žiadny prepis, meno, suma ani

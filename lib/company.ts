@@ -388,6 +388,11 @@ export function getInviteErrorMessage(
         ? error
         : "";
 
+  // Limit používateľov firmy (nárok team_members) — štruktúrovaný kód z DB.
+  if (text.includes("ENTITLEMENT_DENIED:") && text.includes(":team_members")) {
+    return t("auth.invite.errors.ENTITLEMENT_USER_LIMIT");
+  }
+
   for (const code of INVITE_ERROR_CODES) {
     if (text.includes(code)) {
       return t(`auth.invite.errors.${code}`);
@@ -420,6 +425,16 @@ export function getCreateInviteErrorMessage(
       : typeof error === "string"
         ? error
         : "";
+
+  // Limit používateľov (trial = 1 používateľ; po skúšobnej verzii podľa
+  // aktivovaného prístupu). Existujúci členovia sa nikdy neodoberajú.
+  if (text.includes("ENTITLEMENT_DENIED:") && text.includes(":team_members")) {
+    return t(
+      text.includes("TRIAL_EXPIRED") || text.includes("ENTITLEMENT_REQUIRED")
+        ? "auth.invite.createErrors.ENTITLEMENT_TEAM_INACTIVE"
+        : "auth.invite.createErrors.ENTITLEMENT_USER_LIMIT"
+    );
+  }
 
   for (const code of CREATE_INVITE_ERROR_CODES) {
     if (text.includes(code)) {

@@ -4,6 +4,8 @@ import { normalizeSpz } from "@/lib/normalize-spz";
 import { getRequestLocale } from "@/lib/i18n/request-locale";
 import { translate } from "@/lib/i18n/translate";
 import type { Locale } from "@/lib/i18n/locales";
+import { getUserScopedSupabaseClient } from "@/lib/server-supabase-user-client";
+import { finalizeAiProcessing, guardAiProcessing } from "@/lib/entitlements-server";
 
 const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY!,
@@ -255,7 +257,22 @@ obrázok, je to zadná strana toho istého technického preukazu.
       });
     }
 
-    const response = await client.responses.create({
+    // Firma, abuse limit a AI kvóta (nárok ai_documents) — až po validácii
+    // oboch strán, pred volaním modelu. Predtým tento endpoint overoval iba
+    // platný JWT (bez firmy a bez stropu).
+    const db = getUserScopedSupabaseClient(accessToken);
+    const guard = await guardAiProcessing(
+      db,
+      request,
+      locale,
+      "scan-vehicle-registration",
+      new TextEncoder().encode(`${frontImage}|${backImage ?? ""}`)
+    );
+    if (!guard.ok) return guard.response;
+
+    let response;
+    try {
+      response = await client.responses.create({
       model: "gpt-4.1-mini",
       store: false,
       input: [{ role: "user", content }],
@@ -280,6 +297,11 @@ obrázok, je to zadná strana toho istého technického preukazu.
         },
       },
     });
+    } catch (aiError) {
+      await finalizeAiProcessing(db, guard.usageId, false);
+      throw aiError;
+    }
+    await finalizeAiProcessing(db, guard.usageId, true);
 
     if (!response.output_text) {
       return Response.json(

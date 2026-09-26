@@ -1,5 +1,6 @@
 "use client";
 
+import { idempotencyKeyFor } from "@/lib/idempotency-key";
 import { Suspense, useEffect, useRef, useState, type ReactNode } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
@@ -1320,6 +1321,8 @@ const openCustomCategoryDocuments = openCustomCategoryId
         headers: {
           Authorization: `Bearer ${session.access_token}`,
           [REQUEST_LOCALE_HEADER]: locale,
+          // Rovnaký dokument po stratenej odpovedi = bez druhého AI kreditu.
+          "Idempotency-Key": idempotencyKeyFor(pendingImageFile, `rotation:${rotation}`),
         },
         body: formData,
       });

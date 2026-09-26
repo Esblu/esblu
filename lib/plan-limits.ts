@@ -63,10 +63,24 @@ function getErrorText(error: unknown): string {
     .join(" ");
 }
 
+// Nový formát z DB (20260928100000): ENTITLEMENT_DENIED:<REASON>:<key>.
+// Mapuje kľúč nároku na tabuľku, ktorú stránky poznajú. Nárok `ai_documents`
+// je kvóta AI spracovaní (nie počet uložených riadkov) — pre Inbox UI sa
+// hlási ako ai_evidence, aby existujúce stránky zobrazili upozornenie.
+const ENTITLEMENT_KEY_TO_RESOURCE: Record<string, PlanResource> = {
+  vehicles: "vehicles",
+  machines: "machines",
+  inventory: "inventory_items",
+  ai_documents: "ai_evidence",
+};
+
 export function getPlanLimitResourceFromError(
   error: unknown
 ): PlanResource | null {
   const errorText = getErrorText(error);
+  const entitlementMatch = /ENTITLEMENT_DENIED:[A-Z_]+:([a-z_]+)/.exec(errorText);
+  if (entitlementMatch) return ENTITLEMENT_KEY_TO_RESOURCE[entitlementMatch[1]] ?? null;
+
   const prefixIndex = errorText.indexOf(PLAN_LIMIT_ERROR_PREFIX);
 
   if (prefixIndex < 0) return null;
@@ -87,4 +101,32 @@ export function isPlanLimitReachedError(
 
   if (!errorResource) return false;
   return resource ? errorResource === resource : true;
+}
+
+/**
+ * Structured, machine-readable form of a plan-limit denial. The DB trigger
+ * esblu_enforce_plan_limit raises `PLAN_LIMIT_REACHED:<table>`; server routes
+ * and the assistant convert it to this shape so UI and voice never have to
+ * parse human-readable text. Plan and counts are deliberately NOT taken from
+ * the client — the database is the only authority.
+ */
+export type PlanLimitDenial = {
+  code: "PLAN_LIMIT_REACHED";
+  resource: PlanResource;
+};
+
+export function toPlanLimitDenial(error: unknown): PlanLimitDenial | null {
+  const resource = getPlanLimitResourceFromError(error);
+  return resource ? { code: "PLAN_LIMIT_REACHED", resource } : null;
+}
+
+/**
+ * Null-safe limit check for server code. `null` = unlimited (Pro/admin).
+ * Negative or non-integer limits are treated as misconfiguration and fail
+ * closed (limited), never as "unlimited".
+ */
+export function canCreateUnderLimit(usage: number, limit: number | null): boolean {
+  if (limit === null) return true;
+  if (!Number.isInteger(limit) || limit < 0) return false;
+  return usage < limit;
 }

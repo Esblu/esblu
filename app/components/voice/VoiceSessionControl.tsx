@@ -2,6 +2,7 @@
 
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import { isSessionActive, type VoiceSessionState } from "@/lib/voice/voice-session";
+import { useCompanyEntitlements } from "@/hooks/use-company-entitlements";
 
 // =============================================================================
 // Ovládanie súvislého hlasového režimu — zdieľané Nástenkou aj launcherom.
@@ -47,6 +48,7 @@ export function VoiceSessionControl({
   variant?: "button" | "icon";
 }) {
   const { t } = useLocale();
+  const entitlements = useCompanyEntitlements();
   const active = isSessionActive(session.status);
   const listening = session.status === "listening";
   const speaking = session.status === "speaking";
@@ -61,6 +63,12 @@ export function VoiceSessionControl({
     : active
       ? "border-primary/40 text-primary"
       : "";
+
+  // Hlas je platený modul. Bez nároku (aj počas načítania a pri chybe) sa
+  // mikrofón vôbec neponúkne — reláciu teda nemožno spustiť. Bezpečnosť drží
+  // server (/api/assistant/transcribe → esblu_require_my_entitlement('voice')).
+  // Prebiehajúcu reláciu sa dá vždy ukončiť.
+  if (!active && !entitlements.has("voice")) return null;
 
   return (
     <span className="inline-flex items-center gap-2">

@@ -1,5 +1,6 @@
 "use client";
 
+import { idempotencyKeyFor } from "@/lib/idempotency-key";
 import { useRef, useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
 import PlanLimitNotice from "@/app/components/PlanLimitNotice";
@@ -508,6 +509,7 @@ export default function VozidlaPage() {
         headers: {
           Authorization: `Bearer ${session.access_token}`,
           [REQUEST_LOCALE_HEADER]: locale,
+          "Idempotency-Key": idempotencyKeyFor(regFrontFile, regBackFile ? `back:${regBackFile.name}:${regBackFile.size}` : "front"),
         },
         body: formData,
       });

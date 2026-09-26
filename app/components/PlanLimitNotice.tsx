@@ -18,7 +18,7 @@ export default function PlanLimitNotice({
 }: PlanLimitNoticeProps) {
   const { t } = useLocale();
   const hasUsage =
-    typeof usage === "number" && typeof limit === "number" && limit >= 0;
+    typeof usage === "number" && typeof limit === "number" && limit > 0;
   const resourceLabels: Record<PlanResource, string> = {
     ai_evidence: t("common.planResourceLabels.ai_evidence"),
     vehicles: t("common.planResourceLabels.vehicles"),

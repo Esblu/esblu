@@ -1,16 +1,26 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  FREE_PLAN_UX_FALLBACK_LIMITS,
-  isPlan,
-  isPlanUsageLimited,
-  type Plan,
-  type PlanResource,
-} from "@/lib/plan-limits";
+import { isPlanUsageLimited, type Plan, type PlanResource } from "@/lib/plan-limits";
+import { parseCompanyEntitlements, type EntitlementKey } from "@/lib/entitlements";
+import { invalidateCompanyEntitlements } from "@/hooks/use-company-entitlements";
 import { supabase } from "@/lib/supabase";
 
+// =============================================================================
+// UI prehľad limitu jedného zdroja (Vozidlá / Stroje / Sklad / Inbox AI).
+//
+// ZDROJ PRAVDY od 20260928100000: nároky firmy (esblu_get_my_company_entitlements
+// → trial 14 dní + platené moduly), nie companies.plan ani plan_limits.
+// Toto je IBA zobrazenie — limit vynucuje DB trigger / AI ledger. Pri
+// chybe načítania sa vytváranie v UI zablokuje (fail closed), čítanie nie.
+//
+// ai_evidence = AI spracovania dokumentov (kvóta, nie počet uložených
+// riadkov): usage = spotrebované trial spracovania, limit = trial limit
+// alebo mesačný limit plateného modulu (null = bez limitu).
+// =============================================================================
+
 export type PlanUsageSnapshot = {
+  /** Odvodené iba na zobrazenie: 'free' = trial/bez modulu, 'pro' = platený/ručný nárok. */
   plan: Plan;
   usage: number;
   limit: number | null;
@@ -23,42 +33,26 @@ export type PlanUsageResult = PlanUsageSnapshot & {
   refresh: () => Promise<PlanUsageSnapshot | null>;
 };
 
-function getFallbackLimit(plan: Plan, resource: PlanResource): number | null {
-  return plan === "free" ? FREE_PLAN_UX_FALLBACK_LIMITS[resource] : null;
-}
+const RESOURCE_KEY: Record<PlanResource, EntitlementKey> = {
+  vehicles: "vehicles",
+  machines: "machines",
+  inventory_items: "inventory",
+  ai_evidence: "ai_documents",
+};
 
-function getLimitValue(
-  row: Record<string, unknown> | null,
-  plan: Plan,
-  resource: PlanResource
-): number | null {
-  const value = row?.[resource];
-
-  if (value === null) return null;
-  if (typeof value === "number" && Number.isInteger(value) && value >= 0) {
-    return value;
-  }
-
-  return getFallbackLimit(plan, resource);
-}
+const BLOCKED: PlanUsageSnapshot = { plan: "free", usage: 0, limit: 0, isLimited: true };
 
 function getErrorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
-
   if (typeof error === "object" && error !== null && "message" in error) {
     const message = (error as { message?: unknown }).message;
     if (typeof message === "string") return message;
   }
-
-  return "Nepodarilo sa načítať plán a využitie limitu.";
+  return "Nepodarilo sa načítať dostupnosť modulu.";
 }
 
 export function usePlanUsage(resource: PlanResource): PlanUsageResult {
-  const [plan, setPlan] = useState<Plan>("free");
-  const [usage, setUsage] = useState(0);
-  const [limit, setLimit] = useState<number | null>(
-    FREE_PLAN_UX_FALLBACK_LIMITS[resource]
-  );
+  const [snapshot, setSnapshot] = useState<PlanUsageSnapshot>(BLOCKED);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const requestIdRef = useRef(0);
@@ -69,120 +63,58 @@ export function usePlanUsage(resource: PlanResource): PlanUsageResult {
     setError(null);
 
     try {
-      const {
-        data: { session },
-        error: sessionError,
-      } = await supabase.auth.getSession();
-
+      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
       if (sessionError) throw sessionError;
       if (!session) throw new Error("Používateľ nie je prihlásený.");
 
-      // OPRAVA (BLOCKER A/B z Fázy 1A auditu, 15.9.2026): plán aj usage
-      // MUSIA byť company-scoped, nie user-scoped — inak owner/admin/
-      // employee tej istej firmy vidia rôzne (a pre non-ownerov typicky
-      // nesprávne, vždy 'free'/0) hodnoty, hoci server-side vynútenie
-      // (trigger esblu_enforce_plan_limit -> esblu_company_plan) je už
-      // dnes správne company-scoped. Najprv sa preto zistí AKTÍVNY
-      // company_id volajúceho (rovnaký zdroj pravdy ako všade inde v appke
-      // — company_members.status='active'), až potom sa naň naviaže plán
-      // (public.companies.plan, zdroj pravdy od
-      // 20260915190000_add_company_scoped_plan.sql — NIE settings.plan,
-      // ktoré je čisto per-user a od tejto migrácie už appkou nečítané) aj
-      // počet záznamov (`.eq("company_id", ...)`, nie `.eq("user_id", ...)`)
-      // — presne to isté kritérium, aké používa server-side trigger, takže
-      // UI zobrazenie je teraz vždy v zhode s tým, čo appka skutočne
-      // vynucuje.
-      const membershipResult = await supabase
-        .from("company_members")
-        .select("company_id")
-        .eq("user_id", session.user.id)
-        .eq("status", "active")
-        .limit(1)
-        .maybeSingle();
+      invalidateCompanyEntitlements();
+      const { data, error: rpcError } = await supabase.rpc("esblu_get_my_company_entitlements");
+      if (rpcError) throw rpcError;
+      const entitlements = parseCompanyEntitlements(data);
+      if (!entitlements) throw new Error("Nečitateľný stav nárokov firmy.");
 
-      if (membershipResult.error) throw membershipResult.error;
+      const item = entitlements.items[RESOURCE_KEY[resource]];
+      let usage = 0;
 
-      const companyId = membershipResult.data?.company_id;
-
-      if (!companyId) {
-        throw new Error("Používateľ nemá aktívne členstvo v žiadnej firme.");
-      }
-
-      const [companyResult, usageResult] = await Promise.all([
-        supabase
-          .from("companies")
-          .select("plan")
-          .eq("id", companyId)
-          .maybeSingle(),
-        supabase
+      if (resource === "ai_evidence") {
+        // Kvóta AI spracovaní. Počty mimo trialu (mesačné) nie sú v UI
+        // prehľade — server ich vynúti pri rezervácii.
+        usage = item.source === "trial" ? entitlements.trial.aiProcessingUsed : 0;
+      } else {
+        const { count, error: countError } = await supabase
           .from(resource)
           .select("id", { count: "exact", head: true })
-          .eq("company_id", companyId),
-      ]);
+          .eq("company_id", entitlements.companyId);
+        if (countError) throw countError;
+        usage = count ?? 0;
+      }
 
-      if (companyResult.error) throw companyResult.error;
-      if (usageResult.error) throw usageResult.error;
-
-      const loadedPlan = isPlan(companyResult.data?.plan)
-        ? companyResult.data.plan
-        : "free";
-
-      const limitsResult = await supabase
-        .from("plan_limits")
-        .select(resource)
-        .eq("plan", loadedPlan)
-        .single();
-
-      const loadedLimit = limitsResult.error
-        ? getFallbackLimit(loadedPlan, resource)
-        : getLimitValue(
-            limitsResult.data as Record<string, unknown> | null,
-            loadedPlan,
-            resource
-          );
-      const loadedUsage = usageResult.count ?? 0;
-      const snapshot: PlanUsageSnapshot = {
-        plan: loadedPlan,
-        usage: loadedUsage,
-        limit: loadedLimit,
-        isLimited: isPlanUsageLimited(loadedUsage, loadedLimit),
+      const limit = item.active ? item.limit : 0;
+      const next: PlanUsageSnapshot = {
+        plan: item.active && item.source !== "trial" ? "pro" : "free",
+        usage,
+        limit,
+        isLimited: !item.active || isPlanUsageLimited(usage, limit),
       };
 
       if (requestId !== requestIdRef.current) return null;
-
-      setPlan(loadedPlan);
-      setUsage(loadedUsage);
-      setLimit(loadedLimit);
-
-      if (limitsResult.error) {
-        setError(
-          "Limity sa nepodarilo načítať z databázy; zobrazuje sa iba orientačný UX fallback."
-        );
-      }
-
-      return snapshot;
+      setSnapshot(next);
+      return next;
     } catch (loadError: unknown) {
       if (requestId !== requestIdRef.current) return null;
-
-      setPlan("free");
-      setUsage(0);
-      setLimit(FREE_PLAN_UX_FALLBACK_LIMITS[resource]);
+      setSnapshot(BLOCKED);
       setError(getErrorMessage(loadError));
       return null;
     } finally {
-      if (requestId === requestIdRef.current) {
-        setLoading(false);
-      }
+      if (requestId === requestIdRef.current) setLoading(false);
     }
   }, [resource]);
 
   useEffect(() => {
     let cancelled = false;
-
     queueMicrotask(() => {
       if (!cancelled) void refresh();
     });
-
     return () => {
       cancelled = true;
       requestIdRef.current += 1;
@@ -190,17 +122,9 @@ export function usePlanUsage(resource: PlanResource): PlanUsageResult {
   }, [refresh]);
 
   const isLimited = useMemo(
-    () => isPlanUsageLimited(usage, limit),
-    [limit, usage]
+    () => snapshot.isLimited || isPlanUsageLimited(snapshot.usage, snapshot.limit),
+    [snapshot]
   );
 
-  return {
-    plan,
-    usage,
-    limit,
-    isLimited,
-    loading,
-    error,
-    refresh,
-  };
+  return { ...snapshot, isLimited, loading, error, refresh };
 }

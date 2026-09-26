@@ -86,6 +86,12 @@ export type AssistantTurnInput = {
   moduleContext?: ParseHints["module"];
   selection: { items: FolderRef[]; folderId: string | null } | null;
   folderContextId: string | null;
+  /**
+   * Komerčný nárok modulu (lib/entitlements.ts) — samostatná brána PO bráne
+   * oprávnení. Vracia lokalizovaný text odmietnutia alebo null. Chýba = bez
+   * obmedzenia (iba testy starších scenárov); route ju dodáva vždy.
+   */
+  entitlementGate?: (intent: IntentName) => string | null;
 };
 
 export type AssistantTurnDeps = {
@@ -264,7 +270,9 @@ export async function runAssistantTurnDetailed(
   // „Kopanie, odvoz materiálu, pracovníci." pri otázke o položkách je
   // odpoveď; „Ukáž sklad." je nový príkaz; „Zrušiť." úlohu ukončí.
   // ------------------------------------------------------------------
-  if (flowCtx && financeManage) {
+  // Rozpracovaná faktúra pokračuje iba s aktívnym modulom fakturácie; inak
+  // veta prejde bežnou cestou, kde ju zastaví brána nároku (bod 6*).
+  if (flowCtx && financeManage && !input.entitlementGate?.("CREATE_INVOICE_DRAFT")) {
     const stored = await loadConversationContext(db, flowCtx.conversationId);
     const field = stored?.pendingIntent === "CREATE_INVOICE_DRAFT" ? stored.missingFields[0] : undefined;
     if (stored && field && (INVOICE_FIELDS as readonly string[]).includes(field)) {
@@ -677,6 +685,20 @@ export async function runAssistantTurnDetailed(
       intent: intent.name,
       source: intent.source,
       result: { kind: "error", text: t(denialMessageKey(denial)) },
+    });
+  }
+
+  // 6*. BRÁNA NÁROKU MODULU — až po role (rola má prednosť a nárok ju nikdy
+  //     nerozširuje). Hlas ani písanie nič neodomknú: neaktívny modul =
+  //     odmietnutie pred akýmkoľvek dotazom.
+  const entitlementText = input.entitlementGate?.(intent.name) ?? null;
+  if (entitlementText) {
+    return done({
+      success: true,
+      recognized: true,
+      intent: intent.name,
+      source: intent.source,
+      result: { kind: "error", text: entitlementText },
     });
   }
 

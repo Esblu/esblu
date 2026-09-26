@@ -51,6 +51,7 @@ const SKIP_PATH_PREFIXES = [
   "/dpa",
   "/subprocessors",
   "/kontakt",
+  "/cennik",
 ];
 
 // DÔLEŽITÉ poradie voči LegalAcceptanceGate: tento komponent sa v

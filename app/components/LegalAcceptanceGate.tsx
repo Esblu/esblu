@@ -30,6 +30,7 @@ const SKIP_PATH_PREFIXES = [
   "/dpa",
   "/subprocessors",
   "/kontakt",
+  "/cennik",
 ];
 
 export default function LegalAcceptanceGate({

@@ -30,7 +30,9 @@
     "test:voice-conversation": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/voice-conversation-tests.ts",
     "test:assistant-orchestrator": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/assistant-orchestrator-tests.ts",
     "test:master-control": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/master-control-tests.ts",
-    "test:continuous-voice": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/continuous-voice-tests.ts"
+    "test:continuous-voice": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/continuous-voice-tests.ts",
+    "test:assistant-grammar": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/assistant-grammar-tests.ts",
+    "test:plan-entitlements": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/plan-entitlements-tests.ts"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.9.0",

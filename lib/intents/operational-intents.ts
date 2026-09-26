@@ -7,6 +7,7 @@ import type { ClarificationSlot, EntityRef, IntentName, IntentResult, ParsedInte
 import { resolveEntityByName, type NameConfidence } from "@/lib/intents/entity-resolution";
 import type { ResolvedUiEntity } from "@/lib/intents/ui-context";
 import { isServiceUtterance } from "@/lib/intents/parse";
+import { entitlementMessageKey, entitlementModuleKey, parseEntitlementDenial } from "@/lib/entitlements";
 
 // =============================================================================
 // Intent Engine — prevádzkové zápisy: sklad, stroje, vozidlá.
@@ -41,6 +42,7 @@ export type OperationalWriteIntent = (typeof OPERATIONAL_WRITE_INTENTS)[number];
 
 const OPERATIONAL_FAMILY: readonly string[] = [
   ...OPERATIONAL_WRITE_INTENTS,
+  "INVENTORY_ITEM_EDIT",
   "MACHINE_PHOTO_ADD",
   "VEHICLE_PHOTO_ADD",
   "DOCUMENT_INTAKE",
@@ -404,6 +406,28 @@ export async function handleOperationalIntent(
         id, "assistant.confirm.delete", true);
     }
 
+    case "INVENTORY_ITEM_EDIT": {
+      // „Uprav skladovú položku X" — nič nezapisuje. Overí cieľ a spýta sa na
+      // JEDINÉ, čo hlas vie bezpečne zmeniť: počet kusov alebo názov (tie isté
+      // polia ako formulár v Sklade). Žiadne vymyslené pole.
+      const resolved = await resolveInventory(db, locale, { query: args.query ?? args.entityName, useContext: args.useContext, context: ctx.resolvedEntity, entityId: args.entityId });
+      if ("result" in resolved) return resolved.result;
+      if ("missing" in resolved) {
+        return { kind: "not_found", text: t(locale, "assistant.inventory.notFound", { name: args.query ?? "" }), awaiting: { slot: "inventory_item" } };
+      }
+      const item = resolved.entity;
+      return {
+        kind: "answer",
+        text: t(locale, "assistant.inventory.askEditField", { name: item.name ?? "" }),
+        entity: inventoryRef(item),
+        awaiting: { slot: "edit_field", patch: { query: item.name ?? undefined, entityName: item.name ?? undefined } },
+        quickReplies: [
+          { label: t(locale, "assistant.inventory.editQuantity"), text: t(locale, "assistant.inventory.editQuantity") },
+          { label: t(locale, "assistant.inventory.editName"), text: t(locale, "assistant.inventory.editName") },
+        ],
+      };
+    }
+
     case "INVENTORY_ITEM_RENAME": {
       // Ten istý stĺpec `name`, ktorý mení formulár položky v Sklade. Cieľ
       // iba presne (inak otázka „Myslíte …?"), nový názov presne ako zaznel.
@@ -600,6 +624,16 @@ export async function executeOperationalAction(
   args: Record<string, unknown>
 ): Promise<IntentResult> {
   const fail = (key = "search.errors.generic") => actionResult(false, t(locale, key));
+  // Nárok/limit vynucuje DB trigger (esblu_enforce_plan_limit → nároky firmy)
+  // rovnako pre UI, asistenta aj hlas; tu sa štruktúrovaný kód iba prevedie
+  // na zrozumiteľnú odpoveď (bez dôvery v plán/počty z klienta).
+  const planLimitFail = (error: unknown) => {
+    const denial = parseEntitlementDenial(error);
+    if (!denial) return null;
+    return actionResult(false, t(locale, entitlementMessageKey(denial.reason), {
+      module: t(locale, entitlementModuleKey(denial.key)),
+    }));
+  };
 
   switch (intent) {
     case "INVENTORY_ITEM_CREATE": {
@@ -612,7 +646,7 @@ export async function executeOperationalAction(
         quantity: num(args.quantity) ?? 0,
         unit: str(args.unit),
       });
-      if (error) return fail(error.code === "42501" ? "assistant.denied.inventoryReadOnly" : "search.errors.generic");
+      if (error) return planLimitFail(error) ?? fail(error.code === "42501" ? "assistant.denied.inventoryReadOnly" : "search.errors.generic");
       return actionResult(true, t(locale, "assistant.inventory.created", { name }));
     }
 
@@ -664,7 +698,7 @@ export async function executeOperationalAction(
       const name = str(args.name);
       if (!name) return fail();
       const { error } = await db.from("machines").insert({ company_id: ctx.companyId, user_id: ctx.userId, name });
-      if (error) return fail();
+      if (error) return planLimitFail(error) ?? fail();
       return actionResult(true, t(locale, "assistant.machine.created", { name }));
     }
 
@@ -710,7 +744,7 @@ export async function executeOperationalAction(
       const spz = normalizeSpz(str(args.spz) ?? "");
       if (!spz) return fail();
       const { error } = await db.from("vehicles").insert({ company_id: ctx.companyId, user_id: ctx.userId, spz });
-      if (error) return fail();
+      if (error) return planLimitFail(error) ?? fail();
       return actionResult(true, t(locale, "assistant.vehicle.created", { plate: spz }));
     }
 
