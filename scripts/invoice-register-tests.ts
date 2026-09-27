@@ -182,12 +182,13 @@ check(
   visibleInvoices(ALL, "corrections", "all", isOverdue).map((r) => r.id),
   ["dobropis"]
 );
-// Dobropis je uhradený finalizovaný doklad, takže sem patrí. Sekcia
-// "Uhradené" je o stave platby, nie o druhu dokladu.
+// P0-3 (2026-09-26): dobropis NIE JE pohľadávka — nemá stav úhrady, takže do
+// „Uhradené" (ani „Neuhradené"/„Po splatnosti") nepatrí. Ostáva viditeľný
+// vo „Všetky" a „Vystavené" (kontrola „žiadny doklad nezostane neviditeľný").
 check(
-  "uhradené nezahŕňajú koncept s payment_status=unpaid",
+  "uhradené nezahŕňajú koncept s payment_status=unpaid ani dobropis",
   visibleInvoices(ALL, "paid", "all", isOverdue).map((r) => r.id),
-  ["FA20260001", "dobropis"]
+  ["FA20260001"]
 );
 // Koncept má payment_status 'unpaid', ale neuhradený doklad je až ten
 // finalizovaný — inak by sa nedokončený koncept tváril ako pohľadávka.

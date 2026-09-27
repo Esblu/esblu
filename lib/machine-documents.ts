@@ -62,6 +62,7 @@ export async function fetchMachineDocuments(
       .from("ai_evidence")
       .select("id, document_type, document_date, material, supplier, created_at")
       .eq("machine_id", machineId)
+      .is("deleted_at", null)
       .order("created_at", { ascending: false }),
   ]);
 

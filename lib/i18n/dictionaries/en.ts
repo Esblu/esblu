@@ -612,6 +612,7 @@ const en = {
           "Your account is already a member of another company, so this invite can't be accepted.",
         ENTITLEMENT_USER_LIMIT: "The company that invited you has currently used up its user limit. Ask them to extend their access.",
         acceptFailedGeneric: "Could not accept the invite. Please try again.",
+        ESBLU_INVITE_ROLE_NOT_PERMITTED: "Only the company owner can issue an accountant invitation. Ask the owner for a new invitation.",
       },
       createErrors: {
         ESBLU_NOT_ACTIVE_OWNER_OR_ADMIN:
@@ -623,6 +624,7 @@ const en = {
         ENTITLEMENT_USER_LIMIT: "Your company has reached its user limit (the trial includes 1 user). Existing team members stay.",
         ENTITLEMENT_TEAM_INACTIVE: "Adding more users is not currently activated for your company. Existing team members stay.",
         createFailedGeneric: "Could not create the invite. Please try again.",
+        ESBLU_INVITE_ROLE_NOT_PERMITTED: "Only the company owner can invite an accountant.",
       },
     },
   },
@@ -761,6 +763,7 @@ const en = {
         "The logo is automatically resized and saved in WebP format. The maximum allowed size is 2 MB.",
       saving: "Saving...",
       save: "Save",
+      bankDetailsOwnerOnly: "Only the company owner can change the IBAN and BIC.",
     },
     users: {
       title: "Users",
@@ -1274,6 +1277,8 @@ const en = {
       imageTooLarge8MBPrefixed: "{{label}} can be at most 8 MB.",
       imageInvalidContentPrefixed: "{{label}} doesn't have valid image content.",
       aiNoDataReturned: "The AI didn't return any data.",
+      confirmArchiveDocument: "Accounting documents are not deleted but moved to the archive — they disappear from active lists while the file and record are kept. Continue?",
+      documentRemovalDenied: "You do not have permission to remove this document.",
     },
     documentSavedToInbox: "The document was saved to the Inbox.",
     noPlate: "no plate",
@@ -1745,6 +1750,8 @@ const en = {
     genericErrorTitle: "Something went wrong",
     genericErrorDescription:
       "The company account could not be created. Please log in again — if the problem persists, contact support.",
+    pendingInviteTitle: "You have a pending invitation",
+    pendingInviteDescription: "An invitation to an existing company is waiting for your email. Open the link in the invitation email and accept it — we will not create a separate company for you now.",
   },
 
   authCallback: {
@@ -1849,17 +1856,17 @@ const en = {
         "Database, authentication, file storage (photos, documents)",
       supabaseDataCategories: "All data processed within the application",
       supabaseLocation:
-        "TODO — the region of the Supabase project still needs to be confirmed (EU/US)",
+        "EU — Frankfurt (AWS eu-central-1)",
       openaiPurpose:
         "AI recognition of data from uploaded documents and photos",
       openaiDataCategories:
         "Content of the document/photo submitted for processing",
       openaiLocation:
-        "TODO — processing location to be confirmed based on the OpenAI API account configuration",
+        "Processing location not yet legally confirmed in this list — details available on request at privacy@esblu.com",
       vercelPurpose: "Hosting and operation of the application",
       vercelDataCategories:
         "Technical connection data required to deliver the application",
-      vercelLocation: "TODO — deployment region to be confirmed",
+      vercelLocation: "Server functions: EU — Frankfurt (fra1) per project configuration; further details available on request at privacy@esblu.com",
       namecheapPurpose:
         "Hosting of business email communication (the info@esblu.com and privacy@esblu.com mailboxes — privacy@esblu.com is an alias pointing to the same mailbox) and receipt of email messages from users, including requests concerning personal data",
       namecheapDataCategories:
@@ -2189,6 +2196,7 @@ const en = {
       lineGross: "Line gross",
       taxableAmount: "Taxable amount",
       vatAmount: "VAT amount",
+      kind: "Document kind",
     },
     errors: {
       failed: "The export failed. Please try again.",
@@ -2462,6 +2470,7 @@ const en = {
       pdfReceivedNotSupported:
         "Esblu does not generate a PDF for a received invoice — the original was issued by the supplier. Open the attached source document instead.",
       pdfGenerationFailed: "PDF generation failed. Please try again.",
+      draftStale: "This draft was changed elsewhere in the meantime. Reload the page and try again — nothing was overwritten.",
     },
     pdf: {
       documentNumberLabel: "Document number",
@@ -2478,6 +2487,16 @@ const en = {
       totalDueLabel: "Total due",
       paymentDetailsTitle: "Payment details",
       footerNote: "Created with Esblu",
+      correctsLabel: "Corrects invoice no.",
+      creditTotalLabel: "Credit note total",
+    },
+    creditNote: {
+      fullyCredited: "Fully credited",
+      correctsLabel: "Corrects invoice {{number}}",
+      openCorrected: "Open corrected invoice",
+      creditedLabel: "Credited",
+      remainingLabel: "Remaining after credit notes",
+      noPaymentsNotice: "A credit note is not a receivable — no payments are recorded against it. It reduces the amount of the corrected invoice.",
     },
   },
   folders: {
@@ -2723,16 +2742,17 @@ const en = {
       listTitle: "{{count}} {{what}} in the Inbox",
       allProtected: "I found {{count}} {{what}}, but all of them belong to an invoice, a folder, a handoff or were already downloaded. I won't delete them by voice — delete them individually in the Inbox if needed.",
       tooMany: "That is {{count}} documents. By voice I delete at most {{limit}} at once — please narrow it down, e.g. by month, or use the Inbox.",
-      deleteSummary: "I found {{count}} {{what}}. These documents will be deleted from the Inbox together with their original files. This cannot be undone.",
+      deleteSummary: "I found {{count}} {{what}}. Accounting documents are not deleted — they are moved to the archive and removed from the Inbox; files and records are kept.",
       deleteSkipped: "I will skip {{count}} more because they belong to an invoice, a folder, a handoff or were already downloaded.",
       deleteLarge: "Warning: this is a large number of documents ({{count}}).",
-      deleteQuestion: "Do you really want to delete them?",
-      deleteConfirm: "Delete {{count}}",
+      deleteQuestion: "Move them to the archive?",
+      deleteConfirm: "Archive {{count}}",
       deleted: "Deleted documents: {{count}}.",
       dataChanged: "The documents changed in the meantime, so nothing was deleted. Please repeat the command.",
       deliveryNotesUnsupported: "The Inbox does not split delivery notes into assigned and unassigned. Please open them in the Inbox.",
       whichType: "Which unassigned documents do you mean — receipts or invoices?",
       untitled: "Untitled document",
+      archived: "Archived documents: {{count}}.",
     },
     partner: {
       askName: "What is the name of the new business partner?",
@@ -2840,6 +2860,8 @@ const en = {
       deleted: "Inventory item “{{name}}” was deleted.",
       gone: "The inventory item no longer exists.",
       readOnlyNotice: "You have read-only access to inventory. Items are created and edited by the owner or an administrator.",
+      priceNotSupported: "I can't change inventory prices from the assistant yet — please edit the price in the item detail in Inventory. The quantity was not changed.",
+      askEditFieldValue: "What should I change to {{value}} for “{{name}}” — the quantity or the name?",
     },
     machine: {
       confirmCandidate: "Do you mean the machine “{{name}}”?",

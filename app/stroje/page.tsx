@@ -66,6 +66,9 @@ export default function StrojePage() {
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [serviceFilter, setServiceFilter] = useState<ServiceFilter>("all");
   const [showForm, setShowForm] = useState(false);
+  // Kmeňové dáta strojov mení iba owner/admin (RLS machines_*_manager).
+  // Zamestnanec a ostatní stroje iba čítajú — tlačidlá zápisu sa im nezobrazia.
+  const [canManageMachines, setCanManageMachines] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [deletingMachineId, setDeletingMachineId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -138,6 +141,7 @@ export default function StrojePage() {
     }
 
     setCompanyId(membership.company_id);
+    setCanManageMachines(membership.role === "owner" || membership.role === "admin");
     loadMachines(membership.company_id);
   }
 
@@ -641,18 +645,20 @@ export default function StrojePage() {
         title={t("machines.register.title")}
         meta={t("machines.list.subtitle")}
         aside={
-          <button
-            type="button"
-            onClick={() => {
-              setShowForm((value) => !value);
-              if (showForm) cancelEdit();
-            }}
-            disabled={isMachineCreationUnavailable && !showForm}
-            className={`${docButtonPrimary} gap-2`}
-          >
-            <PlusIcon size={16} />
-            {t("machines.list.addMachine")}
-          </button>
+          canManageMachines ? (
+            <button
+              type="button"
+              onClick={() => {
+                setShowForm((value) => !value);
+                if (showForm) cancelEdit();
+              }}
+              disabled={isMachineCreationUnavailable && !showForm}
+              className={`${docButtonPrimary} gap-2`}
+            >
+              <PlusIcon size={16} />
+              {t("machines.list.addMachine")}
+            </button>
+          ) : undefined
         }
       />
 
@@ -679,7 +685,7 @@ export default function StrojePage() {
         </div>
       )}
 
-      {showForm && (
+      {showForm && canManageMachines && (
         <div className="mt-6">
           <SectionPanel
             title={
@@ -924,15 +930,17 @@ export default function StrojePage() {
           <EmptyState
             title={t("machines.list.noneYet")}
             action={
-              <button
-                type="button"
-                onClick={() => setShowForm(true)}
-                disabled={isMachineCreationUnavailable}
-                className={`${docButtonPrimary} gap-2`}
-              >
-                <PlusIcon size={16} />
-                {t("machines.list.addMachine")}
-              </button>
+              canManageMachines ? (
+                <button
+                  type="button"
+                  onClick={() => setShowForm(true)}
+                  disabled={isMachineCreationUnavailable}
+                  className={`${docButtonPrimary} gap-2`}
+                >
+                  <PlusIcon size={16} />
+                  {t("machines.list.addMachine")}
+                </button>
+              ) : undefined
             }
           />
         ) : visibleMachines.length === 0 ? (
@@ -956,6 +964,7 @@ export default function StrojePage() {
                     columns={MACHINE_COLUMNS}
                     ariaLabel={item.name ?? t("dashboard.noName")}
                     trailing={
+                      canManageMachines ? (
                       <>
                         <button
                           type="button"
@@ -977,6 +986,7 @@ export default function StrojePage() {
                             : t("common.buttons.delete")}
                         </button>
                       </>
+                      ) : undefined
                     }
                   >
                     {/* 1 stroj — miniatúra, názov, stav */}

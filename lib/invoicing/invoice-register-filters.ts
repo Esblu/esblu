@@ -60,8 +60,16 @@ export function matchesSection<T extends RegisterInvoice>(
   invoice: T,
   section: SectionKey,
   /** Odvodené „po splatnosti" — počíta ho volajúci, pozri hlavičku modulu. */
-  isOverdue: (invoice: T) => boolean
+  isOverdue: (invoice: T) => boolean,
+  /**
+   * Faktúra úplne pokrytá vystavenými dobropismi (lib/invoicing/credit-note-
+   * semantics.ts). Taká už nie je nič dlžná, takže nepatrí medzi neuhradené.
+   */
+  isFullyCredited: (invoice: T) => boolean = () => false
 ): boolean {
+  // Dobropis NIE JE pohľadávka: nikdy nie je „neuhradený", „po splatnosti"
+  // ani „uhradený" — patrí iba do opráv (a do „Všetky").
+  const isCreditNote = invoice.kind === "credit_note";
   switch (section) {
     // Východiskový pohľad registra. Koncept je jediný doklad, ku ktorému sa
     // používateľ MUSÍ vedieť vrátiť — nemá číslo, nič neúčtuje a existuje
@@ -76,11 +84,11 @@ export function matchesSection<T extends RegisterInvoice>(
     case "drafts":
       return invoice.document_status === "draft";
     case "unpaid":
-      return invoice.document_status === "finalized" && invoice.payment_status === "unpaid";
+      return invoice.document_status === "finalized" && !isCreditNote && invoice.payment_status === "unpaid" && !isFullyCredited(invoice);
     case "overdue":
-      return invoice.document_status === "finalized" && isOverdue(invoice);
+      return invoice.document_status === "finalized" && !isCreditNote && !isFullyCredited(invoice) && isOverdue(invoice);
     case "paid":
-      return invoice.document_status === "finalized" && invoice.payment_status === "paid";
+      return invoice.document_status === "finalized" && !isCreditNote && invoice.payment_status === "paid";
     case "corrections":
       return invoice.kind === "credit_note" || invoice.kind === "debit_note";
     default:
@@ -98,10 +106,11 @@ export function visibleInvoices<T extends RegisterInvoice>(
   invoices: T[],
   section: SectionKey,
   direction: DirectionFilter,
-  isOverdue: (invoice: T) => boolean
+  isOverdue: (invoice: T) => boolean,
+  isFullyCredited: (invoice: T) => boolean = () => false
 ): T[] {
   return invoices.filter(
     (invoice) =>
-      matchesSection(invoice, section, isOverdue) && matchesDirection(invoice, direction)
+      matchesSection(invoice, section, isOverdue, isFullyCredited) && matchesDirection(invoice, direction)
   );
 }

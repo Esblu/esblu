@@ -208,6 +208,17 @@ export async function GET(req: Request, context: RouteContext) {
     return errorResponse(500, translate(locale, "invoices.errors.pdfGenerationFailed"));
   }
 
+  // Dobropis/ťarchopis: číslo opravovanej faktúry (pod RLS tej istej firmy).
+  let correctedInvoiceNumber: string | null = null;
+  if (invoice.corrects_invoice_id) {
+    const { data: corrected } = await userClient
+      .from("invoices")
+      .select("invoice_number")
+      .eq("id", invoice.corrects_invoice_id)
+      .maybeSingle<{ invoice_number: string | null }>();
+    correctedInvoiceNumber = corrected?.invoice_number ?? null;
+  }
+
   let pdfBuffer: Buffer;
   try {
     pdfBuffer = await renderInvoicePdfBuffer({
@@ -217,6 +228,7 @@ export async function GET(req: Request, context: RouteContext) {
       items,
       taxBreakdowns,
       locale,
+      correctedInvoiceNumber,
     });
   } catch (renderError) {
     console.error(

@@ -272,6 +272,11 @@ export function getEnsureOwnerCompanyErrorMessage(
     return t("auth.closedBeta.registerNotice");
   }
 
+  // E-mail má platnú pozvánku do firmy — vlastná firma sa nezakladá.
+  if (text.includes("ESBLU_PENDING_INVITE_EXISTS")) {
+    return t("onboarding.pendingInviteDescription");
+  }
+
   if (text.includes("NOT_AUTHENTICATED")) {
     return t("auth.notAuthenticated");
   }
@@ -372,6 +377,7 @@ const INVITE_ERROR_CODES = [
   "ESBLU_INVITE_EXPIRED",
   "ESBLU_INVITE_EMAIL_MISMATCH",
   "ESBLU_ALREADY_HAS_ACTIVE_MEMBERSHIP",
+  "ESBLU_INVITE_ROLE_NOT_PERMITTED",
 ] as const;
 
 // Text pre volajúceho poskytuje i18n `t()` — kľúče auth.invite.errors.<kód>,
@@ -407,6 +413,7 @@ export function getInviteErrorMessage(
 }
 
 const CREATE_INVITE_ERROR_CODES = [
+  "ESBLU_INVITE_ROLE_NOT_PERMITTED",
   "ESBLU_NOT_ACTIVE_OWNER_OR_ADMIN",
   "ESBLU_INVALID_INVITE_EMAIL",
   "ESBLU_INVITE_ALREADY_MEMBER",

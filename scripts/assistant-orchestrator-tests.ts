@@ -856,7 +856,7 @@ await check("FOLDER: zmazanie → náhľad → potvrdenie; doklady ostanú", asy
   assert.equal(env.state.tables.documents.length, 1, "doklad prežil");
 });
 
-await check("REAL F: „Vymaž nepriradené bločky.“ → náhľad s presným počtom; nový bloček po náhľade sa nezmaže", async () => {
+await check("REAL F: „Vymaž nepriradené bločky.“ → náhľad s presným počtom; bločky sa ARCHIVUJÚ (P0-6), nový bloček po náhľade ostane", async () => {
   const doc = (id: string): Row => ({ id, document_type: "receipt", deleted_at: null, archived_from_inbox_at: null, custom_category_id: null,
     original_filename: `${id}.jpg`, extracted_fields: {}, created_at: "2026-09-01", storage_bucket: "ai-inbox-documents", storage_path: `u/${id}.webp`, company_id: COMPANY_A });
   const env = makeDb({ role: "owner", financeManage: true, tables: { documents: [doc("r1"), doc("r2")] } });
@@ -866,7 +866,10 @@ await check("REAL F: „Vymaž nepriradené bločky.“ → náhľad s presným 
   env.state.tables.documents.push(doc("r3"));
   const done = await executeAction(env.db, "sk", { companyId: COMPANY_A, userId: USER_A, role: "owner" }, (r.result as { confirmationId: string }).confirmationId);
   assert.ok(done.kind === "action_result" && done.success);
-  assert.deepEqual(env.state.tables.documents.map((d) => d.id), ["r3"]);
+  // Účtovné doklady sa nemažú: riadky aj súbory ostanú, r1/r2 dostanú deleted_at.
+  assert.deepEqual(env.state.tables.documents.map((d) => d.id), ["r1", "r2", "r3"]);
+  assert.deepEqual(env.state.tables.documents.filter((d) => d.deleted_at).map((d) => d.id), ["r1", "r2"]);
+  assert.deepEqual(env.state.storageRemoved, []);
 });
 
 // =============================================================================

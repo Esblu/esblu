@@ -12,6 +12,7 @@ import type { Invoice, InvoiceItem, InvoiceParty, InvoiceTaxBreakdown } from "@/
 import { invoicePriceMode, unitPriceLabelKey } from "@/lib/invoicing/price-mode";
 import { formatDate, formatNumber, formatMoney as formatMoneyIntl } from "@/lib/i18n/format";
 import { translate } from "@/lib/i18n/translate";
+import { documentSign } from "@/lib/invoicing/credit-note-semantics";
 import type { Locale } from "@/lib/i18n/locales";
 
 // =============================================================================
@@ -64,6 +65,8 @@ export type InvoicePdfBundle = {
   items: InvoiceItem[];
   taxBreakdowns: InvoiceTaxBreakdown[];
   locale: Locale;
+  /** Číslo opravovanej faktúry (iba dobropis/ťarchopis) — voliteľné. */
+  correctedInvoiceNumber?: string | null;
 };
 
 const styles = StyleSheet.create({
@@ -321,8 +324,12 @@ function documentNumberFor(invoice: InvoicePdfBundle["invoice"]): string | null 
     : (invoice.invoice_number ?? null);
 }
 
-function InvoicePdfDocument({ invoice, seller, buyer, items, taxBreakdowns, locale }: InvoicePdfBundle) {
+function InvoicePdfDocument({ invoice, seller, buyer, items, taxBreakdowns, locale, correctedInvoiceNumber }: InvoicePdfBundle) {
   const documentLabel = translate(locale, `invoices.kind.${invoice.kind}`);
+  // Dobropis: sumy sa tlačia so znamienkom mínus (v DB sú kladné; znamienko
+  // určuje druh dokladu — lib/invoicing/credit-note-semantics.ts).
+  const sign = documentSign(invoice.kind);
+  const isCreditNote = invoice.kind === "credit_note";
   const rounding = Number(invoice.rounding_amount) || 0;
   const documentNumber = documentNumberFor(invoice);
 
@@ -340,6 +347,11 @@ function InvoicePdfDocument({ invoice, seller, buyer, items, taxBreakdowns, loca
             <Text style={styles.docNumber}>
               {translate(locale, "invoices.pdf.documentNumberLabel")}: {documentNumber ?? "—"}
             </Text>
+            {invoice.corrects_invoice_id && correctedInvoiceNumber && (
+              <Text style={styles.docNumber}>
+                {translate(locale, "invoices.pdf.correctsLabel")}: {correctedInvoiceNumber}
+              </Text>
+            )}
           </View>
           <View style={styles.metaBlock}>
             <Text style={styles.metaLine}>
@@ -412,7 +424,7 @@ function InvoicePdfDocument({ invoice, seller, buyer, items, taxBreakdowns, loca
                 {vatCategoryLabel(item.vat_category_code, item.vat_rate, locale)}
               </Text>
               <Text style={[styles.td, styles.colTotal]}>
-                {formatMoney(item.line_gross_amount, invoice.currency, locale)}
+                {formatMoney(sign * item.line_gross_amount, invoice.currency, locale)}
               </Text>
             </View>
           ))}
@@ -437,10 +449,10 @@ function InvoicePdfDocument({ invoice, seller, buyer, items, taxBreakdowns, loca
                 {vatCategoryLabel(row.vat_category_code, row.vat_rate, locale)}
               </Text>
               <Text style={[styles.td, styles.vatColTaxable]}>
-                {formatMoney(row.taxable_amount, invoice.currency, locale)}
+                {formatMoney(sign * row.taxable_amount, invoice.currency, locale)}
               </Text>
               <Text style={[styles.td, styles.vatColAmount]}>
-                {formatMoney(row.vat_amount, invoice.currency, locale)}
+                {formatMoney(sign * row.vat_amount, invoice.currency, locale)}
               </Text>
             </View>
           ))}
@@ -450,25 +462,27 @@ function InvoicePdfDocument({ invoice, seller, buyer, items, taxBreakdowns, loca
           <View style={styles.totalsRow}>
             <Text style={styles.totalsLabel}>{translate(locale, "invoices.newInvoice.subtotalLabel")}</Text>
             <Text style={styles.totalsValue}>
-              {formatMoney(invoice.subtotal_amount, invoice.currency, locale)}
+              {formatMoney(sign * invoice.subtotal_amount, invoice.currency, locale)}
             </Text>
           </View>
           <View style={styles.totalsRow}>
             <Text style={styles.totalsLabel}>{translate(locale, "invoices.newInvoice.vatTotalLabel")}</Text>
             <Text style={styles.totalsValue}>
-              {formatMoney(invoice.vat_total_amount, invoice.currency, locale)}
+              {formatMoney(sign * invoice.vat_total_amount, invoice.currency, locale)}
             </Text>
           </View>
           {rounding !== 0 && (
             <View style={styles.totalsRow}>
               <Text style={styles.totalsLabel}>{translate(locale, "invoices.pdf.roundingLabel")}</Text>
-              <Text style={styles.totalsValue}>{formatMoney(rounding, invoice.currency, locale)}</Text>
+              <Text style={styles.totalsValue}>{formatMoney(sign * rounding, invoice.currency, locale)}</Text>
             </View>
           )}
           <View style={styles.grandTotalRow}>
-            <Text style={styles.grandTotalLabel}>{translate(locale, "invoices.pdf.totalDueLabel")}</Text>
+            <Text style={styles.grandTotalLabel}>
+              {translate(locale, isCreditNote ? "invoices.pdf.creditTotalLabel" : "invoices.pdf.totalDueLabel")}
+            </Text>
             <Text style={styles.grandTotalValue}>
-              {formatMoney(invoice.total_amount, invoice.currency, locale)}
+              {formatMoney(sign * invoice.total_amount, invoice.currency, locale)}
             </Text>
           </View>
         </View>

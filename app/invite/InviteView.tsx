@@ -109,6 +109,9 @@ export default function InviteView({ token }: { token: string }) {
 
     try {
       await acceptCompanyInvite(token);
+      // Token pozvánky už nie je potrebný — odstráni sa z metadát účtu
+      // (best effort; slúžil iba na návrat po overení e-mailu).
+      await supabase.auth.updateUser({ data: { esblu_invite_token: null } }).catch(() => undefined);
       setState("accepted");
 
       setTimeout(() => {

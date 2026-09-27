@@ -5,7 +5,8 @@ import type { IntentResult } from "@/lib/intents/types";
 import type { ReadContext } from "@/lib/intents/handlers-navigation-finance";
 import {
   createDraftInvoice,
-  replaceDraftInvoiceItems,
+  saveInvoiceDraft,
+  deleteDraftInvoice,
   previewDraftTotals,
   type DraftInvoiceItemInput,
 } from "@/lib/invoices";
@@ -56,7 +57,7 @@ export {
 // PREČO SA NEPOUŽÍVA NOVÁ CESTA ZÁPISU
 // ------------------------------------
 // Draft sa zakladá tými istými funkciami, ktoré používa formulár v UI
-// (createDraftInvoice + replaceDraftInvoiceItems), len s klientom
+// (createDraftInvoice + saveInvoiceDraft), len s klientom
 // obliekaným tokenom volajúceho. Prechádza teda tou istou RLS politikou
 // `invoices_insert_finance_draft` (finance manage + document_status='draft'
 // + invoice_number is null) a tými istými CHECK constraintmi. Keby hlas
@@ -597,7 +598,14 @@ export async function createInvoiceDraftFromSlots(
       supabase
     );
 
-    await replaceDraftInvoiceItems(invoice.id, items, supabase);
+    // Riadky atomicky (RPC). Ak by zlyhali, prázdny koncept sa odstráni —
+    // asistent nesmie nechať po sebe doklad bez položiek.
+    try {
+      await saveInvoiceDraft(invoice.id, {}, items, null, supabase);
+    } catch (itemsError) {
+      await deleteDraftInvoice(invoice.id, supabase).catch(() => undefined);
+      throw itemsError;
+    }
 
     const totals = previewDraftTotals(items);
     const partner = (await readPartnerLabels(supabase, [partnerId]))[0];

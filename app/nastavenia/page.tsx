@@ -444,13 +444,22 @@ export default function NastaveniaPage() {
       // undefined nemení) — logo má vlastný, samostatný Storage+DB flow
       // (handleLogoChange/deleteLogo), uloženie textových polí formulára ho
       // nikdy nesmie vedľajškovo prepísať.
-      await upsertCompanyBillingProfile(companyId, userId, payload);
+      // Bankové údaje (IBAN/BIC) mení iba majiteľ — pre ostatných sa do
+      // uloženia vôbec neposielajú (DB trigger zmenu ne-ownerom odmietne).
+      const { iban: _iban, bic: _bic, ...withoutBank } = payload;
+      void _iban;
+      void _bic;
+      await upsertCompanyBillingProfile(companyId, userId, myRole === "owner" ? payload : withoutBank);
       setSettingsLoading(false);
       alert(t("settings.errors.settingsSaved"));
     } catch (error) {
       setSettingsLoading(false);
       const message = error instanceof Error ? error.message : String(error);
-      alert(t("settings.errors.settingsSaveFailedPrefix", { message }));
+      alert(
+        message.includes("ESBLU_BANK_DETAILS_OWNER_ONLY")
+          ? t("settings.company.bankDetailsOwnerOnly")
+          : t("settings.errors.settingsSaveFailedPrefix", { message })
+      );
     }
   }
 
@@ -856,7 +865,7 @@ export default function NastaveniaPage() {
           function field(
             fieldKey: keyof CompanyBillingProfileForm,
             labelKey: string,
-            options?: { placeholder?: string; type?: string }
+            options?: { placeholder?: string; type?: string; ownerOnly?: boolean }
           ) {
             const errorText = billingProfileFieldError(fieldKey);
 
@@ -874,7 +883,7 @@ export default function NastaveniaPage() {
                   onChange={(event) =>
                     updateBillingProfileField(fieldKey, event.target.value)
                   }
-                  disabled={!canEditCompany || settingsLoading}
+                  disabled={!canEditCompany || settingsLoading || (options?.ownerOnly === true && myRole !== "owner")}
                 />
 
                 {errorText && (
@@ -926,9 +935,12 @@ export default function NastaveniaPage() {
           </div>
 
           <div className="mt-6 grid gap-4 sm:grid-cols-2">
-            {field("iban", "settings.company.ibanLabel")}
-            {field("bic", "settings.company.bicLabel")}
+            {field("iban", "settings.company.ibanLabel", { ownerOnly: true })}
+            {field("bic", "settings.company.bicLabel", { ownerOnly: true })}
           </div>
+          {canEditCompany && myRole !== "owner" && (
+            <p className="mt-2 text-xs text-secondary">{t("settings.company.bankDetailsOwnerOnly")}</p>
+          )}
 
           <div className="mt-6">
             {field("contact_email", "settings.company.contactEmailLabel", {
@@ -1161,7 +1173,9 @@ export default function NastaveniaPage() {
                         />
 
                         <div className="flex flex-col gap-2 sm:flex-row">
-                          {INVITE_ROLE_OPTIONS.map((option) => (
+                          {/* Rola účtovníka nesie finančný prístup — pozvať ju
+                              smie iba majiteľ (server to vynucuje). */}
+                          {INVITE_ROLE_OPTIONS.filter((option) => option.value !== "accountant" || myRole === "owner").map((option) => (
                             <label
                               key={option.value}
                               className="flex flex-1 items-start gap-2 rounded-xl border border-subtle p-3 text-sm"

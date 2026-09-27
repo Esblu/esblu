@@ -273,6 +273,11 @@ export type ManifestInvoice = {
   subtotal_amount: string;
   vat_total_amount: string;
   total_amount: string;
+  /**
+   * Ekonomické znamienko dokladu: −1 = dobropis (znižuje), +1 inak. Sumy
+   * vyššie sú uložené kladné; podpísaná hodnota = accounting_sign × suma.
+   */
+  accounting_sign: 1 | -1;
   folder: string;
   artifact_count: number;
 };

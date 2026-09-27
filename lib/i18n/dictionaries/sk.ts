@@ -626,6 +626,7 @@ const sk = {
           "Váš účet je už členom inej firmy, takže túto pozvánku nie je možné prijať.",
         ENTITLEMENT_USER_LIMIT: "Firma, ktorá vás pozvala, má momentálne vyčerpaný počet používateľov. Požiadajte ju o rozšírenie prístupu.",
         acceptFailedGeneric: "Pozvánku sa nepodarilo prijať. Skúste to prosím znova.",
+        ESBLU_INVITE_ROLE_NOT_PERMITTED: "Pozvánku pre účtovníka môže vystaviť iba vlastník firmy. Požiadajte vlastníka o novú pozvánku.",
       },
       createErrors: {
         ESBLU_NOT_ACTIVE_OWNER_OR_ADMIN:
@@ -637,6 +638,7 @@ const sk = {
         ENTITLEMENT_USER_LIMIT: "Vaša firma dosiahla limit počtu používateľov (skúšobná verzia obsahuje 1 používateľa). Existujúci členovia tímu ostávajú.",
         ENTITLEMENT_TEAM_INACTIVE: "Pridávanie ďalších používateľov nie je pre vašu firmu momentálne aktivované. Existujúci členovia tímu ostávajú.",
         createFailedGeneric: "Pozvánku sa nepodarilo vytvoriť. Skúste to prosím znova.",
+        ESBLU_INVITE_ROLE_NOT_PERMITTED: "Účtovníka môže pozvať iba vlastník firmy.",
       },
     },
   },
@@ -775,6 +777,7 @@ const sk = {
         "Logo sa automaticky zmenší a uloží vo formáte WebP. Maximálna povolená veľkosť je 2 MB.",
       saving: "Ukladám...",
       save: "Uložiť",
+      bankDetailsOwnerOnly: "IBAN a BIC môže meniť iba vlastník firmy.",
     },
     users: {
       title: "Používatelia",
@@ -1297,6 +1300,8 @@ const sk = {
       imageTooLarge8MBPrefixed: "{{label}} môže mať najviac 8 MB.",
       imageInvalidContentPrefixed: "{{label}} nemá platný obsah obrázka.",
       aiNoDataReturned: "AI nevrátila žiadne údaje.",
+      confirmArchiveDocument: "Účtovný doklad sa nezmaže, ale presunie do archívu — zmizne z aktívnych zoznamov, súbor aj záznam ostanú zachované. Pokračovať?",
+      documentRemovalDenied: "Na odstránenie tohto dokumentu nemáte oprávnenie.",
     },
     documentSavedToInbox: "Dokument bol uložený do Inboxu.",
     noPlate: "bez ŠPZ",
@@ -1773,6 +1778,8 @@ const sk = {
     genericErrorTitle: "Niečo sa nepodarilo",
     genericErrorDescription:
       "Firemný účet sa nepodarilo založiť. Skús sa prihlásiť znova — ak problém pretrváva, kontaktuj podporu.",
+    pendingInviteTitle: "Máte čakajúcu pozvánku",
+    pendingInviteDescription: "Na váš e-mail čaká pozvánka do existujúcej firmy. Otvorte odkaz z pozývacieho e-mailu a pozvánku prijmite — vlastnú firmu teraz nezaložíme.",
   },
 
   authCallback: {
@@ -1876,16 +1883,16 @@ const sk = {
       supabasePurpose:
         "Databáza, autentifikácia, úložisko súborov (fotografie, dokumenty)",
       supabaseDataCategories: "Všetky údaje spracúvané v aplikácii",
-      supabaseLocation: "TODO — región Supabase projektu treba potvrdiť (EÚ/US)",
+      supabaseLocation: "EÚ — Frankfurt (AWS eu-central-1)",
       openaiPurpose: "AI rozpoznávanie údajov z nahraných dokumentov a fotografií",
       openaiDataCategories:
         "Obsah nahraného dokumentu/fotografie odoslaný na spracovanie",
       openaiLocation:
-        "TODO — potvrdiť spracovateľskú lokalitu podľa OpenAI API nastavenia účtu",
+        "Lokalita spracovania zatiaľ v tomto zozname nie je právne potvrdená — podrobnosti na vyžiadanie na privacy@esblu.com",
       vercelPurpose: "Hosting a prevádzka aplikácie",
       vercelDataCategories:
         "Technické dáta spojenia potrebné na doručenie aplikácie",
-      vercelLocation: "TODO — potvrdiť región nasadenia",
+      vercelLocation: "Serverové funkcie: EÚ — Frankfurt (fra1) podľa konfigurácie projektu; ďalšie podrobnosti na vyžiadanie na privacy@esblu.com",
       namecheapPurpose:
         "Hosting firemnej e-mailovej komunikácie (schránky info@esblu.com a privacy@esblu.com — privacy@esblu.com je alias smerujúci do tej istej schránky) a prijímanie e-mailových správ od používateľov, vrátane žiadostí týkajúcich sa osobných údajov",
       namecheapDataCategories:
@@ -2214,6 +2221,7 @@ const sk = {
       lineGross: "Riadok s DPH",
       taxableAmount: "Základ dane",
       vatAmount: "Suma DPH",
+      kind: "Druh dokladu",
     },
     errors: {
       failed: "Export sa nepodaril. Skúste to, prosím, znova.",
@@ -2491,6 +2499,7 @@ const sk = {
       pdfReceivedNotSupported:
         "Pre prijatú faktúru Esblu negeneruje PDF — originál vystavil dodávateľ. Otvorte pripojený zdrojový doklad.",
       pdfGenerationFailed: "Generovanie PDF zlyhalo. Skúste to prosím znova.",
+      draftStale: "Koncept medzitým zmenil niekto iný alebo iné okno. Obnovte stránku a skúste to znova — nič sa neprepísalo.",
     },
     pdf: {
       documentNumberLabel: "Číslo dokladu",
@@ -2507,6 +2516,16 @@ const sk = {
       totalDueLabel: "Spolu na úhradu",
       paymentDetailsTitle: "Platobné údaje",
       footerNote: "Vytvorené v Esblu",
+      correctsLabel: "Opravuje faktúru č.",
+      creditTotalLabel: "Dobropis celkom",
+    },
+    creditNote: {
+      fullyCredited: "Plne dobropisovaná",
+      correctsLabel: "Opravuje faktúru {{number}}",
+      openCorrected: "Otvoriť opravovanú faktúru",
+      creditedLabel: "Dobropisované",
+      remainingLabel: "Zostáva po dobropisoch",
+      noPaymentsNotice: "Dobropis nie je pohľadávka — úhrady sa k nemu nezaznamenávajú. Znižuje sumu opravovanej faktúry.",
     },
   },
   folders: {
@@ -2752,16 +2771,17 @@ const sk = {
       listTitle: "{{count}} {{what}} v Inboxe",
       allProtected: "Našiel som {{count}} {{what}}, ale všetky sú súčasťou faktúry, priečinka, odovzdania alebo už boli stiahnuté. Hlasom ich nezmažem — ak treba, zmažte ich jednotlivo v Inboxe.",
       tooMany: "Ide o {{count}} dokladov. Hlasom zmažem naraz najviac {{limit}} — zúžte prosím výber, napríklad podľa mesiaca, alebo použite Inbox.",
-      deleteSummary: "Našiel som {{count}} {{what}}. Zmažú sa tieto doklady z Inboxu aj s pôvodnými súbormi. Táto akcia sa nedá vrátiť.",
+      deleteSummary: "Našiel som {{count}} {{what}}. Účtovné doklady sa nemažú — presunú sa do archívu a zmiznú z Inboxu; súbory aj záznamy ostanú zachované.",
       deleteSkipped: "{{count}} ďalších vynechám, lebo sú súčasťou faktúry, priečinka, odovzdania alebo už boli stiahnuté.",
       deleteLarge: "Pozor: ide o veľký počet dokladov ({{count}}).",
-      deleteQuestion: "Naozaj ich chcete zmazať?",
-      deleteConfirm: "Zmazať {{count}}",
+      deleteQuestion: "Presunúť ich do archívu?",
+      deleteConfirm: "Archivovať {{count}}",
       deleted: "Zmazané doklady: {{count}}.",
       dataChanged: "Doklady sa medzičasom zmenili, preto som nezmazal nič. Zopakujte prosím príkaz.",
       deliveryNotesUnsupported: "Dodacie listy Inbox nerozlišuje na priradené a nepriradené. Otvorte ich prosím v Inboxe.",
       whichType: "Ktoré nepriradené doklady myslíte — bločky alebo faktúry?",
       untitled: "Doklad bez názvu",
+      archived: "Archivované doklady: {{count}}.",
     },
     partner: {
       askName: "Ako sa volá nový obchodný partner?",
@@ -2869,6 +2889,8 @@ const sk = {
       deleted: "Skladová položka „{{name}}“ je zmazaná.",
       gone: "Skladová položka už neexistuje.",
       readOnlyNotice: "Sklad máte iba na čítanie. Položky zakladá a upravuje vlastník alebo administrátor.",
+      priceNotSupported: "Cenu skladovej položky zatiaľ hlasom ani v asistentovi nemením — upravte ju prosím v detaile položky v Sklade. Množstvo som nezmenil.",
+      askEditFieldValue: "Čo mám pri položke „{{name}}“ zmeniť na {{value}} — množstvo, alebo názov?",
     },
     machine: {
       confirmCandidate: "Myslíte stroj „{{name}}“?",

@@ -878,7 +878,9 @@ export async function handleSearchDocuments(
           .from("ai_evidence")
           .select(
             "id, document_type, document_number, supplier, customer, material, spz, document_date, created_at"
-          );
+          )
+          // Archivované (deleted_at) nie sú v aktívnych výsledkoch.
+          .is("deleted_at", null);
         if (aiEvidenceTypeLabels.length > 0) {
           evidenceQuery = evidenceQuery.in("document_type", aiEvidenceTypeLabels);
         }

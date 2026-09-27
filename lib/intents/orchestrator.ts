@@ -426,15 +426,19 @@ export async function runAssistantTurnDetailed(
         });
       }
       if (reply.kind === "quantity") {
+        // Hodnota z pôvodnej vety („Zmeň Sprej na 5" → „počet") sa použije,
+        // ak odpoveď vlastnú hodnotu nemá.
+        const quantity = reply.quantity ?? pending.args.quantity;
         intent = {
           name: "INVENTORY_QUANTITY_ADJUST",
-          args: { query: name, entityName: name, quantityMode: reply.mode, ...(reply.quantity !== undefined ? { quantity: reply.quantity } : {}) },
+          args: { query: name, entityName: name, quantityMode: reply.mode, ...(quantity !== undefined ? { quantity } : {}) },
           source: "deterministic",
         };
         resumed = true;
       } else if (reply.kind === "name") {
-        if (reply.newName) {
-          intent = { name: "INVENTORY_ITEM_RENAME", args: { query: name, newName: reply.newName }, source: "deterministic" };
+        const newName = reply.newName ?? pending.args.newName;
+        if (newName) {
+          intent = { name: "INVENTORY_ITEM_RENAME", args: { query: name, newName }, source: "deterministic" };
           resumed = true;
         } else {
           return done({

@@ -2,10 +2,12 @@
 -- Company entitlements: 14-day company trial + modular paid entitlements +
 -- AI-processing ledger + team-member limit + voice as a paid capability.
 --
--- STAV: NAVRHNUTÉ, NEAPLIKOVANÉ. Aplikovať iba po výslovnom schválení cez
--- Supabase MCP apply_migration na fkpgvgvsmbpieduoatrt (supabase/MIGRATIONS.md).
--- NIKDY `supabase db push`. Nahrádza skorší (tiež neaplikovaný) Free/Pro návrh
--- s rovnakým názvom súboru.
+-- STAV: APLIKOVANÉ 2026-09-26 cez Supabase MCP apply_migration na
+-- fkpgvgvsmbpieduoatrt. V produkčnej histórii migrácií je zapísaná pod
+-- verziou 20260926150526 (MCP priradil vlastný timestamp), nie pod
+-- 20260928100000 z názvu tohto súboru. Súbor NEPREMENÚVAŤ a NEAPLIKOVAŤ
+-- znova; históriu migrácií v produkcii nemeniť. NIKDY `supabase db push`.
+-- (Nahradila skorší neaplikovaný Free/Pro návrh s rovnakým názvom súboru.)
 --
 -- PORADIE NASADENIA (povinné): najprv táto migrácia, AŽ POTOM kód, ktorý
 -- volá esblu_get_my_company_entitlements / esblu_require_my_entitlement /

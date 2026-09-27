@@ -528,7 +528,9 @@ export async function buildExportDocumentsPreview(
     .select(
       "id, spz, document_type, movement_type, supplier, customer, document_number, material, material_original, material_category, document_date, brutto, tara, netto, unit, construction_site, source_location, destination_location, photo_url, raw_text, created_at, quantity"
     )
-    .in("document_type", evidenceTypeLabels.length > 0 ? evidenceTypeLabels : ["__none__"]);
+    .in("document_type", evidenceTypeLabels.length > 0 ? evidenceTypeLabels : ["__none__"])
+    // Archivované dodacie listy nie sú v aktívnych výsledkoch.
+    .is("deleted_at", null);
   if (query) {
     evidenceQuery = evidenceQuery.or(
       `document_number.ilike.%${query}%,supplier.ilike.%${query}%,customer.ilike.%${query}%,material.ilike.%${query}%,spz.ilike.%${query}%`

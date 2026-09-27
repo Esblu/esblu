@@ -206,7 +206,8 @@ async function fetchSpzMatchedEvidence(
   // existujúci fetchCompanyVehicles()).
   const { data, error } = await supabase
     .from("ai_evidence")
-    .select("id, vehicle_id, spz, document_type, document_date, document_number, created_at");
+    .select("id, vehicle_id, spz, document_type, document_date, document_number, created_at")
+    .is("deleted_at", null);
 
   if (error) {
     console.error("fetchSpzMatchedEvidence zlyhalo:", error.message);

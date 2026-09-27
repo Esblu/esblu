@@ -210,32 +210,17 @@ export async function executeInboxDelete(
   if (blocked === null) return fail();
   if (blocked.size > 0) return fail("assistant.inbox.dataChanged");
 
-  // Rovnaké kroky ako UI: najprv súbory (originál + prílohy), potom riadky.
-  const { data: attachments, error: attachmentsError } = await db
-    .from("document_attachments")
-    .select("storage_bucket, storage_path")
-    .in("document_id", ids)
-    .eq("company_id", ctx.companyId);
-  if (attachmentsError) return fail();
-  const byBucket = new Map<string, string[]>();
-  const add = (bucket: string | null, path: string | null) => {
-    if (!bucket || !path) return;
-    byBucket.set(bucket, [...(byBucket.get(bucket) ?? []), path]);
-  };
-  for (const row of rows) add(row.storage_bucket, row.storage_path);
-  for (const row of (attachments ?? []) as { storage_bucket: string | null; storage_path: string | null }[]) add(row.storage_bucket, row.storage_path);
-  for (const [bucket, paths] of byBucket) {
-    const { error: removeError } = await db.storage.from(bucket).remove(paths);
-    if (removeError) return fail();
-  }
-
-  const { data: deleted, error: deleteError } = await db
+  // Nepriradené bločky/faktúry sú účtovné doklady → NEMAŽÚ sa, iba sa
+  // archivujú (deleted_at) — rovnako ako v UI (lib/document-retention.ts).
+  // Súbory ani riadky sa neničia; DB trigger tvrdé zmazanie aj tak odmietne.
+  const { data: archived, error: archiveError } = await db
     .from("documents")
-    .delete()
+    .update({ deleted_at: new Date().toISOString() })
     .in("id", ids)
     .eq("company_id", ctx.companyId)
+    .is("deleted_at", null)
     .select("id");
-  if (deleteError) return fail(deleteError.code === "42501" ? "folders.intent.denied" : "search.errors.generic");
-  const count = (deleted ?? []).length;
-  return { kind: "action_result", success: count === ids.length, text: t(locale, "assistant.inbox.deleted", { count }) };
+  if (archiveError) return fail(archiveError.code === "42501" ? "folders.intent.denied" : "search.errors.generic");
+  const count = (archived ?? []).length;
+  return { kind: "action_result", success: count === ids.length, text: t(locale, "assistant.inbox.archived", { count }) };
 }

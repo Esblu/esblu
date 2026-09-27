@@ -12,6 +12,7 @@ import {
   type HandoffErrorCode,
 } from "@/lib/invoicing/handoff-errors";
 import { renderInvoicePdfBuffer } from "@/lib/invoicing/pdf-renderer";
+import { documentSign } from "@/lib/invoicing/credit-note-semantics";
 import {
   buildManifest,
   directionFolder,
@@ -423,6 +424,8 @@ export async function POST(req: Request) {
           vat_total_amount: invoice.vat_total_amount,
           rounding_amount: invoice.rounding_amount,
           total_amount: invoice.total_amount,
+          // −1 = dobropis (znižuje), +1 inak; sumy sú uložené kladné.
+          accounting_sign: documentSign(invoice.kind),
           finalized_at: invoice.finalized_at,
         },
         parties: parties.map((p) => ({
@@ -571,6 +574,7 @@ export async function POST(req: Request) {
         subtotal_amount: invoice.subtotal_amount.toFixed(2),
         vat_total_amount: invoice.vat_total_amount.toFixed(2),
         total_amount: invoice.total_amount.toFixed(2),
+        accounting_sign: documentSign(invoice.kind),
         folder: dir,
         artifact_count: artifactCount,
       });

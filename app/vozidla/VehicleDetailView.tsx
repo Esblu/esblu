@@ -35,6 +35,7 @@ import {
 import { useCompanyDpaLegalHold } from "@/app/components/CompanyDpaGate";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import { formatDate } from "@/lib/i18n/format";
+import { DocumentRemovalError, isRetainedDocumentType, removeDocumentFromActiveView } from "@/lib/document-retention";
 import {
   VIGNETTE_COUNTRIES,
   VIGNETTE_OTHER_COUNTRY_OPTION,
@@ -475,7 +476,10 @@ export default function VehicleDetailView({
   async function deleteLinkedDocument(doc: LinkedVehicleDocument) {
     if (deletingDocumentId) return;
 
-    if (!confirm(t("inbox.errors.confirmDeleteDocument"))) return;
+    // Účtovný doklad (napr. bloček za palivo) sa iba archivuje; ostatné
+    // dokumenty sa mažú DB-first (lib/document-retention.ts).
+    const retained = isRetainedDocumentType(doc.document_type);
+    if (!confirm(t(retained ? "inbox.errors.confirmArchiveDocument" : "inbox.errors.confirmDeleteDocument"))) return;
 
     setDeletingDocumentId(doc.id);
 
@@ -486,60 +490,13 @@ export default function VehicleDetailView({
         throw new Error(t("vehicles.errors.notLoggedInFormal"));
       }
 
-      const { data: docAttachments, error: attachmentsError } = await supabase
-        .from("document_attachments")
-        .select("storage_bucket, storage_path")
-        .eq("document_id", doc.id)
-        .eq("company_id", membership.company_id);
-
-      if (attachmentsError) {
-        throw new Error(
-          t("inbox.errors.documentAttachmentsLoadFailed", {
-            message: attachmentsError.message,
-          })
-        );
-      }
-
-      const pathsByBucket = new Map<string, string[]>();
-      const addPath = (bucket: string | null, path: string | null) => {
-        if (!bucket || !path) return;
-        const existing = pathsByBucket.get(bucket) ?? [];
-        existing.push(path);
-        pathsByBucket.set(bucket, existing);
-      };
-
-      addPath(doc.storage_bucket, doc.storage_path);
-      (docAttachments || []).forEach((attachment) =>
-        addPath(attachment.storage_bucket, attachment.storage_path)
-      );
-
-      for (const [bucket, paths] of pathsByBucket.entries()) {
-        const { error: removeError } = await supabase.storage
-          .from(bucket)
-          .remove(paths);
-
-        if (removeError) {
-          throw new Error(
-            t("inbox.errors.documentFilesDeleteFailed", {
-              message: removeError.message,
-            })
-          );
-        }
-      }
-
-      const { error: deleteError } = await supabase
-        .from("documents")
-        .delete()
-        .eq("id", doc.id)
-        .eq("company_id", membership.company_id);
-
-      if (deleteError) throw deleteError;
+      await removeDocumentFromActiveView(supabase, doc, membership.company_id);
 
       setLinkedDocuments((current) => current.filter((d) => d.id !== doc.id));
     } catch (deleteError: unknown) {
       alert(
-        deleteError instanceof Error
-          ? deleteError.message
+        deleteError instanceof DocumentRemovalError && deleteError.reason === "denied"
+          ? t("inbox.errors.documentRemovalDenied")
           : t("inbox.errors.deleteDocumentFailed")
       );
     } finally {

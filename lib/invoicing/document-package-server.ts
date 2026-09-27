@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { documentSign, signedAmount } from "@/lib/invoicing/credit-note-semantics";
 import JSZip from "jszip";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Locale } from "@/lib/i18n/locales";
@@ -470,7 +471,7 @@ export async function buildDocumentPackage(
             tax_point_date: invoice.tax_point_date, due_date: invoice.due_date, currency: invoice.currency,
             variable_symbol: invoice.variable_symbol, subtotal_amount: invoice.subtotal_amount,
             vat_total_amount: invoice.vat_total_amount, rounding_amount: invoice.rounding_amount,
-            total_amount: invoice.total_amount, finalized_at: invoice.finalized_at,
+            total_amount: invoice.total_amount, accounting_sign: documentSign(invoice.kind), finalized_at: invoice.finalized_at,
             source_document_id: invoice.source_document_id,
           },
           parties: parties.map((p) => ({
@@ -500,7 +501,8 @@ export async function buildDocumentPackage(
         overviewRows.push({
           category: categoryOf(entry), label: entryLabel(entry), date: invoice.issue_date,
           partner: partnerId ? partnerNames.get(partnerId) ?? "" : "",
-          amount: invoice.total_amount, currency: invoice.currency, original: originalKind,
+          // Dobropis v prehľade so znamienkom mínus (sumy v DB sú kladné).
+          amount: signedAmount(invoice.kind, invoice.total_amount), currency: invoice.currency, original: originalKind,
           folder: dir, excludedReason: null,
         });
       } else {

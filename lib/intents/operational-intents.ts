@@ -407,6 +407,11 @@ export async function handleOperationalIntent(
     }
 
     case "INVENTORY_ITEM_EDIT": {
+      // Cena: skladová položka ju v Esblu neeviduje → povedať to, NIČ nezmeniť
+      // (predtým sa „zmeň cenu … na 4,90" zmenilo na stav 4,9 ks).
+      if (args.editField === "price") {
+        return answer(t(locale, "assistant.inventory.priceNotSupported"));
+      }
       // „Uprav skladovú položku X" — nič nezapisuje. Overí cieľ a spýta sa na
       // JEDINÉ, čo hlas vie bezpečne zmeniť: počet kusov alebo názov (tie isté
       // polia ako formulár v Sklade). Žiadne vymyslené pole.
@@ -418,7 +423,10 @@ export async function handleOperationalIntent(
       const item = resolved.entity;
       return {
         kind: "answer",
-        text: t(locale, "assistant.inventory.askEditField", { name: item.name ?? "" }),
+        // „Zmeň Sprej na 5" — hodnota zaznela, cieľ nie: počet 5, alebo názov „5"?
+        text: args.quantity !== undefined
+          ? t(locale, "assistant.inventory.askEditFieldValue", { name: item.name ?? "", value: String(args.newName ?? args.quantity) })
+          : t(locale, "assistant.inventory.askEditField", { name: item.name ?? "" }),
         entity: inventoryRef(item),
         awaiting: { slot: "edit_field", patch: { query: item.name ?? undefined, entityName: item.name ?? undefined } },
         quickReplies: [

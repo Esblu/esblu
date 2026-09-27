@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
@@ -38,8 +38,9 @@ import {
   parseFinalizeErrorCode,
   previewDraftTotals,
   removeInvoicePayment,
-  replaceDraftInvoiceItems,
-  updateDraftInvoiceHeader,
+  saveInvoiceDraft,
+  listFinalizedCreditNotesFor,
+  getInvoiceNumberLabel,
   validateDraftBeforeFinalize,
   type DraftInvoiceItemInput,
   type Invoice,
@@ -78,6 +79,8 @@ import { todayLocalDate } from "@/lib/local-date";
 import { apiUrl } from "@/lib/api-url";
 import { REQUEST_LOCALE_HEADER } from "@/lib/i18n/request-locale";
 import { downloadBlob } from "@/lib/file-actions";
+import { invoiceDetailHref } from "@/lib/entity-links";
+import { creditedTotals, isFullyCredited, remainingAfterCredits, signedAmount } from "@/lib/invoicing/credit-note-semantics";
 
 const VAT_CATEGORIES: VatCategoryCode[] = ["S", "Z", "E", "AE"];
 // Kalendárny deň POUŽÍVATEĽA, nie UTC — predvyplňuje dátum vystavenia aj
@@ -159,6 +162,10 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
   const [parties, setParties] = useState<InvoiceParty[]>([]);
   const [taxBreakdowns, setTaxBreakdowns] = useState<InvoiceTaxBreakdown[]>([]);
   const [payments, setPayments] = useState<InvoicePayment[]>([]);
+  // Dobropisy (finalizované) k tejto faktúre a číslo opravovanej faktúry pri
+  // dobropise — lib/invoicing/credit-note-semantics.ts.
+  const [creditNotes, setCreditNotes] = useState<{ id: string; invoice_number: string | null; total_amount: number; kind: string; document_status: string; corrects_invoice_id: string | null }[]>([]);
+  const [correctedInvoiceNumber, setCorrectedInvoiceNumber] = useState<string | null>(null);
   const [partners, setPartners] = useState<BusinessPartner[]>([]);
   // Firemný VAT default (company_billing_profile.default_vat_rate) — iba
   // prefill zdroj pre NOVÉ S-kategórie položky, nikdy hardcoded universal
@@ -183,6 +190,9 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
   const [saveNotice, setSaveNotice] = useState("");
 
   const [finalizing, setFinalizing] = useState(false);
+  // Uloženie a finalizácia draftu sa nikdy nesmú prekrývať (dve súbežné
+  // transakcie nad tým istým draftom). Ref platí okamžite, stav až po rendri.
+  const draftBusyRef = useRef(false);
   const [finalizeError, setFinalizeError] = useState("");
 
   // PDF (iba finalized) — pozri handleDownloadPdf, FÁZA 3A.
@@ -302,6 +312,13 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
         setParties(partyRows);
         setTaxBreakdowns(breakdownRows);
         setPayments(paymentRows);
+        // Väzby opravných dokladov (pod RLS; zlyhanie nezhodí detail).
+        try {
+          setCreditNotes(await listFinalizedCreditNotesFor(inv.id));
+          setCorrectedInvoiceNumber(inv.corrects_invoice_id ? await getInvoiceNumberLabel(inv.corrects_invoice_id) : null);
+        } catch (error) {
+          console.error("Načítanie dobropisov zlyhalo:", error);
+        }
       }
     } catch (error) {
       console.error("Načítanie faktúry zlyhalo:", error);
@@ -374,7 +391,7 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
   }
 
   async function handleSaveDraft() {
-    if (!invoice) return;
+    if (!invoice || draftBusyRef.current) return;
     setSaveNotice("");
 
     const cleanedItems = draftItems.filter((item) => item.description.trim().length > 0);
@@ -389,28 +406,36 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
       return;
     }
     setDraftErrors([]);
+    draftBusyRef.current = true;
     setSavingDraft(true);
 
     try {
       const parsedTerms = Number(paymentTermsDays);
-      const updated = await updateDraftInvoiceHeader(invoice.id, userId, {
-        ...directionHeaderPatch(),
-        issue_date: issueDate,
-        due_date: dueDate || null,
-        variable_symbol: variableSymbol.trim() || null,
-        payment_terms_days: Number.isFinite(parsedTerms) && paymentTermsDays !== "" ? parsedTerms : null,
-        currency,
-      });
-
-      await replaceDraftInvoiceItems(invoice.id, cleanedItems);
+      // JEDNA atomická operácia (hlavička + riadky) — zlyhanie nič nezmaže.
+      const updated = await saveInvoiceDraft(
+        invoice.id,
+        {
+          ...directionHeaderPatch(),
+          issue_date: issueDate,
+          due_date: dueDate || null,
+          variable_symbol: variableSymbol.trim() || null,
+          payment_terms_days: Number.isFinite(parsedTerms) && paymentTermsDays !== "" ? parsedTerms : null,
+          currency,
+        },
+        cleanedItems,
+        invoice.updated_at
+      );
 
       setInvoice(updated);
       setDraftItems(cleanedItems.length > 0 ? cleanedItems : [emptyItem(companyDefaultVatRate, draftPriceMode ?? DEFAULT_PRICE_MODE)]);
       setSaveNotice(t("invoices.detail.draftSavedNotice"));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      setSaveNotice(t("invoices.errors.saveFailedPrefix", { message }));
+      setSaveNotice(
+        message.includes("ESBLU_DRAFT_STALE") ? t("invoices.errors.draftStale") : t("invoices.errors.saveFailedPrefix", { message })
+      );
     } finally {
+      draftBusyRef.current = false;
       setSavingDraft(false);
     }
   }
@@ -433,7 +458,7 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
   }
 
   async function handleFinalize() {
-    if (!invoice) return;
+    if (!invoice || draftBusyRef.current) return;
 
     const relevantItems = draftItems.filter((item) => item.description.trim().length > 0);
     const errors = validateDraftBeforeFinalize(
@@ -460,29 +485,36 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
     const confirmed = confirm(t("invoices.detail.finalizeConfirmBody"));
     if (!confirmed) return;
 
+    draftBusyRef.current = true;
     setFinalizing(true);
     setFinalizeError("");
 
     try {
       // Najprv ulož posledné zmeny hlavičky/riadkov (finalize prepočíta
       // autoritatívne v DB, ale drafte musia byť uložené, aby ich RPC videla).
-      await updateDraftInvoiceHeader(invoice.id, userId, {
-        ...directionHeaderPatch(),
-        issue_date: issueDate,
-        due_date: dueDate || null,
-        variable_symbol: variableSymbol.trim() || null,
-        payment_terms_days: paymentTermsDays !== "" ? Number(paymentTermsDays) : null,
-        currency,
-      });
-      await replaceDraftInvoiceItems(invoice.id, relevantItems);
+      await saveInvoiceDraft(
+        invoice.id,
+        {
+          ...directionHeaderPatch(),
+          issue_date: issueDate,
+          due_date: dueDate || null,
+          variable_symbol: variableSymbol.trim() || null,
+          payment_terms_days: paymentTermsDays !== "" ? Number(paymentTermsDays) : null,
+          currency,
+        },
+        relevantItems,
+        invoice.updated_at
+      );
       await finalizeInvoice(invoice.id);
       await loadAll();
     } catch (error) {
       const code = parseFinalizeErrorCode(error);
+      const stale = String(error instanceof Error ? error.message : error).includes("ESBLU_DRAFT_STALE");
       setFinalizeError(
-        code ? t(`invoices.errors.${code}`) : t("invoices.errors.finalizeFailedGeneric")
+        stale ? t("invoices.errors.draftStale") : code ? t(`invoices.errors.${code}`) : t("invoices.errors.finalizeFailedGeneric")
       );
     } finally {
+      draftBusyRef.current = false;
       setFinalizing(false);
     }
   }
@@ -622,7 +654,12 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
   }
 
   const totalPaid = payments.reduce((sum, payment) => sum + payment.paid_amount, 0);
-  const overdue = isInvoiceOverdue(invoice.due_date, invoice.payment_status);
+  const creditNote = invoice.kind === "credit_note";
+  const credited = creditedTotals(creditNotes);
+  const creditedAmount = credited.get(invoice.id) ?? 0;
+  const fullyCredited = isFullyCredited(invoice, credited);
+  // Dobropis nie je pohľadávka; faktúra úplne pokrytá dobropismi nie je po splatnosti.
+  const overdue = !creditNote && !fullyCredited && isInvoiceOverdue(invoice.due_date, invoice.payment_status);
   const seller = parties.find((party) => party.role === "seller");
   const buyer = parties.find((party) => party.role === "buyer");
   const preview = previewDraftTotals(draftItems.filter((item) => item.description.trim()));
@@ -650,6 +687,10 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
             <DocumentStatusBadge kind={isReceived ? "received" : "issued"} />
             {invoice.document_status === "draft" ? (
               <DocumentStatusBadge kind="draft" />
+            ) : creditNote ? null : fullyCredited ? (
+              <span className="rounded-doc-sm bg-surface-2 px-2 py-0.5 text-xs font-medium text-secondary">
+                {t("invoices.creditNote.fullyCredited")}
+              </span>
             ) : (
               <DocumentStatusBadge kind={invoice.payment_status} />
             )}
@@ -659,12 +700,44 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
         }
         aside={
           <p className="text-2xl font-semibold tabular-nums text-primary">
+            {/* Dobropis znižuje sumu — zobrazí sa so znamienkom mínus
+                (uložené hodnoty ostávajú kladné, znamienko dáva druh dokladu). */}
             {invoice.document_status === "draft"
-              ? formatMoney(Number(preview.totalAmount), invoice.currency)
-              : formatMoney(invoice.total_amount, invoice.currency)}
+              ? formatMoney(signedAmount(invoice.kind, Number(preview.totalAmount)), invoice.currency)
+              : formatMoney(signedAmount(invoice.kind, invoice.total_amount), invoice.currency)}
           </p>
         }
       />
+
+      {/* Väzba opravného dokladu a zostatok po dobropisoch. */}
+      {creditNote && invoice.corrects_invoice_id && (
+        <p className="mt-3 text-sm text-secondary">
+          {t("invoices.creditNote.correctsLabel", { number: correctedInvoiceNumber ?? t("invoices.numberFallback") })}{" "}
+          <Link href={invoiceDetailHref(invoice.corrects_invoice_id)} className="underline">
+            {t("invoices.creditNote.openCorrected")}
+          </Link>
+        </p>
+      )}
+      {!creditNote && creditedAmount > 0 && (
+        <div className="mt-3 rounded-doc border border-doc-border bg-surface-2 p-3 text-sm text-secondary">
+          <p>
+            {t("invoices.creditNote.creditedLabel")}: {formatMoney(-creditedAmount, invoice.currency)}
+          </p>
+          <p className="font-semibold text-primary">
+            {t("invoices.creditNote.remainingLabel")}: {formatMoney(remainingAfterCredits(invoice, credited), invoice.currency)}
+          </p>
+          <ul className="mt-1 list-disc pl-4">
+            {creditNotes.map((note) => (
+              <li key={note.id}>
+                <Link href={invoiceDetailHref(note.id)} className="underline">
+                  {note.invoice_number ?? t("invoices.numberFallback")}
+                </Link>{" "}
+                ({formatMoney(-note.total_amount, invoice.currency)})
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {invoice.document_status === "draft" ? (
         <>
@@ -928,7 +1001,7 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
                 <button
                   type="button"
                   onClick={handleSaveDraft}
-                  disabled={savingDraft}
+                  disabled={savingDraft || finalizing}
                   className="rounded-xl border px-6 py-3 font-semibold"
                 >
                   {savingDraft ? t("invoices.newInvoice.saving") : t("common.buttons.save")}
@@ -937,7 +1010,7 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
                 <button
                   type="button"
                   onClick={handleFinalize}
-                  disabled={finalizing || legalHold}
+                  disabled={finalizing || savingDraft || legalHold}
                   className={docButtonPrimary}
                 >
                   {finalizing
@@ -1124,7 +1197,7 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
 
                   {/* Opravný doklad dedí smer opravovanej faktúry — krížiť ich
                       zakazuje ESBLU_CORRECTED_INVOICE_DIRECTION_MISMATCH. */}
-                  {canEdit && !isReceived && (
+                  {canEdit && !isReceived && !creditNote && (
                     <Link href={`/faktury/new?corrects=${invoice.id}`} className={docButtonSecondary}>
                       {t("invoices.detail.createCorrectionButton")}
                     </Link>
@@ -1191,6 +1264,10 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
             </aside>
           </div>
 
+          {creditNote ? (
+            <p className="mt-8 text-sm text-secondary">{t("invoices.creditNote.noPaymentsNotice")}</p>
+          ) : (
+          <>
           <h2 className="mt-8 text-lg font-semibold text-primary">{t("invoices.detail.paymentsTitle")}</h2>
 
           {/* Platobný model je pre oba smery ten istý (RPC, payment_status).
@@ -1288,6 +1365,8 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
                 {savingPayment ? t("invoices.detail.savingPayment") : t("invoices.detail.addPaymentButton")}
               </button>
             </div>
+          )}
+          </>
           )}
         </>
       )}

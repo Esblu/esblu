@@ -500,7 +500,7 @@ await check("C+D+E: „Vymaž nepriradené bločky“ → náhľad s presnými I
   assert.equal(t1.intent?.name, "INBOX_DELETE_UNASSIGNED");
   assert.equal(t1.result.kind, "action_preview", JSON.stringify(t1.result));
   assert.equal((t1.result as { destructive?: boolean }).destructive, true);
-  assert.equal(text(t1.result), "Našiel som 1 nepriradený bloček. Zmažú sa tieto doklady z Inboxu aj s pôvodnými súbormi. Táto akcia sa nedá vrátiť. 2 ďalších vynechám, lebo sú súčasťou faktúry, priečinka, odovzdania alebo už boli stiahnuté. Naozaj ich chcete zmazať?");
+  assert.equal(text(t1.result), "Našiel som 1 nepriradený bloček. Účtovné doklady sa nemažú — presunú sa do archívu a zmiznú z Inboxu; súbory aj záznamy ostanú zachované. 2 ďalších vynechám, lebo sú súčasťou faktúry, priečinka, odovzdania alebo už boli stiahnuté. Presunúť ich do archívu?");
   assert.deepEqual(env.state.confirmations[0].canonical_args, { documentIds: ["r1"], documentTypes: ["receipt"] });
   assert.equal(env.state.tables.documents.length, 10, "prvý krok nič nezmaže");
 
@@ -510,9 +510,12 @@ await check("C+D+E: „Vymaž nepriradené bločky“ → náhľad s presnými I
   const done = await confirm(env, t1.result);
   assert.ok(done.kind === "action_result" && done.success, JSON.stringify(done));
   const ids = env.state.tables.documents.map((d) => d.id);
-  assert.ok(!ids.includes("r1"), "r1 zmazaný");
+  // P0-6: účtovný doklad sa archivuje (deleted_at), riadok aj súbory ostanú.
+  assert.ok(ids.includes("r1"), "r1 ostáva (archív)");
+  assert.ok(env.state.tables.documents.find((d) => d.id === "r1")?.deleted_at, "r1 archivovaný");
+  assert.ok(!env.state.tables.documents.find((d) => d.id === "r9")?.deleted_at, "r9 nedotknutý");
   for (const keep of ["r2", "r3", "r4", "r5", "r9", "i1", "i2", "rb"]) assert.ok(ids.includes(keep), `${keep} musí ostať`);
-  assert.deepEqual(env.state.storageRemoved.sort(), ["ai-inbox-attachments/u/r1-a.pdf", "ai-inbox-documents/u/r1.webp"]);
+  assert.deepEqual(env.state.storageRemoved, [], "súbory účtovného dokladu sa nemažú");
 });
 
 await check("H: replay potvrdenia → nič ďalšie", async () => {

@@ -350,33 +350,10 @@ export async function createDraftInvoice(
   return data as Invoice;
 }
 
-export async function updateDraftInvoiceHeader(
-  id: string,
-  userId: string,
-  input: Partial<DraftInvoiceHeaderInput>
-): Promise<Invoice> {
-  const { data, error } = await supabase
-    .from("invoices")
-    .update({
-      ...input,
-      // Mena sa normalizuje aj pri úprave, nie len pri založení — inak by
-      // sa „EUR " dalo do existujúceho dokladu doplniť neskôr.
-      ...(input.currency !== undefined ? { currency: normalizeCurrency(input.currency) } : {}),
-      updated_by: userId,
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", id)
-    .select("*")
-    .single();
-
-  if (error) throw error;
-  return data as Invoice;
-}
-
 /** Iba draft sa dá zmazať (RLS invoices_delete_finance_draft) — finalizovaná
  *  faktúra sa nikdy nemaže, oprava ide cez credit_note/debit_note. */
-export async function deleteDraftInvoice(id: string): Promise<void> {
-  const { error } = await supabase.from("invoices").delete().eq("id", id);
+export async function deleteDraftInvoice(id: string, db: SupabaseLike = supabase): Promise<void> {
+  const { error } = await db.from("invoices").delete().eq("id", id);
   if (error) throw error;
 }
 
@@ -411,38 +388,30 @@ function toEngineLine(item: DraftInvoiceItemInput): VatEngineLineInput {
 }
 
 /**
- * Nahradí VŠETKY riadky draftu naraz (delete + insert v jednej "logickej"
- * operácii z pohľadu volajúceho). Jednoduchšie a menej krehké než
- * riadok-po-riadku diffing pre editor s voľne pridávanými/mazanými/
- * preusporadúvanými riadkami. RLS aj DB trigger aj tak povoľujú zápis iba
- * kým je rodičovská faktúra draft, takže toto je bezpečné volať ľubovoľne
- * počas editácie draftu. line_net_amount/line_vat_amount/line_gross_amount
- * sa dopočítajú cez VAT engine (iba UI preview — finalize prepočíta
- * autoritatívne nanovo v DB).
+ * ATOMICKÉ uloženie draftu: hlavička + VŠETKY riadky v JEDNEJ DB transakcii
+ * (RPC esblu_save_invoice_draft, SECURITY INVOKER = pod RLS volajúceho).
+ *
+ * Predtým sa riadky mazali a potom vkladali dvoma samostatnými volaniami z
+ * prehliadača: keď vloženie zlyhalo (napr. CHECK quantity > 0 pri prázdnom
+ * poli), riadky draftu boli preč. Teraz buď prejde celé uloženie, alebo
+ * ostane pôvodný draft nedotknutý.
+ *
+ * `expectedUpdatedAt` = updated_at, ktoré mal volajúci načítané. Ak draft
+ * medzitým zmenil niekto iný (iná karta), uloženie sa odmietne
+ * (ESBLU_DRAFT_STALE) namiesto tichého prepisu.
+ *
+ * line_* sumy sa počítajú cez VAT engine (iba náhľad — finalize prepočíta
+ * autoritatívne v DB).
  */
-export async function replaceDraftInvoiceItems(
+export async function saveInvoiceDraft(
   invoiceId: string,
+  header: Partial<DraftInvoiceHeaderInput>,
   items: DraftInvoiceItemInput[],
+  expectedUpdatedAt: string | null,
   db: SupabaseLike = supabase
-): Promise<InvoiceItem[]> {
-  const { error: deleteError } = await db
-    .from("invoice_items")
-    .delete()
-    .eq("invoice_id", invoiceId);
-
-  if (deleteError) throw deleteError;
-
-  if (items.length === 0) return [];
-
-  // Riadky sa počítajú NARAZ, nie po jednom. Dopočítaná zložka (daň pri
-  // cenách bez dane, základ pri cenách s daňou) sa rozdeľuje zo skupinového
-  // čísla, takže riadok bez ostatných riadkov sa spočítať nedá — a keby sa
-  // to skúsilo, súčty by sa rozišli o cent. Presne to bol bug 1800,01.
+): Promise<Invoice> {
   const computed = computeInvoiceTotals(items.map(toEngineLine));
-
   const rows = items.map((item, index) => ({
-    invoice_id: invoiceId,
-    position: index + 1,
     description: item.description,
     quantity: item.quantity,
     unit: item.unit,
@@ -455,10 +424,50 @@ export async function replaceDraftInvoiceItems(
     line_gross_amount: Number(computed.lines[index].lineGrossAmount),
   }));
 
-  const { data, error } = await db.from("invoice_items").insert(rows).select("*");
+  const headerPayload: Record<string, unknown> = { ...header };
+  if (header.currency !== undefined) headerPayload.currency = normalizeCurrency(header.currency);
+  // Povolené polia hlavičky rieši RPC; smer, druh a opravovaný doklad sa pri
+  // úprave draftu nemenia.
+  delete headerPayload.direction;
+  delete headerPayload.kind;
+  delete headerPayload.corrects_invoice_id;
+
+  const { data, error } = await db.rpc("esblu_save_invoice_draft", {
+    p_invoice_id: invoiceId,
+    p_header: headerPayload,
+    p_items: rows,
+    p_expected_updated_at: expectedUpdatedAt,
+  });
 
   if (error) throw error;
-  return (data as InvoiceItem[]) ?? [];
+  const saved = Array.isArray(data) ? data[0] : data;
+  if (!saved) throw new Error("ESBLU_DRAFT_NOT_FOUND");
+  return saved as Invoice;
+}
+
+/** Finalizované dobropisy opravujúce danú faktúru (pod RLS). */
+export async function listFinalizedCreditNotesFor(invoiceId: string, db: SupabaseLike = supabase) {
+  const { data, error } = await db
+    .from("invoices")
+    .select("id, invoice_number, total_amount, kind, document_status, corrects_invoice_id")
+    .eq("corrects_invoice_id", invoiceId)
+    .eq("kind", "credit_note")
+    .eq("document_status", "finalized");
+  if (error) throw error;
+  return ((data ?? []) as { id: string; invoice_number: string | null; total_amount: number | string; kind: string; document_status: string; corrects_invoice_id: string | null }[])
+    .map((row) => ({ ...row, total_amount: Number(row.total_amount) }));
+}
+
+/** Číslo dokladu na zobrazenie (vydaná: interné číslo, prijatá: číslo dodávateľa). */
+export async function getInvoiceNumberLabel(invoiceId: string, db: SupabaseLike = supabase): Promise<string | null> {
+  const { data } = await db
+    .from("invoices")
+    .select("invoice_number, supplier_invoice_number, direction")
+    .eq("id", invoiceId)
+    .maybeSingle();
+  const row = data as { invoice_number: string | null; supplier_invoice_number: string | null; direction: string } | null;
+  if (!row) return null;
+  return row.direction === "received" ? row.supplier_invoice_number : row.invoice_number;
 }
 
 /** Live PREVIEW súčtov v UI editore draftu (VAT engine, decimal.js) — NIKDY

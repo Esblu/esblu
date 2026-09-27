@@ -614,6 +614,7 @@ const de = {
           "Ihr Konto ist bereits Mitglied einer anderen Firma, daher kann diese Einladung nicht angenommen werden.",
         ENTITLEMENT_USER_LIMIT: "Die Firma, die Sie eingeladen hat, hat ihr Benutzerlimit derzeit ausgeschöpft. Bitten Sie sie, den Zugang zu erweitern.",
         acceptFailedGeneric: "Die Einladung konnte nicht angenommen werden. Bitte versuchen Sie es erneut.",
+        ESBLU_INVITE_ROLE_NOT_PERMITTED: "Nur der Firmeninhaber kann eine Einladung für Buchhalter ausstellen. Bitten Sie den Inhaber um eine neue Einladung.",
       },
       createErrors: {
         ESBLU_NOT_ACTIVE_OWNER_OR_ADMIN:
@@ -625,6 +626,7 @@ const de = {
         ENTITLEMENT_USER_LIMIT: "Ihre Firma hat das Benutzerlimit erreicht (die Testversion enthält 1 Benutzer). Bestehende Teammitglieder bleiben.",
         ENTITLEMENT_TEAM_INACTIVE: "Weitere Benutzer hinzuzufügen ist für Ihre Firma derzeit nicht aktiviert. Bestehende Teammitglieder bleiben.",
         createFailedGeneric: "Die Einladung konnte nicht erstellt werden. Bitte versuchen Sie es erneut.",
+        ESBLU_INVITE_ROLE_NOT_PERMITTED: "Nur der Firmeninhaber kann einen Buchhalter einladen.",
       },
     },
   },
@@ -763,6 +765,7 @@ const de = {
         "Das Logo wird automatisch verkleinert und im WebP-Format gespeichert. Die maximal zulässige Größe beträgt 2 MB.",
       saving: "Wird gespeichert...",
       save: "Speichern",
+      bankDetailsOwnerOnly: "IBAN und BIC kann nur der Firmeninhaber ändern.",
     },
     users: {
       title: "Benutzer",
@@ -1286,6 +1289,8 @@ const de = {
       imageTooLarge8MBPrefixed: "{{label}} darf höchstens 8 MB groß sein.",
       imageInvalidContentPrefixed: "{{label}} hat keinen gültigen Bildinhalt.",
       aiNoDataReturned: "Die KI hat keine Daten zurückgegeben.",
+      confirmArchiveDocument: "Buchhaltungsbelege werden nicht gelöscht, sondern archiviert — sie verschwinden aus den aktiven Listen, Datei und Datensatz bleiben erhalten. Fortfahren?",
+      documentRemovalDenied: "Sie sind nicht berechtigt, dieses Dokument zu entfernen.",
     },
     documentSavedToInbox: "Das Dokument wurde in der Inbox gespeichert.",
     noPlate: "ohne Kennzeichen",
@@ -1766,6 +1771,8 @@ const de = {
     genericErrorTitle: "Etwas ist schiefgelaufen",
     genericErrorDescription:
       "Das Firmenkonto konnte nicht erstellt werden. Bitte erneut anmelden — falls das Problem weiterhin besteht, kontaktieren Sie den Support.",
+    pendingInviteTitle: "Sie haben eine offene Einladung",
+    pendingInviteDescription: "Für Ihre E-Mail-Adresse wartet eine Einladung in eine bestehende Firma. Öffnen Sie den Link aus der Einladungs-E-Mail und nehmen Sie sie an — eine eigene Firma legen wir jetzt nicht an.",
   },
 
   authCallback: {
@@ -1870,17 +1877,17 @@ const de = {
         "Datenbank, Authentifizierung, Dateispeicher (Fotos, Dokumente)",
       supabaseDataCategories: "Alle in der Anwendung verarbeiteten Daten",
       supabaseLocation:
-        "TODO — Region des Supabase-Projekts muss noch bestätigt werden (EU/US)",
+        "EU — Frankfurt (AWS eu-central-1)",
       openaiPurpose:
         "KI-Erkennung von Daten aus hochgeladenen Dokumenten und Fotos",
       openaiDataCategories:
         "Inhalt des zur Verarbeitung übermittelten Dokuments/Fotos",
       openaiLocation:
-        "TODO — Verarbeitungsstandort gemäß OpenAI-API-Kontoeinstellung noch zu bestätigen",
+        "Verarbeitungsstandort in dieser Liste noch nicht rechtlich bestätigt — Einzelheiten auf Anfrage unter privacy@esblu.com",
       vercelPurpose: "Hosting und Betrieb der Anwendung",
       vercelDataCategories:
         "Für die Bereitstellung der Anwendung erforderliche technische Verbindungsdaten",
-      vercelLocation: "TODO — Einsatzregion noch zu bestätigen",
+      vercelLocation: "Serverfunktionen: EU — Frankfurt (fra1) laut Projektkonfiguration; weitere Einzelheiten auf Anfrage unter privacy@esblu.com",
       namecheapPurpose:
         "Hosting der geschäftlichen E-Mail-Kommunikation (Postfächer info@esblu.com und privacy@esblu.com — privacy@esblu.com ist ein Alias, das auf dasselbe Postfach verweist) und Empfang von E-Mail-Nachrichten von Nutzern, einschließlich Anliegen zu personenbezogenen Daten",
       namecheapDataCategories:
@@ -2210,6 +2217,7 @@ const de = {
       lineGross: "Zeile brutto",
       taxableAmount: "Bemessungsgrundlage",
       vatAmount: "MwSt-Betrag",
+      kind: "Belegart",
     },
     errors: {
       failed: "Der Export ist fehlgeschlagen. Bitte versuchen Sie es erneut.",
@@ -2483,6 +2491,7 @@ const de = {
       pdfReceivedNotSupported:
         "Für eine Eingangsrechnung erstellt Esblu kein PDF — das Original stammt vom Lieferanten. Öffnen Sie stattdessen den zugeordneten Quellbeleg.",
       pdfGenerationFailed: "PDF-Erstellung fehlgeschlagen. Bitte versuchen Sie es erneut.",
+      draftStale: "Dieser Entwurf wurde inzwischen an anderer Stelle geändert. Laden Sie die Seite neu und versuchen Sie es erneut — nichts wurde überschrieben.",
     },
     pdf: {
       documentNumberLabel: "Belegnummer",
@@ -2499,6 +2508,16 @@ const de = {
       totalDueLabel: "Gesamtbetrag fällig",
       paymentDetailsTitle: "Zahlungsdetails",
       footerNote: "Erstellt mit Esblu",
+      correctsLabel: "Korrigiert Rechnung Nr.",
+      creditTotalLabel: "Gutschrift gesamt",
+    },
+    creditNote: {
+      fullyCredited: "Vollständig gutgeschrieben",
+      correctsLabel: "Korrigiert Rechnung {{number}}",
+      openCorrected: "Korrigierte Rechnung öffnen",
+      creditedLabel: "Gutgeschrieben",
+      remainingLabel: "Rest nach Gutschriften",
+      noPaymentsNotice: "Eine Gutschrift ist keine Forderung — dazu werden keine Zahlungen erfasst. Sie mindert den Betrag der korrigierten Rechnung.",
     },
   },
   folders: {
@@ -2744,16 +2763,17 @@ const de = {
       listTitle: "{{count}} {{what}} im Inbox",
       allProtected: "Ich habe {{count}} {{what}} gefunden, aber alle gehören zu einer Rechnung, einem Ordner, einer Übergabe oder wurden bereits heruntergeladen. Per Sprache lösche ich sie nicht — löschen Sie sie bei Bedarf einzeln im Inbox.",
       tooMany: "Das sind {{count}} Dokumente. Per Sprache lösche ich höchstens {{limit}} auf einmal — bitte schränken Sie die Auswahl ein, z. B. nach Monat, oder nutzen Sie den Inbox.",
-      deleteSummary: "Ich habe {{count}} {{what}} gefunden. Diese Dokumente werden samt Originaldateien aus dem Inbox gelöscht. Dies kann nicht rückgängig gemacht werden.",
+      deleteSummary: "Ich habe {{count}} {{what}} gefunden. Buchhaltungsbelege werden nicht gelöscht — sie werden archiviert und aus dem Inbox entfernt; Dateien und Datensätze bleiben erhalten.",
       deleteSkipped: "{{count}} weitere überspringe ich, weil sie zu einer Rechnung, einem Ordner, einer Übergabe gehören oder bereits heruntergeladen wurden.",
       deleteLarge: "Achtung: Es handelt sich um viele Dokumente ({{count}}).",
-      deleteQuestion: "Wirklich löschen?",
-      deleteConfirm: "{{count}} löschen",
+      deleteQuestion: "In das Archiv verschieben?",
+      deleteConfirm: "{{count}} archivieren",
       deleted: "Gelöschte Dokumente: {{count}}.",
       dataChanged: "Die Dokumente haben sich inzwischen geändert, daher wurde nichts gelöscht. Bitte wiederholen Sie den Befehl.",
       deliveryNotesUnsupported: "Der Inbox unterscheidet bei Lieferscheinen nicht zwischen zugeordnet und nicht zugeordnet. Bitte öffnen Sie sie im Inbox.",
       whichType: "Welche nicht zugeordneten Dokumente meinen Sie — Belege oder Rechnungen?",
       untitled: "Dokument ohne Namen",
+      archived: "Archivierte Belege: {{count}}.",
     },
     partner: {
       askName: "Wie heißt der neue Geschäftspartner?",
@@ -2861,6 +2881,8 @@ const de = {
       deleted: "Die Lagerposition „{{name}}“ wurde gelöscht.",
       gone: "Die Lagerposition existiert nicht mehr.",
       readOnlyNotice: "Sie haben nur Lesezugriff auf das Lager. Positionen legt der Inhaber oder ein Administrator an.",
+      priceNotSupported: "Preise von Lagerartikeln ändere ich im Assistenten noch nicht — bitte ändern Sie den Preis im Artikeldetail im Lager. Die Menge wurde nicht geändert.",
+      askEditFieldValue: "Was soll ich bei „{{name}}“ auf {{value}} ändern — die Menge oder den Namen?",
     },
     machine: {
       confirmCandidate: "Meinen Sie die Maschine „{{name}}“?",

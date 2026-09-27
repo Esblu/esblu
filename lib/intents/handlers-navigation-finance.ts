@@ -4,6 +4,7 @@ import { translate } from "@/lib/i18n/translate";
 import type { IntentResult, InvoiceStatusFilter } from "@/lib/intents/types";
 import type { CompanyMemberRole } from "@/lib/company";
 import { isInvoiceOverdue } from "@/lib/invoicing/vat-engine";
+import { creditedTotals, isOpenReceivable, signedAmount } from "@/lib/invoicing/credit-note-semantics";
 import { stockStatus, type InventoryItemRow } from "@/lib/inventory";
 import { fetchMachineDocuments } from "@/lib/machine-documents";
 import {
@@ -11,6 +12,18 @@ import {
   findMatchingCustomCategory,
 } from "@/lib/custom-document-categories";
 import { loadCompanyPartners, resolvePartnerAmong } from "@/lib/partner-resolver";
+
+/** Súčty vystavených dobropisov podľa opravovanej faktúry (pod RLS). */
+async function loadCreditedTotals(supabase: SupabaseClient): Promise<Map<string, number>> {
+  const { data } = await supabase
+    .from("invoices")
+    .select("id, kind, document_status, total_amount, corrects_invoice_id")
+    .eq("kind", "credit_note")
+    .eq("document_status", "finalized")
+    .limit(2000);
+  return creditedTotals((data ?? []) as { id: string; kind: string; document_status: string; total_amount: number; corrects_invoice_id: string | null }[]);
+}
+
 
 // =============================================================================
 // Voice Phase 1 — navigácia a účtovnícke čítanie.
@@ -178,6 +191,8 @@ type InvoiceRow = {
   document_status: string | null;
   issue_date: string | null;
   due_date?: string | null;
+  kind?: string | null;
+  corrects_invoice_id?: string | null;
 };
 
 function invoiceLabel(row: InvoiceRow, locale: Locale): string {
@@ -186,9 +201,10 @@ function invoiceLabel(row: InvoiceRow, locale: Locale): string {
       ? row.supplier_invoice_number
       : row.invoice_number;
 
+  // Dobropis znižuje sumu — v zozname so znamienkom mínus.
   const amount =
     typeof row.total_amount === "number"
-      ? ` · ${row.total_amount} ${row.currency ?? ""}`.trimEnd()
+      ? ` · ${signedAmount(row.kind ?? "", row.total_amount)} ${row.currency ?? ""}`.trimEnd()
       : "";
 
   return `${number ?? translate(locale, "invoices.numberFallback")}${amount}`;
@@ -291,7 +307,7 @@ export async function handleShowInvoicesByStatus(
   let query = supabase
     .from("invoices")
     .select(
-      "id, invoice_number, supplier_invoice_number, direction, total_amount, currency, payment_status, document_status, issue_date, due_date"
+      "id, invoice_number, supplier_invoice_number, direction, total_amount, currency, payment_status, document_status, issue_date, due_date, kind, corrects_invoice_id"
     )
     .order("issue_date", { ascending: false })
     .limit(100);
@@ -325,10 +341,29 @@ export async function handleShowInvoicesByStatus(
     return { kind: "error", text: translate(locale, "search.errors.generic") };
   }
 
-  let rows = (data as InvoiceRow[]) ?? [];
+  let rows = ((data as InvoiceRow[]) ?? []).map((row) => ({ ...row, total_amount: row.total_amount === null ? null : Number(row.total_amount) }));
 
-  if (effective === "overdue") {
-    rows = rows.filter((row) => isInvoiceOverdue(row.due_date ?? null, row.payment_status ?? ""));
+  // Dobropis NIE JE pohľadávka a faktúra úplne pokrytá dobropismi už nie je
+  // nič dlžná (lib/invoicing/credit-note-semantics.ts). Dobropisy sa
+  // načítajú zvlášť, aby sa rátali aj tie mimo limitu zoznamu.
+  if (effective === "unpaid" || effective === "overdue" || effective === "paid") {
+    const credited = await loadCreditedTotals(supabase);
+    const settlement = (row: InvoiceRow) => ({
+      id: row.id,
+      kind: row.kind ?? "regular_invoice",
+      document_status: row.document_status ?? "",
+      payment_status: row.payment_status,
+      total_amount: row.total_amount,
+      due_date: row.due_date ?? null,
+    });
+    if (effective === "paid") {
+      rows = rows.filter((row) => row.kind !== "credit_note");
+    } else {
+      rows = rows.filter((row) => isOpenReceivable(settlement(row), credited));
+    }
+    if (effective === "overdue") {
+      rows = rows.filter((row) => isInvoiceOverdue(row.due_date ?? null, row.payment_status ?? ""));
+    }
   }
 
   if (rows.length === 0) {

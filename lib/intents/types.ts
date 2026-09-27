@@ -378,6 +378,9 @@ export type IntentArgs = {
   // „Pridaj do Spreja" — cieľ bez slova „položka"/„sklad". Platí IBA vtedy,
   // keď ho resolver skladu bezpečne nájde; inak veta nie je skladová.
   implicitInventoryTarget?: boolean;
+  // „Zmeň cenu položky X" — pole, ktoré chcel používateľ zmeniť. Cenu skladová
+  // položka neeviduje → asistent to povie, nič nemení (žiadny tip na množstvo).
+  editField?: "price";
   // Holé „zložka" (zložka dokumentov ALEBO priečinok dokladov) — typ sa ešte
   // musí rozhodnúť (lib/intents/orchestrator.ts#resolveAmbiguousContainer).
   ambiguousContainer?: boolean;

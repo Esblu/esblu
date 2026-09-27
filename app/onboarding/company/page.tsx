@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { IS_MOBILE_BUILD } from "@/lib/build-target";
+import { inviteReturnPath, isPendingInviteError, pendingInviteTokenFromMetadata } from "@/lib/auth/invite-return";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
@@ -36,7 +38,8 @@ type PageState =
   | "no-session"
   | "bootstrapping"
   | "error"
-  | "beta-required";
+  | "beta-required"
+  | "pending-invite";
 
 export default function OnboardingCompanyPage() {
   const router = useRouter();
@@ -60,6 +63,18 @@ export default function OnboardingCompanyPage() {
       // zrozumiteľne.
       setState("no-session");
       return;
+    }
+
+    // Pozvaný používateľ si NEZAKLADÁ vlastnú firmu — vráti sa na pozvánku
+    // (token z metadát overeného účtu; server to aj tak vynucuje).
+    {
+      const { data: userData } = await supabase.auth.getUser();
+      const inviteToken = pendingInviteTokenFromMetadata(userData.user?.user_metadata);
+      const invitePath = inviteToken ? inviteReturnPath(inviteToken, IS_MOBILE_BUILD) : null;
+      if (invitePath) {
+        router.replace(invitePath);
+        return;
+      }
     }
 
     setState("bootstrapping");
@@ -108,6 +123,13 @@ export default function OnboardingCompanyPage() {
       // vôbec vznikol. Ak sa napriek tomu sem dostal (napr. hook ešte nie
       // je zapnutý v Supabase Dashboarde), odhlás ho — nesmie zostať
       // prihlásený v stave "má účet, ale nikdy nebude mať firmu".
+      // Server odmietol vlastnú firmu, lebo e-mail má platnú pozvánku —
+      // používateľ musí otvoriť odkaz z pozvánky (token tu nemáme).
+      if (isPendingInviteError(error)) {
+        setState("pending-invite");
+        return;
+      }
+
       if (isBetaAccessRequiredError(error)) {
         setBetaMessage(getEnsureOwnerCompanyErrorMessage(error, t));
         await supabase.auth.signOut();
@@ -153,6 +175,15 @@ export default function OnboardingCompanyPage() {
         >
           {t("invite.goToLogin")}
         </Link>
+      </Centered>
+    );
+  }
+
+  if (state === "pending-invite") {
+    return (
+      <Centered>
+        <h1 className="text-2xl font-bold text-primary">{t("onboarding.pendingInviteTitle")}</h1>
+        <p className="mt-3 text-secondary">{t("onboarding.pendingInviteDescription")}</p>
       </Centered>
     );
   }

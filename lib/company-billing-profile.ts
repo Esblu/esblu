@@ -318,10 +318,12 @@ export function validateCompanyBillingProfileForm(
 export async function upsertCompanyBillingProfile(
   companyId: string,
   userId: string,
+  // iban/bic sú voliteľné: ne-owner ich neposiela (bankové údaje mení iba
+  // majiteľ — DB trigger esblu_guard_company_bank_details).
   payload: Omit<
     CompanyBillingProfile,
-    "company_id" | "created_at" | "updated_at" | "updated_by" | "logo_path"
-  >,
+    "company_id" | "created_at" | "updated_at" | "updated_by" | "logo_path" | "iban" | "bic"
+  > & Partial<Pick<CompanyBillingProfile, "iban" | "bic">>,
   logoPath?: string | null
 ): Promise<void> {
   const row: Record<string, unknown> = {

@@ -1,6 +1,7 @@
 import type { Workbook, Worksheet } from "exceljs";
 import { downloadBlob } from "@/lib/file-actions";
 import { computeFileSha256 } from "@/lib/invoicing/received-dedupe";
+import { documentSign } from "@/lib/invoicing/credit-note-semantics";
 
 // =============================================================================
 // Odovzdanie dokladov účtovníkovi (handoff).
@@ -127,6 +128,7 @@ export async function exportAccountingHandoff(
   const invoiceHeaders = [
     t("handoff.col.number"),
     t("handoff.col.direction"),
+    t("handoff.col.kind"),
     t("handoff.col.issueDate"),
     t("handoff.col.dueDate"),
     t("handoff.col.counterparty"),
@@ -145,20 +147,25 @@ export async function exportAccountingHandoff(
   styleHeaderRow(headerSheet, 1);
   headerSheet.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: invoiceHeaders.length } };
 
+  // Sumy sú v zošite PODPÍSANÉ: dobropis (credit_note) so znamienkom mínus,
+  // aby súčty stĺpcov a rozpis DPH zodpovedali ekonomickej realite (model
+  // lib/invoicing/credit-note-semantics.ts). V DB ostávajú kladné.
   for (const invoice of invoices) {
+    const sign = documentSign(invoice.kind);
     headerSheet.addRow([
       invoice.direction === "received"
         ? invoice.supplier_invoice_number ?? ""
         : invoice.invoice_number ?? "",
       t(`invoices.direction.${invoice.direction}`),
+      t(`invoices.kind.${invoice.kind}`),
       invoice.issue_date,
       invoice.due_date ?? "",
       invoice.counterpartyName,
       invoice.counterpartyIco ?? "",
       invoice.counterpartyIcDph ?? "",
-      invoice.subtotal_amount,
-      invoice.vat_total_amount,
-      invoice.total_amount,
+      sign * invoice.subtotal_amount,
+      sign * invoice.vat_total_amount,
+      sign * invoice.total_amount,
       invoice.currency,
       t(`invoices.paymentStatus.${invoice.payment_status}`),
       t(`handoff.accountingStatus.${invoice.accountingStatus}`),
@@ -167,7 +174,7 @@ export async function exportAccountingHandoff(
     ]);
   }
 
-  autoWidths(headerSheet, [18, 12, 12, 12, 32, 14, 16, 14, 14, 14, 10, 14, 16, 16, 38]);
+  autoWidths(headerSheet, [18, 12, 14, 12, 12, 32, 14, 16, 14, 14, 14, 10, 14, 16, 16, 38]);
 
   // --------------------------------------------------------------------
   // Hárok 2 — riadkové položky
@@ -199,6 +206,7 @@ export async function exportAccountingHandoff(
       invoice.direction === "received"
         ? invoice.supplier_invoice_number ?? invoice.id
         : invoice.invoice_number ?? invoice.id;
+    const sign = documentSign(invoice.kind);
 
     for (const item of invoice.items) {
       itemSheet.addRow([
@@ -209,9 +217,9 @@ export async function exportAccountingHandoff(
         item.unit_price,
         item.vat_category_code,
         item.vat_rate,
-        item.line_net_amount,
-        item.line_vat_amount,
-        item.line_gross_amount,
+        sign * item.line_net_amount,
+        sign * item.line_vat_amount,
+        sign * item.line_gross_amount,
       ]);
     }
   }
@@ -236,12 +244,13 @@ export async function exportAccountingHandoff(
   // Zoskupenie podľa kategórie a sadzby — presne to, čo ide do priznania.
   const breakdown = new Map<string, { category: string; rate: number; net: number; vat: number }>();
   for (const invoice of invoices) {
+    const sign = documentSign(invoice.kind);
     for (const item of invoice.items) {
       const key = `${item.vat_category_code}|${item.vat_rate}`;
       const entry =
         breakdown.get(key) ?? { category: item.vat_category_code, rate: item.vat_rate, net: 0, vat: 0 };
-      entry.net += item.line_net_amount;
-      entry.vat += item.line_vat_amount;
+      entry.net += sign * item.line_net_amount;
+      entry.vat += sign * item.line_vat_amount;
       breakdown.set(key, entry);
     }
   }

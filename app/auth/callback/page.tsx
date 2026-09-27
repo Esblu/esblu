@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { IS_MOBILE_BUILD } from "@/lib/build-target";
+import { inviteReturnPath, pendingInviteTokenFromMetadata } from "@/lib/auth/invite-return";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
@@ -151,6 +153,15 @@ export default function AuthCallbackPage() {
 
     if (type === "recovery") {
       router.replace("/reset-hesla?verified=1");
+      return;
+    }
+
+    // Pozvaný používateľ (token v metadátach OVERENÉHO účtu) ide späť na
+    // pozvánku, nie do owner onboardingu (lib/auth/invite-return.ts).
+    const inviteToken = pendingInviteTokenFromMetadata(verifyData.user.user_metadata);
+    const invitePath = inviteToken ? inviteReturnPath(inviteToken, IS_MOBILE_BUILD) : null;
+    if (invitePath) {
+      router.replace(invitePath);
       return;
     }
 

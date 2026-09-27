@@ -93,6 +93,7 @@ import { DownloadStateBadge } from "@/app/components/folders/DownloadStateBadge"
 import { FolderPickerModal } from "@/app/components/folders/FolderPickerModal";
 import { describePackageError, describePackageOutcome } from "@/app/components/folders/package-messages";
 import { FilterChips } from "@/app/components/ui/Primitives";
+import { DocumentRemovalError, isDeliveryNoteEvidence, isRetainedDocumentType, removeDocumentFromActiveView } from "@/lib/document-retention";
 import {
   countDocumentsInCategory,
   deleteCustomCategory,
@@ -2243,22 +2244,17 @@ review_status: reviewStatus,
     }
   }
 
-  // Vymazanie dokumentu z public.documents (faktúra, bloček, PZP, servisný
-  // doklad, iné) — bod 1 zadania. Poradie je zámerne: najprv Storage
-  // (hlavný súbor aj všetky prílohy), až potom DB riadok, aby nikdy
-  // nevznikol osirotený súbor v Storage bez zodpovedajúceho DB záznamu (ak
-  // by DB delete zlyhal po vymazaní Storage, dokument v zozname ostane a
-  // vymazanie sa dá bezpečne zopakovať — remove() na už neexistujúcej ceste
-  // nie je chyba). document_links aj document_attachments majú FK ON DELETE
-  // CASCADE, takže sa v DB odstránia automaticky spolu s dokumentom.
+  // Odstránenie dokumentu z Inboxu (lib/document-retention.ts):
+  //   - účtovný doklad (faktúra, bloček, dodací list) sa NEMAŽE — archivuje
+  //     sa (deleted_at), originál aj záznam ostanú uchované,
+  //   - ostatné dokumenty sa zmažú, ale NAJPRV DB riadok, až potom súbor.
+  // Oprávnenie rozhoduje RLS; DB trigger odmietne tvrdé zmazanie účtovného
+  // dokladu aj pri priamom volaní API.
   async function deleteOtherDocument(doc: OtherDocumentRow) {
     if (deletingDocumentId) return;
 
-    if (
-      !confirm(
-        t("inbox.errors.confirmDeleteDocument")
-      )
-    ) {
+    const retained = isRetainedDocumentType(doc.document_type);
+    if (!confirm(t(retained ? "inbox.errors.confirmArchiveDocument" : "inbox.errors.confirmDeleteDocument"))) {
       return;
     }
 
@@ -2280,50 +2276,7 @@ review_status: reviewStatus,
         throw new Error(t("inbox.errors.notLoggedIn"));
       }
 
-      const { data: docAttachments, error: attachmentsError } = await supabase
-        .from("document_attachments")
-        .select("storage_bucket, storage_path")
-        .eq("document_id", doc.id)
-        .eq("company_id", membership.company_id);
-
-      if (attachmentsError) {
-        throw new Error(
-          t("inbox.errors.documentAttachmentsLoadFailed", { message: attachmentsError.message })
-        );
-      }
-
-      const pathsByBucket = new Map<string, string[]>();
-      const addPath = (bucket: string | null, path: string | null) => {
-        if (!bucket || !path) return;
-        const existing = pathsByBucket.get(bucket) ?? [];
-        existing.push(path);
-        pathsByBucket.set(bucket, existing);
-      };
-
-      addPath(doc.storage_bucket, doc.storage_path);
-      (docAttachments || []).forEach((attachment) =>
-        addPath(attachment.storage_bucket, attachment.storage_path)
-      );
-
-      for (const [bucket, paths] of pathsByBucket.entries()) {
-        const { error: removeError } = await supabase.storage
-          .from(bucket)
-          .remove(paths);
-
-        if (removeError) {
-          throw new Error(
-            t("inbox.errors.documentFilesDeleteFailed", { message: removeError.message })
-          );
-        }
-      }
-
-      const { error: deleteError } = await supabase
-        .from("documents")
-        .delete()
-        .eq("id", doc.id)
-        .eq("company_id", membership.company_id);
-
-      if (deleteError) throw deleteError;
+      await removeDocumentFromActiveView(supabase, doc, membership.company_id);
 
       setOtherDocuments((prev) => prev.filter((item) => item.id !== doc.id));
       setSelectedOtherDocument((current) =>
@@ -2331,8 +2284,8 @@ review_status: reviewStatus,
       );
     } catch (deleteError: unknown) {
       alert(
-        deleteError instanceof Error
-          ? deleteError.message
+        deleteError instanceof DocumentRemovalError && deleteError.reason === "denied"
+          ? t("inbox.errors.documentRemovalDenied")
           : t("inbox.errors.deleteDocumentFailed")
       );
     } finally {
@@ -2564,8 +2517,6 @@ review_status: reviewStatus,
   // (Supabase Storage to považuje za úspešný no-op), takže opakovaný pokus
   // po čiastočnom zlyhaní je vždy bezpečný.
   async function deleteRecord(id: string) {
-    if (!confirm(t("inbox.errors.confirmDeleteRecord"))) return;
-
     const {
       data: { session },
     } = await supabase.auth.getSession();
@@ -2583,49 +2534,60 @@ review_status: reviewStatus,
     }
 
     // Vlastníctvo overujeme explicitne (nielen cez RLS) — select je
-    // obmedzený na id AJ company_id aktívnej firmy, takže cudzí
-    // záznam sa sem nikdy nenačíta.
+    // obmedzený na id AJ company_id aktívnej firmy.
     const { data: record, error: recordError } = await supabase
       .from("ai_evidence")
-      .select("photo_url")
+      .select("photo_url, evidence_kind, document_type")
       .eq("id", id)
       .eq("company_id", membership.company_id)
       .single();
 
-    if (recordError) {
+    if (recordError || !record) {
       console.error("Chyba pri načítaní záznamu:", recordError);
       alert(t("inbox.errors.recordLoadFailed"));
       return;
     }
 
-    // Ak existuje fotografia, vymažeme ju zo Storage skôr než DB riadok.
-    if (record?.photo_url) {
-      const { error: photoDeleteError } = await supabase.storage
-        .from("ai-evidence-documents")
-        .remove([record.photo_url]);
+    // Dodací list je účtovný doklad → iba archív (záznam aj fotka ostanú).
+    // Vážny lístok sa maže: NAJPRV DB riadok, až potom fotka (zlyhanie DB
+    // nič nezničí; zlyhanie Storage nechá iba osirelý súbor bez odkazu).
+    const deliveryNote = isDeliveryNoteEvidence(record.evidence_kind, record.document_type);
+    if (!confirm(t(deliveryNote ? "inbox.errors.confirmArchiveDocument" : "inbox.errors.confirmDeleteRecord"))) return;
 
-      if (photoDeleteError) {
-        console.error(
-          "Fotografiu sa nepodarilo odstrániť zo Storage, záznam nebol vymazaný:",
-          photoDeleteError
-        );
-        alert(t("inbox.errors.recordDeletePhotoFailed"));
+    if (deliveryNote) {
+      const { data: archived, error: archiveError } = await supabase
+        .from("ai_evidence")
+        .update({ deleted_at: new Date().toISOString() })
+        .eq("id", id)
+        .eq("company_id", membership.company_id)
+        .select("id");
+      if (archiveError || (archived ?? []).length !== 1) {
+        console.error("Archivácia dodacieho listu zlyhala:", archiveError);
+        alert(t("inbox.errors.documentRemovalDenied"));
         return;
       }
-    }
+    } else {
+      const { data: deleted, error: deleteError } = await supabase
+        .from("ai_evidence")
+        .delete()
+        .eq("id", id)
+        .eq("company_id", membership.company_id)
+        .select("id");
 
-    // Vymažeme databázový záznam — opäť obmedzené na id AJ company_id (defense
-    // in depth, nespoliehame sa iba na RLS).
-    const { error: deleteError } = await supabase
-      .from("ai_evidence")
-      .delete()
-      .eq("id", id)
-      .eq("company_id", membership.company_id);
+      if (deleteError || (deleted ?? []).length !== 1) {
+        console.error("Chyba pri mazaní záznamu:", deleteError);
+        alert(t("inbox.errors.recordDeleteDbFailed"));
+        return;
+      }
 
-    if (deleteError) {
-      console.error("Chyba pri mazaní záznamu:", deleteError);
-      alert(t("inbox.errors.recordDeleteDbFailed"));
-      return;
+      if (record.photo_url) {
+        const { error: photoDeleteError } = await supabase.storage
+          .from("ai-evidence-documents")
+          .remove([record.photo_url]);
+        if (photoDeleteError) {
+          console.error("Fotografiu sa nepodarilo upratať (záznam je už zmazaný):", photoDeleteError);
+        }
+      }
     }
 
     setSelectedRecord(null);
@@ -2661,6 +2623,8 @@ async function loadRecords(currentCompanyId: string = companyId) {
     .from("ai_evidence")
     .select("*")
     .eq("company_id", currentCompanyId)
+    // Archivované dodacie listy (deleted_at) nie sú v aktívnom zozname.
+    .is("deleted_at", null)
     .order("created_at", { ascending: false });
 
   if (!error && data) {

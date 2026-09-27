@@ -33,6 +33,8 @@ export function makeDb(opts: { role: Role; financeManage: boolean; companyId?: s
     confirmations: [] as Row[],
     conversations: new Map<string, Row>(),
     storageRemoved: [] as string[],
+    /** Test: ďalšie esblu_save_invoice_draft zlyhá (overenie atomicity). */
+    failNextDraftSave: false,
     queries: 0,
   };
   // RLS: iba riadky aktívnej firmy (riadky bez company_id patria A).
@@ -141,6 +143,32 @@ export function makeDb(opts: { role: Role; financeManage: boolean; companyId?: s
       state.conversations.delete(`${opts.userId ?? USER_A}|${companyId}|${a.p_conversation_id}`);
       return null;
     },
+    // Atomické uloženie draftu (SQL: jedna transakcia). Emulácia: najprv
+    // sa overí VŠETKO (draft, CHECK-y riadkov), až potom sa čokoľvek zmení —
+    // zlyhanie nechá pôvodné riadky nedotknuté, rovnako ako ROLLBACK.
+    esblu_save_invoice_draft: (a) => {
+      if (state.failNextDraftSave) {
+        state.failNextDraftSave = false;
+        return { __error: { code: "XX000", message: "forced failure" } };
+      }
+      const invoice = state.tables.invoices.find((row) => row.id === a.p_invoice_id && (row.company_id ?? COMPANY_A) === companyId);
+      if (!invoice) return { __error: { code: "P0001", message: "ESBLU_DRAFT_NOT_FOUND" } };
+      // DB default document_status = draft
+      if ((invoice.document_status ?? "draft") !== "draft") return { __error: { code: "P0001", message: "ESBLU_INVOICE_FINALIZED_IMMUTABLE" } };
+      if (a.p_expected_updated_at && invoice.updated_at && invoice.updated_at !== a.p_expected_updated_at) {
+        return { __error: { code: "P0001", message: "ESBLU_DRAFT_STALE" } };
+      }
+      const items = (a.p_items as Row[]) ?? [];
+      for (const item of items) {
+        if (!(Number(item.quantity) > 0) || !(Number(item.unit_price) >= 0) || !["S", "Z", "E", "AE"].includes(String(item.vat_category_code))) {
+          return { __error: { code: "23514", message: "invoice_items check violation" } };
+        }
+      }
+      Object.assign(invoice, a.p_header ?? {}, { updated_at: new Date(Date.now() + Math.random()).toISOString() });
+      state.tables.invoice_items = state.tables.invoice_items.filter((row) => row.invoice_id !== invoice.id);
+      items.forEach((item, index) => state.tables.invoice_items.push({ id: randomUUID(), company_id: companyId, invoice_id: invoice.id, position: index + 1, ...item }));
+      return [invoice];
+    },
     esblu_claim_action_confirmation: (a) => {
       const row = state.confirmations.find((c) => c.id === a.p_confirmation_id && c.company_id === companyId);
       if (!row || row.consumed_at) return null;
@@ -151,7 +179,9 @@ export function makeDb(opts: { role: Role; financeManage: boolean; companyId?: s
   const db = {
     from: table,
     rpc(n: string, a: Row = {}) {
-      const response = { data: rpc[n] ? rpc[n](a) : null, error: null };
+      const raw = rpc[n] ? rpc[n](a) : null;
+      const failed = raw && typeof raw === "object" && "__error" in (raw as Row);
+      const response = failed ? { data: null, error: (raw as Row).__error } : { data: raw, error: null };
       return Object.assign(Promise.resolve(response), { maybeSingle: () => Promise.resolve(response) });
     },
     storage: { from: (bucket: string) => ({ remove: async (paths: string[]) => { state.storageRemoved.push(...paths.map((p) => `${bucket}/${p}`)); return { error: null }; } }) },

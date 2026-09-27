@@ -7,6 +7,7 @@ import PlanLimitNotice from "@/app/components/PlanLimitNotice";
 import { usePlanUsage } from "@/hooks/use-plan-usage";
 import { isPlanLimitReachedError } from "@/lib/plan-limits";
 import { normalizeSpz } from "@/lib/normalize-spz";
+import { sanitizeRegistrationScan } from "@/lib/vehicle-registration-merge";
 import { formatDate } from "@/lib/i18n/format";
 import { vehicleDetailHref } from "@/lib/entity-links";
 import {
@@ -691,17 +692,18 @@ export default function VozidlaPage() {
       let vehicleId: string;
 
       if (registrationDuplicateVehicle) {
-        const { data: updated, error: updateError } = await supabase
-          .from("vehicles")
-          .update(registrationVehiclePayload(session.user.id))
-          .eq("id", registrationDuplicateVehicle.id)
-          .eq("company_id", membership.company_id)
-          .select("id")
-          .single();
+        // EXISTUJÚCE vozidlo: zlúčenie na serveri. Pole, ktoré AI
+        // nerozpoznala (chýba, prázdne, šum), NIČ neprepíše; user_id sa
+        // nemení (lib/vehicle-registration-merge.ts + RPC
+        // esblu_apply_vehicle_registration, RLS owner/admin).
+        const { data: updatedId, error: updateError } = await supabase.rpc("esblu_apply_vehicle_registration", {
+          p_vehicle_id: registrationDuplicateVehicle.id,
+          p_fields: sanitizeRegistrationScan(registrationFields),
+        });
 
         if (updateError) throw updateError;
 
-        vehicleId = updated.id;
+        vehicleId = String(updatedId);
       } else {
         const { data: inserted, error: insertVehicleError } = await supabase
           .from("vehicles")

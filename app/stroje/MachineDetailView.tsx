@@ -204,6 +204,9 @@ export default function MachineDetailView({
   const [services, setServices] = useState<MachineService[]>([]);
   const [service, setService] = useState(emptyService);
   const [showServiceForm, setShowServiceForm] = useState(false);
+  // Kmeňové dáta stroja (servisné záznamy, fotky) mení iba owner/admin
+  // (RLS machine_services_*_manager, machine_photos_*_manager).
+  const [canManageMachine, setCanManageMachine] = useState(false);
   const [editingServiceId, setEditingServiceId] = useState<string | null>(null);
   const [isServiceSaving, setIsServiceSaving] = useState(false);
   const [deletingServiceId, setDeletingServiceId] = useState<string | null>(null);
@@ -248,6 +251,7 @@ export default function MachineDetailView({
     }
 
     setCompanyId(membership.company_id);
+    setCanManageMachine(membership.role === "owner" || membership.role === "admin");
     loadMachine(membership.company_id);
     loadPhotos(membership.company_id);
     loadServices(membership.company_id);
@@ -870,19 +874,21 @@ export default function MachineDetailView({
           <SectionPanel
             title={t("machines.detail.servicesTitle")}
             actions={
-              <button
-                type="button"
-                onClick={() => {
-                  if (showServiceForm) cancelServiceEdit();
-                  else setShowServiceForm(true);
-                }}
-                className={`${docButtonSecondary} gap-2`}
-              >
-                {showServiceForm ? null : <PlusIcon size={16} />}
-                {showServiceForm
-                  ? t("machines.detail.closeForm")
-                  : t("vehicles.services.addService")}
-              </button>
+              canManageMachine ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (showServiceForm) cancelServiceEdit();
+                    else setShowServiceForm(true);
+                  }}
+                  className={`${docButtonSecondary} gap-2`}
+                >
+                  {showServiceForm ? null : <PlusIcon size={16} />}
+                  {showServiceForm
+                    ? t("machines.detail.closeForm")
+                    : t("vehicles.services.addService")}
+                </button>
+              ) : undefined
             }
           >
             {legalHold && (
@@ -891,7 +897,7 @@ export default function MachineDetailView({
               </div>
             )}
 
-            {showServiceForm && (
+            {showServiceForm && canManageMachine && (
               <div className="mb-4 rounded-doc border border-doc-border bg-surface-2 p-4">
                 <p className="mb-3 text-sm font-semibold text-primary">
                   {editingServiceId
@@ -1058,6 +1064,7 @@ export default function MachineDetailView({
                       </span>
                     }
                     actions={
+                      canManageMachine ? (
                       <>
                         <button
                           type="button"
@@ -1079,6 +1086,7 @@ export default function MachineDetailView({
                             : t("common.buttons.delete")}
                         </button>
                       </>
+                      ) : undefined
                     }
                   >
                     {item.description && (
@@ -1138,6 +1146,7 @@ export default function MachineDetailView({
           <SectionPanel
             title={t("machines.detail.galleryTitle")}
             actions={
+              canManageMachine ? (
               <>
                 <label
                   className={`${docButtonSecondary} cursor-pointer gap-2 ${
@@ -1171,6 +1180,7 @@ export default function MachineDetailView({
                   />
                 </label>
               </>
+              ) : undefined
             }
           >
             {legalHold && (
@@ -1204,6 +1214,7 @@ export default function MachineDetailView({
                         className="aspect-[4/3] w-full object-cover transition group-hover:opacity-90"
                       />
                     </a>
+                    {canManageMachine && (
                     <button
                       type="button"
                       onClick={() => deletePhoto(photo)}
@@ -1213,6 +1224,7 @@ export default function MachineDetailView({
                     >
                       <TrashIcon size={16} />
                     </button>
+                    )}
                   </li>
                 ))}
               </ul>

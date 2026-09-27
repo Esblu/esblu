@@ -1659,6 +1659,20 @@ export function parseOperationalIntent(rawText: string, hints: ParseHints = {}):
     if (mode) {
       const drop = [...OP_ADD_QTY, ...OP_SUB_QTY, ...OP_SET_QTY, ...OP_INVENTORY_STRONG, ...OP_GENERIC_ITEM, ...OP_UNITS, "stav", "mnozstv", "pocet", "stand", "menge", "anzahl", "quantity", "stock", "bestand"];
       const name = remainderName(rawText.replace(/-?\d+(?:[.,]\d+)?/g, " "), drop);
+      // „Zmeň/Uprav Sprej na 5" bez jednotky a bez slova „množstvo/počet":
+      // cieľ zmeny je nejednoznačný (počet? názov „5"?) → otázka, nie tip.
+      // „Nastav Sprej na 5" (nastav = hodnota) a „… na 5 kusov" ostávajú stavom.
+      const firstWord = normalizeText(rawText.trim().split(/\s+/)[0] ?? "").replace(/[^a-z]/g, "");
+      const ambiguousVerb = ["zmen", "zmente", "uprav", "upravte", "change", "edit", "update", "andere", "aendere"].includes(firstWord);
+      if (mode === "set" && ambiguousVerb && !qty.unit && !hasQuantityNoun && name) {
+        const valueMatch = /(?:^|\s)(?:na|to|auf)\s+(.+?)\s*[.!?]*$/i.exec(rawText.trim());
+        return build("INVENTORY_ITEM_EDIT", {
+          query: name,
+          entityName: name,
+          quantity: Math.abs(qty.quantity),
+          newName: valueMatch?.[1]?.trim() || undefined,
+        });
+      }
       return build("INVENTORY_QUANTITY_ADJUST", {
         quantity: Math.abs(qty.quantity),
         unit: qty.unit,
@@ -1878,6 +1892,40 @@ export function parseShadowedReadIntent(rawText: string): ParsedIntent | null {
   return null;
 }
 
+// =============================================================================
+// CENA vs. MNOŽSTVO (audit 2026-09-26, P0): „Zmeň cenu tej položky na 4,90"
+// sa čítalo ako „nastav stav na 4,9". Slovo ceny teraz určuje pole: skladová
+// položka cenu v Esblu neeviduje (inventory_items nemá cenový stĺpec), takže
+// asistent to povie a NIČ nezmení — žiadny tip na iné pole.
+// =============================================================================
+
+const PRICE_WORD = /(^|[^a-z])(cena|cenu|ceny|cene|cenou|cien|predajn\w*|nakupn\w*|jednotkov\w* cen\w*|price|prices|preis|preise|preises)([^a-z]|$)/;
+const EDIT_VERB = /^(zmen|zmente|zmenit|uprav|upravte|upravit|nastav|nastavte|nastavit|change|set|update|edit|andere|aendere|setze|bearbeite)$/;
+const PRICE_NOISE = /^(na|to|auf|zu|of|the|der|die|das|den|von|fur|fuer|for|tej|tu|tuto|tejto|tomto|ten|tento|toto|polozk\w*|skladov\w*|item|artikel|cena|cenu|ceny|cene|cenou|price|preis\w*|predajn\w*|nakupn\w*|jednotkov\w*|eur\w*|€|kc|czk|usd|s|dph|bez|vat)$/;
+
+export function parseInventoryPriceRequest(rawText: string): ParsedIntent | null {
+  const text = normalizeText(rawText).replace(/[.?!,;:]+$/g, "");
+  if (!PRICE_WORD.test(text)) return null;
+  // Iná oblasť (faktúra, servis, partner) má cenu ako súčasť svojho zápisu.
+  if (/(faktur|rechnung|invoice|servis|service|wartung|partner|zakaznik|odberatel|dodavatel|dobropis|bloc|doklad)/.test(text)) return null;
+  const words = text.split(/\s+/);
+  if (!EDIT_VERB.test(words[0] ?? "")) return null;
+  const rawWords = rawText.trim().replace(/[.?!]+$/, "").split(/\s+/);
+  const nameWords = rawWords.slice(1).filter((word, index) => {
+    const w = normalizeText(word).replace(/[.,;:]+$/, "");
+    if (PRICE_NOISE.test(w)) return false;
+    // Hodnota („4,90", „4.90€") nie je súčasť mena.
+    if (/^\d+(?:[.,]\d+)?(?:€)?$/.test(w)) return false;
+    void index;
+    return true;
+  });
+  const name = nameWords.join(" ").trim();
+  return build("INVENTORY_ITEM_EDIT", {
+    editField: "price",
+    ...(name ? { query: name.charAt(0).toUpperCase() + name.slice(1), entityName: name.charAt(0).toUpperCase() + name.slice(1) } : { useContext: true }),
+  });
+}
+
 /** Meno/hľadaný výraz nikdy neobsahuje sloveso akcie („uprav sprej" → „sprej"). */
 function withoutActionWords(intent: ParsedIntent | null): ParsedIntent | null {
   if (!intent) return intent;
@@ -1912,6 +1960,9 @@ export function parseIntentDeterministic(rawText: string, hints: ParseHints = {}
 function parseIntentDeterministicInner(rawText: string, hints: ParseHints = {}): ParsedIntent | null {
   const text = normalizeText(rawText);
   if (!text) return null;
+
+  const price = parseInventoryPriceRequest(rawText);
+  if (price) return price;
 
   const grammar = decomposeCommand(rawText);
   const explicit = parseGrammarCommand(rawText, grammar);

@@ -32,7 +32,9 @@
     "test:master-control": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/master-control-tests.ts",
     "test:continuous-voice": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/continuous-voice-tests.ts",
     "test:assistant-grammar": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/assistant-grammar-tests.ts",
-    "test:plan-entitlements": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/plan-entitlements-tests.ts"
+    "test:plan-entitlements": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/plan-entitlements-tests.ts",
+    "test:closed-beta-p0": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/closed-beta-p0-tests.ts",
+    "test:p0-bank-sql": "node --experimental-strip-types --no-warnings scripts/p0-bank-details-sql-tests.ts"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.9.0",

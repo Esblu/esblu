@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 import BackLink from "@/app/components/BackLink";
@@ -16,6 +16,7 @@ import { formatDate, formatNumber, formatMoney as formatMoneyIntl } from "@/lib/
 import InvoicesIcon from "@/app/components/icons/InvoicesIcon";
 import { invoiceDetailHref } from "@/lib/entity-links";
 import { isInvoiceOverdue, listInvoices, listInvoiceItems, type Invoice } from "@/lib/invoices";
+import { creditedTotals, isFullyCredited, signedAmount } from "@/lib/invoicing/credit-note-semantics";
 import {
   listAccountingStates,
   listHandoffStatuses,
@@ -96,9 +97,13 @@ import {
 // Samotné pravidlá zaradenia žijú v lib/invoicing/invoice-register-filters.ts,
 // aby ich používali počty aj zoznam a dali sa odskúšať bez prehliadača.
 
-/** "Po splatnosti" je odvodený stav — pozri lib/invoicing/vat-engine.ts. */
+/**
+ * "Po splatnosti" je odvodený stav — pozri lib/invoicing/vat-engine.ts.
+ * Dobropis nikdy nie je po splatnosti (nie je pohľadávka) — model
+ * lib/invoicing/credit-note-semantics.ts.
+ */
 const isOverdueInvoice = (invoice: Invoice) =>
-  isInvoiceOverdue(invoice.due_date, invoice.payment_status);
+  invoice.kind !== "credit_note" && isInvoiceOverdue(invoice.due_date, invoice.payment_status);
 
 /** Jedna šablóna stĺpcov pre hlavičku aj riadky — nesmú sa rozísť. */
 const INVOICE_COLUMNS =
@@ -244,9 +249,17 @@ export default function FakturyPage() {
   // Predtým sa počítalo cez všetky doklady, kým zoznam navyše filtroval
   // podľa stavu — register tak tvrdil „Všetky 3" a vykreslil dva riadky.
   // Počty sa preto počítajú nad TOU ISTOU množinou, z ktorej vzniká zoznam.
+  // Vystavené dobropisy podľa opravovanej faktúry — faktúra úplne pokrytá
+  // dobropismi už nie je neuhradená ani po splatnosti.
+  const creditedByInvoice = useMemo(() => creditedTotals(invoices), [invoices]);
+  const isFullyCreditedInvoice = useCallback(
+    (invoice: Invoice) => isFullyCredited(invoice, creditedByInvoice),
+    [creditedByInvoice]
+  );
+
   const sectionScopedInvoices = useMemo(
-    () => invoices.filter((invoice) => matchesSection(invoice, section, isOverdueInvoice)),
-    [invoices, section]
+    () => invoices.filter((invoice) => matchesSection(invoice, section, isOverdueInvoice, isFullyCreditedInvoice)),
+    [invoices, section, isFullyCreditedInvoice]
   );
 
   const directionCounts = useMemo(() => {
@@ -271,15 +284,15 @@ export default function FakturyPage() {
     };
     for (const invoice of directionScopedInvoices) {
       for (const key of SECTION_ORDER) {
-        if (matchesSection(invoice, key, isOverdueInvoice)) counts[key] += 1;
+        if (matchesSection(invoice, key, isOverdueInvoice, isFullyCreditedInvoice)) counts[key] += 1;
       }
     }
     return counts;
-  }, [directionScopedInvoices]);
+  }, [directionScopedInvoices, isFullyCreditedInvoice]);
 
   const sectionAndDirectionInvoices = useMemo(
-    () => directionScopedInvoices.filter((invoice) => matchesSection(invoice, section, isOverdueInvoice)),
-    [directionScopedInvoices, section]
+    () => directionScopedInvoices.filter((invoice) => matchesSection(invoice, section, isOverdueInvoice, isFullyCreditedInvoice)),
+    [directionScopedInvoices, section, isFullyCreditedInvoice]
   );
 
   // Filter stiahnutia sa počíta nad tým istým zoznamom, aký používateľ vidí.
@@ -836,7 +849,9 @@ export default function FakturyPage() {
 
               <ul className="mt-2 space-y-1.5">
                 {filteredInvoices.map((invoice) => {
-                  const overdue = isInvoiceOverdue(invoice.due_date, invoice.payment_status);
+                  const creditNote = invoice.kind === "credit_note";
+                  const fullyCredited = isFullyCreditedInvoice(invoice);
+                  const overdue = !creditNote && !fullyCredited && isInvoiceOverdue(invoice.due_date, invoice.payment_status);
                   // Prevádzková lehota v Esblu. Nie je to zákonná lehota
                   // uchovávania — tú plní zákazník mimo Esblu.
                   const handoffStatus = handoffStatuses[invoice.id] ?? "none";
@@ -902,12 +917,21 @@ export default function FakturyPage() {
                           seba, aby doklad zabral tri riadky, nie šesť. */}
                       <div className="mt-2 flex items-center justify-between gap-3 sm:contents">
                         <p className="text-base font-semibold tabular-nums text-primary sm:text-sm sm:text-right">
-                          {formatMoney(invoice.total_amount, invoice.currency)}
+                          {/* Dobropis znižuje sumu — zobrazí sa so znamienkom mínus. */}
+                          {formatMoney(signedAmount(invoice.kind, invoice.total_amount), invoice.currency)}
                         </p>
 
                         <div className="flex flex-wrap items-center justify-end gap-1.5">
                           {invoice.document_status === "draft" ? (
                             <DocumentStatusBadge kind="draft" />
+                          ) : creditNote ? (
+                            <span className="rounded-doc-sm bg-surface-2 px-2 py-0.5 text-xs font-medium text-secondary">
+                              {t("invoices.kind.credit_note")}
+                            </span>
+                          ) : fullyCredited ? (
+                            <span className="rounded-doc-sm bg-surface-2 px-2 py-0.5 text-xs font-medium text-secondary">
+                              {t("invoices.creditNote.fullyCredited")}
+                            </span>
                           ) : (
                             <DocumentStatusBadge kind={invoice.payment_status} />
                           )}
