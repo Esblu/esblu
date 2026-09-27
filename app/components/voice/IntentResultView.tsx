@@ -1,6 +1,8 @@
 "use client";
 
-import Link from "next/link";
+// Mobile M0: odkazy zo servera sú v kanonickom webovom tvare — AppLink ich
+// preloží pre aktuálny build a v appke nikdy nevykreslí mŕtvy odkaz.
+import { AppLink } from "@/app/components/AppLink";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import type { IntentResult } from "@/lib/intents/types";
 import { storePartnerPrefill } from "@/lib/partner-prefill";
@@ -85,14 +87,14 @@ export function IntentResultView({
     switch (intentResult.kind) {
       case "navigate":
         return (
-          <Link href={intentResult.entity.href} className={cardClass}>
+          <AppLink href={intentResult.entity.href} className={cardClass}>
             <p className="min-h-11 py-2 text-sm font-bold text-accent-cyan">
               {t("search.ui.openAction")}
             </p>
             <p className="mt-1 text-base font-bold text-primary">
               {intentResult.entity.label}
             </p>
-          </Link>
+          </AppLink>
         );
 
       case "answer":
@@ -100,12 +102,12 @@ export function IntentResultView({
           <div className={boxClass}>
             <p className="text-sm font-medium text-primary">{intentResult.text}</p>
             {intentResult.entity && (
-              <Link
+              <AppLink
                 href={intentResult.entity.href}
                 className="mt-2 inline-block min-h-11 py-2 text-sm font-bold text-accent-cyan"
               >
                 {intentResult.entity.label} →
-              </Link>
+              </AppLink>
             )}
             <QuickReplies replies={intentResult.quickReplies} onQuickReply={onQuickReply} disabled={actionSubmitting} />
           </div>
@@ -114,12 +116,12 @@ export function IntentResultView({
       case "report":
         return (
           <div className="rounded-2xl border border-subtle bg-surface-1/60 p-4">
-            <Link
+            <AppLink
               href={intentResult.entity.href}
               className="min-h-11 py-2 text-sm font-bold text-accent-cyan"
             >
               {intentResult.entity.label} →
-            </Link>
+            </AppLink>
             <div className="mt-3 space-y-4">
               {intentResult.sections.map((section) => (
                 <div key={section.title}>
@@ -147,9 +149,9 @@ export function IntentResultView({
               {intentResult.title}
             </p>
             {intentResult.items.map((item) => (
-              <Link key={item.id} href={item.href} className={cardClass}>
+              <AppLink key={item.id} href={item.href} className={cardClass}>
                 <p className="text-base font-bold text-primary">{item.label}</p>
-              </Link>
+              </AppLink>
             ))}
             <QuickReplies replies={intentResult.quickReplies} onQuickReply={onQuickReply} disabled={actionSubmitting} />
           </div>
@@ -165,7 +167,7 @@ export function IntentResultView({
               {intentResult.title}
             </p>
             {intentResult.items.map((item, index) => (
-              <Link key={`${item.entity.id}-${index}`} href={item.entity.href} className={cardClass}>
+              <AppLink key={`${item.entity.id}-${index}`} href={item.entity.href} className={cardClass}>
                 <div className="flex items-center justify-between gap-3">
                   <div className="min-w-0">
                     <p className="break-words text-sm font-bold text-primary">
@@ -179,7 +181,7 @@ export function IntentResultView({
                     {item.severityLabel}
                   </span>
                 </div>
-              </Link>
+              </AppLink>
             ))}
           </div>
         );
@@ -191,7 +193,7 @@ export function IntentResultView({
               {intentResult.title}
             </p>
             {intentResult.items.map((item, index) => (
-              <Link key={`${item.href}-${index}`} href={item.href} className={cardClass}>
+              <AppLink key={`${item.href}-${index}`} href={item.href} className={cardClass}>
                 <div className="flex items-center justify-between gap-3">
                   <div className="min-w-0">
                     <p className="break-words text-sm font-bold text-primary">{item.label}</p>
@@ -204,7 +206,7 @@ export function IntentResultView({
                     {item.linkLabel}
                   </span>
                 </div>
-              </Link>
+              </AppLink>
             ))}
           </div>
         );
@@ -216,9 +218,9 @@ export function IntentResultView({
               {t("search.ui.multipleMatches")}
             </p>
             {intentResult.candidates.map((candidate) => (
-              <Link key={candidate.id} href={candidate.href} className={cardClass}>
+              <AppLink key={candidate.id} href={candidate.href} className={cardClass}>
                 <p className="text-base font-bold text-primary">{candidate.label}</p>
-              </Link>
+              </AppLink>
             ))}
           </div>
         );
@@ -273,12 +275,12 @@ export function IntentResultView({
               {intentResult.text}
             </p>
             {intentResult.folder && (
-              <Link
+              <AppLink
                 href={`/priecinky/${intentResult.folder.id}`}
                 className="mt-2 inline-block min-h-11 py-2 text-sm font-bold text-accent-cyan"
               >
                 {intentResult.folder.name} →
-              </Link>
+              </AppLink>
             )}
           </div>
         );
@@ -305,12 +307,12 @@ export function IntentResultView({
 
             <p className="mt-3 text-sm leading-relaxed text-secondary">{intentResult.note}</p>
 
-            <Link
+            <AppLink
               href={intentResult.entity.href}
               className="mt-3 inline-block min-h-11 py-2 text-sm font-bold text-accent-cyan"
             >
               {intentResult.entity.label} →
-            </Link>
+            </AppLink>
           </div>
         );
 
@@ -321,13 +323,13 @@ export function IntentResultView({
         return (
           <div className={boxClass}>
             <p className="text-sm font-medium text-primary">{intentResult.text}</p>
-            <Link
+            <AppLink
               href={intentResult.href}
               onClick={() => storePartnerPrefill(prefill)}
               className="mt-2 inline-block min-h-11 py-2 text-sm font-bold text-accent-cyan"
             >
               {intentResult.openLabel} →
-            </Link>
+            </AppLink>
           </div>
         );
       }

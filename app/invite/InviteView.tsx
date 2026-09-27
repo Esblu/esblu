@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
+import { canonicalWebUrl } from "@/lib/app-origin";
 import {
   acceptCompanyInvite,
   getInviteErrorMessage,
@@ -161,7 +162,8 @@ export default function InviteView({ token }: { token: string }) {
         // origin by tu bol nepoužiteľný, presne ten istý dôvod ako pri
         // publicWebUrl(), pozri lib/public-url.ts). Web wrapper ani mobile
         // wrapper toto správanie nemenia.
-        emailRedirectTo: `https://esblu.com/invite/${token}`,
+        // Mobile M0: kanonický host z lib/app-origin.ts (www; apex presmerúva).
+        emailRedirectTo: canonicalWebUrl(`/invite/${token}`),
         // Closed Beta (supabase/migrations/20260816130000_add_closed_beta_
         // allowlist.sql): raw invite token sa posiela ako user_metadata, aby
         // ho Auth hook esblu_before_user_created_beta_gate mohol NEZÁVISLE

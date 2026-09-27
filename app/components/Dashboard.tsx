@@ -18,7 +18,8 @@ import BusinessPartnersIcon from "./icons/BusinessPartnersIcon";
 import InvoicesIcon from "./icons/InvoicesIcon";
 import SettingsIcon from "./icons/SettingsIcon";
 import type { VehicleVignette } from "@/lib/vehicle-vignettes";
-import { vehicleDetailHref } from "@/lib/entity-links";
+import { inventoryItemDetailHref, machineDetailHref, vehicleDetailHref } from "@/lib/entity-links";
+import { isAppRouteAvailable } from "@/lib/app-routes";
 import { buildLegacyDashboardAlerts } from "@/lib/deadlines";
 import { apiUrl } from "@/lib/api-url";
 import { REQUEST_LOCALE_HEADER } from "@/lib/i18n/request-locale";
@@ -61,6 +62,11 @@ function isModuleVisible(
   financeAccess: boolean,
   operationalAccess: boolean
 ): boolean {
+  // Mobile M0: modul, ktorý v tomto builde neexistuje (mobilná appka zatiaľ
+  // nemá faktúry, partnerov ani priečinky), sa nezobrazí vôbec — žiadna
+  // dlaždica ani položka menu, ktorá by viedla na prázdnu stránku. Na webe
+  // je každá routa dostupná, správanie sa nemení.
+  if (!isAppRouteAvailable(href)) return false;
   if (FINANCE_HREFS.includes(href)) return financeAccess;
   if (OPERATIONAL_HREFS.includes(href)) return operationalAccess;
   return true;
@@ -296,7 +302,7 @@ export default function Dashboard() {
             subtitle: `${v.spz || t("dashboard.noPlate")} | ${
               v.vin || t("dashboard.noVin")
             }`,
-            href: `/vozidla/${v.id}`,
+            href: vehicleDetailHref(v.id),
           })),
 
         ...machines
@@ -311,7 +317,7 @@ export default function Dashboard() {
             subtitle: `${m.category || t("dashboard.noCategory")} | ${
               m.serial_number || t("dashboard.noSerialNumber")
             }`,
-            href: `/stroje/${m.id}`,
+            href: machineDetailHref(m.id),
           })),
 
         ...items
@@ -326,7 +332,7 @@ export default function Dashboard() {
             subtitle: `${i.quantity || 0} ${i.unit || ""} | ${
               i.location || t("dashboard.noLocation")
             }`,
-            href: `/sklad/${i.id}`,
+            href: inventoryItemDetailHref(i.id),
           })),
       ]
     : [];

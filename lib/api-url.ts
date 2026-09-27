@@ -1,23 +1,25 @@
 import { IS_MOBILE_BUILD } from "@/lib/build-target";
+import { mobileApiOrigin } from "@/lib/app-origin";
 
 // -----------------------------------------------------------------------------
 // Zdieľaný helper na volanie existujúcich Next.js API routes (app/api/**) tak,
 // aby fungovali nezmenené AJ vo webovom builde (relatívna cesta, rovnaký
-// origin ako esblu.com), AJ v mobile Capacitor builde (absolútna URL na
-// produkčný Vercel backend, keďže mobile frontend beží z lokálne zabalených
-// assets, nie z https://esblu.com origin).
+// origin), AJ v mobile Capacitor builde (absolútna URL na produkčný backend,
+// keďže mobile frontend beží z lokálne zabalených assets — origin
+// https://localhost na Androide, capacitor://localhost na iOS).
 //
-// Princíp (zadanie FÁZA 1, bod 5):
-// - web    → API_BASE_URL = ""                → apiUrl("/api/x") === "/api/x"
-// - mobile → API_BASE_URL = "https://esblu.com" → apiUrl("/api/x") === "https://esblu.com/api/x"
+// - web    → apiUrl("/api/x") === "/api/x"  (bez zmeny)
+// - mobile → apiUrl("/api/x") === "https://www.esblu.com/api/x"
 //
-// Web build IS_MOBILE_BUILD je vždy false (pozri lib/build-target.ts), takže
-// toto pre existujúci web produkčný build nič nemení — apiUrl(path) === path.
+// Mobile M0 (2026-09-27): predtým "https://esblu.com" — apex odpovedá 308 na
+// www a CORS preflight s presmerovaním WebView odmietne. Origin je teraz
+// jediný, v lib/app-origin.ts (kanonický www, voliteľný build-time override
+// NEXT_PUBLIC_ESBLU_API_ORIGIN pre staging/lokálny vývoj).
+//
+// Server musí mobilný origin povoliť v CORS — pozri lib/cors.ts + proxy.ts.
 // -----------------------------------------------------------------------------
 
-const MOBILE_API_BASE_URL = "https://esblu.com";
-
 export function apiUrl(path: string): string {
-  const base = IS_MOBILE_BUILD ? MOBILE_API_BASE_URL : "";
+  const base = IS_MOBILE_BUILD ? mobileApiOrigin() : "";
   return `${base}${path}`;
 }

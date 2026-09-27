@@ -20,6 +20,8 @@ const ROOT = ${JSON.stringify(process.cwd())};
 const EXTS = [".ts", ".tsx", "/index.ts"];
 
 export async function resolve(specifier, context, next) {
+  // Next.js balíček nemá "exports" mapu pre podcesty — v Node treba príponu.
+  if (specifier === "next/server") return next("next/server.js", context);
   let base = null;
   if (specifier.startsWith("@/")) base = path.join(ROOT, specifier.slice(2));
   else if ((specifier.startsWith("./") || specifier.startsWith("../")) && context.parentURL?.startsWith("file:")) {

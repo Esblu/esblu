@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import { canonicalWebUrl } from "@/lib/app-origin";
 import { ensureMyOwnerCompany, getEnsureOwnerCompanyErrorMessage } from "@/lib/company";
 import { acceptLegalDocumentAtRegistration } from "@/lib/legal-acceptance";
 import { REQUIRED_ACCEPTANCE_DOCUMENTS } from "@/lib/legal-config";
@@ -201,7 +202,7 @@ export default function LoginPage() {
     // ostáva iba ako neškodná fallback hodnota (Supabase ju v praxi
     // nepoužije, pokiaľ je template nastavená podľa vyššie — pozri
     // komentár v app/auth/callback/page.tsx pre presný text template).
-    emailRedirectTo: "https://esblu.com/auth/callback",
+    emailRedirectTo: canonicalWebUrl("/auth/callback"),
   },
 });
 
@@ -294,7 +295,7 @@ async function resetPassword() {
       // "INITIAL_SESSION" bežne prihláseného používateľa) — pozri fix v
       // app/reset-hesla/page.tsx. `redirectTo` tu ostáva iba ako neškodná
       // fallback hodnota.
-      redirectTo: "https://esblu.com/auth/callback",
+      redirectTo: canonicalWebUrl("/auth/callback"),
     }
   );
 

@@ -47,11 +47,29 @@ function main() {
 
   // Čistá Node.js kópia (fs.cpSync, dostupné od Node 16.7+) — žiadny shell
   // `cp -r`/`rsync`, funguje identicky na Windows/macOS/Linux.
-  cpSync(rootPublicDir, mobilePublicDir, { recursive: true });
+  //
+  // Mobile M0 (2026-09-27): vynechané sú adresáre, ktoré do natívnej appky
+  // nepatria — video/ (~41 MB demo MP4 pre marketingovú landing page webu)
+  // a .well-known/ (assetlinks.json / AASA musia byť iba na webovej
+  // doméne, v bundli appky nemajú žiadny význam).
+  cpSync(rootPublicDir, mobilePublicDir, {
+    recursive: true,
+    filter: (source) => !isExcludedFromMobile(source),
+  });
 
   console.log(
     `[prepare-mobile-public] Skopírované: ${rootPublicDir} -> ${mobilePublicDir}`
   );
+}
+
+// Top-level položky koreňového public/, ktoré sa do mobile/public NEKOPÍRUJÚ.
+const MOBILE_PUBLIC_EXCLUDES = ["video", ".well-known"];
+
+function isExcludedFromMobile(source) {
+  const relative = path.relative(rootPublicDir, source);
+  if (!relative || relative.startsWith("..")) return false;
+  const top = relative.split(path.sep)[0];
+  return MOBILE_PUBLIC_EXCLUDES.includes(top);
 }
 
 function isBrokenSymlink(p) {

@@ -1,4 +1,5 @@
 import { IS_MOBILE_BUILD } from "@/lib/build-target";
+import { CANONICAL_WEB_ORIGIN } from "@/lib/app-origin";
 
 // -----------------------------------------------------------------------------
 // Zdieľaný helper na generovanie CANONICAL verejnej web URL (na zdieľanie mimo
@@ -26,7 +27,9 @@ import { IS_MOBILE_BUILD } from "@/lib/build-target";
 // pre existujúci web produkčný build sa touto zmenou nič nemení.
 // -----------------------------------------------------------------------------
 
-const MOBILE_PUBLIC_WEB_URL = "https://esblu.com";
+// Mobile M0 (2026-09-27): kanonický www host (apex presmerúva, Android App
+// Links sú deklarované pre www — pozri lib/app-origin.ts).
+const MOBILE_PUBLIC_WEB_URL = CANONICAL_WEB_ORIGIN;
 
 export function publicWebUrl(path: string): string {
   if (IS_MOBILE_BUILD) {

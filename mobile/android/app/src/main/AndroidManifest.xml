@@ -23,73 +23,48 @@
             </intent-filter>
 
             <!--
-              HTTPS Android App Links — ÚZKY rozsah, iba pre routy, ktoré
-              dnes reálne prichádzajú z e-mailového/zdieľaného odkazu na
-              https://esblu.com (pozri MOBILE AUTH + DEEP LINKS audit):
+              ANDROID APP LINKS (Mobile M0, 2026-09-27)
 
-                /invite/*            — invite emailRedirectTo + zdieľaný
-                                        invite odkaz (app/invite/[token],
-                                        mobile/app/invite?token=...)
-                /reset-hesla         — resetPasswordForEmail redirectTo
-                /onboarding/company  — owner signup emailRedirectTo
-                /auth/callback       — pridané (GOOGLE PLAY RELEASE PRÍPRAVA,
-                                        App Links audit): dedikovaný auth
-                                        callback (TokenHash revízia,
-                                        2026-08-31, app/auth/callback/page.tsx)
-                                        — Supabase Email Templates (Confirm
-                                        signup, Reset Password) odkazujú
-                                        PRIAMO sem s ?token_hash=...&type=...
-                                        DeepLinkBridge.resolveEsbluDeepLink()
-                                        už tento presný pathname rozpoznávala
-                                        (pozri "AUTH CALLBACK BEZPEČNOSTNÁ
-                                        OPRAVA" komentár tam) — chýbal iba
-                                        tento natívny intent-filter záznam,
-                                        bez ktorého Android odkaz appke vôbec
-                                        neponúkol. Bez tejto zmeny by
-                                        potvrdenie registrácie/reset hesla na
-                                        mobile vždy skončilo iba vo web
-                                        prehliadači (bezpečný, ale neúplný
-                                        fallback) namiesto priamo v appke.
+              Host: https://www.esblu.com — kanonický produkčný host.
+              Apex https://esblu.com odpovedá 308 → www (aj pre
+              /.well-known/*) a Android verifikácia presmerovanie
+              nenasleduje, preto apex ZÁMERNE NIE JE registrovaný.
 
-              Zámerne NEPOKRÝVA celú doménu esblu.com (napr. /vozidla,
-              /login, marketing landing page atď.) — tie majú zostať bežné
-              web odkazy, nikdy sa neotvárajú v appke automaticky. Host je
-              iba apex "esblu.com" — appka aj celý zvyšok kódu (lib/public-
-              url.ts, lib/api-url.ts) dôsledne generuje/používa výhradne
-              https://esblu.com (bez "www."), preto "www.esblu.com" tu
-              zámerne nie je pridané (žiadne reálne odkazy naň nesmerujú;
-              dá sa doplniť rovnakým vzorom, ak sa to v budúcnosti zmení).
+              Verifikácia (android:autoVerify="true") beží voči
+              https://www.esblu.com/.well-known/assetlinks.json, ktorý web
+              slúži priamo (200, application/json, bez presmerovania).
 
-              android:autoVerify="true" spustí Android Digital Asset Links
-              verifikáciu voči https://esblu.com/.well-known/assetlinks.json
-              pri inštalácii — BEZ platného assetlinks.json (vyžaduje SHA-256
-              fingerprint z release keystore, ktorý ešte neexistuje) Android
-              verifikáciu buď preskočí, alebo zlyhá a odkazy sa naďalej
-              normálne otvoria vo web prehliadači (bezpečný fallback, nie
-              broken stav) — pozri report, sekcia G.
+              Registrované sú iba tieto cesty (nie celá doména):
+                /invite, /invite/*    — pozvánka do firmy
+                /reset-hesla          — reset hesla
+                /onboarding/company   — onboarding vlastníka
+                /auth/callback        — potvrdenie e-mailu / recovery
+                                        (token_hash z Supabase šablón)
+              Prijatý odkaz spracuje mobile/app/DeepLinkBridge.tsx
+              (resolveEsbluDeepLink v deep-link-resolve.ts: presný host,
+              iba https, iba tieto cesty, token pozvánky 64 hex); čokoľvek
+              iné sa v appke ignoruje.
 
-              JS-side routing prijatého odkazu na správnu lokálnu statickú
-              stránku (vrátane zachovania hash/query s Supabase auth
-              parametrami) je implementované v mobile/app/DeepLinkBridge.tsx
-              (@capacitor/app — App.getLaunchUrl() pre cold start,
-              App.addListener('appUrlOpen', ...) pre foreground/background),
-              mountovanom cez mobile/app/layout.tsx. Tento intent-filter
-              REGISTRUJE appku ako kandidáta na otvorenie týchto URL v
-              Android systéme — bez platného assetlinks.json (pozri vyššie
-              a mobile/android/APP_LINKS_ASSETLINKS_TODO.md) Android
-              automatickú (autoVerify) voľbu appky nedokončí a odkaz sa
-              štandardne otvorí vo web prehliadači; priame otestovanie
-              appky samotnej je možné cez `adb shell am start ... -d "https://
-              esblu.com/..." com.esblu.app` (explicitný package target
-              obchádza Digital Asset Links verifikáciu) — pozri report.
+              Podpisové certifikáty:
+                - lokálny debug APK sa NEoverí automaticky — jeho debug
+                  certifikát nie je (a nesmie byť) v produkčnom
+                  assetlinks.json; debug fingerprint sa do produkcie
+                  NEPRIDÁVA,
+                - testovanie na zariadení s debug buildom: adb override
+                  (pm set-app-links-user-selection … www.esblu.com) alebo
+                  explicitný package cieľ (am start … com.esblu.app),
+                - fingerprint release / Play App Signing certifikátu treba
+                  pred vydaním v obchode overiť samostatne voči
+                  assetlinks.json (pozri mobile/android/APP_LINKS_ASSETLINKS_TODO.md).
             -->
             <intent-filter android:autoVerify="true">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
 
-                <data android:scheme="https" android:host="esblu.com" />
-                <data android:pathPrefix="/invite" />
+                <data android:scheme="https" android:host="www.esblu.com" />
+                <data android:path="/invite" />
+                <data android:pathPrefix="/invite/" />
                 <data android:path="/reset-hesla" />
                 <data android:path="/onboarding/company" />
                 <data android:path="/auth/callback" />
@@ -135,4 +110,29 @@
       bez ďalšej konfigurácie — pozri report, sekcia E.
     -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
+    <!--
+      MOBILE M0 (2026-09-27): Capacitor BridgeWebChromeClient.onPermissionRequest
+      pri getUserMedia({audio}) žiada NARAZ MODIFY_AUDIO_SETTINGS aj
+      RECORD_AUDIO a mikrofón WebView povolí iba ak sú udelené OBE.
+      Nedeklarované povolenie Android vráti ako zamietnuté, takže bez tohto
+      riadku bol mikrofón v appke vždy zamietnutý. Ide o "normal" povolenie
+      (bez dialógu pre používateľa).
+    -->
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+
+    <!--
+      MOBILE M0: package visibility (Android 11+). Capacitor pri
+      <input type="file" accept="image/*" capture> overuje
+      ACTION_IMAGE_CAPTURE cez resolveActivity(); bez tejto deklarácie
+      vráti null a namiesto fotoaparátu sa otvorí výber súborov.
+      Povolenie CAMERA sa zámerne NEPRIDÁVA — IMAGE_CAPTURE intent ho
+      nepotrebuje (a deklarované CAMERA by naopak vyžadovalo runtime
+      dialóg pred každým zachytením).
+    -->
+    <queries>
+        <intent>
+            <action android:name="android.media.action.IMAGE_CAPTURE" />
+        </intent>
+    </queries>
 </manifest>
