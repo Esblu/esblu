@@ -29,3 +29,21 @@ export function inventoryItemDetailHref(id: string): string {
 export function invoiceDetailHref(id: string): string {
   return IS_MOBILE_BUILD ? `/faktury/detail?id=${id}` : `/faktury/${id}`;
 }
+
+// Mobile M1 (2026-09-28): partneri, priečinky a chat majú v mobilnom builde
+// statické ?id= routy (mobile/app/obchodni-partneri/detail, …/priecinky/detail,
+// mobile/app/chat). Web ostáva na dynamických routách bez zmeny.
+export function partnerDetailHref(id: string): string {
+  return IS_MOBILE_BUILD ? `/obchodni-partneri/detail?id=${id}` : `/obchodni-partneri/${id}`;
+}
+
+export function folderDetailHref(id: string): string {
+  return IS_MOBILE_BUILD ? `/priecinky/detail?id=${id}` : `/priecinky/${id}`;
+}
+
+export function chatConversationHref(id: string): string {
+  return IS_MOBILE_BUILD ? `/chat?id=${id}` : `/chat/${id}`;
+}
+
+/** Zoznam konverzácií (bez vybranej). */
+export const CHAT_INDEX_HREF = "/chat";

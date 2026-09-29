@@ -35,7 +35,10 @@
     "test:plan-entitlements": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/plan-entitlements-tests.ts",
     "test:closed-beta-p0": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/closed-beta-p0-tests.ts",
     "test:p0-bank-sql": "node --experimental-strip-types --no-warnings scripts/p0-bank-details-sql-tests.ts",
-    "test:mobile-m0": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/mobile-m0-tests.ts"
+    "test:mobile-m0": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/mobile-m0-tests.ts",
+    "test:mobile-m1": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/mobile-m1-tests.ts",
+    "test:m1-authz-db": "node --experimental-strip-types --no-warnings scripts/m1-authz-pglite-tests.ts",
+    "verify:mobile-bundle": "node scripts/verify-mobile-bundle.mjs"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.9.0",

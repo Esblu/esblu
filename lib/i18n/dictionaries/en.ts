@@ -82,6 +82,13 @@ const en = {
     settings: "Settings",
     logout: "Log out",
     language: "Language",
+    folders: "Folders",
+    more: "More",
+    moreTitle: "More modules",
+    mainNavigation: "Main navigation",
+    assistant: "Assistant",
+    logoutConfirm: "Do you really want to sign out on this device?",
+    appBuild: "Esblu app · build {{build}}",
   },
 
   dashboard: {
@@ -1279,6 +1286,7 @@ const en = {
       aiNoDataReturned: "The AI didn't return any data.",
       confirmArchiveDocument: "Accounting documents are not deleted but moved to the archive — they disappear from active lists while the file and record are kept. Continue?",
       documentRemovalDenied: "You do not have permission to remove this document.",
+      operationalDocumentManagersOnly: "Only the company owner or an administrator can save this type of document (insurance, vehicle registration, service document). You can submit an invoice or receipt for processing.",
     },
     documentSavedToInbox: "The document was saved to the Inbox.",
     noPlate: "no plate",
@@ -1472,6 +1480,13 @@ const en = {
     uploading: "Uploading...",
     addAttachment: "+ Add attachment",
     deleteDocument: "Delete document",
+    intakeResume: {
+      title: "Document reviews in progress",
+      continue: "Continue",
+      expires: "Finish by {{time}}",
+      notConfirmable: "Waiting for processing",
+      loadFailed: "The draft document could not be opened.",
+    },
   },
 
   vehicles: {
@@ -1581,6 +1596,9 @@ const en = {
       attachmentFallback: "Attachment",
       documentFallback: "Document",
       policyNumberPrefix: "No. {{number}}",
+      deadlineOverdue: "{{type}}: overdue",
+      deadlineDueSoon: "{{type}}: due in {{days}} days",
+      deadlinesLabel: "Deadline alerts",
     },
     gallery: {
       addPhotosTitle: "Add vehicle photos",
@@ -2827,6 +2845,8 @@ const en = {
       expired: "The scan expired or does not belong to you. Please scan the document again.",
       instructions: "Photograph or upload the document in the Inbox — it will be submitted for processing.",
       openInbox: "Open Inbox",
+      confirmed: "The document has been reviewed and confirmed. It is now in the company records.",
+      reviewPending: "The document is saved as a draft. Check the data and confirm it — you can also continue later (within 24 hours).",
     },
     inventory: {
       renameSummary: "I will rename the inventory item “{{name}}” to “{{newName}}”. The quantity stays.",

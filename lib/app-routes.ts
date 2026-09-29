@@ -8,8 +8,8 @@
 // "/faktury/<id>", "/stroje/<id>?tab=photos". Webový build ich používa
 // priamo. Mobilný build je statický export: detail sa otvára cez
 // "/vozidla/detail?id=<id>" a niektoré moduly (faktúry, partneri,
-// priečinky, chat, cenník) v appke zatiaľ nie sú — odkaz na ne by skončil
-// na prázdnej/koreňovej stránke.
+// priečinky, chat) boli pridané v M1; cenník v natívnej appke zámerne nie je
+// (store billing politika) — odkaz naň by skončil na prázdnej stránke.
 //
 // MODEL
 //   - kanonický tvar odkazu = relatívna webová cesta (server ho produkuje
@@ -21,8 +21,8 @@
 //   - absolútne URL, protocol-relative ("//…"), javascript: a pod. sa
 //     nikdy neprepustia (null) — interné odkazy sú výhradne relatívne.
 //
-// Keď mobilná appka dostane ďalšie moduly (M1), pridajú sa sem — jediné
-// miesto, ktoré treba zmeniť.
+// Nový modul v appke = nová routa tu (test porovnáva so stránkami v
+// mobile/app/**).
 // =============================================================================
 
 import { IS_MOBILE_BUILD } from "@/lib/build-target";
@@ -49,10 +49,19 @@ export const MOBILE_STATIC_ROUTES: ReadonlySet<string> = new Set([
   "/vozidla/detail",
   "/stroje/detail",
   "/sklad/detail",
+  // Mobile M1 (2026-09-28)
+  "/faktury",
+  "/faktury/new",
+  "/faktury/detail",
+  "/obchodni-partneri",
+  "/obchodni-partneri/detail",
+  "/priecinky",
+  "/priecinky/detail",
+  "/chat",
 ]);
 
 /** Webové detailové routy `/<modul>/<id>` → mobilná `/<modul>/detail?id=`. */
-const MOBILE_DETAIL_MODULES = new Set(["vozidla", "stroje", "sklad"]);
+const MOBILE_DETAIL_MODULES = new Set(["vozidla", "stroje", "sklad", "faktury", "obchodni-partneri", "priecinky"]);
 
 const SAFE_ID = /^[A-Za-z0-9_-]{1,64}$/;
 
@@ -97,6 +106,19 @@ export function resolveAppHref(href: string | null | undefined, isMobile: boolea
     const params = new URLSearchParams(url.search);
     params.set("id", id);
     return `/${detail[1]}/detail?${params.toString()}${hash}`;
+  }
+
+  // Webová konverzácia /chat/<id> → mobilná /chat?id=<id>
+  const chat = pathname.match(/^\/chat\/([^/]+)$/);
+  if (chat) {
+    let id: string;
+    try {
+      id = decodeURIComponent(chat[1]);
+    } catch {
+      return null;
+    }
+    if (!SAFE_ID.test(id)) return null;
+    return `/chat?id=${id}${hash}`;
   }
 
   // Webová pozvánka /invite/<token> → mobilná /invite?token=<token>

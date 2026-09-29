@@ -30,6 +30,7 @@ import {
 } from "@/lib/invoices";
 import { listBusinessPartners, type BusinessPartner } from "@/lib/business-partners";
 import { todayLocalDate } from "@/lib/local-date";
+import { navigateHard } from "@/lib/app-navigation";
 
 // Dobropis/ťarchopis sa zakladá z detailu opravovanej faktúry
 // ("Vytvoriť dobropis" tlačidlo v InvoiceDetailView) s ?corrects=<id> —
@@ -88,7 +89,7 @@ export default function NewInvoicePage() {
     } = await supabase.auth.getSession();
 
     if (!session) {
-      window.location.href = "/login";
+      navigateHard("/login");
       return;
     }
 
@@ -200,12 +201,12 @@ export default function NewInvoicePage() {
   const createDisabled = !canEdit || legalHold || saving;
 
   return (
-    <div className="mx-auto max-w-3xl px-4 pb-24 pt-6 sm:px-6">
+    <div className="mx-auto w-full min-w-0 max-w-3xl px-4 pb-24 pt-6 sm:px-6">
       <Suspense fallback={null}>
         <CorrectsFromQueryParam onCorrectsId={handleCorrectsId} />
       </Suspense>
 
-      <BackLink href="/faktury" label={t("invoices.backToList")} className="mb-6" />
+      <BackLink href="/faktury" label={t("invoices.backToList")} className="mb-3 sm:mb-6" />
 
       <h1 className="text-2xl font-bold text-primary">{t("invoices.newInvoice.title")}</h1>
 

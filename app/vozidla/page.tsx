@@ -65,6 +65,8 @@ import {
   vignetteCountryLabel,
   type DraftVehicleVignette,
 } from "@/lib/vehicle-vignettes";
+import { navigateHard } from "@/lib/app-navigation";
+import { confirmAction } from "@/app/components/ui/AppDialog";
 
 // Diaľničné známky v TP review formulári — zoznam krajín, typ a lokalizovaný
 // label sú zdieľané z lib/vehicle-vignettes.ts (rovnaký zdroj pravdy ako
@@ -284,7 +286,7 @@ export default function VozidlaPage() {
     } = await supabase.auth.getSession();
 
     if (!session) {
-      window.location.href = "/login";
+      navigateHard("/login");
       return;
     }
 
@@ -1116,7 +1118,7 @@ export default function VozidlaPage() {
   }
 
   async function handleDeleteVehicle(id: string) {
-    const confirmed = confirm(t("vehicles.list.confirmDeleteVehicle"));
+    const confirmed = (await confirmAction({ message: t("vehicles.list.confirmDeleteVehicle"), destructive: true }));
     if (!confirmed) return;
 
     // Cesty fotografií vozidla načítame PRED zmazaním vozidla — DB riadky
@@ -1251,7 +1253,7 @@ export default function VozidlaPage() {
 
   return (
     <PageShell wide moduleContext="vehicles">
-      <BackLink href="/" label={t("inbox.backToMenu")} className="mb-6" />
+      <BackLink href="/" label={t("inbox.backToMenu")} className="mb-3 sm:mb-6" />
 
       <PageHeader
         eyebrow={

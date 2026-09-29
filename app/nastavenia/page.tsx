@@ -47,6 +47,8 @@ import {
 } from "@/lib/company-billing-profile";
 import { PushNotificationSettings } from "@/app/components/push/PushNotificationSettings";
 import { disablePushOnThisDevice } from "@/lib/push/client";
+import { navigateHard } from "@/lib/app-navigation";
+import { confirmAction } from "@/app/components/ui/AppDialog";
 
 /**
  * Role, ktoré sa dajú pozvať. Zrkadlí DB allowlist v
@@ -362,7 +364,7 @@ export default function NastaveniaPage() {
     } = await supabase.auth.getSession();
 
     if (!session) {
-      window.location.href = "/login";
+      navigateHard("/login");
       return;
     }
 
@@ -661,9 +663,7 @@ export default function NastaveniaPage() {
       return;
     }
 
-    const confirmed = window.confirm(
-      t("settings.errors.confirmDeleteLogo")
-    );
+    const confirmed = (await confirmAction({ message: t("settings.errors.confirmDeleteLogo"), destructive: true }));
 
     if (!confirmed) {
       return;
@@ -799,7 +799,7 @@ export default function NastaveniaPage() {
       await disablePushOnThisDevice();
       await supabase.auth.signOut();
 
-      window.location.href = "/login?ucet-zruseny=1";
+      navigateHard("/login?ucet-zruseny=1");
     } catch (error) {
       // DÔLEŽITÉ: server označí chybu ako `partial: true` (pozri
       // app/api/account/delete/route.ts), keď DB/membership časť je už
@@ -810,7 +810,7 @@ export default function NastaveniaPage() {
       // úspechu, iba s odlíšeným query flagom pre login stránku.
       if (isPartialAccountDeletionError(error)) {
         await supabase.auth.signOut();
-        window.location.href = "/login?ucet-zruseny-ciastocne=1";
+        navigateHard("/login?ucet-zruseny-ciastocne=1");
         return;
       }
 
@@ -835,14 +835,14 @@ export default function NastaveniaPage() {
           className="h-20 w-20 object-contain"
         />
 
-        <h1 className="text-4xl font-bold text-primary">
+        <h1 className="text-2xl sm:text-4xl font-bold text-primary">
           {t("settings.pageTitle")}
         </h1>
       </div>
 
       <div className="mt-8 max-w-2xl space-y-6">
-        <section className="rounded-3xl border border-subtle bg-surface-1 p-8 shadow-lg backdrop-blur-xl">
-          <h2 className="text-2xl font-bold text-primary">
+        <section className="rounded-3xl border border-subtle bg-surface-1 p-5 sm:p-8 shadow-lg backdrop-blur-xl">
+          <h2 className="text-xl sm:text-2xl font-bold text-primary">
             {t("settings.language.title")}
           </h2>
 
@@ -894,8 +894,8 @@ export default function NastaveniaPage() {
           }
 
           return (
-        <section className="rounded-3xl border border-subtle bg-surface-1 p-8 shadow-lg backdrop-blur-xl">
-          <h2 className="text-2xl font-bold text-primary">
+        <section className="rounded-3xl border border-subtle bg-surface-1 p-5 sm:p-8 shadow-lg backdrop-blur-xl">
+          <h2 className="text-xl sm:text-2xl font-bold text-primary">
             {t("settings.company.title")}
           </h2>
 
@@ -1043,8 +1043,8 @@ export default function NastaveniaPage() {
             Dashboard branding tým zostáva funkčný pre všetkých — pozri
             loadBrandingOnly()/getCompanyProfile() vyššie. */}
         {myRole && !financeView && (
-          <section className="rounded-3xl border border-subtle bg-surface-1 p-8 shadow-lg backdrop-blur-xl">
-            <h2 className="text-2xl font-bold text-primary">
+          <section className="rounded-3xl border border-subtle bg-surface-1 p-5 sm:p-8 shadow-lg backdrop-blur-xl">
+            <h2 className="text-xl sm:text-2xl font-bold text-primary">
               {t("settings.company.title")}
             </h2>
 
@@ -1084,8 +1084,8 @@ export default function NastaveniaPage() {
         )}
 
         {myRole && (
-          <section className="rounded-3xl border border-subtle bg-surface-1 p-8 shadow-lg backdrop-blur-xl">
-            <h2 className="text-2xl font-bold text-primary">
+          <section className="rounded-3xl border border-subtle bg-surface-1 p-5 sm:p-8 shadow-lg backdrop-blur-xl">
+            <h2 className="text-xl sm:text-2xl font-bold text-primary">
               {t("settings.users.title")}
             </h2>
 
@@ -1241,8 +1241,8 @@ export default function NastaveniaPage() {
           </section>
         )}
 
-        <section className="rounded-3xl border border-subtle bg-surface-1 p-8 shadow-lg backdrop-blur-xl">
-          <h2 className="text-2xl font-bold text-primary">
+        <section className="rounded-3xl border border-subtle bg-surface-1 p-5 sm:p-8 shadow-lg backdrop-blur-xl">
+          <h2 className="text-xl sm:text-2xl font-bold text-primary">
             {t("settings.password.title")}
           </h2>
 
@@ -1302,8 +1302,8 @@ export default function NastaveniaPage() {
 
         <PushNotificationSettings />
 
-        <section className="rounded-3xl border border-subtle bg-surface-1 p-8 shadow-lg backdrop-blur-xl">
-          <h2 className="text-2xl font-bold text-primary">
+        <section className="rounded-3xl border border-subtle bg-surface-1 p-5 sm:p-8 shadow-lg backdrop-blur-xl">
+          <h2 className="text-xl sm:text-2xl font-bold text-primary">
             {t("settings.feedback.title")}
           </h2>
 
@@ -1323,8 +1323,8 @@ export default function NastaveniaPage() {
           </p>
         </section>
 
-        <section className="rounded-3xl border border-subtle bg-surface-1 p-8 shadow-lg backdrop-blur-xl">
-          <h2 className="text-2xl font-bold text-primary">
+        <section className="rounded-3xl border border-subtle bg-surface-1 p-5 sm:p-8 shadow-lg backdrop-blur-xl">
+          <h2 className="text-xl sm:text-2xl font-bold text-primary">
             {t("settings.legal.title")}
           </h2>
 
@@ -1375,8 +1375,8 @@ export default function NastaveniaPage() {
           </nav>
         </section>
 
-        <section className="rounded-3xl border border-subtle bg-surface-1 p-8 shadow-lg backdrop-blur-xl">
-          <h2 className="text-2xl font-bold text-primary">
+        <section className="rounded-3xl border border-subtle bg-surface-1 p-5 sm:p-8 shadow-lg backdrop-blur-xl">
+          <h2 className="text-xl sm:text-2xl font-bold text-primary">
             {t("settings.privacy.title")}
           </h2>
 
@@ -1476,9 +1476,9 @@ export default function NastaveniaPage() {
 
       {showDeleteAccountModal && (
         <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/50 p-3 sm:items-center sm:p-4">
-          <div className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-3xl bg-surface-1 p-5 shadow-2xl sm:p-8">
+          <div className="max-h-[90dvh] w-full max-w-xl overflow-y-auto rounded-3xl bg-surface-1 p-5 shadow-2xl sm:p-8">
             <div className="flex items-center justify-between">
-              <h2 className="text-2xl font-bold text-primary">
+              <h2 className="text-xl sm:text-2xl font-bold text-primary">
                 {deletePreflight?.role === "owner"
                   ? t("settings.deleteModal.ownerTitle")
                   : t("settings.deleteModal.genericTitle")}

@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import { getMyActiveMembership } from "@/lib/company";
+import { chatConversationHref } from "@/lib/entity-links";
 import {
   ensureCompanyChatChannel,
   getMyUnreadCounts,
@@ -206,7 +207,7 @@ export default function ChatConversationList({
       if (onSelectConversation) {
         onSelectConversation(conversationId);
       } else {
-        router.push(`/chat/${conversationId}`);
+        router.push(chatConversationHref(conversationId));
       }
     } catch {
       setLoadError(t("chat.errors.conversationLoadFailed"));
@@ -242,7 +243,7 @@ export default function ChatConversationList({
 
           {companyConversationId && (
             <ConversationRow
-              href={`/chat/${companyConversationId}`}
+              href={chatConversationHref(companyConversationId)}
               onSelect={
                 onSelectConversation
                   ? () => onSelectConversation(companyConversationId)
@@ -283,7 +284,7 @@ export default function ChatConversationList({
               {directRows.map((row) => (
                 <ConversationRow
                   key={row.conversation.id}
-                  href={`/chat/${row.conversation.id}`}
+                  href={chatConversationHref(row.conversation.id)}
                   onSelect={
                     onSelectConversation
                       ? () => onSelectConversation(row.conversation.id)

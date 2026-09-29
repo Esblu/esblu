@@ -1,10 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import Dashboard from "./components/Dashboard";
 import PublicLandingPage from "./components/PublicLandingPage";
 import { supabase } from "@/lib/supabase";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
+import { IS_MOBILE_BUILD } from "@/lib/build-target";
 
 // Poznámka: táto stránka zámerne NEVOLÁ esblu_ensure_my_owner_company().
 // Owner bootstrap sa spúšťa VÝHRADNE z explicitného owner-registration/
@@ -44,7 +46,7 @@ export default function Home() {
 
   if (hasSession === null) {
     return (
-      <main className="grid min-h-screen place-items-center bg-slate-950 text-white">
+      <main className="grid min-h-dvh place-items-center bg-slate-950 text-white">
         <div className="flex items-center gap-3 text-sm font-medium text-slate-300">
           <span
             aria-hidden="true"
@@ -56,5 +58,17 @@ export default function Home() {
     );
   }
 
-  return hasSession ? <Dashboard /> : <PublicLandingPage />;
+  if (hasSession) return <Dashboard />;
+  // Mobile M1: natívna appka nemá marketingovú landing page (cenník, demo
+  // video, webová navigácia) — neprihlásený používateľ ide rovno na
+  // prihlásenie. Web ostáva bez zmeny.
+  return IS_MOBILE_BUILD ? <MobileSignedOutRedirect /> : <PublicLandingPage />;
+}
+
+function MobileSignedOutRedirect() {
+  const router = useRouter();
+  useEffect(() => {
+    router.replace("/login");
+  }, [router]);
+  return null;
 }

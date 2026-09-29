@@ -3,7 +3,9 @@ import { verifyRequestUser } from "@/lib/server-auth";
 import { getRequestLocale } from "@/lib/i18n/request-locale";
 import { translate } from "@/lib/i18n/translate";
 import { MAX_AUDIO_SIZE_BYTES, ALLOWED_VOICE_AUDIO_MIME_TYPES } from "@/lib/voice-config";
-import { entitlementDenialResponse, requireVoiceEntitlement } from "@/lib/entitlements-server";
+import { entitlementDenialResponse, getActiveRoleForRequest, requireVoiceEntitlement } from "@/lib/entitlements-server";
+import { guardTranscription } from "@/lib/voice/transcribe-guard";
+import type { EntitlementDenial } from "@/lib/entitlements";
 
 // -----------------------------------------------------------------------------
 // POST /api/assistant/transcribe
@@ -150,17 +152,34 @@ export async function POST(req: Request) {
       return Response.json({ success: false, error: authError }, { status: 401 });
     }
 
-    // 1b) Hlas je PLATENÁ schopnosť (nárok `voice`). Overuje sa na serveri
-    //     pred čítaním audia aj pred OpenAI — skrytý mikrofón v UI nie je
-    //     bezpečnosť. Firma sa odvodí z JWT v DB, nič z tela požiadavky.
-    //     Nárok hlasu NEODOMYKÁ žiadny modul ani rolu: prepis ide ďalej do
-    //     /api/assistant/intent, kde platia rovnaké brány ako pri písaní.
-    //     (Prepis ďalej nečíta žiadne dáta firmy — iba overenie nároku.)
-    const voice = await requireVoiceEntitlement(req);
-    if (!voice.ok) {
-      return entitlementDenialResponse(
-        locale,
-        voice.denial ?? { code: "ENTITLEMENT_DENIED", reason: "VOICE_ENTITLEMENT_REQUIRED", key: "voice" }
+    // 1b) Rola + nárok (lib/voice/transcribe-guard.ts) — pred čítaním audia
+    //     aj pred OpenAI. Rola sa berie z DB cez user-scoped klienta
+    //     (getActiveRoleForRequest — iba AKTÍVNE členstvo), nič z tela
+    //     požiadavky. Zamestnanec nemá hlasový asistent → 403 hneď tu, nie až
+    //     odmietnutím intentu. Hlas je PLATENÁ schopnosť (nárok `voice`);
+    //     skrytý mikrofón v UI nie je bezpečnosť. Nárok NEODOMYKÁ žiadny modul
+    //     ani rolu: prepis ide ďalej do /api/assistant/intent s rovnakými
+    //     bránami ako pri písaní.
+    let voiceDenial: EntitlementDenial | null = null;
+    const guard = await guardTranscription({
+      getUser: async () => user,
+      getActiveRole: () => getActiveRoleForRequest(req),
+      hasVoiceEntitlement: async () => {
+        const voice = await requireVoiceEntitlement(req);
+        voiceDenial = voice.ok ? null : voice.denial;
+        return voice.ok;
+      },
+    });
+    if (!guard.ok) {
+      if (guard.reason === "VOICE_ENTITLEMENT_REQUIRED") {
+        return entitlementDenialResponse(
+          locale,
+          voiceDenial ?? { code: "ENTITLEMENT_DENIED", reason: "VOICE_ENTITLEMENT_REQUIRED", key: "voice" }
+        );
+      }
+      return Response.json(
+        { success: false, error: translate(locale, "assistant.denied.employee") },
+        { status: guard.status, headers: { "Cache-Control": "private, no-store" } }
       );
     }
 

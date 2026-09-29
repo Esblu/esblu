@@ -110,6 +110,8 @@ import {
   PackageIcon,
   PlusIcon,
 } from "@/app/components/icons/AppIcons";
+import { navigateHard } from "@/lib/app-navigation";
+import { confirmAction } from "@/app/components/ui/AppDialog";
 
 type StockFilter = "all" | StockStatus;
 
@@ -171,7 +173,7 @@ function inventoryPhotoUrl(path: string) {
     } = await supabase.auth.getSession();
 
     if (!session) {
-      window.location.href = "/login";
+      navigateHard("/login");
       return;
     }
 
@@ -416,9 +418,7 @@ function inventoryPhotoUrl(path: string) {
   }
 
   async function deleteItem(id: string) {
-  const confirmed = confirm(
-    t("inventory.errors.deleteConfirm")
-  );
+  const confirmed = (await confirmAction({ message: t("inventory.errors.deleteConfirm"), destructive: true }));
 
   if (!confirmed) return;
 
@@ -520,7 +520,7 @@ function inventoryPhotoUrl(path: string) {
 
   return (
     <PageShell wide moduleContext="inventory">
-      <BackLink href="/" label={t("inbox.backToMenu")} className="mb-6" />
+      <BackLink href="/" label={t("inbox.backToMenu")} className="mb-3 sm:mb-6" />
 
       <PageHeader
         eyebrow={

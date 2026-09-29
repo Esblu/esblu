@@ -84,6 +84,13 @@ const sk = {
     settings: "Nastavenia",
     logout: "Odhlásiť sa",
     language: "Jazyk",
+    folders: "Priečinky",
+    more: "Viac",
+    moreTitle: "Ďalšie moduly",
+    mainNavigation: "Hlavná navigácia",
+    assistant: "Asistent",
+    logoutConfirm: "Naozaj sa chcete odhlásiť z tohto zariadenia?",
+    appBuild: "Aplikácia Esblu · build {{build}}",
   },
 
   dashboard: {
@@ -1302,6 +1309,7 @@ const sk = {
       aiNoDataReturned: "AI nevrátila žiadne údaje.",
       confirmArchiveDocument: "Účtovný doklad sa nezmaže, ale presunie do archívu — zmizne z aktívnych zoznamov, súbor aj záznam ostanú zachované. Pokračovať?",
       documentRemovalDenied: "Na odstránenie tohto dokumentu nemáte oprávnenie.",
+      operationalDocumentManagersOnly: "Tento typ dokumentu (PZP, technický preukaz, servisný doklad) môže uložiť iba majiteľ alebo administrátor firmy. Faktúru alebo bloček môžete odoslať na spracovanie.",
     },
     documentSavedToInbox: "Dokument bol uložený do Inboxu.",
     noPlate: "bez ŠPZ",
@@ -1500,6 +1508,13 @@ const sk = {
     uploading: "Nahrávam...",
     addAttachment: "+ Pridať prílohu",
     deleteDocument: "Vymazať dokument",
+    intakeResume: {
+      title: "Rozpracované kontroly dokladov",
+      continue: "Pokračovať",
+      expires: "Dokončiť do {{time}}",
+      notConfirmable: "Čaká na spracovanie",
+      loadFailed: "Rozpracovaný doklad sa nepodarilo otvoriť.",
+    },
   },
 
   vehicles: {
@@ -1609,6 +1624,9 @@ const sk = {
       attachmentFallback: "Príloha",
       documentFallback: "Dokument",
       policyNumberPrefix: "č. {{number}}",
+      deadlineOverdue: "{{type}}: po termíne",
+      deadlineDueSoon: "{{type}}: končí o {{days}} dní",
+      deadlinesLabel: "Upozornenia na termíny",
     },
     gallery: {
       addPhotosTitle: "Pridať fotografie vozidla",
@@ -2856,6 +2874,8 @@ const sk = {
       expired: "Sken vypršal alebo nepatrí vám. Naskenujte doklad znova.",
       instructions: "Odfoťte alebo nahrajte doklad v Inboxe — odošle sa na spracovanie.",
       openInbox: "Otvoriť Inbox",
+      confirmed: "Doklad je skontrolovaný a potvrdený. Zaradil sa do evidencie firmy.",
+      reviewPending: "Doklad je uložený ako rozpracovaný. Skontrolujte údaje a potvrďte ho — pokračovať môžete aj neskôr (do 24 hodín).",
     },
     inventory: {
       renameSummary: "Premenujem skladovú položku „{{name}}“ na „{{newName}}“. Množstvo ostane.",

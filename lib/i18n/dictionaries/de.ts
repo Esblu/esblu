@@ -82,6 +82,13 @@ const de = {
     settings: "Einstellungen",
     logout: "Abmelden",
     language: "Sprache",
+    folders: "Ordner",
+    more: "Mehr",
+    moreTitle: "Weitere Module",
+    mainNavigation: "Hauptnavigation",
+    assistant: "Assistent",
+    logoutConfirm: "Möchten Sie sich auf diesem Gerät wirklich abmelden?",
+    appBuild: "Esblu-App · Build {{build}}",
   },
 
   dashboard: {
@@ -1291,6 +1298,7 @@ const de = {
       aiNoDataReturned: "Die KI hat keine Daten zurückgegeben.",
       confirmArchiveDocument: "Buchhaltungsbelege werden nicht gelöscht, sondern archiviert — sie verschwinden aus den aktiven Listen, Datei und Datensatz bleiben erhalten. Fortfahren?",
       documentRemovalDenied: "Sie sind nicht berechtigt, dieses Dokument zu entfernen.",
+      operationalDocumentManagersOnly: "Diesen Dokumenttyp (Versicherung, Fahrzeugschein, Servicebeleg) kann nur der Firmeninhaber oder ein Administrator speichern. Rechnungen und Belege können Sie zur Verarbeitung einreichen.",
     },
     documentSavedToInbox: "Das Dokument wurde in der Inbox gespeichert.",
     noPlate: "ohne Kennzeichen",
@@ -1489,6 +1497,13 @@ const de = {
     uploading: "Wird hochgeladen...",
     addAttachment: "+ Anhang hinzufügen",
     deleteDocument: "Dokument löschen",
+    intakeResume: {
+      title: "Offene Dokumentprüfungen",
+      continue: "Fortsetzen",
+      expires: "Abschließen bis {{time}}",
+      notConfirmable: "Wartet auf Verarbeitung",
+      loadFailed: "Der Entwurf konnte nicht geöffnet werden.",
+    },
   },
 
   vehicles: {
@@ -1599,6 +1614,9 @@ const de = {
       attachmentFallback: "Anhang",
       documentFallback: "Dokument",
       policyNumberPrefix: "Nr. {{number}}",
+      deadlineOverdue: "{{type}}: überfällig",
+      deadlineDueSoon: "{{type}}: fällig in {{days}} Tagen",
+      deadlinesLabel: "Fristhinweise",
     },
     gallery: {
       addPhotosTitle: "Fahrzeugfotos hinzufügen",
@@ -2848,6 +2866,8 @@ const de = {
       expired: "Der Scan ist abgelaufen oder gehört nicht Ihnen. Bitte scannen Sie den Beleg erneut.",
       instructions: "Fotografieren oder laden Sie den Beleg im Inbox hoch — er wird zur Verarbeitung gesendet.",
       openInbox: "Inbox öffnen",
+      confirmed: "Das Dokument wurde geprüft und bestätigt. Es ist jetzt in den Firmenunterlagen.",
+      reviewPending: "Das Dokument ist als Entwurf gespeichert. Prüfen und bestätigen Sie die Daten — Sie können auch später fortfahren (innerhalb von 24 Stunden).",
     },
     inventory: {
       renameSummary: "Ich benenne den Lagerartikel „{{name}}“ in „{{newName}}“ um. Die Menge bleibt.",

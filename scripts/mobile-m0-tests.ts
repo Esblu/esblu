@@ -230,8 +230,10 @@ await check("mobil: detail /<modul>/<id> → /<modul>/detail?id= (query zachovan
   assert.equal(routes.resolveAppHref(`/invite/${token}`, true), `/invite?token=${token}`);
 });
 
-await check("mobil: moduly, ktoré v appke nie sú, → null (žiadny mŕtvy odkaz)", () => {
-  for (const href of ["/faktury", "/faktury/abc", "/faktury/new", "/obchodni-partneri/p1", "/priecinky/f1", "/chat/c1", "/cennik", "/neexistuje"]) {
+await check("mobil: routy, ktoré v appke nie sú, → null (žiadny mŕtvy odkaz)", () => {
+  // M1 (2026-09-28): faktúry, partneri, priečinky a chat sú v appke —
+  // pokrýva scripts/mobile-m1-tests.ts. Cenník v natívnej appke zámerne nie je.
+  for (const href of ["/cennik", "/cennik?plan=pro", "/neexistuje", "/faktury/a/b", "/chat/a/b"]) {
     assert.equal(routes.resolveAppHref(href, true), null, href);
   }
 });

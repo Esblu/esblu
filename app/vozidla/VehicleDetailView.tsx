@@ -24,11 +24,11 @@ import {
   docButtonSecondary,
   docButtonDanger,
 } from "@/app/components/ui/Primitives";
-import { CarIcon, WrenchIcon } from "@/app/components/icons/AppIcons";
+import { AlertIcon, CarIcon, WrenchIcon } from "@/app/components/icons/AppIcons";
+import { ScrollTabs } from "@/app/components/ui/ScrollTabs";
 import { inspectionState } from "@/lib/vehicles";
 import {
   getMyActiveMembership,
-  canOperate,
   isOwnerOrAdmin,
   type CompanyMemberRole,
 } from "@/lib/company";
@@ -49,6 +49,7 @@ import {
   buildVehicleDeadlines,
   deadlineTypeLabel,
 } from "@/lib/deadlines";
+import { confirmAction, notify } from "@/app/components/ui/AppDialog";
 
 // Dokumenty priradené k vozidlu z AI Inboxu (PZP, technický preukaz) —
 // bod 2/3 zadania: po potvrdení v Inboxe majú tieto dokumenty "skončiť"
@@ -479,7 +480,7 @@ export default function VehicleDetailView({
     // Účtovný doklad (napr. bloček za palivo) sa iba archivuje; ostatné
     // dokumenty sa mažú DB-first (lib/document-retention.ts).
     const retained = isRetainedDocumentType(doc.document_type);
-    if (!confirm(t(retained ? "inbox.errors.confirmArchiveDocument" : "inbox.errors.confirmDeleteDocument"))) return;
+    if (!(await confirmAction({ message: t(retained ? "inbox.errors.confirmArchiveDocument" : "inbox.errors.confirmDeleteDocument"), destructive: true }))) return;
 
     setDeletingDocumentId(doc.id);
 
@@ -494,11 +495,9 @@ export default function VehicleDetailView({
 
       setLinkedDocuments((current) => current.filter((d) => d.id !== doc.id));
     } catch (deleteError: unknown) {
-      alert(
-        deleteError instanceof DocumentRemovalError && deleteError.reason === "denied"
+      void notify({ message: deleteError instanceof DocumentRemovalError && deleteError.reason === "denied"
           ? t("inbox.errors.documentRemovalDenied")
-          : t("inbox.errors.deleteDocumentFailed")
-      );
+          : t("inbox.errors.deleteDocumentFailed") });
     } finally {
       setDeletingDocumentId(null);
     }
@@ -531,7 +530,7 @@ export default function VehicleDetailView({
     if (files.length === 0 || !userId) return;
 
     if (legalHold) {
-      alert(t("common.legalHoldMessage"));
+      void notify({ message: t("common.legalHoldMessage") });
       return;
     }
 
@@ -582,12 +581,10 @@ export default function VehicleDetailView({
       await loadPhotos();
 
       if (failedCount > 0) {
-        alert(
-          t("vehicles.errors.photosUploadFailedCount", {
+        void notify({ message: t("vehicles.errors.photosUploadFailedCount", {
             failedCount,
             total: files.length,
-          })
-        );
+          }) });
       }
     } finally {
       setIsUploadingPhotos(false);
@@ -600,7 +597,7 @@ export default function VehicleDetailView({
     const photoId = String(photo?.id || "");
     if (!photoId) return;
 
-    const confirmed = confirm(t("vehicles.gallery.confirmDeletePhoto"));
+    const confirmed = (await confirmAction({ message: t("vehicles.gallery.confirmDeletePhoto"), destructive: true }));
     if (!confirmed) return;
 
     setDeletingPhotoId(photoId);
@@ -643,7 +640,7 @@ export default function VehicleDetailView({
             "Databázový záznam fotografie bol vymazaný, ale Storage cleanup zlyhal:",
             storageError
           );
-          alert(t("vehicles.errors.photoStorageDeleteFailed"));
+          void notify({ message: t("vehicles.errors.photoStorageDeleteFailed") });
         }
       }
     } catch (deleteError: unknown) {
@@ -651,7 +648,7 @@ export default function VehicleDetailView({
         deleteError instanceof Error
           ? deleteError.message
           : t("vehicles.errors.unknownError");
-      alert(t("vehicles.errors.deletePhotoFailedPrefix", { message }));
+      void notify({ message: t("vehicles.errors.deletePhotoFailedPrefix", { message }) });
     } finally {
       setDeletingPhotoId(null);
     }
@@ -747,12 +744,12 @@ export default function VehicleDetailView({
 
   async function saveVignette() {
     if (!vignette.country_code || !vignette.valid_until) {
-      alert(t("vehicles.vignettes.selectCountryPlaceholder"));
+      void notify({ message: t("vehicles.vignettes.selectCountryPlaceholder") });
       return;
     }
 
     if (vignetteCountryIsCustom && !isValidVignetteCountryCode(vignette.country_code)) {
-      alert(t("vehicles.vignettes.invalidCountryCode"));
+      void notify({ message: t("vehicles.vignettes.invalidCountryCode") });
       return;
     }
 
@@ -760,7 +757,7 @@ export default function VehicleDetailView({
     // esblu_require_company_dpa_before_insert by INSERT (nie UPDATE) aj tak
     // odmietol, toto je iba včasná spätná väzba pre používateľa.
     if (!editingVignetteId && legalHold) {
-      alert(t("common.legalHoldMessage"));
+      void notify({ message: t("common.legalHoldMessage") });
       return;
     }
 
@@ -772,7 +769,7 @@ export default function VehicleDetailView({
       !editingVignetteId &&
       vignettes.some((v) => v.country_code === vignette.country_code)
     ) {
-      alert(t("vehicles.vignettes.duplicateCountry"));
+      void notify({ message: t("vehicles.vignettes.duplicateCountry") });
       return;
     }
 
@@ -795,9 +792,7 @@ export default function VehicleDetailView({
     setIsSavingVignette(false);
 
     if (error) {
-      alert(
-        t("vehicles.errors.vignetteSaveFailedPrefix", { message: error.message })
-      );
+      void notify({ message: t("vehicles.errors.vignetteSaveFailedPrefix", { message: error.message }) });
       return;
     }
 
@@ -809,7 +804,7 @@ export default function VehicleDetailView({
   }
 
   async function deleteVignette(vignetteId: string) {
-    const confirmed = confirm(t("vehicles.vignettes.confirmDelete"));
+    const confirmed = (await confirmAction({ message: t("vehicles.vignettes.confirmDelete"), destructive: true }));
     if (!confirmed) return;
 
     setDeletingVignetteId(vignetteId);
@@ -822,9 +817,7 @@ export default function VehicleDetailView({
     setDeletingVignetteId(null);
 
     if (error) {
-      alert(
-        t("vehicles.errors.vignetteDeleteFailedPrefix", { message: error.message })
-      );
+      void notify({ message: t("vehicles.errors.vignetteDeleteFailedPrefix", { message: error.message }) });
       return;
     }
 
@@ -860,7 +853,7 @@ export default function VehicleDetailView({
 
   async function saveService() {
     if (!service.service_date || !service.title) {
-      alert(t("vehicles.services.validationRequired"));
+      void notify({ message: t("vehicles.services.validationRequired") });
       return;
     }
 
@@ -869,7 +862,7 @@ export default function VehicleDetailView({
     // nemá vyplniť celý formulár a až pri uložení naraziť na chybu.
     // Úpravu existujúceho servisu (editingServiceId nastavené) neblokuje.
     if (!editingServiceId && legalHold) {
-      alert(t("common.legalHoldMessage"));
+      void notify({ message: t("common.legalHoldMessage") });
       return;
     }
 
@@ -882,7 +875,7 @@ export default function VehicleDetailView({
 
     if (authError || !user) {
       setIsSaving(false);
-      alert(t("vehicles.errors.serviceSaveLoginRequired"));
+      void notify({ message: t("vehicles.errors.serviceSaveLoginRequired") });
       return;
     }
 
@@ -908,7 +901,7 @@ export default function VehicleDetailView({
     setIsSaving(false);
 
     if (error) {
-      alert(t("vehicles.errors.serviceSaveFailedPrefix", { message: error.message }));
+      void notify({ message: t("vehicles.errors.serviceSaveFailedPrefix", { message: error.message }) });
       return;
     }
 
@@ -919,7 +912,7 @@ export default function VehicleDetailView({
   }
 
   async function deleteService(serviceId: string) {
-    const confirmed = confirm(t("vehicles.services.confirmDelete"));
+    const confirmed = (await confirmAction({ message: t("vehicles.services.confirmDelete"), destructive: true }));
     if (!confirmed) return;
 
     const { error } = await supabase
@@ -928,7 +921,7 @@ export default function VehicleDetailView({
       .eq("id", serviceId);
 
     if (error) {
-      alert(t("vehicles.errors.serviceDeleteFailedPrefix", { message: error.message }));
+      void notify({ message: t("vehicles.errors.serviceDeleteFailedPrefix", { message: error.message }) });
       return;
     }
 
@@ -979,7 +972,7 @@ export default function VehicleDetailView({
       <Suspense fallback={null}>
         <OpenLinkedDocumentFromQueryParam onOpenDocument={setPendingOpenDocumentId} />
       </Suspense>
-      <BackLink href="/vozidla" label={t("nav.vehicles")} className="mb-6" />
+      <BackLink href="/vozidla" label={t("nav.vehicles")} className="mb-3 sm:mb-6" />
 
       <PageHeader
         eyebrow={
@@ -1015,11 +1008,17 @@ export default function VehicleDetailView({
         badges={
           <>
             <PlateBadge plate={vehicle.spz || t("dashboard.noPlate")} size="sm" />
+            {/* Na telefóne je stav STK/EK hneď pod hlavičkou v kartách a
+                v upozorneniach — odznaky by ho opakovali tretíkrát. */}
             {stkState.severity === "overdue" && (
-              <StatusBadge kind="overdue" label={t("vehicles.fields.stk")} />
+              <span className="hidden sm:inline-flex">
+                <StatusBadge kind="overdue" label={t("vehicles.fields.stk")} />
+              </span>
             )}
             {ekState.severity === "overdue" && (
-              <StatusBadge kind="overdue" label={t("vehicles.fields.ek")} />
+              <span className="hidden sm:inline-flex">
+                <StatusBadge kind="overdue" label={t("vehicles.fields.ek")} />
+              </span>
             )}
           </>
         }
@@ -1039,7 +1038,9 @@ export default function VehicleDetailView({
         }
       />
 
-      <div className="mt-6">
+      {/* Mobile M1: na telefóne kompaktne iba akčné termíny (STK/EK);
+          výkon a rok výroby ostávajú v záložke Prehľad a na širšej obrazovke. */}
+      <div className="mt-3 sm:mt-6">
         <MetricGrid>
           <Metric
             label={t("vehicles.fields.stk")}
@@ -1051,70 +1052,56 @@ export default function VehicleDetailView({
             value={vehicle.ek ? formatDate(vehicle.ek, locale) : t("common.misc.notFilled")}
             tone={inspectionMetricTone(ekState)}
           />
-          <Metric
-            label={t("inbox.fields.vykon")}
-            value={vehicle.vykon ? `${vehicle.vykon} kW` : "—"}
-          />
-          <Metric
-            label={t("inbox.fields.rokVyroby")}
-            value={vehicle.rok_vyroby ? String(vehicle.rok_vyroby) : "—"}
-          />
+          <div className="hidden sm:block">
+            <Metric
+              label={t("inbox.fields.vykon")}
+              value={vehicle.vykon ? `${vehicle.vykon} kW` : "—"}
+            />
+          </div>
+          <div className="hidden sm:block">
+            <Metric
+              label={t("inbox.fields.rokVyroby")}
+              value={vehicle.rok_vyroby ? String(vehicle.rok_vyroby) : "—"}
+            />
+          </div>
         </MetricGrid>
       </div>
 
+      {/* Mobile M1: kompaktné upozornenia — typ + stav na jednom riadku
+          (meno a ŠPZ sú už v hlavičke), dlhý text sa zalamuje. */}
       {activeDeadlines.length > 0 && (
-        <div className="mt-4 space-y-2">
+        <ul className="mt-3 space-y-1.5" aria-label={t("vehicles.detail.deadlinesLabel")}>
           {activeDeadlines.map((item, index) => {
             const isOverdue = item.severity === "overdue";
             const label = deadlineTypeLabel(item.deadlineType, locale, item.vignetteCountryCode);
             return (
-              <Notice
+              <li
                 key={`${item.deadlineType}-${index}`}
-                tone={isOverdue ? "critical" : "warning"}
+                className={`flex items-start gap-2 rounded-doc-sm border px-3 py-2 text-sm leading-snug ${
+                  isOverdue
+                    ? "border-danger/30 bg-danger-soft text-danger"
+                    : "border-warning/30 bg-warning/10 text-warning"
+                }`}
               >
-                {isOverdue
-                  ? t("dashboard.alertOverdue", {
-                      type: label,
-                      name: `${vehicle.znacka || ""} ${vehicle.model || ""}`.trim(),
-                      spz: vehicle.spz || t("dashboard.noPlate"),
-                    })
-                  : t("dashboard.alertDueSoon", {
-                      type: label,
-                      name: `${vehicle.znacka || ""} ${vehicle.model || ""}`.trim(),
-                      spz: vehicle.spz || t("dashboard.noPlate"),
-                      days: item.daysRemaining,
-                    })}
-              </Notice>
+                <AlertIcon size={16} className="mt-0.5 shrink-0" />
+                <span className="min-w-0 break-words">
+                  {isOverdue
+                    ? t("vehicles.detail.deadlineOverdue", { type: label })
+                    : t("vehicles.detail.deadlineDueSoon", { type: label, days: item.daysRemaining })}
+                </span>
+              </li>
             );
           })}
-        </div>
+        </ul>
       )}
 
-      <div
-        role="tablist"
-        aria-label={t("vehicles.detail.sectionsLabel")}
-        className="mt-6 -mx-1 flex snap-x gap-1 overflow-x-auto px-1 pb-1 [scrollbar-width:thin]"
-      >
-        {TABS.map((item) => (
-          <button
-            key={item.key}
-            role="tab"
-            type="button"
-            aria-selected={tab === item.key}
-            onClick={() => setTab(item.key)}
-            className={`min-h-11 shrink-0 snap-start whitespace-nowrap rounded-doc-sm border px-3.5 py-2 text-sm font-medium transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
-              tab === item.key
-                ? "border-border-strong bg-surface-hover text-primary"
-                : "border-doc-border text-secondary hover:text-primary"
-            }`}
-          >
-            {item.label}
-            {item.count !== undefined && item.count > 0 && (
-              <span className="ml-1.5 tabular-nums opacity-70">{item.count}</span>
-            )}
-          </button>
-        ))}
-      </div>
+      <ScrollTabs
+        tabs={TABS}
+        value={tab}
+        onChange={setTab}
+        ariaLabel={t("vehicles.detail.sectionsLabel")}
+        className="mt-3 sm:mt-6"
+      />
 
       {tab === "overview" && (
         <div className="mt-4">
@@ -1157,11 +1144,11 @@ export default function VehicleDetailView({
             </p>
           </div>
 
-          {canOperate(role) && (
+          {isOwnerOrAdmin(role) && (
             <button
               onClick={() => {
                 if (!editingVignetteId && legalHold) {
-                  alert(t("common.legalHoldMessage"));
+                  void notify({ message: t("common.legalHoldMessage") });
                   return;
                 }
                 if (showVignetteForm) {
@@ -1178,11 +1165,11 @@ export default function VehicleDetailView({
           )}
         </div>
 
-        {canOperate(role) && !editingVignetteId && legalHold && (
+        {isOwnerOrAdmin(role) && !editingVignetteId && legalHold && (
           <div className="mt-3"><Notice tone="warning">{t("common.legalHoldMessage")}</Notice></div>
         )}
 
-        {canOperate(role) && showVignetteForm && (
+        {isOwnerOrAdmin(role) && showVignetteForm && (
           <div className="mt-4 rounded-doc border border-doc-border bg-surface-2 p-4">
             <h3 className="mb-4 text-xl font-bold">
               {editingVignetteId
@@ -1292,7 +1279,7 @@ export default function VehicleDetailView({
                   })}
                 </p>
 
-                {canOperate(role) && (
+                {isOwnerOrAdmin(role) && (
                   <div className="flex gap-2">
                     <button
                       onClick={() => startEditVignette(item)}
@@ -1495,7 +1482,7 @@ export default function VehicleDetailView({
           <button
             onClick={() => {
               if (!editingServiceId && legalHold) {
-                alert(t("common.legalHoldMessage"));
+                void notify({ message: t("common.legalHoldMessage") });
                 return;
               }
               setShowForm(!showForm);
@@ -1653,7 +1640,7 @@ export default function VehicleDetailView({
                     >
                       {t("vehicles.services.editButton")}
                     </button>
-                    {canOperate(role) && (
+                    {isOwnerOrAdmin(role) && (
                       <button
                         type="button"
                         onClick={() => deleteService(item.id)}

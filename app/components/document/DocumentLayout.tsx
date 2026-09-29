@@ -2,7 +2,7 @@
 
 import type { ReactNode } from "react";
 import type { UiContext } from "@/lib/intents/ui-context";
-import { VoiceLauncherSlot } from "@/app/components/voice/VoiceLauncherSlot";
+import { VOICE_SLOT_ROW_CLASS, VoiceLauncherSlot } from "@/app/components/voice/VoiceLauncherSlot";
 import type { VoiceModuleContext, VoiceSelection } from "@/app/components/voice/VoiceLauncher";
 
 // =============================================================================
@@ -43,14 +43,19 @@ export function DocumentPageShell({
   /** Modul obrazovky pre vety bez modulu („Vytvor novú položku"). */
   moduleContext?: VoiceModuleContext | null;
 }) {
+  // `w-full min-w-0` je povinné: <body> je `flex flex-col` a `mx-auto` na
+  // flex položke vypína roztiahnutie (stretch) — šírka by bola fit-content,
+  // teda min-content obsahu. Riadok záložiek (nowrap, overflow-x-auto) má
+  // min-content ≈ súčet všetkých záložiek, takže celá stránka narástla na
+  // ~2× šírku telefónu (M1 real-device bug 2026-09-28, detail vozidla).
   return (
-    <div className={`mx-auto ${wide ? "max-w-6xl" : "max-w-5xl"} px-4 pb-28 pt-6 sm:px-6`}>
+    <div className={`relative mx-auto w-full min-w-0 ${wide ? "max-w-6xl" : "max-w-5xl"} px-4 pb-28 pt-4 sm:px-6 sm:pt-6`}>
       {/* Hlasový launcher je v TOKU stránky, nie plávajúci — appka už má
           jeden plávajúci prvok (bublinku chatu), ktorý si používateľ môže
           pretiahnuť kamkoľvek, takže druhý by sa s ním skôr či neskôr
           prekryl. Takto je dostupný na každej stránke, ktorá používa túto
           schránku, a kolidovať nemá s čím. */}
-      <div className="mb-4 flex justify-end">
+      <div className={VOICE_SLOT_ROW_CLASS}>
         <VoiceLauncherSlot
           uiContext={uiContext}
           selection={voiceSelection}
@@ -84,14 +89,14 @@ export function DocumentHeader({
   aside?: ReactNode;
 }) {
   return (
-    <header className="flex flex-col gap-4 border-b border-doc-border pb-5 sm:flex-row sm:items-start sm:justify-between">
+    <header className="flex flex-col gap-3 border-b border-doc-border pb-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4 sm:pb-5">
       <div className="min-w-0">
         {eyebrow && (
           <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-esblu sm:text-[11px]">
             {eyebrow}
           </p>
         )}
-        <h1 className="mt-1 break-words text-2xl font-semibold text-primary">{title}</h1>
+        <h1 className="mt-1 break-words text-xl font-semibold text-primary sm:text-2xl">{title}</h1>
         {badges && <div className="mt-2 flex flex-wrap items-center gap-2">{badges}</div>}
         {meta && <div className="mt-2 text-[15px] text-secondary sm:text-sm">{meta}</div>}
       </div>
@@ -240,7 +245,7 @@ export function DocumentActionBar({
     <div
       className={
         sticky
-          ? "sticky bottom-0 z-10 -mx-4 border-t border-doc-border bg-page-bg/95 px-4 py-3 backdrop-blur sm:mx-0 sm:rounded-doc sm:border sm:px-4"
+          ? "sticky bottom-[var(--mobile-tabbar-space,0px)] z-10 -mx-4 border-t border-doc-border bg-page-bg/95 px-4 py-3 backdrop-blur sm:mx-0 sm:rounded-doc sm:border sm:px-4"
           : ""
       }
     >

@@ -23,6 +23,7 @@ import {
 } from "@/lib/chat";
 import EntityPickerModal from "./EntityPickerModal";
 import { notifyChatMessage } from "@/lib/push/client";
+import { confirmAction } from "@/app/components/ui/AppDialog";
 
 const PAGE_SIZE = 50;
 
@@ -520,7 +521,7 @@ export default function ChatMessageView({
   }
 
   async function deleteMessage(messageId: string) {
-    const confirmed = window.confirm(t("chat.confirmDeleteMessage"));
+    const confirmed = (await confirmAction({ message: t("chat.confirmDeleteMessage"), destructive: true }));
     if (!confirmed) return;
 
     const { data, error } = await supabase

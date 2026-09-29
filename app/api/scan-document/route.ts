@@ -1232,11 +1232,14 @@ export async function POST(req: Request) {
     //     prvým volaním modelu. Retry s rovnakým Idempotency-Key a rovnakým
     //     obsahom nespotrebuje ďalší kredit. Uloženie dokumentu bez AI sa
     //     nepočíta a zmazanie dokumentu kredit nevracia (ledger v DB).
+    // SHA-256 presných bajtov originálu — idempotencia AI kreditu aj väzba
+    // AI návrhu príjmu na originál (pečať → /api/inbox/intake → DB).
+    const contentSha256 = await sha256Hex(imageBytes);
     const reservation = await reserveAiProcessing(
       userClient,
       "scan-document",
       resolveIdempotencyKey(req),
-      await sha256Hex(imageBytes)
+      contentSha256
     );
     if (!reservation.ok) {
       if (reservation.denial) return entitlementDenialResponse(locale, reservation.denial);
@@ -1513,33 +1516,46 @@ export async function POST(req: Request) {
     }
 
     // ---------------------------------------------------------------------
-    // 11) Príjem finančného dokladu BEZ čítania.
+    // 11) PRÍJEM s review uploaderom (M1 produktová korekcia 2026-09-28).
     //
-    // Kto nemá finance.view (zamestnanec, admin bez financií), smie bloček,
-    // faktúru či dodací list odoslať na spracovanie, ale nesmie vidieť ich
-    // obsah — ani vyťažený z vlastnej fotky. Údaje preto neodchádzajú v
-    // čitateľnej podobe: zapečatia sa (lib/intake-seal.ts) a uloží ich až
-    // /api/inbox/intake pod identitou používateľa. Klient dostane iba typ.
+    // Kto nesmie doklad daného typu vložiť priamo ako skontrolovaný
+    // (RLS documents_insert_scoped vetva A / ai_evidence_insert_scoped
+    // vetvy W, D) — zamestnanec, admin bez finance.manage (finančné typy),
+    // zamestnanec (vážny lístok) — ide cez príjem:
+    //   - VIDÍ vyťažené údaje SVOJHO práve naskenovaného dokladu (review),
+    //   - dostane navyše pečať (lib/intake-seal.ts) = serverom atestovaný
+    //     AI návrh; /api/inbox/intake ho pripojí podpísaným RPC a uloží
+    //     používateľom opravené/potvrdené hodnoty cez potvrdzovacie RPC
+    //     (audit AI → používateľ, aktér = auth.uid()).
+    // Po potvrdení doklad NEVIDÍ (žiadne rozšírenie browse práv).
     // ---------------------------------------------------------------------
+    let intake: { intakeOnly: true; sealedExtraction: string | null } | null = null;
     if (isIntakeDocumentType(documentType)) {
-      const { data: financeView } = await userClient.rpc("esblu_my_finance_view");
-      if (financeView !== true) {
-        const sealedExtraction = sealIntakeExtraction(
-          {
-            documentType,
-            confidenceScore,
-            reviewStatus,
-            rawText,
-            documentLanguage,
-            fieldConfidence,
-            fields: (invoiceFields ?? receiptFields ?? deliveryNoteFields ?? null) as Record<string, unknown> | null,
-          },
-          user.id
-        );
-        return Response.json({
-          success: true,
-          data: { documentType, intakeOnly: true, sealedExtraction },
-        });
+      let viaIntake = false;
+      if (documentType === "weigh_ticket") {
+        const { data: role } = await userClient.rpc("esblu_my_active_role");
+        viaIntake = role !== "owner" && role !== "admin";
+      } else {
+        const { data: financeManage } = await userClient.rpc("esblu_my_finance_manage");
+        viaIntake = financeManage !== true;
+      }
+      if (viaIntake) {
+        intake = {
+          intakeOnly: true,
+          sealedExtraction: sealIntakeExtraction(
+            {
+              documentType,
+              confidenceScore,
+              reviewStatus,
+              rawText,
+              documentLanguage,
+              fieldConfidence,
+              fields: (invoiceFields ?? receiptFields ?? deliveryNoteFields ?? weighTicketFields ?? null) as Record<string, unknown> | null,
+              contentSha256,
+            },
+            user.id
+          ),
+        };
       }
     }
 
@@ -1559,6 +1575,7 @@ export async function POST(req: Request) {
         insuranceFields,
         serviceDocumentFields,
         otherFields,
+        ...(intake ?? {}),
       },
     });
   } catch (error) {

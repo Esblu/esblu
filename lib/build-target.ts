@@ -19,3 +19,9 @@
 // -----------------------------------------------------------------------------
 
 export const IS_MOBILE_BUILD = process.env.NEXT_PUBLIC_ESBLU_MOBILE === "1";
+
+/**
+ * Identifikátor mobilného buildu (UTC čas buildu z mobile/next.config.ts).
+ * Webový build ho nemá (prázdny reťazec).
+ */
+export const ESBLU_BUILD_ID = process.env.NEXT_PUBLIC_ESBLU_BUILD_ID ?? "";

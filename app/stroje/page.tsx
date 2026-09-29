@@ -45,6 +45,8 @@ import {
 } from "@/app/components/ui/Primitives";
 import { MachineIcon, PlusIcon, TrashIcon } from "@/app/components/icons/AppIcons";
 import { compressImage } from "@/lib/image-compress";
+import { navigateHard } from "@/lib/app-navigation";
+import { confirmAction } from "@/app/components/ui/AppDialog";
 
 /** Jedna šablóna stĺpcov pre hlavičku aj riadky registra. */
 const MACHINE_COLUMNS =
@@ -126,7 +128,7 @@ export default function StrojePage() {
     } = await supabase.auth.getSession();
 
     if (!session) {
-      window.location.href = "/login";
+      navigateHard("/login");
       return;
     }
 
@@ -436,7 +438,7 @@ export default function StrojePage() {
   async function deleteMachine(machineId: string) {
     if (deletingMachineId) return;
 
-    const confirmed = confirm(t("machines.errors.deleteConfirm"));
+    const confirmed = (await confirmAction({ message: t("machines.errors.deleteConfirm"), destructive: true }));
     if (!confirmed) return;
 
     setDeletingMachineId(machineId);
@@ -633,7 +635,7 @@ export default function StrojePage() {
 
   return (
     <PageShell wide moduleContext="machines">
-      <BackLink href="/" label={t("inbox.backToMenu")} className="mb-6" />
+      <BackLink href="/" label={t("inbox.backToMenu")} className="mb-3 sm:mb-6" />
 
       <PageHeader
         eyebrow={

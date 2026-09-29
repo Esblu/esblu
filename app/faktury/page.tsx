@@ -89,6 +89,7 @@ import {
   DocumentStatusBadge,
   DocumentSourceBadge,
 } from "@/app/components/document/DocumentStatusBadge";
+import { navigateHard } from "@/lib/app-navigation";
 
 // Smer je samostatná dimenzia od sekcií. Sekcia "issued" totiž NIKDY
 // neznamenala direction='issued' — znamená "finalizovaná riadna faktúra".
@@ -186,7 +187,7 @@ export default function FakturyPage() {
     } = await supabase.auth.getSession();
 
     if (!session) {
-      window.location.href = "/login";
+      navigateHard("/login");
       return;
     }
     setUserId(session.user.id);
@@ -608,7 +609,7 @@ export default function FakturyPage() {
           : null
       }
     >
-      <BackLink href="/" label={t("nav.dashboard")} className="mb-6" />
+      <BackLink href="/" label={t("nav.dashboard")} className="mb-3 sm:mb-6" />
 
       <DocumentHeader
         eyebrow={
@@ -775,7 +776,7 @@ export default function FakturyPage() {
       )}
 
       {selectionMode && (
-        <div className="sticky bottom-4 z-10 mt-3 rounded-doc border border-doc-border bg-surface-1/95 p-3 backdrop-blur">
+        <div className="sticky bottom-[calc(var(--mobile-tabbar-space,0px)+1rem)] z-10 mt-3 rounded-doc border border-doc-border bg-surface-1/95 p-3 backdrop-blur">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex flex-wrap items-center gap-3">
               <p className="text-sm font-medium text-primary">

@@ -28,6 +28,8 @@ import {
   denialMessageKey,
   intentRequirement,
   restrictedAssistantDenial,
+  scopeIntentArgsForRole,
+  voiceTranscriptionAllowed,
   type AccessContext,
   type AccessDenial,
 } from "@/lib/intents/permissions";
@@ -103,11 +105,21 @@ const MATRIX: Array<[IntentName, Record<string, unknown>, Expect]> = [
   ["DOCUMENTS_EXPORT", {}, { owner: ok, adminNoFinance: "finance", adminFinance: ok, accountant: ok, employee: "assistant_scope" }],
   ["SEARCH_DOCUMENTS", { documentTypes: ["receipt"] }, { owner: ok, adminNoFinance: "finance", adminFinance: ok, accountant: ok, employee: "assistant_scope" }],
   ["SEARCH_DOCUMENTS", { documentTypes: ["delivery_note"] }, { owner: ok, adminNoFinance: "finance", adminFinance: ok, accountant: ok, employee: "assistant_scope" }],
-  ["EXPORT_DOCUMENTS", {}, { owner: ok, adminNoFinance: "finance", adminFinance: ok, accountant: ok, employee: "assistant_scope" }],
+  // Účtovník = iba financie (M1 authz follow-up): export bez typu by bral aj
+  // TP/PZP/servisné doklady → pre účtovníka odmietnuté; orchestrátor mu typy
+  // vopred zúži na finančné (scopeIntentArgsForRole), takže reálny export prejde.
+  ["EXPORT_DOCUMENTS", {}, { owner: ok, adminNoFinance: "finance", adminFinance: ok, accountant: "operational", employee: "assistant_scope" }],
+  ["EXPORT_DOCUMENTS", { documentTypes: ["invoice", "receipt", "delivery_note"] }, { owner: ok, adminNoFinance: "finance", adminFinance: ok, accountant: ok, employee: "assistant_scope" }],
+  ["SEARCH_DOCUMENTS", { documentTypes: ["vehicle_registration"] }, { owner: ok, adminNoFinance: ok, adminFinance: ok, accountant: "operational", employee: "assistant_scope" }],
+  ["SEARCH_DOCUMENTS", { documentTypes: ["insurance"] }, { owner: ok, adminNoFinance: ok, adminFinance: ok, accountant: "operational", employee: "assistant_scope" }],
+  ["SEARCH_DOCUMENTS", { documentTypes: ["receipt", "insurance"] }, { owner: ok, adminNoFinance: "finance", adminFinance: ok, accountant: "operational", employee: "assistant_scope" }],
+  ["SEARCH_DOCUMENTS", {}, { owner: ok, adminNoFinance: ok, adminFinance: ok, accountant: "operational", employee: "assistant_scope" }],
   // Príjem dokladu: každý člen (zamestnanec IBA toto); navigácia: nie zamestnanec
   ["DOCUMENT_INTAKE", { documentTypes: ["invoice"] }, { owner: ok, adminNoFinance: ok, adminFinance: ok, accountant: ok, employee: ok }],
   ["OPEN_MODULE", {}, { owner: ok, adminNoFinance: ok, adminFinance: ok, accountant: ok, employee: "assistant_scope" }],
-  ["ENTITY_CREATE", {}, { owner: ok, adminNoFinance: ok, adminFinance: ok, accountant: ok, employee: "assistant_scope" }],
+  // Vytvorenie bez modulu vedie iba na sklad/stroje/vozidlá → účtovník nie.
+  ["ENTITY_CREATE", {}, { owner: ok, adminNoFinance: ok, adminFinance: ok, accountant: "operational", employee: "assistant_scope" }],
+  ["DOCUMENT_INTAKE", { documentTypes: ["vehicle_registration"] }, { owner: ok, adminNoFinance: ok, adminFinance: ok, accountant: "operational", employee: "assistant_scope" }],
   // Termíny sú prevádzkové
   ["UPCOMING_DEADLINES", {}, { owner: ok, adminNoFinance: ok, adminFinance: ok, accountant: "operational", employee: "assistant_scope" }],
 ];
@@ -469,6 +481,8 @@ const EXTRACTION = {
   documentLanguage: "sk",
   fieldConfidence: null,
   fields: { supplier: "Dodávateľ s.r.o.", totalAmount: 1234.56 },
+  // v2 pečate: SHA-256 naskenovaného originálu (väzba AI návrhu na súbor)
+  contentSha256: "a".repeat(64),
 };
 
 await check("pečať: nečitateľná, round-trip iba pre toho istého používateľa", () => {
@@ -504,11 +518,18 @@ await check("cesta v Storage: iba vlastný priečinok, bez traverzie", () => {
   assert.equal(isOwnStoragePath(42, uid), false);
 });
 
-await check("scan-document: bez finance_view vráti iba pečať, nie polia", () => {
+await check("scan-document: príjem s review — uploader vidí údaje SVOJHO skenu + dostane pečať (atestovaný AI návrh)", () => {
+  // M1 produktová korekcia 2026-09-28: kto nesmie doklad vložiť priamo ako
+  // skontrolovaný (bez finance.manage; vážny lístok zamestnanca), ide cez
+  // príjem — údaje svojho skenu vidí a opraví, uloženie ide s pečaťou cez
+  // /api/inbox/intake → potvrdzovacie RPC. Browse práva sa nemenia (RLS).
   const route = readFileSync("app/api/scan-document/route.ts", "utf8");
-  assert.ok(route.includes("esblu_my_finance_view"));
+  assert.ok(route.includes('userClient.rpc("esblu_my_finance_manage")'));
+  assert.ok(route.includes("viaIntake = financeManage !== true;"));
+  assert.ok(route.includes('viaIntake = role !== "owner" && role !== "admin";'), "vážny lístok zamestnanca");
   assert.ok(route.includes("intakeOnly: true"));
-  assert.ok(route.includes("sealedExtraction"));
+  assert.ok(route.includes("sealedExtraction: sealIntakeExtraction("));
+  assert.ok(route.includes("...(intake ?? {}),"), "pečať sa pridá k bežnej odpovedi");
 });
 
 await check("inbox/intake: odpoveď obsahuje iba „odoslané“, žiadny RETURNING", () => {
@@ -613,12 +634,18 @@ await check("zamestnanec: príjem vráti iba odkaz na Inbox — žiadny dotaz, �
   assert.ok(!/\d/.test(result.text));
 });
 
-await check("po odoslaní: bezpečné potvrdenie „Doklad bol odoslaný na spracovanie.“", () => {
+await check("po odoslaní: odpoveď bez obsahu dokladu (potvrdené / odoslané na spracovanie)", () => {
   assert.equal(translate("sk", "assistant.intake.submitted"), "Doklad bol odoslaný na spracovanie.");
+  assert.notEqual(translate("sk", "assistant.intake.confirmed"), "assistant.intake.confirmed");
   const route = readFileSync("app/api/inbox/intake/route.ts", "utf8");
-  const success = route.slice(route.lastIndexOf("return Response.json("));
-  assert.ok(success.includes('"assistant.intake.submitted"'));
-  assert.ok(!/fields|extraction|documentId|storagePath/.test(success.split("\n").slice(0, 4).join("\n")));
+  const responses = route.match(/Response\.json\(\s*\{[^}]*\}/g) ?? [];
+  assert.ok(responses.some((r) => r.includes('"assistant.intake.confirmed"')), "potvrdené");
+  assert.ok(route.includes('reviewable ? "assistant.intake.reviewPending" : "assistant.intake.submitted"'), "rozpracované / odoslané");
+  for (const response of responses) {
+    // id riadku (ktorý si vygeneroval sám klient) smie ísť späť kvôli
+    // obnoveniu review; nikdy obsah dokladu, cesta ani hash.
+    assert.ok(!/fields|extraction|storagePath|reviewed|contentSha256/.test(response), response);
+  }
 });
 
 await check("zamestnanec s podvrhnutým permissions.finance → stále odmietnutý", () => {
@@ -683,6 +710,50 @@ await check("i18n: assistant.* a folders.intent.delete* kľúče preložené vo 
     for (const locale of ["sk", "en", "de"] as const) {
       assert.notEqual(translate(locale, key), key, `${locale}: ${key}`);
     }
+  }
+});
+
+// -----------------------------------------------------------------------------
+// ÚČTOVNÍK = iba financie (M1 authz follow-up 2026-09-28)
+// -----------------------------------------------------------------------------
+await check("účtovník: dokladové intenty bez typu sa zúžia na finančné typy a prejdú; iné roly bez zmeny", () => {
+  const acc = ROLES.accountant;
+  for (const name of ["SEARCH_DOCUMENTS", "EXPORT_DOCUMENTS", "DOCUMENT_INTAKE"] as const) {
+    const scoped = scopeIntentArgsForRole({ name, args: {} }, "accountant");
+    assert.deepEqual(scoped.args.documentTypes, ["invoice", "receipt", "delivery_note"], name);
+    assert.equal(checkIntentAccess(scoped.name, scoped.args, acc), null, name);
+    // výslovný nefinančný typ sa NEPREPISUJE — ostane odmietnutý
+    const explicit = scopeIntentArgsForRole({ name, args: { documentTypes: ["insurance"] } }, "accountant");
+    assert.deepEqual(explicit.args.documentTypes, ["insurance"]);
+    assert.equal(checkIntentAccess(explicit.name, explicit.args, acc), "operational", name);
+  }
+  for (const role of ["owner", "admin", "employee"]) {
+    const same = { name: "SEARCH_DOCUMENTS" as const, args: {} };
+    assert.equal(scopeIntentArgsForRole(same, role), same, role);
+  }
+});
+
+await check("účtovník: financie áno, prevádzka nie, vytvorenie bez modulu odmietnuté už pred doplňujúcou otázkou", () => {
+  const acc = ROLES.accountant;
+  for (const name of ["SEARCH_INVOICE", "SHOW_UNPAID_INVOICES", "SEARCH_PARTNER", "CREATE_INVOICE_DRAFT", "FOLDER_OPEN", "FOLDER_EXPORT", "DOCUMENTS_EXPORT", "INBOX_LIST_UNASSIGNED", "PARTNER_CREATE", "CREATE_DOCUMENT_CATEGORY"] as const) {
+    assert.equal(checkIntentAccess(name, {}, acc), null, name);
+  }
+  for (const name of ["OPEN_VEHICLE", "SHOW_VEHICLE_DOCUMENTS", "VEHICLE_REPORT", "OPEN_MACHINE", "SEARCH_INVENTORY_ITEM", "UPCOMING_DEADLINES", "VEHICLE_COST_SUMMARY", "ENTITY_CREATE"] as const) {
+    assert.equal(checkIntentAccess(name, {}, acc), "operational", name);
+  }
+  assert.equal(restrictedAssistantDenial({ name: "ENTITY_CREATE", args: {} }, { role: "accountant" }), "operational");
+  assert.equal(restrictedAssistantDenial({ name: "ENTITY_CREATE", args: {} }, { role: "owner" }), null);
+});
+
+await check("hlas (prepis): owner/admin/účtovník áno; zamestnanec, neznáma a chýbajúca rola nie", () => {
+  for (const role of ["owner", "admin", "accountant"]) assert.equal(voiceTranscriptionAllowed(role), true, role);
+  for (const role of ["employee", "", "viewer", null, undefined]) assert.equal(voiceTranscriptionAllowed(role), false, String(role));
+});
+
+await check("pečať v2: bez platného SHA-256 originálu sa neotvorí", () => {
+  for (const bad of [undefined, "", "abc", "A".repeat(64), "g".repeat(64)]) {
+    const token = sealIntakeExtraction({ ...EXTRACTION, contentSha256: bad as unknown as string }, "user-a", { secret: SECRET });
+    assert.equal(unsealIntakeExtraction(token!, "user-a", { secret: SECRET }), null, String(bad));
   }
 });
 

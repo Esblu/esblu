@@ -64,8 +64,10 @@ import {
   ReceiptIcon,
 } from "@/app/components/icons/AppIcons";
 import { invoiceDetailHref } from "@/lib/entity-links";
+// Mobile M1: plné načítanie (<a>) v appke musí mieriť na statický .html súbor.
+import { hardNavigationTarget } from "@/lib/app-navigation";
 import { receivedInvoiceRoute } from "@/lib/invoicing/received-invoice-route";
-import { VoiceLauncherSlot } from "@/app/components/voice/VoiceLauncherSlot";
+import { VOICE_SLOT_ROW_CLASS, VoiceLauncherSlot } from "@/app/components/voice/VoiceLauncherSlot";
 import { useCompanyDpaLegalHold } from "@/app/components/CompanyDpaGate";
 import { normalizeWeightUnit } from "@/lib/normalize-weight-unit";
 import {
@@ -101,6 +103,8 @@ import {
   moveDocumentsToCategory,
   type CustomDocumentCategory,
 } from "@/lib/custom-document-categories";
+import { sanitizeReviewedDocumentFields, sanitizeReviewedEvidenceValues } from "@/lib/intake-document";
+import { confirmAction, notify } from "@/app/components/ui/AppDialog";
 
 type ScanDocumentType =
   | "weigh_ticket"
@@ -919,12 +923,24 @@ export default function AiEvidenciaPage() {
   const [folderPickerRefs, setFolderPickerRefs] = useState<FolderRef[] | null>(null);
   const [evidenceZipLoading, setEvidenceZipLoading] = useState(false);
   const [sessionUserId, setSessionUserId] = useState("");
-  // Príjem finančného dokladu BEZ čítania (zamestnanec, admin bez financií):
-  // server vrátil iba typ a zapečatené údaje — nič z obsahu sa nezobrazuje.
+  // Príjem s REVIEW uploaderom (zamestnanec, admin bez finance.manage;
+  // vážny lístok zamestnanca): používateľ vidí a opravuje vyťažené údaje
+  // SVOJHO dokladu v bežnom review formulári, uloženie však ide cez
+  // /api/inbox/intake (pečať = atestovaný AI návrh → potvrdzovacie RPC).
   const [intakeOnly, setIntakeOnly] = useState<{
-    documentType: "invoice" | "receipt" | "delivery_note";
+    documentType: "invoice" | "receipt" | "delivery_note" | "weigh_ticket";
     sealedExtraction: string | null;
+    /** Rozpracovaný záznam v DB (extracted) — potvrdzuje sa cez RPC. */
+    review?: { target: "documents" | "ai_evidence"; id: string } | null;
+    /** Podpísaná URL originálu pri obnovenom review. */
+    originalUrl?: string | null;
   } | null>(null);
+  // Uloženie rozpracovaného príjmu beží hneď po skene (odolnosť voči pádu
+  // appky); potvrdenie naň počká.
+  const intakeDraftRef = useRef<Promise<{ target: "documents" | "ai_evidence"; id: string } | null> | null>(null);
+  const [myIntakeReviews, setMyIntakeReviews] = useState<
+    Array<{ target: "documents" | "ai_evidence"; id: string; kind: string; status: string; review_expires_at: string }>
+  >([]);
   const [intakeBusy, setIntakeBusy] = useState(false);
   const [intakeNotice, setIntakeNotice] = useState<string | null>(null);
   // Prílohy PZP dokumentu (bod 3 zadania) — načítané pre aktuálne otvorený
@@ -1339,14 +1355,19 @@ const openCustomCategoryDocuments = openCustomCategoryId
 
       setSelectedFile(compressedFile);
 
+      // Príjem s review: údaje sa zobrazia v bežnom formulári (vlastný
+      // doklad), uloženie pôjde cez /api/inbox/intake s pečaťou.
+      setIntakeNotice(null);
       if (scanned.intakeOnly) {
-        // Bez finance.view: žiadne polia na kontrolu, iba odoslanie.
-        setIntakeOnly({
-          documentType: documentType as "invoice" | "receipt" | "delivery_note",
-          sealedExtraction: typeof scanned.sealedExtraction === "string" ? scanned.sealedExtraction : null,
-        });
-        setIntakeNotice(null);
-        return;
+        const intakeType = documentType as "invoice" | "receipt" | "delivery_note" | "weigh_ticket";
+        const sealed = typeof scanned.sealedExtraction === "string" ? scanned.sealedExtraction : null;
+        setIntakeOnly({ documentType: intakeType, sealedExtraction: sealed, review: null });
+        // Rozpracovaný príjem sa uloží HNEĎ (originál + atestovaný AI návrh),
+        // aby sa review dalo dokončiť aj po páde appky.
+        intakeDraftRef.current = persistIntakeDraft(intakeType, sealed, compressedFile);
+      } else {
+        setIntakeOnly(null);
+        intakeDraftRef.current = null;
       }
 
       setScanDocumentType(documentType);
@@ -1521,14 +1542,18 @@ const openCustomCategoryDocuments = openCustomCategoryId
   }
 
   /**
-   * Odoslanie finančného dokladu na spracovanie bez čítania. Fotka ide do
-   * vlastného priečinka v Storage, záznam uloží server z pečate. Odpoveď je
-   * iba potvrdenie — obsah dokladu sa používateľovi nezobrazí.
+   * PRÍJEM s review uploaderom — krok 1: rozpracovaný záznam.
+   * Originál ide do vlastného priečinka v Storage (nová, jedinečná cesta,
+   * nikdy sa neprepisuje), server overí jeho SHA-256 proti pečati skenu,
+   * vloží záznam v počiatočnom tvare a pripojí atestovaný AI návrh
+   * (needs_review → extracted). Odpoveď neobsahuje údaje dokladu.
    */
-  async function submitIntakeDocument() {
-    if (!intakeOnly || !selectedFile || intakeBusy) return;
+  async function persistIntakeDraft(
+    documentType: "invoice" | "receipt" | "delivery_note" | "weigh_ticket",
+    sealedExtraction: string | null,
+    file: File
+  ): Promise<{ target: "documents" | "ai_evidence"; id: string } | null> {
     setIntakeBusy(true);
-    setError("");
     try {
       const {
         data: { session },
@@ -1536,16 +1561,18 @@ const openCustomCategoryDocuments = openCustomCategoryId
       if (!session) throw new Error(t("inbox.errors.notLoggedIn"));
 
       const documentId = crypto.randomUUID();
-      const bucket = intakeOnly.documentType === "delivery_note" ? "ai-evidence-documents" : "ai-inbox-documents";
+      const bucket =
+        documentType === "delivery_note" || documentType === "weigh_ticket"
+          ? "ai-evidence-documents"
+          : "ai-inbox-documents";
       const storagePath = `${session.user.id}/${documentId}/${crypto.randomUUID()}.webp`;
-      const { error: uploadError } = await supabase.storage.from(bucket).upload(storagePath, selectedFile, {
-        contentType: selectedFile.type || "image/webp",
+      const { error: uploadError } = await supabase.storage.from(bucket).upload(storagePath, file, {
+        contentType: file.type || "image/webp",
         cacheControl: "3600",
         upsert: false,
       });
       if (uploadError) throw new Error(t("inbox.errors.photoSaveFailed", { message: uploadError.message }));
 
-      const contentSha256 = await computeFileSha256(selectedFile).catch(() => null);
       const response = await fetch(apiUrl("/api/inbox/intake"), {
         method: "POST",
         headers: {
@@ -1555,33 +1582,167 @@ const openCustomCategoryDocuments = openCustomCategoryId
         },
         body: JSON.stringify({
           documentId,
-          documentType: intakeOnly.documentType,
+          documentType,
           storagePath,
-          sealedExtraction: intakeOnly.sealedExtraction,
+          sealedExtraction,
           originalFilename: fileName || null,
-          mimeType: selectedFile.type || null,
-          fileSize: selectedFile.size,
-          contentSha256,
-          note: documentNote.trim() || null,
+          mimeType: file.type || null,
         }),
       });
-      const payload = (await response.json().catch(() => null)) as { success?: boolean; message?: string; error?: string } | null;
+      const payload = (await response.json().catch(() => null)) as {
+        success?: boolean;
+        reviewable?: boolean;
+        review?: { target: "documents" | "ai_evidence"; id: string } | null;
+        message?: string;
+        error?: string;
+      } | null;
       if (!response.ok || !payload?.success) {
         // Záznam nevznikol → fotku zmažeme, aby nezostala osirelá.
         await supabase.storage.from(bucket).remove([storagePath]);
         throw new Error(payload?.error || t("assistant.intake.failed"));
       }
-      setIntakeNotice(payload.message || t("assistant.intake.submitted"));
-      setIntakeOnly(null);
+      if (!payload.reviewable || !payload.review) {
+        // Bez atestovaného návrhu nie je čo potvrdiť — dokončí finančný správca.
+        setIntakeNotice(payload.message || t("assistant.intake.submitted"));
+        resetScanReview();
+        setSelectedFile(null);
+        clearImagePreview();
+        return null;
+      }
+      const review = payload.review;
+      setIntakeOnly((current) => (current ? { ...current, review } : current));
+      void loadMyIntakeReviews();
+      return review;
+    } catch (intakeError) {
+      setError(intakeError instanceof Error ? intakeError.message : t("assistant.intake.failed"));
+      return null;
+    } finally {
+      setIntakeBusy(false);
+    }
+  }
+
+  /**
+   * PRÍJEM s review uploaderom — krok 2: potvrdenie skontrolovaných hodnôt.
+   * Potvrdzovacie RPC (DB) overí vlastníka, firmu, typ, atestovaný stav a
+   * zhodu originálu; opravy zaeviduje po poliach (aktér = prihlásený).
+   */
+  async function submitIntakeDocument(reviewed: Record<string, unknown>) {
+    if (!intakeOnly || intakeBusy) return;
+    setIntakeBusy(true);
+    setError("");
+    try {
+      const review = intakeOnly.review ?? (intakeDraftRef.current ? await intakeDraftRef.current : null);
+      if (!review) throw new Error(t("assistant.intake.failed"));
+      const { data: confirmed, error: confirmError } =
+        review.target === "documents"
+          ? await supabase.rpc("esblu_confirm_intake_document", {
+              p_document_id: review.id,
+              p_fields: sanitizeReviewedDocumentFields(reviewed),
+              p_note: documentNote.trim() || null,
+            })
+          : await supabase.rpc("esblu_confirm_evidence_intake", {
+              p_evidence_id: review.id,
+              p_values: sanitizeReviewedEvidenceValues(reviewed),
+            });
+      if (confirmError || confirmed !== true) throw new Error(t("assistant.intake.failed"));
+      setIntakeNotice(t("assistant.intake.confirmed"));
+      intakeDraftRef.current = null;
+      resetScanReview();
       setSelectedFile(null);
       setFileName("");
-      setDocumentNote("");
       clearImagePreview();
+      await Promise.all([loadRecords(), loadOtherDocuments(), loadMyIntakeReviews()]);
     } catch (intakeError) {
       setError(intakeError instanceof Error ? intakeError.message : t("assistant.intake.failed"));
     } finally {
       setIntakeBusy(false);
     }
+  }
+
+  /** Vlastné rozpracované review (≤ 24 h) — nič cudzie ani potvrdené. */
+  async function loadMyIntakeReviews() {
+    const { data, error: listError } = await supabase.rpc("esblu_list_my_intake_reviews");
+    if (listError || !Array.isArray(data)) {
+      setMyIntakeReviews([]);
+      return;
+    }
+    setMyIntakeReviews(data as typeof myIntakeReviews);
+  }
+
+  /** Obnovenie review po páde appky / zatvorení obrazovky. */
+  async function resumeIntakeReview(target: "documents" | "ai_evidence", id: string) {
+    setError("");
+    const { data, error: getError } = await supabase.rpc("esblu_get_my_intake_review", { p_target: target, p_id: id });
+    const review = data as {
+      kind: "invoice" | "receipt" | "delivery_note" | "weigh_ticket";
+      status: string;
+      storage_bucket: string;
+      storage_path: string;
+      confidence_score: number | null;
+      document_type?: string | null;
+      review_values: Record<string, unknown> | null;
+      field_confidence?: unknown;
+      note?: string | null;
+      can_confirm: boolean;
+    } | null;
+    if (getError || !review) {
+      setError(t("inbox.intakeResume.loadFailed"));
+      await loadMyIntakeReviews();
+      return;
+    }
+    const { data: signed } = await supabase.storage.from(review.storage_bucket).createSignedUrl(review.storage_path, 600);
+    resetScanReview();
+    setScanDocumentType(review.kind);
+    const values = review.review_values ?? {};
+    if (target === "ai_evidence") {
+      const asText = (key: string) => (values[key] === null || values[key] === undefined ? "" : String(values[key]));
+      setOtherResult(null);
+      setResult({
+        documentType: review.document_type || documentTypeLabels[review.kind],
+        spz: asText("spz"),
+        supplier: asText("supplier"),
+        customer: asText("customer"),
+        constructionSite: asText("construction_site"),
+        documentNumber: asText("document_number"),
+        material: asText("material"),
+        materialOriginal: asText("material_original"),
+        materialCategory: asText("material_category"),
+        quantity: asText("quantity"),
+        unit: asText("unit"),
+        brutto: asText("brutto"),
+        tara: asText("tara"),
+        netto: asText("netto"),
+        documentDate: asText("document_date"),
+        documentTime: asText("document_time"),
+        sourceLocation: asText("source_location"),
+        destinationLocation: asText("destination_location"),
+        movementType: asText("movement_type"),
+        rawText: asText("raw_text"),
+        documentLanguage: asText("document_language"),
+        confidenceScore: review.confidence_score === null ? "" : String(review.confidence_score),
+        reviewStatus: "needs_review",
+      });
+    } else {
+      setResult(null);
+      setOtherResult({
+        fields: values,
+        reviewStatus: "needs_review",
+        confidenceScore: review.confidence_score ?? null,
+        rawText: null,
+        documentLanguage: null,
+        fieldConfidence: Array.isArray(review.field_confidence)
+          ? (review.field_confidence as { field: string; confidence: number }[])
+          : [],
+      });
+      setDocumentNote(review.note ?? "");
+    }
+    intakeDraftRef.current = null;
+    setIntakeOnly({
+      documentType: review.kind,
+      sealedExtraction: null,
+      review: review.can_confirm ? { target, id } : null,
+      originalUrl: signed?.signedUrl ?? null,
+    });
   }
 
   function resetScanReview() {
@@ -1743,6 +1904,35 @@ function resolveMovementType(result: any): string | null {
       const machineId: string | null = null;
       const machineLabel: string | null = null;
 
+      // Príjem s review (zamestnanec / admin bez finance.manage): skontrolované
+      // hodnoty potvrdí server cez esblu_confirm_evidence_intake (audit po
+      // poliach, aktér = prihlásený používateľ). Priamy INSERT s údajmi by RLS
+      // odmietla.
+      if (intakeOnly && (intakeOnly.documentType === "delivery_note" || intakeOnly.documentType === "weigh_ticket")) {
+        await submitIntakeDocument({
+          spz: canonicalSpz || null,
+          supplier: result.supplier || null,
+          customer: result.customer || null,
+          construction_site: result.constructionSite || null,
+          document_number: result.documentNumber || null,
+          material: result.material || null,
+          material_original: result.materialOriginal || null,
+          material_category: result.materialCategory || null,
+          unit: validatedWeights.unit || null,
+          document_time: result.documentTime || null,
+          source_location: result.sourceLocation || null,
+          destination_location: result.destinationLocation || null,
+          movement_type: resolveMovementType(result) || null,
+          quantity: validatedWeights.quantity,
+          brutto: validatedWeights.brutto,
+          tara: validatedWeights.tara,
+          netto: validatedWeights.netto,
+          document_date: result.documentDate || null,
+          vehicle_id: vehicleId,
+        });
+        return;
+      }
+
       let photoPath: string | null = null;
 
 if (selectedFile) {
@@ -1812,7 +2002,7 @@ review_status: reviewStatus,
       setSelectedFile(null);
       setFileName("");
       await Promise.all([loadRecords(), refreshPlanUsage()]);
-      alert(t("inbox.documentSavedToInbox"));
+      void notify({ message: t("inbox.documentSavedToInbox") });
     } catch (saveError: unknown) {
       if (uploadedPhotoPath && !recordInserted) {
         const { error: cleanupError } = await supabase.storage
@@ -1852,6 +2042,35 @@ review_status: reviewStatus,
       scanDocumentType === "delivery_note" ||
       saveOtherDocumentInProgressRef.current
     ) {
+      return;
+    }
+
+    // Príjem s review (faktúra/bloček bez finance.manage): skontrolované polia
+    // potvrdí server cez esblu_confirm_intake_document.
+    if (intakeOnly && (scanDocumentType === "invoice" || scanDocumentType === "receipt")) {
+      if (legalHold) {
+        setError(t("common.legalHoldMessage"));
+        return;
+      }
+      saveOtherDocumentInProgressRef.current = true;
+      try {
+        await submitIntakeDocument({ ...(otherResult.fields ?? {}) });
+      } finally {
+        saveOtherDocumentInProgressRef.current = false;
+      }
+      return;
+    }
+
+    // Prevádzkové doklady (PZP, TP, servisný doklad, iné) ukladá iba
+    // owner/admin — RLS documents_insert_scoped (vetva C) to vynúti znova.
+    // Zamestnanec a účtovník dostanú zrozumiteľnú hlášku namiesto chyby DB.
+    if (
+      scanDocumentType !== "invoice" &&
+      scanDocumentType !== "receipt" &&
+      role !== "owner" &&
+      role !== "admin"
+    ) {
+      setError(t("inbox.errors.operationalDocumentManagersOnly"));
       return;
     }
 
@@ -2071,7 +2290,7 @@ review_status: reviewStatus,
       setSelectedFile(null);
       setFileName("");
       await loadOtherDocuments();
-      alert(t("inbox.documentSavedToInbox"));
+      void notify({ message: t("inbox.documentSavedToInbox") });
     } catch (saveError: unknown) {
       if (uploadedPath && !documentInserted) {
         const { error: cleanupError } = await supabase.storage
@@ -2254,7 +2473,7 @@ review_status: reviewStatus,
     if (deletingDocumentId) return;
 
     const retained = isRetainedDocumentType(doc.document_type);
-    if (!confirm(t(retained ? "inbox.errors.confirmArchiveDocument" : "inbox.errors.confirmDeleteDocument"))) {
+    if (!(await confirmAction({ message: t(retained ? "inbox.errors.confirmArchiveDocument" : "inbox.errors.confirmDeleteDocument"), destructive: true }))) {
       return;
     }
 
@@ -2283,11 +2502,9 @@ review_status: reviewStatus,
         current?.id === doc.id ? null : current
       );
     } catch (deleteError: unknown) {
-      alert(
-        deleteError instanceof DocumentRemovalError && deleteError.reason === "denied"
+      void notify({ message: deleteError instanceof DocumentRemovalError && deleteError.reason === "denied"
           ? t("inbox.errors.documentRemovalDenied")
-          : t("inbox.errors.deleteDocumentFailed")
-      );
+          : t("inbox.errors.deleteDocumentFailed") });
     } finally {
       setDeletingDocumentId(null);
     }
@@ -2395,11 +2612,9 @@ review_status: reviewStatus,
         }
       }
 
-      alert(
-        uploadError instanceof Error
+      void notify({ message: uploadError instanceof Error
           ? uploadError.message
-          : t("inbox.errors.attachmentSaveFailed")
-      );
+          : t("inbox.errors.attachmentSaveFailed") });
     } finally {
       setIsUploadingAttachment(false);
     }
@@ -2407,35 +2622,37 @@ review_status: reviewStatus,
 
   async function deleteAttachment(attachment: AttachmentRow) {
     if (deletingAttachmentId) return;
-    if (!confirm(t("inbox.errors.confirmDeleteAttachment"))) return;
+    if (!(await confirmAction({ message: t("inbox.errors.confirmDeleteAttachment"), destructive: true }))) return;
 
     setDeletingAttachmentId(attachment.id);
 
     try {
+      // NAJPRV DB riadok, až potom súbor (rovnaký model ako
+      // lib/document-retention.ts): Storage nedovolí zmazať objekt, na ktorý
+      // ešte odkazuje záznam (20260930140000), a zlyhanie Storage nechá iba
+      // osirelý súbor — nikdy záznam bez dôkazového podkladu.
+      const { data: deletedRows, error: deleteError } = await supabase
+        .from("document_attachments")
+        .delete()
+        .eq("id", attachment.id)
+        .select("id");
+
+      if (deleteError) throw deleteError;
+      if ((deletedRows ?? []).length !== 1) throw new Error(t("inbox.errors.attachmentDeleteFailed"));
+
       const { error: removeError } = await supabase.storage
         .from(attachment.storage_bucket)
         .remove([attachment.storage_path]);
 
       if (removeError) {
-        throw new Error(
-          t("inbox.errors.attachmentStorageDeleteFailed", { message: removeError.message })
-        );
+        console.error("Súbor prílohy sa nepodarilo upratať (záznam je už zmazaný):", removeError.message);
       }
-
-      const { error: deleteError } = await supabase
-        .from("document_attachments")
-        .delete()
-        .eq("id", attachment.id);
-
-      if (deleteError) throw deleteError;
 
       setAttachments((prev) => prev.filter((item) => item.id !== attachment.id));
     } catch (deleteError: unknown) {
-      alert(
-        deleteError instanceof Error
+      void notify({ message: deleteError instanceof Error
           ? deleteError.message
-          : t("inbox.errors.attachmentDeleteFailed")
-      );
+          : t("inbox.errors.attachmentDeleteFailed") });
     } finally {
       setDeletingAttachmentId(null);
     }
@@ -2447,7 +2664,7 @@ review_status: reviewStatus,
       .createSignedUrl(attachment.storage_path, 300);
 
     if (error || !data) {
-      alert(t("inbox.errors.attachmentOpenFailed"));
+      void notify({ message: t("inbox.errors.attachmentOpenFailed") });
       return;
     }
 
@@ -2480,11 +2697,9 @@ review_status: reviewStatus,
       const blob = await response.blob();
       await downloadBlob(blob, doc.original_filename || `dokument-${doc.id}`);
     } catch (downloadError: unknown) {
-      alert(
-        downloadError instanceof Error
+      void notify({ message: downloadError instanceof Error
           ? downloadError.message
-          : t("inbox.errors.originalDownloadFailed")
-      );
+          : t("inbox.errors.originalDownloadFailed") });
     }
   }
 
@@ -2499,7 +2714,7 @@ review_status: reviewStatus,
       .createSignedUrl(doc.storage_path, 300);
 
     if (error || !data) {
-      alert(t("inbox.errors.originalPrintPrepareFailed"));
+      void notify({ message: t("inbox.errors.originalPrintPrepareFailed") });
       return;
     }
 
@@ -2522,14 +2737,14 @@ review_status: reviewStatus,
     } = await supabase.auth.getSession();
 
     if (!session) {
-      alert(t("inbox.errors.notLoggedIn"));
+      void notify({ message: t("inbox.errors.notLoggedIn") });
       return;
     }
 
     const membership = await getMyActiveMembership();
 
     if (!membership) {
-      alert(t("inbox.errors.notLoggedIn"));
+      void notify({ message: t("inbox.errors.notLoggedIn") });
       return;
     }
 
@@ -2544,7 +2759,7 @@ review_status: reviewStatus,
 
     if (recordError || !record) {
       console.error("Chyba pri načítaní záznamu:", recordError);
-      alert(t("inbox.errors.recordLoadFailed"));
+      void notify({ message: t("inbox.errors.recordLoadFailed") });
       return;
     }
 
@@ -2552,7 +2767,7 @@ review_status: reviewStatus,
     // Vážny lístok sa maže: NAJPRV DB riadok, až potom fotka (zlyhanie DB
     // nič nezničí; zlyhanie Storage nechá iba osirelý súbor bez odkazu).
     const deliveryNote = isDeliveryNoteEvidence(record.evidence_kind, record.document_type);
-    if (!confirm(t(deliveryNote ? "inbox.errors.confirmArchiveDocument" : "inbox.errors.confirmDeleteRecord"))) return;
+    if (!(await confirmAction({ message: t(deliveryNote ? "inbox.errors.confirmArchiveDocument" : "inbox.errors.confirmDeleteRecord"), destructive: true }))) return;
 
     if (deliveryNote) {
       const { data: archived, error: archiveError } = await supabase
@@ -2563,7 +2778,7 @@ review_status: reviewStatus,
         .select("id");
       if (archiveError || (archived ?? []).length !== 1) {
         console.error("Archivácia dodacieho listu zlyhala:", archiveError);
-        alert(t("inbox.errors.documentRemovalDenied"));
+        void notify({ message: t("inbox.errors.documentRemovalDenied") });
         return;
       }
     } else {
@@ -2576,7 +2791,7 @@ review_status: reviewStatus,
 
       if (deleteError || (deleted ?? []).length !== 1) {
         console.error("Chyba pri mazaní záznamu:", deleteError);
-        alert(t("inbox.errors.recordDeleteDbFailed"));
+        void notify({ message: t("inbox.errors.recordDeleteDbFailed") });
         return;
       }
 
@@ -2979,6 +3194,8 @@ useEffect(() => {
       loadVehicleAndMachineOptions(activeCompanyId || ""),
       loadOtherDocuments(activeCompanyId || ""),
       loadCustomCategories(activeCompanyId || ""),
+      // Vlastné rozpracované review (obnovenie po páde appky) — iba vlastné.
+      loadMyIntakeReviews(),
       // Stav stiahnutia vidí iba finance.view (RLS); ostatní dostanú prázdnu mapu.
       loadDownloadStates().then(setDownloadStates),
     ]);
@@ -3175,13 +3392,13 @@ function renderDocumentRegister(
 }
 
   return (
-    <main className="app-shell-bg min-h-screen px-4 pb-28 pt-4 sm:px-6 sm:pt-6 lg:px-10 lg:pt-10">
+    <main className="app-shell-bg relative min-h-dvh px-4 pb-28 pt-4 sm:px-6 sm:pt-6 lg:px-10 lg:pt-10">
       <Suspense fallback={null}>
         {/* Hlasový launcher. Kontext nesie IBA typ a identifikátor práve
             otvoreného dokladu — vďaka tomu „spracuj tento dokument" vie, o
             čo ide, a keď nie je otvorené nič, príkaz sa poctivo odmietne
             namiesto odhadovania „posledného". */}
-        <div className="mb-4 flex justify-end">
+        <div className={VOICE_SLOT_ROW_CLASS}>
           <VoiceLauncherSlot
             moduleContext="inbox"
             uiContext={
@@ -3336,53 +3553,44 @@ function renderDocumentRegister(
           </div>
         )}
 
-        {intakeNotice && !intakeOnly && (
-          <div className="mt-6">
-            <Notice>{intakeNotice}</Notice>
+        {myIntakeReviews.length > 0 && !intakeOnly && (
+          <div className="mt-6 rounded-doc border border-doc-border bg-doc-surface p-4">
+            <h2 className="text-base font-semibold text-primary">{t("inbox.intakeResume.title")}</h2>
+            <ul className="mt-3 space-y-2">
+              {myIntakeReviews.map((item) => (
+                <li key={`${item.target}-${item.id}`} className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-sm text-secondary">
+                    {documentTypeLabels[item.kind as ScanDocumentType] ?? item.kind}
+                    {" · "}
+                    {item.status === "extracted"
+                      ? t("inbox.intakeResume.expires", { time: new Date(item.review_expires_at).toLocaleString(locale) })
+                      : t("inbox.intakeResume.notConfirmable")}
+                  </span>
+                  {item.status === "extracted" && (
+                    <button
+                      type="button"
+                      onClick={() => void resumeIntakeReview(item.target, item.id)}
+                      className={docButtonSecondary}
+                    >
+                      {t("inbox.intakeResume.continue")}
+                    </button>
+                  )}
+                </li>
+              ))}
+            </ul>
           </div>
         )}
 
-        {intakeOnly && (
-          <div className="mt-8 space-y-4 rounded-doc border border-doc-border bg-doc-surface p-4 sm:p-5">
-            <h2 className="text-lg font-semibold text-primary">
-              {t("assistant.intake.title", { type: documentTypeLabels[intakeOnly.documentType] })}
-            </h2>
-            <p className="text-sm text-secondary">{t("assistant.intake.explanation")}</p>
-            <label className="block">
-              <span className={docLabel}>{t("inbox.noteLabel")}</span>
-              <textarea
-                value={documentNote}
-                onChange={(e) => setDocumentNote(e.target.value)}
-                rows={3}
-                maxLength={1000}
-                placeholder={t("inbox.notePlaceholder")}
-                className="mt-1 w-full rounded-xl border border-subtle bg-surface-1 px-4 py-3 outline-none"
-              />
-            </label>
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={() => void submitIntakeDocument()}
-                disabled={intakeBusy}
-                aria-busy={intakeBusy}
-                className={docButtonPrimary}
-              >
-                {intakeBusy ? t("assistant.intake.submitting") : t("assistant.intake.submit")}
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setIntakeOnly(null);
-                  setSelectedFile(null);
-                  setFileName("");
-                  clearImagePreview();
-                }}
-                disabled={intakeBusy}
-                className={docButtonSecondary}
-              >
-                {t("common.buttons.cancel")}
-              </button>
-            </div>
+        {intakeOnly?.originalUrl && (
+          <div className="mt-6">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={intakeOnly.originalUrl} alt="" className="max-h-96 w-auto rounded-doc border border-doc-border" />
+          </div>
+        )}
+
+        {intakeNotice && (
+          <div className="mt-6">
+            <Notice>{intakeNotice}</Notice>
           </div>
         )}
 
@@ -3957,7 +4165,7 @@ function renderDocumentRegister(
                   {doc.created_at ? formatDate(doc.created_at, locale) : "—"}
                 </p>
               </div>
-              <a href={receivedInvoiceRoute(doc.id)} className={docButtonPrimary}>
+              <a href={hardNavigationTarget(receivedInvoiceRoute(doc.id))} className={docButtonPrimary}>
                 {t("inbox.processAsReceivedInvoice")}
               </a>
             </li>
@@ -4090,7 +4298,7 @@ function renderDocumentRegister(
         {/* Lišta hromadného presunu. Drží sa pri spodku obrazovky, aby bola
             na telefóne dosiahnuteľná aj pri dlhom zozname. */}
         {selectionMode && selectedDocumentIds.length > 0 && (
-          <div className="sticky bottom-4 z-10 mt-3 rounded-doc border border-doc-border bg-surface-1/95 p-3 backdrop-blur">
+          <div className="sticky bottom-[calc(var(--mobile-tabbar-space,0px)+1rem)] z-10 mt-3 rounded-doc border border-doc-border bg-surface-1/95 p-3 backdrop-blur">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <p className="text-sm font-medium text-primary">
                 {t("inbox.folders.selectedCount", {
@@ -4260,7 +4468,7 @@ function renderDocumentRegister(
         )}
 
         {selectionMode && selectedDocumentIds.length > 0 && (
-          <div className="sticky bottom-4 z-10 mt-3 rounded-doc border border-doc-border bg-surface-1/95 p-3 backdrop-blur">
+          <div className="sticky bottom-[calc(var(--mobile-tabbar-space,0px)+1rem)] z-10 mt-3 rounded-doc border border-doc-border bg-surface-1/95 p-3 backdrop-blur">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <p className="text-sm font-medium text-primary">
                 {t("folders.selectedCount", { count: selectedDocumentIds.length })}
@@ -4552,7 +4760,7 @@ function renderDocumentRegister(
         <div className="mt-5 rounded-doc border border-doc-border bg-surface-2 p-4">
           <p className="text-sm text-secondary">{t("inbox.invoiceAlreadyCreated")}</p>
           <a
-            href={invoiceDetailHref(documentInvoiceId(selectedOtherDocument) as string)}
+            href={hardNavigationTarget(invoiceDetailHref(documentInvoiceId(selectedOtherDocument) as string))}
             className={`mt-3 inline-flex ${docButtonPrimary}`}
           >
             {t("inbox.receivedInvoice.created.openInvoice")}
@@ -4562,7 +4770,7 @@ function renderDocumentRegister(
         <div className="mt-5 rounded-doc border border-doc-border bg-surface-2 p-4">
           <p className="text-sm text-secondary">{t("inbox.pendingInvoicesHint")}</p>
           <a
-            href={receivedInvoiceRoute(selectedOtherDocument.id)}
+            href={hardNavigationTarget(receivedInvoiceRoute(selectedOtherDocument.id))}
             className={`mt-3 inline-flex ${docButtonPrimary}`}
           >
             {t("inbox.processAsReceivedInvoice")}
@@ -4838,7 +5046,7 @@ function renderDocumentRegister(
           {t("inbox.receivedInvoice.created.stayInInbox")}
         </button>
         <a
-          href={invoiceDetailHref(createdReceivedInvoiceId)}
+          href={hardNavigationTarget(invoiceDetailHref(createdReceivedInvoiceId))}
           className={docButtonPrimary}
         >
           {t("inbox.receivedInvoice.created.openInvoice")}

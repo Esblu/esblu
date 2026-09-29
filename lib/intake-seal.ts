@@ -21,11 +21,14 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:
 // sa prijme bez vyťažených údajov, nikdy sa neukážu).
 // =============================================================================
 
-const SEAL_VERSION = 1;
+// v2: pečať nesie SHA-256 presných bajtov naskenovaného originálu.
+const SEAL_VERSION = 2;
 /** Ako dlho po skene sa dá doklad odoslať. */
 export const INTAKE_SEAL_TTL_SECONDS = 30 * 60;
 
-export const INTAKE_DOCUMENT_TYPES = ["invoice", "receipt", "delivery_note"] as const;
+// weigh_ticket: zamestnanec skenuje vážny lístok cez ten istý príjem
+// (INSERT bez údajov → podpísaný AI návrh → vlastné potvrdenie).
+export const INTAKE_DOCUMENT_TYPES = ["invoice", "receipt", "delivery_note", "weigh_ticket"] as const;
 export type IntakeDocumentType = (typeof INTAKE_DOCUMENT_TYPES)[number];
 
 export function isIntakeDocumentType(value: unknown): value is IntakeDocumentType {
@@ -40,6 +43,8 @@ export type IntakeExtraction = {
   documentLanguage: string | null;
   fieldConfidence: unknown;
   fields: Record<string, unknown> | null;
+  /** SHA-256 (hex) bajtov, ktoré server naskenoval — viaže AI návrh na originál. */
+  contentSha256: string;
 };
 
 type SealedEnvelope = {
@@ -107,6 +112,7 @@ export function unsealIntakeExtraction(
     if (envelope.v !== SEAL_VERSION || envelope.uid !== userId) return null;
     if (Math.floor((options.now ?? Date.now()) / 1000) > envelope.exp) return null;
     if (!isIntakeDocumentType(envelope.data?.documentType)) return null;
+    if (typeof envelope.data.contentSha256 !== "string" || !/^[0-9a-f]{64}$/.test(envelope.data.contentSha256)) return null;
     return envelope.data;
   } catch {
     return null;

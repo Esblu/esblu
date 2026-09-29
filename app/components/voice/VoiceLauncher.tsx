@@ -122,11 +122,23 @@ export function VoiceLauncher({
   selection = null,
   folderContextId = null,
   moduleContext = null,
+  compact = false,
+  closedClassName,
+  openClassName,
 }: {
   uiContext?: UiContext | null;
   selection?: VoiceSelection | null;
   folderContextId?: string | null;
   moduleContext?: VoiceModuleContext | null;
+  /**
+   * Mobile M1: zatvorený launcher ako kompaktné ikonové tlačidlo (44 px)
+   * v hlavičke obrazovky namiesto samostatného riadku.
+   */
+  compact?: boolean;
+  /** Obal zatvoreného stavu (napr. umiestnenie v hlavičke). */
+  closedClassName?: string;
+  /** Obal otvoreného panelu (v toku stránky). */
+  openClassName?: string;
 } = {}) {
   const { t, locale } = useLocale();
 
@@ -461,7 +473,17 @@ export function VoiceLauncher({
                       : "";
 
   if (!open) {
-    return (
+    const button = compact ? (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        aria-label={t("nav.assistant")}
+        title={t("nav.assistant")}
+        className={`${docButtonSecondary} h-11 w-11 justify-center px-0`}
+      >
+        <AssistantGlyph />
+      </button>
+    ) : (
       <button
         type="button"
         onClick={() => setOpen(true)}
@@ -471,11 +493,12 @@ export function VoiceLauncher({
         {t("search.voice.launcher")}
       </button>
     );
+    return closedClassName ? <div className={closedClassName}>{button}</div> : button;
   }
 
   const clarify = intentResult?.kind === "clarify" ? intentResult : null;
 
-  return (
+  const panel = (
     <section
       aria-label={t("search.voice.launcher")}
       className="rounded-doc border border-doc-border bg-doc-surface p-3 sm:p-4"
@@ -603,6 +626,7 @@ export function VoiceLauncher({
       )}
     </section>
   );
+  return openClassName ? <div className={openClassName}>{panel}</div> : panel;
 }
 
 /**
@@ -621,6 +645,27 @@ function newConversationId(): string {
     return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
   }
   return Array.from({ length: 32 }, () => Math.floor(Math.random() * 16).toString(16)).join("");
+}
+
+/** Asistent (kompaktný vstup v hlavičke, Mobile M1). */
+function AssistantGlyph() {
+  return (
+    <svg
+      width="20"
+      height="20"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path d="M12 3v3M12 18v3M3 12h3M18 12h3" />
+      <path d="M12 8.5 13.3 11 16 12l-2.7 1-1.3 2.5-1.3-2.5L8 12l2.7-1z" />
+    </svg>
+  );
 }
 
 /** Mikrofón. Vlastný glyf, aby launcher nezávisel na ikone chatu. */

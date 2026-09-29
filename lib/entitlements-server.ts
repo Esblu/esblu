@@ -48,6 +48,20 @@ export async function requireEntitlement(db: SupabaseClient, key: EntitlementKey
  * hlavičky Authorization (už overenej volajúcim cez verifyRequestUser);
  * firma sa odvodí v DB. Iná hodnota v tele požiadavky sa nečíta.
  */
+/**
+ * Rola volajúceho z DB (esblu_my_active_role — iba AKTÍVNE členstvo) cez
+ * user-scoped klienta z Bearer tokenu požiadavky. null = bez tokenu, bez
+ * aktívneho členstva alebo chyba (volajúci to musí brať ako odmietnutie).
+ * Nečíta žiadne dáta firmy — iba vlastný riadok company_members.
+ */
+export async function getActiveRoleForRequest(req: Request): Promise<string | null> {
+  const authorization = req.headers.get("authorization") || "";
+  const accessToken = authorization.startsWith("Bearer ") ? authorization.slice("Bearer ".length).trim() : "";
+  if (!accessToken) return null;
+  const { data, error } = await getUserScopedSupabaseClient(accessToken).rpc("esblu_my_active_role");
+  return !error && typeof data === "string" && data ? data : null;
+}
+
 export async function requireVoiceEntitlement(req: Request): Promise<RequireResult> {
   const authorization = req.headers.get("authorization") || "";
   const accessToken = authorization.startsWith("Bearer ") ? authorization.slice("Bearer ".length).trim() : "";

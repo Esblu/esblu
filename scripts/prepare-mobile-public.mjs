@@ -65,11 +65,25 @@ function main() {
 // Top-level položky koreňového public/, ktoré sa do mobile/public NEKOPÍRUJÚ.
 const MOBILE_PUBLIC_EXCLUDES = ["video", ".well-known"];
 
+// Mobile M1 (2026-09-28): konkrétne súbory, ktoré appka nepotrebuje —
+// rastrové PNG nahradené WebP verziou (van/excavator/warehouse, ~2,3 MB
+// každý pri zobrazení 56 px; mobilný build nemá Next Image optimalizáciu)
+// a obrázky iba pre webovú landing page / staré mockupy.
+const MOBILE_PUBLIC_EXCLUDED_FILES = [
+  "images/van.png",
+  "images/excavator.png",
+  "images/warehouse.png",
+  "images/ai-evidencia.png",
+  "images/background.png",
+  "images/background-dark.png",
+];
+
 function isExcludedFromMobile(source) {
   const relative = path.relative(rootPublicDir, source);
   if (!relative || relative.startsWith("..")) return false;
   const top = relative.split(path.sep)[0];
-  return MOBILE_PUBLIC_EXCLUDES.includes(top);
+  if (MOBILE_PUBLIC_EXCLUDES.includes(top)) return true;
+  return MOBILE_PUBLIC_EXCLUDED_FILES.includes(relative.split(path.sep).join("/"));
 }
 
 function isBrokenSymlink(p) {

@@ -4,6 +4,7 @@ import "./globals.css";
 import LegalAcceptanceGate from "./components/LegalAcceptanceGate";
 import CompanyDpaGate from "./components/CompanyDpaGate";
 import FloatingChatWidget from "./components/chat/FloatingChatWidget";
+import { AppDialogHost } from "./components/ui/AppDialog";
 import { LocaleProvider } from "@/lib/i18n/LocaleProvider";
 import { DEFAULT_LOCALE } from "@/lib/i18n/locales";
 import { SITE_URL } from "@/lib/landing-video";
@@ -97,6 +98,8 @@ export default function RootLayout({
                   aj CompanyDpaGate (90) — nedostupný gate vždy prekryje
                   bublinku, presne ako medzi sebou tieto dva gate. */}
               <FloatingChatWidget />
+              {/* Mobile M1: host pre confirmAction()/notify() (app/components/ui/AppDialog.tsx). */}
+              <AppDialogHost />
             </CompanyDpaGate>
           </LegalAcceptanceGate>
         </LocaleProvider>

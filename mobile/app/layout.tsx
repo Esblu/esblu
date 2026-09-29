@@ -1,5 +1,8 @@
 import RootLayout, { metadata, viewport } from "@/app/layout";
 import DeepLinkBridge from "./DeepLinkBridge";
+import BackButtonBridge from "./BackButtonBridge";
+import NativeRuntimeMarker from "./NativeRuntimeMarker";
+import MobileTabBar from "@/app/components/mobile/MobileTabBar";
 
 // -----------------------------------------------------------------------------
 // MOBILE root layout — kompozícia, NIE duplikácia. Celá vizuálna/business
@@ -26,7 +29,11 @@ export default function MobileRootLayout({
   return (
     <RootLayout>
       <DeepLinkBridge />
+      <BackButtonBridge />
+      <NativeRuntimeMarker />
       {children}
+      {/* Mobile M1: spodná navigácia (iba mobilný build). */}
+      <MobileTabBar />
     </RootLayout>
   );
 }

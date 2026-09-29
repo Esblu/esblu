@@ -11,6 +11,7 @@ import { REQUIRED_ACCEPTANCE_DOCUMENTS } from "@/lib/legal-config";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import LanguageSwitcher from "@/app/components/LanguageSwitcher";
 import { SocialAuthButtons } from "@/app/components/auth/SocialAuthButtons";
+import { LegalDocLink } from "@/app/components/LegalDocLink";
 
 // Closed Beta (supabase/migrations/20260816130000_add_closed_beta_allowlist.sql):
 // verejná owner registrácia je dočasne obmedzená iba na schválených beta
@@ -409,13 +410,9 @@ async function resetPassword() {
               />
               <span>
                 {t("auth.login.agreeTermsPrefix")}{" "}
-                <Link
-                  href="/podmienky-pouzivania"
-                  target="_blank"
-                  className="font-semibold text-blue-700 hover:underline"
-                >
+                <LegalDocLink path="/podmienky-pouzivania" className="font-semibold text-blue-700 hover:underline">
                   {t("auth.login.agreeTermsLink")}
-                </Link>
+                </LegalDocLink>
                 .
               </span>
             </label>
@@ -430,13 +427,9 @@ async function resetPassword() {
               />
               <span>
                 {t("auth.login.agreePrivacyPrefix")}{" "}
-                <Link
-                  href="/ochrana-osobnych-udajov"
-                  target="_blank"
-                  className="font-semibold text-blue-700 hover:underline"
-                >
+                <LegalDocLink path="/ochrana-osobnych-udajov" className="font-semibold text-blue-700 hover:underline">
                   {t("auth.login.agreePrivacyLink")}
-                </Link>
+                </LegalDocLink>
                 .
               </span>
             </label>

@@ -22,6 +22,8 @@ import {
 } from "@/app/components/document/DocumentLayout";
 import { EmptyState, LoadingRows } from "@/app/components/ui/Primitives";
 import { FolderIcon, ChevronRightIcon } from "@/app/components/icons/AppIcons";
+import { navigateHard } from "@/lib/app-navigation";
+import { folderDetailHref } from "@/lib/entity-links";
 
 // =============================================================================
 // /priecinky — zoznam priečinkov dokladov.
@@ -47,7 +49,7 @@ export default function FoldersPage() {
     void (async () => {
       const { data } = await supabase.auth.getSession();
       if (!data.session) {
-        window.location.href = "/login";
+        navigateHard("/login");
         return;
       }
       setUserId(data.session.user.id);
@@ -84,7 +86,7 @@ export default function FoldersPage() {
 
   return (
     <DocumentPageShell wide moduleContext="folders">
-      <BackLink href="/" label={t("nav.dashboard")} className="mb-6" />
+      <BackLink href="/" label={t("nav.dashboard")} className="mb-3 sm:mb-6" />
 
       <DocumentHeader
         eyebrow={
@@ -147,7 +149,7 @@ export default function FoldersPage() {
               {folders.map((folder) => (
                 <li key={folder.id}>
                   <Link
-                    href={`/priecinky/${folder.id}`}
+                    href={folderDetailHref(folder.id)}
                     className="flex min-h-16 items-center gap-3 rounded-doc border border-doc-border bg-doc-surface px-4 py-3 transition hover:bg-surface-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   >
                     <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-doc-sm border border-doc-border bg-surface-2 text-secondary">

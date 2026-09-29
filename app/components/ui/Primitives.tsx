@@ -323,18 +323,18 @@ export function Metric({
     tone === "critical" ? "text-danger" : tone === "warning" ? "text-warning" : "text-primary";
 
   return (
-    <div className="rounded-doc-sm border border-doc-border bg-surface-2 px-3 py-2.5">
+    <div className="rounded-doc-sm border border-doc-border bg-surface-2 px-3 py-2 sm:py-2.5">
       <p className="text-xs font-medium uppercase tracking-wide text-secondary sm:text-[11px] sm:text-muted-esblu">
         {label}
       </p>
-      <p className={`mt-1 break-words text-lg font-semibold tabular-nums ${valueTone}`}>{value}</p>
+      <p className={`mt-0.5 break-words text-base font-semibold tabular-nums sm:mt-1 sm:text-lg ${valueTone}`}>{value}</p>
       {hint && <p className="mt-0.5 text-sm text-muted-esblu sm:text-xs">{hint}</p>}
     </div>
   );
 }
 
 export function MetricGrid({ children }: { children: ReactNode }) {
-  return <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">{children}</div>;
+  return <div className="grid grid-cols-2 gap-2 sm:gap-3 lg:grid-cols-4">{children}</div>;
 }
 
 // -----------------------------------------------------------------------------

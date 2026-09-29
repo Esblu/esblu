@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import {
@@ -11,6 +10,8 @@ import {
 } from "@/lib/legal-acceptance";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import LanguageSwitcher from "./LanguageSwitcher";
+import { navigateHard } from "@/lib/app-navigation";
+import { LegalDocLink } from "@/app/components/LegalDocLink";
 
 // Cesty, na ktorých sa blokujúci modal NIKDY nezobrazuje — verejné právne
 // stránky (musia byť čitateľné aj bez potvrdenia), prihlásenie/registrácia,
@@ -129,7 +130,7 @@ export default function LegalAcceptanceGate({
 
   async function handleLogout() {
     await supabase.auth.signOut();
-    window.location.href = "/login";
+    navigateHard("/login");
   }
 
   const mustBlock = !skip && checked && pending.length > 0;
@@ -180,13 +181,9 @@ export default function LegalAcceptanceGate({
                   />
                   <span>
                     {t("legalGate.agreeTermsPrefix")}{" "}
-                    <Link
-                      href="/podmienky-pouzivania"
-                      target="_blank"
-                      className="font-semibold text-blue-700 hover:underline"
-                    >
+                    <LegalDocLink path="/podmienky-pouzivania" className="font-semibold text-blue-700 hover:underline">
                       {t("legalGate.agreeTermsLink")}
-                    </Link>{" "}
+                    </LegalDocLink>{" "}
                     {t("legalGate.termsVersionSuffix", {
                       version: termsDoc.version,
                     })}
@@ -207,13 +204,9 @@ export default function LegalAcceptanceGate({
                   />
                   <span>
                     {t("legalGate.agreePrivacyPrefix")}{" "}
-                    <Link
-                      href="/ochrana-osobnych-udajov"
-                      target="_blank"
-                      className="font-semibold text-blue-700 hover:underline"
-                    >
+                    <LegalDocLink path="/ochrana-osobnych-udajov" className="font-semibold text-blue-700 hover:underline">
                       {t("legalGate.agreePrivacyLink")}
-                    </Link>{" "}
+                    </LegalDocLink>{" "}
                     {t("legalGate.privacyVersionSuffix", {
                       version: privacyDoc.version,
                     })}

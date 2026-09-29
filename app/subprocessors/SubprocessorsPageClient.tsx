@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import {
   LegalSection,
   PublicLegalLayout,
@@ -20,9 +21,9 @@ export function SubprocessorsPageClient() {
     <PublicLegalLayout titleKey="legal.titles.subprocessors" updatedAt="16. augusta 2026">
       <p>
         {t("legal.subprocessors.introPart1")}{" "}
-        <a href="/dpa" className={linkClass}>
+        <Link href="/dpa" className={linkClass}>
           {t("legal.subprocessors.introDpaLink")}
-        </a>
+        </Link>
         .
       </p>
 

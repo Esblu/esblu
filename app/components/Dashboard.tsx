@@ -20,6 +20,7 @@ import SettingsIcon from "./icons/SettingsIcon";
 import type { VehicleVignette } from "@/lib/vehicle-vignettes";
 import { inventoryItemDetailHref, machineDetailHref, vehicleDetailHref } from "@/lib/entity-links";
 import { isAppRouteAvailable } from "@/lib/app-routes";
+import { IS_MOBILE_BUILD } from "@/lib/build-target";
 import { buildLegacyDashboardAlerts } from "@/lib/deadlines";
 import { apiUrl } from "@/lib/api-url";
 import { REQUEST_LOCALE_HEADER } from "@/lib/i18n/request-locale";
@@ -592,7 +593,7 @@ export default function Dashboard() {
       subtitle: t("dashboard.moduleVehiclesSubtitle"),
       stat: String(vehicles.length),
       href: "/vozidla",
-      image: "/images/van.png",
+      image: "/images/van.webp",
       imageZoom: 1.2,
       accent: "blue",
     },
@@ -601,7 +602,7 @@ export default function Dashboard() {
       subtitle: t("dashboard.moduleMachinesSubtitle"),
       stat: String(machines.length),
       href: "/stroje",
-      image: "/images/excavator.png",
+      image: "/images/excavator.webp",
       imageZoom: 1.6,
       accent: "orange",
     },
@@ -610,7 +611,7 @@ export default function Dashboard() {
       subtitle: t("dashboard.moduleInventorySubtitle"),
       stat: String(items.length),
       href: "/sklad",
-      image: "/images/warehouse.png",
+      image: "/images/warehouse.webp",
       imageZoom: 1.7,
       accent: "teal",
     },
@@ -661,9 +662,9 @@ export default function Dashboard() {
     badge?: number;
   }[] = [
     { href: "/ai-evidencia", label: t("nav.inbox"), icon: <InboxDocumentIcon size={20} /> },
-    { href: "/vozidla", label: t("nav.vehicles"), image: "/images/van.png" },
-    { href: "/stroje", label: t("nav.machines"), image: "/images/excavator.png" },
-    { href: "/sklad", label: t("nav.inventory"), image: "/images/warehouse.png" },
+    { href: "/vozidla", label: t("nav.vehicles"), image: "/images/van.webp" },
+    { href: "/stroje", label: t("nav.machines"), image: "/images/excavator.webp" },
+    { href: "/sklad", label: t("nav.inventory"), image: "/images/warehouse.webp" },
     {
       href: "/obchodni-partneri",
       label: t("nav.businessPartners"),
@@ -955,14 +956,18 @@ export default function Dashboard() {
               </p>
             </div>
 
-            <button
-              type="button"
-              aria-label={t("dashboard.openMenu")}
-              onClick={() => setMenuOpen(true)}
-              className="surface-card surface-card-hover flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl text-secondary transition"
-            >
-              <HamburgerIcon />
-            </button>
+            {/* Mobile M1: v natívnej appke je navigácia v spodnej lište
+                (MobileTabBar) — druhé menu (hamburger) by ju duplikovalo. */}
+            {!IS_MOBILE_BUILD && (
+              <button
+                type="button"
+                aria-label={t("dashboard.openMenu")}
+                onClick={() => setMenuOpen(true)}
+                className="surface-card surface-card-hover flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl text-secondary transition"
+              >
+                <HamburgerIcon />
+              </button>
+            )}
           </div>
 
           <h2 className="mt-5 text-3xl font-black tracking-tight text-primary lg:mt-0 lg:text-[2.75rem]">

@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 import BackLink from "@/app/components/BackLink";
 import { getMyActiveMembership, hasFinanceManage, type MyActiveMembership } from "@/lib/company";
@@ -42,6 +41,8 @@ import { CheckIcon, FolderIcon } from "@/app/components/icons/AppIcons";
 import { DownloadStateBadge } from "@/app/components/folders/DownloadStateBadge";
 import { FolderPickerModal } from "@/app/components/folders/FolderPickerModal";
 import { describePackageOutcome, describePackageError } from "@/app/components/folders/package-messages";
+import { navigateHard } from "@/lib/app-navigation";
+import { AppLink } from "@/app/components/AppLink";
 
 // =============================================================================
 // Detail priečinka: kanonické doklady z rôznych modulov na jednom mieste.
@@ -88,7 +89,7 @@ export default function FolderDetailView({ folderId }: { folderId: string }) {
     void (async () => {
       const { data } = await supabase.auth.getSession();
       if (!data.session) {
-        window.location.href = "/login";
+        navigateHard("/login");
         return;
       }
       setUserId(data.session.user.id);
@@ -189,7 +190,7 @@ export default function FolderDetailView({ folderId }: { folderId: string }) {
       setNotice({ tone: "critical", text: t("folders.errors.failed") });
       return;
     }
-    window.location.href = "/priecinky";
+    navigateHard("/priecinky");
   }
 
   function originalLabel(item: FolderItemView): { text: string; tone: "ok" | "warn" | "muted" } {
@@ -204,7 +205,7 @@ export default function FolderDetailView({ folderId }: { folderId: string }) {
   if (loaded && (!canManage || notFound)) {
     return (
       <DocumentPageShell wide>
-        <BackLink href="/priecinky" label={t("folders.back")} className="mb-6" />
+        <BackLink href="/priecinky" label={t("folders.back")} className="mb-3 sm:mb-6" />
         <DocumentNotice>{!canManage ? t("folders.noAccess") : t("folders.errors.notFound")}</DocumentNotice>
       </DocumentPageShell>
     );
@@ -219,7 +220,7 @@ export default function FolderDetailView({ folderId }: { folderId: string }) {
       folderContextId={folderId}
       voiceSelection={selectedRefs.length > 0 ? { items: selectedRefs, folderId } : null}
     >
-      <BackLink href="/priecinky" label={t("folders.back")} className="mb-6" />
+      <BackLink href="/priecinky" label={t("folders.back")} className="mb-3 sm:mb-6" />
 
       <DocumentHeader
         eyebrow={
@@ -316,7 +317,7 @@ export default function FolderDetailView({ folderId }: { folderId: string }) {
       </div>
 
       {selectionMode && selected.length > 0 && (
-        <div className="sticky bottom-4 z-10 mt-3 rounded-doc border border-doc-border bg-surface-1/95 p-3 backdrop-blur">
+        <div className="sticky bottom-[calc(var(--mobile-tabbar-space,0px)+1rem)] z-10 mt-3 rounded-doc border border-doc-border bg-surface-1/95 p-3 backdrop-blur">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="text-sm font-medium text-primary">{t("folders.selectedCount", { count: selected.length })}</p>
             <div className="flex flex-wrap gap-2">
@@ -403,9 +404,9 @@ export default function FolderDetailView({ folderId }: { folderId: string }) {
                       {body}
                     </button>
                   ) : item.href ? (
-                    <Link href={item.href} className={rowClass}>
+                    <AppLink href={item.href} className={rowClass}>
                       {body}
-                    </Link>
+                    </AppLink>
                   ) : (
                     <div className={rowClass}>{body}</div>
                   )}

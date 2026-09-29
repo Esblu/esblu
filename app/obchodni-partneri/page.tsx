@@ -38,6 +38,9 @@ import {
   docField,
   docLabel,
 } from "@/app/components/document/DocumentLayout";
+import { navigateHard } from "@/lib/app-navigation";
+import { partnerDetailHref } from "@/lib/entity-links";
+import { confirmAction, notify } from "@/app/components/ui/AppDialog";
 
 type KindFilter = "all" | BusinessPartnerKind;
 
@@ -184,7 +187,7 @@ export default function ObchodniPartneriPage() {
     } = await supabase.auth.getSession();
 
     if (!session) {
-      window.location.href = "/login";
+      navigateHard("/login");
       return;
     }
 
@@ -334,9 +337,7 @@ export default function ObchodniPartneriPage() {
   }
 
   async function handleDelete(partner: BusinessPartner) {
-    const confirmed = confirm(
-      t("businessPartners.errors.deleteConfirmPrefix", { name: partner.legal_name })
-    );
+    const confirmed = (await confirmAction({ message: t("businessPartners.errors.deleteConfirmPrefix", { name: partner.legal_name }), destructive: true }));
 
     if (!confirmed) return;
 
@@ -345,7 +346,7 @@ export default function ObchodniPartneriPage() {
       setPartners((previous) => previous.filter((row) => row.id !== partner.id));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      alert(t("businessPartners.errors.deleteFailedPrefix", { message }));
+      void notify({ message: t("businessPartners.errors.deleteFailedPrefix", { message }) });
     }
   }
 
@@ -356,12 +357,12 @@ export default function ObchodniPartneriPage() {
   const createDisabled = !canEdit || legalHold;
 
   return (
-    <div className="mx-auto max-w-5xl px-4 pb-24 pt-6 sm:px-6">
+    <div className="mx-auto w-full min-w-0 max-w-5xl px-4 pb-24 pt-6 sm:px-6">
       <Suspense fallback={null}>
         <EditFromQueryParam onEditId={setPendingEditId} onNewPrefill={openPrefilledCreateForm} />
       </Suspense>
 
-      <BackLink href="/" label={t("nav.dashboard")} className="mb-6" />
+      <BackLink href="/" label={t("nav.dashboard")} className="mb-3 sm:mb-6" />
 
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center gap-3">
@@ -766,7 +767,7 @@ export default function ObchodniPartneriPage() {
                 className="flex flex-wrap items-center justify-between gap-3 rounded-doc border border-doc-border bg-doc-surface p-4 transition hover:bg-doc-surface-hover"
               >
                 <Link
-                  href={`/obchodni-partneri/${partner.id}`}
+                  href={partnerDetailHref(partner.id)}
                   className="min-w-0 flex-1"
                 >
                   <p className="truncate font-semibold text-primary">{partner.legal_name}</p>

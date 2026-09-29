@@ -81,6 +81,8 @@ import { REQUEST_LOCALE_HEADER } from "@/lib/i18n/request-locale";
 import { downloadBlob } from "@/lib/file-actions";
 import { invoiceDetailHref } from "@/lib/entity-links";
 import { creditedTotals, isFullyCredited, remainingAfterCredits, signedAmount } from "@/lib/invoicing/credit-note-semantics";
+import { navigateHard } from "@/lib/app-navigation";
+import { confirmAction, notify } from "@/app/components/ui/AppDialog";
 
 const VAT_CATEGORIES: VatCategoryCode[] = ["S", "Z", "E", "AE"];
 // Kalendárny deň POUŽÍVATEĽA, nie UTC — predvyplňuje dátum vystavenia aj
@@ -218,7 +220,7 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
     } = await supabase.auth.getSession();
 
     if (!session) {
-      window.location.href = "/login";
+      navigateHard("/login");
       return;
     }
 
@@ -482,7 +484,7 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
     }
     setDraftErrors([]);
 
-    const confirmed = confirm(t("invoices.detail.finalizeConfirmBody"));
+    const confirmed = (await confirmAction({ message: t("invoices.detail.finalizeConfirmBody") }));
     if (!confirmed) return;
 
     draftBusyRef.current = true;
@@ -521,7 +523,7 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
 
   async function handleDeleteDraft() {
     if (!invoice) return;
-    const confirmed = confirm(t("invoices.errors.deleteConfirmPrefix"));
+    const confirmed = (await confirmAction({ message: t("invoices.errors.deleteConfirmPrefix"), destructive: true }));
     if (!confirmed) return;
 
     try {
@@ -529,7 +531,7 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
       router.push("/faktury");
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      alert(t("invoices.errors.deleteFailedPrefix", { message }));
+      void notify({ message: t("invoices.errors.deleteFailedPrefix", { message }) });
     }
   }
 
@@ -617,7 +619,7 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
   }
 
   async function handleRemovePayment(payment: InvoicePayment) {
-    const confirmed = confirm(t("invoices.detail.removePaymentConfirmPrefix"));
+    const confirmed = (await confirmAction({ message: t("invoices.detail.removePaymentConfirmPrefix"), destructive: true }));
     if (!confirmed) return;
 
     try {
@@ -625,7 +627,7 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
       await loadAll();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      alert(t("invoices.errors.removePaymentFailedPrefix", { message }));
+      void notify({ message: t("invoices.errors.removePaymentFailedPrefix", { message }) });
     }
   }
 
@@ -645,7 +647,7 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
   if (!canView || notFound || !invoice) {
     return (
       <DocumentPageShell uiContext={{ module: "invoice", entityType: "invoice", entityId: entityId }}>
-        <BackLink href="/faktury" label={t("invoices.backToList")} className="mb-6" />
+        <BackLink href="/faktury" label={t("invoices.backToList")} className="mb-3 sm:mb-6" />
         <DocumentNotice>
           {!canView ? t("invoices.noFinanceAccess") : t("invoices.errors.notFound")}
         </DocumentNotice>
@@ -670,7 +672,7 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
 
   return (
     <DocumentPageShell uiContext={{ module: "invoice", entityType: "invoice", entityId: entityId }}>
-      <BackLink href="/faktury" label={t("invoices.backToList")} className="mb-6" />
+      <BackLink href="/faktury" label={t("invoices.backToList")} className="mb-3 sm:mb-6" />
 
       <DocumentHeader
         eyebrow={t(`invoices.kind.${invoice.kind}`)}

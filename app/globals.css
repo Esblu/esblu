@@ -221,6 +221,60 @@ body {
   background: var(--color-page-bg);
   color: var(--color-text-primary);
   font-family: var(--font-sans), Arial, Helvetica, sans-serif;
+  /* Mobile M1: rezerva pre spodnú navigáciu appky (nastavuje
+     MobileTabBar; na webe premenná neexistuje → 0). */
+  padding-bottom: var(--mobile-tabbar-space, 0px);
+}
+
+/* =============================================================================
+   Mobile M1 (2026-09-28) — bezpečné zóny (safe areas).
+   --esblu-safe-*: env() (iOS / Android WebView s viewport-fit=cover) alebo
+   premenné, ktoré vkladá Capacitor 8 SystemBars (--safe-area-inset-*).
+   Na Androide appka dnes beží v "boxed" režime (Capacitor odsadí WebView
+   od systémových líšt), takže hodnoty sú 0 a nič nie je pod gestami;
+   rovnaké triedy fungujú bez zmeny aj na iPhone po zapnutí cover režimu.
+   ============================================================================= */
+:root {
+  --esblu-safe-top: max(env(safe-area-inset-top, 0px), var(--safe-area-inset-top, 0px));
+  --esblu-safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--safe-area-inset-bottom, 0px));
+  --esblu-safe-left: max(env(safe-area-inset-left, 0px), var(--safe-area-inset-left, 0px));
+  --esblu-safe-right: max(env(safe-area-inset-right, 0px), var(--safe-area-inset-right, 0px));
+}
+
+.pt-safe {
+  padding-top: var(--esblu-safe-top);
+}
+
+.pb-safe {
+  padding-bottom: var(--esblu-safe-bottom);
+}
+
+/* Horizontálne posúvateľné záložky: skrytý posuvník, fade na okraji
+   naznačuje ďalšie položky. */
+.scroll-tabs {
+  /* Šírku pásu určuje rodič, nie obsah: bez toho sa min-content všetkých
+     nowrap záložiek prepisuje do šírky predkov (shrink-to-fit / flex). */
+  contain: inline-size;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+  mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+}
+/* Obrana do hĺbky IBA v natívnej appke (NativeRuntimeMarker nastaví
+   data-esblu-runtime): dokument sa nikdy nesmie posúvať do strany. Príčina
+   (shrink-to-fit PageShell) je opravená v DocumentPageShell; toto len zaručí,
+   že prípadný ďalší príliš široký prvok nezväčší layout viewport — inak by
+   Android WebView zväčšil aj oblasť pre position:fixed a spodná navigácia by
+   sa ocitla mimo obrazovky. Vodorovne sa posúva iba vnútri .scroll-tabs. */
+html[data-esblu-runtime="native-app"],
+html[data-esblu-runtime="native-app"] body {
+  overflow-x: clip;
+}
+
+.scroll-tabs::-webkit-scrollbar {
+  display: none;
+}
+.scroll-tabs[data-at-end="true"] {
+  mask-image: none;
 }
 
 /* =============================================================================
@@ -448,5 +502,20 @@ body {
   :root {
     --background: var(--color-page-bg);
     --foreground: var(--color-text-primary);
+  }
+}
+
+/* =============================================================================
+   Mobile M1 (2026-09-28) — formuláre na telefóne.
+   iOS Safari/WKWebView pri fokuse priblíži pole s písmom < 16 px; Android
+   je s 16 px čitateľnejší. Pravidlo je ZÁMERNE mimo @layer (neprebijú ho
+   utility triedy ako text-sm) a platí iba pre úzke obrazovky — desktop
+   ostáva bez zmeny.
+   ============================================================================= */
+@media (max-width: 639px) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]),
+  textarea,
+  select {
+    font-size: 16px;
   }
 }

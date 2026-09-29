@@ -52,6 +52,9 @@ import {
   TrashIcon,
   WrenchIcon,
 } from "@/app/components/icons/AppIcons";
+import { navigateHard } from "@/lib/app-navigation";
+import { confirmAction } from "@/app/components/ui/AppDialog";
+import { ScrollTabs } from "@/app/components/ui/ScrollTabs";
 
 type DetailTab = "overview" | "service" | "documents" | "photos";
 
@@ -234,7 +237,7 @@ export default function MachineDetailView({
     } = await supabase.auth.getSession();
 
     if (!session) {
-      window.location.href = "/login";
+      navigateHard("/login");
       return;
     }
 
@@ -449,7 +452,7 @@ export default function MachineDetailView({
       return;
     }
 
-    const confirmed = confirm(t("machines.errors.serviceDeleteConfirm"));
+    const confirmed = (await confirmAction({ message: t("machines.errors.serviceDeleteConfirm"), destructive: true }));
     if (!confirmed) return;
 
     serviceDeleteInProgressRef.current = true;
@@ -584,7 +587,7 @@ export default function MachineDetailView({
       return;
     }
 
-    const confirmed = confirm(t("vehicles.gallery.confirmDeletePhoto"));
+    const confirmed = (await confirmAction({ message: t("vehicles.gallery.confirmDeletePhoto"), destructive: true }));
     if (!confirmed) return;
 
     setDeletingPhotoId(photoId);
@@ -683,7 +686,7 @@ export default function MachineDetailView({
 
   return (
     <PageShell moduleContext="machines" uiContext={{ module: "machine", entityType: "machine", entityId }}>
-      <BackLink href="/stroje" label={t("nav.machines")} className="mb-6" />
+      <BackLink href="/stroje" label={t("nav.machines")} className="mb-3 sm:mb-6" />
 
       <PageHeader
         eyebrow={
@@ -737,7 +740,7 @@ export default function MachineDetailView({
       {/* Kľúčové ukazovatele. Motohodiny sú zámerne označené ako "pri
           poslednom servise" — machines nemá stĺpec s aktuálnym stavom a
           tváriť sa, že ho máme, by bolo klamstvo v evidencii majetku. */}
-      <div className="mt-6">
+      <div className="mt-3 sm:mt-6">
         <MetricGrid>
           <Metric
             label={t("machines.detail.mileageLabel")}
@@ -812,31 +815,13 @@ export default function MachineDetailView({
       {/* Záložky. Detail majetku má štyri celkom odlišné obsahy —
           zoskrolovať ich pod seba by znamenalo, že fotky sú 900 px
           pod servisom. */}
-      <div
-        role="tablist"
-        aria-label={t("machines.detail.sectionsLabel")}
-        className="mt-6 -mx-1 flex gap-1 overflow-x-auto px-1"
-      >
-        {TABS.map((item) => (
-          <button
-            key={item.key}
-            role="tab"
-            type="button"
-            aria-selected={tab === item.key}
-            onClick={() => setTab(item.key)}
-            className={`whitespace-nowrap rounded-doc-sm border px-3 py-2 text-sm font-medium transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
-              tab === item.key
-                ? "border-border-strong bg-surface-hover text-primary"
-                : "border-doc-border text-secondary hover:text-primary"
-            }`}
-          >
-            {item.label}
-            {item.count !== undefined && item.count > 0 && (
-              <span className="ml-1.5 tabular-nums opacity-70">{item.count}</span>
-            )}
-          </button>
-        ))}
-      </div>
+      <ScrollTabs
+        tabs={TABS}
+        value={tab}
+        onChange={setTab}
+        ariaLabel={t("machines.detail.sectionsLabel")}
+        className="mt-3 sm:mt-6"
+      />
 
       {/* ------------------------------ PREHĽAD ----------------------------- */}
       {tab === "overview" && (

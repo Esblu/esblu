@@ -283,3 +283,30 @@ export const ScanIcon = (p: IconProps) => (
     <path d="M4 12h16" />
   </Svg>
 );
+
+/* --------------------------------------------------------------------------
+   Mobilná navigácia (Mobile M1)
+   -------------------------------------------------------------------------- */
+
+export const HomeIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M3 10.5 12 3l9 7.5" />
+    <path d="M5 9.5V20a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1V9.5" />
+  </Svg>
+);
+
+export const MoreGridIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="4" y="4" width="6" height="6" rx="1.5" />
+    <rect x="14" y="4" width="6" height="6" rx="1.5" />
+    <rect x="4" y="14" width="6" height="6" rx="1.5" />
+    <rect x="14" y="14" width="6" height="6" rx="1.5" />
+  </Svg>
+);
+
+export const SparkleIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M12 3v3M12 18v3M3 12h3M18 12h3" />
+    <path d="M12 8.5 13.3 11 16 12l-2.7 1-1.3 2.5-1.3-2.5L8 12l2.7-1z" />
+  </Svg>
+);

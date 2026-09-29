@@ -22,7 +22,7 @@ import {
   createOperationalActionConfirmation,
   createInboxActionConfirmation,
 } from "@/lib/intents/actions";
-import { checkIntentAccess, denialMessageKey, restrictedAssistantDenial } from "@/lib/intents/permissions";
+import { checkIntentAccess, denialMessageKey, restrictedAssistantDenial, scopeIntentArgsForRole } from "@/lib/intents/permissions";
 import { handleInboxIntent } from "@/lib/intents/inbox-intents";
 import {
   classifyClarificationReply,
@@ -675,7 +675,9 @@ export async function runAssistantTurnDetailed(
     intent = decision.intent;
   }
 
-  // 6. BRÁNA OPRÁVNENÍ — pred akýmkoľvek dotazom na dáta.
+  // 6. BRÁNA OPRÁVNENÍ — pred akýmkoľvek dotazom na dáta. Účtovník dostane
+  //    dokladové intenty zúžené na finančné typy (nikdy „všetky doklady").
+  intent = scopeIntentArgsForRole(intent, input.role);
   const denial = checkIntentAccess(intent.name, intent.args, {
     role: input.role,
     financeView: input.financeView,

@@ -70,6 +70,17 @@ export function hasFullAssistant(role: string): boolean {
   return (FULL_ASSISTANT_ROLES as readonly string[]).includes(role);
 }
 
+/**
+ * Smie rola spotrebovať platený prepis reči (/api/assistant/transcribe)?
+ * Prepis nemá iný účel než vstup do asistenta, preto iba roly s asistentom
+ * (owner/admin; účtovník v rozsahu financií — rozsah drží checkIntentAccess).
+ * Zamestnanec NIE: nemá hlasový asistent a príjem dokladu v Inboxe je
+ * fotka/súbor, nie hlas. Neznáma alebo chýbajúca rola = NIE (fail closed).
+ */
+export function voiceTranscriptionAllowed(role: string | null | undefined): boolean {
+  return typeof role === "string" && hasFullAssistant(role);
+}
+
 function isAllowlistedIntake(name: IntentName, args: IntentArgs): boolean {
   if (!EMPLOYEE_ASSISTANT_ALLOWLIST.includes(name)) return false;
   return (args.documentTypes ?? []).every((type) => INTAKE_TYPES.includes(type));
@@ -85,6 +96,9 @@ export function restrictedAssistantDenial(
   intent: { name: IntentName; args: IntentArgs } | null,
   ctx: Pick<AccessContext, "role">
 ): AccessDenial | null {
+  // Účtovník: vytvorenie bez modulu vedie iba na prevádzkové moduly
+  // (sklad/stroje/vozidlá) — odmietnuť hneď, nie až po doplňujúcej otázke.
+  if (ctx.role === "accountant" && intent?.name === "ENTITY_CREATE") return "operational";
   if (hasFullAssistant(ctx.role)) return null;
   if (!intent) return "assistant_scope";
   return isAllowlistedIntake(intent.name, intent.args) ? null : "assistant_scope";
@@ -95,6 +109,31 @@ export const FINANCE_DOCUMENT_TYPES = ["invoice", "receipt", "delivery_note"] as
 
 function mentionsFinanceDocuments(args: IntentArgs): boolean {
   return (args.documentTypes ?? []).some((type) => (FINANCE_DOCUMENT_TYPES as readonly string[]).includes(type));
+}
+
+// -----------------------------------------------------------------------------
+// ÚČTOVNÍK = iba financie (M1 authz follow-up 2026-09-28).
+// Dokladové intenty (hľadanie, export, príjem) smie účtovník spustiť IBA nad
+// finančnými typmi. Bez uvedeného typu sa rozsah zúži na finančné typy
+// (scopeIntentArgsForRole) — nikdy nie „všetky doklady" (TP, PZP, servisné
+// doklady, vážne lístky sú prevádzkové). Uvedený nefinančný typ = odmietnutie.
+// -----------------------------------------------------------------------------
+const DOCUMENT_SCOPED_INTENTS: readonly IntentName[] = ["SEARCH_DOCUMENTS", "EXPORT_DOCUMENTS", "DOCUMENT_INTAKE"];
+
+function onlyFinanceDocumentTypes(args: IntentArgs): boolean {
+  const types = args.documentTypes ?? [];
+  return types.length > 0 && types.every((type) => (FINANCE_DOCUMENT_TYPES as readonly string[]).includes(type));
+}
+
+/**
+ * Zúženie argumentov podľa roly PRED bránou oprávnení. Dnes iba účtovník:
+ * dokladový intent bez typu dostane finančné typy. Iné roly nemení.
+ */
+export function scopeIntentArgsForRole<T extends { name: IntentName; args: IntentArgs }>(intent: T, role: string): T {
+  if (role !== "accountant") return intent;
+  if (!DOCUMENT_SCOPED_INTENTS.includes(intent.name)) return intent;
+  if ((intent.args.documentTypes ?? []).length > 0) return intent;
+  return { ...intent, args: { ...intent.args, documentTypes: [...FINANCE_DOCUMENT_TYPES] } };
 }
 
 const STATIC_REQUIREMENTS: Partial<Record<IntentName, AccessRequirement>> = {
@@ -208,6 +247,12 @@ export function checkIntentAccess(name: IntentName, args: IntentArgs, ctx: Acces
   // čo tvrdia financie či can_operate — podvrhnuté permissions.finance nič
   // neodomknú.
   if (!hasFullAssistant(ctx.role)) return isAllowlistedIntake(name, args) ? null : "assistant_scope";
+  // Účtovník: dokladové intenty iba nad finančnými typmi (pozri vyššie);
+  // prevádzkové vytvorenie bez modulu nikdy.
+  if (ctx.role === "accountant") {
+    if (name === "ENTITY_CREATE") return "operational";
+    if (DOCUMENT_SCOPED_INTENTS.includes(name) && !onlyFinanceDocumentTypes(args)) return "operational";
+  }
   const requirement = intentRequirement(name, args);
   switch (requirement) {
     case "any":

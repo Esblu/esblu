@@ -1,7 +1,6 @@
 "use client";
 
 import { createContext, useContext, useEffect, useState } from "react";
-import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import {
@@ -10,6 +9,8 @@ import {
   type CompanyDpaStatus,
 } from "@/lib/company-dpa";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
+import { navigateHard } from "@/lib/app-navigation";
+import { LegalDocLink } from "@/app/components/LegalDocLink";
 
 // -----------------------------------------------------------------------
 // Legal-hold kontext: kým firma nemá platné company-level DPA acceptance,
@@ -129,7 +130,7 @@ export default function CompanyDpaGate({
 
   async function handleLogout() {
     await supabase.auth.signOut();
-    window.location.href = "/login";
+    navigateHard("/login");
   }
 
   async function handleConfirm() {
@@ -190,15 +191,11 @@ export default function CompanyDpaGate({
             </p>
 
             <p className="mt-3 text-sm">
-              <Link
-                href="/dpa"
-                target="_blank"
-                className="font-semibold text-blue-700 hover:underline"
-              >
+              <LegalDocLink path="/dpa" className="font-semibold text-blue-700 hover:underline">
                 {t("companyDpaGate.readCurrentDpa", {
                   version: status.current_dpa_version,
                 })}
-              </Link>
+              </LegalDocLink>
             </p>
 
             <label className="mt-6 flex items-start gap-3 rounded-xl border border-subtle p-4 text-sm">
@@ -267,13 +264,9 @@ export default function CompanyDpaGate({
               >
                 {t("companyDpaGate.employeeNoticeDismiss")}
               </button>
-              <Link
-                href="/dpa"
-                target="_blank"
-                className="rounded-xl border border-amber-300/40 bg-surface-1 px-5 py-2.5 text-sm font-semibold text-amber-400 hover:bg-surface-hover"
-              >
+              <LegalDocLink path="/dpa" className="rounded-xl border border-amber-300/40 bg-surface-1 px-5 py-2.5 text-sm font-semibold text-amber-400 hover:bg-surface-hover">
                 {t("companyDpaGate.viewDpa")}
-              </Link>
+              </LegalDocLink>
             </div>
           </div>
         </div>

@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import { IS_MOBILE_BUILD } from "@/lib/build-target";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import { getMyActiveMembership } from "@/lib/company";
 import { getMyUnreadCounts } from "@/lib/chat";
@@ -84,7 +85,15 @@ function defaultPosition(): Position {
   );
 }
 
+// Mobile M1 (2026-09-28): v natívnej appke je tímový chat položkou spodnej
+// navigácie (mobile/app/chat) — plávajúca bublina by kolidovala so spodnou
+// lištou a sticky akciami, preto sa v mobilnom builde nerenderuje vôbec.
 export default function FloatingChatWidget() {
+  if (IS_MOBILE_BUILD) return null;
+  return <FloatingChatWidgetInner />;
+}
+
+function FloatingChatWidgetInner() {
   const pathname = usePathname();
   const { t } = useLocale();
 
