@@ -11,6 +11,8 @@ import { assertServerOnly, type EinvoiceEnvironment, type EinvoiceProvider } fro
 //   ESBLU_EINVOICE_PROVIDER      = efaktura_sk
 //   ESBLU_EINVOICE_ENVIRONMENT   = sandbox | live
 //   ESBLU_EFAKTURA_API_KEY       = efk_pk_test_… / efk_pk_live_…
+//   ESBLU_EFAKTURA_BASE_URL      = voliteľné, default https://api.efaktura.sk
+//                                  (sandbox aj live — prostredie určuje prefix kľúča)
 //   ESBLU_EFAKTURA_WEBHOOK_SECRET(S) = whsec_… (čiarkou oddelené pri rotácii)
 // =============================================================================
 
@@ -26,7 +28,9 @@ export function getEinvoiceProvider(env: Record<string, string | undefined> = pr
   if (providerName === "efaktura_sk") {
     const apiKey = env.ESBLU_EFAKTURA_API_KEY?.trim();
     if (!apiKey) return null;
-    return { provider: new EfakturaSkProvider({ apiKey, environment }), environment };
+    // Voliteľné; default https://api.efaktura.sk. Host je overený voči allowlistu.
+    const baseUrl = env.ESBLU_EFAKTURA_BASE_URL?.trim() || undefined;
+    return { provider: new EfakturaSkProvider({ apiKey, environment, baseUrl }), environment };
   }
   return null;
 }

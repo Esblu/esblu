@@ -572,6 +572,28 @@ await check("mock: cudzia organizácia nevidí podanie ani prijaté doklady (org
   assert.equal((await p.listUnacknowledgedInbound(ctxA)).length, 0);
 });
 
+await check("BT-30/BT-47: SK IČO bez schémy → schemeID 0158; explicitná schéma sa zachová; mimo SK sa nedopĺňa", () => {
+  const legalSchemes = (xml: string): Array<string | null> => {
+    const list = dom(xml).getElementsByTagNameNS(NS.cac, "PartyLegalEntity");
+    const out: Array<string | null> = [];
+    for (let i = 0; i < list.length; i++) {
+      const id = list[i].getElementsByTagNameNS(NS.cbc, "CompanyID")[0];
+      out.push(id ? id.getAttribute("schemeID") || null : null);
+    }
+    return out;
+  };
+  const s = vatPayerSnapshot();
+  s.seller = seller({ legal_registration_scheme_id: null });
+  s.buyer = buyer({ legal_registration_scheme_id: "" });
+  assert.deepEqual(legalSchemes(ok(s).xml), ["0158", "0158"]);
+  const explicit = vatPayerSnapshot();
+  explicit.seller = seller({ legal_registration_scheme_id: "0245" });
+  assert.deepEqual(legalSchemes(ok(explicit).xml), ["0245", "0000"]);
+  const foreign = vatPayerSnapshot();
+  foreign.buyer = buyer({ country_code: "CZ", legal_registration_scheme_id: null });
+  assert.deepEqual(legalSchemes(ok(foreign).xml), ["0000", null]);
+});
+
 // =============================================================================
 // eFaktura.sk skeleton + výber poskytovateľa
 // =============================================================================
@@ -587,24 +609,23 @@ await check("eFaktura: kľúč musí zodpovedať prostrediu, kľúč sa neprezra
   assert.doesNotMatch(JSON.stringify({ p }), /efk_pk_/);
 });
 
-await check("eFaktura: všetky operácie sú zatiaľ NotImplemented (žiadne sieťové volanie)", async () => {
-  const p = new EfakturaSkProvider({ apiKey: FAKE_TEST_KEY, environment: "sandbox" });
+// Sieťové operácie adaptéra (fake fetch, bez siete): scripts/einvoice-efaktura-adapter-tests.ts
+await check("eFaktura: lokálne kontroly vstupu zlyhajú PRED akýmkoľvek sieťovým volaním", async () => {
+  let calls = 0;
+  const p = new EfakturaSkProvider({
+    apiKey: FAKE_TEST_KEY,
+    environment: "sandbox",
+    fetchImpl: async () => { calls++; throw new Error("sieť je v tomto teste zakázaná"); },
+  });
   const ctx = { environment: "sandbox" as const, providerOrgId: "org" };
-  const calls: Array<() => Promise<unknown>> = [
-    () => p.provisionOrganization(orgInput),
-    () => p.getOrganization(ctx),
-    () => p.verifyRecipient(ctx, "9915:x"),
-    () => p.preflight(ctx, { ubl: new Uint8Array(1) }),
-    () => p.sendUbl(ctx, { idempotencyKey: "k".repeat(16), ubl: new Uint8Array(1), ublSha256: "0".repeat(64), receiverParticipantId: "9915:x" }),
-    () => p.getOutboundStatus(ctx, { providerSubmissionId: "s" }),
-    () => p.getDeliveryEvidence(ctx, { providerSubmissionId: "s" }),
-    () => p.listUnacknowledgedInbound(ctx),
-    () => p.getInboundDocument(ctx, "r"),
-    () => p.acknowledgeInbound(ctx, "r"),
-  ];
-  for (const call of calls) {
-    await assert.rejects(call(), (e: unknown) => e instanceof EinvoiceProviderError && e.code === "EINVOICE_PROVIDER_NOT_IMPLEMENTED");
-  }
+  await assert.rejects(p.provisionOrganization({ ...orgInput, environment: "live" }), (e: unknown) => e instanceof EinvoiceProviderError && e.code === "EINVOICE_ENVIRONMENT_MISMATCH");
+  await assert.rejects(p.verifyRecipient(ctx, "9915:x y"), (e: unknown) => e instanceof EinvoiceProviderError && e.code === "EINVOICE_INVALID_PARTICIPANT");
+  await assert.rejects(p.preflight(ctx, { ubl: new Uint8Array(0) }), (e: unknown) => e instanceof EinvoiceProviderError && e.code === "EINVOICE_INVALID_INPUT");
+  await assert.rejects(p.sendUbl(ctx, { idempotencyKey: "short", ubl: new Uint8Array(1), ublSha256: "0".repeat(64) }), (e: unknown) => e instanceof EinvoiceProviderError && e.code === "EINVOICE_INVALID_IDEMPOTENCY_KEY");
+  await assert.rejects(p.sendUbl(ctx, { idempotencyKey: "k".repeat(16), ubl: new Uint8Array(1), ublSha256: "0".repeat(64) }), (e: unknown) => e instanceof EinvoiceProviderError && e.code === "EINVOICE_UBL_HASH_MISMATCH");
+  await assert.rejects(p.getOutboundStatus(ctx, { providerSubmissionId: "../x" }), (e: unknown) => e instanceof EinvoiceProviderError && e.code === "EINVOICE_INVALID_ID");
+  await assert.rejects(p.getInboundDocument({ environment: "live", providerOrgId: "org" }, "r"), (e: unknown) => e instanceof EinvoiceProviderError && e.code === "EINVOICE_ENVIRONMENT_MISMATCH");
+  assert.equal(calls, 0);
 });
 
 await check("eFaktura: hlavičky a mapovanie zdokumentovaných stavov; neznámy stav = null", () => {

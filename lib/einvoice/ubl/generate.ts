@@ -200,6 +200,27 @@ function netUnitPrice(item: UblItem): Decimal | null {
   return qty.times(candidate).toDecimalPlaces(2, Decimal.ROUND_HALF_UP).eq(lineNet) ? candidate : null;
 }
 
+/**
+ * ISO 6523 ICD pre slovenské IČO (BT-30 / BT-47 schemeID).
+ * Zdroj: Peppol BIS Billing 3.0 (May 2026) — ISO 6523 ICD code list,
+ * https://docs.peppol.eu/poacc/billing/3.0/codelist/ICD/ :
+ * „0158 — Identification number of economic subject (ICO) … Slovak Statistical Office".
+ * (0245 = SK DIČ, používa sa pre Peppol participant ID, nie pre IČO.)
+ */
+export const SK_ICO_ICD_SCHEME = "0158";
+
+/**
+ * schemeID pre PartyLegalEntity/CompanyID. Explicitne uložená schéma má prednosť;
+ * ak chýba a ide o slovenskú stranu s 8-miestnym IČO, doplní sa 0158
+ * (SK FS overlay: SK-BT-30/47-SCHEME-REQUIRED).
+ */
+function legalRegistrationSchemeOf(party: UblParty): string | null {
+  if (!blank(party.legal_registration_scheme_id)) return party.legal_registration_scheme_id!.trim();
+  const id = party.legal_registration_id?.trim() ?? "";
+  if (party.country_code?.trim().toUpperCase() === "SK" && /^[0-9]{8}$/.test(id)) return SK_ICO_ICD_SCHEME;
+  return null;
+}
+
 function addParty(x: XmlBuilder, parent: Element, party: UblParty) {
   const p = x.group(parent, "cac:Party");
   x.text(p, "cbc:EndpointID", party.electronic_address!.trim(), { schemeID: party.electronic_address_scheme_id!.trim() });
@@ -222,7 +243,8 @@ function addParty(x: XmlBuilder, parent: Element, party: UblParty) {
   const legal = x.group(p, "cac:PartyLegalEntity");
   x.text(legal, "cbc:RegistrationName", party.legal_name.trim());
   if (!blank(party.legal_registration_id)) {
-    const attrs = blank(party.legal_registration_scheme_id) ? undefined : { schemeID: party.legal_registration_scheme_id!.trim() };
+    const scheme = legalRegistrationSchemeOf(party);
+    const attrs = scheme ? { schemeID: scheme } : undefined;
     x.text(legal, "cbc:CompanyID", party.legal_registration_id!.trim(), attrs);
   }
 
