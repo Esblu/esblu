@@ -72,6 +72,15 @@
 
         </activity>
 
+        <!--
+          PUSH (2026-10-01): predvolený kanál FCM notifikácií. Kanál
+          "esblu_default" vytvára appka (lib/push/native.ts) pred registráciou;
+          server ho posiela v android.notification.channel_id.
+        -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="esblu_default" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
@@ -86,6 +95,13 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+
+    <!--
+      PUSH (2026-10-01): Android 13+ runtime povolenie na notifikácie.
+      Žiada sa IBA po ťuknutí na „Zapnúť upozornenia" v Nastaveniach
+      (@capacitor/push-notifications requestPermissions), nikdy pri štarte.
+    -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!--
       RECORD_AUDIO — hlasové vyhľadávanie (zadanie, sekcia B/C/E: mikrofón

@@ -23,10 +23,22 @@ import type { CapacitorConfig } from "@capacitor/cli";
 // bloku Capacitor defaultne načíta LOKÁLNE zabalené assets z `webDir`
 // (žiadny remote wrapper, presne podľa FÁZA 1 zadania).
 // -----------------------------------------------------------------------------
+//
+// PUSH (2026-10-01): @capacitor/push-notifications (oficiálny Capacitor plugin,
+// v8 — kompatibilný s Capacitor 8). presentationOptions platí pre iOS, keď je
+// appka v popredí (Android v popredí notifikáciu nezobrazí — obsah ukáže
+// samotná appka). Firebase/APNs konfigurácia NIE JE v repozitári:
+// google-services.json (Android) a Push capability (iOS) pridáva vlastník
+// projektu — pozri docs/push-notifications-setup.md.
 const config: CapacitorConfig = {
   appId: "com.esblu.app",
   appName: "Esblu",
   webDir: "out",
+  plugins: {
+    PushNotifications: {
+      presentationOptions: ["badge", "sound", "alert"],
+    },
+  },
 };
 
 export default config;

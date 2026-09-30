@@ -2,21 +2,39 @@
 
 import { supabase } from "@/lib/supabase";
 import { apiUrl } from "@/lib/api-url";
+import { IS_MOBILE_BUILD } from "@/lib/build-target";
+import { LOCALE_STORAGE_KEY, normalizeLocale } from "@/lib/i18n/locales";
 
 // =============================================================================
-// Push notifikácie v prehliadači / PWA — iba na výslovný pokyn používateľa.
+// Push notifikácie — iba na výslovný pokyn používateľa.
 //
 // Povolenie sa NIKDY nežiada pri načítaní stránky: iba po ťuknutí na
-// „Zapnúť upozornenia" v Nastaveniach. Bez VAPID kľúča (nenastavené) alebo
-// bez podpory prehliadača sa funkcia neponúkne.
+// „Zapnúť upozornenia" v Nastaveniach.
+//   web / PWA       Web Push (service worker /sw.js, VAPID). Bez VAPID
+//                   kľúča alebo bez podpory prehliadača sa neponúkne.
+//   mobilná appka   natívny push (lib/push/native.ts — FCM / APNs), načítaný
+//                   IBA dynamicky v mobilnom builde (webový bundle ho nemá).
+// Rovnaké funkcie pre oba svety, takže Nastavenia aj odhlásenie
+// (lib/sign-out.ts, disablePushOnThisDevice) fungujú bez zmeny.
 // =============================================================================
 
 const VAPID_PUBLIC_KEY = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY ?? "";
 
 export type PushSupport = "supported" | "unsupported" | "not_configured" | "ios_needs_install";
 
+function currentLocale(): string {
+  try {
+    return normalizeLocale(window.localStorage.getItem(LOCALE_STORAGE_KEY));
+  } catch {
+    return normalizeLocale(null);
+  }
+}
+
 export function pushSupport(): PushSupport {
   if (typeof window === "undefined") return "unsupported";
+  // Natívna appka: dostupnosť rieši plugin (bez Firebase configu registrácia
+  // skončí chybou → "failed" v Nastaveniach, nič iné sa nerozbije).
+  if (IS_MOBILE_BUILD) return "supported";
   if (!VAPID_PUBLIC_KEY) return "not_configured";
   const hasApis = "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
   if (hasApis) return "supported";
@@ -43,6 +61,10 @@ async function registration(): Promise<ServiceWorkerRegistration> {
 
 /** Je toto zariadenie prihlásené na odber? */
 export async function isThisDeviceSubscribed(): Promise<boolean> {
+  if (IS_MOBILE_BUILD) {
+    const native = await import("@/lib/push/native");
+    return native.nativePushEnabled();
+  }
   if (pushSupport() !== "supported") return false;
   const reg = await navigator.serviceWorker.getRegistration("/");
   return Boolean(await reg?.pushManager.getSubscription());
@@ -50,6 +72,10 @@ export async function isThisDeviceSubscribed(): Promise<boolean> {
 
 /** Zapne push pre toto zariadenie (vyžiada povolenie — iba z kliknutia). */
 export async function enablePushOnThisDevice(): Promise<"enabled" | "denied" | "failed"> {
+  if (IS_MOBILE_BUILD) {
+    const native = await import("@/lib/push/native");
+    return native.enableNativePush();
+  }
   if (pushSupport() !== "supported") return "failed";
   const permission = await Notification.requestPermission();
   if (permission !== "granted") return "denied";
@@ -60,7 +86,7 @@ export async function enablePushOnThisDevice(): Promise<"enabled" | "denied" | "
     let subscription = (await reg.pushManager.getSubscription()) ?? (await subscribe());
     const headers = await authHeaders();
     if (!headers) return "failed";
-    const register = () => fetch(apiUrl("/api/push/subscribe"), { method: "POST", headers, body: JSON.stringify(subscription.toJSON()) });
+    const register = () => fetch(apiUrl("/api/push/subscribe"), { method: "POST", headers, body: JSON.stringify({ ...subscription.toJSON(), locale: currentLocale() }) });
     let response = await register();
     // 409: toto zariadenie je ešte zaregistrované pod iným (neodhláseným)
     // používateľom. Jeho endpoint sa neprevezme — vytvorí sa NOVÝ odber.
@@ -77,6 +103,15 @@ export async function enablePushOnThisDevice(): Promise<"enabled" | "denied" | "
 
 /** Vypne push pre toto zariadenie (aj pri odhlásení). Nikdy nevyhodí chybu. */
 export async function disablePushOnThisDevice(): Promise<void> {
+  if (IS_MOBILE_BUILD) {
+    try {
+      const native = await import("@/lib/push/native");
+      await native.disableNativePush();
+    } catch {
+      // Odhlásenie nesmie zlyhať kvôli push.
+    }
+    return;
+  }
   try {
     if (typeof window === "undefined" || !("serviceWorker" in navigator)) return;
     const reg = await navigator.serviceWorker.getRegistration("/");
@@ -89,6 +124,30 @@ export async function disablePushOnThisDevice(): Promise<void> {
     await subscription.unsubscribe();
   } catch {
     // Odhlásenie nesmie zlyhať kvôli push.
+  }
+}
+
+/**
+ * Obnova väzby zariadenia na AKTUÁLNU session (po prihlásení / štarte appky),
+ * bez dialógu: iba ak je toto zariadenie už prihlásené na odber. Server
+ * doručuje iba zariadeniam so živou session, takže po novom prihlásení treba
+ * registráciu zopakovať (idempotentné).
+ */
+export async function refreshPushRegistration(): Promise<void> {
+  try {
+    if (IS_MOBILE_BUILD) {
+      const native = await import("@/lib/push/native");
+      await native.refreshNativePush();
+      return;
+    }
+    if (pushSupport() !== "supported" || Notification.permission !== "granted") return;
+    const reg = await navigator.serviceWorker.getRegistration("/");
+    const subscription = await reg?.pushManager.getSubscription();
+    const headers = await authHeaders();
+    if (!subscription || !headers) return;
+    await fetch(apiUrl("/api/push/subscribe"), { method: "POST", headers, body: JSON.stringify({ ...subscription.toJSON(), locale: currentLocale() }) });
+  } catch {
+    // ďalší pokus pri ďalšom prihlásení
   }
 }
 

@@ -2,17 +2,20 @@ import { timingSafeEqual } from "node:crypto";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { buildMachineDeadlines, buildVehicleDeadlines, type MinimalServiceRecord } from "@/lib/deadlines";
 import type { VehicleVignette } from "@/lib/vehicle-vignettes";
-import { readVapidKeys, loadPreferences, deliverToUsers, DEFAULT_PREFERENCES } from "@/lib/push/server";
+import { configuredProviders, hasAnyProvider, loadPreferences, deliverToUsers, DEFAULT_PREFERENCES } from "@/lib/push/server";
 import { buildDeadlinePayload, deadlineRecipients, deadlinesToNotify, type CompanyMember } from "@/lib/push/routing";
 
 // -----------------------------------------------------------------------------
 // GET /api/cron/deadline-notifications — denne (Vercel Cron, vercel.json).
 //
-// Zdroje termínov sú IBA existujúce dáta Esblu (lib/deadlines.ts): STK, EK,
-// diaľničná známka, najbližší servis vozidla a stroja. Nič sa nevymýšľa.
-// Pre každú firmu zvlášť: jej termíny → jej vlastník/administrátori → ich
-// zariadenia v tej istej firme. Deduplikácia na termín a okno (30/7/1/0 dní,
-// podľa predvoľby) — ten istý termín neodíde v ten istý deň dvakrát.
+// 1. Upratanie: zariadenia so skončenou session alebo členstvom sa zrušia
+//    (esblu_push_revoke_ended).
+// 2. Zdroje termínov sú IBA existujúce dáta Esblu (lib/deadlines.ts): STK, EK,
+//    diaľničná známka, najbližší servis vozidla a stroja. Nič sa nevymýšľa.
+// 3. Pre každú firmu zvlášť: jej termíny → jej vlastník/administrátori
+//    (oprávnenie na prevádzkové moduly; zamestnanec ani účtovník nie) → ich
+//    zariadenia v tej istej firme (web, Android, iOS). Deduplikácia na
+//    termín a okno (30/7/1/0 dní, podľa predvoľby). Text v jazyku zariadenia.
 // Chránené tajomstvom CRON_SECRET (Authorization: Bearer …).
 // -----------------------------------------------------------------------------
 
@@ -26,13 +29,15 @@ function authorized(req: Request): boolean {
 
 export async function GET(req: Request) {
   if (!authorized(req)) return Response.json({ success: false }, { status: 401 });
-  const vapid = readVapidKeys();
-  if (!vapid) return Response.json({ success: true, configured: false, sent: 0 });
+  const providers = configuredProviders();
+  if (!hasAnyProvider(providers)) return Response.json({ success: true, configured: false, sent: 0 });
 
   const admin = getSupabaseAdmin();
+  await admin.rpc("esblu_push_revoke_ended");
+
   // Iba firmy, ktoré majú aspoň jedno aktívne zariadenie — ostatné netreba čítať.
-  const { data: subscribed } = await admin.from("push_subscriptions").select("company_id").is("revoked_at", null).limit(5000);
-  const companyIds = Array.from(new Set(((subscribed as { company_id: string }[] | null) ?? []).map((row) => row.company_id)));
+  const { data: companies } = await admin.rpc("esblu_push_companies_with_targets");
+  const companyIds = ((companies as string[] | null) ?? []).filter((id) => typeof id === "string");
 
   let sent = 0;
   for (const companyId of companyIds) {
@@ -61,21 +66,23 @@ export async function GET(req: Request) {
       if (due.length === 0) continue;
       // Deduplikácia PO TERMÍNOCH: každý termín v danom okne (alebo „po
       // termíne") sa pripomenie práve raz. Do súhrnu idú iba nové.
-      let fresh = 0;
+      const fresh: (typeof due)[number][] = [];
       for (const entry of due) {
         const { error } = await admin
           .from("notification_deliveries")
           .insert({ user_id: userId, company_id: companyId, kind: "deadline", dedupe_key: entry.dedupeKey });
-        if (!error) fresh++;
+        if (!error) fresh.push(entry);
       }
-      if (fresh === 0) continue;
-      sent += await deliverToUsers(admin, vapid, {
+      if (fresh.length === 0) continue;
+      const single = fresh.length === 1 ? { entityType: fresh[0].item.entityType, entityId: fresh[0].item.entityId } : null;
+      const result = await deliverToUsers(admin, providers, {
         companyId,
         userIds: [userId],
         kind: "deadline",
         dedupeKey: null,
-        payloadFor: () => buildDeadlinePayload({ locale: "sk", count: fresh }),
+        messageFor: (_userId, locale) => buildDeadlinePayload({ locale, count: fresh.length, single }),
       });
+      sent += result.sent;
     }
   }
   return Response.json({ success: true, sent });

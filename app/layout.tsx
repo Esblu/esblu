@@ -5,6 +5,7 @@ import LegalAcceptanceGate from "./components/LegalAcceptanceGate";
 import CompanyDpaGate from "./components/CompanyDpaGate";
 import FloatingChatWidget from "./components/chat/FloatingChatWidget";
 import { AppDialogHost } from "./components/ui/AppDialog";
+import PushRegistrationSync from "./components/push/PushRegistrationSync";
 import { LocaleProvider } from "@/lib/i18n/LocaleProvider";
 import { DEFAULT_LOCALE } from "@/lib/i18n/locales";
 import { SITE_URL } from "@/lib/landing-video";
@@ -100,6 +101,8 @@ export default function RootLayout({
               <FloatingChatWidget />
               {/* Mobile M1: host pre confirmAction()/notify() (app/components/ui/AppDialog.tsx). */}
               <AppDialogHost />
+              {/* Obnova väzby zapnutého push zariadenia na aktuálnu session. */}
+              <PushRegistrationSync />
             </CompanyDpaGate>
           </LegalAcceptanceGate>
         </LocaleProvider>

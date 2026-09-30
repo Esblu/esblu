@@ -2,6 +2,7 @@ import RootLayout, { metadata, viewport } from "@/app/layout";
 import DeepLinkBridge from "./DeepLinkBridge";
 import BackButtonBridge from "./BackButtonBridge";
 import NativeRuntimeMarker from "./NativeRuntimeMarker";
+import PushBridge from "./PushBridge";
 import MobileTabBar from "@/app/components/mobile/MobileTabBar";
 
 // -----------------------------------------------------------------------------
@@ -31,6 +32,8 @@ export default function MobileRootLayout({
       <DeepLinkBridge />
       <BackButtonBridge />
       <NativeRuntimeMarker />
+      {/* Kliknutie na natívnu push notifikáciu → obrazovka z allowlistu. */}
+      <PushBridge />
       {children}
       {/* Mobile M1: spodná navigácia (iba mobilný build). */}
       <MobileTabBar />

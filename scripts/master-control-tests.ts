@@ -407,11 +407,11 @@ await check("push smerovanie: chat bez autora (aj zamestnanec); termíny iba vla
     { userId: "emp", role: "employee" }, { userId: "gone", role: "employee", status: "disabled" },
   ];
   assert.deepEqual(routing.chatRecipients({ type: "company", memberUserIds: [] }, members, "owner").sort(), ["acc", "admin", "emp"]);
-  assert.deepEqual(routing.chatRecipients({ type: "direct", memberUserIds: ["owner", "emp", "foreign"] }, members, "owner"), ["emp"], "cudzí používateľ mimo firmy nikdy");
+  assert.deepEqual(routing.chatRecipients({ type: "direct", directUserIds: ["owner", "emp"], memberUserIds: ["owner", "emp", "foreign"] }, members, "owner"), ["emp"], "cudzí používateľ mimo firmy nikdy");
   assert.deepEqual(routing.deadlineRecipients(members).sort(), ["admin", "owner"], "zamestnanec ani účtovník nedostane termíny");
 });
 
-await check("push súkromie: bez náhľadu všeobecný text; termíny iba počet; bezpečná relatívna cesta", () => {
+await check("push súkromie: bez náhľadu všeobecný text; termíny iba počet; cieľ iba z allowlistu", () => {
   const chat = routing.buildChatPayload({ locale: "sk", conversationId: "c1", messageBody: "Faktúra 1 832 € pre Tester1", showPreview: false });
   assert.equal(chat.body, "Máte novú správu. Otvorte Esblu a prečítajte si ju.");
   assert.ok(!JSON.stringify(chat).includes("1 832"));
@@ -419,8 +419,8 @@ await check("push súkromie: bez náhľadu všeobecný text; termíny iba počet
   assert.equal(withPreview.body, "Ahoj");
   const deadlines = routing.buildDeadlinePayload({ locale: "sk", count: 3 });
   assert.ok(!/[A-Z]{2}\d{3}/.test(deadlines.body), "žiadna ŠPZ");
-  for (const bad of ["https://evil.example", "//evil.example", "/../x", "javascript:alert(1)"]) assert.equal(routing.isSafeNotificationUrl(bad), false, bad);
-  assert.equal(routing.isSafeNotificationUrl("/chat/c1"), true);
+  assert.deepEqual(deadlines.target, { screen: "deadlines" });
+  assert.ok(!("url" in chat), "žiadna URL v obsahu notifikácie");
 });
 
 await check("push termíny: iba v zvolených oknách a po termíne raz; kľúč na deduplikáciu", () => {
@@ -433,16 +433,16 @@ await check("push termíny: iba v zvolených oknách a po termíne raz; kľúč 
   assert.deepEqual(due.map((d) => d.dedupeKey), ["deadline:vehicle_stk:v1:2026-10-25:30", "deadline:machine_service:m1:2026-09-20:overdue"]);
 });
 
-await check("push bezpečnosť: zariadenia iba vlastnej firmy a používateľa; revokácia pri 404/410; cron za tajomstvom", () => {
+await check("push bezpečnosť: ciele iba vlastnej firmy (RPC so session/členstvom); deaktivácia neplatných; cron za tajomstvom", () => {
   const server = readFileSync("lib/push/server.ts", "utf8");
-  assert.ok(server.includes('.eq("company_id", input.companyId)') && server.includes('.eq("user_id", userId)') && server.includes('.is("revoked_at", null)'));
-  assert.ok(server.includes('outcome === "gone"'));
+  assert.ok(server.includes('admin.rpc("esblu_push_delivery_targets", { p_company_id: companyId, p_user_ids: userIds })'));
+  assert.ok(server.includes('admin.rpc("esblu_push_record_outcome"'));
   const cron = readFileSync("app/api/cron/deadline-notifications/route.ts", "utf8");
   assert.ok(cron.includes("timingSafeEqual") && cron.includes("CRON_SECRET"));
   const chat = readFileSync("app/api/push/chat-message/route.ts", "utf8");
-  assert.ok(chat.includes("row.author_id !== user.id") && chat.includes("chat:${row.id}"), "iba autor, raz na správu");
+  assert.ok(chat.includes("row.author_id !== who.userId") && chat.includes("chat:${row.id}"), "iba autor, raz na správu");
   const subscribe = readFileSync("app/api/push/subscribe/route.ts", "utf8");
-  assert.ok(subscribe.includes('.eq("status", "active")') && !subscribe.includes("body.companyId"), "firma z členstva, nie z tela");
+  assert.ok(subscribe.includes('who.db.rpc("esblu_push_register_web"') && !subscribe.includes("companyId"), "firma z členstva v DB, nie z tela");
   const migration = readFileSync("supabase/migrations/20260927110000_push_notifications.sql", "utf8");
   assert.ok(migration.includes("NEAPLIKOVANÉ") && migration.includes("revoke all on public.notification_deliveries from public, anon, authenticated"));
   const client = readFileSync("lib/push/client.ts", "utf8");
@@ -509,17 +509,14 @@ await check("OAuth: tlačidlá iba pre zapnutých poskytovateľov; beta brána a
 });
 
 await check("push vlastníctvo endpointu: aktívny endpoint iného používateľa / firmy sa NEPREVEZME", () => {
-  const caller = { userId: "user-a", companyId: "company-a" };
-  assert.equal(routing.decideSubscriptionWrite(null, caller), "insert");
-  assert.equal(routing.decideSubscriptionWrite({ userId: "user-a", companyId: "company-a", revoked: false }, caller), "update");
-  assert.equal(routing.decideSubscriptionWrite({ userId: "user-a", companyId: "company-b", revoked: false }, caller), "update", "vlastné zariadenie po zmene firmy");
-  assert.equal(routing.decideSubscriptionWrite({ userId: "user-b", companyId: "company-a", revoked: false }, caller), "reject", "iný používateľ, tá istá firma");
-  assert.equal(routing.decideSubscriptionWrite({ userId: "user-b", companyId: "company-b", revoked: false }, caller), "reject", "iný používateľ, iná firma");
-  assert.equal(routing.decideSubscriptionWrite({ userId: "user-b", companyId: "company-b", revoked: true }, caller), "update", "zrušený po odhlásení");
+  // Pravidlo žije v DB (esblu_push_register_web) — maticu overuje scripts/push-devices-pglite-tests.ts.
+  const sql = readFileSync("supabase/migrations/20261001130000_push_devices_session_binding.sql", "utf8");
+  const fn = sql.slice(sql.indexOf("create or replace function public.esblu_push_register_web"), sql.indexOf("create or replace function public.esblu_push_unregister_web"));
+  assert.ok(fn.includes("if found and v_existing.user_id <> v_uid and v_existing.revoked_at is null then") && fn.includes("return 'conflict';"));
+  assert.ok(fn.includes("for update") && fn.includes("pg_advisory_xact_lock"), "súbeh");
   const route = readFileSync("app/api/push/subscribe/route.ts", "utf8");
-  assert.ok(route.includes('if (decision === "reject") return Response.json({ success: false }, { status: 409 });'), "odmietnutie bez prezradenia vlastníka");
+  assert.ok(route.includes('if (data === "conflict") return Response.json({ success: false }, { status: 409 });'), "odmietnutie bez prezradenia vlastníka");
   assert.ok(!/upsert\(/.test(route), "žiadny slepý upsert");
-  assert.ok(route.includes(".or(`user_id.eq.${who.userId},revoked_at.not.is.null`)") && route.includes("(written ?? []).length !== 1"), "súbeh: prepíše iba vlastný alebo zrušený riadok");
 });
 
 await check("push tabuľky: žiadny priamy prístup klienta (ani čítanie), iba service role; prázdne okno dní zakázané", () => {
@@ -532,7 +529,7 @@ await check("push tabuľky: žiadny priamy prístup klienta (ani čítanie), iba
   const code = sql.split("\n").filter((line) => !line.trim().startsWith("--")).join("\n");
   assert.ok(!/grant[^;]*to\s+(authenticated|anon)/i.test(code), "žiadny grant pre authenticated/anon");
   assert.ok(!/create policy/i.test(code), "žiadne politiky = žiadny klientsky prístup");
-  assert.ok(!/security\s+definer/i.test(code));
+  assert.ok(!/security\s+definer/i.test(code), "tabuľková migrácia bez funkcií (RPC sú v 20261001130000)");
   assert.ok(sql.includes("cardinality(deadline_days) > 0") && sql.includes("cardinality(deadline_days) <= 6"));
   assert.ok(sql.includes("RETENCIA"), "retencia zdokumentovaná");
   // Prehliadač sa na tabuľky nepýta vôbec.
