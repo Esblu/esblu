@@ -31,6 +31,14 @@ export type CompanyBillingProfile = {
   default_vat_rate: number | null;
   invoice_numbering_prefix: string | null;
   logo_path: string | null;
+  // EN16931 / Peppol (20260920122000 + 20261001110000). Scheme ID sa
+  // NIKDY nedopĺňa automaticky — zadáva ho používateľ podľa poskytovateľa.
+  electronic_address: string | null;
+  electronic_address_scheme_id: string | null;
+  legal_registration_id: string | null;
+  legal_registration_scheme_id: string | null;
+  vat_identifier: string | null;
+  vat_payer_status: "vat_payer" | "non_vat_payer" | null;
   created_at: string;
   updated_at: string | null;
   updated_by: string | null;
@@ -53,6 +61,12 @@ export const EMPTY_COMPANY_BILLING_PROFILE_FORM = {
   default_currency: "",
   default_vat_rate: "",
   invoice_numbering_prefix: "",
+  electronic_address: "",
+  electronic_address_scheme_id: "",
+  legal_registration_id: "",
+  legal_registration_scheme_id: "",
+  vat_identifier: "",
+  vat_payer_status: "" as "" | "vat_payer" | "non_vat_payer",
 };
 
 export type CompanyBillingProfileForm = typeof EMPTY_COMPANY_BILLING_PROFILE_FORM;
@@ -83,6 +97,12 @@ export function billingProfileToForm(
     default_vat_rate:
       profile.default_vat_rate === null ? "" : String(profile.default_vat_rate),
     invoice_numbering_prefix: profile.invoice_numbering_prefix ?? "",
+    electronic_address: profile.electronic_address ?? "",
+    electronic_address_scheme_id: profile.electronic_address_scheme_id ?? "",
+    legal_registration_id: profile.legal_registration_id ?? "",
+    legal_registration_scheme_id: profile.legal_registration_scheme_id ?? "",
+    vat_identifier: profile.vat_identifier ?? "",
+    vat_payer_status: profile.vat_payer_status ?? "",
   };
 }
 
@@ -127,6 +147,7 @@ export type CompanyBillingProfileValidationError = {
 const IBAN_FORMAT = /^[A-Z]{2}[0-9]{2}[A-Z0-9]{1,30}$/;
 const BIC_FORMAT = /^[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?$/;
 const EMAIL_FORMAT = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const SCHEME_ID_FORMAT = /^[0-9]{4}$/;
 
 /**
  * IBAN mod-97 kontrolný súčet (ISO 13616 / ECBS). Spracováva string po
@@ -277,6 +298,37 @@ export function validateCompanyBillingProfileForm(
     errors.push({ field: "contact_email", messageKey: "invalidEmail" });
   }
 
+  // EN16931 identifikátory — páry zodpovedajú DB CHECK *_pair constraintom.
+  // Scheme ID je 4-miestny kód (EAS / ICD); ktorý konkrétny kód použiť,
+  // Esblu nehádá.
+  const electronicAddress = emptyToNull(form.electronic_address);
+  const electronicAddressScheme = emptyToNull(form.electronic_address_scheme_id);
+  if ((electronicAddress === null) !== (electronicAddressScheme === null)) {
+    errors.push({
+      field: electronicAddress === null ? "electronic_address" : "electronic_address_scheme_id",
+      messageKey: "electronicAddressPairRequired",
+    });
+  } else if (electronicAddressScheme !== null && !SCHEME_ID_FORMAT.test(electronicAddressScheme)) {
+    errors.push({ field: "electronic_address_scheme_id", messageKey: "invalidSchemeId" });
+  }
+
+  const legalRegistration = emptyToNull(form.legal_registration_id);
+  const legalRegistrationScheme = emptyToNull(form.legal_registration_scheme_id);
+  if ((legalRegistration === null) !== (legalRegistrationScheme === null)) {
+    errors.push({
+      field: legalRegistration === null ? "legal_registration_id" : "legal_registration_scheme_id",
+      messageKey: "legalRegistrationPairRequired",
+    });
+  } else if (legalRegistrationScheme !== null && !SCHEME_ID_FORMAT.test(legalRegistrationScheme)) {
+    errors.push({ field: "legal_registration_scheme_id", messageKey: "invalidSchemeId" });
+  }
+
+  const vatIdentifier = emptyToNull(form.vat_identifier);
+  const vatPayerStatus = form.vat_payer_status === "" ? null : form.vat_payer_status;
+  if (vatPayerStatus === "vat_payer" && vatIdentifier === null && emptyToNull(form.ic_dph) === null) {
+    errors.push({ field: "vat_payer_status", messageKey: "vatPayerWithoutVatId" });
+  }
+
   if (errors.length > 0) {
     return { errors, payload: null };
   }
@@ -300,6 +352,12 @@ export function validateCompanyBillingProfileForm(
       default_currency: currency,
       default_vat_rate: vatRate === "invalid" ? null : vatRate,
       invoice_numbering_prefix: emptyToNull(form.invoice_numbering_prefix),
+      electronic_address: electronicAddress,
+      electronic_address_scheme_id: electronicAddressScheme,
+      legal_registration_id: legalRegistration,
+      legal_registration_scheme_id: legalRegistrationScheme,
+      vat_identifier: vatIdentifier,
+      vat_payer_status: vatPayerStatus,
     },
   };
 }

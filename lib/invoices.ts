@@ -306,6 +306,16 @@ export type DraftInvoiceHeaderInput = {
   variable_symbol: string | null;
   payment_terms_days: number | null;
   corrects_invoice_id: string | null;
+  /** EN16931 BT-72 (dátum dodania). Zapisuje esblu_save_invoice_draft (20261001110000). */
+  delivery_date?: string | null;
+  /** EN16931 BT-10. */
+  buyer_reference?: string | null;
+  /** EN16931 BT-13. */
+  purchase_order_reference?: string | null;
+  /** EN16931 BT-81 (UNTDID 4461), napr. 30 / 58. */
+  payment_means_code?: string | null;
+  /** EN16931 BT-83. */
+  payment_reference?: string | null;
 };
 
 /**
@@ -365,6 +375,9 @@ export type DraftInvoiceItemInput = {
   description: string;
   quantity: number;
   unit: string;
+  /** EN16931 BT-130 — kód mernej jednotky UN/ECE Rec 20 (napr. H87, HUR, KGM).
+   *  Nikdy sa automaticky neodvodzuje z `unit`. */
+  unit_code?: string | null;
   vat_category_code: VatCategoryCode;
   vat_rate: number;
   unit_price: number;
@@ -415,6 +428,7 @@ export async function saveInvoiceDraft(
     description: item.description,
     quantity: item.quantity,
     unit: item.unit,
+    unit_code: item.unit_code?.trim() ? item.unit_code.trim().toUpperCase() : null,
     unit_price: item.unit_price,
     price_mode: item.price_mode ?? DEFAULT_PRICE_MODE,
     vat_category_code: item.vat_category_code,

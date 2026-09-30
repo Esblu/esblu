@@ -84,7 +84,10 @@ import { creditedTotals, isFullyCredited, remainingAfterCredits, signedAmount } 
 import { navigateHard } from "@/lib/app-navigation";
 import { confirmAction, notify } from "@/app/components/ui/AppDialog";
 
-const VAT_CATEGORIES: VatCategoryCode[] = ["S", "Z", "E", "AE"];
+// K/G/O (EN16931 / Peppol) pribudli v 20261001110000 — finalizácia ich počíta ako 0 %.
+const VAT_CATEGORIES: VatCategoryCode[] = ["S", "Z", "E", "AE", "K", "G", "O"];
+// UNTDID 4461 — spôsob úhrady (BT-81). Esblu kód nikdy nedopĺňa samo.
+const PAYMENT_MEANS_CODES = ["30", "58", "10", "48", "49", "59"] as const;
 // Kalendárny deň POUŽÍVATEĽA, nie UTC — predvyplňuje dátum vystavenia aj
 // dátum úhrady. Pozri lib/local-date.ts.
 const TODAY = todayLocalDate();
@@ -107,6 +110,7 @@ function emptyItem(
     description: "",
     quantity: 1,
     unit: "ks",
+    unit_code: null,
     unit_price: 0,
     price_mode: priceMode,
     vat_category_code: "S",
@@ -184,6 +188,12 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
   const [issueDate, setIssueDate] = useState(TODAY);
   const [dueDate, setDueDate] = useState("");
   const [variableSymbol, setVariableSymbol] = useState("");
+  // EN16931 / Peppol polia vydanej faktúry (BT-72, BT-10, BT-13, BT-81, BT-83).
+  const [deliveryDate, setDeliveryDate] = useState("");
+  const [buyerReference, setBuyerReference] = useState("");
+  const [purchaseOrderReference, setPurchaseOrderReference] = useState("");
+  const [paymentMeansCode, setPaymentMeansCode] = useState("");
+  const [paymentReference, setPaymentReference] = useState("");
   const [paymentTermsDays, setPaymentTermsDays] = useState("");
   const [currency, setCurrency] = useState("EUR");
   const [draftItems, setDraftItems] = useState<DraftInvoiceItemInput[]>([]);
@@ -200,6 +210,10 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
   // PDF (iba finalized) — pozri handleDownloadPdf, FÁZA 3A.
   const [downloadingPdf, setDownloadingPdf] = useState(false);
   const [pdfError, setPdfError] = useState("");
+  // XML (UBL / Peppol BIS 3.0) export — iba finalizovaná vydaná faktúra.
+  const [downloadingUbl, setDownloadingUbl] = useState(false);
+  const [ublError, setUblError] = useState("");
+  const [ublIssues, setUblIssues] = useState<string[]>([]);
 
   // Payment form state (iba finalized).
   const [paymentAmount, setPaymentAmount] = useState("");
@@ -285,6 +299,11 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
         setIssueDate(inv.issue_date);
         setDueDate(inv.due_date ?? "");
         setVariableSymbol(inv.variable_symbol ?? "");
+        setDeliveryDate(inv.delivery_date ?? "");
+        setBuyerReference(inv.buyer_reference ?? "");
+        setPurchaseOrderReference(inv.purchase_order_reference ?? "");
+        setPaymentMeansCode(inv.payment_means_code ?? "");
+        setPaymentReference(inv.payment_reference ?? "");
         setPaymentTermsDays(inv.payment_terms_days != null ? String(inv.payment_terms_days) : "");
         setCurrency(inv.currency);
         setDraftItems(
@@ -293,6 +312,7 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
                 description: item.description,
                 quantity: item.quantity,
                 unit: item.unit,
+                unit_code: item.unit_code,
                 unit_price: item.unit_price,
                 // Režim ceny MUSÍ prejsť editorom nedotknutý. Keby sa tu
                 // stratil, uloženie bez jedinej zmeny by z dokladu so sumami
@@ -418,6 +438,7 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
         invoice.id,
         {
           ...directionHeaderPatch(),
+          ...einvoiceHeaderPatch(),
           issue_date: issueDate,
           due_date: dueDate || null,
           variable_symbol: variableSymbol.trim() || null,
@@ -459,6 +480,18 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
       : { customer_business_partner_id: customerId || null };
   }
 
+  /** EN16931 polia — iba pre vydanú faktúru; prijatú faktúru nemeníme. */
+  function einvoiceHeaderPatch() {
+    if (isReceived) return {};
+    return {
+      delivery_date: deliveryDate || null,
+      buyer_reference: buyerReference.trim() || null,
+      purchase_order_reference: purchaseOrderReference.trim() || null,
+      payment_means_code: paymentMeansCode || null,
+      payment_reference: paymentReference.trim() || null,
+    };
+  }
+
   async function handleFinalize() {
     if (!invoice || draftBusyRef.current) return;
 
@@ -498,6 +531,7 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
         invoice.id,
         {
           ...directionHeaderPatch(),
+          ...einvoiceHeaderPatch(),
           issue_date: issueDate,
           due_date: dueDate || null,
           variable_symbol: variableSymbol.trim() || null,
@@ -583,6 +617,60 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
       setPdfError(t("invoices.errors.pdfDownloadFailedPrefix", { message }));
     } finally {
       setDownloadingPdf(false);
+    }
+  }
+
+  /**
+   * Export XML (UBL) — GET /api/invoices/[id]/ubl. Server načíta nemenný
+   * snapshot, overí finance.view a pri chýbajúcich údajoch vráti zoznam
+   * problémov (nič neopravuje). XML je prevádzková kópia na export —
+   * archiváciu si zákazník zabezpečuje sám.
+   */
+  async function handleDownloadUbl() {
+    if (!invoice) return;
+    setUblError("");
+    setUblIssues([]);
+    setDownloadingUbl(true);
+
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (!session) throw new Error(t("invoices.errors.pdfNotAuthenticated"));
+
+      const response = await fetch(apiUrl(`/api/invoices/${invoice.id}/ubl`), {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+          [REQUEST_LOCALE_HEADER]: locale,
+        },
+      });
+
+      if (!response.ok) {
+        let message = t("invoices.errors.ublGenerationFailed");
+        try {
+          const data = await response.json();
+          if (data?.error) message = data.error;
+          if (Array.isArray(data?.issues)) {
+            setUblIssues(
+              (data.issues as { message?: string; rule?: string }[]).map((issue) =>
+                issue.rule ? `${issue.message ?? ""} (${issue.rule})` : issue.message ?? ""
+              )
+            );
+          }
+        } catch {
+          // odpoveď bez JSON tela — ponechaj generickú hlášku.
+        }
+        throw new Error(message);
+      }
+
+      const blob = await response.blob();
+      await downloadBlob(blob, `${invoice.invoice_number ?? invoice.id}.xml`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setUblError(t("invoices.errors.ublDownloadFailedPrefix", { message }));
+    } finally {
+      setDownloadingUbl(false);
     }
   }
 
@@ -874,7 +962,72 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
                   onChange={(event) => setVariableSymbol(event.target.value)}
                 />
               </div>
+
+              {!isReceived && (
+                <>
+                  <div>
+                    <label className={docLabel}>{t("invoices.einvoice.deliveryDateLabel")}</label>
+                    <input
+                      type="date"
+                      className={docField}
+                      value={deliveryDate}
+                      disabled={!canEdit}
+                      onChange={(event) => setDeliveryDate(event.target.value)}
+                    />
+                  </div>
+
+                  <div>
+                    <label className={docLabel}>{t("invoices.einvoice.buyerReferenceLabel")}</label>
+                    <input
+                      className={docField}
+                      value={buyerReference}
+                      disabled={!canEdit}
+                      onChange={(event) => setBuyerReference(event.target.value)}
+                    />
+                  </div>
+
+                  <div>
+                    <label className={docLabel}>{t("invoices.einvoice.purchaseOrderReferenceLabel")}</label>
+                    <input
+                      className={docField}
+                      value={purchaseOrderReference}
+                      disabled={!canEdit}
+                      onChange={(event) => setPurchaseOrderReference(event.target.value)}
+                    />
+                  </div>
+
+                  <div>
+                    <label className={docLabel}>{t("invoices.einvoice.paymentMeansCodeLabel")}</label>
+                    <select
+                      className={docField}
+                      value={paymentMeansCode}
+                      disabled={!canEdit}
+                      onChange={(event) => setPaymentMeansCode(event.target.value)}
+                    >
+                      <option value="">{t("invoices.einvoice.paymentMeansNone")}</option>
+                      {PAYMENT_MEANS_CODES.map((code) => (
+                        <option key={code} value={code}>
+                          {t(`invoices.einvoice.paymentMeans.${code}`)}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className={docLabel}>{t("invoices.einvoice.paymentReferenceLabel")}</label>
+                    <input
+                      className={docField}
+                      value={paymentReference}
+                      disabled={!canEdit}
+                      onChange={(event) => setPaymentReference(event.target.value)}
+                    />
+                  </div>
+                </>
+              )}
             </div>
+            {!isReceived && (
+              <p className="mt-2 text-xs text-secondary">{t("invoices.einvoice.draftFieldsHint")}</p>
+            )}
 
             <h2 className="mt-8 text-lg font-semibold text-primary">
               {t("invoices.newInvoice.itemsTitle")}
@@ -887,7 +1040,7 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
                   className="grid gap-2 rounded-doc-sm border border-doc-border bg-surface-2 p-3 sm:grid-cols-12"
                 >
                   <input
-                    className="rounded-doc-sm border border-doc-border bg-surface-2 p-2 text-sm text-primary outline-none focus:border-accent-cyan sm:col-span-4"
+                    className="rounded-doc-sm border border-doc-border bg-surface-2 p-2 text-sm text-primary outline-none focus:border-accent-cyan sm:col-span-3"
                     placeholder={t("invoices.newInvoice.itemDescriptionLabel")}
                     value={item.description}
                     disabled={!canEdit}
@@ -910,6 +1063,18 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
                     value={item.unit}
                     disabled={!canEdit}
                     onChange={(event) => updateDraftItem(index, { unit: event.target.value })}
+                  />
+                  <input
+                    className="rounded-doc-sm border border-doc-border bg-surface-2 p-2 text-sm uppercase text-primary outline-none focus:border-accent-cyan sm:col-span-1"
+                    placeholder={t("invoices.einvoice.unitCodePlaceholder")}
+                    title={t("invoices.einvoice.unitCodeHint")}
+                    aria-label={t("invoices.einvoice.unitCodeLabel")}
+                    maxLength={3}
+                    value={item.unit_code ?? ""}
+                    disabled={!canEdit}
+                    onChange={(event) =>
+                      updateDraftItem(index, { unit_code: event.target.value.toUpperCase() || null })
+                    }
                   />
                   <input
                     type="number"
@@ -1040,6 +1205,20 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
               <DocumentNotice tone="critical">{pdfError}</DocumentNotice>
             </div>
           )}
+          {ublError && (
+            <div className="mt-4">
+              <DocumentNotice tone="critical">
+                {ublError}
+                {ublIssues.length > 0 && (
+                  <ul className="mt-2 list-disc pl-5">
+                    {ublIssues.map((issue) => (
+                      <li key={issue}>{issue}</li>
+                    ))}
+                  </ul>
+                )}
+              </DocumentNotice>
+            </div>
+          )}
 
           {/* Dvojstĺpcový doklad na desktope: vľavo obsah, vpravo metadáta a
               akcie. Na mobile sa poskladá pod seba a akcie idú navrch, aby
@@ -1155,16 +1334,29 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
                       faktúra je dokument dodávateľa — vyrobiť jej vlastné PDF by
                       znamenalo vydávať prerozprávanie cudzieho dokladu za doklad. */}
                   {!isReceived ? (
-                    <button
-                      type="button"
-                      onClick={handleDownloadPdf}
-                      disabled={downloadingPdf}
-                      className={docButtonPrimary}
-                    >
-                      {downloadingPdf
-                        ? t("invoices.detail.downloadingPdf")
-                        : t("invoices.detail.downloadPdfButton")}
-                    </button>
+                    <>
+                      <button
+                        type="button"
+                        onClick={handleDownloadPdf}
+                        disabled={downloadingPdf}
+                        className={docButtonPrimary}
+                      >
+                        {downloadingPdf
+                          ? t("invoices.detail.downloadingPdf")
+                          : t("invoices.detail.downloadPdfButton")}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleDownloadUbl}
+                        disabled={downloadingUbl}
+                        className={docButtonSecondary}
+                      >
+                        {downloadingUbl
+                          ? t("invoices.einvoice.downloadingUbl")
+                          : t("invoices.einvoice.downloadUblButton")}
+                      </button>
+                      <p className="text-xs text-muted-esblu">{t("invoices.einvoice.exportNotice")}</p>
+                    </>
                   ) : invoice.source_document_id ? (
                     <Link
                       href={`/ai-evidencia?openDocument=${invoice.source_document_id}`}

@@ -967,6 +967,49 @@ export default function NastaveniaPage() {
             )}
           </div>
 
+          <div className="mt-8 border-t border-subtle pt-6">
+            <h3 className="text-lg font-bold text-primary">
+              {t("settings.company.einvoiceTitle")}
+            </h3>
+            <p className="mt-1 text-xs text-secondary">
+              {t("settings.company.einvoiceHint")}
+            </p>
+
+            <div className="mt-4 grid gap-4 sm:grid-cols-2">
+              {field("electronic_address", "settings.company.electronicAddressLabel")}
+              {field("electronic_address_scheme_id", "settings.company.electronicAddressSchemeLabel")}
+            </div>
+
+            <div className="mt-4 grid gap-4 sm:grid-cols-2">
+              {field("legal_registration_id", "settings.company.legalRegistrationIdLabel")}
+              {field("legal_registration_scheme_id", "settings.company.legalRegistrationSchemeLabel")}
+            </div>
+
+            <div className="mt-4 grid gap-4 sm:grid-cols-2">
+              {field("vat_identifier", "settings.company.vatIdentifierLabel")}
+              <div>
+                <label className="mb-2 block text-sm font-semibold">
+                  {t("settings.company.vatPayerStatusLabel")}
+                </label>
+                <select
+                  className={`w-full rounded-xl border p-3 ${billingProfileFieldError("vat_payer_status") ? "border-red-500" : ""}`}
+                  value={billingProfile.vat_payer_status}
+                  onChange={(event) => updateBillingProfileField("vat_payer_status", event.target.value)}
+                  disabled={!canEditCompany || settingsLoading}
+                >
+                  <option value="">{t("settings.company.vatPayerUnknown")}</option>
+                  <option value="vat_payer">{t("settings.company.vatPayerYes")}</option>
+                  <option value="non_vat_payer">{t("settings.company.vatPayerNo")}</option>
+                </select>
+                {billingProfileFieldError("vat_payer_status") && (
+                  <p className="mt-1 text-xs font-semibold text-red-600">
+                    {billingProfileFieldError("vat_payer_status")}
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
+
           <div className="mt-6">
             <label className="mb-2 block font-semibold">
               {t("settings.company.logoLabel")}

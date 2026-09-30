@@ -20,9 +20,11 @@ import {
 } from "@/lib/invoices";
 import {
   computeInvoiceTotals,
-  VAT_CATEGORY_CODES,
   type VatCategoryCode,
 } from "@/lib/invoicing/vat-engine";
+// Príjem prijatej faktúry (esblu_create_received_invoice_draft) zatiaľ
+// podporuje iba S/Z/E/AE — K/G/O sú iba pre vydané faktúry (20261001110000).
+import { RECEIVED_VAT_CATEGORY_CODES } from "@/lib/invoicing/vat-categories";
 import {
   compareCandidateTotals,
   type ReceivedInvoiceCandidate,
@@ -1012,7 +1014,7 @@ export default function ReceivedInvoiceReview({
                         <option value="">
                           {t("inbox.receivedInvoice.items.vatCategoryPlaceholder")}
                         </option>
-                        {VAT_CATEGORY_CODES.map((code) => (
+                        {RECEIVED_VAT_CATEGORY_CODES.map((code) => (
                           <option key={code} value={code}>
                             {t(`invoices.newInvoice.vatCategory.${code}`)}
                           </option>
