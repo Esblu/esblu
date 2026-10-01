@@ -23,9 +23,11 @@ import type { Element } from "@xmldom/xmldom";
 //     NEVYGENERUJE a vráti sa zoznam problémov (UblIssue) na opravu človekom,
 //   - deterministický výstup (pevné poradie, žiadne časové pečiatky) a SHA-256
 //     presne tých bajtov, ktoré sa odošlú,
-//   - kontroluje iba pravidlá EN16931 / Peppol, ktoré vieme doložiť.
-//     SK FS nadstavba (SK-BT-*) je len upozornenie — autoritatívne ju overí
-//     preflight poskytovateľa (TODO po sandbox kľúči / OpenAPI).
+//   - kontroluje iba pravidlá EN16931 / Peppol, ktoré vieme doložiť, plus
+//     SK BT-30/BT-47 (IČO so schemeID 0158 — overené v sandbox E2E) ako BLOK.
+//     Ostatná SK FS nadstavba (adresa SK-BT-*) je len upozornenie —
+//     autoritatívne ju overí preflight poskytovateľa,
+//   - výsledok je strojovo čitateľný (kód + pravidlo + params), žiadny text.
 //
 // Nie je to validácia voči XSD ani Schematronu — tú generátor nenahrádza.
 // =============================================================================
@@ -78,108 +80,154 @@ function vatIdOf(party: UblParty): string | null {
   return null;
 }
 
-/** Kontroly, ktoré musia prejsť pred vygenerovaním. Vracia chyby aj upozornenia. */
+/**
+ * ISO 6523 ICD pre slovenské IČO (BT-30 / BT-47 schemeID).
+ * Zdroj: Peppol BIS Billing 3.0 (May 2026) — ISO 6523 ICD code list,
+ * https://docs.peppol.eu/poacc/billing/3.0/codelist/ICD/ :
+ * „0158 — Identification number of economic subject (ICO) … Slovak Statistical Office".
+ * (0245 = SK DIČ, používa sa pre Peppol participant ID, nie pre IČO.)
+ */
+export const SK_ICO_ICD_SCHEME = "0158";
+
+function isSkParty(party: UblParty): boolean {
+  return party.country_code?.trim().toUpperCase() === "SK";
+}
+
+/** IČO zo SNAPSHOTU strany faktúry: presne 8 číslic (medzery sa ignorujú), inak null. Nič sa nedopĺňa. */
+function skIcoOf(party: UblParty): string | null {
+  const digits = (party.ico ?? "").replace(/\s+/g, "");
+  return /^[0-9]{8}$/.test(digits) ? digits : null;
+}
+
+/**
+ * BT-30 / BT-47 (PartyLegalEntity/CompanyID).
+ *   - Slovenská strana: VŽDY IČO z nemenného snapshotu faktúry (invoice_parties.ico,
+ *     zachytené pri finalizácii z profilu firmy / obchodného partnera) so
+ *     schemeID 0158. Neskoršia zmena obchodného partnera snapshot nemení.
+ *   - Iná krajina: iba explicitne uložený legal_registration_id (+ schéma, ak je).
+ * Konflikty a chýbajúce IČO rieši checkUblPreconditions (blokuje) — tu sa nič nehádá.
+ */
+function legalEntityIdOf(party: UblParty): { id: string; scheme: string | null } | null {
+  if (isSkParty(party)) {
+    const ico = skIcoOf(party);
+    return ico ? { id: ico, scheme: SK_ICO_ICD_SCHEME } : null;
+  }
+  if (blank(party.legal_registration_id)) return null;
+  return {
+    id: party.legal_registration_id!.trim(),
+    scheme: blank(party.legal_registration_scheme_id) ? null : party.legal_registration_scheme_id!.trim(),
+  };
+}
+
+/** Kontroly, ktoré musia prejsť pred vygenerovaním. Vracia chyby aj upozornenia (iba kódy, žiadny text). */
 export function checkUblPreconditions(s: UblInvoiceSnapshot): { issues: UblIssue[]; warnings: UblWarning[] } {
   const issues: UblIssue[] = [];
   const warnings: UblWarning[] = [];
-  const add = (code: string, rule: string, message: string) => issues.push({ code, rule, message });
-  const warn = (code: string, rule: string, message: string) => warnings.push({ code, rule, message });
+  const add = (code: string, rule: string, params?: UblIssue["params"]) => issues.push(params ? { code, rule, params } : { code, rule });
+  const warn = (code: string, rule: string, params?: UblIssue["params"]) => warnings.push(params ? { code, rule, params } : { code, rule });
   const inv = s.invoice;
 
-  if (inv.direction !== "issued") add("NOT_ISSUED", "-", "UBL sa generuje iba z vydanej faktúry.");
-  if (inv.document_status !== "finalized") add("NOT_FINALIZED", "-", "UBL sa generuje iba z finalizovanej faktúry.");
-  if (blank(inv.invoice_number)) add("MISSING_INVOICE_NUMBER", "BT-1", "Chýba číslo faktúry.");
-  if (!isoDate(inv.issue_date)) add("INVALID_ISSUE_DATE", "BT-2", "Chýba alebo je neplatný dátum vystavenia.");
-  if (!documentTypeFor(inv.kind)) add("KIND_UNSUPPORTED", "BT-3", `Druh dokladu „${inv.kind}" zatiaľ nie je podporovaný pre e-faktúru.`);
-  if (inv.currency !== "EUR") add("CURRENCY_UNSUPPORTED", "BT-5/BT-6", "Zatiaľ iba EUR (pri inej mene je povinný BT-111 v EUR — TODO).");
+  if (inv.direction !== "issued") add("NOT_ISSUED", "-");
+  if (inv.document_status !== "finalized") add("NOT_FINALIZED", "-");
+  if (blank(inv.invoice_number)) add("MISSING_INVOICE_NUMBER", "BT-1");
+  if (!isoDate(inv.issue_date)) add("INVALID_ISSUE_DATE", "BT-2");
+  if (!documentTypeFor(inv.kind)) add("KIND_UNSUPPORTED", "BT-3", { kind: inv.kind });
+  if (inv.currency !== "EUR") add("CURRENCY_UNSUPPORTED", "BT-5/BT-6", { currency: inv.currency });
 
   if (blank(inv.buyer_reference) && blank(inv.purchase_order_reference)) {
-    add("MISSING_BUYER_OR_ORDER_REFERENCE", "PEPPOL-EN16931-R003", "Vyplňte referenciu kupujúceho (BT-10) alebo číslo objednávky (BT-13).");
+    add("MISSING_BUYER_OR_ORDER_REFERENCE", "PEPPOL-EN16931-R003");
   }
   if (!isoDate(inv.due_date) && inv.kind !== "credit_note" && toDecimal(inv.total_amount).gt(0)) {
-    add("MISSING_DUE_DATE", "BR-CO-25", "Chýba dátum splatnosti (BT-9).");
+    add("MISSING_DUE_DATE", "BR-CO-25");
   }
   if (inv.kind === "credit_note" || inv.kind === "debit_note") {
     if (!s.correctedInvoice || blank(s.correctedInvoice.invoice_number)) {
-      add("MISSING_PRECEDING_INVOICE", "BT-25", "Opravný doklad musí odkazovať na číslo opravovanej faktúry.");
+      add("MISSING_PRECEDING_INVOICE", "BT-25");
     }
   }
 
-  for (const [label, party, isSeller] of [["Predávajúci", s.seller, true], ["Kupujúci", s.buyer, false]] as const) {
-    if (blank(party.legal_name)) add(`${isSeller ? "SELLER" : "BUYER"}_MISSING_NAME`, isSeller ? "BR-06" : "BR-07", `${label}: chýba obchodné meno.`);
+  for (const [party, isSeller] of [[s.seller, true], [s.buyer, false]] as const) {
+    const P = isSeller ? "SELLER" : "BUYER";
+    if (blank(party.legal_name)) add(`${P}_MISSING_NAME`, isSeller ? "BR-06" : "BR-07");
     if (blank(party.country_code) || !/^[A-Z]{2}$/.test(party.country_code!.trim())) {
-      add(`${isSeller ? "SELLER" : "BUYER"}_MISSING_COUNTRY`, isSeller ? "BR-09" : "BR-11", `${label}: chýba kód krajiny.`);
+      add(`${P}_MISSING_COUNTRY`, isSeller ? "BR-09" : "BR-11");
     }
     if (blank(party.electronic_address) || blank(party.electronic_address_scheme_id)) {
-      add(
-        `${isSeller ? "SELLER" : "BUYER"}_MISSING_ENDPOINT`,
-        isSeller ? "PEPPOL-EN16931-R020 (BT-34)" : "PEPPOL-EN16931-R010 (BT-49)",
-        `${label}: chýba elektronická adresa (Peppol ID) a jej schéma.`
-      );
+      add(`${P}_MISSING_ENDPOINT`, isSeller ? "PEPPOL-EN16931-R020 (BT-34)" : "PEPPOL-EN16931-R010 (BT-49)");
+    }
+    // BT-30 / BT-47 pre slovenskú stranu: IČO je povinné (SK FS nadstavba
+    // SK-BT-30/47 so schemeID 0158) — chýbajúce alebo konfliktné = BLOK.
+    if (isSkParty(party)) {
+      const ico = skIcoOf(party);
+      const rule = isSeller ? "SK-BT-30 (BT-30, schemeID 0158)" : "SK-BT-47 (BT-47, schemeID 0158)";
+      if (!ico) {
+        add(`${P}_MISSING_ICO`, rule);
+      } else {
+        const explicitId = (party.legal_registration_id ?? "").replace(/\s+/g, "");
+        if (explicitId !== "" && explicitId !== ico) add(`${P}_LEGAL_ID_ICO_MISMATCH`, rule);
+        if (!blank(party.legal_registration_scheme_id) && party.legal_registration_scheme_id!.trim() !== SK_ICO_ICD_SCHEME) {
+          add(`${P}_LEGAL_SCHEME_CONFLICT`, rule, { scheme: party.legal_registration_scheme_id!.trim() });
+        }
+      }
+    }
+    // SK FS nadstavba — presné znenie nepoznáme, iba upozorňujeme (preflight rozhodne).
+    if (blank(party.address_line1) || blank(party.city) || blank(party.postal_code)) {
+      warn(`SK_${P}_ADDRESS_INCOMPLETE`, isSeller ? "SK-BT-35/37/38" : "SK-BT-50/52/53");
     }
   }
-  // SK FS nadstavba — presné znenie nepoznáme, iba upozorňujeme (preflight rozhodne).
-  if (blank(s.seller.address_line1) || blank(s.seller.city) || blank(s.seller.postal_code)) {
-    warn("SK_SELLER_ADDRESS_INCOMPLETE", "SK-BT-35/37/38 (TODO)", "Predávajúci: neúplná adresa (ulica, mesto, PSČ).");
-  }
-  if (blank(s.buyer.address_line1) || blank(s.buyer.city) || blank(s.buyer.postal_code)) {
-    warn("SK_BUYER_ADDRESS_INCOMPLETE", "SK-BT-50/52/53 (TODO)", "Kupujúci: neúplná adresa (ulica, mesto, PSČ).");
-  }
-  if (blank(s.seller.legal_registration_id)) warn("SK_SELLER_LEGAL_ID_MISSING", "SK-BT-30 (TODO)", "Predávajúci: chýba registračné číslo (BT-30).");
-  if (blank(s.buyer.legal_registration_id)) warn("SK_BUYER_LEGAL_ID_MISSING", "SK-BT-47 (TODO)", "Kupujúci: chýba registračné číslo (BT-47).");
 
-  if (s.items.length === 0) add("NO_LINES", "BR-16", "Faktúra nemá žiadne položky.");
+  if (s.items.length === 0) add("NO_LINES", "BR-16");
 
   const categories = new Set(s.items.map((i) => i.vat_category_code));
   const sellerVat = vatIdOf(s.seller);
   const buyerVat = vatIdOf(s.buyer);
   if (categories.has("O")) {
-    if (categories.size > 1) add("O_MIXED_WITH_OTHER_CATEGORIES", "BR-O-11", "Kategória O (mimo DPH) sa nesmie kombinovať s inými kategóriami.");
-    if (sellerVat) add("O_WITH_SELLER_VAT_ID", "BR-O-02", "Pri kategórii O (neplatiteľ DPH) nesmie byť uvedené IČ DPH predávajúceho.");
+    if (categories.size > 1) add("O_MIXED_WITH_OTHER_CATEGORIES", "BR-O-11");
+    if (sellerVat) add("O_WITH_SELLER_VAT_ID", "BR-O-02");
   }
   if ([...categories].some((c) => c !== "O") && !sellerVat) {
-    add("SELLER_VAT_ID_REQUIRED", "BR-S-02 / BR-Z-02 / BR-E-02 / BR-AE-02 / BR-IC-02 / BR-G-02", "Predávajúci: chýba IČ DPH (BT-31).");
+    add("SELLER_VAT_ID_REQUIRED", "BR-S-02 / BR-Z-02 / BR-E-02 / BR-AE-02 / BR-IC-02 / BR-G-02");
   }
   if ((categories.has("AE") || categories.has("K")) && !buyerVat) {
-    add("BUYER_VAT_ID_REQUIRED", "BR-AE-02 / BR-IC-02", "Kupujúci: pri prenesení daňovej povinnosti / dodaní do EÚ je povinné IČ DPH (BT-48).");
+    add("BUYER_VAT_ID_REQUIRED", "BR-AE-02 / BR-IC-02");
   }
 
   for (const item of s.items) {
-    const where = `Položka ${item.position}`;
-    if (blank(item.description)) add("LINE_MISSING_NAME", "BT-153", `${where}: chýba názov.`);
+    const position = item.position;
+    if (blank(item.description)) add("LINE_MISSING_NAME", "BT-153", { position });
     if (blank(item.unit_code) || !/^[A-Z0-9]{1,3}$/.test(item.unit_code!.trim())) {
-      add("LINE_MISSING_UNIT_CODE", "BT-130", `${where}: chýba kód mernej jednotky (UN/ECE Rec 20).`);
+      add("LINE_MISSING_UNIT_CODE", "BT-130", { position });
     }
     if (item.vat_category_code === "S" && !toDecimal(item.vat_rate).gt(0)) {
-      add("LINE_S_RATE_NOT_POSITIVE", "BR-S-05", `${where}: kategória S vyžaduje kladnú sadzbu DPH.`);
+      add("LINE_S_RATE_NOT_POSITIVE", "BR-S-05", { position });
     }
     if (netUnitPrice(item) === null) {
-      add("LINE_PRICE_NOT_REPRESENTABLE", "PEPPOL-EN16931-R120", `${where}: čistú jednotkovú cenu nemožno presne vyjadriť (množstvo × cena ≠ suma riadka).`);
+      add("LINE_PRICE_NOT_REPRESENTABLE", "PEPPOL-EN16931-R120", { position });
     }
   }
 
   for (const b of s.taxBreakdowns) {
     if (b.vat_category_code === "E" && blank(b.vat_exemption_reason_code) && blank(b.vat_exemption_reason_text)) {
-      add("E_EXEMPTION_REASON_MISSING", "BR-E-10", "Oslobodenie od DPH (E) vyžaduje dôvod oslobodenia.");
+      add("E_EXEMPTION_REASON_MISSING", "BR-E-10");
     }
   }
 
   // Aritmetika hlavičky (BR-CO-10 / BR-CO-15) — len kontrola, nič sa neprepočítava.
   const lineSum = s.items.reduce((acc, i) => acc.plus(toDecimal(i.line_net_amount)), new Decimal(0));
   if (!lineSum.eq(toDecimal(inv.subtotal_amount))) {
-    add("LINE_SUM_MISMATCH", "BR-CO-10", "Súčet riadkov sa nerovná základu faktúry.");
+    add("LINE_SUM_MISMATCH", "BR-CO-10");
   }
   const breakdownVat = s.taxBreakdowns.reduce((acc, b) => acc.plus(toDecimal(b.vat_amount)), new Decimal(0));
   if (!breakdownVat.eq(toDecimal(inv.vat_total_amount))) {
-    add("VAT_SUM_MISMATCH", "BR-CO-14", "Súčet DPH v rozpise sa nerovná DPH faktúry.");
+    add("VAT_SUM_MISMATCH", "BR-CO-14");
   }
   const expectedTotal = toDecimal(inv.subtotal_amount).plus(toDecimal(inv.vat_total_amount)).plus(toDecimal(inv.rounding_amount));
   if (!expectedTotal.eq(toDecimal(inv.total_amount))) {
-    add("TOTAL_MISMATCH", "BR-CO-15 / BR-CO-16", "Celková suma nesedí so základom, DPH a zaokrúhlením.");
+    add("TOTAL_MISMATCH", "BR-CO-15 / BR-CO-16");
   }
 
   if (!blank(s.seller.iban) && blank(inv.payment_means_code)) {
-    add("MISSING_PAYMENT_MEANS_CODE", "BR-49 (BT-81)", "Pri IBAN je povinný kód spôsobu úhrady (napr. prevodný príkaz) — vyberte ho v koncepte faktúry.");
+    add("MISSING_PAYMENT_MEANS_CODE", "BR-49 (BT-81)");
   }
 
   return { issues, warnings };
@@ -198,27 +246,6 @@ function netUnitPrice(item: UblItem): Decimal | null {
     ? toDecimal(item.unit_price)
     : lineNet.div(qty).toDecimalPlaces(8, Decimal.ROUND_HALF_UP);
   return qty.times(candidate).toDecimalPlaces(2, Decimal.ROUND_HALF_UP).eq(lineNet) ? candidate : null;
-}
-
-/**
- * ISO 6523 ICD pre slovenské IČO (BT-30 / BT-47 schemeID).
- * Zdroj: Peppol BIS Billing 3.0 (May 2026) — ISO 6523 ICD code list,
- * https://docs.peppol.eu/poacc/billing/3.0/codelist/ICD/ :
- * „0158 — Identification number of economic subject (ICO) … Slovak Statistical Office".
- * (0245 = SK DIČ, používa sa pre Peppol participant ID, nie pre IČO.)
- */
-export const SK_ICO_ICD_SCHEME = "0158";
-
-/**
- * schemeID pre PartyLegalEntity/CompanyID. Explicitne uložená schéma má prednosť;
- * ak chýba a ide o slovenskú stranu s 8-miestnym IČO, doplní sa 0158
- * (SK FS overlay: SK-BT-30/47-SCHEME-REQUIRED).
- */
-function legalRegistrationSchemeOf(party: UblParty): string | null {
-  if (!blank(party.legal_registration_scheme_id)) return party.legal_registration_scheme_id!.trim();
-  const id = party.legal_registration_id?.trim() ?? "";
-  if (party.country_code?.trim().toUpperCase() === "SK" && /^[0-9]{8}$/.test(id)) return SK_ICO_ICD_SCHEME;
-  return null;
 }
 
 function addParty(x: XmlBuilder, parent: Element, party: UblParty) {
@@ -242,10 +269,9 @@ function addParty(x: XmlBuilder, parent: Element, party: UblParty) {
 
   const legal = x.group(p, "cac:PartyLegalEntity");
   x.text(legal, "cbc:RegistrationName", party.legal_name.trim());
-  if (!blank(party.legal_registration_id)) {
-    const scheme = legalRegistrationSchemeOf(party);
-    const attrs = scheme ? { schemeID: scheme } : undefined;
-    x.text(legal, "cbc:CompanyID", party.legal_registration_id!.trim(), attrs);
+  const legalId = legalEntityIdOf(party);
+  if (legalId) {
+    x.text(legal, "cbc:CompanyID", legalId.id, legalId.scheme ? { schemeID: legalId.scheme } : undefined);
   }
 
   if (!blank(party.email)) {
@@ -365,7 +391,7 @@ export function generateUbl(s: UblInvoiceSnapshot): UblGenerationResult {
       return {
         ok: false,
         warnings,
-        issues: [{ code: "INVALID_XML_CHARACTER", rule: "XML 1.0", message: `Nepovolený znak v poli ${error.context} — opravte údaj.` }],
+        issues: [{ code: "INVALID_XML_CHARACTER", rule: "XML 1.0", params: { field: error.context } }],
       };
     }
     throw error;

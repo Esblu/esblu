@@ -70,9 +70,13 @@ nothing and breaks the link between the repo file and the `name` in history.
 
 ## 6. Versions for new migrations
 
-- Current highest reserved repo migration version: **`20260926110000`**.
+- Current highest reserved repo migration version: **`20261002110000`**
+  (`einvoice_en16931_fields`; the E-Faktúra migrations
+  `20261002100000_einvoice_foundation` and `20261002110000_einvoice_en16931_fields`
+  were renumbered from `20261001100000` / `20261001110000` before they were
+  ever applied, so they sort after `20261001130000_push_devices_session_binding`).
 - New repo migrations must use a unique, monotonically higher version,
-  starting at **`20260926120000`** or later.
+  starting at **`20261002120000`** or later.
 - Do not rely on `supabase migration new` for the prefix — it stamps the
   current time, which may be lower than the highest reserved version.
 

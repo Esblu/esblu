@@ -5,7 +5,7 @@
 -- Na rozdiel od m1-authz-baseline.sql tu NIE sú ručne prepísané fakturačné
 -- tabuľky: test na túto kostru aplikuje DOSLOVNE celý fakturačný reťazec
 -- migrácií z repa (20260916094000 … 20260929100000) a potom migrácie
--- E-Faktúry (20261001100000, 20261001110000). Kostra obsahuje iba to, čo
+-- E-Faktúry (20261002100000, 20261002110000). Kostra obsahuje iba to, čo
 -- Supabase / skoršie (predfakturačné) migrácie dodávajú:
 --   - roly anon / authenticated / service_role, predvolené GRANTy ako v Supabase,
 --   - auth.users, auth.uid(), auth.role() z request.jwt.claims,
@@ -13,7 +13,10 @@
 --   - companies, company_members, settings a pomocné funkcie esblu_my_*
 --     (doslovne z prod — rovnaké ako v m1-authz-baseline.sql),
 --   - minimálne stuby tabuliek iných modulov, na ktoré fakturačné migrácie
---     odkazujú v DDL (documents, document_links, ai_evidence, machine_*, …).
+--     odkazujú v DDL (documents, document_links, ai_evidence, machine_*, …),
+--   - companies.plan, plan_limits, ai_scan_limits a esblu_company_plan —
+--     predpoklady skutočnej migrácie nárokov 20260928100000, ktorú test
+--     spúšťa doslovne (trial firmy, katalóg, resolver, trigger fakturácie).
 -- Vynechaná je iba 20260920123000 (EXECUTE granty trigger funkcií iných modulov).
 -- =============================================================================
 
@@ -38,7 +41,7 @@ create table storage.buckets (id text primary key, name text not null, public bo
 create table storage.objects (id uuid primary key default gen_random_uuid(), bucket_id text, name text, owner uuid, metadata jsonb, created_at timestamptz default now());
 create function storage.foldername(name text) returns text[] language sql immutable as $f$ select string_to_array(name, '/') $f$;
 alter table storage.objects enable row level security;
-create table public.companies (id uuid primary key default gen_random_uuid(), name text not null, created_at timestamptz default now());
+create table public.companies (id uuid primary key default gen_random_uuid(), name text not null, plan text not null default 'free', created_at timestamptz default now());
 create table public.company_members (id uuid primary key default gen_random_uuid(), company_id uuid not null references public.companies(id), user_id uuid not null, role text not null, status text not null default 'active', permissions jsonb not null default '{}', created_at timestamptz default now());
 -- Pomocné funkcie (doslovne z prod) -------------------------------------------
 create or replace function public.esblu_my_active_company_id() returns uuid language sql stable security definer set search_path to '' as $f$
@@ -155,5 +158,13 @@ create table public.ai_evidence (
 create table public.machine_services (id uuid primary key default gen_random_uuid(), company_id uuid, machine_id uuid);
 create table public.machine_photos (id uuid primary key default gen_random_uuid(), company_id uuid, machine_id uuid);
 create table public.company_invites (id uuid primary key default gen_random_uuid(), company_id uuid, email text, role text, token text, status text, invited_by uuid, expires_at timestamptz, accepted_at timestamptz, created_at timestamptz default now());
-create table public.company_entitlements (id uuid primary key default gen_random_uuid(), company_id uuid, entitlement_key text, value jsonb, source text, starts_at timestamptz, ends_at timestamptz, created_at timestamptz default now());
+-- Nároky (company_entitlements, entitlement_catalog, resolver, trigger fakturácie)
+-- vytvára SKUTOČNÁ migrácia 20260928100000 v reťazci testu. Tu iba objekty,
+-- ktoré táto migrácia predpokladá zo starších (predfakturačných) migrácií.
+create table public.plan_limits (plan text primary key, vehicles integer, machines integer, inventory_items integer);
+insert into public.plan_limits (plan, vehicles, machines, inventory_items) values ('free', 2, 2, 5), ('pro', null, null, null);
+create table public.ai_scan_limits (endpoint text primary key, max_per_hour integer, max_per_day integer);
+create or replace function public.esblu_company_plan(p_company_id uuid) returns text language sql stable security definer set search_path to '' as $f$
+  select c.plan from public.companies c where c.id = p_company_id;
+$f$;
 create table public.beta_allowlist (email text primary key);

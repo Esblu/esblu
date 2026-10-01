@@ -32,6 +32,11 @@ export type BusinessPartner = {
   country_code: string | null;
   email: string | null;
   phone: string | null;
+  /**
+   * @deprecated LEGACY voľný text (pred EN16931 P1). Nie je zdrojom pravdy pre
+   * e-faktúru — E-Faktúra (lib/einvoice/**) používa výhradne
+   * electronic_address + electronic_address_scheme_id. Nové flow ho nečítajú.
+   */
   peppol_identifier: string | null;
   default_payment_terms_days: number | null;
   default_currency: string | null;

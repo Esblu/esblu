@@ -171,6 +171,11 @@ export type InvoiceParty = {
   iban: string | null;
   bic: string | null;
   email: string | null;
+  /**
+   * @deprecated LEGACY voľný text (pred EN16931 P1). Nie je zdrojom pravdy pre
+   * e-faktúru — E-Faktúra (lib/einvoice/**) používa výhradne
+   * electronic_address + electronic_address_scheme_id. Nové flow ho nečítajú.
+   */
   peppol_identifier: string | null;
   // EN16931 P1 identifikátory zo snapshotu (migrácia 20260920122000).
   // Sú súčasťou IMMUTABLE snapshotu — nikdy sa nečítajú z live
@@ -306,7 +311,7 @@ export type DraftInvoiceHeaderInput = {
   variable_symbol: string | null;
   payment_terms_days: number | null;
   corrects_invoice_id: string | null;
-  /** EN16931 BT-72 (dátum dodania). Zapisuje esblu_save_invoice_draft (20261001110000). */
+  /** EN16931 BT-72 (dátum dodania). Zapisuje esblu_save_invoice_draft (20261002110000). */
   delivery_date?: string | null;
   /** EN16931 BT-10. */
   buyer_reference?: string | null;

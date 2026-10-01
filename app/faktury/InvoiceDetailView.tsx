@@ -78,13 +78,14 @@ import { getCompanyBillingProfile } from "@/lib/company-billing-profile";
 import { todayLocalDate } from "@/lib/local-date";
 import { apiUrl } from "@/lib/api-url";
 import { REQUEST_LOCALE_HEADER } from "@/lib/i18n/request-locale";
+import { hasTranslation, translate } from "@/lib/i18n/translate";
 import { downloadBlob } from "@/lib/file-actions";
 import { invoiceDetailHref } from "@/lib/entity-links";
 import { creditedTotals, isFullyCredited, remainingAfterCredits, signedAmount } from "@/lib/invoicing/credit-note-semantics";
 import { navigateHard } from "@/lib/app-navigation";
 import { confirmAction, notify } from "@/app/components/ui/AppDialog";
 
-// K/G/O (EN16931 / Peppol) pribudli v 20261001110000 — finalizácia ich počíta ako 0 %.
+// K/G/O (EN16931 / Peppol) pribudli v 20261002110000 — finalizácia ich počíta ako 0 %.
 const VAT_CATEGORIES: VatCategoryCode[] = ["S", "Z", "E", "AE", "K", "G", "O"];
 // UNTDID 4461 — spôsob úhrady (BT-81). Esblu kód nikdy nedopĺňa samo.
 const PAYMENT_MEANS_CODES = ["30", "58", "10", "48", "49", "59"] as const;
@@ -652,10 +653,16 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
           const data = await response.json();
           if (data?.error) message = data.error;
           if (Array.isArray(data?.issues)) {
+            // Server posiela iba kódy (code / rule / params) — preklad tu.
             setUblIssues(
-              (data.issues as { message?: string; rule?: string }[]).map((issue) =>
-                issue.rule ? `${issue.message ?? ""} (${issue.rule})` : issue.message ?? ""
-              )
+              (data.issues as { code?: string; rule?: string; params?: Record<string, string | number> }[]).map((issue) => {
+                const key = `invoices.einvoice.issues.${issue.code ?? ""}`;
+                const text =
+                  issue.code && hasTranslation(locale, key)
+                    ? translate(locale, key, issue.params)
+                    : t("invoices.einvoice.issueUnknown", { code: issue.code ?? "?" });
+                return issue.rule ? `${text} (${issue.rule})` : text;
+              })
             );
           }
         } catch {

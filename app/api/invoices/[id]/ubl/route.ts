@@ -1,5 +1,7 @@
-import { createClient } from "@supabase/supabase-js";
+import "server-only";
+
 import { verifyRequestUser } from "@/lib/server-auth";
+import { getUserScopedSupabaseClient } from "@/lib/server-supabase-user-client";
 import { getRequestLocale } from "@/lib/i18n/request-locale";
 import { translate } from "@/lib/i18n/translate";
 import { loadFinalizedIssuedInvoiceSnapshot } from "@/lib/einvoice/load-finalized-invoice";
@@ -9,11 +11,13 @@ import { buildIssuedInvoiceUblExport } from "@/lib/einvoice/export";
 // GET /api/invoices/[id]/ubl — export UBL 2.1 (Peppol BIS Billing 3.0) XML
 // finalizovanej vydanej faktúry. Nezávislé od poskytovateľa, nič neposiela.
 //
-// Autorizácia rovnaká ako PDF route: user-scoped klient (RLS) + explicitná
-// kontrola aktívnej firmy a finance.view. Employee / admin bez financií /
-// cudzia firma → odmietnuté. XML sa generuje on-demand zo serverom
-// načítaného nemenného snapshotu, nikde sa neukladá, necachuje sa.
-// Pri chýbajúcich údajoch vráti 422 so zoznamom problémov — nič neopravuje.
+// Autorizácia: overený Bearer JWT (verifyRequestUser) + user-scoped klient
+// (getUserScopedSupabaseClient — RLS) + explicitná kontrola aktívnej firmy a
+// finance.view. Employee / admin bez financií / cudzia firma → odmietnuté.
+// Žiadny service_role. XML sa generuje on-demand zo serverom načítaného
+// nemenného snapshotu, nikde sa neukladá, necachuje sa.
+// Pri chýbajúcich údajoch vráti 422 so strojovo čitateľnými kódmi
+// (code / rule / params) — preklad robí klient, server nič neopravuje.
 // =============================================================================
 
 export const runtime = "nodejs";
@@ -24,6 +28,11 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 function json(status: number, body: Record<string, unknown>): Response {
   return Response.json(body, { status, headers: { "Cache-Control": "private, no-store" } });
+}
+
+function bearerToken(req: Request): string {
+  const authorization = req.headers.get("authorization") || "";
+  return authorization.startsWith("Bearer ") ? authorization.slice("Bearer ".length).trim() : "";
 }
 
 export async function GET(req: Request, context: RouteContext) {
@@ -39,22 +48,13 @@ export async function GET(req: Request, context: RouteContext) {
     return json(404, { error: translate(locale, "invoices.errors.pdfNotFound") });
   }
 
-  const authorization = req.headers.get("authorization");
-  const accessToken = authorization?.startsWith("Bearer ") ? authorization.slice("Bearer ".length).trim() : "";
+  const accessToken = bearerToken(req);
   if (!accessToken) return json(401, { error: translate(locale, "invoices.errors.pdfNotAuthenticated") });
 
   const { user, error: authError } = await verifyRequestUser(req, locale);
   if (authError || !user) return json(401, { error: translate(locale, "invoices.errors.pdfNotAuthenticated") });
 
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  if (!supabaseUrl || !supabaseAnonKey) {
-    return json(500, { error: translate(locale, "invoices.errors.ublGenerationFailed") });
-  }
-  const userClient = createClient(supabaseUrl, supabaseAnonKey, {
-    auth: { autoRefreshToken: false, persistSession: false },
-    global: { headers: { Authorization: `Bearer ${accessToken}` } },
-  });
+  const userClient = getUserScopedSupabaseClient(accessToken);
 
   const { data: activeCompanyId, error: companyError } = await userClient.rpc("esblu_my_active_company_id");
   if (companyError) return json(500, { error: translate(locale, "invoices.errors.ublGenerationFailed") });
@@ -82,8 +82,8 @@ export async function GET(req: Request, context: RouteContext) {
   if (!exported.ok) {
     return json(422, {
       error: translate(locale, "invoices.errors.ublNotReady"),
-      issues: exported.issues.map((i) => ({ code: i.code, rule: i.rule, message: i.message })),
-      warnings: exported.warnings.map((w) => ({ code: w.code, rule: w.rule, message: w.message })),
+      issues: exported.issues,
+      warnings: exported.warnings,
     });
   }
 

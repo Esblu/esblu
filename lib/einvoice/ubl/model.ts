@@ -90,17 +90,24 @@ export type UblInvoiceSnapshot = {
   correctedInvoice: UblCorrectedInvoice | null;
 };
 
-/** Problém, pre ktorý sa UBL NEVYGENERUJE (fail-closed). */
+/**
+ * Problém, pre ktorý sa UBL NEVYGENERUJE (fail-closed).
+ *
+ * Strojovo čitateľné: `code` (stabilný kód → i18n `einvoice.issues.<code>`),
+ * `rule` (EN16931 / Peppol / SK pravidlo alebo BT — technická referencia,
+ * neprekladá sa) a voliteľné `params` (napr. číslo položky). Server nikdy
+ * neposiela hotový text v konkrétnom jazyku — preklad robí klient.
+ */
 export type UblIssue = {
   code: string;
   /** EN16931 / Peppol pravidlo alebo BT, ktorého sa týka. */
   rule: string;
-  message: string;
+  params?: Record<string, string | number>;
 };
 
 /**
  * Upozornenie, ktoré UBL NEBLOKUJE — typicky SK FS nadstavba (SK-BT-*), ktorej
  * presné znenie verejne nepoznáme. Autoritatívne ju overí preflight
- * poskytovateľa (TODO: po získaní sandbox kľúča / OpenAPI).
+ * poskytovateľa.
  */
 export type UblWarning = UblIssue;

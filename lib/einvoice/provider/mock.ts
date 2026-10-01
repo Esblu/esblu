@@ -14,6 +14,7 @@ import {
   type SendResult,
   type SendUblInput,
 } from "./types.ts";
+import { sanitizeDeliveryEvidence } from "../evidence.ts";
 
 // =============================================================================
 // MockEinvoiceProvider — iba pre testy a lokálny vývoj. Žiadna sieť, žiadne
@@ -126,7 +127,13 @@ export class MockEinvoiceProvider implements EinvoiceProvider {
     this.calls.push("getDeliveryEvidence");
     const s = this.findSubmission(ctx, submission.providerSubmissionId);
     if (s.state !== "delivered") return null;
-    return { documentId: `doc_${s.submissionId}`, ublSha256: s.sha256, deliveredAt: "2026-01-01T00:00:00Z", raw: { mock: true } };
+    const record = sanitizeDeliveryEvidence({
+      invoice_id: s.submissionId,
+      document_id: `doc_${s.submissionId}`,
+      ubl_sha256: s.sha256,
+      delivery_status: { state: "delivered", at: "2026-01-01T00:00:00Z" },
+    });
+    return { documentId: record.document_id, ublSha256: record.ubl_sha256, deliveredAt: record.delivered_at, record };
   }
 
   /** Testovací pomocník: vloží prijatý doklad pre organizáciu. */

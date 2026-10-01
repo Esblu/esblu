@@ -1,3 +1,5 @@
+import "server-only";
+
 import { EfakturaSkProvider } from "./efaktura-sk.ts";
 import { assertServerOnly, type EinvoiceEnvironment, type EinvoiceProvider } from "./types.ts";
 

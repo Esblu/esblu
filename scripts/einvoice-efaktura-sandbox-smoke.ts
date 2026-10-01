@@ -14,7 +14,7 @@
 //
 // Použitie (PowerShell, z koreňa repa):
 //   node --env-file=C:\cesta\mimo\repa\efaktura-sandbox.env `
-//     --experimental-strip-types --no-warnings `
+//     --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs `
 //     scripts/einvoice-efaktura-sandbox-smoke.ts --confirm-sandbox --step=org
 //
 // Kroky (--step=): org | ubl (offline) | recipient | preflight | send (vyžaduje aj --allow-send)

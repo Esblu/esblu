@@ -1,6 +1,8 @@
 -- =============================================================================
 -- E-Faktúra — doplnenie EN16931 / Peppol polí do existujúceho modelu (Phase B).
 -- NEAPLIKOVANÉ. Iba lokálne / testovací branch. Nikdy `supabase db push`.
+-- Pôvodne 20261001110000; prečíslované za 20261002100000_einvoice_foundation
+-- (audit 2026-10-01). Obsah bez zmeny.
 --
 -- Čo sa mení:
 --   1. Kategórie DPH K (intrakomunitárne dodanie), G (vývoz mimo EÚ) a

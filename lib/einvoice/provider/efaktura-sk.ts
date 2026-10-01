@@ -1,3 +1,5 @@
+import "server-only";
+
 import { createHash } from "node:crypto";
 import {
   EinvoiceProviderError,
@@ -18,6 +20,7 @@ import {
   type SendUblInput,
 } from "./types.ts";
 import { MAX_INBOUND_XML_BYTES } from "../ubl/parse.ts";
+import { sanitizeDeliveryEvidence } from "../evidence.ts";
 
 // =============================================================================
 // eFaktura.sk Agent API — adaptér (Connector cesta, vlastný UBL). SERVER-ONLY.
@@ -481,13 +484,13 @@ export class EfakturaSkProvider implements EinvoiceProvider {
       if (error instanceof EinvoiceProviderError && error.code === "EINVOICE_PROVIDER_NOT_FOUND") return null;
       throw error;
     }
-    const delivery = obj(body.delivery_status);
-    const ubl = str(body.ubl_sha256);
+    // Allowlist — neznáme polia (layers, hlavičky, surové telá…) sa zahodia.
+    const record = sanitizeDeliveryEvidence(body);
     return {
-      documentId: str(body.document_id),
-      ublSha256: ubl && /^[0-9a-f]{64}$/i.test(ubl) ? ubl.toLowerCase() : null,
-      deliveredAt: delivery?.state === "delivered" ? str(delivery.at) : null,
-      raw: body,
+      documentId: record.document_id,
+      ublSha256: record.ubl_sha256,
+      deliveredAt: record.delivered_at,
+      record,
     };
   }
 

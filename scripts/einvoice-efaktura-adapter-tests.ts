@@ -18,6 +18,8 @@ import {
 } from "../lib/einvoice/provider/efaktura-sk.ts";
 import { getEinvoiceProvider } from "../lib/einvoice/provider/index.ts";
 import { EinvoiceProviderError } from "../lib/einvoice/provider/types.ts";
+import { EVIDENCE_TOP_LEVEL_KEYS, sanitizeDeliveryEvidence } from "../lib/einvoice/evidence.ts";
+import { readFileSync } from "node:fs";
 
 let passed = 0;
 let failed = 0;
@@ -299,6 +301,62 @@ await check("kľúč sa neprezradí serializáciou ani inšpekciou objektu", asy
   const { inspect } = await import("node:util");
   assert.doesNotMatch(inspect(p, { depth: 5, showHidden: true }), /efk_pk_test_0{8}/);
   assert.deepEqual(Object.keys(p), ["name"]);
+});
+
+await check("evidence allowlist: neznáme polia, hlavičky, tokeny ani surové telá sa NEUKLADAJÚ", async () => {
+  const hostile = {
+    data: {
+      invoice_id: INV,
+      document_id: "m@ap",
+      ubl_sha256: "CD".repeat(32),
+      delivery_status: { state: "delivered", at: "2026-09-30T10:00:05Z", internal_note: "x" },
+      layers: { as4: { raw: "<soap:Envelope>…</soap:Envelope>" } },
+      headers: { authorization: "Bearer secret-token", "x-api-key": FAKE_KEY },
+      raw_request: "POST /v1/…", raw_response: "{…}", token: "whsec_abcdef", customer_email: "person@example.test",
+      transactions: [
+        { message_id: "as4-msg-1", status: "DELIVERED", at: "2026-09-30T10:00:04Z", receiver_participant_id: "9915:2040000000",
+          sender_participant_id: "9915:2020000000", payload_base64: "PD94bWwg", signature: "abc", headers: { a: "b" } },
+        { garbage: true },
+        "not-an-object",
+      ],
+    },
+  };
+  const f = fake([(r) => (is("GET", `/v1/agent/peppol/sent/${INV}/evidence`)(r) ? { json: hostile } : undefined)]);
+  const ev = await provider(f.impl).getDeliveryEvidence(ctx, { providerSubmissionId: INV });
+  assert.ok(ev);
+  assert.equal("raw" in (ev as object), false, "žiadne raw pole");
+  assert.deepEqual(Object.keys(ev!.record).sort(), [...EVIDENCE_TOP_LEVEL_KEYS].sort());
+  assert.deepEqual(ev!.record, {
+    schema: "esblu.einvoice.evidence.v1",
+    provider_invoice_id: INV,
+    document_id: "m@ap",
+    ubl_sha256: "cd".repeat(32),
+    delivery_state: "delivered",
+    delivered_at: "2026-09-30T10:00:05.000Z",
+    transactions: [{ message_id: "as4-msg-1", status: "delivered", at: "2026-09-30T10:00:04.000Z",
+      sender_participant_id: "9915:2020000000", receiver_participant_id: "9915:2040000000" }],
+  });
+  const serialized = JSON.stringify(ev);
+  for (const forbidden of ["secret-token", FAKE_KEY, "whsec_", "Envelope", "person@example.test", "PD94bWwg", "raw_request", "internal_note"]) {
+    assert.equal(serialized.includes(forbidden), false, forbidden);
+  }
+});
+
+await check("evidence allowlist: zrkadlí DB CHECK (rovnaké kľúče v migrácii), neplatné hodnoty → null", () => {
+  const migration = readFileSync(new URL("../supabase/migrations/20261002100000_einvoice_foundation.sql", import.meta.url), "utf8");
+  const m = /evidence - array\[([^\]]+)\]/.exec(migration);
+  assert.ok(m, "CHECK na evidence v migrácii");
+  const dbKeys = [...m![1].matchAll(/'([a-z0-9_]+)'/g)].map((x) => x[1]).sort();
+  assert.deepEqual(dbKeys, [...EVIDENCE_TOP_LEVEL_KEYS].sort());
+  const bad = sanitizeDeliveryEvidence({ invoice_id: "../../etc", document_id: "x".repeat(500), ubl_sha256: "nothex",
+    delivery_status: { state: "DELIVERED; DROP", at: "včera" }, transactions: new Array(50).fill({ message_id: "ok-1" }) });
+  assert.equal(bad.provider_invoice_id, null);
+  assert.equal(bad.document_id, null);
+  assert.equal(bad.ubl_sha256, null);
+  assert.equal(bad.delivery_state, null);
+  assert.equal(bad.delivered_at, null);
+  assert.equal(bad.transactions.length, 10);
+  assert.deepEqual(sanitizeDeliveryEvidence(null).transactions, []);
 });
 
 console.log(`\neinvoice-efaktura-adapter: ${passed} passed, ${failed} failed`);

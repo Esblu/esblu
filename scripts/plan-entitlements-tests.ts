@@ -478,5 +478,43 @@ await check("migration: every SECURITY DEFINER function pins search_path and rev
   }
 });
 
+// ============================================================ 7. eFaktúra (20261002100000)
+const EINVOICE_MIGRATION = read("supabase/migrations/20261002100000_einvoice_foundation.sql");
+const EINVOICE_CODE = EINVOICE_MIGRATION.split("\n").filter((l) => !l.trimStart().startsWith("--")).join("\n");
+
+await check("einvoice: samostatný platený modul — v katalógu mimo trialu, v ENTITLEMENT_KEYS, s prekladom", () => {
+  assert.match(EINVOICE_CODE, /values \('einvoice', 'module', false, null, null, \d+\)/);
+  assert.ok((E.ENTITLEMENT_KEYS as readonly string[]).includes("einvoice"));
+  for (const locale of ["sk", "en", "de"] as const) {
+    assert.notEqual(translate(locale, "entitlements.modules.einvoice"), "entitlements.modules.einvoice", locale);
+  }
+  // Snapshot bez einvoice v odpovedi = neaktívny (fail closed), trial ho nezapína.
+  const trial = snapshot({ invoicing: { source: "trial" } }, true);
+  assert.equal(E.hasEntitlement(trial, "einvoice"), false);
+  assert.equal(E.hasEntitlement(snapshot({ einvoice: { source: "subscription" } }), "einvoice"), true);
+});
+
+await check("einvoice: vznik/finalizácia faktúry = invoicing ALEBO einvoice, bez duplicitnej logiky resolvera", () => {
+  assert.match(EINVOICE_CODE, /create or replace function public\.esblu_require_invoice_creation_entitlement/);
+  assert.match(EINVOICE_CODE, /esblu_resolve_entitlement\(p_company_id, 'invoicing'\)/);
+  assert.match(EINVOICE_CODE, /esblu_resolve_entitlement\(p_company_id, 'einvoice'\)/);
+  assert.match(EINVOICE_CODE, /perform public\.esblu_require_entitlement_capacity\(p_company_id, 'invoicing', null\)/);
+  // Trigger ostáva ten istý; iba volá helper.
+  assert.match(EINVOICE_CODE, /create or replace function public\.esblu_enforce_invoicing_entitlement\(\)/);
+  assert.doesNotMatch(EINVOICE_CODE, /create trigger esblu_invoicing_entitlement_guard/);
+  assert.doesNotMatch(EINVOICE_CODE, /from public\.company_entitlements/);
+});
+
+await check("einvoice: nárok neblokuje čítanie (RLS politiky einvoice_* bez kontroly nároku), nič sa nemaže", () => {
+  const policies = [...EINVOICE_CODE.matchAll(/create policy [\s\S]*?;/g)].map((m) => m[0]);
+  assert.ok(policies.length >= 5);
+  for (const p of policies) {
+    assert.match(p, /for select/);
+    assert.doesNotMatch(p, /entitlement/);
+  }
+  assert.doesNotMatch(EINVOICE_CODE, /\bdelete from public\.(invoices|einvoice_|company_entitlements)/);
+  assert.doesNotMatch(EINVOICE_CODE, /^\s*truncate\s/im);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

@@ -23,7 +23,7 @@ import {
   type VatCategoryCode,
 } from "@/lib/invoicing/vat-engine";
 // Príjem prijatej faktúry (esblu_create_received_invoice_draft) zatiaľ
-// podporuje iba S/Z/E/AE — K/G/O sú iba pre vydané faktúry (20261001110000).
+// podporuje iba S/Z/E/AE — K/G/O sú iba pre vydané faktúry (20261002110000).
 import { RECEIVED_VAT_CATEGORY_CODES } from "@/lib/invoicing/vat-categories";
 import {
   compareCandidateTotals,

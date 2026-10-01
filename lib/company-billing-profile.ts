@@ -31,7 +31,7 @@ export type CompanyBillingProfile = {
   default_vat_rate: number | null;
   invoice_numbering_prefix: string | null;
   logo_path: string | null;
-  // EN16931 / Peppol (20260920122000 + 20261001110000). Scheme ID sa
+  // EN16931 / Peppol (20260920122000 + 20261002110000). Scheme ID sa
   // NIKDY nedopĺňa automaticky — zadáva ho používateľ podľa poskytovateľa.
   electronic_address: string | null;
   electronic_address_scheme_id: string | null;

@@ -7,6 +7,8 @@
 // einvoice_organizations podľa overenej aktívnej firmy — nikdy klient.
 // =============================================================================
 
+import type { EinvoiceEvidenceRecord } from "../evidence.ts";
+
 export type EinvoiceEnvironment = "sandbox" | "live";
 
 /** Neutrálny stav pokusu o doručenie (zhodný s einvoice_outbound.state). */
@@ -82,8 +84,12 @@ export type DeliveryEvidence = {
   documentId: string | null;
   ublSha256: string | null;
   deliveredAt: string | null;
-  /** Surové dáta dôkazu (bez tajomstiev) na uloženie do einvoice_outbound.evidence. */
-  raw: Record<string, unknown>;
+  /**
+   * JEDINÉ, čo sa smie uložiť do einvoice_outbound.evidence — allowlistovaný
+   * záznam (lib/einvoice/evidence.ts). Surová odpoveď poskytovateľa sa nikdy
+   * neukladá ani nevracia.
+   */
+  record: EinvoiceEvidenceRecord;
 };
 
 export type InboundSummary = {

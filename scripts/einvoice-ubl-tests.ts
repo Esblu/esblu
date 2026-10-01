@@ -11,6 +11,10 @@
 
 import assert from "node:assert/strict";
 import { createHash, createHmac } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { hasTranslation } from "../lib/i18n/translate.ts";
+import { evaluateEinvoiceReadiness } from "../lib/einvoice/readiness.ts";
+import { buildProvisionalSnapshot } from "../lib/einvoice/provisional-snapshot.ts";
 import { DOMParser } from "@xmldom/xmldom";
 import { generateUbl, checkUblPreconditions, PEPPOL_BIS3_CUSTOMIZATION_ID, PEPPOL_BIS3_PROFILE_ID } from "../lib/einvoice/ubl/generate.ts";
 import { parseInboundUbl, MAX_INBOUND_XML_BYTES } from "../lib/einvoice/ubl/parse.ts";
@@ -49,13 +53,13 @@ const seller = (over: Partial<UblParty> = {}): UblParty => ({
   address_line1: "Testovacia 1", address_line2: null, city: "Bratislava", postal_code: "81101", country_code: "SK",
   iban: "SK3112000000198742637541", bic: "TESTSKBX", email: "fakturacia@example.test",
   electronic_address: "2020000000", electronic_address_scheme_id: "9950",
-  legal_registration_id: "11111111", legal_registration_scheme_id: "0000", vat_identifier: null, ...over,
+  legal_registration_id: "11111111", legal_registration_scheme_id: null, vat_identifier: null, ...over,
 });
 const buyer = (over: Partial<UblParty> = {}): UblParty => ({
   role: "buyer", legal_name: "Odberateľ s.r.o.", ico: "33333333", dic: "2040000000", ic_dph: "SK2040000000",
   address_line1: "Príkladná 3", address_line2: null, city: "Žilina", postal_code: "01001", country_code: "SK",
   iban: null, bic: null, email: null, electronic_address: "2040000000", electronic_address_scheme_id: "9950",
-  legal_registration_id: "33333333", legal_registration_scheme_id: "0000", vat_identifier: null, ...over,
+  legal_registration_id: "33333333", legal_registration_scheme_id: null, vat_identifier: null, ...over,
 });
 const item = (over: Partial<UblItem> = {}): UblItem => ({
   position: 1, description: "Práca", quantity: 2, unit_code: "HUR", unit_price: 50, price_mode: "net",
@@ -340,11 +344,11 @@ await check("cena s DPH (gross): čistá jednotková cena sa odvodí zo sumy ria
   assert.deepEqual(all(r.xml, NS.cbc, "PriceAmount"), ["50", "10"]);
 });
 
-await check("SK nadstavba: neúplná adresa / chýbajúce BT-30 je iba upozornenie (TODO), nie blokácia", () => {
+await check("SK nadstavba: neúplná adresa je iba upozornenie; chýbajúci legal_registration_id pri SK IČO nevadí (BT-47 = IČO zo snapshotu)", () => {
   const s = vatPayerSnapshot();
   s.buyer = buyer({ address_line1: null, legal_registration_id: null, legal_registration_scheme_id: null });
   const r = ok(s);
-  assert.deepEqual(r.warnings.map((w) => w.code).sort(), ["SK_BUYER_ADDRESS_INCOMPLETE", "SK_BUYER_LEGAL_ID_MISSING"]);
+  assert.deepEqual(r.warnings.map((w) => w.code).sort(), ["SK_BUYER_ADDRESS_INCOMPLETE"]);
   assert.deepEqual(checkUblPreconditions(s).issues, []);
 });
 
@@ -572,26 +576,109 @@ await check("mock: cudzia organizácia nevidí podanie ani prijaté doklady (org
   assert.equal((await p.listUnacknowledgedInbound(ctxA)).length, 0);
 });
 
-await check("BT-30/BT-47: SK IČO bez schémy → schemeID 0158; explicitná schéma sa zachová; mimo SK sa nedopĺňa", () => {
-  const legalSchemes = (xml: string): Array<string | null> => {
-    const list = dom(xml).getElementsByTagNameNS(NS.cac, "PartyLegalEntity");
-    const out: Array<string | null> = [];
-    for (let i = 0; i < list.length; i++) {
-      const id = list[i].getElementsByTagNameNS(NS.cbc, "CompanyID")[0];
-      out.push(id ? id.getAttribute("schemeID") || null : null);
-    }
-    return out;
-  };
+const legalEntities = (xml: string): Array<{ id: string | null; scheme: string | null }> => {
+  const list = dom(xml).getElementsByTagNameNS(NS.cac, "PartyLegalEntity");
+  const out: Array<{ id: string | null; scheme: string | null }> = [];
+  for (let i = 0; i < list.length; i++) {
+    const id = list[i].getElementsByTagNameNS(NS.cbc, "CompanyID")[0];
+    out.push({ id: id ? id.textContent : null, scheme: id ? id.getAttribute("schemeID") || null : null });
+  }
+  return out;
+};
+
+await check("BT-30/BT-47: SK strana → CompanyID = IČO zo snapshotu, schemeID 0158 (vždy); mimo SK iba explicitné údaje", () => {
   const s = vatPayerSnapshot();
-  s.seller = seller({ legal_registration_scheme_id: null });
-  s.buyer = buyer({ legal_registration_scheme_id: "" });
-  assert.deepEqual(legalSchemes(ok(s).xml), ["0158", "0158"]);
+  s.seller = seller({ legal_registration_id: null, legal_registration_scheme_id: null });
+  s.buyer = buyer({ legal_registration_id: "", legal_registration_scheme_id: "" });
+  assert.deepEqual(legalEntities(ok(s).xml), [{ id: "11111111", scheme: "0158" }, { id: "33333333", scheme: "0158" }]);
+  // explicitná schéma 0158 a zhodné registračné číslo sú v poriadku
   const explicit = vatPayerSnapshot();
-  explicit.seller = seller({ legal_registration_scheme_id: "0245" });
-  assert.deepEqual(legalSchemes(ok(explicit).xml), ["0245", "0000"]);
+  explicit.seller = seller({ legal_registration_id: "11 111 111", legal_registration_scheme_id: "0158" });
+  assert.deepEqual(legalEntities(ok(explicit).xml)[0], { id: "11111111", scheme: "0158" });
+  // zahraničný kupujúci: nič sa nedopĺňa ani nehádá
   const foreign = vatPayerSnapshot();
-  foreign.buyer = buyer({ country_code: "CZ", legal_registration_scheme_id: null });
-  assert.deepEqual(legalSchemes(ok(foreign).xml), ["0000", null]);
+  foreign.buyer = buyer({ country_code: "CZ", ico: null, legal_registration_id: "CZ-REG-1", legal_registration_scheme_id: null });
+  assert.deepEqual(legalEntities(ok(foreign).xml), [{ id: "11111111", scheme: "0158" }, { id: "CZ-REG-1", scheme: null }]);
+  const foreignNone = vatPayerSnapshot();
+  foreignNone.buyer = buyer({ country_code: "CZ", ico: null, legal_registration_id: null });
+  assert.deepEqual(legalEntities(ok(foreignNone).xml)[1], { id: null, scheme: null });
+});
+
+await check("BT-30/BT-47: chýbajúce alebo neplatné SK IČO = TVRDÝ BLOK (nie upozornenie), pre dodávateľa aj odberateľa", () => {
+  for (const ico of [null, "", "1234567", "123456789", "ABCDEFGH"]) {
+    const s = vatPayerSnapshot();
+    s.seller = seller({ ico, legal_registration_id: null });
+    const r = generateUbl(s);
+    assert.equal(r.ok, false, String(ico));
+    if (!r.ok) assert.ok(r.issues.some((i) => i.code === "SELLER_MISSING_ICO"), String(ico));
+    assert.ok(!r.warnings.some((w) => w.code.includes("ICO")), "nesmie byť iba upozornenie");
+  }
+  const b = vatPayerSnapshot();
+  b.buyer = buyer({ ico: null, legal_registration_id: null });
+  const rb = generateUbl(b);
+  assert.equal(rb.ok, false);
+  if (!rb.ok) assert.deepEqual(rb.issues.map((i) => i.code), ["BUYER_MISSING_ICO"]);
+  // IČO sa NEdoplní z legal_registration_id ani nevyplní nulami
+  const guessed = vatPayerSnapshot();
+  guessed.buyer = buyer({ ico: null, legal_registration_id: "33333333" });
+  assert.equal(generateUbl(guessed).ok, false);
+});
+
+await check("BT-30/BT-47: konflikt IČO vs. registračné číslo alebo iná schéma ako 0158 = blok (nič sa potichu neprepíše)", () => {
+  const mismatch = vatPayerSnapshot();
+  mismatch.buyer = buyer({ legal_registration_id: "99999999" });
+  const r1 = generateUbl(mismatch);
+  assert.equal(r1.ok, false);
+  if (!r1.ok) assert.deepEqual(r1.issues.map((i) => i.code), ["BUYER_LEGAL_ID_ICO_MISMATCH"]);
+  const scheme = vatPayerSnapshot();
+  scheme.seller = seller({ legal_registration_scheme_id: "0245" });
+  const r2 = generateUbl(scheme);
+  assert.equal(r2.ok, false);
+  if (!r2.ok) assert.deepEqual(r2.issues, [{ code: "SELLER_LEGAL_SCHEME_CONFLICT", rule: "SK-BT-30 (BT-30, schemeID 0158)", params: { scheme: "0245" } }]);
+});
+
+await check("BT-47 po finalizácii: UBL sa riadi IBA snapshotom faktúry (invoice_parties), nie aktuálnym partnerom", () => {
+  // Generátor nemá prístup k business_partners — vstup je výlučne snapshot.
+  const before = ok(vatPayerSnapshot());
+  const snap = vatPayerSnapshot();
+  const after = ok(snap);
+  assert.equal(before.sha256, after.sha256);
+  assert.ok(!/business_partners|peppol_identifier/.test(readFileSync(new URL("../lib/einvoice/ubl/generate.ts", import.meta.url), "utf8")));
+});
+
+await check("výsledok kontroly je strojovo čitateľný: iba code / rule / params, žiadny hotový text", () => {
+  const s = vatPayerSnapshot();
+  s.invoice = { ...s.invoice, invoice_number: null, buyer_reference: null, purchase_order_reference: null };
+  s.items = [item({ unit_code: null }), s.items[1]];
+  const { issues } = checkUblPreconditions(s);
+  assert.ok(issues.length >= 3);
+  for (const issue of issues) {
+    assert.deepEqual(Object.keys(issue).filter((k) => !["code", "rule", "params"].includes(k)), [], issue.code);
+    assert.match(issue.code, /^[A-Z0-9_]+$/);
+  }
+  assert.deepEqual(issues.find((i) => i.code === "LINE_MISSING_UNIT_CODE")?.params, { position: 1 });
+});
+
+await check("i18n: každý kód z generátora a readiness má preklad v sk / en / de", () => {
+  const sources = ["../lib/einvoice/ubl/generate.ts", "../lib/einvoice/readiness.ts"]
+    .map((f) => readFileSync(new URL(f, import.meta.url), "utf8"))
+    .join("\n");
+  const codes = new Set<string>();
+  for (const m of sources.matchAll(/(?:add|warn)\(\s*[`"]([A-Z0-9_${}]+)[`"]/g)) codes.add(m[1]);
+  for (const m of sources.matchAll(/code: "([A-Z0-9_]+)"/g)) codes.add(m[1]);
+  const expanded = new Set<string>();
+  for (const code of codes) {
+    if (code.includes("${P}")) {
+      expanded.add(code.replace("${P}", "SELLER"));
+      expanded.add(code.replace("${P}", "BUYER"));
+    } else expanded.add(code);
+  }
+  assert.ok(expanded.size >= 40, `nájdených kódov: ${expanded.size}`);
+  for (const locale of ["sk", "en", "de"] as const) {
+    for (const code of expanded) {
+      assert.ok(hasTranslation(locale, `invoices.einvoice.issues.${code}`), `${locale}: ${code}`);
+    }
+  }
 });
 
 // =============================================================================
@@ -679,6 +766,103 @@ await check("tajomstvá nie sú v NEXT_PUBLIC_* ani v klientských súboroch", a
   }
   const detail = readFileSync(path.join(root, "app/faktury/InvoiceDetailView.tsx"), "utf8");
   assert.doesNotMatch(detail, /lib\/einvoice\/provider/);
+});
+
+// =============================================================================
+// Readiness (pred finalizáciou / pred odoslaním) — čistá funkcia
+// =============================================================================
+const ORG_OK = { participantId: "9950:2020000000", peppolEligible: true };
+const READY_ALL = { financeManage: true, einvoiceEntitlement: true, providerConfigured: true, organization: ORG_OK };
+const rcodes = (r: ReturnType<typeof evaluateEinvoiceReadiness>) => r.issues.map((i) => i.code);
+
+await check("readiness: kompletná finalizovaná faktúra + oprávnenie + nárok + organizácia → ready", () => {
+  const r = evaluateEinvoiceReadiness({ ...READY_ALL, mode: "pre_send", snapshot: vatPayerSnapshot() });
+  assert.equal(r.ready, true, JSON.stringify(r.issues));
+  assert.deepEqual(r.issues, []);
+});
+
+await check("readiness: chýbajúci nárok einvoice a finance.manage blokujú (aj keď je doklad v poriadku)", () => {
+  const r = evaluateEinvoiceReadiness({ ...READY_ALL, financeManage: false, einvoiceEntitlement: false, mode: "pre_send", snapshot: vatPayerSnapshot() });
+  assert.equal(r.ready, false);
+  assert.deepEqual(rcodes(r), ["FINANCE_MANAGE_REQUIRED", "EINVOICE_ENTITLEMENT_REQUIRED"]);
+  assert.deepEqual(r.issues.map((i) => i.category), ["access", "entitlement"]);
+});
+
+await check("readiness: organizácia nepripravená / chýba / iný participant ako BT-34 predávajúceho → blok", () => {
+  for (const organization of [null, { participantId: null, peppolEligible: true }, { participantId: "9950:2020000000", peppolEligible: false }]) {
+    assert.deepEqual(rcodes(evaluateEinvoiceReadiness({ ...READY_ALL, organization, mode: "pre_send", snapshot: vatPayerSnapshot() })), ["ORGANIZATION_NOT_READY"]);
+  }
+  const r = evaluateEinvoiceReadiness({ ...READY_ALL, organization: { participantId: "9915:2020000000", peppolEligible: true }, mode: "pre_send", snapshot: vatPayerSnapshot() });
+  assert.deepEqual(rcodes(r), ["SELLER_ENDPOINT_MISMATCH"]);
+});
+
+await check("readiness: chýbajúca konfigurácia poskytovateľa blokuje iba odoslanie (pre_send), nie kontrolu konceptu", () => {
+  assert.deepEqual(rcodes(evaluateEinvoiceReadiness({ ...READY_ALL, providerConfigured: false, mode: "pre_send", snapshot: vatPayerSnapshot() })), ["PROVIDER_NOT_CONFIGURED"]);
+  const draft = vatPayerSnapshot();
+  draft.invoice = { ...draft.invoice, document_status: "draft", invoice_number: null };
+  assert.deepEqual(rcodes(evaluateEinvoiceReadiness({ ...READY_ALL, providerConfigured: false, mode: "pre_finalize", snapshot: draft })), []);
+});
+
+await check("readiness: chýbajúce IČO, EN16931 polia, endpoint a nesediace sumy sú tvrdý blok (machine codes)", () => {
+  const s = vatPayerSnapshot();
+  s.seller = seller({ ico: null, legal_registration_id: null });
+  s.buyer = buyer({ electronic_address: null });
+  s.invoice = { ...s.invoice, buyer_reference: null, purchase_order_reference: null, total_amount: 999 };
+  const r = evaluateEinvoiceReadiness({ ...READY_ALL, mode: "pre_send", snapshot: s });
+  assert.equal(r.ready, false);
+  for (const code of ["SELLER_MISSING_ICO", "BUYER_MISSING_ENDPOINT", "MISSING_BUYER_OR_ORDER_REFERENCE", "TOTAL_MISMATCH"]) {
+    assert.ok(rcodes(r).includes(code), code);
+  }
+  for (const issue of r.issues) assert.equal(issue.category, "document");
+});
+
+await check("provisional snapshot: predávajúci z profilu, kupujúci z partnera, sumy z VAT enginu (pre_finalize)", () => {
+  const snap = buildProvisionalSnapshot({
+    invoice: {
+      id: "f0000000-0000-4000-8000-000000000003", company_id: "a0000000-0000-4000-8000-000000000001", direction: "issued",
+      kind: "regular_invoice", document_status: "draft", invoice_number: null, issue_date: "2026-10-01", due_date: "2026-10-15",
+      delivery_date: null, tax_point_date: null, currency: "EUR", rounding_amount: 0, buyer_reference: "REF",
+      purchase_order_reference: null, payment_means_code: "30", payment_reference: null, corrects_invoice_id: null,
+    },
+    items: [
+      { position: 1, description: "Práca", quantity: 2, unit_code: "HUR", unit_price: 50, price_mode: "net", vat_category_code: "S", vat_rate: 23 },
+      { position: 2, description: "Materiál", quantity: 1, unit_code: "H87", unit_price: 10, price_mode: "net", vat_category_code: "S", vat_rate: 19 },
+    ],
+    profile: { ...seller(), contact_email: "fakturacia@example.test" },
+    partner: { ...buyer(), email: null },
+  });
+  assert.equal(snap.seller.role, "seller");
+  assert.equal(snap.seller.ico, "11111111");
+  assert.equal(snap.buyer.ico, "33333333");
+  assert.equal(String(snap.invoice.subtotal_amount), "110.00");
+  assert.equal(String(snap.invoice.total_amount), "134.90");
+  const r = evaluateEinvoiceReadiness({ ...READY_ALL, mode: "pre_finalize", snapshot: snap });
+  assert.deepEqual(rcodes(r), []);
+  // bez partnera (kupujúci) → blok, nič sa nevymyslí
+  const noPartner = buildProvisionalSnapshot({ invoice: snap.invoice as never, items: [], profile: null, partner: null });
+  const r2 = evaluateEinvoiceReadiness({ ...READY_ALL, mode: "pre_finalize", snapshot: noPartner });
+  for (const code of ["SELLER_MISSING_NAME", "BUYER_MISSING_NAME", "NO_LINES"]) assert.ok(rcodes(r2).includes(code), code);
+});
+
+await check("server vrstva E-Faktúry: server-only, user-scoped klient, žiadny service_role ani vlastný auth klient", () => {
+  const read = (f: string) => readFileSync(new URL(f, import.meta.url), "utf8");
+  for (const f of [
+    "../lib/einvoice/provider/index.ts", "../lib/einvoice/provider/efaktura-sk.ts", "../lib/einvoice/provider/efaktura-sk-webhook.ts",
+    "../lib/einvoice/load-finalized-invoice.ts", "../lib/einvoice/readiness-server.ts",
+    "../app/api/invoices/[id]/ubl/route.ts", "../app/api/invoices/[id]/einvoice-readiness/route.ts",
+  ]) {
+    const src = read(f);
+    assert.match(src, /^import "server-only";/, f);
+    assert.doesNotMatch(src, /SERVICE_ROLE|service_role_key|getSupabaseAdmin|supabase-admin/, f);
+    assert.doesNotMatch(src, /NEXT_PUBLIC_[A-Z_]*(EFAKTURA|EINVOICE)/, f);
+  }
+  for (const f of ["../app/api/invoices/[id]/ubl/route.ts", "../app/api/invoices/[id]/einvoice-readiness/route.ts"]) {
+    const src = read(f);
+    assert.match(src, /getUserScopedSupabaseClient/, f);
+    assert.doesNotMatch(src, /createClient\(/, f);
+  }
+  // Klientský bundle nesmie importovať poskytovateľa.
+  assert.doesNotMatch(read("../app/faktury/InvoiceDetailView.tsx"), /lib\/einvoice\/(provider|readiness-server)/);
 });
 
 console.log(`\neinvoice-ubl: ${passed} passed, ${failed} failed`);
