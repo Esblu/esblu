@@ -31,6 +31,7 @@ import {
 import { listBusinessPartners, type BusinessPartner } from "@/lib/business-partners";
 import { todayLocalDate } from "@/lib/local-date";
 import { navigateHard } from "@/lib/app-navigation";
+import NewPartnerFromRegistry from "@/app/components/company-lookup/NewPartnerFromRegistry";
 
 // Dobropis/ťarchopis sa zakladá z detailu opravovanej faktúry
 // ("Vytvoriť dobropis" tlačidlo v InvoiceDetailView) s ?corrects=<id> —
@@ -65,6 +66,8 @@ export default function NewInvoicePage() {
   const canEdit = hasFinanceManage(membership);
 
   const [partners, setPartners] = useState<BusinessPartner[]>([]);
+  // „+ Nový partner z registra" — panel nad existujúcim výberom partnera.
+  const [showNewPartner, setShowNewPartner] = useState(false);
 
   const [kind, setKind] = useState<InvoiceKind>("regular_invoice");
   const [correctsInvoiceId, setCorrectsInvoiceId] = useState<string | null>(null);
@@ -278,7 +281,40 @@ export default function NewInvoicePage() {
                   ))}
                 </select>
               )}
+              {!showNewPartner && (
+                <button
+                  type="button"
+                  className={`${docButtonSecondary} mt-2`}
+                  disabled={legalHold || saving}
+                  onClick={() => setShowNewPartner(true)}
+                >
+                  {t("companyLookup.invoice.newFromRegistry")}
+                </button>
+              )}
             </div>
+
+            {showNewPartner && (
+              <div className="sm:col-span-2">
+                <NewPartnerFromRegistry
+                  companyId={companyId}
+                  userId={userId}
+                  partners={partners}
+                  disabled={legalHold || saving}
+                  onCreated={(created) => {
+                    setPartners((previous) =>
+                      [...previous, created].sort((a, b) => a.legal_name.localeCompare(b.legal_name))
+                    );
+                    setCustomerId(created.id);
+                    setShowNewPartner(false);
+                  }}
+                  onSelectExisting={(existing) => {
+                    setCustomerId(existing.id);
+                    setShowNewPartner(false);
+                  }}
+                  onCancel={() => setShowNewPartner(false)}
+                />
+              </div>
+            )}
 
             <div>
               <label className={docLabel}>

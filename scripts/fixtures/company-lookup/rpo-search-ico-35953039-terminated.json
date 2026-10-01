@@ -1,0 +1,63 @@
+{
+ "results": [
+  {
+   "id": 423700,
+   "dbModificationDate": "2025-07-07",
+   "identifiers": [
+    {
+     "value": "35953039",
+     "validFrom": "2005-09-06"
+    }
+   ],
+   "fullNames": [
+    {
+     "value": "Slovnaft Petrochemicals, s.r.o.",
+     "validFrom": "2005-09-06",
+     "validTo": "2012-12-31"
+    }
+   ],
+   "addresses": [
+    {
+     "validFrom": "2005-09-06",
+     "validTo": "2012-12-31",
+     "street": "Vlčie hrdlo",
+     "regNumber": 0,
+     "buildingNumber": "4846",
+     "postalCodes": [
+      "82412"
+     ],
+     "municipality": {
+      "value": "Bratislava"
+     },
+     "country": {
+      "value": "Slovenská republika",
+      "code": "703",
+      "codelistCode": "CL000086"
+     }
+    }
+   ],
+   "establishment": "2005-09-06",
+   "termination": "2013-01-01",
+   "sourceRegister": {
+    "value": {
+     "value": "Obchodný register",
+     "code": "1",
+     "codelistCode": "CL010112"
+    },
+    "registrationOffices": [
+     {
+      "value": "Mestský súd Bratislava III",
+      "validFrom": "1992-04-29"
+     }
+    ],
+    "registrationNumbers": [
+     {
+      "value": "Sa/426/B",
+      "validFrom": "1992-04-29"
+     }
+    ]
+   }
+  }
+ ],
+ "license": "1. ŠÚ SR ako správca informačného systému RPO uplatňuje ... medzinárodnú verejnú licenciu Creative Commons Attribution License (cc-by) 4.0 (skrátené pre fixture)."
+}

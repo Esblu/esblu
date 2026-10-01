@@ -1,0 +1,142 @@
+{
+ "id": 1003617,
+ "dbModificationDate": "2026-07-09",
+ "identifiers": [
+  {
+   "value": "31322832",
+   "validFrom": "1992-04-29"
+  }
+ ],
+ "fullNames": [
+  {
+   "value": "SLOVNAFT, a.s.",
+   "validFrom": "2008-05-30"
+  }
+ ],
+ "addresses": [
+  {
+   "validFrom": "2006-06-16",
+   "street": "Vlčie hrdlo",
+   "regNumber": 0,
+   "buildingNumber": "1",
+   "postalCodes": [
+    "82412"
+   ],
+   "municipality": {
+    "value": "Bratislava"
+   },
+   "country": {
+    "value": "Slovenská republika",
+    "code": "703",
+    "codelistCode": "CL000086"
+   }
+  }
+ ],
+ "establishment": "1992-05-01",
+ "sourceRegister": {
+  "value": {
+   "value": "Obchodný register",
+   "code": "1",
+   "codelistCode": "CL010112"
+  },
+  "registrationOffices": [
+   {
+    "value": "Mestský súd Bratislava III",
+    "validFrom": "1992-04-29"
+   }
+  ],
+  "registrationNumbers": [
+   {
+    "value": "Sa/426/B",
+    "validFrom": "1992-04-29"
+   }
+  ]
+ },
+ "legalForms": [
+  {
+   "value": {
+    "value": "Akciová spoločnosť",
+    "code": "121",
+    "codelistCode": "CL000056"
+   },
+   "validFrom": "1992-04-29"
+  }
+ ],
+ "activities": [
+  {
+   "economicActivityDescription": "prevádzkovanie čerpacích staníc,",
+   "validFrom": "2005-04-23"
+  }
+ ],
+ "statutoryBodies": [
+  {
+   "stakeholderType": {
+    "value": "Predstavenstvo",
+    "code": "99"
+   },
+   "validFrom": "2025-12-02",
+   "address": {
+    "street": "Tajná ulica",
+    "buildingNumber": "7",
+    "postalCodes": [
+     "99999"
+    ],
+    "municipality": {
+     "value": "Testovo"
+    },
+    "country": {
+     "value": "Slovenská republika",
+     "code": "703",
+     "codelistCode": "CL000086"
+    }
+   },
+   "personName": {
+    "formatedName": "Ing. Ján Testovací",
+    "familyNames": [
+     "Testovací"
+    ],
+    "givenNames": [
+     "Ján"
+    ]
+   }
+  }
+ ],
+ "stakeholders": [
+  {
+   "stakeholderType": {
+    "value": "Člen dozorného orgánu",
+    "code": "98"
+   },
+   "validFrom": "2024-05-28",
+   "address": {
+    "street": "Súkromná",
+    "buildingNumber": "3",
+    "postalCodes": [
+     "99998"
+    ],
+    "municipality": {
+     "value": "Skúšobná Ves"
+    },
+    "country": {
+     "value": "Slovenská republika",
+     "code": "703",
+     "codelistCode": "CL000086"
+    }
+   },
+   "personName": {
+    "formatedName": "Mária Fiktívna"
+   }
+  }
+ ],
+ "equities": [
+  {
+   "validFrom": "2009-04-02",
+   "value": 684757602.8,
+   "currency": {
+    "value": "euro",
+    "code": "EUR"
+   }
+  }
+ ],
+ "license": "1. ŠÚ SR ako správca informačného systému RPO uplatňuje ... medzinárodnú verejnú licenciu Creative Commons Attribution License (cc-by) 4.0 (skrátené pre fixture)."
+}

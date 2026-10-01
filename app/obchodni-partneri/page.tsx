@@ -41,6 +41,11 @@ import {
 import { navigateHard } from "@/lib/app-navigation";
 import { partnerDetailHref } from "@/lib/entity-links";
 import { confirmAction, notify } from "@/app/components/ui/AppDialog";
+import CompanyLookupCombobox from "@/app/components/company-lookup/CompanyLookupCombobox";
+import CompanyRegistryNotice from "@/app/components/company-lookup/CompanyRegistryNotice";
+import { applyCompanyDetailToForm, findPartnerWithIco } from "@/lib/company-lookup/prefill";
+import { canonicalIco } from "@/lib/company-lookup/normalize";
+import type { CompanyDetailResponseBody } from "@/lib/company-lookup/types";
 
 type KindFilter = "all" | BusinessPartnerKind;
 
@@ -156,6 +161,9 @@ export default function ObchodniPartneriPage() {
   const [formErrors, setFormErrors] = useState<BusinessPartnerValidationError[]>([]);
   const [formSubmitError, setFormSubmitError] = useState("");
   const [saving, setSaving] = useState(false);
+  // Posledný výber z registra (iba na zobrazenie zdroja a varovaní). Nič sa
+  // z neho neukladá mimo polí formulára, ktoré používateľ vidí a potvrdí.
+  const [registryDetail, setRegistryDetail] = useState<CompanyDetailResponseBody | null>(null);
 
   useEffect(() => {
     void init();
@@ -253,7 +261,16 @@ export default function ObchodniPartneriPage() {
     setForm(EMPTY_BUSINESS_PARTNER_FORM);
     setFormErrors([]);
     setFormSubmitError("");
+    setRegistryDetail(null);
     setShowForm(true);
+  }
+
+  /** Výber z registra iba predvyplní formulár — ukladá človek tlačidlom Uložiť. */
+  function handleRegistrySelect(detail: CompanyDetailResponseBody) {
+    setForm((previous) => applyCompanyDetailToForm(previous, detail.company));
+    setRegistryDetail(detail);
+    setFormErrors([]);
+    setFormSubmitError("");
   }
 
   function openPrefilledCreateForm(prefill: PartnerPrefill) {
@@ -268,6 +285,7 @@ export default function ObchodniPartneriPage() {
     });
     setFormErrors([]);
     setFormSubmitError("");
+    setRegistryDetail(null);
     setShowForm(true);
   }
 
@@ -276,6 +294,7 @@ export default function ObchodniPartneriPage() {
     setForm(businessPartnerToForm(partner));
     setFormErrors([]);
     setFormSubmitError("");
+    setRegistryDetail(null);
     setShowForm(true);
   }
 
@@ -284,6 +303,7 @@ export default function ObchodniPartneriPage() {
     setEditingId(null);
     setFormErrors([]);
     setFormSubmitError("");
+    setRegistryDetail(null);
   }
 
   function updateField(field: keyof BusinessPartnerForm, value: string) {
@@ -445,6 +465,34 @@ export default function ObchodniPartneriPage() {
               kde sídli → daňové údaje → ako sa platí → ako sa doručuje
               elektronicky. */}
           <div className="mt-5 space-y-4">
+            {/* Vyhľadanie v registri (RPO + RÚZ DIČ) iba predvyplní polia
+                nižšie. Ručné zadanie ostáva vždy možné a nič sa neuloží
+                bez kliknutia na Uložiť. */}
+            <DocumentSection title={t("companyLookup.sectionTitle")}>
+              <div className="space-y-3">
+                <CompanyLookupCombobox onSelect={handleRegistrySelect} disabled={legalHold || saving} />
+                {registryDetail && canonicalIco(form.ico) === registryDetail.company.ico && (
+                  <CompanyRegistryNotice detail={registryDetail} />
+                )}
+                {(() => {
+                  const existing = findPartnerWithIco(partners, form.ico, editingId);
+                  if (!existing) return null;
+                  return (
+                    <DocumentNotice tone="warning">
+                      <p>{t("companyLookup.existingPartner", { name: existing.legal_name })}</p>
+                      <button
+                        type="button"
+                        className={`${docButtonSecondary} mt-2`}
+                        onClick={() => openEditForm(existing)}
+                      >
+                        {t("companyLookup.openExisting")}
+                      </button>
+                    </DocumentNotice>
+                  );
+                })()}
+              </div>
+            </DocumentSection>
+
             <DocumentSection title={t("businessPartners.section.identity")}>
               <div className="grid gap-4 sm:grid-cols-2">
                 <PartnerField label={t("businessPartners.form.kindLabel")}>
