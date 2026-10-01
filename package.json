@@ -45,6 +45,7 @@
     "test:einvoice-db": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/einvoice-pglite-tests.ts",
     "test:einvoice-ubl": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/einvoice-ubl-tests.ts",
     "test:einvoice-efaktura": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/einvoice-efaktura-adapter-tests.ts",
+    "test:einvoice-outbound": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/einvoice-outbound-tests.ts",
     "verify:mobile-bundle": "node scripts/verify-mobile-bundle.mjs"
   },
   "dependencies": {

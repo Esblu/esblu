@@ -14,6 +14,7 @@ import {
 } from "./provisional-snapshot.ts";
 import { evaluateEinvoiceReadiness, type ReadinessResult } from "./readiness.ts";
 import type { EinvoiceEnvironment } from "./provider/types.ts";
+import type { UblInvoiceSnapshot } from "./ubl/model.ts";
 
 // =============================================================================
 // Serverové zostavenie vstupu pre readiness kontrolu. SERVER-ONLY.
@@ -24,8 +25,17 @@ import type { EinvoiceEnvironment } from "./provider/types.ts";
 // Prostredie poskytovateľa určuje výhradne serverová konfigurácia (env).
 // =============================================================================
 
+/** Serverový kontext readiness — používa ho outbound orchestrácia (nikdy nejde klientovi). */
+export type ReadinessContext = {
+  companyId: string;
+  environment: EinvoiceEnvironment | null;
+  organization: { providerOrgId: string | null; provider: string; participantId: string | null; peppolEligible: boolean } | null;
+  /** Nemenný snapshot finalizovanej faktúry (iba v režime pre_send). */
+  finalizedSnapshot: UblInvoiceSnapshot | null;
+};
+
 export type ReadinessLoadResult =
-  | { ok: true; result: ReadinessResult }
+  | { ok: true; result: ReadinessResult; context: ReadinessContext }
   | { ok: false; status: 403 | 404 | 409 | 500; code: "NO_ACTIVE_COMPANY" | "FORBIDDEN" | "NOT_FOUND" | "NOT_ISSUED" | "QUERY_FAILED" };
 
 const DRAFT_COLUMNS =
@@ -81,16 +91,18 @@ export async function loadEinvoiceReadiness(
   const einvoiceEntitlement = hasEntitlement(entitlements, "einvoice");
 
   const environment = serverEnvironment(env);
-  let organization: { participantId: string | null; peppolEligible: boolean } | null = null;
+  let organization: ReadinessContext["organization"] = null;
   if (environment) {
     const { data: org, error: orgError } = await db
       .from("einvoice_organizations")
-      .select("participant_id, peppol_eligible")
+      .select("provider, provider_org_id, participant_id, peppol_eligible")
       .eq("company_id", companyId)
       .eq("environment", environment)
-      .maybeSingle<{ participant_id: string | null; peppol_eligible: boolean }>();
+      .maybeSingle<{ provider: string; provider_org_id: string | null; participant_id: string | null; peppol_eligible: boolean }>();
     if (orgError) return { ok: false, status: 500, code: "QUERY_FAILED" };
-    organization = org ? { participantId: org.participant_id, peppolEligible: org.peppol_eligible === true } : null;
+    organization = org
+      ? { provider: org.provider, providerOrgId: org.provider_org_id, participantId: org.participant_id, peppolEligible: org.peppol_eligible === true }
+      : null;
   }
 
   const { data: header, error: headerError } = await db
@@ -111,7 +123,11 @@ export async function loadEinvoiceReadiness(
       if (loaded.reason === "QUERY_FAILED") return { ok: false, status: 500, code: "QUERY_FAILED" };
       return { ok: false, status: 409, code: "NOT_ISSUED" };
     }
-    return { ok: true, result: evaluateEinvoiceReadiness({ ...common, mode: "pre_send", snapshot: loaded.snapshot }) };
+    return {
+      ok: true,
+      result: evaluateEinvoiceReadiness({ ...common, mode: "pre_send", snapshot: loaded.snapshot }),
+      context: { companyId, environment, organization, finalizedSnapshot: loaded.snapshot },
+    };
   }
 
   const [itemsRes, profileRes, partnerRes] = await Promise.all([
@@ -151,5 +167,9 @@ export async function loadEinvoiceReadiness(
     }
   }
 
-  return { ok: true, result: evaluateEinvoiceReadiness({ ...common, mode: "pre_finalize", snapshot }) };
+  return {
+    ok: true,
+    result: evaluateEinvoiceReadiness({ ...common, mode: "pre_finalize", snapshot }),
+    context: { companyId, environment, organization, finalizedSnapshot: null },
+  };
 }
