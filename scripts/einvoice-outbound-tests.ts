@@ -104,6 +104,8 @@ for (const migration of [
   "20261002110000_einvoice_en16931_fields.sql",
   // --- predmet testu ---
   "20261002120000_einvoice_outbound_flow.sql",
+  // regresia: Phase 3 nesmie zmeniť outbound správanie
+  "20261002130000_einvoice_inbound_flow.sql",
 ]) {
   try {
     await db.exec(read(`supabase/migrations/${migration}`));
@@ -1023,8 +1025,8 @@ await check("service_role iba v privilegovanej vrstve: supabase-store.ts; route/
   };
   const files = [...walk("lib/einvoice"), ...walk("app/api/einvoice"), ...walk("app/api/cron/einvoice-outbound")];
   const admin = files.filter((f) => /supabase-admin|getSupabaseAdmin|SUPABASE_SERVICE_ROLE_KEY/.test(read(f)));
-  assert.deepEqual(admin, ["lib/einvoice/outbound/supabase-store.ts"]);
-  for (const f of files.filter((x) => x.startsWith("app/") || /outbound\/(worker|request|supabase-store)\.ts$/.test(x))) {
+  assert.deepEqual(admin.sort(), ["lib/einvoice/inbound/supabase-store.ts", "lib/einvoice/outbound/supabase-store.ts"]);
+  for (const f of files.filter((x) => x.startsWith("app/") || /(outbound|inbound)\/(worker|request|supabase-store|processor|webhook)\.ts$/.test(x))) {
     assert.match(read(f), /^import "server-only";/, f);
   }
   // Route nikdy priamo neposiela — iba orchestrácia požiadavky (bez sendUbl).

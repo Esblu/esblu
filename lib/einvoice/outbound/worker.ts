@@ -179,6 +179,15 @@ export async function runOutboundSendBatch(deps: WorkerDeps, options: WorkerOpti
   return { claimed: rows.length, results };
 }
 
+/**
+ * Reconciliation JEDNÉHO už claimnutého podania (lease drží volajúci). Používa ju
+ * aj webhook: udalosť poskytovateľa iba spustí toto overenie — stav sa vždy
+ * potvrdí dotazom u poskytovateľa, nikdy sa nepreberá z webhooku.
+ */
+export async function reconcileOutboundRow(deps: WorkerDeps, row: OutboundRow): Promise<WorkerItemResult> {
+  return reconcileOne(deps, row);
+}
+
 async function reconcileOne(deps: WorkerDeps, row: OutboundRow): Promise<WorkerItemResult> {
   const now = (deps.now ?? (() => new Date()))();
   const release: TransitionFields = { locked_until: null, status_checked_at: iso(now) };
