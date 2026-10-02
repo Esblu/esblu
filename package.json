@@ -47,6 +47,7 @@
     "test:einvoice-efaktura": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/einvoice-efaktura-adapter-tests.ts",
     "test:einvoice-outbound": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/einvoice-outbound-tests.ts",
     "test:einvoice-inbound": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/einvoice-inbound-tests.ts",
+    "test:einvoice-ops": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/einvoice-ops-tests.ts",
     "verify:mobile-bundle": "node scripts/verify-mobile-bundle.mjs"
   },
   "dependencies": {

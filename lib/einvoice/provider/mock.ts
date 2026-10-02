@@ -13,6 +13,7 @@ import {
   type RecipientLookup,
   type SendResult,
   type SendUblInput,
+  type SubmissionLookup,
 } from "./types.ts";
 import { sanitizeDeliveryEvidence } from "../evidence.ts";
 
@@ -134,6 +135,14 @@ export class MockEinvoiceProvider implements EinvoiceProvider {
       delivery_status: { state: "delivered", at: "2026-01-01T00:00:00Z" },
     });
     return { documentId: record.document_id, ublSha256: record.ubl_sha256, deliveredAt: record.delivered_at, record };
+  }
+
+  async findSubmissionByIdempotencyKey(ctx: ProviderContext, idempotencyKey: string): Promise<SubmissionLookup> {
+    this.calls.push("findSubmissionByIdempotencyKey");
+    this.requireOrg(ctx);
+    const s = this.submissions.get(idempotencyKey);
+    if (!s || s.orgId !== ctx.providerOrgId) return { kind: "absent" };
+    return { kind: "found", providerSubmissionId: s.submissionId, state: s.state };
   }
 
   /** Testovací pomocník: vloží prijatý doklad pre organizáciu. */

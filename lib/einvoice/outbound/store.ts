@@ -70,6 +70,8 @@ export type TransitionFields = Partial<{
   locked_until: string | null;
   provider_status: string | null;
   status_checked_at: string | null;
+  /** Phase 4: reconciliation autoritatívne potvrdila absenciu podania (iba bez ID poskytovateľa). */
+  reconciled_absent_at: string | null;
 }>;
 
 export type TransitionSource = "job" | "provider" | "reconcile" | "webhook" | "poll" | "system";

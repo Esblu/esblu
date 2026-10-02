@@ -33,6 +33,8 @@ export type WebhookDeps = {
   environment: EinvoiceEnvironment;
   secrets: string[];
   nowSeconds: () => number;
+  /** Phase 4: ohraničené počítadlo odmietnutí (bez tela/hlavičiek) — best effort. */
+  recordRejection?: (reason: "INVALID_SIGNATURE" | "REPLAYED_WEBHOOK" | "PAYLOAD_TOO_LARGE" | "INVALID_PAYLOAD") => Promise<void>;
 };
 
 export type WebhookResponse = { status: number; body: { code: string } };
@@ -59,6 +61,22 @@ function obj(value: unknown): Record<string, unknown> | null {
 }
 
 export async function handleEinvoiceWebhook(
+  deps: WebhookDeps,
+  input: { rawBody: Uint8Array; signatureHeader: string | null; deliveryIdHeader: string | null }
+): Promise<WebhookResponse> {
+  const result = await handleVerified(deps, input);
+  const code = result.body.code;
+  if (deps.recordRejection && (code === "INVALID_SIGNATURE" || code === "REPLAYED_WEBHOOK" || code === "PAYLOAD_TOO_LARGE" || code === "INVALID_PAYLOAD")) {
+    try {
+      await deps.recordRejection(code);
+    } catch {
+      // počítadlo nesmie ovplyvniť odpoveď
+    }
+  }
+  return result;
+}
+
+async function handleVerified(
   deps: WebhookDeps,
   input: { rawBody: Uint8Array; signatureHeader: string | null; deliveryIdHeader: string | null }
 ): Promise<WebhookResponse> {

@@ -108,6 +108,17 @@ export type InboundDocument = {
   pdf: Uint8Array | null;
 };
 
+/**
+ * Dohľadanie podania podľa Idempotency-Key (reconciliation neistého výsledku).
+ *   found   — poskytovateľ podanie s týmto kľúčom má → pokračuje sa s PÔVODNÝM,
+ *   absent  — poskytovateľ AUTORITATÍVNE potvrdil, že podanie neexistuje,
+ *   unknown — poskytovateľ to nevie potvrdiť (nič sa nesmie rozhodnúť).
+ */
+export type SubmissionLookup =
+  | { kind: "found"; providerSubmissionId: string; state: OutboundState }
+  | { kind: "absent" }
+  | { kind: "unknown" };
+
 export interface EinvoiceProvider {
   readonly name: string;
   provisionOrganization(input: OrganizationProvisionInput): Promise<OrganizationInfo>;
@@ -117,6 +128,7 @@ export interface EinvoiceProvider {
   sendUbl(ctx: ProviderContext, input: SendUblInput): Promise<SendResult>;
   getOutboundStatus(ctx: ProviderContext, submission: { providerSubmissionId: string }): Promise<OutboundStatus>;
   getDeliveryEvidence(ctx: ProviderContext, submission: { providerSubmissionId: string }): Promise<DeliveryEvidence | null>;
+  findSubmissionByIdempotencyKey(ctx: ProviderContext, idempotencyKey: string): Promise<SubmissionLookup>;
   listUnacknowledgedInbound(ctx: ProviderContext, options?: { limit?: number }): Promise<InboundSummary[]>;
   getInboundDocument(ctx: ProviderContext, providerReceivedId: string): Promise<InboundDocument>;
   acknowledgeInbound(ctx: ProviderContext, providerReceivedId: string): Promise<void>;

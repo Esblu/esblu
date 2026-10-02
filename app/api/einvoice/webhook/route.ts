@@ -4,6 +4,7 @@ import { getEfakturaWebhookSecrets, getEinvoiceProvider } from "@/lib/einvoice/p
 import { handleEinvoiceWebhook, WEBHOOK_MAX_BODY_BYTES } from "@/lib/einvoice/inbound/webhook";
 import { createSupabaseInboundStore } from "@/lib/einvoice/inbound/supabase-store";
 import { createSupabaseOutboundStore } from "@/lib/einvoice/outbound/supabase-store";
+import { createSupabaseOpsStore } from "@/lib/einvoice/ops/supabase-store";
 
 // =============================================================================
 // POST /api/einvoice/webhook — webhook poskytovateľa (eFaktura.sk).
@@ -63,6 +64,7 @@ export async function POST(req: Request) {
   const secrets = getEfakturaWebhookSecrets();
   if (!runtimeConfig || secrets.length === 0) return json(503, { code: "NOT_CONFIGURED" });
 
+  const ops = createSupabaseOpsStore();
   const result = await handleEinvoiceWebhook(
     {
       inbound: createSupabaseInboundStore(),
@@ -71,6 +73,7 @@ export async function POST(req: Request) {
       environment: runtimeConfig.environment,
       secrets,
       nowSeconds: () => Math.floor(Date.now() / 1000),
+      recordRejection: (reason) => ops.recordWebhookRejection(runtimeConfig.provider.name, runtimeConfig.environment, reason),
     },
     {
       rawBody,

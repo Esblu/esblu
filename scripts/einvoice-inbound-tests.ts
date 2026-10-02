@@ -109,6 +109,8 @@ for (const migration of [
   "20261002120000_einvoice_outbound_flow.sql",
   // --- predmet testu ---
   "20261002130000_einvoice_inbound_flow.sql",
+  // regresia: Phase 4 nesmie zmeniť inbound správanie
+  "20261002140000_einvoice_operations.sql",
 ]) {
   try {
     await db.exec(read(`supabase/migrations/${migration}`));
@@ -287,6 +289,7 @@ class FakeProvider implements EinvoiceProvider {
     return { state, receiverIdentifier: null, documentId: null, errorMessage: null, updatedAt: null };
   }
   async getDeliveryEvidence() { return null; }
+  async findSubmissionByIdempotencyKey() { return { kind: "unknown" as const }; }
   async listUnacknowledgedInbound(c: ProviderContext) {
     this.calls.push("list");
     this.ctx(c);

@@ -106,6 +106,7 @@ for (const migration of [
   "20261002120000_einvoice_outbound_flow.sql",
   // regresia: Phase 3 nesmie zmeniť outbound správanie
   "20261002130000_einvoice_inbound_flow.sql",
+  "20261002140000_einvoice_operations.sql",
 ]) {
   try {
     await db.exec(read(`supabase/migrations/${migration}`));
@@ -338,6 +339,7 @@ class FakeProvider implements EinvoiceProvider {
     return { documentId: record.document_id, ublSha256: record.ubl_sha256, deliveredAt: record.delivered_at, record };
   }
   async listUnacknowledgedInbound(): Promise<never> { throw new Error("not used"); }
+  async findSubmissionByIdempotencyKey() { return { kind: "unknown" as const }; }
   async getInboundDocument(): Promise<never> { throw new Error("not used"); }
   async acknowledgeInbound(): Promise<never> { throw new Error("not used"); }
 }
@@ -1023,9 +1025,9 @@ await check("service_role iba v privilegovanej vrstve: supabase-store.ts; route/
     }
     return out;
   };
-  const files = [...walk("lib/einvoice"), ...walk("app/api/einvoice"), ...walk("app/api/cron/einvoice-outbound")];
+  const files = [...walk("lib/einvoice"), ...walk("app/api/einvoice"), ...walk("app/api/cron/einvoice-outbound"), ...walk("app/api/cron/einvoice-maintenance")];
   const admin = files.filter((f) => /supabase-admin|getSupabaseAdmin|SUPABASE_SERVICE_ROLE_KEY/.test(read(f)));
-  assert.deepEqual(admin.sort(), ["lib/einvoice/inbound/supabase-store.ts", "lib/einvoice/outbound/supabase-store.ts"]);
+  assert.deepEqual(admin.sort(), ["lib/einvoice/inbound/supabase-store.ts", "lib/einvoice/ops/supabase-store.ts", "lib/einvoice/outbound/supabase-store.ts"]);
   for (const f of files.filter((x) => x.startsWith("app/") || /(outbound|inbound)\/(worker|request|supabase-store|processor|webhook)\.ts$/.test(x))) {
     assert.match(read(f), /^import "server-only";/, f);
   }

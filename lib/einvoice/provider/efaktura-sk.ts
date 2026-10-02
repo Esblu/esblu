@@ -18,6 +18,7 @@ import {
   type RecipientLookup,
   type SendResult,
   type SendUblInput,
+  type SubmissionLookup,
 } from "./types.ts";
 import { MAX_INBOUND_XML_BYTES } from "../ubl/parse.ts";
 import { sanitizeDeliveryEvidence } from "../evidence.ts";
@@ -492,6 +493,18 @@ export class EfakturaSkProvider implements EinvoiceProvider {
       deliveredAt: record.delivered_at,
       record,
     };
+  }
+
+  /**
+   * Dohľadanie podania podľa Idempotency-Key. Verejná dokumentácia Agent API
+   * (audit 2026-09-30) takýto endpoint neuvádza → výsledok je vždy „unknown":
+   * Esblu NIKDY nepovolí nový pokus po neistom výsledku len na základe ticha.
+   * TO CONFIRM WITH PROVIDER: lookup podľa Idempotency-Key / externej referencie.
+   */
+  async findSubmissionByIdempotencyKey(ctx: ProviderContext, idempotencyKey: string): Promise<SubmissionLookup> {
+    this.#assertCtx(ctx);
+    if (!idempotencyKey) throw new EinvoiceProviderError("EINVOICE_INVALID_IDEMPOTENCY_KEY");
+    return { kind: "unknown" };
   }
 
   // ---------------------------------------------------------------------------
