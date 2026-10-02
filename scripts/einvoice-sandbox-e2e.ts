@@ -317,7 +317,11 @@ const ALLOWED: [string, RegExp][] = [
   ["POST", /^\/v1\/agent\/peppol\/received\/[^/]+\/acknowledge$/],
 ];
 // --- offline fake sandbox (iba --offline-selftest) ---------------------------------
+// --selftest-legacy-numbering: reprodukcia L2 behu po 070ddef — čísla FA<rok>0001… ako
+// v čerstvej DB a sandbox, ktorý už FA<rok>0002/0003 a DO<rok>0001 pozná z predošlého behu.
+const LEGACY_NUMBERING = SELFTEST && ARGS.get("selftest-legacy-numbering") === "true";
 const FAKE = {
+  numbers: new Set<string>(LEGACY_NUMBERING ? [`FA${TODAY.slice(0, 4)}0002`, `FA${TODAY.slice(0, 4)}0003`, `DO${TODAY.slice(0, 4)}0001`] : []),
   idem: new Map<string, { bodySha: string; response: string }>(),
   sent: new Map<string, { xml: Uint8Array }>(),
   received: [] as { id: string; xml: Uint8Array; acknowledged_at: string | null; document_type: string; number: string }[],
@@ -344,6 +348,13 @@ async function fakeSandbox(url: URL, method: string, init: RequestInit): Promise
     const invoiceId = randomUUID();
     const text = new TextDecoder().decode(xml);
     const number = /<cbc:ID>([^<]+)<\/cbc:ID>/.exec(text)?.[1] ?? "X";
+    if (FAKE.numbers.has(number)) {
+      // Docs connector: reason `ingest` = „the document number already exists as a native invoice".
+      const rejected = JSON.stringify({ data: { status: "rejected", reason: "ingest", error: "Doklad s týmto číslom už existuje", send_ready: true } });
+      FAKE.idem.set(key, { bodySha: sha(body), response: rejected });
+      return new Response(rejected, { status: 200, headers: { "content-type": "application/json" } });
+    }
+    FAKE.numbers.add(number);
     FAKE.sent.set(invoiceId, { xml });
     const at = new Date().toISOString();
     FAKE.events.push({ occurred_at: at, event: "sent.queued", invoice_id: invoiceId, document_id: `${PARTICIPANT}#${number}`, message_id: null });
@@ -380,6 +391,31 @@ async function fakeSandbox(url: URL, method: string, init: RequestInit): Promise
 type Fault = null | "unavailable-before-send" | "drop-response-after-send";
 let fault: Fault = null;
 const calls: string[] = [];
+/**
+ * Záznam KAŽDÉHO reálne doručeného connector/send (aj keď sa odpoveď lokálne
+ * „stratí"). Iba bezpečné polia: HTTP status, data.status, kategória reason,
+ * prefix SHA-256 invoice_id a Idempotency-Key — nikdy telo, XML ani kľúč API.
+ */
+type SendLogEntry = { http: number; status: string | null; reason: string | null; invoice: string | null; key: string | null; dropped: boolean };
+const sendLog: SendLogEntry[] = [];
+const hashPrefix = (v: string | null | undefined) => (v ? `sha256:${createHash("sha256").update(v).digest("hex").slice(0, 12)}` : null);
+async function logSend(res: Response, init: RequestInit, dropped: boolean) {
+  let data: Record<string, unknown> = {};
+  try {
+    data = ((await res.clone().json()) as { data?: Record<string, unknown> }).data ?? {};
+  } catch {
+    data = {};
+  }
+  const reason = typeof data.reason === "string" && /^[a-z_]{1,40}$/.test(data.reason) ? data.reason : null;
+  sendLog.push({
+    http: res.status,
+    status: typeof data.status === "string" ? data.status : null,
+    reason,
+    invoice: hashPrefix(typeof data.invoice_id === "string" ? data.invoice_id : null),
+    key: hashPrefix(new Headers(init.headers).get("Idempotency-Key")),
+    dropped,
+  });
+}
 const guardedFetch = async (input: string, init: RequestInit): Promise<Response> => {
   const url = new URL(input);
   const method = (init.method ?? "GET").toUpperCase();
@@ -391,10 +427,14 @@ const guardedFetch = async (input: string, init: RequestInit): Promise<Response>
     throw new TypeError("simulated network failure before send");
   }
   const res = SELFTEST ? await fakeSandbox(url, method, init) : await fetch(input, init);
-  if (url.pathname.endsWith("/connector/send") && fault === "drop-response-after-send") {
-    fault = null;
-    await res.arrayBuffer();
-    throw new TypeError("simulated lost response after send");
+  if (url.pathname.endsWith("/connector/send")) {
+    const dropped = fault === "drop-response-after-send";
+    await logSend(res, init, dropped);
+    if (dropped) {
+      fault = null;
+      await res.arrayBuffer();
+      throw new TypeError("simulated lost response after send");
+    }
   }
   return res;
 };
@@ -486,6 +526,14 @@ await locked(() => db.exec(`
   insert into public.company_entitlements (company_id, entitlement_key, source, note) values ('${CA}', 'einvoice', 'manual', 'sandbox-e2e');
   insert into public.einvoice_rollout (company_id, environment, stage, changed_by)
     values ('${CA}', 'sandbox', 'internal', 'sandbox-e2e'), ('${CB}', 'sandbox', 'internal', 'sandbox-e2e');
+`));
+
+// Unikátne číslovanie PER BEH: sandbox organizácia je trvalá a poskytovateľ odmietne
+// číslo dokladu, ktoré už existuje (connector reason `ingest`). Čerstvá PGlite DB by
+// inak v každom behu generovala FA20260001, FA20260002… (L2 root cause O14/O15/I11).
+if (!LEGACY_NUMBERING) await locked(() => db.exec(`
+  insert into public.invoice_number_sequences (company_id, year, series_key, prefix)
+  values ('${CA}', ${TODAY.slice(0, 4)}, 'regular', 'E2E${RUN}-'), ('${CA}', ${TODAY.slice(0, 4)}, 'credit_note', 'E2EDO${RUN}-');
 `));
 
 const ITEMS = [
@@ -766,32 +814,48 @@ await step("O13", "UBL integrita: uložené bajty → SHA-256 = riadok = snapsho
   return { sha256: h.slice(0, 12), provider_hash_matches: ev ? true : "n/a" };
 });
 let RETRY_SHA = "";
-await step("O14", "retry: sieťová chyba PRED odoslaním → backoff, ten istý kľúč → úspech", ["P0"], async () => {
+const safeReason = (r: unknown) => (typeof r === "string" ? (/^([a-z_]{1,40})/.exec(r)?.[1] ?? "other") : null);
+const numberOf = async (inv: string) => String((await sql<Row>("select invoice_number from public.invoices where id = $1", [inv])).rows[0].invoice_number);
+await step("O14", "retry: sieťová chyba PRED odoslaním (poskytovateľ dokument nevidí) → backoff, ten istý kľúč → prvé reálne podanie", ["P0"], async () => {
   const inv = await invoice(U.owner, CA, PARTNER_A, { ...HEADER, buyer_reference: `E2E-RETRY-${RUN}` });
   const r = await postOutbound(U.owner, { invoice_id: inv, confirm_send: true });
   assert.equal(r.status, 202, JSON.stringify(r.body));
   const id = String((r.body.outbound as { id: string }).id);
-  const key = (await outboundOf(id)).idempotency_key;
+  const key = (await outboundOf(id)).idempotency_key as string;
+  const log0 = sendLog.length;
   fault = "unavailable-before-send";
   await sendOnly(id);
   let row = await outboundOf(id);
+  const realSendsFirst = sendLog.length - log0;
+  assert.equal(realSendsFirst, 0, "prvý pokus sa NESMIE dostať k poskytovateľovi");
   assert.equal(row.state, "sending");
   await makeDue(id);
   await sendOnly(id);
   row = await outboundOf(id);
-  assert.ok(["sent", "delivered"].includes(row.state as string), String(row.state));
+  const sends = sendLog.slice(log0);
   assert.equal(row.idempotency_key, key);
   RETRY_SHA = String(row.ubl_sha256);
-  return { first: "network error (no send)", final_state: row.state, retry_count: row.retry_count, same_key: true };
+  const evidence = {
+    invoice_number_unique_per_run: (await numberOf(inv)).startsWith(`E2E${RUN}-`),
+    real_sends_before_fault: realSendsFirst,
+    real_sends_total: sends.length,
+    provider_responses: sends.map((x) => ({ http: x.http, status: x.status, reason: x.reason })),
+    same_key: sends.every((x) => x.key === hashPrefix(key)),
+    final_state: row.state,
+    reject_reason_category: safeReason(row.reject_reason),
+    retry_count: row.retry_count,
+  };
+  return { verdict: ["sent", "delivered"].includes(row.state as string) && sends.length === 1 ? "PASS" : "FAIL", evidence };
 });
-await step("O15", "neistý výsledok: odpoveď stratená PO odoslaní → replay toho istého kľúča → JEDINÉ podanie u poskytovateľa", ["P0"], async () => {
+await step("O15", "neistý výsledok: odpoveď stratená PO odoslaní → replay toho istého kľúča → presne JEDNO podanie (uložená odpoveď)", ["P0"], async () => {
   const before = await sentEvents();
   const known = new Set(before.rows.map((e) => e.key));
   const inv = await invoice(U.owner, CA, PARTNER_A, { ...HEADER, buyer_reference: `E2E-UNKNOWN-${RUN}` });
   const r = await postOutbound(U.owner, { invoice_id: inv, confirm_send: true });
   assert.equal(r.status, 202, JSON.stringify(r.body));
   const id = String((r.body.outbound as { id: string }).id);
-  const key = (await outboundOf(id)).idempotency_key;
+  const key = (await outboundOf(id)).idempotency_key as string;
+  const log0 = sendLog.length;
   fault = "drop-response-after-send";
   await sendOnly(id);
   let row = await outboundOf(id);
@@ -800,36 +864,39 @@ await step("O15", "neistý výsledok: odpoveď stratená PO odoslaní → replay
   await makeDue(id);
   await sendOnly(id);
   row = await outboundOf(id);
-  assert.ok(["sent", "delivered"].includes(row.state as string), String(row.state));
+  const sends = sendLog.slice(log0);
+  const [first, replay] = sends;
   assert.equal(row.idempotency_key, key, "replay musí použiť ten istý kľúč");
-  // Dôkaz: nové udalosti odoslania v audite poskytovateľa → koľko RÔZNYCH podaní (invoice_id) vzniklo.
+  // Provider-side: nové udalosti odoslania → koľko RÔZNYCH podaní (invoice_id) vzniklo.
   let fresh: { invoiceId: string | null; event: string }[] = [];
   for (let i = 0; i < 8; i++) {
     await sleep(5_000);
-    const now = await sentEvents();
-    fresh = now.rows.filter((e) => !known.has(e.key));
-    if (fresh.some((e) => e.invoiceId === row.provider_submission_id)) break;
+    fresh = (await sentEvents()).rows.filter((e) => !known.has(e.key));
+    if (row.provider_submission_id && fresh.some((e) => e.invoiceId === row.provider_submission_id)) break;
   }
-  await sleep(10_000); // prípadné druhé podanie by sa objavilo s oneskorením
+  await sleep(10_000);
   fresh = (await sentEvents()).rows.filter((e) => !known.has(e.key));
   const submissions = new Set(fresh.map((e) => e.invoiceId).filter((x): x is string => !!x));
-  const ours = fresh.filter((e) => e.invoiceId === row.provider_submission_id).map((e) => e.event);
-  const evidenceTx = await provider.getDeliveryEvidence(providerCtx, { providerSubmissionId: String(row.provider_submission_id) }).catch(() => null);
-  const txCount = Array.isArray((evidenceTx?.record as Record<string, unknown> | undefined)?.transactions) ? ((evidenceTx!.record as Record<string, unknown>).transactions as unknown[]).length : null;
-  const verdict: Verdict = submissions.size === 1 && submissions.has(String(row.provider_submission_id)) ? "PASS" : submissions.size > 1 ? "FAIL" : "PARTIAL";
-  return {
-    verdict,
-    evidence: {
-      final_state: row.state,
-      same_idempotency_key: true,
-      provider_submission: idHash(row.provider_submission_id),
-      new_sent_events: fresh.length,
-      distinct_new_submissions: submissions.size,
-      events_for_our_submission: ours,
-      evidence_transactions: txCount,
-      note: "dôkaz jedného podania pre tento replay; NEdokazuje retenčnú dobu kľúča (P1)",
-    },
+  const identicalReplay = !!first && !!replay && first.status === replay.status && first.invoice === replay.invoice && first.http === replay.http;
+  const evidence = {
+    invoice_number_unique_per_run: (await numberOf(inv)).startsWith(`E2E${RUN}-`),
+    real_sends: sends.length,
+    first_response: first ? { http: first.http, status: first.status, reason: first.reason, invoice: first.invoice, dropped: first.dropped } : null,
+    replay_response: replay ? { http: replay.http, status: replay.status, reason: replay.reason, invoice: replay.invoice } : null,
+    replay_identical_to_first: identicalReplay,
+    same_key: sends.every((x) => x.key === hashPrefix(key)),
+    distinct_new_provider_submissions: submissions.size,
+    final_state: row.state,
+    provider_submission: hashPrefix(row.provider_submission_id as string | null),
+    reject_reason_category: safeReason(row.reject_reason),
+    note: "dôkaz pre tento replay; NEdokazuje retenčnú dobu Idempotency-Key (P1)",
   };
+  if (submissions.size > 1) return { verdict: "FAIL", evidence };
+  if (first?.status === "queued" && identicalReplay && submissions.size === 1 && ["sent", "delivered"].includes(row.state as string)) return { verdict: "PASS", evidence };
+  // Bezpečný stav: replay vrátil uloženú odpoveď a nevzniklo druhé podanie, ale pôvodné podanie
+  // poskytovateľ odmietol (business) → idempotencia preukázaná, happy-path nie.
+  if (identicalReplay && submissions.size <= 1) return { verdict: "PARTIAL", evidence };
+  return { verdict: "FAIL", evidence };
 });
 await step("O16", "reconciliation operátorom (sent/delivered riadok) → RECONCILED, nikdy neodošle", ["O8-O9"], async () => {
   await sql("update public.einvoice_outbound set operator_action_at = null, locked_until = null where id = $1", [OUT1]);
@@ -913,7 +980,7 @@ await step("I11", "nepodporovaný typ (dobropis) → failed UNSUPPORTED_PROFILE,
   await sendOnly(id);
   const out = await outboundOf(id);
   if (!["sent", "delivered"].includes(out.state as string)) {
-    return { verdict: "SKIP", evidence: { stage: "outbound_send", reason: "poskytovateľ dobropis neprijal", state: out.state, code: out.last_error_code } };
+    return { verdict: "SKIP", evidence: { stage: "outbound_send", reason: "poskytovateľ dobropis neprijal", state: out.state, code: out.last_error_code, reject_reason_category: safeReason(out.reject_reason), number_unique_per_run: (await numberOf(cn)).startsWith(`E2EDO${RUN}-`) } };
   }
   let row: Row | undefined;
   for (let i = 0; i < 18 && !row; i++) {

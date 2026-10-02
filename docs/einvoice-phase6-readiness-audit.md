@@ -103,3 +103,14 @@
 | I12 PARTIAL | Zámerne iba offline: podpis, parsovanie a spracovanie s lokálnym secretom. Skutočné doručenie webhooku vyžaduje verejný endpoint a secret z portálu. | **obmedzenie prostredia (L3)** | Evidencia `scope: offline_only`. |
 
 Overenie harnessu bez siete: `npm run test:einvoice-e2e-selftest` (fake sandbox v pamäti). Výsledok: 27 PASS, 1 PARTIAL (I12, offline podľa návrhu).
+
+## 8. L2 beh 2 (po `070ddef`) — O14/O15/I11
+
+- **Root cause:** kolízia čísel dokladov medzi behmi harnessu v trvalej sandbox organizácii. Poskytovateľ
+  odpovedal `rejected` / `reason = ingest` (duplicitné číslo). Je to **chyba harnessu**, nie chyba produkcie
+  ani poskytovateľa.
+- **Idempotencia (O15):** replay rovnakého kľúča vrátil identickú uloženú odpoveď a druhé podanie nevzniklo.
+- **Produkčný runtime sa nemenil.**
+- **WARNING (nové, P17 / P18):** operátorský retry po `failed` (`ERROR` po prijatí) posiela nový connector
+  pokus s tým istým `cbc:ID`. Poskytovateľ ho pravdepodobne odmietne ako duplicitu. Retry po `ERROR` ostáva
+  v pilote na eskaláciu (runbook §5), kým poskytovateľ nepotvrdí správny postup.

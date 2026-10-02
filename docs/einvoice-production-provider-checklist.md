@@ -92,6 +92,19 @@ Nič v tomto dokumente nie je odhad. Čo dokumentácia neuvádza, je označené 
 
 ---
 
+## 2b. Empirické správanie sandboxu (L2, 2026-10-02)
+
+| Pozorovanie | Zdroj | Vyvodenie |
+| --- | --- | --- |
+| Odoslanie čísla dokladu, ktoré už v tej istej organizácii existuje (z predošlého L2 behu), skončí `200` + `data.status = "rejected"`, `reason = "ingest"`. | L2 beh po `070ddef`: O14, O15 a I11. Reprodukované offline (`--offline-selftest --selftest-legacy-numbering`). Docs connectora: `ingest` = „the document number already exists as a native invoice“. | Číslo dokladu je u poskytovateľa unikátne v rámci organizácie. Odmietnutie je **istý výsledok** (nič neodišlo). Nevytvorilo sa žiadne podanie. |
+| Replay toho istého Idempotency-Key po „stratenej“ odpovedi vrátil **rovnakú** odpoveď ako prvé volanie (rovnaký `status`/`reason`). Nové podanie nevzniklo (0 nových `invoice_id` v `/peppol/events`). | L2 O15 (beh po `070ddef`, odmietnutý variant). Happy-path variant (queued → rovnaké `invoice_id`) overí ďalší beh s unikátnym číslovaním. | Zhodné s docs („stored response, never sends twice“). **Nevyvodzuje sa** z toho retenčná doba kľúča (P1) ani správanie pri súbežnom in-flight (P2). |
+| `/peppol/status` končí pri `SENT`. Doručenie nesie `evidence.delivery_status = delivered`. | L2 O10–O12 PASS po `070ddef` | Opravené v reconciliation. |
+
+| # | Nová otázka | Prečo |
+| --- | --- | --- |
+| P17 | Po `ERROR` (trvalé zlyhanie **po** prijatí dokladu) je číslo dokladu u poskytovateľa už „obsadené“? Nové `connector/send` s tým istým `cbc:ID` (nový Idempotency-Key) potom skončí `rejected/ingest`? Je správna cesta `POST /v1/agent/peppol/send/{invoiceId}` („retrying after a failure (error) is allowed“)? | Operátorský retry po `failed` posiela nový connector pokus s tým istým číslom. Ak to poskytovateľ odmietne ako duplicitu, retry po `ERROR` cez connector nefunguje. |
+| P18 | Čísla dokladov vystavených natívne v eFaktúra appke tej istej organizácie kolidujú s číslami z Esblu? (Esblu = zdroj pravdy číslovania.) | Prvé odoslanie Esblu faktúry s číslom, ktoré firma už v eFaktúre použila, skončí `rejected/ingest`. |
+
 ## 3. Čo blokuje produkčné spustenie
 
 | Blocker | Kto | Poznámka |

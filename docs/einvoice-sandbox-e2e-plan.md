@@ -141,3 +141,22 @@ Harness teraz:
 **Rerun L2 je potrebný** (rovnaký príkaz ako vyššie, s `--org=<UUID>`).
 Očakávanie: PASS okrem I12 (PARTIAL, offline). O10–O12 môže byť PARTIAL, ak sandbox ešte nevrátil
 `delivery_status = delivered`.
+
+## Výsledok druhého L2 behu (po `070ddef`): 24 PASS / 2 FAIL / 1 SKIP / 1 PARTIAL
+
+| Krok | Root cause | Kategória |
+| --- | --- | --- |
+| O14 `rejected` | Harness generoval v každom behu v čerstvej PGlite DB rovnaké čísla (`FA<rok>0001`, `0002`, `0003`, …). O14 (`FA…0002`) a O15 (`FA…0003`) už boli odoslané v prvom behu, takže poskytovateľ odmietol duplicitné číslo: `200`, `status = rejected`, `reason = ingest`. Simulovaná chyba bola skutočne **pred** volaním (0 reálnych sendov v prvom pokuse). Retry bol prvé reálne podanie a bolo odmietnuté ako business duplicita. | **chyba harnessu** (poskytovateľ sa správal správne) |
+| O15 `rejected` | To isté číslo z prvého behu. Prvé (stratené) podanie bolo `rejected/ingest`, replay toho istého kľúča vrátil rovnakú uloženú odpoveď a nové podanie nevzniklo. | **chyba harnessu**; idempotencia replayu je preukázaná |
+| I11 SKIP | Dobropis `DO<rok>0001` už odoslaný v prvom behu, takže `rejected/ingest` (fáza `outbound_send`). | **chyba harnessu** |
+| I12 PARTIAL | Iba offline časť, očakávané do L3. | obmedzenie prostredia |
+
+**Oprava (iba harness):**
+
+- **Unikátne číslovanie per beh:** prefix `E2E<RUN>-` pre faktúry a `E2EDO<RUN>-` pre dobropisy.
+- **Log každého reálne doručeného `connector/send`:** HTTP, `status`, `reason`, prefix SHA-256 `invoice_id` a kľúča.
+- **O14** overuje 0 reálnych sendov pred chybou a presne 1 podanie.
+- **O15:** PASS = replay vrátil identickú odpoveď **a** presne 1 nové podanie u poskytovateľa. Bezpečné identické odmietnutie bez podania = PARTIAL, nie PASS.
+- **Offline reprodukcia pôvodného zlyhania:** `--offline-selftest --selftest-legacy-numbering` (výsledok: O14 FAIL `ingest`, O15 PARTIAL identický replay, I11 SKIP `ingest`).
+
+**Rerun L2 je potrebný.**
