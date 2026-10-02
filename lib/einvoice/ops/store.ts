@@ -26,6 +26,8 @@ export interface OpsStore {
     cooldownSeconds: number;
   }): Promise<OperatorBeginResult>;
   health(stuckMinutes: number, ackPendingMinutes: number): Promise<unknown>;
+  /** Phase 6: výsledky odosielania za 24 h (iba počty). */
+  outcomes24h(): Promise<unknown>;
   retention(olderThanDays: number, limit: number): Promise<{ older_than_days: number; webhook_events_deleted: number; rejection_buckets_deleted: number }>;
   storageConsistency(): Promise<Record<string, number>>;
   recordWebhookRejection(provider: string, environment: EinvoiceEnvironment, reason: WebhookRejectionReason): Promise<void>;

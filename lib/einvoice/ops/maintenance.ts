@@ -25,7 +25,7 @@ function onlyNumbers(raw: Record<string, unknown>): Record<string, number> {
 }
 
 export async function runEinvoiceMaintenance(ops: OpsStore, options: { retention: boolean }): Promise<MaintenanceReport> {
-  const health = sanitizeHealth(await ops.health(STUCK_MINUTES, ACK_PENDING_MINUTES));
+  const health = sanitizeHealth(await ops.health(STUCK_MINUTES, ACK_PENDING_MINUTES), await ops.outcomes24h());
   const alerts = evaluateAlerts(health, DEFAULT_ALERT_THRESHOLDS);
   const retention = options.retention ? await ops.retention(WEBHOOK_RETENTION_DAYS, RETENTION_BATCH) : null;
   const storage = onlyNumbers(await ops.storageConsistency());

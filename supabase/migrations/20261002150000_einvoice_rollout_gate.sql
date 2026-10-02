@@ -25,12 +25,15 @@
 --      9915 (= Peppol TEST sieť) — ochrana proti zámene prostredí.
 --   7) esblu_einvoice_my_rollout(environment) — boolean pre UI (iba vlastná
 --      aktívna firma, iba s finance.view), aby UI vedelo zobraziť oznam.
+--   8) esblu_einvoice_outcomes_24h() — agregované výsledky odosielania za 24 h
+--      (iba počty, iba service_role) pre alert „neobvykle vysoký podiel odmietnutí".
 --
 -- Historické čítanie (RLS select, UBL/XML download, časová os) sa NEMENÍ.
 --
 -- ROLLBACK (bez straty business dát):
 --   drop trigger esblu_einvoice_outbound_rollout_gate on public.einvoice_outbound;
---   drop function esblu_einvoice_outbound_rollout_gate(), esblu_einvoice_my_rollout(text);
+--   drop function esblu_einvoice_outbound_rollout_gate(), esblu_einvoice_my_rollout(text),
+--     esblu_einvoice_outcomes_24h();
 --   esblu_einvoice_claim_outbound vrátiť z 20261002120000, esblu_einvoice_claim_inbound
 --   z 20261002130000; alter table einvoice_organizations drop constraint
 --   einvoice_organizations_participant_env_scheme;
@@ -254,5 +257,27 @@ end;
 $function$;
 revoke all on function public.esblu_einvoice_my_rollout(text) from public, anon;
 grant execute on function public.esblu_einvoice_my_rollout(text) to authenticated;
+
+-- 8) Výsledky odosielania za 24 h (alerty) ---------------------------------------------------
+create or replace function public.esblu_einvoice_outcomes_24h()
+returns jsonb
+language sql
+stable
+security definer
+set search_path to ''
+as $function$
+  select jsonb_build_object(
+    'sent_24h', count(distinct e.outbound_id) filter (where e.to_state = 'sent'),
+    'delivered_24h', count(distinct e.outbound_id) filter (where e.to_state = 'delivered'),
+    'rejected_24h', count(distinct e.outbound_id) filter (where e.to_state = 'rejected'),
+    'failed_24h', count(distinct e.outbound_id) filter (where e.to_state = 'failed')
+  )
+  from public.einvoice_events e
+  where e.outbound_id is not null
+    and e.created_at > now() - interval '24 hours'
+    and e.from_state is distinct from e.to_state;
+$function$;
+revoke all on function public.esblu_einvoice_outcomes_24h() from public, anon, authenticated;
+grant execute on function public.esblu_einvoice_outcomes_24h() to service_role;
 
 commit;

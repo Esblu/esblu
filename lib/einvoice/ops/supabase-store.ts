@@ -29,6 +29,9 @@ export function createSupabaseOpsStore(admin: SupabaseClient = getSupabaseAdmin(
         p_cooldown_seconds: i.cooldownSeconds,
       });
     },
+    async outcomes24h() {
+      return rpc<unknown>("esblu_einvoice_outcomes_24h", {});
+    },
     async health(stuckMinutes, ackPendingMinutes) {
       return rpc<unknown>("esblu_einvoice_health", { p_stuck_minutes: stuckMinutes, p_ack_pending_minutes: ackPendingMinutes });
     },

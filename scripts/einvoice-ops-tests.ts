@@ -560,6 +560,9 @@ const opsStore: OpsStore = {
   async health(m, a) {
     return (await asService(() => db.query<{ j: unknown }>("select public.esblu_einvoice_health($1, $2) j", [m, a]))).rows[0].j;
   },
+  async outcomes24h() {
+    return (await asService(() => db.query<{ j: unknown }>("select public.esblu_einvoice_outcomes_24h() j"))).rows[0].j;
+  },
   async retention(d, l) {
     return (await asService(() => db.query<{ j: { older_than_days: number; webhook_events_deleted: number; rejection_buckets_deleted: number } }>("select public.esblu_einvoice_webhook_retention($1, $2) j", [d, l]))).rows[0].j;
   },
@@ -991,6 +994,13 @@ await check("alert kandidáti: neistý výsledok / vyčerpané pokusy / podpisov
   }
   const calm = evaluateAlerts(sanitizeHealth({}));
   assert.deepEqual(calm, []);
+  // Phase 6: odmietnutia iba za 24 h; podiel ≥ 20 % pri ≥ 3 prípadoch = kritický alert
+  const rate = evaluateAlerts(sanitizeHealth({ outbound: { rejected: 50, failed: 50 } }, { sent_24h: 2, delivered_24h: 1, rejected_24h: 2, failed_24h: 1 }));
+  assert.deepEqual(rate.map((a) => a.code).sort(), ["OUTBOUND_PERMANENT_FAILURES", "OUTBOUND_REJECT_RATE_HIGH"]);
+  const old = evaluateAlerts(sanitizeHealth({ outbound: { rejected: 50, failed: 50 } }, { sent_24h: 40 }));
+  assert.deepEqual(old, [], "staré (kumulatívne) odmietnutia samy nealertujú");
+  const low = evaluateAlerts(sanitizeHealth({}, { sent_24h: 100, rejected_24h: 3 }));
+  assert.deepEqual(low.map((a) => a.code), ["OUTBOUND_PERMANENT_FAILURES"], "3/103 < 20 % → iba warning");
   const exhausted = evaluateAlerts(sanitizeHealth({ outbound: { retry_exhausted_unknown: 2, unknown_send_outcome: 2 }, inbound: { ack_pending_too_long: 1 } }));
   assert.deepEqual(exhausted.map((a) => a.code).sort(), ["INBOUND_ACK_PENDING_TOO_LONG", "OUTBOUND_RETRY_EXHAUSTED_UNKNOWN", "OUTBOUND_UNKNOWN_SEND_OUTCOME"]);
 });
