@@ -32,6 +32,8 @@ export type ReadinessContext = {
   organization: { providerOrgId: string | null; provider: string; participantId: string | null; peppolEligible: boolean } | null;
   /** Nemenný snapshot finalizovanej faktúry (iba v režime pre_send). */
   finalizedSnapshot: UblInvoiceSnapshot | null;
+  /** Phase 5: prístupové príznaky volajúceho (DB helpery) — iba na zobrazenie, autorita ostáva v DB. */
+  access: { financeManage: boolean; einvoiceEntitlement: boolean; providerConfigured: boolean };
 };
 
 export type ReadinessLoadResult =
@@ -126,7 +128,7 @@ export async function loadEinvoiceReadiness(
     return {
       ok: true,
       result: evaluateEinvoiceReadiness({ ...common, mode: "pre_send", snapshot: loaded.snapshot }),
-      context: { companyId, environment, organization, finalizedSnapshot: loaded.snapshot },
+      context: { companyId, environment, organization, finalizedSnapshot: loaded.snapshot, access: { financeManage, einvoiceEntitlement, providerConfigured: common.providerConfigured } },
     };
   }
 
@@ -170,6 +172,6 @@ export async function loadEinvoiceReadiness(
   return {
     ok: true,
     result: evaluateEinvoiceReadiness({ ...common, mode: "pre_finalize", snapshot }),
-    context: { companyId, environment, organization, finalizedSnapshot: null },
+    context: { companyId, environment, organization, finalizedSnapshot: null, access: { financeManage, einvoiceEntitlement, providerConfigured: common.providerConfigured } },
   };
 }

@@ -693,6 +693,17 @@ export default function FakturyPage() {
         <p className="mt-4 text-sm text-muted-esblu">{t("invoices.readOnlyNotice")}</p>
       )}
 
+      {canView && (
+        <div className="mt-4">
+          <Link
+            href="/faktury/efaktury"
+            className={`${docButtonSecondary} w-full justify-center sm:w-auto`}
+          >
+            {t("invoices.einvoice.inbound.openList")}
+          </Link>
+        </div>
+      )}
+
       {canView && legalHold && canEdit && (
         <div className="mt-4">
           <DocumentNotice tone="warning">{t("invoices.legalHoldNotice")}</DocumentNotice>

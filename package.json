@@ -48,6 +48,7 @@
     "test:einvoice-outbound": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/einvoice-outbound-tests.ts",
     "test:einvoice-inbound": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/einvoice-inbound-tests.ts",
     "test:einvoice-ops": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/einvoice-ops-tests.ts",
+    "test:einvoice-ui": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs --import ./scripts/tsx-loader.mjs scripts/einvoice-ui-tests.ts",
     "verify:mobile-bundle": "node scripts/verify-mobile-bundle.mjs"
   },
   "dependencies": {

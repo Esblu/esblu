@@ -84,6 +84,7 @@ import { invoiceDetailHref } from "@/lib/entity-links";
 import { creditedTotals, isFullyCredited, remainingAfterCredits, signedAmount } from "@/lib/invoicing/credit-note-semantics";
 import { navigateHard } from "@/lib/app-navigation";
 import { confirmAction, notify } from "@/app/components/ui/AppDialog";
+import EinvoiceInvoicePanel from "@/app/components/einvoice/EinvoiceInvoicePanel";
 
 // K/G/O (EN16931 / Peppol) pribudli v 20261002110000 — finalizácia ich počíta ako 0 %.
 const VAT_CATEGORIES: VatCategoryCode[] = ["S", "Z", "E", "AE", "K", "G", "O"];
@@ -1464,6 +1465,11 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
               </DocumentSection>
             </aside>
           </div>
+
+          {/* Phase 5: panel E-Faktúra (odoslanie / stav / prijatá e-faktúra).
+              Oprávnenia a povolené akcie rozhoduje server; bez finančného
+              prístupu sa panel nezobrazí vôbec. */}
+          {canView && <EinvoiceInvoicePanel invoiceId={invoice.id} />}
 
           {creditNote ? (
             <p className="mt-8 text-sm text-secondary">{t("invoices.creditNote.noPaymentsNotice")}</p>

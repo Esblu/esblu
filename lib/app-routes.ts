@@ -53,6 +53,8 @@ export const MOBILE_STATIC_ROUTES: ReadonlySet<string> = new Set([
   "/faktury",
   "/faktury/new",
   "/faktury/detail",
+  // Phase 5 eFaktúra: prijaté e-faktúry (detail cez ?id=)
+  "/faktury/efaktury",
   "/obchodni-partneri",
   "/obchodni-partneri/detail",
   "/priecinky",
