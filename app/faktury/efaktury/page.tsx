@@ -118,6 +118,11 @@ function InboundListSection() {
   }
   return (
     <div className="mt-6 min-w-0">
+      {load.data.access.providerConfigured && !load.data.access.rolloutEnabled && (
+        <p className="mb-3 break-words rounded-doc-sm border border-doc-border bg-surface-2 px-3 py-2 text-sm text-secondary">
+          {h.t("invoices.einvoice.panel.rolloutDisabled")}
+        </p>
+      )}
       {!load.data.access.entitlementActive && (
         <p className="mb-3 break-words rounded-doc-sm border border-doc-border bg-surface-2 px-3 py-2 text-sm text-secondary">
           {h.t("invoices.einvoice.panel.entitlementRequired")}

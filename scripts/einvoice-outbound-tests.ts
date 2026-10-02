@@ -107,6 +107,7 @@ for (const migration of [
   // regresia: Phase 3 nesmie zmeniť outbound správanie
   "20261002130000_einvoice_inbound_flow.sql",
   "20261002140000_einvoice_operations.sql",
+  "20261002150000_einvoice_rollout_gate.sql",
 ]) {
   try {
     await db.exec(read(`supabase/migrations/${migration}`));
@@ -198,9 +199,11 @@ function userDb(uid: string | null) {
   }
   return {
     from: builder,
-    async rpc(fn: string) {
+    async rpc(fn: string, args: Record<string, unknown> = {}) {
       try {
-        const res = await as(uid, () => db.query<{ j: unknown }>(`select to_jsonb(public.${fn}()) j`));
+        const names = Object.keys(args);
+        const call = `public.${fn}(${names.map((n, i) => `${n} => $${i + 1}`).join(", ")})`;
+        const res = await as(uid, () => db.query<{ j: unknown }>(`select to_jsonb(${call}) j`, names.map((n) => args[n])));
         return { data: res.rows[0]?.j ?? null, error: null };
       } catch (error) {
         return { data: null, error: { message: error instanceof Error ? error.message : String(error) } };
@@ -328,7 +331,7 @@ class FakeProvider implements EinvoiceProvider {
     if (this.statusError) throw this.statusError;
     const state = this.status.get(s.providerSubmissionId);
     if (!state) throw new EinvoiceProviderError("EINVOICE_PROVIDER_NOT_FOUND");
-    return { state, receiverIdentifier: "9950:2040000000", documentId: state === "delivered" ? `doc-${s.providerSubmissionId}` : null, errorMessage: state === "failed" ? "AS4 error" : null, updatedAt: null };
+    return { state, receiverIdentifier: "9915:2040000000", documentId: state === "delivered" ? `doc-${s.providerSubmissionId}` : null, errorMessage: state === "failed" ? "AS4 error" : null, updatedAt: null };
   }
   async getDeliveryEvidence(c: ProviderContext, s: { providerSubmissionId: string }): Promise<DeliveryEvidence | null> {
     this.calls.push("getDeliveryEvidence");
@@ -377,7 +380,7 @@ const U = {
 };
 const PARTNER_A = "d0000000-0000-4000-8000-00000000000a";
 const PARTNER_B = "d0000000-0000-4000-8000-00000000000b";
-const BUYER = "9950:2040000000";
+const BUYER = "9915:2040000000";
 
 await locked(() => db.exec(`
   insert into auth.users (id) values ${Object.values(U).map((u) => `('${u}')`).join(", ")};
@@ -393,18 +396,20 @@ await locked(() => db.exec(`
   insert into public.company_billing_profile (company_id, legal_name, ico, dic, ic_dph, address_line1, city, postal_code,
       country_code, iban, contact_email, electronic_address, electronic_address_scheme_id)
     values ('${CA}', 'Syntetická A s.r.o.', '11111111', '2020000000', 'SK2020000000', 'Testovacia 1', 'Bratislava', '81101',
-      'SK', 'SK3112000000198742637541', 'fakturacia@example.test', '2020000000', '9950'),
+      'SK', 'SK3112000000198742637541', 'fakturacia@example.test', '2020000000', '9915'),
            ('${CB}', 'Syntetická B s.r.o.', '22222222', '2030000000', 'SK2030000000', 'Skúšobná 2', 'Košice', '04001',
-      'SK', null, null, '2030000000', '9950');
+      'SK', null, null, '2030000000', '9915');
   insert into public.business_partners (id, company_id, kind, legal_name, ico, dic, ic_dph, address_line1, city,
       postal_code, country_code, electronic_address, electronic_address_scheme_id)
     values ('${PARTNER_A}', '${CA}', 'customer', 'Odberateľ s.r.o.', '33333333', '2040000000', 'SK2040000000',
-      'Príkladná 3', 'Žilina', '01001', 'SK', '2040000000', '9950'),
-           ('${PARTNER_B}', '${CB}', 'customer', 'Odberateľ B', '44444444', '2050000000', 'SK2050000000', 'Iná 4', 'Nitra', '94901', 'SK', '2050000000', '9950');
+      'Príkladná 3', 'Žilina', '01001', 'SK', '2040000000', '9915'),
+           ('${PARTNER_B}', '${CB}', 'customer', 'Odberateľ B', '44444444', '2050000000', 'SK2050000000', 'Iná 4', 'Nitra', '94901', 'SK', '2050000000', '9915');
   insert into public.einvoice_organizations (company_id, provider, environment, provider_org_id, participant_id, org_status, peppol_eligible)
-    values ('${CA}', 'mock', 'sandbox', 'org-a-synthetic', '9950:2020000000', 'active', true),
-           ('${CB}', 'mock', 'sandbox', 'org-b-synthetic', '9950:2030000000', 'active', true);
+    values ('${CA}', 'mock', 'sandbox', 'org-a-synthetic', '9915:2020000000', 'active', true),
+           ('${CB}', 'mock', 'sandbox', 'org-b-synthetic', '9915:2030000000', 'active', true);
   insert into public.company_entitlements (company_id, entitlement_key, source, note) values ('${CA}', 'einvoice', 'manual', 'test');
+  insert into public.einvoice_rollout (company_id, environment, stage, changed_by)
+    values ('${CA}', 'sandbox', 'internal', 'test'), ('${CB}', 'sandbox', 'internal', 'test');
 `));
 
 const ITEMS = [
@@ -561,7 +566,7 @@ await check("nárok chýba: firma bez einvoice → 403 EINVOICE_ENTITLEMENT_REQU
   assert.deepEqual(provider.calls, []);
   const msg = await errorOf(() => store.requestOutbound({
     actorUserId: U.b, invoiceId: INV_B, environment: "sandbox", ublSha256: "a".repeat(64),
-    ublStoragePath: outboundUblPath(CB, INV_B, "a".repeat(64)), ublSizeBytes: 10, receiverParticipantId: "9950:2050000000",
+    ublStoragePath: outboundUblPath(CB, INV_B, "a".repeat(64)), ublSizeBytes: 10, receiverParticipantId: "9915:2050000000",
   }));
   assert.match(msg, /ENTITLEMENT_DENIED:ENTITLEMENT_REQUIRED:einvoice/);
 });
@@ -687,7 +692,7 @@ await check("súbežná požiadavka (bez pred-kontroly) → RPC vráti ten istý
 await check("RPC obrana: podvrhnutý príjemca, cesta mimo firmy alebo zlý hash sú odmietnuté", async () => {
   const other = await invoice(U.owner, CA, PARTNER_A);
   const base = { actorUserId: U.owner, invoiceId: other, environment: "sandbox" as const, ublSha256: "b".repeat(64), ublStoragePath: outboundUblPath(CA, other, "b".repeat(64)), ublSizeBytes: 100, receiverParticipantId: BUYER };
-  assert.match(await errorOf(() => store.requestOutbound({ ...base, receiverParticipantId: "9950:9999999999" })), /ESBLU_EINVOICE_RECEIVER_MISMATCH/);
+  assert.match(await errorOf(() => store.requestOutbound({ ...base, receiverParticipantId: "9915:9999999999" })), /ESBLU_EINVOICE_RECEIVER_MISMATCH/);
   assert.match(await errorOf(() => store.requestOutbound({ ...base, ublStoragePath: outboundUblPath(CB, other, "b".repeat(64)) })), /ESBLU_EINVOICE_UBL_PATH_INVALID/);
   assert.match(await errorOf(() => store.requestOutbound({ ...base, ublSha256: "XYZ" })), /ESBLU_EINVOICE_UBL_HASH_INVALID/);
   assert.match(await errorOf(() => store.requestOutbound({ ...base, ublSizeBytes: 0 })), /ESBLU_EINVOICE_UBL_SIZE_INVALID/);
@@ -821,8 +826,17 @@ await check("permanentná 4xx: odmietnutý obsah → rejected; 403 → failed; o
   row = await outboundOf(c.outboundId);
   assert.equal(row.state, "rejected");
   assert.equal(row.reject_reason, "validation_failed");
-  // po terminálnom stave smie vzniknúť NOVÝ pokus (nový kľúč) iba ručnou požiadavkou
-  const again = await requestAs(U.owner, c.invoiceId);
+  // Phase 6: bežné „Odoslať" po terminálnom stave NEvytvorí nový pokus — iba operátorská akcia.
+  provider.calls = [];
+  const plain = await requestAs(U.owner, c.invoiceId);
+  assert.equal(plain.status, 409);
+  assert.equal(plain.body.code, "RETRY_REQUIRES_OPERATOR_ACTION");
+  assert.deepEqual(provider.calls, []);
+  // po terminálnom stave smie vzniknúť NOVÝ pokus (nový kľúč) iba ručnou operátorskou požiadavkou
+  const again = await requestOutboundForInvoice(
+    { userDb: userDb(U.owner), store, runtime: { provider, environment: "sandbox" }, env: ENV },
+    { userId: U.owner, invoiceId: c.invoiceId, allowNewAttempt: true }
+  );
   assert.equal(again.status, 202);
   const second = await outboundOf(again.body.outbound!.id);
   assert.equal(second.attempt, 2);
@@ -1013,6 +1027,97 @@ await check("klient (aj owner) nemôže meniť outbound ani volať worker RPC; �
   assert.equal(hidden.rows[0].n, 0);
   const foreign = await as(U.b, () => db.query<{ n: number }>("select count(*)::int n from public.einvoice_outbound"));
   assert.equal(foreign.rows[0].n, 0);
+});
+
+// =============================================================================
+// Phase 6: rollout allowlist (fail-closed), nárok vo workeri, termín behu
+// =============================================================================
+await check("rollout: firma bez povolenia → 403 ROLLOUT_NOT_ENABLED PRED volaním poskytovateľa; DB trigger odmietne aj priame RPC", async () => {
+  await sql("delete from public.einvoice_rollout where company_id = $1", [CA]);
+  try {
+    const invoiceId = await invoice(U.owner, CA, PARTNER_A);
+    provider.calls = [];
+    const r = await requestAs(U.owner, invoiceId);
+    assert.equal(r.status, 403);
+    assert.equal(r.body.code, "ROLLOUT_NOT_ENABLED");
+    assert.deepEqual(provider.calls, [], "žiadny lookup, preflight ani send");
+    const msg = await errorOf(() => store.requestOutbound({
+      actorUserId: U.owner, invoiceId, environment: "sandbox", ublSha256: "b".repeat(64),
+      ublStoragePath: outboundUblPath(CA, invoiceId, "b".repeat(64)), ublSizeBytes: 10, receiverParticipantId: BUYER,
+    }));
+    assert.match(msg, /ESBLU_EINVOICE_ROLLOUT_NOT_ENABLED/);
+  } finally {
+    await sql("insert into public.einvoice_rollout (company_id, environment, stage, changed_by) values ($1, 'sandbox', 'internal', 'test')", [CA]);
+  }
+});
+
+await check("rollout: povolené iba sandbox — live prostredie ostáva zamietnuté (iné prostredie = iný záznam)", async () => {
+  const allowed = (await sql<{ a: boolean; b: boolean }>("select public.esblu_einvoice_rollout_allowed($1, 'sandbox') a, public.esblu_einvoice_rollout_allowed($1, 'live') b", [CA])).rows[0];
+  assert.deepEqual(allowed, { a: true, b: false });
+});
+
+await check("kill switch: stage paused → worker NEODOŠLE zaradený riadok (ostáva queued, bez in_flight); po obnovení odošle", async () => {
+  const { outboundId } = await freshQueued();
+  await sql("update public.einvoice_rollout set stage = 'paused' where company_id = $1", [CA]);
+  try {
+    provider.calls = [];
+    const r = await sendOnly(outboundId);
+    assert.equal(r.claimed, 0);
+    const row = await outboundOf(outboundId);
+    assert.equal(row.state, "queued");
+    assert.equal(row.send_in_flight, false);
+    assert.ok(!provider.calls.some((c) => c.startsWith("sendUbl")));
+  } finally {
+    await sql("update public.einvoice_rollout set stage = 'internal' where company_id = $1", [CA]);
+  }
+  provider.sendScript = ["ok"];
+  await sendOnly(outboundId);
+  assert.equal((await outboundOf(outboundId)).state, "sent");
+});
+
+await check("strata nároku: zaradený (ešte neodoslaný) riadok sa NEODOŠLE; riadok s neistým výsledkom zopakuje TEN ISTÝ kľúč", async () => {
+  const fresh = await freshQueued();
+  const unknown = await freshQueued();
+  // neistý výsledok: prvý pokus timeout
+  provider.sendScript = [new EinvoiceProviderError("EINVOICE_PROVIDER_TIMEOUT", "t", true)];
+  await sendOnly(unknown.outboundId);
+  const before = await outboundOf(unknown.outboundId);
+  assert.equal(before.send_outcome_unknown, true);
+  await sql("update public.company_entitlements set status = 'revoked' where company_id = $1 and entitlement_key = 'einvoice'", [CA]);
+  try {
+    await makeDue(fresh.outboundId);
+    provider.calls = [];
+    const r1 = await sendOnly(fresh.outboundId);
+    assert.equal(r1.claimed, 0, "bez nároku sa nové odoslanie nespustí");
+    assert.equal((await outboundOf(fresh.outboundId)).state, "queued");
+    await makeDue(unknown.outboundId);
+    provider.sendScript = ["ok"];
+    const r2 = await sendOnly(unknown.outboundId);
+    assert.equal(r2.claimed, 1, "neistý výsledok sa dorieši replayom toho istého kľúča");
+    const after = await outboundOf(unknown.outboundId);
+    assert.equal(after.idempotency_key, before.idempotency_key);
+    assert.equal(after.state, "sent");
+  } finally {
+    await sql("update public.company_entitlements set status = 'active' where company_id = $1 and entitlement_key = 'einvoice'", [CA]);
+  }
+  provider.sendScript = ["ok"];
+  await makeDue(fresh.outboundId);
+  await sendOnly(fresh.outboundId);
+  assert.equal((await outboundOf(fresh.outboundId)).state, "sent");
+});
+
+await check("termín behu: ak by sa riadok nestihol, NECLAIMNE sa (žiadny falošný in_flight / neistý výsledok)", async () => {
+  const { outboundId } = await freshQueued();
+  await sql("update public.einvoice_outbound set next_retry_at = now() + interval '1 day' where id <> $1 and state in ('queued','sending') and provider_submission_id is null and next_retry_at is not null", [outboundId]);
+  const r = await runOutboundSendBatch(workerDeps(), { ...WOPTS, deadlineMs: Date.now() + 1_000, itemBudgetMs: 25_000 });
+  assert.equal(r.claimed, 0);
+  const row = await outboundOf(outboundId);
+  assert.equal(row.state, "queued");
+  assert.equal(row.send_in_flight, false);
+  assert.equal(row.retry_count, 0);
+  provider.sendScript = ["ok"];
+  await sendOnly(outboundId);
+  assert.equal((await outboundOf(outboundId)).state, "sent");
 });
 
 await check("service_role iba v privilegovanej vrstve: supabase-store.ts; route/worker/orchestrácia ho priamo nedržia", async () => {

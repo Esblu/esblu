@@ -12,6 +12,8 @@ export type EinvoiceAccess = {
   financeManage: boolean;
   entitlementActive: boolean;
   providerConfigured: boolean;
+  /** Phase 6: firma je v rollout allowliste pre serverové prostredie (einvoice_rollout). */
+  rolloutEnabled: boolean;
 };
 
 export type EinvoiceTimelineItem = {

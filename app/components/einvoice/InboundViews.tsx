@@ -114,6 +114,11 @@ export function InboundDetailView({ detail, busy, feedback, onDownloadXml, onAct
         {c.t("invoices.einvoice.panel.title")} · {c.t("invoices.einvoice.inbound.sourceLabel")}
       </h2>
 
+      {detail.access.providerConfigured && !detail.access.rolloutEnabled && (
+        <p className="mt-3 break-words rounded-doc-sm border border-doc-border bg-surface-2 px-3 py-2 text-sm text-secondary">
+          {c.t("invoices.einvoice.panel.rolloutDisabled")}
+        </p>
+      )}
       {!detail.access.entitlementActive && (
         <p className="mt-3 break-words rounded-doc-sm border border-doc-border bg-surface-2 px-3 py-2 text-sm text-secondary">
           {c.t("invoices.einvoice.panel.entitlementRequired")}

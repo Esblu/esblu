@@ -24,11 +24,13 @@ export function outboundAllowedActions(input: {
 }): OutboundAllowedActions {
   const { access } = input;
   const latest = input.attempts[0] ?? null;
-  const canOperate = access.financeManage && access.providerConfigured;
+  // Reconcile = iba čítanie stavu u poskytovateľa → aj pri pozastavenom rollout-e.
+  const canReconcile = access.financeManage && access.providerConfigured;
+  const canOperate = canReconcile && access.rolloutEnabled;
   const canCreate = canOperate && access.entitlementActive;
 
   const send = canCreate && input.readinessReady && latest === null;
-  const reconcile = canOperate && latest !== null && ["sending", "sent", "deferred"].includes(latest.state);
+  const reconcile = canReconcile && latest !== null && ["sending", "sent", "deferred"].includes(latest.state);
   const unknownUnresolved = latest !== null && latest.send_outcome_unknown && latest.provider_submission_id === null && latest.reconciled_absent_at === null;
   const retry = canCreate && latest !== null && ["failed", "rejected"].includes(latest.state) && !unknownUnresolved;
   return { send, reconcile, retry };
@@ -42,7 +44,8 @@ export function inboundAllowedActions(input: {
   lastErrorCode: string | null;
 }): InboundAllowedActions {
   const { access } = input;
-  const canOperate = access.financeManage && access.providerConfigured;
+  // Phase 6: spracovanie aj ACK idú cez claim s rollout bránou — bez povolenia by akcia nič nespravila.
+  const canOperate = access.financeManage && access.providerConfigured && access.rolloutEnabled;
   const reprocessable =
     ["received", "stored", "parsed"].includes(input.status) ||
     // Trvalé chyby dát (nepodporovaný profil / dobropis) sa opätovným spracovaním nezmenia — tlačidlo sa neponúka.

@@ -13,7 +13,7 @@ import assert from "node:assert/strict";
 import { createHash, createHmac } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { hasTranslation } from "../lib/i18n/translate.ts";
-import { evaluateEinvoiceReadiness } from "../lib/einvoice/readiness.ts";
+import { bratislavaToday, evaluateEinvoiceReadiness, issueDateRule } from "../lib/einvoice/readiness.ts";
 import { buildProvisionalSnapshot } from "../lib/einvoice/provisional-snapshot.ts";
 import { DOMParser } from "@xmldom/xmldom";
 import { generateUbl, checkUblPreconditions, PEPPOL_BIS3_CUSTOMIZATION_ID, PEPPOL_BIS3_PROFILE_ID } from "../lib/einvoice/ubl/generate.ts";
@@ -738,7 +738,18 @@ await check("výber poskytovateľa: bez env → null (žiadny mock fallback); ib
   const cfg = getEinvoiceProvider({ ESBLU_EINVOICE_PROVIDER: "efaktura_sk", ESBLU_EINVOICE_ENVIRONMENT: "sandbox", ESBLU_EFAKTURA_API_KEY: FAKE_TEST_KEY });
   assert.equal(cfg?.environment, "sandbox");
   assert.equal(cfg?.provider.name, "efaktura_sk");
-  assert.throws(() => getEinvoiceProvider({ ESBLU_EINVOICE_PROVIDER: "efaktura_sk", ESBLU_EINVOICE_ENVIRONMENT: "live", ESBLU_EFAKTURA_API_KEY: FAKE_TEST_KEY }));
+  // Phase 6: live bez explicitného potvrdenia a mimo produkčného Vercel nasadenia → null (fail-closed)
+  const LIVE_KEY = "efk_pk_live_" + "0".repeat(24);
+  const live = { ESBLU_EINVOICE_PROVIDER: "efaktura_sk", ESBLU_EINVOICE_ENVIRONMENT: "live", ESBLU_EFAKTURA_API_KEY: LIVE_KEY };
+  assert.equal(getEinvoiceProvider(live), null);
+  assert.equal(getEinvoiceProvider({ ...live, ESBLU_EINVOICE_LIVE_ENABLED: "true" }), null, "lokálne / preview");
+  assert.equal(getEinvoiceProvider({ ...live, ESBLU_EINVOICE_LIVE_ENABLED: "true", VERCEL_ENV: "preview" }), null);
+  assert.equal(getEinvoiceProvider({ ...live, ESBLU_EINVOICE_LIVE_ENABLED: "1", VERCEL_ENV: "production" }), null);
+  assert.equal(getEinvoiceProvider({ ...live, ESBLU_EINVOICE_LIVE_ENABLED: "true", VERCEL_ENV: "production" })?.environment, "live");
+  // test kľúč v live prostredí (aj s potvrdením) → chyba, nie tiché odosielanie
+  assert.throws(() => getEinvoiceProvider({ ...live, ESBLU_EFAKTURA_API_KEY: FAKE_TEST_KEY, ESBLU_EINVOICE_LIVE_ENABLED: "true", VERCEL_ENV: "production" }));
+  // live kľúč v sandbox prostredí → chyba
+  assert.throws(() => getEinvoiceProvider({ ESBLU_EINVOICE_PROVIDER: "efaktura_sk", ESBLU_EINVOICE_ENVIRONMENT: "sandbox", ESBLU_EFAKTURA_API_KEY: LIVE_KEY }));
   assert.deepEqual(getEfakturaWebhookSecrets({ ESBLU_EFAKTURA_WEBHOOK_SECRETS: " a , ,b" }), ["a", "b"]);
   assert.deepEqual(getEfakturaWebhookSecrets({}), []);
 });
@@ -863,6 +874,37 @@ await check("server vrstva E-Faktúry: server-only, user-scoped klient, žiadny 
   }
   // Klientský bundle nesmie importovať poskytovateľa.
   assert.doesNotMatch(read("../app/faktury/InvoiceDetailView.tsx"), /lib\/einvoice\/(provider|readiness-server)/);
+});
+
+// Phase 6: pravidlá prostredia a dátumu vyhotovenia (eFaktura.sk changelog 2026-09-23/28)
+await check("issue date: do 31.12.2026 max 10 dní; od 1.1.2027 iba v deň odoslania", () => {
+  assert.equal(issueDateRule("2026-10-01", "2026-10-11"), null);
+  assert.equal(issueDateRule("2026-10-01", "2026-10-12")?.code, "ISSUE_DATE_TOO_OLD");
+  assert.equal(issueDateRule("2026-12-30", "2027-01-01")?.code, "ISSUE_DATE_NOT_SEND_DATE");
+  assert.equal(issueDateRule("2027-01-05", "2027-01-05"), null);
+  assert.equal(issueDateRule(null, "2027-01-05"), null);
+  assert.match(bratislavaToday(new Date("2026-12-31T23:30:00Z")), /^2027-01-01$/, "Bratislava je UTC+1");
+});
+
+await check("readiness live: starý dátum vyhotovenia BLOKUJE odoslanie; sandbox iba upozorní; koncept iba upozorní", () => {
+  const snap = vatPayerSnapshot();
+  const old = { ...snap, invoice: { ...snap.invoice, issue_date: "2026-09-01" } };
+  const liveOrg = { participantId: "0245:2020000000", peppolEligible: true };
+  const liveSnap = { ...old, seller: { ...old.seller, electronic_address_scheme_id: "0245" }, buyer: { ...old.buyer, electronic_address_scheme_id: "0245" } };
+  const live = evaluateEinvoiceReadiness({ ...READY_ALL, organization: liveOrg, environment: "live", today: "2026-10-02", mode: "pre_send", snapshot: liveSnap });
+  assert.deepEqual(rcodes(live), ["ISSUE_DATE_TOO_OLD"]);
+  const draft = evaluateEinvoiceReadiness({ ...READY_ALL, organization: liveOrg, environment: "live", today: "2026-10-02", mode: "pre_finalize", snapshot: liveSnap });
+  assert.ok(!rcodes(draft).includes("ISSUE_DATE_TOO_OLD"));
+  assert.ok(draft.warnings.some((w) => w.code === "ISSUE_DATE_TOO_OLD"));
+});
+
+await check("readiness: live odberateľ so schémou 9915 (TEST) → blok; sandbox odberateľ bez 9915 → blok", () => {
+  const snap = vatPayerSnapshot();
+  const liveOrg = { participantId: "0245:2020000000", peppolEligible: true };
+  const liveTest = { ...snap, seller: { ...snap.seller, electronic_address_scheme_id: "0245" }, buyer: { ...snap.buyer, electronic_address_scheme_id: "9915" } };
+  assert.ok(rcodes(evaluateEinvoiceReadiness({ ...READY_ALL, organization: liveOrg, environment: "live", mode: "pre_send", snapshot: liveTest })).includes("BUYER_ENDPOINT_TEST_SCHEME"));
+  const sandboxLiveBuyer = { ...snap, buyer: { ...snap.buyer, electronic_address_scheme_id: "0245" } };
+  assert.ok(rcodes(evaluateEinvoiceReadiness({ ...READY_ALL, environment: "sandbox", mode: "pre_send", snapshot: sandboxLiveBuyer })).includes("BUYER_ENDPOINT_SANDBOX_SCHEME"));
 });
 
 console.log(`\neinvoice-ubl: ${passed} passed, ${failed} failed`);

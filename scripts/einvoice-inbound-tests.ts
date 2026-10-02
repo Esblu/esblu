@@ -111,6 +111,7 @@ for (const migration of [
   "20261002130000_einvoice_inbound_flow.sql",
   // regresia: Phase 4 nesmie zmeniť inbound správanie
   "20261002140000_einvoice_operations.sql",
+  "20261002150000_einvoice_rollout_gate.sql",
 ]) {
   try {
     await db.exec(read(`supabase/migrations/${migration}`));
@@ -274,7 +275,7 @@ class FakeProvider implements EinvoiceProvider {
     if (c.environment !== "sandbox" || !this.orgs.has(c.providerOrgId)) throw new EinvoiceProviderError("EINVOICE_ORGANIZATION_NOT_FOUND");
   }
   add(org: string, id: string, xml: Uint8Array) {
-    this.docs.set(id, { org, xml, acknowledged: false, summary: { providerReceivedId: id, senderParticipantId: "9950:2055555555", senderIco: "55555555", documentNumber: "IN", documentType: "invoice", receivedAt: null, isTest: true } });
+    this.docs.set(id, { org, xml, acknowledged: false, summary: { providerReceivedId: id, senderParticipantId: "9915:2055555555", senderIco: "55555555", documentNumber: "IN", documentType: "invoice", receivedAt: null, isTest: true } });
   }
   async provisionOrganization(): Promise<never> { throw new Error("not used"); }
   async getOrganization(): Promise<never> { throw new Error("not used"); }
@@ -358,13 +359,15 @@ await locked(() => db.exec(`
     ('${CA}', '${U.emp}', 'employee', '{"finance":{"view":true,"manage":true}}'),
     ('${CB}', '${U.b}', 'owner', '{}');
   insert into public.company_billing_profile (company_id, legal_name, ico, dic, ic_dph, address_line1, city, postal_code, country_code, electronic_address, electronic_address_scheme_id)
-    values ('${CA}', 'Syntetická A s.r.o.', '11111111', '2020000000', 'SK2020000000', 'Testovacia 1', 'Bratislava', '81101', 'SK', '2020000000', '9950'),
-           ('${CB}', 'Syntetická B s.r.o.', '22222222', '2030000000', 'SK2030000000', 'Skúšobná 2', 'Košice', '04001', 'SK', '2030000000', '9950');
+    values ('${CA}', 'Syntetická A s.r.o.', '11111111', '2020000000', 'SK2020000000', 'Testovacia 1', 'Bratislava', '81101', 'SK', '2020000000', '9915'),
+           ('${CB}', 'Syntetická B s.r.o.', '22222222', '2030000000', 'SK2030000000', 'Skúšobná 2', 'Košice', '04001', 'SK', '2030000000', '9915');
   insert into public.einvoice_organizations (company_id, provider, environment, provider_org_id, participant_id, org_status, peppol_eligible)
-    values ('${CA}', 'mock', 'sandbox', 'org-a', '9950:2020000000', 'active', true),
-           ('${CB}', 'mock', 'sandbox', 'org-b', '9950:2030000000', 'active', true);
+    values ('${CA}', 'mock', 'sandbox', 'org-a', '9915:2020000000', 'active', true),
+           ('${CB}', 'mock', 'sandbox', 'org-b', '9915:2030000000', 'active', true);
   insert into public.company_entitlements (company_id, entitlement_key, source, note)
     values ('${CA}', 'einvoice', 'manual', 'test'), ('${CB}', 'einvoice', 'manual', 'test');
+  insert into public.einvoice_rollout (company_id, environment, stage, changed_by)
+    values ('${CA}', 'sandbox', 'internal', 'test'), ('${CB}', 'sandbox', 'internal', 'test');
 `));
 
 // -----------------------------------------------------------------------------
@@ -374,13 +377,13 @@ const supplierParty = (over: Partial<UblParty> = {}): UblParty => ({
   role: "seller", legal_name: "Dodávateľ X s.r.o.", ico: "55555555", dic: "2055555555", ic_dph: "SK2055555555",
   address_line1: "Dodávateľská 5", address_line2: null, city: "Trnava", postal_code: "91701", country_code: "SK",
   iban: "SK3112000000198742637541", bic: "TESTSKBX", email: null,
-  electronic_address: "2055555555", electronic_address_scheme_id: "9950",
+  electronic_address: "2055555555", electronic_address_scheme_id: "9915",
   legal_registration_id: null, legal_registration_scheme_id: null, vat_identifier: null, ...over,
 });
 const customerParty = (endpoint = "2020000000", ico = "11111111"): UblParty => ({
   role: "buyer", legal_name: "Syntetická A s.r.o.", ico, dic: endpoint, ic_dph: `SK${endpoint}`,
   address_line1: "Testovacia 1", address_line2: null, city: "Bratislava", postal_code: "81101", country_code: "SK",
-  iban: null, bic: null, email: null, electronic_address: endpoint, electronic_address_scheme_id: "9950",
+  iban: null, bic: null, email: null, electronic_address: endpoint, electronic_address_scheme_id: "9915",
   legal_registration_id: null, legal_registration_scheme_id: null, vat_identifier: null,
 });
 function inboundXml(number: string, opts: { category?: "S" | "K"; endpoint?: string; customerIco?: string; supplier?: Partial<UblParty> } = {}): Uint8Array {
@@ -421,7 +424,7 @@ await check("mapovanie: profil EN16931, dobropis a neznáma DPH kategória = UNS
   const ok = parseInboundUbl(inboundXml("FA-M-1"));
   assert.ok(ok.ok);
   if (!ok.ok) return;
-  const m = mapInboundDraft(ok.document, ok.reviewReasons, "9950:2020000000");
+  const m = mapInboundDraft(ok.document, ok.reviewReasons, "9915:2020000000");
   assert.ok(m.ok);
   if (m.ok) {
     assert.equal(m.draft.supplier.ico, "55555555");
@@ -433,7 +436,7 @@ await check("mapovanie: profil EN16931, dobropis a neznáma DPH kategória = UNS
   assert.deepEqual(mapInboundDraft({ ...ok.document, documentType: "CreditNote" }, [], null), { ok: false, code: "UNSUPPORTED_PROFILE", detail: "CREDIT_NOTE_NOT_SUPPORTED" });
   assert.deepEqual(mapInboundDraft({ ...ok.document, lines: [{ ...ok.document.lines[0], vatCategory: "L" }] }, [], null), { ok: false, code: "UNSUPPORTED_PROFILE", detail: "VAT_CATEGORY_UNSUPPORTED" });
   assert.deepEqual(mapInboundDraft({ ...ok.document, invoiceNumber: null }, [], null), { ok: false, code: "INVALID_XML", detail: "MISSING_INVOICE_NUMBER" });
-  const wrongRecipient = mapInboundDraft(ok.document, [], "9950:9999999999");
+  const wrongRecipient = mapInboundDraft(ok.document, [], "9915:9999999999");
   assert.ok(wrongRecipient.ok && wrongRecipient.reviewReasons.includes("RECIPIENT_ENDPOINT_MISMATCH"));
 });
 
@@ -777,6 +780,77 @@ await check("outbound webhook: stav z tela sa NEpoužije — iba reconciliation 
   const foreign = await webhook({ event: "invoice.delivered", organization_id: "org-b", data: { invoice_id: "prov-out-1" } }, "dlv-out-3");
   assert.deepEqual(foreign, { status: 200, body: { code: "IGNORED" } });
   assert.ok(!provider.calls.some((c) => c.startsWith("sendUbl")));
+});
+
+// =============================================================================
+// Phase 6: presný tvar webhookov podľa dokumentácie poskytovateľa + rollout brána
+// =============================================================================
+await check("docs tvar: peppol.document.received s data.orgId (camelCase) → spracované", async () => {
+  provider.add("org-a", "rcv-docs-1", inboundXml("FA-DOCS-1"));
+  const r = await webhook({
+    event: "peppol.document.received",
+    timestamp: "2026-10-02T10:00:00.000Z",
+    data: { senderName: "Dodávateľ", senderParticipantId: "9915:2020000099", documentNumber: "FA-DOCS-1", documentType: "invoice", total: "12.30", currency: "EUR", mode: "test", orgId: "org-a" },
+  }, "dlv-docs-1");
+  assert.deepEqual(r, { status: 200, body: { code: "PROCESSED" } });
+  assert.equal((await inboundByPid("rcv-docs-1")).processing_status, "acknowledged");
+});
+
+await check("docs tvar: peppol.document.delivered s data.invoiceId → reconciliation (stav z tela sa nepoužije)", async () => {
+  provider.status.set("prov-out-1", "sent");
+  provider.calls = [];
+  const r = await webhook({
+    event: "peppol.document.delivered",
+    timestamp: "2026-10-02T10:00:00.000Z",
+    data: { invoiceId: "prov-out-1", invoiceNumber: "X", documentType: "invoice", mode: "test", state: "DELIVERED", orgId: "org-a" },
+  }, "dlv-docs-2");
+  assert.deepEqual(r, { status: 200, body: { code: "RECONCILED" } });
+  assert.deepEqual(provider.calls, ["status:prov-out-1"]);
+});
+
+await check("data.mode z inej siete (live udalosť na sandbox serveri) → IGNORED, nič sa nespracuje", async () => {
+  provider.calls = [];
+  const r = await webhook({ event: "peppol.document.received", data: { mode: "live", orgId: "org-a" } }, "dlv-docs-3");
+  assert.deepEqual(r, { status: 200, body: { code: "IGNORED" } });
+  assert.deepEqual(provider.calls, []);
+  const wh = (await sql<Row>("select processing_status, error from public.einvoice_webhook_events where delivery_id = 'dlv-docs-3'")).rows[0];
+  assert.equal(wh.processing_status, "ignored");
+  assert.equal(wh.error, "ENVIRONMENT_MISMATCH");
+});
+
+await check("rollout: pozastavená firma (stage paused) → doklad sa zaregistruje, ale nespracuje ani nepotvrdí; po povolení áno", async () => {
+  await sql("update public.einvoice_rollout set stage = 'paused' where company_id = $1", [CB]);
+  provider.add("org-b", "rcv-gate-1", inboundXml("FA-GATE-1", { endpoint: "2030000000", customerIco: "22222222" }));
+  await makeDue();
+  await runInboundPoll(deps(), { batchSize: 10 });
+  let row = await inboundByPid("rcv-gate-1");
+  assert.equal(row.processing_status, "received");
+  assert.equal(row.invoice_id, null);
+  assert.ok(!provider.calls.includes("ack:rcv-gate-1"));
+  await sql("update public.einvoice_rollout set stage = 'pilot' where company_id = $1", [CB]);
+  await makeDue();
+  await runInboundPoll(deps(), { batchSize: 10 });
+  row = await inboundByPid("rcv-gate-1");
+  assert.equal(row.processing_status, "acknowledged");
+});
+
+await check("rollout tabuľka: klient (aj owner) ju nevidí ani nemení; brána nie je volateľná klientom", async () => {
+  assert.match(await errorOf(() => as(U.owner, () => db.query("select * from public.einvoice_rollout"))), /permission denied/);
+  assert.match(await errorOf(() => as(U.owner, () => db.query("insert into public.einvoice_rollout (company_id, environment, stage, changed_by) values ($1, 'live', 'ga', 'x')", [CA]))), /permission denied/);
+  assert.match(await errorOf(() => as(U.owner, () => db.query("select public.esblu_einvoice_rollout_allowed($1, 'sandbox')", [CA]))), /permission denied/);
+  const mine = (await as(U.owner, () => db.query<{ r: boolean }>("select public.esblu_einvoice_my_rollout('sandbox') r"))).rows[0].r;
+  assert.equal(mine, true);
+  const emp = (await as(U.emp, () => db.query<{ r: boolean }>("select public.esblu_einvoice_my_rollout('sandbox') r"))).rows[0].r;
+  assert.equal(emp, false, "employee nikdy");
+  const live = (await as(U.owner, () => db.query<{ r: boolean }>("select public.esblu_einvoice_my_rollout('live') r"))).rows[0].r;
+  assert.equal(live, false, "live nie je povolené (default deny)");
+});
+
+await check("live organizácia s participant schémou 9915 (Peppol TEST) je v DB odmietnutá", async () => {
+  assert.match(
+    await errorOf(() => sql("insert into public.einvoice_organizations (company_id, provider, environment, provider_org_id, participant_id) values ($1, 'mock', 'live', 'org-a-live', '9915:2020000000')", [CA])),
+    /participant_env_scheme/
+  );
 });
 
 // =============================================================================

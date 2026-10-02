@@ -33,7 +33,16 @@ export type OutboundRequestDeps = {
   env?: Record<string, string | undefined>;
 };
 
-export type OutboundRequestInput = { userId: string; invoiceId: string };
+export type OutboundRequestInput = {
+  userId: string;
+  invoiceId: string;
+  /**
+   * Phase 6: nový pokus po terminálnom failed/rejected smie vzniknúť IBA cez
+   * operátorskú akciu (esblu_einvoice_operator_begin: cooldown, NOT_LATEST,
+   * audit udalosť). Bežné „Odoslať" po neúspechu vráti RETRY_REQUIRES_OPERATOR_ACTION.
+   */
+  allowNewAttempt?: boolean;
+};
 
 export type OutboundApiBody = {
   code: string;
@@ -66,6 +75,7 @@ function preflightIssues(issues: PreflightIssue[]): OutboundApiBody["issues"] {
 
 function statusForDbCode(code: string): number {
   if (code.startsWith("ENTITLEMENT_DENIED")) return 403;
+  if (code === "ESBLU_EINVOICE_ROLLOUT_NOT_ENABLED") return 403;
   if (code === "ESBLU_FORBIDDEN_FINANCE_MANAGE_REQUIRED" || code === "ESBLU_NO_ACTIVE_COMPANY") return 403;
   if (code === "NOT_AUTHENTICATED") return 401;
   if (code === "ESBLU_INVOICE_NOT_FOUND") return 404;
@@ -73,15 +83,19 @@ function statusForDbCode(code: string): number {
   return 500;
 }
 
-async function findActiveOutbound(userDb: SupabaseClient, invoiceId: string): Promise<{ id: string; state: string } | null | "error"> {
+async function findActiveOutbound(
+  userDb: SupabaseClient,
+  invoiceId: string
+): Promise<{ active: { id: string; state: string } | null; hasAny: boolean } | "error"> {
   const { data, error } = await userDb
     .from("einvoice_outbound")
     .select("id, state, attempt")
     .eq("invoice_id", invoiceId)
     .returns<{ id: string; state: string; attempt: number }[]>();
   if (error) return "error";
-  const active = (data ?? []).filter((r) => !ACTIVE_EXCLUDED.has(r.state)).sort((a, b) => b.attempt - a.attempt)[0];
-  return active ? { id: active.id, state: active.state } : null;
+  const rows = data ?? [];
+  const active = rows.filter((r) => !ACTIVE_EXCLUDED.has(r.state)).sort((a, b) => b.attempt - a.attempt)[0];
+  return { active: active ? { id: active.id, state: active.state } : null, hasAny: rows.length > 0 };
 }
 
 export async function requestOutboundForInvoice(deps: OutboundRequestDeps, input: OutboundRequestInput): Promise<OutboundRequestResult> {
@@ -101,7 +115,10 @@ export async function requestOutboundForInvoice(deps: OutboundRequestDeps, input
   // 2) Idempotencia požiadavky: aktívny pokus už existuje → vrátiť ho, nič nové.
   const existing = await findActiveOutbound(deps.userDb, input.invoiceId);
   if (existing === "error") return { status: 500, body: { code: "QUERY_FAILED" } };
-  if (existing) return { status: 200, body: { code: "ALREADY_REQUESTED", outbound: existing, readiness } };
+  if (existing.active) return { status: 200, body: { code: "ALREADY_REQUESTED", outbound: existing.active, readiness } };
+  if (existing.hasAny && !input.allowNewAttempt) {
+    return { status: 409, body: { code: "RETRY_REQUIRES_OPERATOR_ACTION", readiness } };
+  }
 
   // 3) Serverová konfigurácia poskytovateľa a organizácia firmy.
   const runtime = deps.runtime;
@@ -112,6 +129,12 @@ export async function requestOutboundForInvoice(deps: OutboundRequestDeps, input
   if (!org || !org.providerOrgId || org.provider !== runtime.provider.name) {
     return { status: 409, body: { code: "ORGANIZATION_NOT_READY", readiness } };
   }
+  // Phase 6: rollout allowlist (fail-closed) PRED akýmkoľvek volaním poskytovateľa.
+  // DB to vynúti znova (BEFORE INSERT trigger) — toto len šetrí volania.
+  const rollout = await deps.userDb.rpc("esblu_einvoice_my_rollout", { p_environment: runtime.environment });
+  if (rollout.error) return { status: 500, body: { code: "QUERY_FAILED" } };
+  if (rollout.data !== true) return { status: 403, body: { code: "ROLLOUT_NOT_ENABLED", readiness } };
+
   const ctx = { environment: runtime.environment, providerOrgId: org.providerOrgId };
 
   // 4) Kanonické UBL z nemenného snapshotu + SHA-256.

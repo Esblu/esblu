@@ -65,12 +65,21 @@ async function loadAccess(db: SupabaseClient, env: Record<string, string | undef
   const [view, manage] = await Promise.all([db.rpc("esblu_my_finance_view"), db.rpc("esblu_my_finance_manage")]);
   if (view.error || manage.error) return null;
   const entitlements = await getCompanyEntitlements(db);
+  const configured = providerConfigured(env);
+  // Phase 6: rollout allowlist pre serverové prostredie (fail-closed: chyba = nepovolené).
+  let rolloutEnabled = false;
+  if (configured && view.data === true) {
+    const environment = env.ESBLU_EINVOICE_ENVIRONMENT?.trim();
+    const rollout = await db.rpc("esblu_einvoice_my_rollout", { p_environment: environment });
+    rolloutEnabled = !rollout.error && rollout.data === true;
+  }
   return {
     financeView: view.data === true,
     access: {
       financeManage: manage.data === true,
       entitlementActive: hasEntitlement(entitlements, "einvoice"),
-      providerConfigured: providerConfigured(env),
+      providerConfigured: configured,
+      rolloutEnabled,
     },
   };
 }

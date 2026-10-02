@@ -12,7 +12,7 @@ import {
   type DraftItemRow,
   type PartnerRow,
 } from "./provisional-snapshot.ts";
-import { evaluateEinvoiceReadiness, type ReadinessResult } from "./readiness.ts";
+import { bratislavaToday, evaluateEinvoiceReadiness, type ReadinessResult } from "./readiness.ts";
 import type { EinvoiceEnvironment } from "./provider/types.ts";
 import type { UblInvoiceSnapshot } from "./ubl/model.ts";
 
@@ -116,7 +116,14 @@ export async function loadEinvoiceReadiness(
   if (!header || header.company_id !== companyId) return { ok: false, status: 404, code: "NOT_FOUND" };
   if (header.direction !== "issued") return { ok: false, status: 409, code: "NOT_ISSUED" };
 
-  const common = { financeManage, einvoiceEntitlement, providerConfigured: providerConfigured(env), organization };
+  const common = {
+    financeManage,
+    einvoiceEntitlement,
+    providerConfigured: providerConfigured(env),
+    organization,
+    environment,
+    today: bratislavaToday(),
+  };
 
   if (header.document_status === "finalized") {
     const loaded = await loadFinalizedIssuedInvoiceSnapshot(db, invoiceId, companyId);

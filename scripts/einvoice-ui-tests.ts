@@ -64,8 +64,9 @@ const i18n = (locale: Locale) => ({
 const sk = i18n("sk");
 const fmt = { formatDateTime: (s: string) => `@${s}`, formatDate: (s: string) => `#${s}`, formatMoney: (n: number, c: string | null) => `${n.toFixed(2)} ${c ?? ""}`.trim() };
 
-const FULL: EinvoiceAccess = { financeManage: true, entitlementActive: true, providerConfigured: true };
-const NO_ENT: EinvoiceAccess = { financeManage: true, entitlementActive: false, providerConfigured: true };
+const FULL: EinvoiceAccess = { financeManage: true, entitlementActive: true, providerConfigured: true, rolloutEnabled: true };
+const NO_ENT: EinvoiceAccess = { financeManage: true, entitlementActive: false, providerConfigured: true, rolloutEnabled: true };
+const NO_ROLLOUT: EinvoiceAccess = { ...FULL, rolloutEnabled: false };
 
 function attempt(over: Partial<OutboundAttemptDto> = {}): OutboundAttemptDto {
   return {
@@ -495,7 +496,7 @@ const STORAGE_PATH = "company/x/einvoice/outbound/secret-path.xml";
 
 const ENV_OK = { ESBLU_EINVOICE_PROVIDER: "efaktura_sk", ESBLU_EINVOICE_ENVIRONMENT: "sandbox", ESBLU_EFAKTURA_API_KEY: "efk_pk_test_" + "0".repeat(24) };
 
-function fakeDb(opts: { financeView: boolean; financeManage: boolean; einvoice: boolean; tables: Record<string, Row[]> }) {
+function fakeDb(opts: { financeView: boolean; financeManage: boolean; einvoice: boolean; rollout?: boolean; tables: Record<string, Row[]> }) {
   const rpc = async (name: string) => {
     switch (name) {
       case "esblu_my_finance_view":
@@ -507,6 +508,8 @@ function fakeDb(opts: { financeView: boolean; financeManage: boolean; einvoice: 
           data: { company_id: "co", trial: { started_at: null, ends_at: null, active: false }, entitlements: [{ key: "einvoice", active: opts.einvoice, source: "manual", reason: opts.einvoice ? null : "ENTITLEMENT_REQUIRED" }] },
           error: null,
         };
+      case "esblu_einvoice_my_rollout":
+        return { data: opts.rollout ?? true, error: null };
       case "esblu_my_active_company_id":
         // readiness sa v teste nenačíta (rovnako ako výpadok) → readiness=null, send=false
         return { data: null, error: { message: "not in test" } };
@@ -652,6 +655,26 @@ await test("bežná prijatá faktúra bez e-faktúry → kind=none (panel sa nez
   t.einvoice_inbound = [];
   const r = await loadInvoiceEinvoiceSummary(fakeDb({ financeView: true, financeManage: true, einvoice: true, tables: t }), INV_IN, ME, ENV_OK);
   assert.ok(r.ok && r.data.kind === "none");
+});
+
+await test("rollout nepovolený (firma mimo allowlistu) → neutrálny oznam, história ostáva, žiadne send/retry", () => {
+  const html = renderOutbound(outbound({ access: NO_ROLLOUT, attempts: [attempt({ state: "rejected", category: "rejected" })], timeline: TIMELINE }));
+  assert.ok(has(html, sk.t("invoices.einvoice.panel.rolloutDisabled")));
+  assert.ok(action(html, "download"));
+  assert.ok(!action(html, "send") && !action(html, "retry"));
+  assert.deepEqual(outboundAllowedActions({ access: NO_ROLLOUT, readinessReady: true, attempts: [] }), { send: false, reconcile: false, retry: false });
+  assert.equal(outboundAllowedActions({ access: NO_ROLLOUT, readinessReady: true, attempts: [row("sent")] }).reconcile, true, "reconcile = iba čítanie stavu");
+  assert.deepEqual(inboundAllowedActions({ access: NO_ROLLOUT, status: "ack_pending", invoiceId: "x", hasXml: true, lastErrorCode: null }), { reprocess: false, ackRetry: false });
+  const inb = renderInbound(inboundDetail(inboundItem(), { access: NO_ROLLOUT }));
+  assert.ok(has(inb, sk.t("invoices.einvoice.panel.rolloutDisabled")));
+});
+
+await test("server: firma mimo rollout allowlistu → rolloutEnabled=false, žiadne akcie (ani pri plných právach)", async () => {
+  const r = await loadInvoiceEinvoiceSummary(fakeDb({ financeView: true, financeManage: true, einvoice: true, rollout: false, tables: tables() }), INV_OUT, ME, ENV_OK);
+  assert.ok(r.ok && r.data.kind === "outbound");
+  if (!r.ok || r.data.kind !== "outbound") return;
+  assert.equal(r.data.access.rolloutEnabled, false);
+  assert.deepEqual(r.data.allowed, { send: false, reconcile: false, retry: false });
 });
 
 // ============================================================================= 5) STATICKÉ KONTROLY
@@ -810,9 +833,9 @@ await test("zoznam faktúr odkazuje na prijaté e-faktúry iba pri finančnom pr
   assert.ok(hasTranslation("sk", "invoices.source.efaktura_peppol"));
 });
 
-await test("v repozitári nie je nová migrácia vo Phase 5 (UI iba číta cez RLS)", () => {
+await test("migrácie E-Faktúry končia rollout bránou Phase 6 (UI iba číta cez RLS)", () => {
   const migrations = readdirSync(path.join(ROOT, "supabase/migrations")).filter((f) => f.startsWith("20261002") || f.startsWith("2026100"));
-  assert.ok(migrations.every((f) => f <= "20261002140000_einvoice_operations.sql"), migrations.join(","));
+  assert.ok(migrations.every((f) => f <= "20261002150000_einvoice_rollout_gate.sql"), migrations.join(","));
 });
 
 console.log(`\n${passed} passed, ${failures.length} failed`);

@@ -21,6 +21,13 @@ import { runOutboundReconcileBatch, runOutboundSendBatch } from "@/lib/einvoice/
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
+/** Rezerva pod maxDuration (60 s): posledný riadok musí dobehnúť pred koncom funkcie. */
+const RUN_BUDGET_MS = 50_000;
+/** Jedno odoslanie = 1 volanie poskytovateľa (timeout 20 s) + zápis. */
+const SEND_ITEM_BUDGET_MS = 25_000;
+/** Jedna reconciliation = stav + dôkaz (2 × 20 s) + zápis. */
+const RECONCILE_ITEM_BUDGET_MS = 45_000;
+
 function authorized(req: Request): boolean {
   const secret = process.env.CRON_SECRET?.trim();
   if (!secret || secret.length < 16) return false;
@@ -45,10 +52,15 @@ export async function GET(req: Request) {
   }
   if (!runtimeConfig) return Response.json({ success: true, configured: false });
 
+  // Phase 6: ?mode=send | reconcile (samostatné cron záznamy), predvolene oboje.
+  // Odosielanie má prednosť; každý riadok sa claimne až keď sa do termínu stihne.
+  const mode = new URL(req.url).searchParams.get("mode");
+  const startedAt = Date.now();
   const deps = { store: createSupabaseOutboundStore(), provider: runtimeConfig.provider };
-  const options = { batchSize: batchSize(), leaseSeconds: 120, reconcileAfterSeconds: 300 };
-  const reconcile = await runOutboundReconcileBatch(deps, options);
-  const send = await runOutboundSendBatch(deps, options);
+  const base = { batchSize: batchSize(), leaseSeconds: 120, reconcileAfterSeconds: 300, deadlineMs: startedAt + RUN_BUDGET_MS };
+  const empty = { claimed: 0, results: [] };
+  const send = mode === "reconcile" ? empty : await runOutboundSendBatch(deps, { ...base, itemBudgetMs: SEND_ITEM_BUDGET_MS });
+  const reconcile = mode === "send" ? empty : await runOutboundReconcileBatch(deps, { ...base, itemBudgetMs: RECONCILE_ITEM_BUDGET_MS });
 
   const summarize = (r: typeof send) => ({
     claimed: r.claimed,

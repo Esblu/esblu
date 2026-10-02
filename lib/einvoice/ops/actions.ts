@@ -102,7 +102,7 @@ export async function runOperatorAction(
       // Nový pokus = štandardná požiadavka (readiness pod RLS, príjemca, preflight, RPC).
       const result = await requestOutboundForInvoice(
         { userDb: deps.userDb, store: deps.outbound, runtime, env: deps.env },
-        { userId: input.userId, invoiceId: row.invoice_id }
+        { userId: input.userId, invoiceId: row.invoice_id, allowNewAttempt: true }
       );
       return {
         status: result.status,

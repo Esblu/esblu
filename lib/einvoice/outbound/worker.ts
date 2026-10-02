@@ -36,6 +36,15 @@ export type WorkerOptions = {
   batchSize?: number;
   leaseSeconds?: number;
   reconcileAfterSeconds?: number;
+  /**
+   * Phase 6: absolútny termín behu (epoch ms). Riadky sa claimujú PO JEDNOM a
+   * ďalší sa nezoberie, ak by sa do termínu nestihol (itemBudgetMs). Tým sa
+   * nikdy neoznačí ako „in flight" riadok, ktorý sa v tomto behu neodošle
+   * (pád serverless funkcie na maxDuration by inak zanechal falošne neistý výsledok).
+   */
+  deadlineMs?: number;
+  /** Odhad najhoršieho trvania jedného riadku (timeouty volaní poskytovateľa). */
+  itemBudgetMs?: number;
 };
 
 export type WorkerItemResult = { outboundId: string; from: string; to: string; code: string | null };
@@ -163,20 +172,43 @@ async function sendOne(deps: WorkerDeps, row: OutboundRow): Promise<WorkerItemRe
   return recordFailure(deps, row, { kind: "retry", code: "EINVOICE_PROVIDER_UNEXPECTED_RESULT", outcomeUnknown: true });
 }
 
-/** Jeden beh odosielania. Chyba pri jednom riadku nezastaví ostatné. */
-export async function runOutboundSendBatch(deps: WorkerDeps, options: WorkerOptions = {}): Promise<WorkerReport> {
-  const rows = await deps.store.claim("send", options.batchSize ?? DEFAULT_BATCH, options.leaseSeconds ?? DEFAULT_LEASE_SECONDS);
+/**
+ * Claim po jednom riadku s termínom (Phase 6). `claim(…, 1, …)` označí in-flight
+ * iba riadok, ktorý sa hneď spracuje.
+ */
+async function runClaimLoop(
+  options: WorkerOptions,
+  claimOne: () => Promise<OutboundRow[]>,
+  handle: (row: OutboundRow) => Promise<WorkerItemResult>
+): Promise<WorkerReport> {
+  const max = Math.max(1, Math.min(10, Math.floor(options.batchSize ?? DEFAULT_BATCH)));
   const results: WorkerItemResult[] = [];
-  for (const row of rows) {
-    try {
-      results.push(await sendOne(deps, row));
-    } catch (error) {
-      // Zápis výsledku zlyhal (napr. STALE) — lease vyprší, send_in_flight ostane
-      // → ďalší claim to vyhodnotí ako neistý výsledok a zopakuje TEN ISTÝ kľúč.
-      results.push({ outboundId: row.id, from: row.state, to: row.state, code: error instanceof OutboundStoreError ? error.code : errorCode(error) });
+  let claimed = 0;
+  for (let i = 0; i < max; i++) {
+    if (options.deadlineMs !== undefined && Date.now() + (options.itemBudgetMs ?? 0) > options.deadlineMs) break;
+    const rows = await claimOne();
+    if (rows.length === 0) break;
+    claimed += rows.length;
+    for (const row of rows) {
+      try {
+        results.push(await handle(row));
+      } catch (error) {
+        // Zápis výsledku zlyhal (napr. STALE) — lease vyprší, send_in_flight ostane
+        // → ďalší claim to vyhodnotí ako neistý výsledok a zopakuje TEN ISTÝ kľúč.
+        results.push({ outboundId: row.id, from: row.state, to: row.state, code: error instanceof OutboundStoreError ? error.code : errorCode(error) });
+      }
     }
   }
-  return { claimed: rows.length, results };
+  return { claimed, results };
+}
+
+/** Jeden beh odosielania. Chyba pri jednom riadku nezastaví ostatné. */
+export async function runOutboundSendBatch(deps: WorkerDeps, options: WorkerOptions = {}): Promise<WorkerReport> {
+  return runClaimLoop(
+    options,
+    () => deps.store.claim("send", 1, options.leaseSeconds ?? DEFAULT_LEASE_SECONDS),
+    (row) => sendOne(deps, row)
+  );
 }
 
 /**
@@ -289,19 +321,15 @@ async function reconcileOne(deps: WorkerDeps, row: OutboundRow): Promise<WorkerI
 
 /** Jeden beh reconciliation (sending/sent/deferred s ID poskytovateľa staršie než prah). */
 export async function runOutboundReconcileBatch(deps: WorkerDeps, options: WorkerOptions = {}): Promise<WorkerReport> {
-  const rows = await deps.store.claim(
-    "reconcile",
-    options.batchSize ?? DEFAULT_BATCH,
-    options.leaseSeconds ?? DEFAULT_LEASE_SECONDS,
-    options.reconcileAfterSeconds ?? DEFAULT_RECONCILE_AFTER_SECONDS
+  return runClaimLoop(
+    options,
+    () =>
+      deps.store.claim(
+        "reconcile",
+        1,
+        options.leaseSeconds ?? DEFAULT_LEASE_SECONDS,
+        options.reconcileAfterSeconds ?? DEFAULT_RECONCILE_AFTER_SECONDS
+      ),
+    (row) => reconcileOne(deps, row)
   );
-  const results: WorkerItemResult[] = [];
-  for (const row of rows) {
-    try {
-      results.push(await reconcileOne(deps, row));
-    } catch (error) {
-      results.push({ outboundId: row.id, from: row.state, to: row.state, code: error instanceof OutboundStoreError ? error.code : errorCode(error) });
-    }
-  }
-  return { claimed: rows.length, results };
 }

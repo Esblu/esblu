@@ -108,7 +108,10 @@ async function handleVerified(
 
   const deliveryId = str(input.deliveryIdHeader) ?? str(payload.id) ?? str(payload.delivery_id);
   const event = str(payload.event) ?? str(payload.type);
-  const providerOrgId = str(payload.organization_id) ?? str(payload.org_id) ?? str(data?.organization_id) ?? str(data?.org_id);
+  // Docs (developers.efaktura.sk/docs/webhooks, 2026-10): obálka {event, timestamp, data},
+  // `data.orgId` je VŽDY prítomné. snake_case varianty ostávajú ako fallback.
+  const providerOrgId =
+    str(data?.orgId) ?? str(payload.organization_id) ?? str(payload.org_id) ?? str(data?.organization_id) ?? str(data?.org_id);
   if (!deliveryId || !DELIVERY_ID.test(deliveryId) || !event || !EVENT.test(event)) {
     return { status: 400, body: { code: "INVALID_PAYLOAD" } };
   }
@@ -132,6 +135,14 @@ async function handleVerified(
     return { status: 200, body: { code: "UNKNOWN_ORG" } };
   }
 
+  // `data.mode` = "test" pri sandbox (test) odosielaní. Udalosť z inej siete,
+  // než je serverové prostredie, sa nespracuje (ochrana proti zámene prostredí).
+  const mode = str(data?.mode);
+  if (mode && ((mode === "test") !== (deps.environment === "sandbox"))) {
+    await deps.inbound.webhookComplete(record.webhookEventId, "ignored", "ENVIRONMENT_MISMATCH");
+    return { status: 200, body: { code: "IGNORED" } };
+  }
+
   const kind = classifyWebhookEvent(event);
   try {
     if (kind === "inbound") {
@@ -146,7 +157,8 @@ async function handleVerified(
       return { status: 200, body: { code: failed ? "ACCEPTED_RETRY_LATER" : "PROCESSED" } };
     }
     if (kind === "outbound") {
-      const submissionId = str(data?.invoice_id) ?? str(payload.invoice_id);
+      // Docs: data.invoiceId (camelCase) = invoice_id z connector/send (náš provider_submission_id).
+      const submissionId = str(data?.invoiceId) ?? str(data?.invoice_id) ?? str(payload.invoice_id);
       if (!submissionId || !ORG_ID.test(submissionId)) {
         await deps.inbound.webhookComplete(record.webhookEventId, "ignored", "MISSING_SUBMISSION_ID");
         return { status: 200, body: { code: "IGNORED" } };

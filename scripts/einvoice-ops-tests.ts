@@ -114,6 +114,7 @@ for (const migration of [
   "20261002130000_einvoice_inbound_flow.sql",
   // --- predmet testu ---
   "20261002140000_einvoice_operations.sql",
+  "20261002150000_einvoice_rollout_gate.sql",
 ]) {
   try {
     await db.exec(read(`supabase/migrations/${migration}`));
@@ -205,9 +206,11 @@ function userDb(uid: string | null) {
   }
   return {
     from: builder,
-    async rpc(fn: string) {
+    async rpc(fn: string, args: Record<string, unknown> = {}) {
       try {
-        const res = await as(uid, () => db.query<{ j: unknown }>(`select to_jsonb(public.${fn}()) j`));
+        const names = Object.keys(args);
+        const call = `public.${fn}(${names.map((n, i) => `${n} => $${i + 1}`).join(", ")})`;
+        const res = await as(uid, () => db.query<{ j: unknown }>(`select to_jsonb(${call}) j`, names.map((n) => args[n])));
         return { data: res.rows[0]?.j ?? null, error: null };
       } catch (error) {
         return { data: null, error: { message: error instanceof Error ? error.message : String(error) } };
@@ -333,7 +336,7 @@ class FakeProvider implements EinvoiceProvider {
     if (this.statusError) throw this.statusError;
     const state = this.status.get(s.providerSubmissionId);
     if (!state) throw new EinvoiceProviderError("EINVOICE_PROVIDER_NOT_FOUND");
-    return { state, receiverIdentifier: "9950:2040000000", documentId: state === "delivered" ? `doc-${s.providerSubmissionId}` : null, errorMessage: state === "failed" ? "AS4 error" : null, updatedAt: null };
+    return { state, receiverIdentifier: "9915:2040000000", documentId: state === "delivered" ? `doc-${s.providerSubmissionId}` : null, errorMessage: state === "failed" ? "AS4 error" : null, updatedAt: null };
   }
   async getDeliveryEvidence(c: ProviderContext, s: { providerSubmissionId: string }): Promise<DeliveryEvidence | null> {
     this.calls.push("getDeliveryEvidence");
@@ -420,7 +423,7 @@ const U = {
 };
 const PARTNER_A = "d0000000-0000-4000-8000-00000000000a";
 const PARTNER_B = "d0000000-0000-4000-8000-00000000000b";
-const BUYER = "9950:2040000000";
+const BUYER = "9915:2040000000";
 
 await locked(() => db.exec(`
   insert into auth.users (id) values ${Object.values(U).map((u) => `('${u}')`).join(", ")};
@@ -436,18 +439,20 @@ await locked(() => db.exec(`
   insert into public.company_billing_profile (company_id, legal_name, ico, dic, ic_dph, address_line1, city, postal_code,
       country_code, iban, contact_email, electronic_address, electronic_address_scheme_id)
     values ('${CA}', 'Syntetická A s.r.o.', '11111111', '2020000000', 'SK2020000000', 'Testovacia 1', 'Bratislava', '81101',
-      'SK', 'SK3112000000198742637541', 'fakturacia@example.test', '2020000000', '9950'),
+      'SK', 'SK3112000000198742637541', 'fakturacia@example.test', '2020000000', '9915'),
            ('${CB}', 'Syntetická B s.r.o.', '22222222', '2030000000', 'SK2030000000', 'Skúšobná 2', 'Košice', '04001',
-      'SK', null, null, '2030000000', '9950');
+      'SK', null, null, '2030000000', '9915');
   insert into public.business_partners (id, company_id, kind, legal_name, ico, dic, ic_dph, address_line1, city,
       postal_code, country_code, electronic_address, electronic_address_scheme_id)
     values ('${PARTNER_A}', '${CA}', 'customer', 'Odberateľ s.r.o.', '33333333', '2040000000', 'SK2040000000',
-      'Príkladná 3', 'Žilina', '01001', 'SK', '2040000000', '9950'),
-           ('${PARTNER_B}', '${CB}', 'customer', 'Odberateľ B', '44444444', '2050000000', 'SK2050000000', 'Iná 4', 'Nitra', '94901', 'SK', '2050000000', '9950');
+      'Príkladná 3', 'Žilina', '01001', 'SK', '2040000000', '9915'),
+           ('${PARTNER_B}', '${CB}', 'customer', 'Odberateľ B', '44444444', '2050000000', 'SK2050000000', 'Iná 4', 'Nitra', '94901', 'SK', '2050000000', '9915');
   insert into public.einvoice_organizations (company_id, provider, environment, provider_org_id, participant_id, org_status, peppol_eligible)
-    values ('${CA}', 'mock', 'sandbox', 'org-a-synthetic', '9950:2020000000', 'active', true),
-           ('${CB}', 'mock', 'sandbox', 'org-b-synthetic', '9950:2030000000', 'active', true);
+    values ('${CA}', 'mock', 'sandbox', 'org-a-synthetic', '9915:2020000000', 'active', true),
+           ('${CB}', 'mock', 'sandbox', 'org-b-synthetic', '9915:2030000000', 'active', true);
   insert into public.company_entitlements (company_id, entitlement_key, source, note) values ('${CA}', 'einvoice', 'manual', 'test');
+  insert into public.einvoice_rollout (company_id, environment, stage, changed_by)
+    values ('${CA}', 'sandbox', 'internal', 'test'), ('${CB}', 'sandbox', 'internal', 'test');
 `));
 
 const ITEMS = [
@@ -800,7 +805,7 @@ await check("finance.manage povinné: admin bez financií, admin iba view, emplo
 const supplierParty = (over: Partial<UblParty> = {}): UblParty => ({
   role: "seller", legal_name: "Dodávateľ X s.r.o.", ico: "55555555", dic: "2055555555", ic_dph: "SK2055555555",
   address_line1: "Dodávateľská 5", address_line2: null, city: "Trnava", postal_code: "91701", country_code: "SK",
-  iban: "SK3112000000198742637541", bic: "TESTSKBX", email: null, electronic_address: "2055555555", electronic_address_scheme_id: "9950",
+  iban: "SK3112000000198742637541", bic: "TESTSKBX", email: null, electronic_address: "2055555555", electronic_address_scheme_id: "9915",
   legal_registration_id: null, legal_registration_scheme_id: null, vat_identifier: null, ...over,
 });
 function inboundXml(number: string): Uint8Array {
@@ -868,7 +873,7 @@ await check("reprocess po zlyhaní konceptu (chýbajúci nárok) → po obnove n
 await check("reprocess failed s uloženým XML: failed → stored (bez prepisu XML/hashu), dedupe ostáva; bez XML nepovolené", async () => {
   // dodávateľ bez akejkoľvek identity → trvalé zlyhanie konceptu
   const xml = new TextDecoder().decode(inboundXml("FA-OPS-2"))
-    .replace(/<cbc:EndpointID schemeID="9950">2055555555<\/cbc:EndpointID>/, "")
+    .replace(/<cbc:EndpointID schemeID="9915">2055555555<\/cbc:EndpointID>/, "")
     .replace(/<cac:PartyTaxScheme><cbc:CompanyID>SK2055555555<\/cbc:CompanyID><cac:TaxScheme><cbc:ID>VAT<\/cbc:ID><\/cac:TaxScheme><\/cac:PartyTaxScheme>/, "")
     .replace(/<cbc:CompanyID schemeID="0158">55555555<\/cbc:CompanyID>/, "");
   const row = await receive("rcv-ops-2", new TextEncoder().encode(xml));
@@ -967,7 +972,7 @@ await check("health: počty sedia s DB, výstup iba čísla — žiadne firmy, I
   assert.equal(health.inbound.failed, await c("select count(*)::int n from public.einvoice_inbound where processing_status = 'failed'"));
   assert.ok(health.webhook.signature_failures_1h >= 1);
   const text = JSON.stringify(raw);
-  for (const forbidden of [CA, CB, "11111111", "55555555", "FA-OPS", "9950:", "org-a-synthetic", "efk_", "whsec_", "Syntetick"]) {
+  for (const forbidden of [CA, CB, "11111111", "55555555", "FA-OPS", "9915:", "org-a-synthetic", "efk_", "whsec_", "Syntetick"]) {
     assert.ok(!text.includes(forbidden), forbidden);
   }
   for (const group of [health.outbound, health.inbound, health.webhook]) {

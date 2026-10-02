@@ -84,6 +84,7 @@ export function outboundPanelModel(summary: OutboundSummaryDto): OutboundPanelMo
   const [current = null, ...previous] = summary.attempts;
   const notices: string[] = [];
   if (!summary.access.providerConfigured) notices.push(`${NS}.panel.notConfigured`);
+  else if (!summary.access.rolloutEnabled) notices.push(`${NS}.panel.rolloutDisabled`);
   if (!summary.access.entitlementActive) notices.push(`${NS}.panel.entitlementRequired`);
   if (!summary.access.financeManage) notices.push(`${NS}.panel.readOnly`);
   const actions: ("reconcile" | "retry")[] = [];
@@ -181,6 +182,8 @@ const ERROR_KEYS: [RegExp, string][] = [
   [/NOT_LATEST_ATTEMPT$/, "NOT_LATEST_ATTEMPT"],
   [/ACK_REQUIRES_DRAFT$/, "ACK_REQUIRES_DRAFT"],
   [/^PROVIDER_NOT_CONFIGURED$|^PROVIDER_MISMATCH$/, "PROVIDER_NOT_CONFIGURED"],
+  [/ROLLOUT_NOT_ENABLED$/, "ROLLOUT_NOT_ENABLED"],
+  [/^RETRY_REQUIRES_OPERATOR_ACTION$/, "RETRY_REQUIRES_OPERATOR_ACTION"],
   [/^STORAGE_INTEGRITY$/, "STORAGE_INTEGRITY"],
   [/^READINESS_FAILED$|^UBL_NOT_READY$/, "READINESS_FAILED"],
   [/^INVOICE_NOT_FINALIZED$/, "INVOICE_NOT_FINALIZED"],
@@ -213,7 +216,7 @@ export function allStaticKeys(): string[] {
   for (const c of Object.keys(SUCCESS)) keys.add(`${NS}.result.${c}`);
   for (const [, k] of ERROR_KEYS) keys.add(`${NS}.errors.${k}`);
   for (const k of ["generic", "UNAUTHENTICATED", "FORBIDDEN", "RATE_LIMITED"]) keys.add(`${NS}.errors.${k}`);
-  for (const k of ["notConfigured", "entitlementRequired", "readOnly"]) keys.add(`${NS}.panel.${k}`);
+  for (const k of ["notConfigured", "rolloutDisabled", "entitlementRequired", "readOnly"]) keys.add(`${NS}.panel.${k}`);
   for (const k of ["self", "user", "provider", "system"]) keys.add(`${NS}.source.${k}`);
   for (const k of ["ackDone", "ackPending", "ackNotSent"]) keys.add(`${NS}.inbound.${k}`);
   keys.add(`${NS}.events.created`);
