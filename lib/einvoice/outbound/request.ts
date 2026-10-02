@@ -37,6 +37,13 @@ export type OutboundRequestInput = {
   userId: string;
   invoiceId: string;
   /**
+   * Phase 6: výslovné potvrdenie je súčasťou kontraktu orchestrácie, nie iba
+   * route. user_confirm_send = telo {confirm_send:true} (route-handler);
+   * operator_confirm_action = operátorská akcia {confirm_action:true}.
+   * Chýbajúce/iné → 400 CONFIRMATION_REQUIRED PRED akýmkoľvek čítaním či volaním.
+   */
+  confirmation: "user_confirm_send" | "operator_confirm_action";
+  /**
    * Phase 6: nový pokus po terminálnom failed/rejected smie vzniknúť IBA cez
    * operátorskú akciu (esblu_einvoice_operator_begin: cooldown, NOT_LATEST,
    * audit udalosť). Bežné „Odoslať" po neúspechu vráti RETRY_REQUIRES_OPERATOR_ACTION.
@@ -98,7 +105,16 @@ async function findActiveOutbound(
   return { active: active ? { id: active.id, state: active.state } : null, hasAny: rows.length > 0 };
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export async function requestOutboundForInvoice(deps: OutboundRequestDeps, input: OutboundRequestInput): Promise<OutboundRequestResult> {
+  // 0) Kontrakt: výslovné potvrdenie a platné UUID (nikdy "" do UUID parametrov).
+  if (input.confirmation !== "user_confirm_send" && input.confirmation !== "operator_confirm_action") {
+    return { status: 400, body: { code: "CONFIRMATION_REQUIRED" } };
+  }
+  if (!UUID_RE.test(input.invoiceId ?? "") || !UUID_RE.test(input.userId ?? "")) {
+    return { status: 400, body: { code: "INVALID_INVOICE_ID" } };
+  }
   // 1) Readiness pod RLS volajúceho (finance.manage, nárok, organizácia, doklad).
   const loaded = await loadEinvoiceReadiness(deps.userDb, input.invoiceId, deps.env ?? process.env);
   if (!loaded.ok) return { status: loaded.status, body: { code: loaded.code } };

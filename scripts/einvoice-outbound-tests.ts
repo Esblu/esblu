@@ -18,6 +18,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { requestOutboundForInvoice } from "../lib/einvoice/outbound/request.ts";
+import { handleOutboundSendRequest } from "../lib/einvoice/outbound/route-handler.ts";
 import { parseOutboundRequestBody } from "../lib/einvoice/outbound/request-body.ts";
 import { runOutboundReconcileBatch, runOutboundSendBatch } from "../lib/einvoice/outbound/worker.ts";
 import { backoffMs, classifySendError, MAX_SEND_ATTEMPTS, planAfterError } from "../lib/einvoice/outbound/policy.ts";
@@ -358,7 +359,7 @@ const ENV: Record<string, string | undefined> = {
 function requestAs(uid: string | null, invoiceId: string) {
   return requestOutboundForInvoice(
     { userDb: userDb(uid), store, runtime: { provider, environment: "sandbox" }, env: ENV },
-    { userId: uid ?? "00000000-0000-4000-8000-000000000000", invoiceId }
+    { userId: uid ?? "00000000-0000-4000-8000-000000000000", invoiceId, confirmation: "user_confirm_send" }
   );
 }
 const workerDeps = () => ({ store, provider });
@@ -835,7 +836,7 @@ await check("permanentná 4xx: odmietnutý obsah → rejected; 403 → failed; o
   // po terminálnom stave smie vzniknúť NOVÝ pokus (nový kľúč) iba ručnou operátorskou požiadavkou
   const again = await requestOutboundForInvoice(
     { userDb: userDb(U.owner), store, runtime: { provider, environment: "sandbox" }, env: ENV },
-    { userId: U.owner, invoiceId: c.invoiceId, allowNewAttempt: true }
+    { userId: U.owner, invoiceId: c.invoiceId, allowNewAttempt: true, confirmation: "operator_confirm_action" }
   );
   assert.equal(again.status, 202);
   const second = await outboundOf(again.body.outbound!.id);
@@ -1118,6 +1119,107 @@ await check("termín behu: ak by sa riadok nestihol, NECLAIMNE sa (žiadny falo�
   provider.sendScript = ["ok"];
   await sendOnly(outboundId);
   assert.equal((await outboundOf(outboundId)).state, "sent");
+});
+
+// =============================================================================
+// Phase 6 (L2 forenzika): route cesta, potvrdenie, UUID kontrakt, nemenný snapshot
+// =============================================================================
+const routeDeps = (uid: string | null) => ({
+  authenticate: async () => (uid ? { userId: uid } : null),
+  userDbFor: () => userDb(uid),
+  store: () => store,
+  runtime: () => ({ provider, environment: "sandbox" as const }),
+  env: ENV,
+});
+const post = (body: unknown, token = "test-token") =>
+  new Request("http://localhost/api/einvoice/outbound", {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: typeof body === "string" ? body : JSON.stringify(body),
+  });
+const outboundCount = async () => (await sql<{ n: number }>("select count(*)::int n from public.einvoice_outbound")).rows[0].n;
+
+await check("reconciliation (reálny vzor eFaktura.sk): status SENT + dôkaz delivery_status=delivered → delivered; dôkaz pending/rejected → ostáva sent", async () => {
+  const { invoiceId, outboundId } = await freshQueued();
+  provider.sendScript = ["ok"];
+  await sendOnly(outboundId);
+  const row0 = await outboundOf(outboundId);
+  assert.equal(row0.state, "sent");
+  const subId = row0.provider_submission_id as string;
+  const sha = row0.ubl_sha256 as string;
+  provider.status.set(subId, "sent");
+  provider.evidenceBody.set(subId, { invoice_id: subId, document_id: "d1", ubl_sha256: sha, delivery_status: { state: "pending" }, transactions: [] });
+  await runOutboundReconcileBatch(workerDeps(), WOPTS);
+  assert.equal((await outboundOf(outboundId)).state, "sent", "pending dôkaz nie je doručenie");
+  provider.evidenceBody.set(subId, { invoice_id: subId, document_id: "d1", ubl_sha256: sha, delivery_status: { state: "rejected" }, transactions: [] });
+  await sql("update public.einvoice_outbound set updated_at = now() - interval '1 hour' where id = $1", [outboundId]);
+  await runOutboundReconcileBatch(workerDeps(), WOPTS);
+  assert.equal((await outboundOf(outboundId)).state, "sent", "MLS rejected → stav sa NEMENÍ na delivered");
+  provider.evidenceBody.set(subId, { invoice_id: subId, document_id: "d1", ubl_sha256: sha, delivery_status: { state: "delivered", at: "2026-10-02T10:00:00Z" }, transactions: [{ state: "SENT" }] });
+  await sql("update public.einvoice_outbound set updated_at = now() - interval '1 hour' where id = $1", [outboundId]);
+  await runOutboundReconcileBatch(workerDeps(), WOPTS);
+  const row = await outboundOf(outboundId);
+  assert.equal(row.state, "delivered");
+  assert.ok(row.delivered_at);
+  assert.ok(invoiceId);
+});
+
+await check("route handler: bez presného confirm_send:true → 400, žiadny verify/preflight/queue/send", async () => {
+  const inv = await invoice(U.owner, CA, PARTNER_A);
+  const before = await outboundCount();
+  for (const body of [
+    { invoice_id: inv },
+    { invoice_id: inv, confirm_send: "true" },
+    { invoice_id: inv, confirm_send: 1 },
+    { invoice_id: inv, confirm_send: false },
+    { invoice_id: inv, confirm_send: true, company_id: CB },
+    { invoice_id: "", confirm_send: true },
+    "nie-json",
+  ]) {
+    provider.calls = [];
+    const r = await handleOutboundSendRequest(post(body), routeDeps(U.owner));
+    assert.equal(r.status, 400, JSON.stringify(body));
+    assert.deepEqual(provider.calls, [], `poskytovateľ volaný pre ${JSON.stringify(body)}`);
+  }
+  assert.equal(await outboundCount(), before, "nevznikol žiadny pokus");
+  const noAuth = await handleOutboundSendRequest(post({ invoice_id: inv, confirm_send: true }), routeDeps(null));
+  assert.equal(noAuth.status, 401);
+  const ok = await handleOutboundSendRequest(post({ invoice_id: inv, confirm_send: true }), routeDeps(U.owner));
+  assert.equal(ok.status, 202, JSON.stringify(ok.body));
+  assert.equal(await outboundCount(), before + 1);
+});
+
+await check("orchestrácia: bez výslovného potvrdenia v kontrakte → 400 CONFIRMATION_REQUIRED; \"\" ako UUID → 400 (nikdy DB chyba)", async () => {
+  const inv = await invoice(U.owner, CA, PARTNER_A);
+  provider.calls = [];
+  const deps = { userDb: userDb(U.owner), store, runtime: { provider, environment: "sandbox" as const }, env: ENV };
+  const missing = await requestOutboundForInvoice(deps, { userId: U.owner, invoiceId: inv } as unknown as Parameters<typeof requestOutboundForInvoice>[1]);
+  assert.deepEqual([missing.status, missing.body.code], [400, "CONFIRMATION_REQUIRED"]);
+  const empty = await requestOutboundForInvoice(deps, { userId: U.owner, invoiceId: "", confirmation: "user_confirm_send" });
+  assert.deepEqual([empty.status, empty.body.code], [400, "INVALID_INVOICE_ID"]);
+  assert.deepEqual(provider.calls, []);
+});
+
+await check("nemenný snapshot: po finalizácii owner (RLS) zmení 0 riadkov, service_role (trigger) je odmietnutý; snapshot aj UBL bajtovo rovnaké", async () => {
+  const inv = await invoice(U.owner, CA, PARTNER_A);
+  const ublOf = async () => {
+    const loaded = await loadFinalizedIssuedInvoiceSnapshot(userDb(U.owner), inv, CA);
+    assert.ok(loaded.ok);
+    if (!loaded.ok) throw new Error("snapshot");
+    const u = generateUbl(loaded.snapshot);
+    assert.ok(u.ok);
+    if (!u.ok) throw new Error("ubl");
+    return { snap: createHash("sha256").update(JSON.stringify(loaded.snapshot)).digest("hex"), ubl: u.sha256 };
+  };
+  const before = await ublOf();
+  const items = await as(U.owner, () => db.query<{ id: string }>("update public.invoice_items set unit_price = 99, description = 'zmenené' where invoice_id = $1 returning id", [inv]));
+  assert.equal(items.rows.length, 0, "RLS: finalizované položky sa nedajú meniť (0 riadkov, bez chyby)");
+  const header = await as(U.owner, () => db.query<{ id: string }>("update public.invoices set issue_date = '2020-01-01' where id = $1 returning id", [inv]).catch((e: Error) => ({ rows: [], error: e.message })));
+  assert.equal(header.rows.length, 0);
+  assert.match(await errorOf(() => asService(() => db.query("update public.invoice_items set unit_price = 99 where invoice_id = $1", [inv]))), /.+/, "trigger blokuje aj service_role");
+  assert.match(await errorOf(() => asService(() => db.query("update public.invoice_parties set legal_name = 'X' where invoice_id = $1", [inv]))), /.+/);
+  const after = await ublOf();
+  assert.deepEqual(after, before, "snapshot a UBL bajtovo rovnaké");
 });
 
 await check("service_role iba v privilegovanej vrstve: supabase-store.ts; route/worker/orchestrácia ho priamo nedržia", async () => {

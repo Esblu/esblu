@@ -290,7 +290,12 @@ async function reconcileOne(deps: WorkerDeps, row: OutboundRow): Promise<WorkerI
     return { outboundId: row.id, from: row.state, to: row.state, code: "EINVOICE_EVIDENCE_HASH_MISMATCH" };
   }
 
-  if (target === "delivered") {
+  // eFaktura.sk: /peppol/status končí pri SENT (AS4); doručenie príjemcovi (MLS)
+  // nesie IBA dôkaz `delivery_status.state = delivered` (docs receiving/evidence).
+  // Bez tohto pravidla by sa stav `delivered` v produkcii nikdy nedosiahol.
+  // Hash dôkazu (ak je) už bol overený vyššie.
+  const deliveredByEvidence = target === "sent" && evidence?.record.delivery_state === "delivered";
+  if (target === "delivered" || deliveredByEvidence) {
     if (!evidence) {
       // Stav hovorí doručené, dôkaz ešte nie je — skúsiť pri ďalšej reconciliation.
       const toState = row.state === "sending" ? "sent" : null;

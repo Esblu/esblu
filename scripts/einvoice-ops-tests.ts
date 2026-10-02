@@ -401,7 +401,7 @@ const ENV: Record<string, string | undefined> = {
 function requestAs(uid: string | null, invoiceId: string) {
   return requestOutboundForInvoice(
     { userDb: userDb(uid), store, runtime: { provider, environment: "sandbox" }, env: ENV },
-    { userId: uid ?? "00000000-0000-4000-8000-000000000000", invoiceId }
+    { userId: uid ?? "00000000-0000-4000-8000-000000000000", invoiceId, confirmation: "user_confirm_send" }
   );
 }
 const workerDeps = () => ({ store, provider });

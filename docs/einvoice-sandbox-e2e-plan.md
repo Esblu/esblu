@@ -115,3 +115,29 @@ Výsledky sú PASS.
    riadky `einvoice_rollout` / `einvoice_organizations` / nárok `einvoice`.
 
 Potom sa L3 vykoná rovnakými krokmi cez UI / API (Bearer JWT jednotlivých rolí).
+
+## Výsledok prvého L2 behu (2026-10-02) a root causes
+
+Prvý beh u používateľa: **13 PASS / 11 FAIL / 3 PARTIAL**. Authz matica A1–A8 bola PASS.
+Forenzná analýza je v `docs/einvoice-phase6-readiness-audit.md` §7. Zhrnutie:
+
+| Skupina | Root cause | Kategória |
+| --- | --- | --- |
+| O2 | Test čakal výnimku, RLS však zmení 0 riadkov bez chyby. Invariant platí. | chybný test |
+| O4 | `parseOutboundRequestBody` vracia `{ok:false}` (neháže). Harness obchádzal route. | chyba harnessu |
+| O8–O13, O16 (UUID `""`) | kaskáda O4 (`OUT1 = ""`) | kaskáda |
+| I1–I10, I11 | stuby `listOrganizations` / `companyForOrg` v harnesse (poll nevidel organizáciu) + kaskáda O13 | chyba harnessu |
+| O10–O12 | `delivered` iba zo statusu, ktorý ho pri eFaktura.sk nikdy nevráti | **produkčný bug, opravený** |
+| O15 | slabé párovanie udalostí (formát `document_id`) | dôkaz v harnesse zlepšený |
+| I12 | iba offline časť (podľa návrhu) | obmedzenie prostredia |
+
+Harness teraz:
+
+- volá produkčný route handler,
+- má explicitné predpoklady krokov (kaskáda = `SKIP BLOCKED_BY`, nie FAIL),
+- zaznamenáva diagnostiku príjmu,
+- dá sa overiť offline cez `npm run test:einvoice-e2e-selftest` (27 PASS, 1 PARTIAL = I12).
+
+**Rerun L2 je potrebný** (rovnaký príkaz ako vyššie, s `--org=<UUID>`).
+Očakávanie: PASS okrem I12 (PARTIAL, offline). O10–O12 môže byť PARTIAL, ak sandbox ešte nevrátil
+`delivery_status = delivered`.

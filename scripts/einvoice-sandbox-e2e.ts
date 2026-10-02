@@ -26,15 +26,22 @@
 //   node --env-file=C:\cesta\mimo\repa\efaktura-sandbox.env `
 //     --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs `
 //     scripts/einvoice-sandbox-e2e.ts --confirm-sandbox --org=<sandbox org uuid>
+//
+// Overenie samotného harnessu (bez siete, bez kľúča, fake sandbox v pamäti):
+//   npm run test:einvoice-e2e-selftest
 // =============================================================================
 
 import assert from "node:assert/strict";
-import { createHash, createHmac } from "node:crypto";
+import { createHash, createHmac, randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { requestOutboundForInvoice } from "../lib/einvoice/outbound/request.ts";
+import { handleOutboundSendRequest } from "../lib/einvoice/outbound/route-handler.ts";
+import { loadEinvoiceReadiness } from "../lib/einvoice/readiness-server.ts";
+import { loadFinalizedIssuedInvoiceSnapshot } from "../lib/einvoice/load-finalized-invoice.ts";
+import { generateUbl } from "../lib/einvoice/ubl/generate.ts";
+import { handleEinvoiceWebhook } from "../lib/einvoice/inbound/webhook.ts";
 import { runOutboundReconcileBatch, runOutboundSendBatch } from "../lib/einvoice/outbound/worker.ts";
 import { dbErrorCode, OutboundStoreError, type OutboundRow, type OutboundStore } from "../lib/einvoice/outbound/store.ts";
 import { InboundStoreError, type InboundRow, type InboundStore } from "../lib/einvoice/inbound/store.ts";
@@ -56,12 +63,14 @@ function stop(message: string): never {
   console.error(`STOP: ${message}`);
   process.exit(2);
 }
-if (ARGS.get("confirm-sandbox") !== "true") stop("chýba --confirm-sandbox (reálne volania sandbox API)");
-if (process.env.ESBLU_EINVOICE_ENVIRONMENT?.trim() !== "sandbox") stop("ESBLU_EINVOICE_ENVIRONMENT musí byť 'sandbox'");
-const SANDBOX_KEY = process.env.ESBLU_EFAKTURA_API_KEY?.trim() ?? "";
+// --offline-selftest: overenie samotného harnessu BEZ siete a BEZ kľúča (lokálny
+// fake sandbox v pamäti). Nikdy nevolá api.efaktura.sk — iba pre vývoj harnessu.
+const SELFTEST = ARGS.get("offline-selftest") === "true";
+if (!SELFTEST && ARGS.get("confirm-sandbox") !== "true") stop("chýba --confirm-sandbox (reálne volania sandbox API)");
+if (!SELFTEST && process.env.ESBLU_EINVOICE_ENVIRONMENT?.trim() !== "sandbox") stop("ESBLU_EINVOICE_ENVIRONMENT musí byť 'sandbox'");
+const SANDBOX_KEY = SELFTEST ? "efk_pk_test_" + "0".repeat(24) : process.env.ESBLU_EFAKTURA_API_KEY?.trim() ?? "";
 if (!SANDBOX_KEY.startsWith("efk_pk_test_")) stop("ESBLU_EFAKTURA_API_KEY chýba alebo nie je sandbox kľúč (efk_pk_test_)");
-const ORG_ID = ARGS.get("org") ?? stop("chýba --org=<uuid sandbox organizácie>");
-if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(ORG_ID)) stop("--org musí byť UUID");
+const ORG_ID = ARGS.get("org") ?? (SELFTEST ? "5e1f7e57-0000-4000-8000-000000000001" : stop("chýba --org=<uuid sandbox organizácie>"));
 const ORG_ICO = ARGS.get("ico") ?? "87654326";
 const ORG_DIC = ARGS.get("dic") ?? "2099999999";
 if (!/^[0-9]{8}$/.test(ORG_ICO) || !/^[0-9]{10}$/.test(ORG_DIC)) stop("syntetické IČO (8 číslic) / DIČ (10 číslic)");
@@ -307,6 +316,67 @@ const ALLOWED: [string, RegExp][] = [
   ["GET", /^\/v1\/agent\/peppol\/received\/[^/]+(\/xml)?$/],
   ["POST", /^\/v1\/agent\/peppol\/received\/[^/]+\/acknowledge$/],
 ];
+// --- offline fake sandbox (iba --offline-selftest) ---------------------------------
+const FAKE = {
+  idem: new Map<string, { bodySha: string; response: string }>(),
+  sent: new Map<string, { xml: Uint8Array }>(),
+  received: [] as { id: string; xml: Uint8Array; acknowledged_at: string | null; document_type: string; number: string }[],
+  events: [] as Record<string, unknown>[],
+};
+function fakeJson(status: number, value: unknown): Response {
+  return new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json" } });
+}
+async function fakeSandbox(url: URL, method: string, init: RequestInit): Promise<Response> {
+  const p = url.pathname;
+  const id = p.split("/").filter(Boolean).at(-1) ?? "";
+  if (method === "GET" && p.startsWith("/v1/agent/organizations/")) {
+    return fakeJson(200, { organization_id: ORG_ID, participant_id: PARTICIPANT, status: "aktivne", peppol_status: "active", claim_status: "claimed", peppol_eligible: true });
+  }
+  if (p === "/v1/agent/peppol/recipient") return fakeJson(200, { data: { peppol_id: url.searchParams.get("peppolId"), found: true, sml_state: "active", lookup_unavailable: false } });
+  if (p === "/v1/agent/peppol/preflight") return fakeJson(200, { data: { send_ready: true, validator_unavailable: false, validation: { ran: true, valid: true, error_count: 0, warning_count: 0 }, repair: [], recipient: { found: true } } });
+  if (p === "/v1/agent/peppol/connector/send") {
+    const key = new Headers(init.headers).get("Idempotency-Key") ?? "";
+    const body = String(init.body ?? "");
+    const prev = FAKE.idem.get(key);
+    if (prev) return prev.bodySha === sha(body) ? new Response(prev.response, { status: 200, headers: { "content-type": "application/json" } }) : fakeJson(409, { error: { code: "CONFLICT" } });
+    const parsed = JSON.parse(body) as { document: { xmlBase64: string } };
+    const xml = new Uint8Array(Buffer.from(parsed.document.xmlBase64, "base64"));
+    const invoiceId = randomUUID();
+    const text = new TextDecoder().decode(xml);
+    const number = /<cbc:ID>([^<]+)<\/cbc:ID>/.exec(text)?.[1] ?? "X";
+    FAKE.sent.set(invoiceId, { xml });
+    const at = new Date().toISOString();
+    FAKE.events.push({ occurred_at: at, event: "sent.queued", invoice_id: invoiceId, document_id: `${PARTICIPANT}#${number}`, message_id: null });
+    FAKE.received.push({ id: randomUUID(), xml, acknowledged_at: null, document_type: text.includes("<CreditNote") ? "credit_note" : "invoice", number });
+    const response = JSON.stringify({ data: { status: "queued", invoice_id: invoiceId, document_id: `${PARTICIPANT}#${number}`, job_id: "j", send_ready: true } });
+    FAKE.idem.set(key, { bodySha: sha(body), response });
+    return new Response(response, { status: 200, headers: { "content-type": "application/json" } });
+  }
+  if (p.startsWith("/v1/agent/peppol/status/")) return fakeJson(200, { data: { invoice_id: id, state: "SENT", updated_at: new Date().toISOString() } });
+  if (/\/peppol\/sent\/[^/]+\/evidence$/.test(p)) {
+    const inv = p.split("/")[5];
+    const x = FAKE.sent.get(inv);
+    if (!x) return fakeJson(404, { error: { code: "NOT_FOUND" } });
+    return fakeJson(200, { data: { invoice_id: inv, document_id: "d", ubl_sha256: sha(x.xml), delivery_status: { state: "delivered", at: new Date().toISOString() }, transactions: [{ state: "SENT", mode: "test" }] } });
+  }
+  if (p === "/v1/agent/peppol/events") return fakeJson(200, { data: FAKE.events });
+  if (p === "/v1/agent/peppol/received") {
+    return fakeJson(200, { data: FAKE.received.filter((r) => !r.acknowledged_at).map((r) => ({ id: r.id, sender_participant_id: PARTICIPANT, sender_name: "Tatra Servis s.r.o.", sender_ico: ORG_ICO, document_type: r.document_type, document_number: r.number, total: "12.30", currency: "EUR", status: "new", issue_date: TODAY, received_at: new Date().toISOString(), acknowledged_at: null, is_test: true })) });
+  }
+  if (/\/received\/[^/]+\/xml$/.test(p)) {
+    const r = FAKE.received.find((x) => x.id === p.split("/")[5]);
+    return r ? new Response(r.xml, { status: 200, headers: { "content-type": "application/xml" } }) : fakeJson(404, { error: { code: "NOT_FOUND" } });
+  }
+  if (/\/received\/[^/]+\/acknowledge$/.test(p)) {
+    const r = FAKE.received.find((x) => x.id === p.split("/")[5]);
+    if (!r) return fakeJson(404, { error: { code: "NOT_FOUND" } });
+    const already = r.acknowledged_at !== null;
+    r.acknowledged_at ??= new Date().toISOString();
+    return fakeJson(200, { data: { id: r.id, acknowledged_at: r.acknowledged_at, already_acknowledged: already } });
+  }
+  return fakeJson(404, { error: { code: "NOT_FOUND" } });
+}
+
 type Fault = null | "unavailable-before-send" | "drop-response-after-send";
 let fault: Fault = null;
 const calls: string[] = [];
@@ -320,7 +390,7 @@ const guardedFetch = async (input: string, init: RequestInit): Promise<Response>
     fault = null;
     throw new TypeError("simulated network failure before send");
   }
-  const res = await fetch(input, init);
+  const res = SELFTEST ? await fakeSandbox(url, method, init) : await fetch(input, init);
   if (url.pathname.endsWith("/connector/send") && fault === "drop-response-after-send") {
     fault = null;
     await res.arrayBuffer();
@@ -349,11 +419,24 @@ const ENV: Record<string, string | undefined> = {
   ESBLU_EINVOICE_ENVIRONMENT: "sandbox",
   ESBLU_EFAKTURA_API_KEY: SANDBOX_KEY,
 };
-function requestAs(uid: string | null, invoiceId: string) {
-  return requestOutboundForInvoice(
-    { userDb: userDb(uid), store, runtime: { provider, environment: "sandbox" }, env: ENV },
-    { userId: uid ?? "00000000-0000-4000-8000-000000000000", invoiceId }
-  );
+/**
+ * POST /api/einvoice/outbound presne cez produkčný route handler (Bearer → telo
+ * {invoice_id, confirm_send:true} → orchestrácia). Overenie tokenu je jediná
+ * náhrada: token = ID syntetického používateľa (iba lokálna PGlite DB).
+ */
+async function postOutbound(uid: string, body: unknown): Promise<{ status: number; body: Record<string, unknown> }> {
+  const req = new Request("http://localhost/api/einvoice/outbound", {
+    method: "POST",
+    headers: { authorization: `Bearer e2e-${uid}`, "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return handleOutboundSendRequest(req, {
+    authenticate: async (_req, token) => (token === `e2e-${uid}` ? { userId: uid } : null),
+    userDbFor: () => userDb(uid),
+    store: () => store,
+    runtime: () => ({ provider, environment: "sandbox" }),
+    env: ENV,
+  });
 }
 const workerDeps = () => ({ store, provider });
 const WOPTS = { batchSize: 10, leaseSeconds: 120, reconcileAfterSeconds: 0 };
@@ -432,8 +515,7 @@ async function sendOnly(outboundId: string) {
   await sql("update public.einvoice_outbound set next_retry_at = now() + interval '1 day' where id <> $1 and state in ('queued','sending') and provider_submission_id is null and next_retry_at is not null", [outboundId]);
   return runOutboundSendBatch(workerDeps(), WOPTS);
 }
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-const short = (h: unknown) => (typeof h === "string" ? `${h.slice(0, 12)}…` : null);
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, SELFTEST ? 1 : ms));
 
 const INBOUND_STORAGE = new Map<string, Uint8Array>();
 const svcRows = async <T>(text: string, params: unknown[]): Promise<T[]> => {
@@ -471,9 +553,20 @@ const inboundStore: InboundStore = {
     return rows[0]?.p ?? null;
   },
   organizationFor: (c, e) => store.organizationFor(c, e),
-  async listOrganizations() { return []; },
-  async companyForOrg() { return null; },
-  async claimOutboundBySubmission() { return null; },
+  // Zrkadlo produkčného lib/einvoice/inbound/supabase-store.ts (pôvodne tu boli
+  // stuby z ops testov → poll nikdy nevidel organizáciu; L2 root cause I1–I4).
+  async listOrganizations(provider, env) {
+    const { rows } = await sql<Row>("select company_id, provider, provider_org_id, participant_id, peppol_eligible, environment from public.einvoice_organizations where provider = $1 and environment = $2 and peppol_eligible and provider_org_id is not null", [provider, env]);
+    return rows.map((o) => ({ companyId: o.company_id as string, environment: o.environment as "sandbox", provider: o.provider as string, providerOrgId: o.provider_org_id as string, participantId: (o.participant_id as string) ?? null, peppolEligible: true }));
+  },
+  async companyForOrg(provider, env, orgId) {
+    const { rows } = await sql<{ c: string }>("select company_id c from public.einvoice_organizations where provider = $1 and environment = $2 and provider_org_id = $3", [provider, env, orgId]);
+    return rows[0]?.c ?? null;
+  },
+  async claimOutboundBySubmission(companyId, submissionId, lease) {
+    const rows = await svcRows<{ j: OutboundRow }>("select to_jsonb(t) j from public.esblu_einvoice_claim_outbound_by_submission($1, $2, $3) t", [companyId, submissionId, lease]);
+    return rows[0]?.j ?? null;
+  },
   async putXml(p, bytes) {
     if (INBOUND_STORAGE.has(p)) return "exists";
     INBOUND_STORAGE.set(p, new Uint8Array(bytes));
@@ -513,14 +606,24 @@ const opsStore: OpsStore = {
 };
 
 // =============================================================================
-// Výsledky (PASS / FAIL / PARTIAL / SKIP) s dôkazmi bez tajomstiev a PII
+// Výsledky (PASS / FAIL / PARTIAL / SKIP) s dôkazmi bez tajomstiev a PII.
+// Kaskáda: krok s nesplneným predpokladom je SKIP „BLOCKED_BY", nie FAIL —
+// report tak ukazuje iba skutočné príčiny.
 // =============================================================================
 type Verdict = "PASS" | "FAIL" | "PARTIAL" | "SKIP";
+type StepOut = Record<string, unknown> | { verdict: Verdict; evidence: Record<string, unknown> };
 const results: { id: string; label: string; verdict: Verdict; evidence: Record<string, unknown> }[] = [];
-async function step(id: string, label: string, fn: () => Promise<Record<string, unknown> | { verdict: Verdict; evidence: Record<string, unknown> }>) {
+const verdictOf = (id: string) => results.find((r) => r.id === id)?.verdict;
+async function step(id: string, label: string, requires: string[], fn: () => Promise<StepOut>) {
+  const blocked = requires.filter((r) => verdictOf(r) !== "PASS" && verdictOf(r) !== "PARTIAL");
+  if (blocked.length > 0) {
+    results.push({ id, label, verdict: "SKIP", evidence: { blocked_by: blocked } });
+    console.log(`SKIP    ${id} ${label}  (BLOCKED_BY ${blocked.join(",")})`);
+    return;
+  }
   try {
     const out = await fn();
-    const wrapped = "verdict" in out && "evidence" in out ? (out as { verdict: Verdict; evidence: Record<string, unknown> }) : { verdict: "PASS" as Verdict, evidence: out };
+    const wrapped = "verdict" in out && "evidence" in out ? (out as { verdict: Verdict; evidence: Record<string, unknown> }) : { verdict: "PASS" as Verdict, evidence: out as Record<string, unknown> };
     results.push({ id, label, ...wrapped });
     console.log(`${wrapped.verdict.padEnd(7)} ${id} ${label}`);
   } catch (error) {
@@ -529,9 +632,36 @@ async function step(id: string, label: string, fn: () => Promise<Record<string, 
     console.log(`FAIL    ${id} ${label}\n        ${message}`);
   }
 }
+const sha = (b: Uint8Array | string) => createHash("sha256").update(b).digest("hex");
+/** Bezpečný identifikátor do reportu: iba prefix SHA-256 (nie samotné ID). */
+const idHash = (v: unknown) => (typeof v === "string" && v ? `sha256:${sha(v).slice(0, 12)}` : null);
+const outboundCount = async () => (await sql<{ n: number }>("select count(*)::int n from public.einvoice_outbound")).rows[0].n;
+
+/** Snapshot + UBL presne tak, ako ich zostaví odoslanie (pod RLS ownera). */
+async function snapshotFingerprint(invoiceId: string) {
+  const loaded = await loadFinalizedIssuedInvoiceSnapshot(userDb(U.owner), invoiceId, CA);
+  if (!loaded.ok) throw new Error(`snapshot: ${loaded.reason}`);
+  const ubl = generateUbl(loaded.snapshot);
+  if (!ubl.ok) throw new Error(`ubl: ${ubl.issues.map((i) => i.code).join(",")}`);
+  return { snapshot: sha(JSON.stringify(loaded.snapshot)), ubl: ubl.sha256 };
+}
+
+/** Udalosti odoslania poskytovateľa za dnešok (iba allowlistované polia). */
+async function sentEvents(): Promise<{ status: number; rows: { key: string; invoiceId: string | null; event: string }[] }> {
+  const r = await sandboxGet(`/v1/agent/peppol/events?direction=sent&from=${TODAY}&to=${TODAY}&limit=1000`);
+  const data = Array.isArray(r.json?.data) ? (r.json!.data as Record<string, unknown>[]) : [];
+  return {
+    status: r.status,
+    rows: data.map((e) => ({
+      key: `${e.occurred_at}|${e.event}|${e.document_id}|${e.message_id ?? ""}`,
+      invoiceId: typeof e.invoice_id === "string" ? e.invoice_id : null,
+      event: String(e.event),
+    })),
+  };
+}
 
 // Predpoklad: sandbox organizácia existuje a má aktívny Peppol účet (9915:DIČ).
-await step("P0", "sandbox organizácia: aktívny Peppol účet a participant = 9915:DIČ", async () => {
+await step("P0", "sandbox organizácia: aktívny Peppol účet a participant = 9915:DIČ", [], async () => {
   const info = await provider.getOrganization(providerCtx);
   assert.equal(info.participantId, PARTICIPANT, "participant organizácie nesedí s --dic");
   assert.equal(info.peppolEligible, true, "organizácia nie je peppol_eligible (sandbox: POST /v1/agent/peppol/enroll s ľubovoľným hex tokenom)");
@@ -544,20 +674,31 @@ await step("P0", "sandbox organizácia: aktívny Peppol účet a participant = 9
 let INV1 = "";
 let OUT1 = "";
 let SENT_SHA = "";
-await step("O1", "koncept faktúry (vydaná, syntetická, dnešný dátum vyhotovenia)", async () => {
+let SENT_SHA_SOURCE = "";
+await step("O1", "koncept faktúry (vydaná, syntetická, dnešný dátum vyhotovenia)", ["P0"], async () => {
   INV1 = await invoice(U.owner, CA, PARTNER_A, HEADER, false);
   const r = (await sql<Row>("select document_status, direction from public.invoices where id = $1", [INV1])).rows[0];
   assert.equal(r.document_status, "draft");
   return { document_status: r.document_status, direction: r.direction };
 });
-await step("O2", "finalizácia → nemenný snapshot (zmena položky po finalizácii odmietnutá)", async () => {
+await step("O2", "finalizácia → nemenný kanonický snapshot: pokusy o zmenu nič nezmenia, snapshot aj UBL bajtovo rovnaké", ["O1"], async () => {
   await as(U.owner, () => db.query("select public.esblu_finalize_invoice($1)", [INV1]));
-  const msg = await errorOf(() => as(U.owner, () => db.query("update public.invoice_items set unit_price = 99 where invoice_id = $1", [INV1])));
-  assert.ok(msg.length > 0, "zmena finalizovanej položky prešla");
-  return { finalized: true, mutation_rejected: true };
+  const before = await snapshotFingerprint(INV1);
+  // owner: RLS politika *_finance_draft → UPDATE zasiahne 0 riadkov (bez chyby) — overuje sa POČET, nie chyba.
+  const items = await as(U.owner, () => db.query<{ id: string }>("update public.invoice_items set unit_price = 99, description = 'zmenené' where invoice_id = $1 returning id", [INV1]));
+  const header = await as(U.owner, () => db.query<{ id: string }>("update public.invoices set issue_date = '2020-01-01' where id = $1 returning id", [INV1])).catch(() => ({ rows: [] as { id: string }[] }));
+  // service_role (obchádza RLS): trigger esblu_block_finalized_invoice_items_mutation / snapshot guard musí odmietnuť.
+  const svcItems = await errorOf(() => asService(() => db.query("update public.invoice_items set unit_price = 99 where invoice_id = $1", [INV1])));
+  const svcParties = await errorOf(() => asService(() => db.query("update public.invoice_parties set legal_name = 'X' where invoice_id = $1", [INV1])));
+  const after = await snapshotFingerprint(INV1);
+  assert.equal(items.rows.length, 0, "owner zmenil finalizované položky");
+  assert.equal(header.rows.length, 0, "owner zmenil hlavičku finalizovanej faktúry");
+  assert.ok(svcItems.length > 0, "service_role zmenil finalizované položky");
+  assert.ok(svcParties.length > 0, "service_role zmenil snapshot strán");
+  assert.deepEqual(after, before, "snapshot / UBL sa zmenil");
+  return { owner_items_rows_changed: 0, owner_header_rows_changed: 0, service_role_blocked: true, snapshot_sha256: before.snapshot.slice(0, 12), ubl_sha256: before.ubl.slice(0, 12), invariant: "byte-identical" };
 });
-await step("O3", "readiness (pre_send) pod RLS ownera = ready, bez issues", async () => {
-  const { loadEinvoiceReadiness } = await import("../lib/einvoice/readiness-server.ts");
+await step("O3", "readiness (pre_send) pod RLS ownera = ready, bez issues", ["O2"], async () => {
   const r = await loadEinvoiceReadiness(userDb(U.owner), INV1, ENV);
   assert.ok(r.ok, JSON.stringify(r));
   if (!r.ok) return {};
@@ -565,14 +706,24 @@ await step("O3", "readiness (pre_send) pod RLS ownera = ready, bez issues", asyn
   assert.deepEqual(r.result.issues.map((i) => i.code), []);
   return { mode: r.result.mode, ready: r.result.ready, warnings: r.result.warnings.map((w) => w.code) };
 });
-await step("O4-O7", "explicitné potvrdenie → recipient verify → provider preflight → queue (202), nič neodoslané", async () => {
-  const { parseOutboundRequestBody } = await import("../lib/einvoice/outbound/request-body.ts");
-  assert.throws(() => parseOutboundRequestBody({ invoice_id: INV1 }), "bez confirm_send musí byť 400");
-  parseOutboundRequestBody({ invoice_id: INV1, confirm_send: true });
+await step("O4", "route cesta: bez presného confirm_send:true → 400; žiadny verify/preflight/pokus/odoslanie", ["O3"], async () => {
+  const before = await outboundCount();
+  const codes: string[] = [];
+  for (const body of [{ invoice_id: INV1 }, { invoice_id: INV1, confirm_send: "true" }, { invoice_id: INV1, confirm_send: false }, { invoice_id: INV1, confirm_send: true, company_id: CB }, { invoice_id: "", confirm_send: true }]) {
+    calls.length = 0;
+    const r = await postOutbound(U.owner, body);
+    assert.equal(r.status, 400, JSON.stringify(body));
+    assert.deepEqual(calls, [], "poskytovateľ bol volaný");
+    codes.push(String(r.body.code));
+  }
+  assert.equal(await outboundCount(), before, "vznikol pokus bez potvrdenia");
+  return { status: 400, codes, provider_calls: 0, new_attempts: 0 };
+});
+await step("O5-O7", "route cesta s confirm_send:true → recipient verify → provider preflight → queue (202), nič neodoslané", ["O4"], async () => {
   calls.length = 0;
-  const r = await requestAs(U.owner, INV1);
+  const r = await postOutbound(U.owner, { invoice_id: INV1, confirm_send: true });
   assert.equal(r.status, 202, JSON.stringify(r.body));
-  OUT1 = r.body.outbound!.id;
+  OUT1 = String((r.body.outbound as { id: string }).id);
   assert.ok(calls.includes("GET /v1/agent/peppol/recipient"), "recipient lookup");
   assert.ok(calls.includes("POST /v1/agent/peppol/preflight"), "preflight");
   assert.ok(!calls.some((c) => c.endsWith("/connector/send")), "request nesmie odoslať");
@@ -580,16 +731,16 @@ await step("O4-O7", "explicitné potvrdenie → recipient verify → provider pr
   assert.equal(row.state, "queued");
   return { status: r.status, code: r.body.code, provider_calls: [...calls], state: row.state };
 });
-await step("O8-O9", "worker claim + send (ten istý kľúč) → poskytovateľ prijal (sent, ID podania)", async () => {
+await step("O8-O9", "worker claim + send (ten istý kľúč) → poskytovateľ prijal (sent, ID podania)", ["O5-O7"], async () => {
   calls.length = 0;
   const rep = await sendOnly(OUT1);
   const row = await outboundOf(OUT1);
   assert.equal(rep.claimed, 1);
   assert.ok(["sent", "delivered"].includes(row.state as string), `stav ${row.state} (${row.last_error_code ?? ""})`);
   assert.ok(row.provider_submission_id);
-  return { claimed: rep.claimed, state: row.state, has_submission_id: true, provider_calls: [...calls] };
+  return { claimed: rep.claimed, state: row.state, provider_submission: idHash(row.provider_submission_id), provider_calls: [...calls] };
 });
-await step("O10-O12", "reconciliation → SENT / delivered + allowlistovaný dôkaz (AS4/MLS), hash dôkazu = hash UBL", async () => {
+await step("O10-O12", "reconciliation → SENT / delivered + allowlistovaný dôkaz (AS4/MLS)", ["O8-O9"], async () => {
   let row = await outboundOf(OUT1);
   for (let i = 0; i < 18 && row.state !== "delivered"; i++) {
     await sleep(5_000);
@@ -598,26 +749,28 @@ await step("O10-O12", "reconciliation → SENT / delivered + allowlistovaný dô
     row = await outboundOf(OUT1);
   }
   const evidence = row.evidence as Record<string, unknown> | null;
-  const keys = evidence ? Object.keys(evidence).sort() : [];
   const verdict: Verdict = row.state === "delivered" ? "PASS" : row.state === "sent" ? "PARTIAL" : "FAIL";
-  return { verdict, evidence: { state: row.state, provider_status: row.provider_status ?? null, evidence_keys: keys, evidence_delivery_state: evidence?.delivery_state ?? null } };
+  return { verdict, evidence: { state: row.state, provider_status: row.provider_status ?? null, evidence_keys: evidence ? Object.keys(evidence).sort() : [], evidence_delivery_state: evidence?.delivery_state ?? null } };
 });
-await step("O13", "UBL integrita: uložené bajty → SHA-256 = riadok = (ak je) hash v dôkaze poskytovateľa", async () => {
+await step("O13", "UBL integrita: uložené bajty → SHA-256 = riadok = snapshot UBL = (ak je) hash v dôkaze poskytovateľa", ["O8-O9"], async () => {
   const row = await outboundOf(OUT1);
   const bytes = storage.get(row.ubl_storage_path as string);
   assert.ok(bytes, "UBL v storage");
-  const sha = createHash("sha256").update(bytes!).digest("hex");
-  assert.equal(sha, row.ubl_sha256);
-  SENT_SHA = sha;
+  const h = sha(bytes!);
+  assert.equal(h, row.ubl_sha256);
+  assert.equal(h, (await snapshotFingerprint(INV1)).ubl, "UBL z nemenného snapshotu sa zhoduje s odoslanými bajtmi");
+  SENT_SHA = h;
+  SENT_SHA_SOURCE = "O8-O9";
   const ev = (row.evidence as Record<string, unknown> | null)?.ubl_sha256 ?? null;
-  if (ev) assert.equal(ev, sha, "hash v dôkaze poskytovateľa");
-  return { sha256: short(sha), provider_hash_matches: ev ? true : "n/a" };
+  if (ev) assert.equal(ev, h, "hash v dôkaze poskytovateľa");
+  return { sha256: h.slice(0, 12), provider_hash_matches: ev ? true : "n/a" };
 });
-await step("O14", "retry: sieťová chyba PRED odoslaním → backoff, ten istý kľúč → úspech", async () => {
+let RETRY_SHA = "";
+await step("O14", "retry: sieťová chyba PRED odoslaním → backoff, ten istý kľúč → úspech", ["P0"], async () => {
   const inv = await invoice(U.owner, CA, PARTNER_A, { ...HEADER, buyer_reference: `E2E-RETRY-${RUN}` });
-  const r = await requestAs(U.owner, inv);
+  const r = await postOutbound(U.owner, { invoice_id: inv, confirm_send: true });
   assert.equal(r.status, 202, JSON.stringify(r.body));
-  const id = r.body.outbound!.id;
+  const id = String((r.body.outbound as { id: string }).id);
   const key = (await outboundOf(id)).idempotency_key;
   fault = "unavailable-before-send";
   await sendOnly(id);
@@ -628,15 +781,17 @@ await step("O14", "retry: sieťová chyba PRED odoslaním → backoff, ten istý
   row = await outboundOf(id);
   assert.ok(["sent", "delivered"].includes(row.state as string), String(row.state));
   assert.equal(row.idempotency_key, key);
+  RETRY_SHA = String(row.ubl_sha256);
   return { first: "network error (no send)", final_state: row.state, retry_count: row.retry_count, same_key: true };
 });
-let UNKNOWN_NUMBER = "";
-await step("O15", "neistý výsledok: odpoveď stratená PO odoslaní → replay toho istého kľúča → JEDINÉ podanie u poskytovateľa", async () => {
+await step("O15", "neistý výsledok: odpoveď stratená PO odoslaní → replay toho istého kľúča → JEDINÉ podanie u poskytovateľa", ["P0"], async () => {
+  const before = await sentEvents();
+  const known = new Set(before.rows.map((e) => e.key));
   const inv = await invoice(U.owner, CA, PARTNER_A, { ...HEADER, buyer_reference: `E2E-UNKNOWN-${RUN}` });
-  const r = await requestAs(U.owner, inv);
+  const r = await postOutbound(U.owner, { invoice_id: inv, confirm_send: true });
   assert.equal(r.status, 202, JSON.stringify(r.body));
-  const id = r.body.outbound!.id;
-  UNKNOWN_NUMBER = String((await sql<Row>("select invoice_number from public.invoices where id = $1", [inv])).rows[0].invoice_number);
+  const id = String((r.body.outbound as { id: string }).id);
+  const key = (await outboundOf(id)).idempotency_key;
   fault = "drop-response-after-send";
   await sendOnly(id);
   let row = await outboundOf(id);
@@ -646,18 +801,37 @@ await step("O15", "neistý výsledok: odpoveď stratená PO odoslaní → replay
   await sendOnly(id);
   row = await outboundOf(id);
   assert.ok(["sent", "delivered"].includes(row.state as string), String(row.state));
-  // Dôkaz „never sends twice": audit poskytovateľa pre číslo dokladu obsahuje JEDNO podanie.
-  await sleep(3_000);
-  const events = await sandboxGet(`/v1/agent/peppol/events?direction=sent&from=${TODAY}&to=${TODAY}&limit=1000`);
-  const rows = Array.isArray(events.json?.data) ? (events.json!.data as Record<string, unknown>[]) : [];
-  const docs = new Set(rows.filter((e) => String(e.document_id ?? "").endsWith(`#${UNKNOWN_NUMBER}`) && e.event === "sent.queued").map((e) => String(e.document_id)));
-  const queued = rows.filter((e) => String(e.document_id ?? "").endsWith(`#${UNKNOWN_NUMBER}`) && e.event === "sent.queued").length;
+  assert.equal(row.idempotency_key, key, "replay musí použiť ten istý kľúč");
+  // Dôkaz: nové udalosti odoslania v audite poskytovateľa → koľko RÔZNYCH podaní (invoice_id) vzniklo.
+  let fresh: { invoiceId: string | null; event: string }[] = [];
+  for (let i = 0; i < 8; i++) {
+    await sleep(5_000);
+    const now = await sentEvents();
+    fresh = now.rows.filter((e) => !known.has(e.key));
+    if (fresh.some((e) => e.invoiceId === row.provider_submission_id)) break;
+  }
+  await sleep(10_000); // prípadné druhé podanie by sa objavilo s oneskorením
+  fresh = (await sentEvents()).rows.filter((e) => !known.has(e.key));
+  const submissions = new Set(fresh.map((e) => e.invoiceId).filter((x): x is string => !!x));
+  const ours = fresh.filter((e) => e.invoiceId === row.provider_submission_id).map((e) => e.event);
+  const evidenceTx = await provider.getDeliveryEvidence(providerCtx, { providerSubmissionId: String(row.provider_submission_id) }).catch(() => null);
+  const txCount = Array.isArray((evidenceTx?.record as Record<string, unknown> | undefined)?.transactions) ? ((evidenceTx!.record as Record<string, unknown>).transactions as unknown[]).length : null;
+  const verdict: Verdict = submissions.size === 1 && submissions.has(String(row.provider_submission_id)) ? "PASS" : submissions.size > 1 ? "FAIL" : "PARTIAL";
   return {
-    verdict: queued === 1 ? "PASS" : queued === 0 ? "PARTIAL" : "FAIL",
-    evidence: { final_state: row.state, send_outcome_unknown_was_set: true, provider_queued_events_for_number: queued, distinct_documents: docs.size, events_http: events.status },
+    verdict,
+    evidence: {
+      final_state: row.state,
+      same_idempotency_key: true,
+      provider_submission: idHash(row.provider_submission_id),
+      new_sent_events: fresh.length,
+      distinct_new_submissions: submissions.size,
+      events_for_our_submission: ours,
+      evidence_transactions: txCount,
+      note: "dôkaz jedného podania pre tento replay; NEdokazuje retenčnú dobu kľúča (P1)",
+    },
   };
 });
-await step("O16", "reconciliation operátorom (sent/delivered riadok) → RECONCILED, nikdy neodošle", async () => {
+await step("O16", "reconciliation operátorom (sent/delivered riadok) → RECONCILED, nikdy neodošle", ["O8-O9"], async () => {
   await sql("update public.einvoice_outbound set operator_action_at = null, locked_until = null where id = $1", [OUT1]);
   calls.length = 0;
   const res = await runOperatorAction(
@@ -671,67 +845,92 @@ await step("O16", "reconciliation operátorom (sent/delivered riadok) → RECONC
 // =============================================================================
 // INBOUND (self-send → prijatý doklad pre tú istú sandbox organizáciu)
 // =============================================================================
+if (!SENT_SHA && RETRY_SHA) {
+  SENT_SHA = RETRY_SHA;
+  SENT_SHA_SOURCE = "O14";
+}
 let INBOUND_ROW: Row | null = null;
-await step("I1-I4", "prijatý sandbox doklad → poll → refetch XML od poskytovateľa → nemenné uloženie", async () => {
-  for (let i = 0; i < 12 && !INBOUND_ROW; i++) {
+const inboundDeps = () => ({ store: inboundStore, provider, environment: "sandbox" as const });
+await step("I1-I4", "prijatý sandbox doklad → poll → refetch XML od poskytovateľa → nemenné uloženie", [SENT_SHA_SOURCE || "O8-O9"], async () => {
+  const diag = { polls: 0, listed_total: 0, registered_total: 0, sync_errors: [] as string[], processed: 0, processing_codes: [] as string[] };
+  for (let i = 0; i < 18 && !INBOUND_ROW; i++) {
     await sleep(5_000);
-    await runInboundPoll({ store: inboundStore, provider, environment: "sandbox" }, { batchSize: 10 });
-    const r = (await sql<Row>("select * from public.einvoice_inbound where company_id = $1 and xml_sha256 = $2", [CA, SENT_SHA])).rows[0];
-    if (r) INBOUND_ROW = r;
+    calls.length = 0;
+    const r = await runInboundPoll(inboundDeps(), { batchSize: 10 });
+    diag.polls++;
+    diag.listed_total += r.sync.listed;
+    diag.registered_total += r.sync.registered;
+    diag.sync_errors.push(...r.sync.errors.map((e) => e.code));
+    diag.processed += r.processed.claimed;
+    diag.processing_codes.push(...r.processed.results.map((x) => `${x.from}->${x.to}:${x.code ?? "ok"}`));
+    INBOUND_ROW = (await sql<Row>("select * from public.einvoice_inbound where company_id = $1 and xml_sha256 = $2", [CA, SENT_SHA])).rows[0] ?? null;
   }
-  assert.ok(INBOUND_ROW, "prijatý doklad s rovnakým hashom ako odoslané UBL sa neobjavil (poll 60 s)");
-  const bytes = INBOUND_STORAGE.get(INBOUND_ROW!.xml_storage_path as string);
-  assert.ok(bytes);
-  return { provider_calls_include_xml: calls.some((c) => /received\/:id\/xml$/.test(c)), stored: true, size: bytes!.byteLength };
+  const rows = (await sql<Row>("select processing_status s, last_error_code e, count(*)::int n from public.einvoice_inbound group by 1, 2")).rows;
+  if (!INBOUND_ROW) {
+    return { verdict: "FAIL", evidence: { reason: "žiadny prijatý doklad s hashom odoslaného UBL do 90 s", matched_sha_from: SENT_SHA_SOURCE, ...diag, inbound_rows: rows } };
+  }
+  const bytes = INBOUND_STORAGE.get(INBOUND_ROW.xml_storage_path as string);
+  assert.ok(bytes, "XML v storage");
+  return { matched_sha_from: SENT_SHA_SOURCE, ...diag, stored: true, size: bytes!.byteLength, inbound_rows: rows };
 });
-await step("I5", "hash: prijaté XML je byte-identické s odoslaným UBL (SHA-256)", async () => {
-  assert.ok(INBOUND_ROW);
-  const sha = createHash("sha256").update(INBOUND_STORAGE.get(INBOUND_ROW!.xml_storage_path as string)!).digest("hex");
-  assert.equal(sha, INBOUND_ROW!.xml_sha256);
-  assert.equal(sha, SENT_SHA);
-  return { sha256: short(sha), equals_sent: true };
+await step("I5", "hash: prijaté XML je byte-identické s odoslaným UBL (SHA-256)", ["I1-I4"], async () => {
+  const h = sha(INBOUND_STORAGE.get(INBOUND_ROW!.xml_storage_path as string)!);
+  assert.equal(h, INBOUND_ROW!.xml_sha256);
+  assert.equal(h, SENT_SHA);
+  return { sha256: h.slice(0, 12), equals_sent: true };
 });
-await step("I6-I9", "parse → koncept prijatej faktúry → ACK u poskytovateľa", async () => {
-  await sql("update public.einvoice_inbound set next_retry_at = now() - interval '1 second', locked_until = null where processing_status not in ('acknowledged','failed')");
-  await runInboundProcessBatch({ store: inboundStore, provider, environment: "sandbox" }, { batchSize: 10 });
+await step("I6-I9", "parse → koncept prijatej faktúry → ACK u poskytovateľa", ["I1-I4"], async () => {
+  for (let i = 0; i < 3; i++) {
+    await sql("update public.einvoice_inbound set next_retry_at = now() - interval '1 second', locked_until = null where processing_status not in ('acknowledged','failed')");
+    await runInboundProcessBatch(inboundDeps(), { batchSize: 10 });
+  }
   const r = (await sql<Row>("select * from public.einvoice_inbound where id = $1", [INBOUND_ROW!.id])).rows[0];
   INBOUND_ROW = r;
-  assert.ok(["acknowledged", "duplicate"].includes(r.processing_status as string), String(r.processing_status));
+  assert.ok(["acknowledged", "duplicate"].includes(r.processing_status as string), `${r.processing_status} ${r.last_error_code ?? ""}`);
   const inv = r.invoice_id ? (await sql<Row>("select direction, document_status, source from public.invoices where id = $1", [r.invoice_id])).rows[0] : null;
   return { status: r.processing_status, acknowledged: Boolean(r.acknowledged_at), draft: inv ? { direction: inv.direction, status: inv.document_status, source: inv.source } : null };
 });
-await step("I8b", "duplicate: opätovná registrácia toho istého dokladu nevytvorí nový koncept", async () => {
+await step("I8b", "duplicate: opätovná registrácia toho istého dokladu nevytvorí nový koncept", ["I6-I9"], async () => {
   const before = (await sql<{ n: number }>("select count(*)::int n from public.invoices where company_id = $1 and direction = 'received'", [CA])).rows[0].n;
-  await sql("update public.einvoice_inbound set next_retry_at = now() - interval '1 second', locked_until = null where processing_status not in ('acknowledged','failed')");
-  await runInboundPoll({ store: inboundStore, provider, environment: "sandbox" }, { batchSize: 10 });
+  await runInboundPoll(inboundDeps(), { batchSize: 10 });
+  await inboundStore.register({ provider: provider.name, environment: "sandbox", providerOrgId: ORG_ID, providerReceivedId: String(INBOUND_ROW!.provider_received_id), source: "poll", meta: { sender_participant_id: null, sender_ico: null, document_number: null, document_type: null, is_test: true } });
   const after = (await sql<{ n: number }>("select count(*)::int n from public.invoices where company_id = $1 and direction = 'received'", [CA])).rows[0].n;
   const rows = (await sql<{ n: number }>("select count(*)::int n from public.einvoice_inbound where provider_received_id = $1", [INBOUND_ROW!.provider_received_id])).rows[0].n;
   assert.equal(rows, 1);
+  assert.equal(after, before);
   return { drafts_before: before, drafts_after: after, inbound_rows_for_document: rows };
 });
-await step("I10", "ACK retry: opätovný ACK u poskytovateľa je idempotentný (already_acknowledged)", async () => {
-  // Adaptér vracia void; idempotencia = druhý a tretí ACK prejdú bez chyby (docs: already_acknowledged).
+await step("I10", "ACK retry: opätovný ACK u poskytovateľa je idempotentný", ["I6-I9"], async () => {
   await provider.acknowledgeInbound(providerCtx, String(INBOUND_ROW!.provider_received_id));
   await provider.acknowledgeInbound(providerCtx, String(INBOUND_ROW!.provider_received_id));
   return { repeated_ack_ok: true };
 });
-await step("I11", "nepodporovaný typ (dobropis) → failed UNSUPPORTED_PROFILE, XML uložené, bez konceptu", async () => {
+await step("I11", "nepodporovaný typ (dobropis) → failed UNSUPPORTED_PROFILE, XML uložené, bez konceptu", ["O2"], async () => {
   const cn = await invoice(U.owner, CA, PARTNER_A, { ...HEADER, buyer_reference: `E2E-CN-${RUN}` }, true, "credit_note", INV1);
-  const r = await requestAs(U.owner, cn);
-  if (r.status !== 202) return { verdict: "SKIP", evidence: { reason: "dobropis neprešiel readiness/preflight", code: r.body.code } };
-  await sendOnly(r.body.outbound!.id);
-  const sha = (await outboundOf(r.body.outbound!.id)).ubl_sha256;
-  let row: Row | undefined;
-  for (let i = 0; i < 12 && !row; i++) {
-    await sleep(5_000);
-    await runInboundPoll({ store: inboundStore, provider, environment: "sandbox" }, { batchSize: 10 });
-    row = (await sql<Row>("select * from public.einvoice_inbound where company_id = $1 and xml_sha256 = $2", [CA, sha])).rows[0];
+  const r = await postOutbound(U.owner, { invoice_id: cn, confirm_send: true });
+  if (r.status !== 202) return { verdict: "SKIP", evidence: { stage: "outbound_request", reason: "dobropis sa nedal zaradiť", status: r.status, code: r.body.code, issues: (r.body.issues as unknown[] | undefined)?.length ?? 0 } };
+  const id = String((r.body.outbound as { id: string }).id);
+  await sendOnly(id);
+  const out = await outboundOf(id);
+  if (!["sent", "delivered"].includes(out.state as string)) {
+    return { verdict: "SKIP", evidence: { stage: "outbound_send", reason: "poskytovateľ dobropis neprijal", state: out.state, code: out.last_error_code } };
   }
-  if (!row) return { verdict: "PARTIAL", evidence: { reason: "prijatý dobropis sa v sandboxe neobjavil do 60 s" } };
-  return { status: row.processing_status, last_error_code: row.last_error_code, xml_stored: INBOUND_STORAGE.has(row.xml_storage_path as string), invoice_id: row.invoice_id ?? null };
+  let row: Row | undefined;
+  for (let i = 0; i < 18 && !row; i++) {
+    await sleep(5_000);
+    await runInboundPoll(inboundDeps(), { batchSize: 10 });
+    row = (await sql<Row>("select * from public.einvoice_inbound where company_id = $1 and xml_sha256 = $2", [CA, out.ubl_sha256])).rows[0];
+  }
+  if (!row) return { verdict: "PARTIAL", evidence: { stage: "inbound_delivery", reason: "odoslaný dobropis sa v sandboxe ako prijatý neobjavil do 90 s", outbound_state: out.state } };
+  for (let i = 0; i < 2; i++) {
+    await sql("update public.einvoice_inbound set next_retry_at = now() - interval '1 second', locked_until = null where processing_status not in ('acknowledged','failed')");
+    await runInboundProcessBatch(inboundDeps(), { batchSize: 10 });
+  }
+  row = (await sql<Row>("select * from public.einvoice_inbound where id = $1", [row.id])).rows[0];
+  const ok = row.processing_status === "failed" && row.last_error_code === "UNSUPPORTED_PROFILE" && !row.invoice_id && INBOUND_STORAGE.has(row.xml_storage_path as string);
+  return { verdict: ok ? "PASS" : "FAIL", evidence: { stage: "inbound_processing", status: row.processing_status, last_error_code: row.last_error_code, xml_stored: INBOUND_STORAGE.has(row.xml_storage_path as string), draft_created: Boolean(row.invoice_id) } };
 });
-await step("I12", "webhook (offline): docs tvar s data.orgId, HMAC t=…,v1=… → spracované; zlý podpis → 401", async () => {
-  const { handleEinvoiceWebhook } = await import("../lib/einvoice/inbound/webhook.ts");
+await step("I12", "webhook (iba OFFLINE časť): docs tvar s data.orgId, HMAC t=…,v1=… → spracované; zlý podpis → 401", [], async () => {
   const secret = "whsec_local_e2e_only_" + RUN;
   const body = JSON.stringify({ event: "peppol.document.received", timestamp: new Date().toISOString(), data: { mode: "test", orgId: ORG_ID } });
   const t = Math.floor(Date.now() / 1000);
@@ -740,13 +939,14 @@ await step("I12", "webhook (offline): docs tvar s data.orgId, HMAC t=…,v1=… 
   const ok = await handleEinvoiceWebhook(deps, { rawBody: new TextEncoder().encode(body), signatureHeader: `t=${t},v1=${sig}`, deliveryIdHeader: `e2e-${RUN}` });
   const bad = await handleEinvoiceWebhook(deps, { rawBody: new TextEncoder().encode(body), signatureHeader: `t=${t},v1=${"0".repeat(64)}`, deliveryIdHeader: `e2e-bad-${RUN}` });
   assert.equal(bad.status, 401);
-  return { verdict: "PARTIAL", evidence: { note: "skutočné doručenie webhooku z poskytovateľa vyžaduje verejný endpoint (staging)", ok: ok.body.code, bad: bad.body.code } };
+  assert.ok(["PROCESSED", "ACCEPTED_RETRY_LATER"].includes(String(ok.body.code)), String(ok.body.code));
+  return { verdict: "PARTIAL", evidence: { scope: "offline_only", note: "podpis/parsovanie/spracovanie overené lokálne s lokálnym secretom; doručenie webhooku z poskytovateľa vyžaduje verejný endpoint + secret z portálu (L3)", ok: ok.body.code, bad: bad.body.code } };
 });
-await step("I13", "tenant izolácia: firma B nevidí outbound/inbound firmy A; request na faktúru A → 404", async () => {
+await step("I13", "tenant izolácia: firma B nevidí outbound/inbound firmy A; request na faktúru A → 404", ["O2"], async () => {
   const seeOut = (await as(U.b, () => db.query<{ n: number }>("select count(*)::int n from public.einvoice_outbound"))).rows[0].n;
   const seeIn = (await as(U.b, () => db.query<{ n: number }>("select count(*)::int n from public.einvoice_inbound"))).rows[0].n;
   calls.length = 0;
-  const r = await requestAs(U.b, INV1);
+  const r = await postOutbound(U.b, { invoice_id: INV1, confirm_send: true });
   assert.equal(seeOut, 0);
   assert.equal(seeIn, 0);
   assert.equal(r.status, 404);
@@ -755,59 +955,60 @@ await step("I13", "tenant izolácia: firma B nevidí outbound/inbound firmy A; r
 });
 
 // =============================================================================
-// AUTHZ MATRIX (bez odoslania: zamietnuté nevolajú poskytovateľa; povolené sa iba zaradia)
+// AUTHZ MATRIX — cez route handler (zamietnuté nevolajú poskytovateľa; povolené sa iba zaradia)
 // =============================================================================
 async function matrix(uid: string, company: string, partner: string) {
   const inv = await invoice(company === CA ? U.owner : U.b, company, partner, { ...HEADER, buyer_reference: `E2E-AUTHZ-${RUN}` });
   calls.length = 0;
-  const r = await requestAs(uid, inv);
+  const r = await postOutbound(uid, { invoice_id: inv, confirm_send: true });
   const sent = calls.some((c) => c.endsWith("/connector/send"));
-  if (r.body.outbound?.id) await sql("update public.einvoice_outbound set next_retry_at = now() + interval '30 days' where id = $1", [r.body.outbound.id]);
+  const outId = (r.body.outbound as { id?: string } | undefined)?.id;
+  if (outId) await sql("update public.einvoice_outbound set next_retry_at = now() + interval '30 days' where id = $1", [outId]);
   return { status: r.status, code: r.body.code, provider_called: calls.length > 0, sent };
 }
-await step("A1", "owner + nárok → 202 (zaradené, neodoslané bez workera)", async () => {
+await step("A1", "owner + nárok → 202 (zaradené, neodoslané bez workera)", ["P0"], async () => {
   const m = await matrix(U.owner, CA, PARTNER_A);
   assert.equal(m.status, 202);
   assert.equal(m.sent, false);
   return m;
 });
-await step("A2", "accountant (finance.manage) + nárok → 202", async () => {
+await step("A2", "accountant (finance.manage) + nárok → 202", ["P0"], async () => {
   const m = await matrix(U.acc, CA, PARTNER_A);
   assert.equal(m.status, 202);
   return m;
 });
-await step("A3", "admin bez finance.manage → 403, poskytovateľ sa nevolá", async () => {
+await step("A3", "admin bez finance.manage → 403, poskytovateľ sa nevolá", ["P0"], async () => {
   const m = await matrix(U.admin, CA, PARTNER_A);
   assert.equal(m.status, 403);
   assert.equal(m.provider_called, false);
   return m;
 });
-await step("A4", "admin s explicitným finance.manage → 202", async () => {
+await step("A4", "admin s explicitným finance.manage → 202", ["P0"], async () => {
   const m = await matrix(U.adminFin, CA, PARTNER_A);
   assert.equal(m.status, 202);
   return m;
 });
-await step("A5", "employee (aj s finance flagom) → 403, poskytovateľ sa nevolá", async () => {
+await step("A5", "employee (aj s finance flagom) → 403, poskytovateľ sa nevolá", ["P0"], async () => {
   const m = await matrix(U.emp, CA, PARTNER_A);
   assert.equal(m.status, 403);
   assert.equal(m.provider_called, false);
   return m;
 });
-await step("A6", "firma bez nároku einvoice → 403 EINVOICE_ENTITLEMENT_REQUIRED", async () => {
+await step("A6", "firma bez nároku einvoice → 403 EINVOICE_ENTITLEMENT_REQUIRED", ["P0"], async () => {
   const m = await matrix(U.b, CB, PARTNER_B);
   assert.equal(m.status, 403);
   assert.equal(m.code, "EINVOICE_ENTITLEMENT_REQUIRED");
   assert.equal(m.provider_called, false);
   return m;
 });
-await step("A7", "cross-company pokus → 404, poskytovateľ sa nevolá", async () => {
+await step("A7", "cross-company pokus → 404, poskytovateľ sa nevolá", ["O2"], async () => {
   calls.length = 0;
-  const r = await requestAs(U.b, INV1);
+  const r = await postOutbound(U.b, { invoice_id: INV1, confirm_send: true });
   assert.equal(r.status, 404);
   assert.deepEqual(calls, []);
   return { status: r.status };
 });
-await step("A8", "rollout pozastavený (kill switch) → 403 ROLLOUT_NOT_ENABLED, poskytovateľ sa nevolá", async () => {
+await step("A8", "rollout pozastavený (kill switch) → 403 ROLLOUT_NOT_ENABLED, poskytovateľ sa nevolá", ["P0"], async () => {
   await sql("update public.einvoice_rollout set stage = 'paused' where company_id = $1", [CA]);
   try {
     const m = await matrix(U.owner, CA, PARTNER_A);
@@ -825,13 +1026,13 @@ await step("A8", "rollout pozastavený (kill switch) → 403 ROLLOUT_NOT_ENABLED
 // =============================================================================
 const summary = {
   generated_at: new Date().toISOString(),
-  environment: "sandbox",
-  architecture: "Phase 1–6 moduly + PGlite (všetky migrácie) + reálne eFaktura.sk sandbox API",
+  environment: SELFTEST ? "offline-selftest (fake sandbox, bez siete)" : "sandbox",
+  architecture: "Phase 1–6 moduly + route handler + PGlite (všetky migrácie) + reálne eFaktura.sk sandbox API",
   not_covered: ["Supabase PostgREST/Storage/RLS na skutočnom projekte", "Vercel routes a cron", "skutočné doručenie webhooku"],
   counts: results.reduce<Record<string, number>>((acc, r) => ((acc[r.verdict] = (acc[r.verdict] ?? 0) + 1), acc), {}),
   results,
 };
-const reportPath = ARGS.get("report") ?? path.join(tmpdir(), "esblu-einvoice-sandbox-e2e-report.json");
+const reportPath = ARGS.get("report") ?? path.join(tmpdir(), SELFTEST ? "esblu-einvoice-e2e-selftest-report.json" : "esblu-einvoice-sandbox-e2e-report.json");
 writeFileSync(reportPath, JSON.stringify(summary, null, 2));
 console.log(`\nsandbox-e2e: ${JSON.stringify(summary.counts)}  report: ${reportPath}`);
 if (results.some((r) => r.verdict === "FAIL")) process.exit(1);
