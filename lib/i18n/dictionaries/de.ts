@@ -2784,6 +2784,7 @@ const de = {
           PAYABLE_MISMATCH: "Zahlbetrag passt nicht.",
           DOCUMENT_ALLOWANCE_CHARGE_NOT_MAPPED: "Nachlässe oder Zuschläge wurden nicht übernommen.",
           LINE_NAME_MISSING: "Eine Position hat keine Bezeichnung.",
+          PAYMENT_MEANS_CODE_UNSUPPORTED: "Die Zahlungsart aus dem Beleg konnte nicht übernommen werden — bitte ergänzen.",
         },
         error: {
           generic: "Bei der Verarbeitung ist ein Fehler aufgetreten. Das System wiederholt oder bietet den nächsten Schritt an.",

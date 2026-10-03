@@ -45,6 +45,8 @@ const PERMANENT_DRAFT_CODES = new Set([
   "ESBLU_MISSING_SUPPLIER_INVOICE_NUMBER",
   "ESBLU_MISSING_ISSUE_DATE",
   "ESBLU_INVOICE_NO_ITEMS",
+  // Súčty z XML nesedia s položkami / samy so sebou (DB druhá vrstva za mapovaním).
+  "ESBLU_EINVOICE_TOTALS_INCONSISTENT",
 ]);
 
 export type InboundDeps = {

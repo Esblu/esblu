@@ -2763,6 +2763,7 @@ const en = {
           PAYABLE_MISMATCH: "Amount due does not match.",
           DOCUMENT_ALLOWANCE_CHARGE_NOT_MAPPED: "Document allowances or charges were not mapped.",
           LINE_NAME_MISSING: "A line has no name.",
+          PAYMENT_MEANS_CODE_UNSUPPORTED: "The payment means from the document could not be mapped — please fill it in.",
         },
         error: {
           generic: "An error occurred during processing. The system will retry or offer the next step.",

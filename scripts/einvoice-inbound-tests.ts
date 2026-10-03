@@ -112,6 +112,7 @@ for (const migration of [
   // regresia: Phase 4 nesmie zmeniť inbound správanie
   "20261002140000_einvoice_operations.sql",
   "20261002150000_einvoice_rollout_gate.sql",
+  "20261003100000_einvoice_inbound_draft_totals.sql",
 ]) {
   try {
     await db.exec(read(`supabase/migrations/${migration}`));
@@ -933,6 +934,258 @@ await check("žiadne logovanie tela webhooku, XML ani tajomstiev; zdroj E-Faktú
   assert.match(read("lib/einvoice/ubl/parse.ts"), /<!DOCTYPE/);
   assert.match(read("lib/einvoice/provider/efaktura-sk.ts"), /redirect: "error"/);
   assert.match(read("lib/einvoice/provider/efaktura-sk.ts"), /maxBytes: MAX_INBOUND_XML_BYTES/);
+});
+
+// =============================================================================
+// L3 nález 2026-10-03 — koncept prijatej e-faktúry je pri vzniku finančne zhodný
+// s nemenným XML (hlavička, BT-81, rozpis DPH), fail-closed pri nekonzistencii.
+// =============================================================================
+type SnapLine = { net: number; qty?: number; price?: number; cat?: "S" | "E" | "Z"; rate?: number; unit?: string };
+function receivedXml(number: string, opts: { lines?: SnapLine[]; pm?: string | null; rounding?: number; buyerRef?: string; exemption?: string } = {}): Uint8Array {
+  const lines = opts.lines ?? [{ net: 1000, qty: 1, price: 1000, cat: "S", rate: 23, unit: "H87" }];
+  const groups = new Map<string, { cat: "S" | "E" | "Z"; rate: number; taxable: number }>();
+  for (const l of lines) {
+    const cat = l.cat ?? "S";
+    const rate = cat === "S" ? l.rate ?? 23 : 0;
+    const k = `${cat}|${rate}`;
+    const g = groups.get(k) ?? { cat, rate, taxable: 0 };
+    g.taxable = Math.round((g.taxable + l.net) * 100) / 100;
+    groups.set(k, g);
+  }
+  const breakdowns = [...groups.values()].map((g) => ({
+    vat_category_code: g.cat, vat_rate: g.rate, taxable_amount: g.taxable,
+    vat_amount: g.cat === "S" ? Math.round(g.taxable * g.rate + Number.EPSILON) / 100 : 0,
+    vat_exemption_reason_code: g.cat === "E" ? opts.exemption ?? "VATEX-EU-132" : null, vat_exemption_reason_text: null,
+  }));
+  const subtotal = Math.round(lines.reduce((a, l) => a + l.net, 0) * 100) / 100;
+  const vat = Math.round(breakdowns.reduce((a, b) => a + b.vat_amount, 0) * 100) / 100;
+  const rounding = opts.rounding ?? 0;
+  const snap: UblInvoiceSnapshot = {
+    invoice: {
+      id: "f0000000-0000-4000-8000-000000000004", company_id: "x", direction: "issued", kind: "regular_invoice", document_status: "finalized",
+      invoice_number: number, issue_date: "2026-10-03", due_date: "2026-12-11", delivery_date: null, tax_point_date: null, currency: "EUR",
+      subtotal_amount: subtotal, vat_total_amount: vat, total_amount: Math.round((subtotal + vat + rounding) * 100) / 100, rounding_amount: rounding,
+      buyer_reference: opts.buyerRef ?? "L3-REF-002", purchase_order_reference: null, payment_means_code: opts.pm === undefined ? "30" : opts.pm,
+      payment_reference: null, corrects_invoice_id: null,
+    },
+    seller: supplierParty(opts.pm === null ? { iban: null, bic: null } : {}),
+    buyer: customerParty(),
+    items: lines.map((l, i) => ({
+      position: i + 1, description: `Položka ${i + 1}`, quantity: l.qty ?? 1, unit_code: l.unit ?? "H87", unit_price: l.price ?? l.net, price_mode: "net",
+      vat_category_code: l.cat ?? "S", vat_rate: (l.cat ?? "S") === "S" ? l.rate ?? 23 : 0, line_net_amount: l.net,
+    })),
+    taxBreakdowns: breakdowns,
+    correctedInvoice: null,
+  };
+  const r = generateUbl(snap);
+  if (!r.ok) throw new Error(`fixture UBL: ${r.issues.map((i) => i.code).join(",")}`);
+  return r.bytes;
+}
+const xmlEdit = (b: Uint8Array, edits: [RegExp | string, string][]) => {
+  let x = new TextDecoder().decode(b);
+  for (const [from, to] of edits) {
+    const before = x;
+    x = x.replace(from, to);
+    assert.notEqual(x, before, `úprava fixture sa neaplikovala: ${String(from)}`);
+  }
+  return new TextEncoder().encode(x);
+};
+async function receiveOne(pid: string, xml: Uint8Array) {
+  provider.add("org-a", pid, xml);
+  await makeDue();
+  await runInboundPoll(deps(), { batchSize: 10 });
+  return inboundByPid(pid);
+}
+const invoiceRow = async (id: string) => (await sql<Row>("select * from public.invoices where id = $1", [id])).rows[0];
+const breakdownOf = async (id: string) =>
+  (await sql<Row>("select vat_category_code c, vat_rate::text r, taxable_amount::text t, vat_amount::text v, vat_exemption_reason_code e from public.invoice_tax_breakdowns where invoice_id = $1 order by vat_category_code, vat_rate", [id])).rows;
+const itemsOf = async (id: string) =>
+  (await sql<Row>("select position, line_net_amount::text n, line_vat_amount::text v, line_gross_amount::text g, unit_price::text p, quantity::text q from public.invoice_items where invoice_id = $1 order by position", [id])).rows;
+
+await check("REGRESIA FA20260004: koncept má hlavičku 1000 / 230 / 1230, BT-81 = 30 a rozpis S 23 % 1000/230 hneď po importe", async () => {
+  const xml = receivedXml("FA20260004");
+  const row = await receiveOne("l3-fa20260004", xml);
+  assert.equal(row.processing_status, "acknowledged", String(row.last_error_code));
+  assert.equal(row.xml_sha256, sha(xml));
+  assert.equal(row.xml_size_bytes, xml.byteLength);
+  const inv = await invoiceRow(row.invoice_id as string);
+  assert.equal(inv.document_status, "draft");
+  assert.equal(inv.direction, "received");
+  assert.equal(inv.company_id, CA);
+  assert.equal(inv.supplier_invoice_number, "FA20260004");
+  assert.equal(inv.buyer_reference, "L3-REF-002");
+  assert.equal(String(inv.subtotal_amount), "1000.00");
+  assert.equal(String(inv.vat_total_amount), "230.00");
+  assert.equal(String(inv.rounding_amount), "0.00");
+  assert.equal(String(inv.total_amount), "1230.00");
+  assert.equal(inv.payment_means_code, "30");
+  assert.deepEqual(await breakdownOf(inv.id as string), [{ c: "S", r: "23.0000", t: "1000.00", v: "230.00", e: null }]);
+  assert.deepEqual((await itemsOf(inv.id as string)).map((i) => [i.n, i.v, i.g]), [["1000.00", "230.00", "1230.00"]]);
+  const x = row.xml_totals as Record<string, unknown>;
+  assert.equal(Number(x.payable), 1230);
+  assert.equal(x.payment_means_code, "30");
+  assert.ok(provider.calls.includes("ack:l3-fa20260004"));
+});
+
+let multiInvoiceId = "";
+await check("parser → perzistencia: viac sadzieb + oslobodenie + PayableRoundingAmount + BT-81 58 — DB presne = rozparsované XML; DPH riadkov = rozpis", async () => {
+  const xml = receivedXml("FA-MULTI-1", {
+    pm: "58",
+    rounding: 0.02,
+    lines: [
+      { net: 0.05, qty: 1, price: 0.05, cat: "S", rate: 23 },
+      { net: 0.05, qty: 1, price: 0.05, cat: "S", rate: 23 },
+      { net: 0.05, qty: 1, price: 0.05, cat: "S", rate: 23 },
+      { net: 10, qty: 4, price: 2.5, cat: "S", rate: 5 },
+      { net: 20, qty: 1, price: 20, cat: "E" },
+    ],
+  });
+  const parsed = parseInboundUbl(xml);
+  assert.ok(parsed.ok);
+  const doc = parsed.ok ? parsed.document : null!;
+  const row = await receiveOne("rcv-multi-1", xml);
+  assert.equal(row.processing_status, "acknowledged", String(row.last_error_code));
+  const inv = await invoiceRow(row.invoice_id as string);
+  multiInvoiceId = inv.id as string;
+  assert.equal(String(inv.subtotal_amount), doc.totals.taxExclusive);
+  assert.equal(String(inv.vat_total_amount), doc.vatTotal);
+  assert.equal(String(inv.rounding_amount), doc.totals.rounding);
+  assert.equal(String(inv.total_amount), doc.totals.payable);
+  assert.deepEqual([String(inv.subtotal_amount), String(inv.vat_total_amount), String(inv.total_amount)], ["30.15", "0.53", "30.70"]);
+  assert.equal(inv.payment_means_code, "58");
+  const bd = await breakdownOf(inv.id as string);
+  assert.deepEqual(bd, [
+    { c: "E", r: "0.0000", t: "20.00", v: "0.00", e: "VATEX-EU-132" },
+    { c: "S", r: "5.0000", t: "10.00", v: "0.50", e: null },
+    { c: "S", r: "23.0000", t: "0.15", v: "0.03", e: null },
+  ]);
+  const xmlBd = doc.taxSubtotals.map((t) => `${t.category}|${Number(t.percent ?? 0)}|${t.taxableAmount}|${t.taxAmount}`).sort();
+  assert.deepEqual(bd.map((b) => `${b.c}|${Number(b.r)}|${b.t}|${b.v}`).sort(), xmlBd);
+  const items = await itemsOf(inv.id as string);
+  assert.deepEqual(items.map((i) => i.n), doc.lines.map((l) => Number(l.lineNetAmount).toFixed(2)));
+  // DPH skupiny S 23 % (0,03) rozdelená na 3 riadky najväčšími zvyškami → 0,01 + 0,01 + 0,01
+  assert.deepEqual(items.slice(0, 3).map((i) => i.v), ["0.01", "0.01", "0.01"]);
+  const lineVat = items.reduce((a, i) => a + Math.round(Number(i.v) * 100), 0);
+  assert.equal(lineVat, 53);
+  for (const i of items) assert.equal(Math.round(Number(i.n) * 100) + Math.round(Number(i.v) * 100), Math.round(Number(i.g) * 100));
+});
+
+await check("finalizácia prijatej e-faktúry: prepočet = XML (hlavička aj rozpis), potom je rozpis nemenný", async () => {
+  await as(U.owner, () => db.query("select public.esblu_finalize_invoice($1)", [multiInvoiceId]));
+  const inv = await invoiceRow(multiInvoiceId);
+  assert.equal(inv.document_status, "finalized");
+  assert.deepEqual([String(inv.subtotal_amount), String(inv.vat_total_amount), String(inv.rounding_amount), String(inv.total_amount)], ["30.15", "0.53", "0.02", "30.70"]);
+  assert.equal((await breakdownOf(multiInvoiceId)).length, 3);
+  const err = await errorOf(() => sql("delete from public.invoice_tax_breakdowns where invoice_id = $1", [multiInvoiceId]));
+  assert.match(err, /ESBLU_INVOICE_SNAPSHOT_IMMUTABLE/);
+});
+
+await check("finalizácia po ručnej zmene položky konceptu → ESBLU_EINVOICE_FINALIZE_TOTALS_MISMATCH (význam doručeného dokladu sa nezmení)", async () => {
+  const row = await receiveOne("rcv-tamper-1", receivedXml("FA-TAMPER-1"));
+  assert.equal(row.processing_status, "acknowledged");
+  await sql("update public.invoice_items set unit_price = 999 where invoice_id = $1", [row.invoice_id]);
+  const err = await errorOf(() => as(U.owner, () => db.query("select public.esblu_finalize_invoice($1)", [row.invoice_id])));
+  assert.match(err, /ESBLU_EINVOICE_FINALIZE_TOTALS_MISMATCH/);
+  assert.equal((await invoiceRow(row.invoice_id as string)).document_status, "draft");
+});
+
+await check("XML nekonzistentné / nepodporované → koncept NEVZNIKNE, žiadny ACK, trvalé zlyhanie s presným kódom", async () => {
+  const base = receivedXml("FA-BAD-0");
+  const cases: Array<[string, Uint8Array, string, string]> = [
+    ["rcv-bad-allow", xmlEdit(base, [[/<cac:TaxTotal>/, `<cac:AllowanceCharge><cbc:ChargeIndicator>false</cbc:ChargeIndicator><cbc:Amount currencyID="EUR">10.00</cbc:Amount><cac:TaxCategory><cbc:ID>S</cbc:ID><cbc:Percent>23</cbc:Percent><cac:TaxScheme><cbc:ID>VAT</cbc:ID></cac:TaxScheme></cac:TaxCategory></cac:AllowanceCharge><cac:TaxTotal>`]]), "UNSUPPORTED_PROFILE", "DOCUMENT_ALLOWANCE_CHARGE_UNSUPPORTED"],
+    ["rcv-bad-prepaid", xmlEdit(base, [[/<cbc:PayableAmount currencyID="EUR">1230.00<\/cbc:PayableAmount>/, `<cbc:PrepaidAmount currencyID="EUR">100.00</cbc:PrepaidAmount><cbc:PayableAmount currencyID="EUR">1130.00</cbc:PayableAmount>`]]), "UNSUPPORTED_PROFILE", "PREPAID_AMOUNT_UNSUPPORTED"],
+    ["rcv-bad-vat", xmlEdit(base, [[/<cbc:TaxAmount currencyID="EUR">230.00<\/cbc:TaxAmount>/g, `<cbc:TaxAmount currencyID="EUR">231.00</cbc:TaxAmount>`], [/<cbc:TaxInclusiveAmount currencyID="EUR">1230.00/, `<cbc:TaxInclusiveAmount currencyID="EUR">1231.00`], [/<cbc:PayableAmount currencyID="EUR">1230.00/, `<cbc:PayableAmount currencyID="EUR">1231.00`]]), "INVALID_XML", "VAT_BREAKDOWN_AMOUNT_MISMATCH"],
+    ["rcv-bad-linesum", xmlEdit(base, [[/(<cac:InvoiceLine>[\s\S]*?<cbc:LineExtensionAmount currencyID="EUR">)1000.00/, "$1999.00"]]), "INVALID_XML", "TOTALS_LINE_SUM_MISMATCH"],
+    ["rcv-bad-payable", xmlEdit(base, [[/<cbc:PayableAmount currencyID="EUR">1230.00/, `<cbc:PayableAmount currencyID="EUR">1229.00`]]), "INVALID_XML", "TOTALS_PAYABLE_MISMATCH"],
+    ["rcv-bad-nototals", xmlEdit(base, [[/<cac:LegalMonetaryTotal>[\s\S]*?<\/cac:LegalMonetaryTotal>/, ""]]), "INVALID_XML", "MISSING_MONETARY_TOTALS"],
+  ];
+  const invoicesBefore = (await sql<{ n: number }>("select count(*)::int n from public.invoices where direction = 'received'")).rows[0].n;
+  for (const [pid, xml, code, detail] of cases) {
+    const row = await receiveOne(pid, xml);
+    assert.equal(row.processing_status, "failed", pid);
+    assert.equal(row.last_error_code, code, pid);
+    assert.equal(row.invoice_id, null, pid);
+    assert.equal(row.xml_sha256, sha(xml), `${pid}: XML uložené`);
+    const ev = (await sql<Row>("select provider_code from public.einvoice_events where inbound_id = $1 and to_state = 'failed'", [row.id])).rows;
+    assert.equal(ev[0]?.provider_code, detail, pid);
+    assert.ok(!provider.calls.includes(`ack:${pid}`), `${pid}: bez ACK`);
+  }
+  assert.equal((await sql<{ n: number }>("select count(*)::int n from public.invoices where direction = 'received'")).rows[0].n, invoicesBefore);
+});
+
+await check("cena riadka nesedí so sumou riadka (napr. zľava na riadku) → cena odvodená zo sumy, suma riadka = XML, LINE_AMOUNT_MISMATCH na kontrolu", async () => {
+  const xml = xmlEdit(receivedXml("FA-PRICE-1"), [[/<cbc:PriceAmount currencyID="EUR">1000<\/cbc:PriceAmount>/, `<cbc:PriceAmount currencyID="EUR">1100</cbc:PriceAmount>`]]);
+  const row = await receiveOne("rcv-price-1", xml);
+  assert.equal(row.processing_status, "acknowledged", String(row.last_error_code));
+  assert.ok((row.review_reasons as string[]).includes("LINE_AMOUNT_MISMATCH"));
+  const items = await itemsOf(row.invoice_id as string);
+  assert.deepEqual([items[0].n, items[0].v, items[0].p], ["1000.00", "230.00", "1000.000000"]);
+  assert.equal(String((await invoiceRow(row.invoice_id as string)).total_amount), "1230.00");
+});
+
+await check("BT-81 mimo číselného UNCL4461 (ZZZ) → koncept bez kódu + PAYMENT_MEANS_CODE_UNSUPPORTED; bez PaymentMeans → null bez dôvodu", async () => {
+  const zzz = xmlEdit(receivedXml("FA-PM-ZZZ"), [[/<cbc:PaymentMeansCode>30<\/cbc:PaymentMeansCode>/, "<cbc:PaymentMeansCode>ZZZ</cbc:PaymentMeansCode>"]]);
+  const r1 = await receiveOne("rcv-pm-zzz", zzz);
+  assert.equal(r1.processing_status, "acknowledged");
+  assert.equal((await invoiceRow(r1.invoice_id as string)).payment_means_code, null);
+  assert.ok((r1.review_reasons as string[]).includes("PAYMENT_MEANS_CODE_UNSUPPORTED"));
+  const none = await receiveOne("rcv-pm-none", receivedXml("FA-PM-NONE", { pm: null }));
+  assert.equal(none.processing_status, "acknowledged");
+  assert.equal((await invoiceRow(none.invoice_id as string)).payment_means_code, null);
+  assert.ok(!(none.review_reasons as string[]).includes("PAYMENT_MEANS_CODE_UNSUPPORTED"));
+});
+
+await check("DB druhá vrstva: create_draft s pozmenenými súčtami → ESBLU_EINVOICE_TOTALS_INCONSISTENT (rollback); bez súčtov → ESBLU_EINVOICE_TOTALS_REQUIRED", async () => {
+  const xml = receivedXml("FA-DB-1");
+  const parsed = parseInboundUbl(xml);
+  assert.ok(parsed.ok);
+  const mapped = parsed.ok ? mapInboundDraft(parsed.document, parsed.reviewReasons, "9915:2020000000") : null;
+  assert.ok(mapped && mapped.ok);
+  const draft = mapped && mapped.ok ? mapped.draft : null!;
+  const reg = await inboundStore.register({ provider: "mock", environment: "sandbox", providerOrgId: "org-a", providerReceivedId: "rcv-db-1", source: "poll", meta: {} });
+  await sql("update public.einvoice_inbound set processing_status = 'stored', xml_sha256 = $2, xml_storage_path = $3, xml_size_bytes = $4 where id = $1", [reg.inboundId, sha(xml), `x/${sha(xml)}.xml`, xml.byteLength]);
+  await sql("update public.einvoice_inbound set processing_status = 'parsed' where id = $1", [reg.inboundId]);
+  const before = (await sql<{ n: number }>("select count(*)::int n from public.invoices")).rows[0].n;
+  const tampered = { ...draft, totals: { ...draft.totals, vat_total: "231.00", tax_inclusive: "1231.00", payable: "1231.00" } };
+  assert.match(await errorOf(() => inboundStore.createDraft(reg.inboundId, tampered)), /ESBLU_EINVOICE_TOTALS_INCONSISTENT/);
+  const wrongBreakdown = { ...draft, totals: { ...draft.totals, breakdown: [{ ...draft.totals.breakdown[0], taxable: "999.00" }] } };
+  assert.match(await errorOf(() => inboundStore.createDraft(reg.inboundId, wrongBreakdown)), /ESBLU_EINVOICE_TOTALS_INCONSISTENT/);
+  const noTotals: Partial<typeof draft> = { ...draft };
+  delete noTotals.totals;
+  assert.match(await errorOf(() => inboundStore.createDraft(reg.inboundId, noTotals as typeof draft)), /ESBLU_EINVOICE_TOTALS_REQUIRED/);
+  assert.equal((await sql<{ n: number }>("select count(*)::int n from public.invoices")).rows[0].n, before, "žiadny koncept (rollback)");
+  assert.equal((await inboundByPid("rcv-db-1")).processing_status, "parsed");
+  // platné súčty → koncept so súčtami
+  const ok = await inboundStore.createDraft(reg.inboundId, draft);
+  assert.equal(ok.status, "created");
+  assert.equal(String((await invoiceRow(ok.invoiceId)).total_amount), "1230.00");
+});
+
+await check("xml_totals je nemenné; koncept s rozpisom DPH sa dá zmazať (rozpis nemenný až od finalizácie)", async () => {
+  const row = await inboundByPid("l3-fa20260004");
+  assert.match(await errorOf(() => sql("update public.einvoice_inbound set xml_totals = '{}'::jsonb where id = $1", [row.id])), /ESBLU_EINVOICE_INBOUND_IDENTITY_IMMUTABLE/);
+  // koncept z testu DB vrstvy: rozpis DPH konceptu (draft) zamknutý nie je
+  const draftId = (await inboundByPid("rcv-db-1")).invoice_id as string;
+  assert.ok(draftId);
+  assert.equal((await breakdownOf(draftId)).length, 1);
+  const err = await errorOf(() => sql("delete from public.invoice_tax_breakdowns where invoice_id = $1", [draftId]));
+  assert.equal(err, "", "rozpis konceptu (draft) nie je zamknutý");
+});
+
+await check("dedupe (rovnaké XML) a izolácia firiem ostávajú: žiadny druhý koncept ani rozpis; firma B nevidí súčty ani rozpis firmy A", async () => {
+  const xml = receivedXml("FA20260004");
+  const row = await receiveOne("l3-fa20260004-copy", xml);
+  assert.equal(row.processing_status, "acknowledged");
+  assert.equal(row.dedupe_matched_on, "xml_sha256");
+  const orig = await inboundByPid("l3-fa20260004");
+  assert.equal(row.invoice_id, orig.invoice_id);
+  assert.equal(row.xml_totals, null, "duplicitný riadok nemá vlastné súčty");
+  assert.equal((await breakdownOf(orig.invoice_id as string)).length, 1);
+  assert.equal((await sql<{ n: number }>("select count(*)::int n from public.invoices where supplier_invoice_number = 'FA20260004' and direction = 'received'")).rows[0].n, 1);
+  const seenByB = await as(U.b, () => db.query<{ n: number }>("select (select count(*)::int from public.invoices where id = $1) + (select count(*)::int from public.invoice_tax_breakdowns where invoice_id = $1) n", [orig.invoice_id]));
+  assert.equal(seenByB.rows[0].n, 0);
+  const seenByA = await as(U.owner, () => db.query<{ n: number }>("select count(*)::int n from public.invoice_tax_breakdowns where invoice_id = $1", [orig.invoice_id]));
+  assert.equal(seenByA.rows[0].n, 1);
 });
 
 console.log(`\neinvoice-inbound: ${passed} passed, ${failed} failed`);

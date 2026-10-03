@@ -190,7 +190,7 @@ Guardy sú overené v PGlite:
 - fail-closed: URL presne `https://cjbdijbbcujvmrzezusd.supabase.co`; produkčný ref v ktorejkoľvek hodnote aj v JWT payloade kľúča = STOP; JWT `ref`/`role` musia sedieť; iba `efaktura_sk` + `sandbox` + `efk_pk_test_…`; `ESBLU_EINVOICE_LIVE_ENABLED` ≠ prázdne/false a `VERCEL_ENV=production` = STOP; neznáme názvy (aj VAPID/FCM/APNS, DB URL) = STOP; premenné zdedené zo shellu (SUPABASE*, ESBLU_*, NEXT_PUBLIC_*, VERCEL*, OPENAI*, PG*) sa do Next.js neprenesú;
 - výstup obsahuje iba názvy premenných a verdikty, chyby sú redigované a bez stack trace.
 
-## 8. Presné poradie migrácií v repe (94)
+## 8. Presné poradie migrácií v repe (95)
 
 Pri postupe A je 88 migrácií obsiahnutých v klone produkčnej štruktúry. Klon navyše obsahuje 3
 produkčné migrácie, ktoré v repe chýbajú. 6 E-Faktúra migrácií sa aplikuje.
@@ -291,3 +291,4 @@ produkčné migrácie, ktoré v repe chýbajú. 6 E-Faktúra migrácií sa aplik
 | 92 | `20261002130000_einvoice_inbound_flow.sql` | **aplikovať** (MCP `apply_migration`, staging) |
 | 93 | `20261002140000_einvoice_operations.sql` | **aplikovať** (MCP `apply_migration`, staging) |
 | 94 | `20261002150000_einvoice_rollout_gate.sql` | **aplikovať** (MCP `apply_migration`, staging) |
+| 95 | `20261003100000_einvoice_inbound_draft_totals.sql` | **aplikovať** po review (MCP `apply_migration`, staging) — L3 nález: súčty/BT-81/rozpis DPH prijatého konceptu z XML |

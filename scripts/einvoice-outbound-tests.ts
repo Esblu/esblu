@@ -109,6 +109,7 @@ for (const migration of [
   "20261002130000_einvoice_inbound_flow.sql",
   "20261002140000_einvoice_operations.sql",
   "20261002150000_einvoice_rollout_gate.sql",
+  "20261003100000_einvoice_inbound_draft_totals.sql",
 ]) {
   try {
     await db.exec(read(`supabase/migrations/${migration}`));

@@ -2792,6 +2792,7 @@ const sk = {
           PAYABLE_MISMATCH: "Suma na úhradu nesedí.",
           DOCUMENT_ALLOWANCE_CHARGE_NOT_MAPPED: "Zľavy alebo príplatky na doklade neboli prenesené.",
           LINE_NAME_MISSING: "Položka nemá názov.",
+          PAYMENT_MEANS_CODE_UNSUPPORTED: "Spôsob úhrady z dokladu sa nepodarilo preniesť — doplňte ho.",
         },
         error: {
           generic: "Pri spracovaní nastala chyba. Systém to zopakuje alebo ponúkne ďalší krok.",

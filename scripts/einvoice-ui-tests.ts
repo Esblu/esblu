@@ -833,9 +833,9 @@ await test("zoznam faktúr odkazuje na prijaté e-faktúry iba pri finančnom pr
   assert.ok(hasTranslation("sk", "invoices.source.efaktura_peppol"));
 });
 
-await test("migrácie E-Faktúry končia rollout bránou Phase 6 (UI iba číta cez RLS)", () => {
+await test("migrácie E-Faktúry končia súčtami prijatého konceptu z XML (UI iba číta cez RLS)", () => {
   const migrations = readdirSync(path.join(ROOT, "supabase/migrations")).filter((f) => f.startsWith("20261002") || f.startsWith("2026100"));
-  assert.ok(migrations.every((f) => f <= "20261002150000_einvoice_rollout_gate.sql"), migrations.join(","));
+  assert.ok(migrations.every((f) => f <= "20261003100000_einvoice_inbound_draft_totals.sql"), migrations.join(","));
 });
 
 console.log(`\n${passed} passed, ${failures.length} failed`);

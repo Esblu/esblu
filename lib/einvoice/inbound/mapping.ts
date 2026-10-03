@@ -7,6 +7,14 @@ import type { ParsedInboundUbl } from "../ubl/parse.ts";
 // esblu_received_invoice_draft_core). Čistá funkcia, žiadne AI, žiadne
 // hádanie: čo nevieme spoľahlivo namapovať, buď zablokuje koncept (kód), alebo
 // sa zapíše ako review reason pre človeka.
+//
+// Sumy (L3 nález 2026-10-03): koncept MUSÍ byť už pri vzniku finančne zhodný
+// s nemenným XML — hlavička (BT-106/109/110/112/114/115), spôsob úhrady
+// (BT-81) a rozpis DPH (BG-23) sa prenášajú z XML (`totals`), nič sa
+// neprepočítava. XML je zdroj pravdy: ak je doklad sám v sebe nekonzistentný
+// alebo obsahuje niečo, čo dátový model Esblu nevie verne uložiť (zľavy/
+// prirážky na úrovni dokladu, uhradené zálohy), koncept NEVZNIKNE (žiadny
+// ACK) — radšej manuálna kontrola než tichá zmena významu doručeného dokladu.
 // =============================================================================
 
 /** EN16931 (vrátane Peppol BIS Billing 3.0 a jeho CIUS/extensions) — CustomizationID začína týmto URN. */
@@ -36,6 +44,27 @@ export type InboundDraftItem = {
   unit_code: string | null;
 };
 
+/** Rozpis DPH (BG-23) presne podľa XML; sadzba je pre iné kategórie ako S vždy 0 (rovnako ako finalizácia). */
+export type InboundDraftTaxBreakdown = {
+  category: string;
+  rate: string;
+  taxable: string;
+  vat: string;
+  exemption_reason_code: string | null;
+};
+
+/** Peňažné súčty dokladu presne podľa XML (BG-22) — reťazce s 2 desatinnými miestami. */
+export type InboundDraftTotals = {
+  line_extension: string;
+  tax_exclusive: string;
+  vat_total: string;
+  tax_inclusive: string;
+  rounding: string;
+  prepaid: string;
+  payable: string;
+  breakdown: InboundDraftTaxBreakdown[];
+};
+
 export type InboundDraftPayload = {
   supplier: InboundDraftSupplier;
   invoice_number: string;
@@ -46,9 +75,12 @@ export type InboundDraftPayload = {
   iban: string | null;
   bic: string | null;
   payment_reference: string | null;
+  /** BT-81 (UNCL4461, iba číselné kódy — DB check ^[0-9]{1,3}$). */
+  payment_means_code: string | null;
   buyer_reference: string | null;
   purchase_order_reference: string | null;
   items: InboundDraftItem[];
+  totals: InboundDraftTotals;
 };
 
 export type MappingResult =
@@ -58,6 +90,18 @@ export type MappingResult =
 
 function blank(v: string | null | undefined): boolean {
   return v === null || v === undefined || v.trim() === "";
+}
+
+const money = (d: Decimal) => d.toFixed(2);
+const dec = (v: string | null | undefined) => new Decimal(blank(v) ? "0" : v!.trim());
+/** Kľúč skupiny DPH rovnako ako finalizácia: kategória + sadzba (pre iné ako S vždy 0). */
+const groupKey = (category: string, rate: Decimal) => `${category}|${rate.toFixed(4)}`;
+
+/** Spôsob úhrady BT-81 — Esblu ukladá iba číselné kódy UNCL4461. */
+export function mapPaymentMeansCode(code: string | null): { code: string | null; unsupported: boolean } {
+  if (blank(code)) return { code: null, unsupported: false };
+  const c = code!.trim();
+  return /^[0-9]{1,3}$/.test(c) ? { code: c, unsupported: false } : { code: null, unsupported: true };
 }
 
 /** Profil / typ dokladu, ktorý vieme prijať ako koncept prijatej faktúry. */
@@ -89,7 +133,21 @@ export function mapInboundDraft(doc: ParsedInboundUbl, parserReviewReasons: stri
     if (customer !== recipientParticipantId) reasons.add("RECIPIENT_ENDPOINT_MISMATCH");
   }
 
+  // Peňažné súčty dokladu (BG-22) — povinné v EN16931 (BT-106, BT-109, BT-112, BT-115).
+  const t = doc.totals;
+  if (blank(t.lineExtension) || blank(t.taxExclusive) || blank(t.taxInclusive) || blank(t.payable)) {
+    return { ok: false, code: "INVALID_XML", detail: "MISSING_MONETARY_TOTALS" };
+  }
+  // Dátový model Esblu nemá zľavy/prirážky na úrovni dokladu ani uhradené zálohy:
+  // koncept by nebol zhodný s XML → nevznikne (žiadny ACK, manuálna kontrola).
+  if (parserReviewReasons.includes("DOCUMENT_ALLOWANCE_CHARGE_NOT_MAPPED") || !dec(t.taxExclusive).eq(dec(t.lineExtension))) {
+    return { ok: false, code: "UNSUPPORTED_PROFILE", detail: "DOCUMENT_ALLOWANCE_CHARGE_UNSUPPORTED" };
+  }
+  if (!dec(t.prepaid).eq(0)) return { ok: false, code: "UNSUPPORTED_PROFILE", detail: "PREPAID_AMOUNT_UNSUPPORTED" };
+
   const items: InboundDraftItem[] = [];
+  const lineGroups = new Map<string, Decimal>();
+  let lineSum = new Decimal(0);
   for (const line of doc.lines) {
     const category = (line.vatCategory ?? "").trim().toUpperCase();
     if (!SUPPORTED_VAT.has(category)) return { ok: false, code: "UNSUPPORTED_PROFILE", detail: "VAT_CATEGORY_UNSUPPORTED" };
@@ -97,9 +155,21 @@ export function mapInboundDraft(doc: ParsedInboundUbl, parserReviewReasons: stri
     const qty = new Decimal(line.quantity);
     if (qty.lte(0)) return { ok: false, code: "UNSUPPORTED_PROFILE", detail: "NON_POSITIVE_QUANTITY" };
     const lineNet = new Decimal(line.lineNetAmount);
-    const unitPrice = line.netUnitPrice !== null ? new Decimal(line.netUnitPrice) : lineNet.div(qty).toDecimalPlaces(6, Decimal.ROUND_HALF_UP);
+    if (lineNet.decimalPlaces() > 2) return { ok: false, code: "INVALID_XML", detail: "LINE_AMOUNT_PRECISION" };
+    // Suma riadka (BT-131) je zdroj pravdy: koncept ju uloží ako round(množstvo × cena, 2)
+    // (esblu_received_invoice_draft_core), preto cena musí dať PRESNE túto sumu.
+    // Ak ju nedá uvedená cena (napr. zľava na riadku BG-27), použije sa cena
+    // odvodená zo sumy riadka (6 desatinných miest) a doklad ide na kontrolu
+    // (LINE_AMOUNT_MISMATCH).
+    // Ak ani tá nedá presnú sumu, koncept nevznikne.
+    const exact = (p: Decimal) => qty.times(p).toDecimalPlaces(2, Decimal.ROUND_HALF_UP).eq(lineNet);
+    let unitPrice = line.netUnitPrice !== null ? new Decimal(line.netUnitPrice) : null;
+    if (unitPrice === null || unitPrice.decimalPlaces() > 6 || !exact(unitPrice)) {
+      if (unitPrice !== null) reasons.add("LINE_AMOUNT_MISMATCH");
+      unitPrice = lineNet.div(qty).toDecimalPlaces(6, Decimal.ROUND_HALF_UP);
+      if (!exact(unitPrice)) return { ok: false, code: "INVALID_XML", detail: "LINE_AMOUNT_NOT_REPRESENTABLE" };
+    }
     if (unitPrice.lt(0)) return { ok: false, code: "UNSUPPORTED_PROFILE", detail: "NEGATIVE_UNIT_PRICE" };
-    if (!qty.times(unitPrice).toDecimalPlaces(2, Decimal.ROUND_HALF_UP).eq(lineNet)) reasons.add("LINE_AMOUNT_MISMATCH");
     if (category === "S" && (line.vatPercent === null || new Decimal(line.vatPercent).lte(0))) {
       return { ok: false, code: "INVALID_XML", detail: "S_RATE_MISSING" };
     }
@@ -108,15 +178,69 @@ export function mapInboundDraft(doc: ParsedInboundUbl, parserReviewReasons: stri
       reasons.add("LINE_NAME_MISSING");
       description = `#${(line.id ?? String(items.length + 1)).slice(0, 40)}`;
     }
+    const rate = category === "S" ? new Decimal(line.vatPercent!) : new Decimal(0);
     items.push({
       description: description.slice(0, 500),
       quantity: qty.toFixed(),
       unit_price: unitPrice.toFixed(),
       vat_category_code: category,
-      vat_rate: category === "S" ? new Decimal(line.vatPercent!).toFixed() : "0",
+      vat_rate: rate.toFixed(),
       unit_code: line.unitCode && /^[A-Z0-9]{1,3}$/.test(line.unitCode) ? line.unitCode : null,
     });
+    const key = groupKey(category, rate);
+    lineGroups.set(key, (lineGroups.get(key) ?? new Decimal(0)).plus(lineNet));
+    lineSum = lineSum.plus(lineNet);
   }
+
+  // Aritmetika dokladu (EN16931 BR-CO-10/11/13/14/15/16/17). Nesúlad = XML nie je
+  // vnútorne konzistentné → koncept nevznikne (nič sa „neopraví").
+  const vatTotal = dec(doc.vatTotal);
+  const rounding = dec(t.rounding);
+  const amounts = [t.lineExtension, t.taxExclusive, t.taxInclusive, t.payable, t.rounding, doc.vatTotal];
+  if (amounts.some((a) => !blank(a) && dec(a).decimalPlaces() > 2)) return { ok: false, code: "INVALID_XML", detail: "AMOUNT_PRECISION" };
+  if (!lineSum.eq(dec(t.lineExtension))) return { ok: false, code: "INVALID_XML", detail: "TOTALS_LINE_SUM_MISMATCH" };
+  if (!dec(t.taxExclusive).plus(vatTotal).eq(dec(t.taxInclusive))) return { ok: false, code: "INVALID_XML", detail: "TOTALS_TAX_INCLUSIVE_MISMATCH" };
+  if (!dec(t.taxInclusive).minus(dec(t.prepaid)).plus(rounding).eq(dec(t.payable))) return { ok: false, code: "INVALID_XML", detail: "TOTALS_PAYABLE_MISMATCH" };
+
+  if (doc.taxSubtotals.length === 0) return { ok: false, code: "INVALID_XML", detail: "VAT_BREAKDOWN_MISSING" };
+  const breakdown: InboundDraftTaxBreakdown[] = [];
+  const seen = new Set<string>();
+  let taxableSum = new Decimal(0);
+  let vatSum = new Decimal(0);
+  for (const st of doc.taxSubtotals) {
+    const category = (st.category ?? "").trim().toUpperCase();
+    if (!SUPPORTED_VAT.has(category)) return { ok: false, code: "UNSUPPORTED_PROFILE", detail: "VAT_CATEGORY_UNSUPPORTED" };
+    if (blank(st.taxableAmount) || blank(st.taxAmount)) return { ok: false, code: "INVALID_XML", detail: "VAT_BREAKDOWN_INCOMPLETE" };
+    if (category === "S" && (blank(st.percent) || dec(st.percent).lte(0))) return { ok: false, code: "INVALID_XML", detail: "S_RATE_MISSING" };
+    const rate = category === "S" ? dec(st.percent) : new Decimal(0);
+    if (category !== "S" && !blank(st.percent) && !dec(st.percent).eq(0)) return { ok: false, code: "INVALID_XML", detail: "VAT_BREAKDOWN_RATE_INVALID" };
+    const taxable = dec(st.taxableAmount);
+    const vat = dec(st.taxAmount);
+    if (taxable.decimalPlaces() > 2 || vat.decimalPlaces() > 2) return { ok: false, code: "INVALID_XML", detail: "AMOUNT_PRECISION" };
+    const key = groupKey(category, rate);
+    if (seen.has(key)) return { ok: false, code: "INVALID_XML", detail: "VAT_BREAKDOWN_DUPLICATE" };
+    seen.add(key);
+    // BR-CO-17 (rovnaký vzorec ako finalizácia Esblu); iné kategórie nesú nulovú daň.
+    const expectedVat = category === "S" ? taxable.times(rate).div(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP) : new Decimal(0);
+    if (!vat.eq(expectedVat)) return { ok: false, code: "INVALID_XML", detail: "VAT_BREAKDOWN_AMOUNT_MISMATCH" };
+    if (!taxable.eq(lineGroups.get(key) ?? new Decimal(-1))) return { ok: false, code: "INVALID_XML", detail: "VAT_BREAKDOWN_LINE_MISMATCH" };
+    taxableSum = taxableSum.plus(taxable);
+    vatSum = vatSum.plus(vat);
+    const exemption = (st.exemptionReasonCode ?? "").trim();
+    breakdown.push({
+      category,
+      rate: rate.toFixed(),
+      taxable: money(taxable),
+      vat: money(vat),
+      exemption_reason_code: /^[A-Z0-9-]{1,30}$/i.test(exemption) ? exemption.toUpperCase() : null,
+    });
+  }
+  if (seen.size !== lineGroups.size) return { ok: false, code: "INVALID_XML", detail: "VAT_BREAKDOWN_LINE_MISMATCH" };
+  if (!taxableSum.eq(dec(t.taxExclusive))) return { ok: false, code: "INVALID_XML", detail: "VAT_BREAKDOWN_TAXABLE_MISMATCH" };
+  if (!vatSum.eq(vatTotal)) return { ok: false, code: "INVALID_XML", detail: "VAT_BREAKDOWN_TOTAL_MISMATCH" };
+
+  const paymentMeans = mapPaymentMeansCode(doc.paymentMeansCode);
+  if (paymentMeans.unsupported) reasons.add("PAYMENT_MEANS_CODE_UNSUPPORTED");
 
   const s = doc.supplier;
   const legalId = (s.legalId ?? "").replace(/\s+/g, "");
@@ -147,9 +271,20 @@ export function mapInboundDraft(doc: ParsedInboundUbl, parserReviewReasons: stri
       iban: doc.payeeIban ? doc.payeeIban.replace(/\s+/g, "").toUpperCase() : null,
       bic: doc.payeeBic ? doc.payeeBic.trim().toUpperCase() : null,
       payment_reference: doc.paymentId,
+      payment_means_code: paymentMeans.code,
       buyer_reference: doc.buyerReference,
       purchase_order_reference: doc.orderReference,
       items,
+      totals: {
+        line_extension: money(dec(t.lineExtension)),
+        tax_exclusive: money(dec(t.taxExclusive)),
+        vat_total: money(vatTotal),
+        tax_inclusive: money(dec(t.taxInclusive)),
+        rounding: money(rounding),
+        prepaid: money(dec(t.prepaid)),
+        payable: money(dec(t.payable)),
+        breakdown,
+      },
     },
   };
 }
