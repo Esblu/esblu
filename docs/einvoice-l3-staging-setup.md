@@ -87,7 +87,7 @@ Guardy sú overené v PGlite:
 - guard bez markera vedie na STOP,
 - marker na neprázdnej DB vedie na STOP,
 - DB s produkčnou históriou vedie na STOP,
-- reset zachová marker, vyprázdni public aj buckety,
+- reset zachová marker a vyprázdni public (buckety nemaže),
 - seed bez používateľov vedie na STOP,
 - seed je idempotentný,
 - nenahradená zástupná hodnota v rollout skripte vedie na STOP.
@@ -99,10 +99,10 @@ Guardy sú overené v PGlite:
 | Krok | Kto | Ako |
 | --- | --- | --- |
 | A1 marker | Claude (po schválení) | `01-staging-marker.sql` cez MCP `execute_sql` |
-| A2 reset public | Claude (po schválení) | `02-reset-public.sql` (guard + kontrola prázdnoty + Supabase predvolené granty + vymazanie bucketov) |
+| A2 reset public | Claude (po schválení) | `02-reset-public.sql` (guard + kontrola prázdnoty + `drop schema public cascade` + `USAGE` pre `PUBLIC`; granty a predvolené privilégiá dodá produkčný dump). Buckety sa **nemažú** — Supabase priame mazanie zo storage tabuliek zakazuje (`storage.protect_delete`); ak už existujú, skript iba vypíše upozornenie a `30-prod-storage-buckets.sql` sa vkladá s `ON CONFLICT DO NOTHING` (nepotrebný bucket odstrániť cez Storage API / Dashboard). |
 | A3 export produkcie | **používateľ** | `node --env-file=<mimo repa> scripts/l3/export-prod-schema.mjs --confirm-read-only` |
 | A4 obnova | Claude | súbory `.l3-local/10, 20, 21, 30, 31` cez MCP (bez `\restrict` riadkov) |
-| A5 E-Faktúra migrácie | Claude | MCP `apply_migration` v poradí `20261002100000` → `150000` |
+| A5 E-Faktúra migrácie | Claude | MCP `apply_migration` v poradí `20261002100000` → `150000`, `name` = celý názov súboru bez `.sql` (`MIGRATIONS.md` §9); `version` je čas aplikácie, nemení sa |
 | A6 kontrola | Claude | `03-post-restore.sql` (výpis), advisors stagingu, RLS matica |
 
 ### B) Supabase Auth (Dashboard stagingu, používateľ)
