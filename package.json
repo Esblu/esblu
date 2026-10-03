@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "next dev",
     "dev:l3-staging": "node scripts/l3/run-local-staging.mjs",
+    "l3:inbound-one": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/l3/inbound-one/cli.ts",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
@@ -51,6 +52,7 @@
     "test:einvoice-ops": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/einvoice-ops-tests.ts",
     "test:einvoice-ui": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs --import ./scripts/tsx-loader.mjs scripts/einvoice-ui-tests.ts",
     "test:l3-launcher": "node scripts/l3/run-local-staging-tests.mjs",
+    "test:l3-inbound-one": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/l3/inbound-one-tests.ts",
     "test:einvoice-e2e-selftest": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/einvoice-sandbox-e2e.ts --offline-selftest",
     "verify:mobile-bundle": "node scripts/verify-mobile-bundle.mjs"
   },
