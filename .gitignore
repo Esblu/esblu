@@ -49,3 +49,5 @@ next-env.d.ts
 Claude outputs/
 
 marketing/
+# L3 staging: lokálny export štruktúry produkcie (nikdy necommitovať)
+/.l3-local/
