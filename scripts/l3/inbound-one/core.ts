@@ -1,6 +1,7 @@
 // =============================================================================
 // L3-ONLY: spracovanie PRESNE JEDNÉHO prijatého dokladu zo sandboxu eFaktura.sk
-// (self-send kópia FA20260004) na stagingu esblu-test. NIE JE súčasť appky —
+// (self-send kópia vlastnej L3 faktúry z uzavretého zoznamu L3_INBOUND_TARGETS,
+// jeden cieľ na beh) na stagingu esblu-test. NIE JE súčasť appky —
 // žiadna route, žiadny cron, žiadny import z app/ ani lib/. Produkčné správanie
 // inbound workeru sa NEMENÍ.
 //
@@ -47,9 +48,18 @@ export const L3_COMPANY_A = "a1300000-0000-4000-8000-00000000000a";
 /** l3-owner@example.com (staging, syntetický) — operátor s finance.manage. */
 export const L3_ACTOR_USER_ID = "78cbe0c7-9e71-41ab-90f2-26c4b52e5882";
 export const L3_ACTOR_EMAIL = "l3-owner@example.com";
-/** JEDINÝ povolený provider document ID: self-send kópia FA20260004. */
-export const L3_INBOUND_TARGET = "ebcda9cf-d854-48a3-8d30-dde8970f8c78";
-export const L3_TARGET_DOCUMENT_NUMBER = "FA20260004";
+/**
+ * UZAVRETÝ zoznam L3 cieľov (self-send kópie vlastných L3 faktúr). Jeden beh =
+ * jeden cieľ zvolený výslovne (--target=<číslo>); žiadny „všetko čakajúce".
+ * Nový cieľ = vedomá zmena kódu + review, nie parameter z príkazového riadka.
+ */
+export type L3InboundTarget = { readonly documentNumber: string; readonly providerReceivedId: string };
+export const L3_INBOUND_TARGETS: Readonly<Record<string, L3InboundTarget>> = Object.freeze({
+  // spracovaný a ACKnutý 2026-10-03 (inbound 6adca190…) — ďalší beh je no-op
+  FA20260004: Object.freeze({ documentNumber: "FA20260004", providerReceivedId: "ebcda9cf-d854-48a3-8d30-dde8970f8c78" }),
+  // self-send kópia FA20260005 (received_at 2026-10-03T22:22:52.389Z, is_test)
+  FA20260005: Object.freeze({ documentNumber: "FA20260005", providerReceivedId: "3c753470-3268-4898-b6bf-3b88dda18229" }),
+});
 /** Staré L2 dobropisy v tej istej sandbox organizácii — nikdy sa nesmú spracovať ani ACKnúť. */
 export const L3_PROTECTED_L2_DOCUMENTS: readonly string[] = [
   "fb37f7bf-f7af-449e-8672-362fef261535", // E2EDOMURFPOCW-20260001
@@ -61,6 +71,15 @@ export class L3Stop extends Error {
     super(code);
     this.name = "L3Stop";
   }
+}
+
+/** Cieľ podľa čísla dokladu — iba zo zoznamu vyššie; chránený L2 doklad nikdy. */
+export function resolveL3Target(documentNumber: string | null | undefined): L3InboundTarget {
+  const key = (documentNumber ?? "").trim();
+  const target = Object.prototype.hasOwnProperty.call(L3_INBOUND_TARGETS, key) ? L3_INBOUND_TARGETS[key] : undefined;
+  if (!target) throw new L3Stop("L3_STOP_TARGET_UNKNOWN");
+  if (L3_PROTECTED_L2_DOCUMENTS.includes(target.providerReceivedId)) throw new L3Stop("L3_STOP_TARGET_PROTECTED");
+  return target;
 }
 
 /**
@@ -91,15 +110,17 @@ function assertCtx(ctx: ProviderContext): void {
 }
 
 /** Poskytovateľ s allowlistom volaní. `calls` = auditný záznam (iba metóda + ID). */
-export function guardProvider(inner: EinvoiceProvider, options: { allowAck: boolean }): EinvoiceProvider & { calls: ProviderCall[] } {
+export function guardProvider(inner: EinvoiceProvider, options: { allowAck: boolean; target: L3InboundTarget }): EinvoiceProvider & { calls: ProviderCall[] } {
   if (inner.name !== L3_PROVIDER) throw new L3Stop("L3_STOP_PROVIDER_NAME");
+  const targetId = options.target.providerReceivedId;
+  if (L3_PROTECTED_L2_DOCUMENTS.includes(targetId)) throw new L3Stop("L3_STOP_TARGET_PROTECTED");
   const calls: ProviderCall[] = [];
   const forbid = (method: string) => async (): Promise<never> => {
     calls.push({ method: `FORBIDDEN:${method}`, id: null });
     throw new L3Stop(`L3_PROVIDER_CALL_FORBIDDEN:${method}`);
   };
   const onlyTarget = (method: string, id: string) => {
-    if (id !== L3_INBOUND_TARGET || L3_PROTECTED_L2_DOCUMENTS.includes(id)) {
+    if (id !== targetId || L3_PROTECTED_L2_DOCUMENTS.includes(id)) {
       calls.push({ method: `FORBIDDEN:${method}`, id });
       throw new L3Stop(`L3_PROVIDER_TARGET_FORBIDDEN:${method}`);
     }
@@ -140,7 +161,9 @@ export function guardProvider(inner: EinvoiceProvider, options: { allowAck: bool
 }
 
 /** Inbound store: iba cieľ a jeho jediný riadok. Dávkový claim a webhook RPC sú zakázané. */
-export function guardInboundStore(inner: InboundStore): InboundStore & { bindRow(id: string): void } {
+export function guardInboundStore(inner: InboundStore, target: L3InboundTarget): InboundStore & { bindRow(id: string): void } {
+  const targetId = target.providerReceivedId;
+  if (L3_PROTECTED_L2_DOCUMENTS.includes(targetId)) throw new L3Stop("L3_STOP_TARGET_PROTECTED");
   let rowId: string | null = null;
   const own = (id: string) => {
     if (!rowId || id !== rowId) throw new L3Stop("L3_STORE_ROW_FORBIDDEN");
@@ -158,7 +181,7 @@ export function guardInboundStore(inner: InboundStore): InboundStore & { bindRow
     claim: forbid("claim"),
     claimOutboundBySubmission: forbid("claimOutboundBySubmission"),
     async register(input) {
-      if (input.providerReceivedId !== L3_INBOUND_TARGET || L3_PROTECTED_L2_DOCUMENTS.includes(input.providerReceivedId)) {
+      if (input.providerReceivedId !== targetId || L3_PROTECTED_L2_DOCUMENTS.includes(input.providerReceivedId)) {
         throw new L3Stop("L3_REGISTER_TARGET_FORBIDDEN");
       }
       if (input.provider !== L3_PROVIDER || input.environment !== L3_ENVIRONMENT || input.providerOrgId !== L3_SANDBOX_ORG) {
@@ -234,6 +257,7 @@ export type L3InboundDeps = {
 export type L3InboundReport = {
   mode: "check" | "run";
   target: string;
+  targetDocumentNumber: string;
   listed: number;
   targetListed: boolean;
   targetMeta: Omit<InboundSummary, "providerReceivedId"> | null;
@@ -253,11 +277,15 @@ const ACK_STATES = new Set(["draft_created", "duplicate", "ack_pending"]);
 
 export async function runL3InboundOne(
   deps: L3InboundDeps,
-  options: { mode: "check" | "run"; confirmDocument?: string | null }
+  options: { mode: "check" | "run"; target: L3InboundTarget; confirmDocument?: string | null }
 ): Promise<L3InboundReport> {
-  if (options.mode === "run" && options.confirmDocument !== L3_INBOUND_TARGET) throw new L3Stop("L3_STOP_CONFIRM_DOCUMENT_MISMATCH");
-  const provider = guardProvider(deps.provider, { allowAck: options.mode === "run" });
-  const inbound = guardInboundStore(deps.inbound);
+  // Cieľ musí byť presne položka uzavretého zoznamu (nie ľubovoľný objekt).
+  const chosen = resolveL3Target(options.target?.documentNumber);
+  if (chosen.providerReceivedId !== options.target.providerReceivedId) throw new L3Stop("L3_STOP_TARGET_UNKNOWN");
+  const TARGET_ID = chosen.providerReceivedId;
+  if (options.mode === "run" && options.confirmDocument !== TARGET_ID) throw new L3Stop("L3_STOP_CONFIRM_DOCUMENT_MISMATCH");
+  const provider = guardProvider(deps.provider, { allowAck: options.mode === "run", target: chosen });
+  const inbound = guardInboundStore(deps.inbound, chosen);
   let rowId: string | null = null;
   const ops = guardOpsStore(deps.ops, () => rowId);
   const ctx: ProviderContext = { environment: L3_ENVIRONMENT, providerOrgId: L3_SANDBOX_ORG };
@@ -269,18 +297,19 @@ export async function runL3InboundOne(
 
   // 2) zoznam u poskytovateľa (iba čítanie) — nič iné ako cieľ sa ďalej nepoužije
   const list = await provider.listUnacknowledgedInbound(ctx, { limit: 50 });
-  const target = list.find((i) => i.providerReceivedId === L3_INBOUND_TARGET) ?? null;
-  const others = list.filter((i) => i.providerReceivedId !== L3_INBOUND_TARGET).map((i) => i.providerReceivedId);
-  if (target && target.documentNumber && target.documentNumber !== L3_TARGET_DOCUMENT_NUMBER) throw new L3Stop("L3_STOP_TARGET_NUMBER_MISMATCH");
+  const target = list.find((i) => i.providerReceivedId === TARGET_ID) ?? null;
+  const others = list.filter((i) => i.providerReceivedId !== TARGET_ID).map((i) => i.providerReceivedId);
+  if (target && target.documentNumber && target.documentNumber !== chosen.documentNumber) throw new L3Stop("L3_STOP_TARGET_NUMBER_MISMATCH");
 
-  const before = await deps.readInbound(L3_INBOUND_TARGET);
+  const before = await deps.readInbound(TARGET_ID);
   if (before && (before.company_id !== L3_COMPANY_A || before.provider !== L3_PROVIDER || before.environment !== L3_ENVIRONMENT)) {
     throw new L3Stop("L3_STOP_STAGING_ROW_MISMATCH");
   }
 
   const base: L3InboundReport = {
     mode: options.mode,
-    target: L3_INBOUND_TARGET,
+    target: TARGET_ID,
+    targetDocumentNumber: chosen.documentNumber,
     listed: list.length,
     targetListed: !!target,
     targetMeta: target
@@ -314,7 +343,7 @@ export async function runL3InboundOne(
     const meta = target
       ? { sender_participant_id: target.senderParticipantId, sender_ico: target.senderIco, document_number: target.documentNumber, document_type: target.documentType, is_test: target.isTest }
       : {};
-    const r = await inbound.register({ provider: L3_PROVIDER, environment: L3_ENVIRONMENT, providerOrgId: L3_SANDBOX_ORG, providerReceivedId: L3_INBOUND_TARGET, source: "poll", meta });
+    const r = await inbound.register({ provider: L3_PROVIDER, environment: L3_ENVIRONMENT, providerOrgId: L3_SANDBOX_ORG, providerReceivedId: TARGET_ID, source: "poll", meta });
     if (r.companyId !== L3_COMPANY_A) throw new L3Stop("L3_STOP_REGISTER_COMPANY_MISMATCH");
     registered = { inboundId: r.inboundId, created: r.created };
     rowId = r.inboundId;
@@ -336,8 +365,8 @@ export async function runL3InboundOne(
     { userId: L3_ACTOR_USER_ID, kind: "inbound", id: rowId, action: plannedAction, reasonCode: "OPERATOR_REQUEST" }
   );
 
-  const after = await deps.readInbound(L3_INBOUND_TARGET);
-  const touched = provider.calls.filter((c) => c.id !== null && c.id !== L3_INBOUND_TARGET);
+  const after = await deps.readInbound(TARGET_ID);
+  const touched = provider.calls.filter((c) => c.id !== null && c.id !== TARGET_ID);
   if (touched.length > 0) throw new L3Stop("L3_STOP_NON_TARGET_TOUCHED");
   return { ...base, action: plannedAction, registered, operator, stagingAfter: after, verdict: after?.processing_status === "acknowledged" ? "ACKNOWLEDGED" : `STOPPED_AT:${after?.processing_status ?? "?"}` };
 }

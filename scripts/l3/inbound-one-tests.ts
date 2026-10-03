@@ -28,10 +28,11 @@ import {
   guardProvider,
   L3_ACTOR_USER_ID,
   L3_COMPANY_A,
-  L3_INBOUND_TARGET,
+  L3_INBOUND_TARGETS,
   L3_PROTECTED_L2_DOCUMENTS,
   L3_SANDBOX_ORG,
   L3Stop,
+  resolveL3Target,
   runL3InboundOne,
   type L3InboundReadRow,
 } from "./inbound-one/core.ts";
@@ -39,6 +40,10 @@ import { parseCliArgs } from "./inbound-one/cli.ts";
 import { PRODUCTION_REF, STAGING_REF } from "./staging-guard.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+const T4 = L3_INBOUND_TARGETS.FA20260004;
+const T5 = L3_INBOUND_TARGETS.FA20260005;
+const L3_INBOUND_TARGET = T4.providerReceivedId;
+const T5_ID = T5.providerReceivedId;
 const read = (p: string) => readFileSync(path.join(ROOT, p), "utf8");
 type Row = Record<string, unknown>;
 type Db = { exec: (sql: string) => Promise<unknown>; query: <T = Row>(sql: string, params?: unknown[]) => Promise<{ rows: T[] }> };
@@ -341,12 +346,20 @@ await check("env guard: produkčný ref kdekoľvek, iná URL, live, iný provide
 });
 
 await check("CLI argumenty: --run vyžaduje presne cieľový --confirm-document; --check+--run, neznámy argument a chýbajúci režim → STOP", async () => {
-  assert.deepEqual(parseCliArgs(["--check"]), { mode: "check", confirm: null, envFile: null });
-  assert.equal(parseCliArgs(["--run", `--confirm-document=${L3_INBOUND_TARGET}`]).mode, "run");
-  assert.match(await stopCode(() => parseCliArgs(["--run"])), /CONFIRM_DOCUMENT_MISMATCH/);
-  for (const id of L3_PROTECTED_L2_DOCUMENTS) assert.match(await stopCode(() => parseCliArgs(["--run", `--confirm-document=${id}`])), /CONFIRM_DOCUMENT_MISMATCH/);
-  assert.match(await stopCode(() => parseCliArgs(["--check", "--run"])), /CHECK_AND_RUN/);
-  assert.match(await stopCode(() => parseCliArgs(["--check", "--all"])), /UNKNOWN_ARGUMENT/);
+  assert.deepEqual(parseCliArgs(["--check", "--target=FA20260005"]), { mode: "check", target: T5, confirm: null, envFile: null });
+  assert.equal(parseCliArgs(["--run", "--target=FA20260005", `--confirm-document=${T5_ID}`]).mode, "run");
+  assert.equal(parseCliArgs(["--run", "--target=FA20260004", `--confirm-document=${L3_INBOUND_TARGET}`]).target, T4);
+  assert.match(await stopCode(() => parseCliArgs(["--check"])), /TARGET_REQUIRED/);
+  assert.match(await stopCode(() => parseCliArgs(["--run", "--target=FA20260005"])), /CONFIRM_DOCUMENT_MISMATCH/);
+  // potvrdenie iného cieľa (starý FA20260004) ani L2 dokladu nestačí
+  assert.match(await stopCode(() => parseCliArgs(["--run", "--target=FA20260005", `--confirm-document=${L3_INBOUND_TARGET}`])), /CONFIRM_DOCUMENT_MISMATCH/);
+  for (const id of L3_PROTECTED_L2_DOCUMENTS) assert.match(await stopCode(() => parseCliArgs(["--run", "--target=FA20260005", `--confirm-document=${id}`])), /CONFIRM_DOCUMENT_MISMATCH/);
+  for (const bad of ["--target=E2EDOMURFPOCW-20260001", "--target=DO20260001", "--target=FA20260006", "--target=__proto__", "--target=constructor", `--target=${T5_ID}`]) {
+    assert.match(await stopCode(() => parseCliArgs(["--check", bad])), /TARGET_UNKNOWN/, bad);
+  }
+  assert.match(await stopCode(() => parseCliArgs(["--check", "--target=FA20260005", "--target=FA20260004"])), /MULTIPLE_TARGETS/);
+  assert.match(await stopCode(() => parseCliArgs(["--check", "--run", "--target=FA20260005"])), /CHECK_AND_RUN/);
+  assert.match(await stopCode(() => parseCliArgs(["--check", "--target=FA20260005", "--all"])), /UNKNOWN_ARGUMENT/);
   assert.match(await stopCode(() => parseCliArgs([])), /MODE_REQUIRED/);
 });
 
@@ -357,7 +370,7 @@ const ctxOk: ProviderContext = { environment: "sandbox", providerOrgId: L3_SANDB
 
 await check("guardProvider: send/preflight/status/evidence/provisioning zakázané; fetch/ACK iných ID zakázané; ACK bez povolenia zakázaný; iná org zakázaná", async () => {
   const inner = new SandboxFake();
-  const gp = guardProvider(inner, { allowAck: false });
+  const gp = guardProvider(inner, { allowAck: false, target: T4 });
   for (const fn of [
     () => gp.sendUbl(ctxOk, {} as never), () => gp.preflight(ctxOk, { ubl: new Uint8Array() }), () => gp.verifyRecipient(ctxOk, "x"),
     () => gp.getOutboundStatus(ctxOk, { providerSubmissionId: "x" }), () => gp.getDeliveryEvidence(ctxOk, { providerSubmissionId: "x" }),
@@ -372,11 +385,11 @@ await check("guardProvider: send/preflight/status/evidence/provisioning zakázan
   assert.match(await stopCode(() => gp.listUnacknowledgedInbound({ environment: "live", providerOrgId: L3_SANDBOX_ORG })), /CONTEXT_FORBIDDEN/);
   assert.deepEqual(inner.log, [], "vnútorný poskytovateľ sa nesmel zavolať");
   assert.equal([...inner.docs.values()].some((d) => d.acknowledged || d.fetched), false);
-  assert.match(await stopCode(() => guardProvider({ ...inner, name: "mock" } as EinvoiceProvider, { allowAck: true })), /PROVIDER_NAME/);
+  assert.match(await stopCode(() => guardProvider({ ...inner, name: "mock" } as EinvoiceProvider, { allowAck: true, target: T4 })), /PROVIDER_NAME/);
 });
 
 await check("guardInboundStore / guardOpsStore / deadObject: claim, webhook, register iných ID, cudzí riadok, iná akcia/aktér → STOP", async () => {
-  const gs = guardInboundStore(inboundStore);
+  const gs = guardInboundStore(inboundStore, T4);
   assert.match(await stopCode(() => gs.claim(5, 120)), /CALL_FORBIDDEN:claim/);
   assert.match(await stopCode(() => gs.webhookRecord({} as never)), /CALL_FORBIDDEN/);
   for (const id of L3_PROTECTED_L2_DOCUMENTS) {
@@ -403,12 +416,12 @@ await check("guardInboundStore / guardOpsStore / deadObject: claim, webhook, reg
 // Zacielenie end-to-end (PGlite + produkčná logika)
 // =============================================================================
 await check("run s nesprávnym potvrdením → STOP pred akýmkoľvek volaním", async () => {
-  assert.match(await stopCode(() => runL3InboundOne(deps(), { mode: "run", confirmDocument: L2_A })), /CONFIRM_DOCUMENT_MISMATCH/);
+  assert.match(await stopCode(() => runL3InboundOne(deps(), { mode: "run", target: T4, confirmDocument: L2_A })), /CONFIRM_DOCUMENT_MISMATCH/);
   assert.deepEqual(provider.log, []);
 });
 
 await check("--check: iba zoznam u poskytovateľa, žiadny zápis, žiadne stiahnutie, žiadny ACK; L2 vidí, ale nedotkne sa", async () => {
-  const r = await runL3InboundOne(deps(), { mode: "check" });
+  const r = await runL3InboundOne(deps(), { mode: "check", target: T4 });
   assert.equal(r.verdict, "READY_REGISTER_AND_PROCESS");
   assert.equal(r.action, "inbound_reprocess");
   assert.equal(r.listed, 3);
@@ -427,7 +440,7 @@ let firstRowId = "";
 await check("--run, ACK zlyhá u poskytovateľa → koncept existuje, riadok ack_pending, nič iné; L2 nedotknuté", async () => {
   provider.log = [];
   provider.ackErrors = [new EinvoiceProviderError("EINVOICE_PROVIDER_UNAVAILABLE", "t", true)];
-  const r = await runL3InboundOne(deps(), { mode: "run", confirmDocument: L3_INBOUND_TARGET });
+  const r = await runL3InboundOne(deps(), { mode: "run", target: T4, confirmDocument: L3_INBOUND_TARGET });
   assert.equal(r.registered?.created, true);
   firstRowId = r.registered!.inboundId;
   assert.equal(r.stagingAfter?.processing_status, "ack_pending", JSON.stringify(r.operator));
@@ -442,7 +455,7 @@ await check("--run znova (po cooldowne) → iba inbound_ack_retry, bez opätovn�
   await sql("update public.einvoice_inbound set operator_action_at = null, locked_until = null where id = $1", [firstRowId]); // test: cooldown uplynul
   provider.log = [];
   const before = await readInbound(L3_INBOUND_TARGET);
-  const r = await runL3InboundOne(deps(), { mode: "run", confirmDocument: L3_INBOUND_TARGET });
+  const r = await runL3InboundOne(deps(), { mode: "run", target: T4, confirmDocument: L3_INBOUND_TARGET });
   assert.equal(r.action, "inbound_ack_retry");
   assert.equal(r.registered, null);
   assert.equal(r.verdict, "ACKNOWLEDGED", JSON.stringify(r.operator));
@@ -481,9 +494,91 @@ await check("výsledok: presne 1 staging inbound riadok (cieľ), nemenné XML = 
 
 await check("po ACK: --check aj --run sú no-op (ALREADY_ACKNOWLEDGED), žiadne ďalšie stiahnutie ani ACK", async () => {
   provider.log = [];
-  assert.equal((await runL3InboundOne(deps(), { mode: "check" })).verdict, "ALREADY_ACKNOWLEDGED");
-  assert.equal((await runL3InboundOne(deps(), { mode: "run", confirmDocument: L3_INBOUND_TARGET })).verdict, "ALREADY_ACKNOWLEDGED");
+  assert.equal((await runL3InboundOne(deps(), { mode: "check", target: T4 })).verdict, "ALREADY_ACKNOWLEDGED");
+  assert.equal((await runL3InboundOne(deps(), { mode: "run", target: T4, confirmDocument: L3_INBOUND_TARGET })).verdict, "ALREADY_ACKNOWLEDGED");
   assert.deepEqual(provider.log, ["list", "list"]);
+  await assertL2Untouched();
+});
+
+// =============================================================================
+// Nový cieľ FA20260005 (self-send po FA20260004) — ten istý mechanizmus, iný jediný cieľ
+// =============================================================================
+await check("uzavretý zoznam cieľov: iba FA20260004 / FA20260005; neznámy, prototypový alebo podvrhnutý cieľ → STOP", async () => {
+  assert.equal(resolveL3Target("FA20260005").providerReceivedId, "3c753470-3268-4898-b6bf-3b88dda18229");
+  assert.equal(resolveL3Target("FA20260004").providerReceivedId, "ebcda9cf-d854-48a3-8d30-dde8970f8c78");
+  for (const bad of ["", "FA20260006", "__proto__", "constructor", "toString", T5_ID, L2_A]) assert.match(await stopCode(() => resolveL3Target(bad)), /TARGET_UNKNOWN/, bad);
+  assert.ok(Object.isFrozen(L3_INBOUND_TARGETS) && Object.isFrozen(T5));
+  for (const t of Object.values(L3_INBOUND_TARGETS)) assert.ok(!L3_PROTECTED_L2_DOCUMENTS.includes(t.providerReceivedId));
+  // podvrhnutý objekt cieľa (správne číslo, cudzie ID) sa nepripustí
+  provider.log = [];
+  for (const forged of [{ documentNumber: "FA20260005", providerReceivedId: L2_A }, { documentNumber: "FA20260005", providerReceivedId: L3_INBOUND_TARGET }]) {
+    assert.match(await stopCode(() => runL3InboundOne(deps(), { mode: "check", target: forged })), /TARGET_UNKNOWN/);
+  }
+  assert.match(await stopCode(() => guardProvider(new SandboxFake(), { allowAck: true, target: { documentNumber: "X", providerReceivedId: L2_B } })), /TARGET_PROTECTED/);
+  assert.match(await stopCode(() => guardInboundStore(inboundStore, { documentNumber: "X", providerReceivedId: L2_A })), /TARGET_PROTECTED/);
+  assert.deepEqual(provider.log, []);
+});
+
+await check("guardy pre cieľ FA20260005: fetch/ACK/registrácia starého FA20260004 aj oboch L2 zakázané, ešte pred poskytovateľom", async () => {
+  const inner = new SandboxFake();
+  const gp = guardProvider(inner, { allowAck: true, target: T5 });
+  for (const id of [L3_INBOUND_TARGET, ...L3_PROTECTED_L2_DOCUMENTS]) {
+    assert.match(await stopCode(() => gp.getInboundDocument(ctxOk, id)), /L3_PROVIDER_TARGET_FORBIDDEN/);
+    assert.match(await stopCode(() => gp.acknowledgeInbound(ctxOk, id)), /L3_PROVIDER_TARGET_FORBIDDEN/);
+  }
+  assert.deepEqual(inner.log, []);
+  const gs = guardInboundStore(inboundStore, T5);
+  for (const id of [L3_INBOUND_TARGET, ...L3_PROTECTED_L2_DOCUMENTS]) {
+    assert.match(await stopCode(() => gs.register({ provider: "efaktura_sk", environment: "sandbox", providerOrgId: L3_SANDBOX_ORG, providerReceivedId: id, source: "poll", meta: {} })), /REGISTER_TARGET_FORBIDDEN/);
+  }
+});
+
+const T5_DOC = { meta: { providerReceivedId: T5_ID, senderParticipantId: "9915:2099999999", senderIco: "87654326", documentNumber: "FA20260005", documentType: "invoice", receivedAt: "2026-10-03T22:22:52.389Z", isTest: true }, xml: ubl("regular_invoice", "FA20260005"), acknowledged: false, fetched: 0 };
+
+await check("FA20260005 --check: iba zoznam; čakajú FA20260005 + 2 L2 (FA20260004 už ACK), nič sa nezapíše ani nestiahne", async () => {
+  provider.docs.set(T5_ID, T5_DOC);
+  provider.log = [];
+  const rowsBefore = (await sql<{ n: number }>("select count(*)::int n from public.einvoice_inbound")).rows[0].n;
+  const r = await runL3InboundOne(deps(), { mode: "check", target: T5 });
+  assert.equal(r.verdict, "READY_REGISTER_AND_PROCESS");
+  assert.equal(r.target, T5_ID);
+  assert.equal(r.targetDocumentNumber, "FA20260005");
+  assert.equal(r.listed, 3);
+  assert.equal(r.targetMeta?.documentNumber, "FA20260005");
+  assert.deepEqual([...r.otherPending].sort(), [...L3_PROTECTED_L2_DOCUMENTS].sort());
+  assert.equal(r.protectedSeen.length, 2);
+  assert.deepEqual(provider.log, ["list"]);
+  assert.equal((await sql<{ n: number }>("select count(*)::int n from public.einvoice_inbound")).rows[0].n, rowsBefore);
+  assert.equal(provider.docs.get(T5_ID)!.fetched, 0);
+  await assertL2Untouched();
+});
+
+await check("FA20260005 --run: potvrdenie starého ID → STOP; správne potvrdenie → iba fetch+ACK FA20260005, koncept so súčtami z XML; FA20260004 ani L2 sa nedotkne", async () => {
+  provider.log = [];
+  assert.match(await stopCode(() => runL3InboundOne(deps(), { mode: "run", target: T5, confirmDocument: L3_INBOUND_TARGET })), /CONFIRM_DOCUMENT_MISMATCH/);
+  assert.deepEqual(provider.log, []);
+  const fa4Fetched = provider.docs.get(L3_INBOUND_TARGET)!.fetched;
+  const r = await runL3InboundOne(deps(), { mode: "run", target: T5, confirmDocument: T5_ID });
+  assert.equal(r.verdict, "ACKNOWLEDGED", JSON.stringify(r.operator));
+  assert.equal(r.action, "inbound_reprocess");
+  assert.deepEqual(provider.log, ["list", `fetch:${T5_ID}`, `ack:${T5_ID}`]);
+  assert.deepEqual(r.providerCalls.map((c) => `${c.method}:${c.id ?? ""}`), ["listUnacknowledgedInbound:", `getInboundDocument:${T5_ID}`, `acknowledgeInbound:${T5_ID}`]);
+  assert.equal(provider.docs.get(T5_ID)!.acknowledged, true);
+  assert.equal(provider.docs.get(T5_ID)!.fetched, 1);
+  assert.equal(provider.docs.get(L3_INBOUND_TARGET)!.fetched, fa4Fetched, "FA20260004 sa znova nestiahol");
+  const rows = (await sql<Row>("select provider_received_id, processing_status, invoice_id, xml_sha256, xml_size_bytes from public.einvoice_inbound order by received_at")).rows;
+  assert.deepEqual(rows.map((x) => x.provider_received_id), [L3_INBOUND_TARGET, T5_ID]);
+  const row5 = rows[1];
+  assert.equal(row5.processing_status, "acknowledged");
+  assert.equal(row5.xml_sha256, createHash("sha256").update(T5_DOC.xml).digest("hex"));
+  assert.equal(row5.xml_size_bytes, T5_DOC.xml.byteLength);
+  const inv = (await sql<Row>("select company_id, direction, document_status, supplier_invoice_number, subtotal_amount::text s, vat_total_amount::text v, total_amount::text t, payment_means_code pm from public.invoices where id = $1", [row5.invoice_id])).rows[0];
+  assert.deepEqual(inv, { company_id: L3_COMPANY_A, direction: "received", document_status: "draft", supplier_invoice_number: "FA20260005", s: "1000.00", v: "230.00", t: "1230.00", pm: "30" });
+  await assertL2Untouched();
+  // opakovanie → no-op
+  provider.log = [];
+  assert.equal((await runL3InboundOne(deps(), { mode: "run", target: T5, confirmDocument: T5_ID })).verdict, "ALREADY_ACKNOWLEDGED");
+  assert.deepEqual(provider.log, ["list"]);
   await assertL2Untouched();
 });
 

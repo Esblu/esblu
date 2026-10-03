@@ -1,11 +1,13 @@
 // =============================================================================
-// L3-ONLY CLI: spracovanie presne jedného sandbox inbound dokladu (FA20260004).
-// Logika a guardy: ./core.ts. Spúšťa IBA používateľ lokálne.
+// L3-ONLY CLI: spracovanie presne jedného sandbox inbound dokladu z uzavretého
+// zoznamu L3_INBOUND_TARGETS (./core.ts). Spúšťa IBA používateľ lokálne.
 //
 //   Kontrola (bez zápisu, bez ACK — iba čítanie zoznamu u poskytovateľa a DB):
-//     npm run l3:inbound-one -- --check
-//   Spracovanie + ACK (iba cieľ, iba s výslovným potvrdením):
-//     npm run l3:inbound-one -- --run --confirm-document=ebcda9cf-d854-48a3-8d30-dde8970f8c78
+//     npm run l3:inbound-one -- --check --target=FA20260005
+//   Spracovanie + ACK (iba cieľ, iba s výslovným potvrdením jeho provider ID):
+//     npm run l3:inbound-one -- --run --target=FA20260005 --confirm-document=3c753470-3268-4898-b6bf-3b88dda18229
+//
+//   --target=ČÍSLO   povinné; iba číslo dokladu zo zoznamu (FA20260004, FA20260005)
 //
 //   --l3-env=CESTA   externý env súbor mimo repa (default
 //                    %USERPROFILE%\Documents\esblu-l3-staging.env / ESBLU_L3_ENV_FILE)
@@ -26,32 +28,40 @@ import {
   L3_ACTOR_EMAIL,
   L3_ACTOR_USER_ID,
   L3_ENVIRONMENT,
-  L3_INBOUND_TARGET,
   L3_PROVIDER,
   L3Stop,
+  resolveL3Target,
   runL3InboundOne,
   type L3InboundReadRow,
+  type L3InboundTarget,
 } from "./core.ts";
 
 const redactor = createRedactor();
 const say = (s: string) => process.stdout.write(`${redactor.redact(s)}\n`);
 const fail = (s: string) => process.stderr.write(`${redactor.redact(s)}\n`);
 
-type Args = { mode: "check" | "run"; confirm: string | null; envFile: string | null };
+type Args = { mode: "check" | "run"; target: L3InboundTarget; confirm: string | null; envFile: string | null };
 export function parseCliArgs(argv: string[]): Args {
   let mode: Args["mode"] | null = null;
   let confirm: string | null = null;
   let envFile: string | null = null;
+  let targetName: string | null = null;
   for (const a of argv) {
     if (a === "--check") mode = mode === "run" ? (() => { throw new L3Stop("L3_STOP_ARGS_CHECK_AND_RUN"); })() : "check";
     else if (a === "--run") mode = mode === "check" ? (() => { throw new L3Stop("L3_STOP_ARGS_CHECK_AND_RUN"); })() : "run";
     else if (a.startsWith("--confirm-document=")) confirm = a.slice("--confirm-document=".length);
+    else if (a.startsWith("--target=")) {
+      if (targetName !== null) throw new L3Stop("L3_STOP_ARGS_MULTIPLE_TARGETS");
+      targetName = a.slice("--target=".length);
+    }
     else if (a.startsWith("--l3-env=")) envFile = a.slice("--l3-env=".length);
     else throw new L3Stop("L3_STOP_UNKNOWN_ARGUMENT");
   }
   if (!mode) throw new L3Stop("L3_STOP_MODE_REQUIRED (--check alebo --run)");
-  if (mode === "run" && confirm !== L3_INBOUND_TARGET) throw new L3Stop("L3_STOP_CONFIRM_DOCUMENT_MISMATCH");
-  return { mode, confirm, envFile };
+  if (targetName === null) throw new L3Stop("L3_STOP_TARGET_REQUIRED (--target=FA20260005)");
+  const target = resolveL3Target(targetName);
+  if (mode === "run" && confirm !== target.providerReceivedId) throw new L3Stop("L3_STOP_CONFIRM_DOCUMENT_MISMATCH");
+  return { mode, target, confirm, envFile };
 }
 
 async function main(): Promise<number> {
@@ -83,7 +93,7 @@ async function main(): Promise<number> {
   if (actor.error || actor.data.user?.email !== L3_ACTOR_EMAIL) throw new L3Stop("L3_STOP_ACTOR_MISMATCH");
 
   const readInbound = async (pid: string): Promise<L3InboundReadRow | null> => {
-    if (pid !== L3_INBOUND_TARGET) throw new L3Stop("L3_STOP_READ_NON_TARGET");
+    if (pid !== args.target.providerReceivedId) throw new L3Stop("L3_STOP_READ_NON_TARGET");
     const { data, error } = await admin
       .from("einvoice_inbound")
       .select("id, company_id, provider, environment, provider_received_id, processing_status, xml_sha256, xml_size_bytes, xml_storage_path, invoice_id, last_error_code, locked_until, acknowledged_at")
@@ -95,10 +105,10 @@ async function main(): Promise<number> {
     return (data as L3InboundReadRow | null) ?? null;
   };
 
-  say(`L3 inbound-one — režim ${args.mode}, cieľ ${L3_INBOUND_TARGET} (staging cjbdijbbcujvmrzezusd, eFaktura sandbox)`);
+  say(`L3 inbound-one — režim ${args.mode}, cieľ ${args.target.documentNumber} / ${args.target.providerReceivedId} (staging cjbdijbbcujvmrzezusd, eFaktura sandbox)`);
   const report = await runL3InboundOne(
     { provider: runtime.provider, inbound: createSupabaseInboundStore(admin), ops: createSupabaseOpsStore(admin), readInbound },
-    { mode: args.mode, confirmDocument: args.confirm }
+    { mode: args.mode, target: args.target, confirmDocument: args.confirm }
   );
   const row = (r: L3InboundReadRow | null) =>
     r ? { id: r.id, status: r.processing_status, xml_sha256: r.xml_sha256, xml_size_bytes: r.xml_size_bytes, invoice_id: r.invoice_id, last_error_code: r.last_error_code, acknowledged_at: r.acknowledged_at ?? null } : null;
@@ -106,6 +116,7 @@ async function main(): Promise<number> {
     verdict: report.verdict,
     mode: report.mode,
     target: report.target,
+    target_document_number: report.targetDocumentNumber,
     provider_list: { listed: report.listed, target_listed: report.targetListed, target_meta: report.targetMeta, other_pending_untouched: report.otherPending, protected_l2_seen: report.protectedSeen },
     planned_action: report.action,
     registered: report.registered,
