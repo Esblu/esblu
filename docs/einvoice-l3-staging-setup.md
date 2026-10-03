@@ -161,7 +161,7 @@ Guardy sú overené v PGlite:
 
 | Variant | Push? | Poznámka |
 | --- | --- | --- |
-| **L3-local (odporúčané teraz)** | nie | `npm run dev` lokálne so staging env. Webhook cez verejný tunel (napr. cloudflared). Cron sa volá ručne (`GET /api/cron/einvoice-*` s `Authorization: Bearer $CRON_SECRET`). |
+| **L3-local (odporúčané teraz)** | nie | `npm run dev:l3-staging` (fail-closed launcher, §7) lokálne so staging env. Webhook cez verejný tunel (napr. cloudflared). Cron sa volá ručne (`GET /api/cron/einvoice-*` s `Authorization: Bearer $CRON_SECRET`). |
 | L3-preview (Vercel) | **áno** (push `einvoice-port`, iba so súhlasom) | Env premenné **scoped na branch `einvoice-port` v Preview**. Inak by preview mohol dediť produkčné Supabase hodnoty. Vercel Cron beží iba v produkcii, takže aj tu sa cron volá ručne. |
 
 ## 7. Env pre L3 (iba staging / sandbox hodnoty, mimo repa)
@@ -182,6 +182,13 @@ Guardy sú overené v PGlite:
 | `OPENAI_API_KEY` | voliteľné (AI funkcie mimo E-Faktúry); samostatný kľúč alebo vynechať |
 | `ESBLU_EINVOICE_LIVE_ENABLED` | **NENASTAVOVAŤ** |
 | VAPID / FCM / APNS | vynechať (push mimo L3) |
+
+**Lokálny launcher** — `scripts/l3/run-local-staging.mjs` (`npm run dev:l3-staging`, kontrola bez spustenia `-- --check`, testy `npm run test:l3-launcher`):
+
+- env číta **iba** z externého súboru mimo repa (default `%USERPROFILE%\Documents\esblu-l3-staging.env`, alebo `--l3-env=…` / `ESBLU_L3_ENV_FILE`); šablóna bez hodnôt: `docs/einvoice-l3-env-template.txt`;
+- **`.env.local` sa nikdy nemení** — v `assetpilot-einvoice` je to hardlink na produkčný `.env.local` hlavného repa. Launcher z `.env*` súborov repa číta iba názvy premenných, v procese Next.js ich prekryje prázdnou hodnotou (Next.js existujúcu premennú nikdy neprepíše; overené testom so skutočným `@next/env`), pri zmene `.env*` počas behu dev server zastaví a po skončení overí, že `.env.local` je nezmenený. Hlavička Next.js môže napriek tomu vypísať `Environments: .env.local` — súbor nájde, ale nič z neho nepoužije;
+- fail-closed: URL presne `https://cjbdijbbcujvmrzezusd.supabase.co`; produkčný ref v ktorejkoľvek hodnote aj v JWT payloade kľúča = STOP; JWT `ref`/`role` musia sedieť; iba `efaktura_sk` + `sandbox` + `efk_pk_test_…`; `ESBLU_EINVOICE_LIVE_ENABLED` ≠ prázdne/false a `VERCEL_ENV=production` = STOP; neznáme názvy (aj VAPID/FCM/APNS, DB URL) = STOP; premenné zdedené zo shellu (SUPABASE*, ESBLU_*, NEXT_PUBLIC_*, VERCEL*, OPENAI*, PG*) sa do Next.js neprenesú;
+- výstup obsahuje iba názvy premenných a verdikty, chyby sú redigované a bez stack trace.
 
 ## 8. Presné poradie migrácií v repe (94)
 
