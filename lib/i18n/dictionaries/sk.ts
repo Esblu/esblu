@@ -2875,6 +2875,7 @@ const sk = {
         VAT_SUM_MISMATCH: "Súčet DPH v rozpise sa nerovná DPH faktúry.",
         TOTAL_MISMATCH: "Celková suma nesedí so základom, DPH a zaokrúhlením.",
         MISSING_PAYMENT_MEANS_CODE: "Pri IBAN vyberte spôsob úhrady (napr. prevodný príkaz).",
+        BANK_TRANSFER_IBAN_MISSING: "Pri bankovom prevode (kód úhrady {{paymentMeansCode}}) chýba IBAN dodávateľa. Doplňte IBAN vo fakturačnom profile firmy alebo zvoľte iný spôsob úhrady.",
         INVALID_XML_CHARACTER: "Údaj obsahuje nepovolený znak — opravte ho.",
         FINANCE_MANAGE_REQUIRED: "Na e-faktúru potrebujete oprávnenie spravovať financie.",
         EINVOICE_ENTITLEMENT_REQUIRED: "Modul eFaktúra nie je pre vašu firmu aktívny.",

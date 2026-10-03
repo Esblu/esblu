@@ -119,6 +119,25 @@ function legalEntityIdOf(party: UblParty): { id: string; scheme: string | null }
   };
 }
 
+/**
+ * EN 16931 BR-61: ak kód spôsobu úhrady (BT-81) znamená prevod na účet —
+ * 30 (Credit transfer) alebo 58 (SEPA credit transfer) — identifikátor účtu
+ * príjemcu platby (BT-84, IBAN predávajúceho) MUSÍ byť uvedený. Schematron
+ * EN16931 (fatal) testuje presne kódy 30 a 58; ostatné kódy (10 hotovosť,
+ * 48/49 karta/inkaso, 59 SEPA inkaso …) BT-84 nevyžadujú.
+ * L3 nález: bez tejto kontroly to odhalil až preflight poskytovateľa (422).
+ */
+export const BANK_TRANSFER_PAYMENT_MEANS: ReadonlySet<string> = new Set(["30", "58"]);
+export const BANK_TRANSFER_IBAN_MISSING = "BANK_TRANSFER_IBAN_MISSING";
+
+/** Jediný zdroj pravdy pre BR-61 — používa ho UBL generátor aj readiness (cez checkUblPreconditions). */
+export function bankTransferAccountIssue(s: Pick<UblInvoiceSnapshot, "invoice" | "seller">): UblIssue | null {
+  const code = s.invoice.payment_means_code?.trim() ?? "";
+  if (!BANK_TRANSFER_PAYMENT_MEANS.has(code)) return null;
+  if (!blank(s.seller.iban)) return null;
+  return { code: BANK_TRANSFER_IBAN_MISSING, rule: "BR-61 (BT-84)", params: { paymentMeansCode: code } };
+}
+
 /** Kontroly, ktoré musia prejsť pred vygenerovaním. Vracia chyby aj upozornenia (iba kódy, žiadny text). */
 export function checkUblPreconditions(s: UblInvoiceSnapshot): { issues: UblIssue[]; warnings: UblWarning[] } {
   const issues: UblIssue[] = [];
@@ -229,6 +248,8 @@ export function checkUblPreconditions(s: UblInvoiceSnapshot): { issues: UblIssue
   if (!blank(s.seller.iban) && blank(inv.payment_means_code)) {
     add("MISSING_PAYMENT_MEANS_CODE", "BR-49 (BT-81)");
   }
+  const accountIssue = bankTransferAccountIssue(s);
+  if (accountIssue) issues.push(accountIssue);
 
   return { issues, warnings };
 }

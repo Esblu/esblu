@@ -2867,6 +2867,7 @@ const de = {
         VAT_SUM_MISMATCH: "Die USt-Aufschlüsselung entspricht nicht der USt-Summe.",
         TOTAL_MISMATCH: "Der Gesamtbetrag passt nicht zu Netto, USt und Rundung.",
         MISSING_PAYMENT_MEANS_CODE: "Bei einer IBAN wählen Sie eine Zahlungsart (z. B. Überweisung).",
+        BANK_TRANSFER_IBAN_MISSING: "Bei Überweisung (Zahlungsart {{paymentMeansCode}}) fehlt die IBAN des Lieferanten. Ergänzen Sie die IBAN im Rechnungsprofil der Firma oder wählen Sie eine andere Zahlungsart.",
         INVALID_XML_CHARACTER: "Ein Feld enthält ein unzulässiges Zeichen — bitte korrigieren.",
         FINANCE_MANAGE_REQUIRED: "Für E-Rechnungen benötigen Sie die Berechtigung zur Finanzverwaltung.",
         EINVOICE_ENTITLEMENT_REQUIRED: "Das E-Rechnungsmodul ist für Ihr Unternehmen nicht aktiv.",

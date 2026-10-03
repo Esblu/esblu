@@ -38,6 +38,9 @@ declare
   u_other uuid := (select id from auth.users where email = 'l3-other-owner@example.com');
   c_a uuid := 'a1300000-0000-4000-8000-00000000000a';
   c_b uuid := 'b1300000-0000-4000-8000-00000000000b';
+  -- Syntetický IBAN: vzorový slovenský IBAN z SWIFT IBAN Registry (príklad
+  -- formátu, nie účet Esblu ani zákazníka), platný kontrolný súčet ISO 13616.
+  v_test_iban text := 'SK3112000000198742637541';
 begin
   if u_owner is null or u_acc is null or u_admin_fin is null or u_admin is null or u_emp is null or u_other is null then
     raise exception 'L3_SEED_STOP: chýba niektorý L3 používateľ v auth.users (krok 8)';
@@ -53,10 +56,16 @@ begin
     (c_b, u_other, 'owner', 'active', '{}')
   on conflict do nothing;
   insert into public.company_billing_profile (company_id, legal_name, ico, dic, ic_dph, address_line1, city, postal_code, country_code,
-      electronic_address, electronic_address_scheme_id)
-    values (c_a, 'Tatra Servis s.r.o.', '87654326', '2099999999', 'SK2099999999', 'Hlavná 1', 'Bratislava', '81101', 'SK', '2099999999', '9915'),
-           (c_b, 'L3 Iná firma s.r.o.', '22222222', '2030000000', 'SK2030000000', 'Skúšobná 2', 'Košice', '04001', 'SK', '2030000000', '9915')
+      electronic_address, electronic_address_scheme_id, iban)
+    values (c_a, 'Tatra Servis s.r.o.', '87654326', '2099999999', 'SK2099999999', 'Hlavná 1', 'Bratislava', '81101', 'SK', '2099999999', '9915', v_test_iban),
+           (c_b, 'L3 Iná firma s.r.o.', '22222222', '2030000000', 'SK2030000000', 'Skúšobná 2', 'Košice', '04001', 'SK', '2030000000', '9915', null)
     on conflict (company_id) do nothing;
+  -- BR-61 (L3 nález): bankový prevod (kód úhrady 30/58) vyžaduje IBAN dodávateľa.
+  -- Už existujúci profil firmy A (staging seedovaný pred touto zmenou) sa iba
+  -- DOPLNÍ, ak IBAN chýba — ručne zmenený IBAN sa neprepíše (idempotentné).
+  -- Finalizované faktúry majú nemenný snapshot strán; táto zmena sa ich netýka.
+  update public.company_billing_profile set iban = v_test_iban
+    where company_id = c_a and (iban is null or btrim(iban) = '');
   -- Odberateľ = tá istá sandbox organizácia (self-send → vznikne aj prijatý doklad).
   insert into public.business_partners (company_id, kind, legal_name, ico, dic, ic_dph, address_line1, city, postal_code, country_code,
       electronic_address, electronic_address_scheme_id)

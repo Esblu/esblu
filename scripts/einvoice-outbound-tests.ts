@@ -595,6 +595,26 @@ await check("readiness fail: koncept → 409; chýbajúca referencia → 422 REA
   assert.equal(storageWrites, 0);
 });
 
+await check("BR-61: kód úhrady 30 bez IBAN dodávateľa → 422 READINESS_FAILED/BANK_TRANSFER_IBAN_MISSING PRED poskytovateľom", async () => {
+  provider.calls = [];
+  const writesBefore = storageWrites;
+  await sql("update public.company_billing_profile set iban = null where company_id = $1", [CA]);
+  try {
+    const id = await invoice(U.owner, CA, PARTNER_A); // HEADER: payment_means_code 30
+    const r = await requestAs(U.owner, id);
+    assert.equal(r.status, 422, JSON.stringify(r.body));
+    assert.equal(r.body.code, "READINESS_FAILED");
+    const issue = r.body.readiness!.issues.find((i) => i.code === "BANK_TRANSFER_IBAN_MISSING");
+    assert.ok(issue, JSON.stringify(r.body.readiness!.issues.map((i) => i.code)));
+    assert.equal(issue!.rule, "BR-61 (BT-84)");
+    assert.deepEqual(provider.calls, [], "žiadny recipient lookup ani preflight");
+    assert.equal(storageWrites, writesBefore);
+    assert.equal((await sql<Row>("select count(*)::int as n from public.einvoice_outbound where invoice_id = $1", [id])).rows[0].n, 0);
+  } finally {
+    await sql("update public.company_billing_profile set iban = 'SK3112000000198742637541' where company_id = $1", [CA]);
+  }
+});
+
 await check("príjemca nenájdený / lookup nedostupný → 422 / 503, nič sa neuloží ani nezaradí", async () => {
   const other = await invoice(U.owner, CA, PARTNER_A);
   provider.knownRecipients.delete(BUYER);

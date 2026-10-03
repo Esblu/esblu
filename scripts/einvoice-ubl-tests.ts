@@ -16,7 +16,10 @@ import { hasTranslation } from "../lib/i18n/translate.ts";
 import { bratislavaToday, evaluateEinvoiceReadiness, issueDateRule } from "../lib/einvoice/readiness.ts";
 import { buildProvisionalSnapshot } from "../lib/einvoice/provisional-snapshot.ts";
 import { DOMParser } from "@xmldom/xmldom";
-import { generateUbl, checkUblPreconditions, PEPPOL_BIS3_CUSTOMIZATION_ID, PEPPOL_BIS3_PROFILE_ID } from "../lib/einvoice/ubl/generate.ts";
+import {
+  generateUbl, checkUblPreconditions, bankTransferAccountIssue, BANK_TRANSFER_IBAN_MISSING, BANK_TRANSFER_PAYMENT_MEANS,
+  PEPPOL_BIS3_CUSTOMIZATION_ID, PEPPOL_BIS3_PROFILE_ID,
+} from "../lib/einvoice/ubl/generate.ts";
 import { parseInboundUbl, MAX_INBOUND_XML_BYTES } from "../lib/einvoice/ubl/parse.ts";
 import { NS } from "../lib/einvoice/ubl/xml.ts";
 import type { UblInvoiceSnapshot, UblItem, UblParty, UblTaxBreakdown } from "../lib/einvoice/ubl/model.ts";
@@ -905,6 +908,123 @@ await check("readiness: live odberateľ so schémou 9915 (TEST) → blok; sandbo
   assert.ok(rcodes(evaluateEinvoiceReadiness({ ...READY_ALL, organization: liveOrg, environment: "live", mode: "pre_send", snapshot: liveTest })).includes("BUYER_ENDPOINT_TEST_SCHEME"));
   const sandboxLiveBuyer = { ...snap, buyer: { ...snap.buyer, electronic_address_scheme_id: "0245" } };
   assert.ok(rcodes(evaluateEinvoiceReadiness({ ...READY_ALL, environment: "sandbox", mode: "pre_send", snapshot: sandboxLiveBuyer })).includes("BUYER_ENDPOINT_SANDBOX_SCHEME"));
+});
+
+// =============================================================================
+// BR-61 (L3 nález): kód úhrady 30/58 vyžaduje IBAN dodávateľa (BT-84) — chytí
+// to UBL validácia aj readiness ešte PRED volaním poskytovateľa.
+// =============================================================================
+function withPayment(code: string | null, iban: string | null): UblInvoiceSnapshot {
+  const s = vatPayerSnapshot();
+  s.invoice = { ...s.invoice, payment_means_code: code };
+  s.seller = seller({ iban, bic: iban ? "TESTSKBX" : null });
+  return s;
+}
+const br61Readiness = (s: UblInvoiceSnapshot, mode: "pre_send" | "pre_finalize" = "pre_send") =>
+  evaluateEinvoiceReadiness({ ...READY_ALL, mode, snapshot: s });
+
+await check("BR-61: kód 30 + IBAN → PASS (UBL aj readiness), PayeeFinancialAccount v UBL", () => {
+  const s = withPayment("30", "SK3112000000198742637541");
+  const r = ok(s);
+  assert.match(r.xml, /<cbc:PaymentMeansCode>30<\/cbc:PaymentMeansCode>/);
+  assert.match(r.xml, /<cac:PayeeFinancialAccount><cbc:ID>SK3112000000198742637541<\/cbc:ID>/);
+  assert.equal(br61Readiness(s).ready, true);
+});
+
+await check("BR-61: kód 58 + IBAN → PASS (UBL aj readiness)", () => {
+  const s = withPayment("58", "SK3112000000198742637541");
+  const r = ok(s);
+  assert.match(r.xml, /<cbc:PaymentMeansCode>58<\/cbc:PaymentMeansCode>/);
+  assert.match(r.xml, /<cac:PayeeFinancialAccount>/);
+  assert.equal(br61Readiness(s).ready, true);
+});
+
+await check("BR-61: kód 30 / 58 bez IBAN (null, prázdny, medzery) → FAIL BANK_TRANSFER_IBAN_MISSING, UBL sa nevygeneruje", () => {
+  for (const code of ["30", "58", " 58 "]) {
+    for (const iban of [null, "", "   "]) {
+      const s = withPayment(code, iban);
+      const before = structuredClone(s);
+      const r = generateUbl(s);
+      assert.equal(r.ok, false, `${code}/${JSON.stringify(iban)}`);
+      if (r.ok) continue;
+      const issue = r.issues.find((i) => i.code === BANK_TRANSFER_IBAN_MISSING);
+      assert.ok(issue, `${code}: ${r.issues.map((i) => i.code).join(",")}`);
+      assert.equal(issue!.rule, "BR-61 (BT-84)");
+      assert.deepEqual(issue!.params, { paymentMeansCode: code.trim() });
+      assert.equal(r.issues.length, 1, "jediný dôvod — žiadny všeobecný blok");
+      assert.deepEqual(s, before, "vstup sa nezmenil");
+    }
+  }
+});
+
+await check("BR-61: iné kódy úhrady bez IBAN (10, 48, 49, 59, 1, ZZZ) a bez kódu → nie sú falošne blokované", () => {
+  for (const code of ["10", "48", "49", "59", "1", "ZZZ", null, ""]) {
+    const s = withPayment(code, null);
+    assert.equal(bankTransferAccountIssue(s), null, String(code));
+    assert.ok(!issueCodes(s).includes(BANK_TRANSFER_IBAN_MISSING), String(code));
+    assert.ok(!rcodes(br61Readiness(s)).includes(BANK_TRANSFER_IBAN_MISSING), String(code));
+  }
+  // explicitne: kód 10 (hotovosť) bez IBAN sa vygeneruje bez PayeeFinancialAccount
+  const r = ok(withPayment("10", null));
+  assert.match(r.xml, /<cbc:PaymentMeansCode>10<\/cbc:PaymentMeansCode>/);
+  assert.doesNotMatch(r.xml, /PayeeFinancialAccount/);
+  assert.deepEqual([...BANK_TRANSFER_PAYMENT_MEANS].sort(), ["30", "58"]);
+});
+
+await check("BR-61: readiness a UBL validácia sú konzistentné (pre_send aj pre_finalize, ten istý kód a pravidlo)", () => {
+  const matrix: Array<[string | null, string | null]> = [];
+  for (const code of ["30", "58", "10", "49", null]) for (const iban of ["SK3112000000198742637541", null]) matrix.push([code, iban]);
+  for (const [code, iban] of matrix) {
+    const s = withPayment(code, iban);
+    const ublIssues = checkUblPreconditions(s).issues.filter((i) => i.code === BANK_TRANSFER_IBAN_MISSING);
+    const gen = generateUbl(s);
+    const genIssues = gen.ok ? [] : gen.issues.filter((i) => i.code === BANK_TRANSFER_IBAN_MISSING);
+    const send = br61Readiness(s, "pre_send");
+    const draft = structuredClone(s);
+    draft.invoice = { ...draft.invoice, document_status: "draft", invoice_number: null };
+    const fin = br61Readiness(draft, "pre_finalize");
+    const pick = (r: ReturnType<typeof evaluateEinvoiceReadiness>) =>
+      r.issues.filter((i) => i.code === BANK_TRANSFER_IBAN_MISSING).map(({ code: c, rule, params }) => ({ code: c, rule, params }));
+    assert.deepEqual(pick(send), ublIssues, `${code}/${iban}: pre_send`);
+    assert.deepEqual(pick(fin), ublIssues, `${code}/${iban}: pre_finalize`);
+    assert.deepEqual(genIssues, ublIssues, `${code}/${iban}: generateUbl`);
+    const expectBlock = (code === "30" || code === "58") && !iban;
+    assert.equal(ublIssues.length, expectBlock ? 1 : 0, `${code}/${iban}`);
+    // IBAN bez kódu úhrady blokuje existujúce BR-49 (MISSING_PAYMENT_MEANS_CODE), nie BR-61.
+    const expectBr49 = code === null && !!iban;
+    assert.equal(send.ready, !expectBlock && !expectBr49, `${code}/${iban}: ready`);
+    for (const i of send.issues.filter((x) => x.code === BANK_TRANSFER_IBAN_MISSING)) assert.equal(i.category, "document");
+  }
+});
+
+await check("BR-61: provisional snapshot (koncept) bez IBAN v profile firmy + kód 30 → blocker už pred finalizáciou", () => {
+  const snap = buildProvisionalSnapshot({
+    invoice: {
+      id: "f0000000-0000-4000-8000-000000000061", company_id: "a0000000-0000-4000-8000-000000000001", direction: "issued",
+      kind: "regular_invoice", document_status: "draft", invoice_number: null, issue_date: "2026-10-01", due_date: "2026-10-15",
+      delivery_date: null, tax_point_date: null, currency: "EUR", rounding_amount: 0, buyer_reference: "REF",
+      purchase_order_reference: null, payment_means_code: "30", payment_reference: null, corrects_invoice_id: null,
+    },
+    items: [{ position: 1, description: "Práca", quantity: 2, unit_code: "HUR", unit_price: 50, price_mode: "net", vat_category_code: "S", vat_rate: 23 }],
+    profile: { ...seller({ iban: null, bic: null }), contact_email: null },
+    partner: { ...buyer(), email: null },
+  });
+  assert.deepEqual(rcodes(br61Readiness(snap, "pre_finalize")), [BANK_TRANSFER_IBAN_MISSING]);
+  const withIban = buildProvisionalSnapshot({
+    invoice: snap.invoice as never,
+    items: [{ position: 1, description: "Práca", quantity: 2, unit_code: "HUR", unit_price: 50, price_mode: "net", vat_category_code: "S", vat_rate: 23 }],
+    profile: { ...seller(), contact_email: null },
+    partner: { ...buyer(), email: null },
+  });
+  assert.deepEqual(rcodes(br61Readiness(withIban, "pre_finalize")), []);
+});
+
+await check("BR-61: preklad BANK_TRANSFER_IBAN_MISSING v sk / en / de (konkrétny text s kódom úhrady)", () => {
+  for (const locale of ["sk", "en", "de"] as const) {
+    assert.ok(hasTranslation(locale, `invoices.einvoice.issues.${BANK_TRANSFER_IBAN_MISSING}`), locale);
+  }
+  const sk = readFileSync(new URL("../lib/i18n/dictionaries/sk.ts", import.meta.url), "utf8");
+  assert.match(sk, /BANK_TRANSFER_IBAN_MISSING: "[^"]*IBAN dodávateľa[^"]*\{\{paymentMeansCode\}\}|BANK_TRANSFER_IBAN_MISSING: "[^"]*\{\{paymentMeansCode\}\}[^"]*IBAN dodávateľa/);
 });
 
 console.log(`\neinvoice-ubl: ${passed} passed, ${failed} failed`);

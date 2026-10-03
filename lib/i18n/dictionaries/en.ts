@@ -2846,6 +2846,7 @@ const en = {
         VAT_SUM_MISMATCH: "The VAT breakdown does not match the invoice VAT total.",
         TOTAL_MISMATCH: "The total does not match net amount, VAT and rounding.",
         MISSING_PAYMENT_MEANS_CODE: "With an IBAN, select a payment means (e.g. credit transfer).",
+        BANK_TRANSFER_IBAN_MISSING: "Bank transfer (payment means {{paymentMeansCode}}) requires the supplier IBAN. Add an IBAN to the company billing profile or choose another payment means.",
         INVALID_XML_CHARACTER: "A field contains a character that is not allowed — please correct it.",
         FINANCE_MANAGE_REQUIRED: "You need finance management permission for e-invoicing.",
         EINVOICE_ENTITLEMENT_REQUIRED: "The e-invoicing module is not active for your company.",

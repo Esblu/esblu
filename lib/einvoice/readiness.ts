@@ -144,6 +144,12 @@ export function evaluateEinvoiceReadiness(input: ReadinessInput): ReadinessResul
     }
   }
 
+  // Dokumentové pravidlá UBL — TÁ ISTÁ funkcia, akú volá generateUbl, takže
+  // readiness a UBL validácia sú vždy konzistentné. Patrí sem aj BR-61
+  // (bankTransferAccountIssue: kód úhrady 30/58 bez IBAN dodávateľa →
+  // BANK_TRANSFER_IBAN_MISSING) — v pre_finalize sa ukáže ešte na koncepte
+  // (IBAN z profilu firmy), v pre_send zablokuje odoslanie PRED volaním
+  // poskytovateľa. Zámerne sa tu neduplikuje (duplicitný blocker v UI).
   const ubl = checkUblPreconditions(input.snapshot);
   for (const issue of ubl.issues) {
     if (input.mode === "pre_finalize" && PRE_FINALIZE_IGNORED.has(issue.code)) continue;
