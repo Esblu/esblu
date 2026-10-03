@@ -4,7 +4,16 @@
 -- document_review_log, inventory_items, machine_services, machines,
 -- vehicle_services, vehicles), všetky s 0 riadkami; 10 politík; 0 funkcií;
 -- auth.users = 0, storage.objects = 0, žiadne buckety, žiadna história migrácií.
--- Obnoví predvolené Supabase granty pre public.
+-- Granty a predvolené privilégiá public NEnastavuje — obnoví ich presne
+-- produkčný dump (10-prod-public-schema.sql: GRANT USAGE + ALTER DEFAULT
+-- PRIVILEGES FOR ROLE postgres). Supabase predvolené `… to anon` by inak
+-- dalo anon práva, ktoré produkcia nemá.
+--
+-- Oprava 2026-10-03: odstránené `delete from storage.buckets` — Supabase
+-- priame mazanie zo storage tabuliek zakazuje (storage.protect_delete) a celá
+-- transakcia sa zrolovala. Buckety sa tu nemenia; ak už existujú, iba sa
+-- vypíše upozornenie (30-prod-storage-buckets.sql ich potom treba vložiť
+-- s ON CONFLICT DO NOTHING alebo bucket odstrániť cez Storage API/Dashboard).
 -- =============================================================================
 begin;
 do $guard$
@@ -40,10 +49,16 @@ $empty$;
 drop schema public cascade;
 create schema public authorization pg_database_owner;
 comment on schema public is 'standard public schema';
-grant usage on schema public to postgres, anon, authenticated, service_role;
-grant all on schema public to postgres, service_role;
-alter default privileges for role postgres in schema public grant all on tables to postgres, anon, authenticated, service_role;
-alter default privileges for role postgres in schema public grant all on functions to postgres, anon, authenticated, service_role;
-alter default privileges for role postgres in schema public grant all on sequences to postgres, anon, authenticated, service_role;
-delete from storage.buckets;  -- staging nemá žiadne objekty (overené vyššie)
+-- PG15+ predvolené USAGE pre PUBLIC (produkcia: =U/pg_database_owner); pg_dump
+-- ho neexportuje (pg_init_privs), preto sa obnovuje tu. Ostatné granty dodá dump.
+grant usage on schema public to public;
+do $buckets$
+declare n integer;
+begin
+  select count(*) into n from storage.buckets;
+  if n > 0 then
+    raise notice 'L3: storage.buckets už obsahuje % bucketov — nemažú sa (Supabase to priamo nedovolí); 30-prod-storage-buckets.sql vkladať s ON CONFLICT DO NOTHING', n;
+  end if;
+end
+$buckets$;
 commit;
