@@ -42,6 +42,8 @@
     "test:push-db": "node --experimental-strip-types --no-warnings scripts/push-devices-pglite-tests.ts",
     "test:company-lookup": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/company-lookup-tests.ts",
     "test:company-lookup-db": "node --experimental-strip-types --no-warnings scripts/company-lookup-authz-pglite-tests.ts",
+    "test:google-oauth": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/google-oauth-tests.ts",
+    "test:google-oauth-db": "node --experimental-strip-types --no-warnings scripts/google-oauth-pglite-tests.ts",
     "verify:mobile-bundle": "node scripts/verify-mobile-bundle.mjs"
   },
   "dependencies": {

@@ -9,8 +9,8 @@
 --      nezaregistruje ani neprepíše cudzí endpoint, nečíta ho, nezapíše
 --      predvoľby, nečíta denník doručení,
 --   B) prázdne okno dní je zakázané,
---   C) Auth hook: google/apple + platná pozvánka pre ten istý e-mail prejde;
---      iný poskytovateľ, vypršaná/cudzia pozvánka, e-mail bez tokenu a bez
+--   C) Auth hook: google + platná pozvánka pre ten istý e-mail prejde;
+--      apple, iný poskytovateľ, vypršaná/cudzia pozvánka, e-mail bez tokenu a bez
 --      allowlistu neprejde; owner allowlist funguje ako doteraz.
 -- =============================================================================
 do $$
@@ -116,7 +116,7 @@ begin
     select public.esblu_before_user_created_beta_gate(e.event), e.expect_allow
     from (values
       (jsonb_build_object('user', jsonb_build_object('email', v_invited, 'app_metadata', jsonb_build_object('provider', 'google'))), true),
-      (jsonb_build_object('user', jsonb_build_object('email', v_invited, 'app_metadata', jsonb_build_object('provider', 'apple'))), true),
+      (jsonb_build_object('user', jsonb_build_object('email', v_invited, 'app_metadata', jsonb_build_object('provider', 'apple'))), false),
       (jsonb_build_object('user', jsonb_build_object('email', v_invited, 'app_metadata', jsonb_build_object('provider', 'github'))), false),
       (jsonb_build_object('user', jsonb_build_object('email', v_invited, 'app_metadata', jsonb_build_object('provider', 'email'))), false),
       (jsonb_build_object('user', jsonb_build_object('email', v_invited)), false),

@@ -539,11 +539,12 @@ await check("push tabuľky: žiadny priamy prístup klienta (ani čítanie), iba
   }
 });
 
-await check("OAuth pozvánková brána: iba google/apple z app_metadata (nie user_metadata); iný poskytovateľ bez obchvatu", () => {
+await check("OAuth pozvánková brána: iba google z app_metadata (nie user_metadata); Apple ani iný poskytovateľ bez obchvatu", () => {
   const sql = readFileSync("supabase/migrations/20260927120000_beta_gate_allow_oauth_invites.sql", "utf8");
   assert.ok(sql.includes("v_provider := lower(btrim(coalesce(event #>> '{user,app_metadata,provider}', '')));"));
-  assert.ok(sql.includes("if v_provider in ('google', 'apple') then"));
-  const branch = sql.slice(sql.indexOf("if v_provider in ('google', 'apple') then"), sql.indexOf("-- Owner-registration prípad"));
+  assert.ok(sql.includes("if v_provider = 'google' then"));
+  assert.ok(!/v_provider\s+in\s*\(/.test(sql) && !sql.includes("'apple'"), "Apple vetva nesmie existovať");
+  const branch = sql.slice(sql.indexOf("if v_provider = 'google' then"), sql.indexOf("-- Owner-registration prípad"));
   assert.ok(!branch.includes("user_metadata"), "poskytovateľ sa neberie z klientskych metadát");
   assert.ok(branch.includes("ci.status = 'pending'") && branch.includes("ci.expires_at > now()") && branch.includes("ci.email = v_email"));
   // Token vetva e-mailu a allowlist ostávajú nezmenené.

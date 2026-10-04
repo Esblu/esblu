@@ -69,7 +69,7 @@ export default function LoginPage() {
   const [accountDeletionPartialNotice, setAccountDeletionPartialNotice] =
     useState(false);
   // Návrat z Google/Apple bez prihlásenia (zrušené alebo chyba).
-  const [oauthNotice, setOauthNotice] = useState<"" | "cancelled" | "error">("");
+  const [oauthNotice, setOauthNotice] = useState<"" | "cancelled" | "error" | "beta">("");
 
   // Jednorazová správa po úspešnom (alebo čiastočnom) samoobslužnom zrušení
   // účtu (app/nastavenia → lib/account-deletion.ts). Číta sa priamo z
@@ -89,7 +89,7 @@ export default function LoginPage() {
 
       const params = new URLSearchParams(window.location.search);
       const oauth = params.get("oauth");
-      if (oauth === "cancelled" || oauth === "error") {
+      if (oauth === "cancelled" || oauth === "error" || oauth === "beta") {
         await Promise.resolve();
         setOauthNotice(oauth);
         params.delete("oauth");
@@ -338,7 +338,7 @@ async function resetPassword() {
 
         {oauthNotice && (
           <p className="mt-4 rounded-xl border border-subtle bg-surface-2 px-4 py-3 text-sm text-secondary">
-            {t(oauthNotice === "cancelled" ? "auth.oauth.cancelled" : "auth.oauth.failed")}
+            {t(oauthNotice === "cancelled" ? "auth.oauth.cancelled" : oauthNotice === "beta" ? "auth.oauth.betaRequired" : "auth.oauth.failed")}
           </p>
         )}
 

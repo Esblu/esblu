@@ -556,6 +556,8 @@ const sk = {
       startFailed: "Prihlásenie cez poskytovateľa sa nepodarilo spustiť. Skúste to, prosím, znova.",
       cancelled: "Prihlásenie bolo zrušené.",
       failed: "Prihlásenie sa nepodarilo. Ak ešte nemáte prístup do uzavretej beta verzie alebo pozvánku, kontaktujte nás na info@esblu.com.",
+      betaRequired: "Tento Google účet nemá prístup do uzavretej beta verzie Esblu. Ak máte pozvánku, otvorte odkaz z pozvánky a prihláste sa e-mailom, na ktorý prišla. Prístup do bety vám zriadime na info@esblu.com.",
+      redirecting: "Presmerúvame na Google…",
     },
     login: {
       title: "Prihlásenie",

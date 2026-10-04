@@ -1,13 +1,15 @@
 "use client";
 
-import { useState, useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import { enabledOAuthProviders, startOAuth } from "@/lib/auth/oauth-client";
 import type { OAuthMode, OAuthProvider } from "@/lib/auth/oauth-routing";
 
-// „Pokračovať cez Google / Apple". Zobrazí sa IBA pre poskytovateľov
-// zapnutých v konfigurácii (NEXT_PUBLIC_ESBLU_OAUTH_PROVIDERS) — kým nie sú
-// ručne nastavené v Supabase, tlačidlá sa neukážu.
+// „Pokračovať cez Google". Zobrazí sa IBA pre poskytovateľov zapnutých v
+// konfigurácii (NEXT_PUBLIC_ESBLU_OAUTH_PROVIDERS) a zároveň podporovaných
+// appkou (lib/auth/oauth-routing.ts SUPPORTED_OAUTH_PROVIDERS — dnes iba
+// Google; Apple sa neukáže ani pri omylom zapnutej konfigurácii). V Android
+// (Capacitor) appke a v iOS PWA sa neukáže vôbec (oauthAllowedInRuntime).
 function noopSubscribe(): () => void {
   return () => undefined;
 }
@@ -34,6 +36,17 @@ export function SocialAuthButtons({
     () => ""
   );
   const providers = providerList ? (providerList.split(",") as OAuthProvider[]) : [];
+
+  // Návrat tlačidlom Späť z Google (stránka z bfcache) — tlačidlo nesmie
+  // ostať navždy v stave „Presmerúvame…".
+  useEffect(() => {
+    function onPageShow(event: PageTransitionEvent) {
+      if (event.persisted) setBusy(null);
+    }
+    window.addEventListener("pageshow", onPageShow);
+    return () => window.removeEventListener("pageshow", onPageShow);
+  }, []);
+
   if (providers.length === 0) return null;
 
   async function go(provider: OAuthProvider) {
@@ -55,9 +68,12 @@ export function SocialAuthButtons({
           type="button"
           onClick={() => void go(provider)}
           disabled={disabled || busy !== null}
+          aria-busy={busy === provider}
           className="w-full rounded-xl border border-subtle px-6 py-3 font-semibold text-primary hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-60"
         >
-          {t(provider === "google" ? "auth.oauth.google" : "auth.oauth.apple")}
+          {busy === provider
+            ? t("auth.oauth.redirecting")
+            : t(provider === "google" ? "auth.oauth.google" : "auth.oauth.apple")}
         </button>
       ))}
       {error && <p className="text-center text-sm text-danger">{error}</p>}

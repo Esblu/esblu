@@ -544,6 +544,8 @@ const de = {
       startFailed: "Die Anmeldung beim Anbieter konnte nicht gestartet werden. Bitte versuchen Sie es erneut.",
       cancelled: "Die Anmeldung wurde abgebrochen.",
       failed: "Die Anmeldung ist fehlgeschlagen. Wenn Sie noch keinen Zugang zur geschlossenen Beta oder keine Einladung haben, kontaktieren Sie uns unter info@esblu.com.",
+      betaRequired: "Dieses Google-Konto hat keinen Zugang zur geschlossenen Beta von Esblu. Wenn Sie eine Einladung haben, öffnen Sie den Einladungslink und melden Sie sich mit der E-Mail-Adresse an, an die sie gesendet wurde. Beta-Zugang erhalten Sie über info@esblu.com.",
+      redirecting: "Weiterleitung zu Google…",
     },
     login: {
       title: "Anmeldung",

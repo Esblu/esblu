@@ -91,24 +91,31 @@ export default function AuthCallbackPage() {
 
     const searchParams = new URLSearchParams(window.location.search);
 
-    // --- Návrat z Google / Apple (OAuth). Supabase klient si session
-    // prevezme z adresy sám (detectSessionInUrl); tu sa iba rozhodne, kam
+    // --- Návrat z Google (OAuth, PKCE — lib/supabase.ts). Supabase klient
+    // vymení jednorazový `?code=` za session sám (detectSessionInUrl) a IBA
+    // s code_verifierom z tohto prehliadača; tu sa iba rozhodne, kam
     // ďalej — výhradne na pevné cesty Esblu (lib/auth/oauth-routing.ts).
+    // Žiadny parameter next/returnTo/redirectTo sa nečíta.
     if (searchParams.has("oauth")) {
       const hash = new URLSearchParams(window.location.hash.replace(/^#/, ""));
       const providerError = searchParams.get("error") ?? hash.get("error") ?? searchParams.get("error_code") ?? hash.get("error_code");
+      // Iba na rozlíšenie odmietnutia uzavretou betou; nezobrazuje sa ani neloguje.
+      const providerErrorDescription = searchParams.get("error_description") ?? hash.get("error_description");
       const pending = peekOAuthPending();
       let hasSession = false;
       let hasActiveMembership = false;
       if (!providerError) {
-        await supabase.auth.getSession();
-        const { data: userData, error: userError } = await supabase.auth.getUser();
-        hasSession = !userError && Boolean(userData.user);
+        // Výsledok výmeny kódu (PKCE). Ak zlyhala (chýba code_verifier, kód
+        // vypršal/použitý, podvrhnutý odkaz), NEPOKRAČUJE sa na základe
+        // prípadnej staršej session iného účtu v tomto prehliadači.
+        const { error: initError } = await supabase.auth.initialize();
+        const { data: userData, error: userError } = initError ? { data: { user: null }, error: initError } : await supabase.auth.getUser();
+        hasSession = !initError && !userError && Boolean(userData.user);
         if (hasSession) hasActiveMembership = Boolean(await getMyActiveMembership().catch(() => null));
       }
       // Tokeny ani chyby poskytovateľa nesmú ostať v adrese ani v histórii.
       window.history.replaceState(null, "", window.location.pathname);
-      const destination = decideOAuthDestination({ providerError, hasSession, hasActiveMembership, pending });
+      const destination = decideOAuthDestination({ providerError, providerErrorDescription, hasSession, hasActiveMembership, pending });
       // Záznam si prečíta a zmaže onboarding (súhlas pri registrácii);
       // inde sa zmaže hneď.
       if (destination !== "/onboarding/company") takeOAuthPending();

@@ -3,7 +3,7 @@
 import { supabase } from "@/lib/supabase";
 import { publicWebUrl } from "@/lib/public-url";
 import { IS_MOBILE_BUILD } from "@/lib/build-target";
-import { oauthAllowedInRuntime, readOAuthPending, type OAuthMode, type OAuthPending, type OAuthProvider } from "@/lib/auth/oauth-routing";
+import { oauthAllowedInRuntime, parseEnabledOAuthProviders, readOAuthPending, type OAuthMode, type OAuthPending, type OAuthProvider } from "@/lib/auth/oauth-routing";
 
 // Stav pred odoslaním na Google/Apple — localStorage (nie URL), jednorazový,
 // platnosť 15 min. localStorage (nie sessionStorage), lebo návrat z
@@ -22,11 +22,13 @@ function runtimeAllowsOAuth(): boolean {
 /** Ktorí poskytovatelia sú zapnutí (ručné nastavenie v Supabase) a smú sa v tomto prostredí ponúknuť. */
 export function enabledOAuthProviders(): OAuthProvider[] {
   if (!runtimeAllowsOAuth()) return [];
-  const raw = (process.env.NEXT_PUBLIC_ESBLU_OAUTH_PROVIDERS ?? "").toLowerCase();
-  return (["google", "apple"] as const).filter((provider) => raw.split(",").map((value) => value.trim()).includes(provider));
+  // Literálny odkaz na premennú — Next.js ju pri builde vloží do bundlu.
+  return parseEnabledOAuthProviders(process.env.NEXT_PUBLIC_ESBLU_OAUTH_PROVIDERS);
 }
 
 export async function startOAuth(provider: OAuthProvider, options: { mode: OAuthMode; legalAccepted: boolean; inviteToken?: string }): Promise<string | null> {
+  // Iba podporovaný a zapnutý poskytovateľ (obrana aj pri priamom volaní).
+  if (!enabledOAuthProviders().includes(provider)) return "provider_not_enabled";
   const pending: OAuthPending = { provider, mode: options.mode, legalAccepted: options.legalAccepted, inviteToken: options.inviteToken, at: Date.now() };
   try {
     window.localStorage.setItem(KEY, JSON.stringify(pending));

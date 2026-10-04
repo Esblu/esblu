@@ -542,6 +542,8 @@ const en = {
       startFailed: "Sign-in with the provider could not be started. Please try again.",
       cancelled: "Sign-in was cancelled.",
       failed: "Sign-in failed. If you do not yet have closed-beta access or an invitation, contact us at info@esblu.com.",
+      betaRequired: "This Google account does not have access to the Esblu closed beta. If you have an invitation, open the invitation link and sign in with the email address it was sent to. To request beta access, contact info@esblu.com.",
+      redirecting: "Redirecting to Google…",
     },
     login: {
       title: "Log in",

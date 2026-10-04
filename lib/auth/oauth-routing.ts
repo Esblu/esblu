@@ -55,7 +55,17 @@ export type OAuthDestination =
   | "/onboarding/company"
   | "/login?oauth=cancelled"
   | "/login?oauth=error"
+  | "/login?oauth=beta"
   | `/invite/${string}`;
+
+/**
+ * Odmietnutie Auth hookom uzavretej bety (esblu_before_user_created_beta_gate).
+ * Supabase ho vráti ako `error=access_denied` (HTTP 403) s textom hooku v
+ * `error_description` — bez tohto rozlíšenia by používateľ bez prístupu videl
+ * zavádzajúce „Prihlásenie bolo zrušené". Text sa iba porovná, nikdy sa
+ * nezobrazí ani nezaloguje.
+ */
+const BETA_GATE_REJECTION = /uzavretej beta|closed beta|beta verzii|beta access/i;
 
 /**
  * Kam po návrate z Google/Apple. Iba pevné cesty; token pozvánky iba v
@@ -63,11 +73,15 @@ export type OAuthDestination =
  */
 export function decideOAuthDestination(input: {
   providerError: string | null;
+  providerErrorDescription?: string | null;
   hasSession: boolean;
   hasActiveMembership: boolean;
   pending: OAuthPending | null;
 }): OAuthDestination {
   if (input.providerError) {
+    if (input.providerErrorDescription && BETA_GATE_REJECTION.test(input.providerErrorDescription)) {
+      return "/login?oauth=beta";
+    }
     return /access_denied|cancel|user_cancelled/i.test(input.providerError) ? "/login?oauth=cancelled" : "/login?oauth=error";
   }
   if (!input.hasSession) return "/login?oauth=error";
@@ -100,6 +114,22 @@ export function mayRecordRegistrationConsent(pending: OAuthPending | null, sessi
  *     Safari kontexte s inou úložiskou, session by do PWA neprišla.
  *   - bežný prehliadač (Android/iOS/desktop) a Android PWA: áno.
  */
+/**
+ * Poskytovatelia, ktorých appka vôbec smie ponúknuť. Apple zatiaľ NIE (chýba
+ * Apple Developer Program) — ani omylom zapnutý v konfigurácii sa neukáže.
+ * Pridanie poskytovateľa = vedomá zmena tohto zoznamu + bezpečnostná revízia.
+ */
+export const SUPPORTED_OAUTH_PROVIDERS: readonly OAuthProvider[] = ["google"];
+
+/** Zapnutí poskytovatelia z konfigurácie (NEXT_PUBLIC_ESBLU_OAUTH_PROVIDERS), orezaní na podporovaných. */
+export function parseEnabledOAuthProviders(raw: string | undefined | null): OAuthProvider[] {
+  const requested = (raw ?? "")
+    .toLowerCase()
+    .split(",")
+    .map((value) => value.trim());
+  return SUPPORTED_OAUTH_PROVIDERS.filter((provider) => requested.includes(provider));
+}
+
 export function oauthAllowedInRuntime(input: { isCapacitorBuild: boolean; isIos: boolean; isStandalone: boolean }): boolean {
   if (input.isCapacitorBuild) return false;
   if (input.isIos && input.isStandalone) return false;
