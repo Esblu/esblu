@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
+import { flushMediaDeletions } from "@/lib/storage/media-deletion";
+import { signMediaUrls } from "@/lib/storage/signed-media";
 import PlanLimitNotice from "@/app/components/PlanLimitNotice";
 import { usePlanUsage } from "@/hooks/use-plan-usage";
 import {
@@ -114,14 +116,6 @@ export default function StrojePage() {
     checkUser();
   }, []);
 
-  function photoUrl(path: string) {
-    const { data } = supabase.storage
-      .from("machine-photos")
-      .getPublicUrl(path);
-
-    return data.publicUrl;
-  }
-
   async function checkUser() {
     const {
       data: { session },
@@ -205,12 +199,18 @@ export default function StrojePage() {
       summaries[id] = summarizeMachineServices(byMachine.get(id) ?? []);
     }
 
+    const firstPhotoPaths = (machinesData || [])
+      .map((item) => photosData.find((photo) => photo.machine_id === item.id)?.file_path)
+      .filter((path): path is string => Boolean(path));
+    // Súkromný bucket: jedna dávka podpísaných URL (lib/storage/signed-media.ts).
+    const signedPhotos = await signMediaUrls("machine-photos", firstPhotoPaths);
+
     const machinesWithPhotos = (machinesData || []).map((item) => {
       const firstPhoto = photosData.find((photo) => photo.machine_id === item.id);
 
       return {
         ...item,
-        first_photo_url: firstPhoto ? photoUrl(firstPhoto.file_path) : null,
+        first_photo_url: firstPhoto?.file_path ? signedPhotos[firstPhoto.file_path] ?? null : null,
       };
     });
 
@@ -534,17 +534,13 @@ export default function StrojePage() {
         refreshPlanUsage(),
       ]);
 
-      // Storage čistíme až nakoniec. Jeho chyba nesmie zakryť úspešný DB delete.
+      // Súbory fotiek sú po zmazaní záznamov vo fronte mazania (trigger).
+      // Dokončíme ich zmazanie; chyba nezakryje úspešný DB delete a položky
+      // ostávajú evidované na zopakovanie (lib/storage/media-deletion.ts).
       if (photoPaths.length > 0) {
-        const { error: storageError } = await supabase.storage
-          .from("machine-photos")
-          .remove(photoPaths);
-
-        if (storageError) {
-          console.error(
-            "Stroj bol vymazaný, ale fotografie sa nepodarilo odstrániť zo Storage:",
-            storageError
-          );
+        const cleanup = await flushMediaDeletions(supabase);
+        if (cleanup.remaining !== 0) {
+          console.error("Stroj bol vymazaný, fotografie čakajú na dokončenie mazania v úložisku.");
           alert(t("machines.errors.photosStorageDeleteFailed"));
         }
       }

@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
+import { flushMediaDeletions } from "@/lib/storage/media-deletion";
+import { useSignedMediaUrls } from "@/lib/storage/signed-media";
 import BackLink from "@/app/components/BackLink";
 import { getMyActiveMembership } from "@/lib/company";
 import { useCompanyDpaLegalHold } from "@/app/components/CompanyDpaGate";
@@ -204,6 +206,8 @@ export default function MachineDetailView({
   const [companyId, setCompanyId] = useState("");
   const [machine, setMachine] = useState<MachineRow | null>(null);
   const [photos, setPhotos] = useState<MachinePhoto[]>([]);
+  // Súkromný bucket: podpísané URL (lib/storage/signed-media.ts).
+  const photoUrls = useSignedMediaUrls("machine-photos", photos.map((photo) => photo.file_path));
   const [services, setServices] = useState<MachineService[]>([]);
   const [service, setService] = useState(emptyService);
   const [showServiceForm, setShowServiceForm] = useState(false);
@@ -620,21 +624,12 @@ export default function MachineDetailView({
         )
       );
 
-      const deletedFilePath = deletedPhotos[0].file_path;
-
-      // Storage čistíme až po vymazaní DB riadku a aktualizácii UI.
-      if (deletedFilePath) {
-        const { error: storageError } = await supabase.storage
-          .from("machine-photos")
-          .remove([deletedFilePath]);
-
-        if (storageError) {
-          console.error(
-            "Databázový záznam fotografie bol vymazaný, ale Storage cleanup zlyhal:",
-            storageError
-          );
-          alert(t("vehicles.errors.photoStorageDeleteFailed"));
-        }
+      // Súbor je už vo fronte mazania (trigger pri DELETE záznamu) — zmažeme
+      // ho ako owner/admin; pri zlyhaní ostáva vo fronte na zopakovanie.
+      const cleanup = await flushMediaDeletions(supabase);
+      if (cleanup.remaining !== 0) {
+        console.error("Fotografia bola vymazaná, súbor čaká na dokončenie mazania v úložisku.");
+        alert(t("vehicles.errors.photoStorageDeleteFailed"));
       }
     } catch (deleteError: unknown) {
       console.error("Chyba pri mazaní fotografie stroja:", deleteError);
@@ -653,11 +648,7 @@ export default function MachineDetailView({
   }
 
   function photoUrl(path: string) {
-    const { data } = supabase.storage
-      .from("machine-photos")
-      .getPublicUrl(path);
-
-    return data.publicUrl;
+    return photoUrls[path] ?? "";
   }
 
   // ---------------------------------------------------------------------------
@@ -682,7 +673,7 @@ export default function MachineDetailView({
     { key: "photos", label: t("machines.detail.galleryTitle"), count: photos.length },
   ];
 
-  const coverPhoto = photos[0] ? photoUrl(photos[0].file_path) : null;
+  const coverPhoto = photos[0] ? photoUrl(photos[0].file_path) || null : null;
 
   return (
     <PageShell moduleContext="machines" uiContext={{ module: "machine", entityType: "machine", entityId }}>
@@ -1186,6 +1177,7 @@ export default function MachineDetailView({
               <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
                 {photos.map((photo) => (
                   <li key={photo.id} className="group relative">
+                    {photoUrl(photo.file_path) ? (
                     <a
                       href={photoUrl(photo.file_path)}
                       target="_blank"
@@ -1199,6 +1191,9 @@ export default function MachineDetailView({
                         className="aspect-[4/3] w-full object-cover transition group-hover:opacity-90"
                       />
                     </a>
+                    ) : (
+                      <div className="aspect-[4/3] w-full rounded-doc border border-doc-border bg-surface-2" aria-hidden="true" />
+                    )}
                     {canManageMachine && (
                     <button
                       type="button"

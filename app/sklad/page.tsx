@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
+import { flushMediaDeletions } from "@/lib/storage/media-deletion";
+import { signMediaUrls } from "@/lib/storage/signed-media";
 import PlanLimitNotice from "@/app/components/PlanLimitNotice";
 import { usePlanUsage } from "@/hooks/use-plan-usage";
 import {
@@ -160,13 +162,6 @@ export default function SkladPage() {
   useEffect(() => {
     checkUser();
   }, []);
-function inventoryPhotoUrl(path: string) {
-  const { data } = supabase.storage
-    .from("inventory-photos")
-    .getPublicUrl(path);
-
-  return data.publicUrl;
-}
   async function checkUser() {
     const {
       data: { session },
@@ -225,6 +220,15 @@ function inventoryPhotoUrl(path: string) {
       photosData = photos || [];
     }
 
+    const firstPhotos = (data || [])
+      .map((row) => photosData.find((photo) => photo.inventory_item_id === row.id))
+      .filter((photo): photo is { inventory_item_id: string; file_path: string } => Boolean(photo));
+    // Súkromný bucket: jedna dávka podpísaných URL (lib/storage/signed-media.ts).
+    const signedPhotos = await signMediaUrls(
+      "inventory-photos",
+      firstPhotos.map((photo) => photo.file_path)
+    );
+
     const itemsWithPhotos = (data || []).map((row) => {
       const firstPhoto = photosData.find(
         (photo) => photo.inventory_item_id === row.id
@@ -232,7 +236,7 @@ function inventoryPhotoUrl(path: string) {
 
       return {
         ...row,
-        first_photo_url: firstPhoto ? inventoryPhotoUrl(firstPhoto.file_path) : null,
+        first_photo_url: firstPhoto ? signedPhotos[firstPhoto.file_path] ?? null : null,
       };
     });
 
@@ -467,6 +471,12 @@ function inventoryPhotoUrl(path: string) {
   if (deleteError) {
     alert(t("inventory.errors.deleteFailedPrefix", { message: deleteError.message }));
     return;
+  }
+
+  // Súbory sme zmazali ešte pri existujúcich záznamoch; zmazanie záznamov ich
+  // zapísalo do fronty — sweep ich overí v úložisku a uzavrie.
+  if (photoPaths.length > 0) {
+    await flushMediaDeletions(supabase);
   }
 
   await Promise.all([loadItems(companyId), refreshPlanUsage()]);

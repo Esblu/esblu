@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
+import { useSignedMediaUrls } from "@/lib/storage/signed-media";
 import BackLink from "@/app/components/BackLink";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import { formatDate, formatNumber } from "@/lib/i18n/format";
@@ -40,6 +41,8 @@ export default function InventoryItemDetailView({ entityId }: { entityId: string
   const { t, locale } = useLocale();
   const [item, setItem] = useState<InventoryItemRow | null>(null);
   const [photos, setPhotos] = useState<InventoryPhoto[]>([]);
+  // Súkromný bucket: podpísané URL (lib/storage/signed-media.ts).
+  const photoUrls = useSignedMediaUrls("inventory-photos", photos.map((photo) => photo.file_path));
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
 
@@ -80,7 +83,7 @@ export default function InventoryItemDetailView({ entityId }: { entityId: string
   }
 
   function photoUrl(path: string) {
-    return supabase.storage.from("inventory-photos").getPublicUrl(path).data.publicUrl;
+    return photoUrls[path] ?? "";
   }
 
   if (loading) {
@@ -199,6 +202,7 @@ export default function InventoryItemDetailView({ entityId }: { entityId: string
             <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
               {photos.map((photo) => (
                 <li key={photo.id}>
+                  {photoUrl(photo.file_path) ? (
                   <a
                     href={photoUrl(photo.file_path)}
                     target="_blank"
@@ -212,6 +216,9 @@ export default function InventoryItemDetailView({ entityId }: { entityId: string
                       className="aspect-[4/3] w-full object-cover"
                     />
                   </a>
+                  ) : (
+                    <div className="aspect-[4/3] w-full rounded-doc border border-doc-border bg-surface-2" aria-hidden="true" />
+                  )}
                 </li>
               ))}
             </ul>

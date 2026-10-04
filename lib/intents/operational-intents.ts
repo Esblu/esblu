@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { flushMediaDeletions } from "@/lib/storage/media-deletion";
 import type { Locale } from "@/lib/i18n/locales";
 import { translate } from "@/lib/i18n/translate";
 import { normalizeSpz } from "@/lib/normalize-spz";
@@ -690,6 +691,7 @@ export async function executeOperationalAction(
       }
       const { data, error } = await db.from("inventory_items").delete().eq("id", itemId).select("id");
       if (error || (data ?? []).length !== 1) return fail();
+      if (paths.length > 0) await flushMediaDeletions(db);
       return actionResult(true, t(locale, "assistant.inventory.deleted", { name: str(args.name) ?? "" }));
     }
 
@@ -744,7 +746,8 @@ export async function executeOperationalAction(
       }
       if (error || (data ?? []).length !== 1) return fail();
       await db.from("machine_photos").delete().eq("machine_id", machineId);
-      if (paths.length > 0) await db.storage.from("machine-photos").remove(paths);
+      // Súbory sú vo fronte mazania (trigger) — dokončiť; pri zlyhaní ostávajú evidované.
+      if (paths.length > 0) await flushMediaDeletions(db);
       return actionResult(true, t(locale, "assistant.machine.deleted", { name: str(args.name) ?? "" }));
     }
 
@@ -774,7 +777,8 @@ export async function executeOperationalAction(
         await db.from("documents").update({ archived_from_inbox_at: null }).in("id", docIds);
       }
       const paths = ((photos ?? []) as { storage_path: string | null }[]).map((p) => p.storage_path).filter((p): p is string => Boolean(p));
-      if (paths.length > 0) await db.storage.from("vehicle-photos").remove(paths);
+      // Súbory sú po kaskáde vo fronte mazania (trigger) — dokončiť.
+      if (paths.length > 0) await flushMediaDeletions(db);
       return actionResult(true, t(locale, "assistant.vehicle.deleted", { name: str(args.label) ?? "" }));
     }
   }

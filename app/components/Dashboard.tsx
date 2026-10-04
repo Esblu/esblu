@@ -5,6 +5,8 @@ import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import { flushMediaDeletions } from "@/lib/storage/media-deletion";
+import { signMediaUrl } from "@/lib/storage/signed-media";
 import {
   canOperate,
   getCompanyProfile,
@@ -213,6 +215,10 @@ export default function Dashboard() {
   // company_billing_profile riadok, takže RPC vždy vráti profil (aj keď s
   // prázdnymi poľami) a settings fallback už nie je potrebný.
   async function loadCompanyProfile() {
+    // Dokončenie prípadných nedokončených mazaní súborov firmy (fronta,
+    // lib/storage/media-deletion.ts). Bez prístupu server nič nevráti.
+    void flushMediaDeletions(supabase).catch(() => undefined);
+
     const profile = await getCompanyProfile();
 
     if (profile?.company_name) {
@@ -220,11 +226,8 @@ export default function Dashboard() {
     }
 
     if (profile?.logo_path) {
-      const { data: logoData } = supabase.storage
-        .from("company-logos")
-        .getPublicUrl(profile.logo_path);
-
-      setCompanyLogoUrl(logoData.publicUrl);
+      // Súkromný bucket: krátkodobá podpísaná URL (lib/storage/signed-media.ts).
+      setCompanyLogoUrl(await signMediaUrl("company-logos", profile.logo_path));
     } else {
       setCompanyLogoUrl("");
     }

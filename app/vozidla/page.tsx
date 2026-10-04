@@ -3,6 +3,8 @@
 import { idempotencyKeyFor } from "@/lib/idempotency-key";
 import { useRef, useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
+import { flushMediaDeletions } from "@/lib/storage/media-deletion";
+import { signMediaUrls } from "@/lib/storage/signed-media";
 import PlanLimitNotice from "@/app/components/PlanLimitNotice";
 import { usePlanUsage } from "@/hooks/use-plan-usage";
 import { isPlanLimitReachedError } from "@/lib/plan-limits";
@@ -338,13 +340,17 @@ export default function VozidlaPage() {
         .eq("company_id", currentCompanyId)
         .order("created_at", { ascending: false });
 
-      const map: Record<string, string> = {};
+      const firstPathByVehicle: Record<string, string> = {};
       for (const photo of (photos as { vehicle_id: string; storage_path: string }[]) || []) {
-        if (!map[photo.vehicle_id]) {
-          map[photo.vehicle_id] = supabase.storage
-            .from("vehicle-photos")
-            .getPublicUrl(photo.storage_path).data.publicUrl;
+        if (!firstPathByVehicle[photo.vehicle_id]) {
+          firstPathByVehicle[photo.vehicle_id] = photo.storage_path;
         }
+      }
+      // Súkromný bucket: jedna dávka podpísaných URL (lib/storage/signed-media.ts).
+      const signed = await signMediaUrls("vehicle-photos", Object.values(firstPathByVehicle));
+      const map: Record<string, string> = {};
+      for (const [vehicleId, path] of Object.entries(firstPathByVehicle)) {
+        if (signed[path]) map[vehicleId] = signed[path];
       }
       setPhotosByVehicle(map);
     } else {
@@ -1182,20 +1188,13 @@ export default function VozidlaPage() {
       }
     }
 
-    const paths = (photosToClean || [])
-      .map((p) => p.storage_path)
-      .filter((p): p is string => Boolean(p));
-
-    if (paths.length > 0) {
-      const { error: storageError } = await supabase.storage
-        .from("vehicle-photos")
-        .remove(paths);
-
-      if (storageError) {
-        console.error(
-          "Vozidlo bolo vymazané, ale fotografie sa nepodarilo odstrániť zo Storage:",
-          storageError
-        );
+    // Fotky vozidla sa pri kaskádovom zmazaní záznamov zapísali do fronty
+    // mazania (trigger) — dokončíme ich zmazanie v úložisku; pri zlyhaní
+    // ostávajú evidované a zopakujú sa (lib/storage/media-deletion.ts).
+    if ((photosToClean || []).length > 0) {
+      const cleanup = await flushMediaDeletions(supabase);
+      if (cleanup.remaining !== 0) {
+        console.error("Vozidlo bolo vymazané, fotografie čakajú na dokončenie mazania v úložisku.");
       }
     }
 

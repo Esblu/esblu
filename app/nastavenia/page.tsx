@@ -3,6 +3,8 @@
 import { ChangeEvent, useEffect, useState } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
+import { flushMediaDeletions } from "@/lib/storage/media-deletion";
+import { signMediaUrl } from "@/lib/storage/signed-media";
 import BackLink from "@/app/components/BackLink";
 import {
   createCompanyInvite,
@@ -346,16 +348,14 @@ export default function NastaveniaPage() {
     }
   }
 
-  function getLogoPublicUrl(path: string) {
+  // Súkromný bucket company-logos: krátkodobá podpísaná URL. `force` po
+  // nahratí nového loga obíde cache (lib/storage/signed-media.ts).
+  async function getLogoSignedUrl(path: string, force = false) {
     if (!path) {
       return "";
     }
 
-    const { data } = supabase.storage
-      .from("company-logos")
-      .getPublicUrl(path);
-
-    return data.publicUrl;
+    return signMediaUrl("company-logos", path, { force });
   }
 
   async function checkUser() {
@@ -394,7 +394,7 @@ export default function NastaveniaPage() {
 
       const savedLogoPath = profile?.logo_path || "";
       setLogoPath(savedLogoPath);
-      setLogoUrl(savedLogoPath ? getLogoPublicUrl(savedLogoPath) : "");
+      setLogoUrl(savedLogoPath ? await getLogoSignedUrl(savedLogoPath) : "");
     } catch (error) {
       console.error("Načítanie firemného profilu zlyhalo:", error);
     }
@@ -410,7 +410,7 @@ export default function NastaveniaPage() {
       const profile = await getCompanyProfile();
       setBrandingOnlyName(profile?.company_name || "");
       setBrandingOnlyLogoUrl(
-        profile?.logo_path ? getLogoPublicUrl(profile.logo_path) : ""
+        profile?.logo_path ? await getLogoSignedUrl(profile.logo_path) : ""
       );
     } catch (error) {
       console.error("Načítanie firemného brandingu zlyhalo:", error);
@@ -584,24 +584,18 @@ export default function NastaveniaPage() {
       await saveLogoPathToDatabase(uploadedPath);
 
       setLogoPath(uploadedPath);
-      setLogoUrl(
-        getLogoPublicUrl(uploadedPath) + `?v=${Date.now()}`
-      );
+      setLogoUrl(await getLogoSignedUrl(uploadedPath, true));
 
       if (
         previousLogoPath &&
         previousLogoPath !== uploadedPath
       ) {
-        const { error: deleteOldLogoError } =
-          await supabase.storage
-            .from("company-logos")
-            .remove([previousLogoPath]);
+        // Staré logo je po zmene logo_path vo fronte mazania (trigger);
+        // pri zlyhaní ostáva evidované a zopakuje sa.
+        const cleanup = await flushMediaDeletions(supabase);
 
-        if (deleteOldLogoError) {
-          console.error(
-            "Staré logo sa nepodarilo vymazať:",
-            deleteOldLogoError
-          );
+        if (cleanup.remaining !== 0) {
+          console.error("Staré logo čaká na dokončenie mazania v úložisku.");
         }
       }
 
@@ -687,6 +681,9 @@ export default function NastaveniaPage() {
 
     try {
       await saveLogoPathToDatabaseWithRetry(null);
+      // Logo bolo zmazané ešte pri existujúcom zázname; vynulovanie cesty
+      // ho zapísalo do fronty — sweep to overí a uzavrie.
+      await flushMediaDeletions(supabase);
 
       setLogoPath("");
       setLogoUrl("");

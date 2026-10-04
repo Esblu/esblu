@@ -3,6 +3,8 @@
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import { flushMediaDeletions } from "@/lib/storage/media-deletion";
+import { useSignedMediaUrls } from "@/lib/storage/signed-media";
 import { openExternalUrl } from "@/lib/file-actions";
 import BackLink from "@/app/components/BackLink";
 import {
@@ -223,6 +225,8 @@ export default function VehicleDetailView({
   const [userId, setUserId] = useState("");
   const [companyId, setCompanyId] = useState("");
   const [photos, setPhotos] = useState<any[]>([]);
+  // Súkromný bucket: podpísané URL (lib/storage/signed-media.ts).
+  const photoUrls = useSignedMediaUrls("vehicle-photos", photos.map((photo) => photo.storage_path));
   const [isUploadingPhotos, setIsUploadingPhotos] = useState(false);
   const [deletingPhotoId, setDeletingPhotoId] = useState<string | null>(null);
   const [tab, setTab] = useState<VehicleTab>("overview");
@@ -517,8 +521,7 @@ export default function VehicleDetailView({
   }
 
   function photoUrl(path: string) {
-    const { data } = supabase.storage.from("vehicle-photos").getPublicUrl(path);
-    return data.publicUrl;
+    return photoUrls[path] ?? "";
   }
 
   async function uploadVehiclePhotos(
@@ -628,20 +631,13 @@ export default function VehicleDetailView({
         current && String(current.id) === photoId ? null : current
       );
 
-      const deletedPath = deletedPhotos[0].storage_path;
-
-      if (deletedPath) {
-        const { error: storageError } = await supabase.storage
-          .from("vehicle-photos")
-          .remove([deletedPath]);
-
-        if (storageError) {
-          console.error(
-            "Databázový záznam fotografie bol vymazaný, ale Storage cleanup zlyhal:",
-            storageError
-          );
-          void notify({ message: t("vehicles.errors.photoStorageDeleteFailed") });
-        }
+      // Súbor je už vo fronte mazania (trigger pri DELETE záznamu) — zmažeme
+      // ho ako owner/admin, aj keď ho nahral iný člen. Ak Storage zlyhá,
+      // položka ostáva vo fronte a zopakuje sa (lib/storage/media-deletion.ts).
+      const cleanup = await flushMediaDeletions(supabase);
+      if (cleanup.remaining !== 0) {
+        console.error("Fotografia bola vymazaná, súbor čaká na dokončenie mazania v úložisku.");
+        void notify({ message: t("vehicles.errors.photoStorageDeleteFailed") });
       }
     } catch (deleteError: unknown) {
       const message =
@@ -959,7 +955,7 @@ export default function VehicleDetailView({
     { key: "photos", label: t("vehicles.gallery.title"), count: photos.length },
   ];
 
-  const coverPhoto = photos[0] ? photoUrl(photos[0].storage_path) : null;
+  const coverPhoto = photos[0] ? photoUrl(photos[0].storage_path) || null : null;
 
   function inspectionMetricTone(state: { severity: string | null; ok: boolean }) {
     if (state.severity === "overdue") return "critical" as const;
@@ -1446,7 +1442,7 @@ export default function VehicleDetailView({
         ) : (
           <div className="mt-4">
             <PhotoGrid
-              photos={photos.map((photo) => ({
+              photos={photos.filter((photo) => photoUrl(photo.storage_path)).map((photo) => ({
                 id: String(photo.id),
                 url: photoUrl(photo.storage_path),
                 alt: t("vehicles.gallery.photoAlt"),
@@ -1674,7 +1670,7 @@ export default function VehicleDetailView({
         >
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
-            src={photoUrl(lightboxPhoto.storage_path)}
+            src={photoUrl(lightboxPhoto.storage_path) || undefined}
             alt={t("vehicles.gallery.photoLightboxAlt")}
             className="max-h-[70vh] w-full rounded-doc object-contain"
           />
