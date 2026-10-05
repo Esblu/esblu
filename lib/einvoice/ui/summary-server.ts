@@ -61,7 +61,7 @@ function providerConfigured(env: Record<string, string | undefined>): boolean {
   }
 }
 
-async function loadAccess(db: SupabaseClient, env: Record<string, string | undefined>): Promise<{ financeView: boolean; access: EinvoiceAccess } | null> {
+export async function loadAccess(db: SupabaseClient, env: Record<string, string | undefined>): Promise<{ financeView: boolean; access: EinvoiceAccess } | null> {
   const [view, manage] = await Promise.all([db.rpc("esblu_my_finance_view"), db.rpc("esblu_my_finance_manage")]);
   if (view.error || manage.error) return null;
   const entitlements = await getCompanyEntitlements(db);

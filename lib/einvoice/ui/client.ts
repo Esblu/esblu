@@ -75,3 +75,15 @@ export async function downloadEinvoiceDocument(path: string, fileName: string, l
     return false;
   }
 }
+
+/**
+ * POST /api/einvoice/reception/enroll — aktivácia príjmu FS overovacím kódom.
+ * Telo presne { verification_code, confirm_enroll: true }. Kód sa nikde neukladá
+ * (ani v klientovi — volajúci ho po odoslaní vymaže z formulára).
+ */
+export function enrollEinvoiceReception(verificationCode: string, locale: Locale) {
+  return call<{ code: string; reception?: unknown }>("/api/einvoice/reception/enroll", locale, {
+    method: "POST",
+    body: { verification_code: verificationCode, confirm_enroll: true },
+  });
+}

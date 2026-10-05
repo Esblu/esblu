@@ -49,6 +49,7 @@ import { PushNotificationSettings } from "@/app/components/push/PushNotification
 import { disablePushOnThisDevice } from "@/lib/push/client";
 import { navigateHard } from "@/lib/app-navigation";
 import { confirmAction } from "@/app/components/ui/AppDialog";
+import EinvoiceReceptionPanel from "@/app/components/einvoice/EinvoiceReceptionPanel";
 
 /**
  * Role, ktoré sa dajú pozvať. Zrkadlí DB allowlist v
@@ -1008,6 +1009,9 @@ export default function NastaveniaPage() {
                 )}
               </div>
             </div>
+
+            {/* Stav príjmu E-Faktúry + aktivácia FS kódom — server rozhoduje (finance.view / finance.manage). */}
+            {financeView && <EinvoiceReceptionPanel />}
           </div>
 
           <div className="mt-6">
