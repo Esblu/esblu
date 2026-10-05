@@ -165,7 +165,10 @@ await check("DB: enroll failed → failed, neeligible; enrolled → active + par
   assert.equal(o.peppol_eligible, true);
   assert.equal(o.reception_error_code, null);
   await applyEnroll("org-a-1", "failed", null, "VERIFICATION_TOKEN_INVALID");
-  assert.equal((await org(CA)).reception_status, "active");
+  o = await org(CA);
+  assert.equal(o.reception_status, "active");
+  // Staging E2E nález (20261005110000): aktívny príjem nedostane chybový kód neplatného FS kódu.
+  assert.equal(o.reception_error_code, null);
 });
 await check("DB: send_only → send_only, odosielanie povolené, held_by uložené, kód PARTICIPANT_HELD_ELSEWHERE", async () => {
   await upsert(CB, "org-b-1");
@@ -271,6 +274,18 @@ await check("enrollCompany: 503 sa NEopakuje automaticky a stav sa nemení; toke
   assert.equal((await org(CC)).reception_status, before);
   const dump = JSON.stringify((await h.sql("select * from public.einvoice_organizations")).rows);
   assert.ok(!dump.includes("abcdef0123"));
+});
+await check("enrollCompany: neplatný FS kód pri aktívnom príjme → active, view bez chybového kódu (staging E2E nález)", async () => {
+  const p = new EfakturaSkProvider({ apiKey: KEY, environment: "sandbox", fetchImpl: async () => json(400, { error: { code: "VALIDATION_ERROR", message: "bad" } }) });
+  assert.equal((await org(CA)).reception_status, "active");
+  const r = await enrollCompany({ store: h.onboarding, provider: p, environment: "sandbox" }, CA, "000000000000dead");
+  assert.ok(!r.ok);
+  if (r.ok) return;
+  assert.equal(r.code, "EINVOICE_ENROLL_TOKEN_INVALID");
+  assert.equal(r.reception?.state, "active");
+  assert.equal(r.reception?.receivingActive, true);
+  assert.equal(r.reception?.errorCode, null);
+  assert.equal((await org(CA)).reception_error_code, null);
 });
 
 // --- regresia úniku tajomstiev (statická) ----------------------------------------------

@@ -48,12 +48,35 @@ SAPI-SK client ID/secret Esblu nepoužíva (Agent API). Nepatria do repo ani do 
 ## 5. Webhooky
 
 - Endpoint `POST /api/einvoice/webhook` (HMAC `t=…,v1=…`, okno 300 s, konštantný čas, dedupe `X-Webhook-Id` + SHA-256 tela, iné telo pod rovnakým ID = 409, telo sa neukladá ani neloguje).
-- Reálne doručenie z portálu vyžaduje verejnú HTTPS URL s E-Faktúra migráciami v databáze → preview/staging deploy + staging DB. **Nespustené** — vyžaduje samostatný súhlas.
+- Endpoint na preview (`esblu-git-einvoice-port-esblu.vercel.app/api/einvoice/webhook`) beží proti staging DB. Podpis, okno, duplicita, konflikt tela, rotácia, neznáma org, cudzí tenant a limit veľkosti overené cez HTTP (5. 10. 2026). Registrácia partner endpointu v portáli vyžaduje prihlásenú session portálu (`POST /v1/partner/webhooks`, nie API kľúč); URL musí niesť `x-vercel-protection-bypass` (Vercel Authentication).
 - Kým webhook nie je registrovaný, udalosti sa overujú cez partnerský feed `GET /v1/agent/events` (telo = presne telo webhooku).
 
 ## 6. Otvorené
 
-- Migrácia `20261005100000_einvoice_partner_onboarding.sql` je iba lokálna (neaplikovaná nikde).
+- Migrácie `20261005100000_einvoice_partner_onboarding.sql` a `20261005110000_einvoice_enroll_error_code_active.sql` (oprava z E2E: neplatný FS kód pri aktívnom príjme už nezapíše chybový kód) sú aplikované IBA na staging `esblu-test` (5. 10. 2026). Produkcia: neaplikované.
 - UI pre zadanie FS overovacieho kódu a zobrazenie stavu príjmu ešte nie je (serverová logika `enrollCompany` / `receptionView` pripravená).
+
+## 7. Staging E2E (Vercel Preview × esblu-test × partner sandbox)
+
+Prostredie (bez hodnôt):
+
+| Časť | Stav |
+| --- | --- |
+| Vercel Preview | vetva `einvoice-port`, alias `esblu-git-einvoice-port-esblu.vercel.app`, chránené Vercel Authentication |
+| Branch env (Preview, iba `einvoice-port`) | `NEXT_PUBLIC_SUPABASE_URL/ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` (staging), `CRON_SECRET`, `ESBLU_ACTION_CONFIRMATION_SECRET` (nové staging), `ESBLU_EINVOICE_PROVIDER/ENVIRONMENT`, `ESBLU_EFAKTURA_API_KEY` (partner `efk_pk_test_`), `ESBLU_EFAKTURA_WEBHOOK_SECRETS`, `ESBLU_STAGING_E2E_ENABLED/SECRET` |
+| Protection Bypass for Automation | zapnuté (projekt), hodnota mimo repa; používa ho driver a webhook URL v portáli |
+| Lokálne hodnoty | iba mimo repa (`Documents\esblu-l3-staging.env`, `Documents\esblu-einvoice-staging-e2e.env`) |
+
+Driver `POST /api/einvoice/staging-e2e` (`lib/einvoice/staging-e2e/guard.ts`): mimo preview vetvy
+`einvoice-port` so staging DB, sandbox kľúčom a zapnutým prepínačom vracia 404. Akcie: `status`,
+`ensure-users`, `provision`, `enroll` (iba sandbox kódy `ok` / `invalid` / `sendOnly`), `reception`,
+`feed`, `feed-process` (iba udalosti firiem A–D), `outbound` (skutočná route s JWT syntetického ownera),
+`isolation` (RLS matica cez user JWT). Seed / cleanup: `scripts/einvoice-staging-e2e-seed.sql`,
+`scripts/einvoice-staging-e2e-cleanup.sql`.
+
+Rollback stagingu: `supabase/rollback/20261005100000_einvoice_partner_onboarding_rollback.sql`
+(ručne v SQL editore stagingu); legacy L3 organizácia (starý sandbox účet) bola vyradená z pollingu
+`reception_status = 'deactivated'` — vrátenie: `reception_status = null`. Vypnutie drivera:
+`ESBLU_STAGING_E2E_ENABLED` ≠ `true` (redeploy) alebo zmazanie branch env.
 - Kurzor feedu sa zatiaľ neukladá v DB (cron fallback na feed je ďalší krok).
 - Otázka na eFaktura.sk: čo presne znamená „Peppol kredit 0" v portáli.

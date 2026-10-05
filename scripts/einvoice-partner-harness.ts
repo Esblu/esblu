@@ -55,6 +55,7 @@ export const EINVOICE_MIGRATIONS = [
   "20261002150000_einvoice_rollout_gate.sql",
   "20261003100000_einvoice_inbound_draft_totals.sql",
   "20261005100000_einvoice_partner_onboarding.sql",
+  "20261005110000_einvoice_enroll_error_code_active.sql",
 ];
 
 async function loadPglite(): Promise<Db> {

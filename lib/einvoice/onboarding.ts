@@ -188,6 +188,7 @@ export async function enrollCompany(deps: OnboardingDeps, companyId: string, ver
     const retryable = error instanceof EinvoiceProviderError && error.retryable;
     // Iba definitívne zamietnutie sa zapisuje (neplatný kód / konflikt); sieť a 5xx stav nemenia.
     if (code === "EINVOICE_ENROLL_TOKEN_INVALID" || code === "EINVOICE_ENROLL_CONFLICT") {
+      const errorCode = code === "EINVOICE_ENROLL_TOKEN_INVALID" ? "VERIFICATION_TOKEN_INVALID" : "ENROLL_CONFLICT";
       const applied = await deps.store.applyEnroll({
         provider: deps.provider.name,
         environment: deps.environment,
@@ -195,9 +196,16 @@ export async function enrollCompany(deps: OnboardingDeps, companyId: string, ver
         outcome: "failed",
         participantId: null,
         heldBy: null,
-        errorCode: code === "EINVOICE_ENROLL_TOKEN_INVALID" ? "VERIFICATION_TOKEN_INVALID" : "ENROLL_CONFLICT",
+        errorCode,
       });
-      return { ok: false, code, retryable: false, reception: receptionView({ ...org, receptionStatus: applied.receptionStatus as ReceptionStatus, peppolEligible: applied.peppolEligible }) };
+      // Aktívny príjem ostáva aktívny a bez chybového kódu (DB pravidlo 20261005110000).
+      const receptionErrorCode = applied.receptionStatus === "active" ? org.receptionErrorCode : errorCode;
+      return {
+        ok: false,
+        code,
+        retryable: false,
+        reception: receptionView({ ...org, receptionStatus: applied.receptionStatus as ReceptionStatus, peppolEligible: applied.peppolEligible, receptionErrorCode }),
+      };
     }
     return { ok: false, code, retryable, reception: receptionView(org) };
   }
