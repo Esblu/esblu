@@ -23,6 +23,18 @@ async function authHeaders(locale: Locale): Promise<Record<string, string> | nul
 }
 
 async function call<T>(path: string, locale: Locale, init: { method: "GET" | "POST"; body?: unknown }): Promise<ApiResult<T>> {
+  const first = await callOnce<T>(path, locale, init);
+  // Expirovaný access token (server overí JWT skôr, než čokoľvek spracuje): jeden refresh
+  // session a jeden nový pokus. Ak aj potom 401, volajúci dostane 401 (relácia skončila) —
+  // nič sa nemaskuje ako „skúste znova“.
+  if (first.status === 401 && (first.code === "SESSION_EXPIRED" || first.code === "UNAUTHENTICATED")) {
+    const { data, error } = await supabase.auth.refreshSession();
+    if (!error && data.session) return callOnce<T>(path, locale, init);
+  }
+  return first;
+}
+
+async function callOnce<T>(path: string, locale: Locale, init: { method: "GET" | "POST"; body?: unknown }): Promise<ApiResult<T>> {
   const headers = await authHeaders(locale);
   if (!headers) return { status: 401, body: null, code: "UNAUTHENTICATED" };
   try {

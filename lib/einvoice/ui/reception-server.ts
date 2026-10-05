@@ -3,6 +3,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { enrollCompany, provisionCompany, receptionView, type OnboardingDeps, type OrganizationState, type ReceptionStatus, type ReceptionView } from "../onboarding.ts";
 import type { EinvoiceAccess } from "./types.ts";
+import { accessFailure, type AccessResult } from "./summary-server.ts";
 
 // =============================================================================
 // E-Faktúra UI — stav príjmu a aktivácia príjmu FS overovacím kódom. SERVER-ONLY.
@@ -29,7 +30,8 @@ export type ReceptionDto = {
 export type ReceptionDeps = {
   /** user-scoped klient (RLS) */
   db: SupabaseClient;
-  access: (db: SupabaseClient) => Promise<{ financeView: boolean; access: EinvoiceAccess } | null>;
+  /** Klasifikovaný prístup (401 / 403 / 503 sa nikdy nezamieňajú). */
+  access: (db: SupabaseClient) => Promise<AccessResult>;
   environment: "sandbox" | "live" | null;
 };
 
@@ -53,7 +55,10 @@ async function readOrganization(db: SupabaseClient, environment: "sandbox" | "li
 
 export async function loadReception(deps: ReceptionDeps): Promise<Result<ReceptionDto>> {
   const acc = await deps.access(deps.db);
-  if (!acc) return { status: 500, body: { code: "ACCESS_CHECK_FAILED" } };
+  if (!acc.ok) {
+    const f = accessFailure(acc.kind);
+    return { status: f.status, body: { code: f.code } };
+  }
   if (!acc.financeView) return { status: 403, body: { code: "FORBIDDEN" } };
   let reception = receptionView(null);
   if (deps.environment) {
@@ -87,7 +92,10 @@ export async function enrollReception(deps: EnrollDeps, rawBody: unknown): Promi
   if (!parsed.ok) return { status: 400, body: { code: parsed.code } };
 
   const acc = await deps.access(deps.db);
-  if (!acc) return { status: 500, body: { code: "ACCESS_CHECK_FAILED" } };
+  if (!acc.ok) {
+    const f = accessFailure(acc.kind);
+    return { status: f.status, body: { code: f.code } };
+  }
   if (!acc.financeView || !acc.access.financeManage) return { status: 403, body: { code: "FORBIDDEN" } };
   if (!acc.access.entitlementActive) return { status: 403, body: { code: "ENTITLEMENT_REQUIRED" } };
   if (!acc.access.providerConfigured || !deps.environment) return { status: 503, body: { code: "NOT_CONFIGURED" } };

@@ -2568,6 +2568,9 @@ const en = {
     },
     einvoice: {
       reception: {
+        sessionExpired: "Your session has expired. Please sign in again.",
+        forbidden: "You are not allowed to view the e-invoicing status.",
+        temporary: "Reception status is temporarily unavailable. Please try again shortly.",
         title: "E-invoice reception (Peppol)",
         loading: "Loading reception status…",
         loadFailed: "Could not load reception status.",

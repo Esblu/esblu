@@ -2589,6 +2589,9 @@ const de = {
     },
     einvoice: {
       reception: {
+        sessionExpired: "Ihre Sitzung ist abgelaufen. Bitte melden Sie sich erneut an.",
+        forbidden: "Sie dürfen den E-Rechnungsstatus nicht einsehen.",
+        temporary: "Der Empfangsstatus ist vorübergehend nicht verfügbar. Bitte gleich erneut versuchen.",
         title: "E-Rechnungsempfang (Peppol)",
         loading: "Empfangsstatus wird geladen…",
         loadFailed: "Empfangsstatus konnte nicht geladen werden.",

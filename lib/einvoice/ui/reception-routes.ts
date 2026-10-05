@@ -6,7 +6,7 @@ import { getRequestLocale } from "@/lib/i18n/request-locale";
 import { getEinvoiceProvider } from "../provider/index.ts";
 import { EfakturaSkProvider } from "../provider/efaktura-sk.ts";
 import { createSupabaseOnboardingStore } from "../onboarding-supabase-store.ts";
-import { loadAccess } from "./summary-server.ts";
+import { loadAccessResult } from "./summary-server.ts";
 import { enrollReception, loadReception } from "./reception-server.ts";
 
 // =============================================================================
@@ -38,7 +38,7 @@ function serverEnvironment(): "sandbox" | "live" | null {
 export async function handleReceptionGet(req: Request): Promise<Response> {
   const token = await authToken(req);
   if (!token) return json(401, { code: "UNAUTHENTICATED" });
-  const r = await loadReception({ db: getUserScopedSupabaseClient(token), access: (db) => loadAccess(db, process.env), environment: serverEnvironment() });
+  const r = await loadReception({ db: getUserScopedSupabaseClient(token), access: (db) => loadAccessResult(db, process.env), environment: serverEnvironment() });
   return json(r.status, r.body);
 }
 
@@ -54,7 +54,7 @@ export async function handleReceptionEnroll(req: Request): Promise<Response> {
   const r = await enrollReception(
     {
       db: getUserScopedSupabaseClient(token),
-      access: (db) => loadAccess(db, process.env),
+      access: (db) => loadAccessResult(db, process.env),
       environment: serverEnvironment(),
       onboarding: () => {
         let rt = null;

@@ -11,6 +11,8 @@ import { createPartnerHarness } from "./einvoice-partner-harness.ts";
 import { createFakeSandbox } from "./einvoice-partner-fake-sandbox.ts";
 import { EfakturaSkProvider } from "../lib/einvoice/provider/efaktura-sk.ts";
 import { enrollReception, loadReception, parseEnrollBody } from "../lib/einvoice/ui/reception-server.ts";
+import { classifyAccessError, loadAccessFlags, type RpcLike } from "../lib/einvoice/ui/access.ts";
+import { accessFailure, loadAccessResult } from "../lib/einvoice/ui/summary-server.ts";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (p: string) => readFileSync(path.join(ROOT, p), "utf8");
@@ -80,8 +82,8 @@ const fake = createFakeSandbox();
 const provider = new EfakturaSkProvider({ apiKey: "efk_pk_test_" + "r".repeat(24), environment: "sandbox", fetchImpl: (u, i) => fake.fetch(String(u), i ?? {}) });
 const access = (over: Partial<{ entitlementActive: boolean; rolloutEnabled: boolean; providerConfigured: boolean }> = {}) => async (db: SupabaseClient) => {
   const [v, m] = await Promise.all([db.rpc("esblu_my_finance_view"), db.rpc("esblu_my_finance_manage")]);
-  if (v.error || m.error) return null;
-  return { financeView: v.data === true, access: { financeManage: m.data === true, entitlementActive: true, providerConfigured: true, rolloutEnabled: true, ...over } };
+  if (v.error || m.error) return { ok: false as const, kind: "temporary" as const };
+  return { ok: true as const, financeView: v.data === true, access: { financeManage: m.data === true, entitlementActive: true, providerConfigured: true, rolloutEnabled: true, ...over } };
 };
 let providerCalls = 0;
 const deps = (uid: string, over = {}) => ({
@@ -172,7 +174,9 @@ await check("UI: panel bez localStorage/console, input type=password + autocompl
   assert.match(ui, /type="password"/);
   assert.match(ui, /autoComplete="off"/);
   assert.match(ui, /setCode\(""\)/);
-  assert.match(ui, /res\.status === 401 \|\| res\.status === 403\) return \{ state: "hidden" \}/);
+  assert.match(ui, /res\.status === 401\) return \{ state: "sessionExpired" \}/);
+  assert.match(ui, /res\.status === 403\) return \{ state: "forbidden" \}/);
+  assert.doesNotMatch(ui, /state: "hidden"/, "403/401 sa neskrývajú ani nemaskujú ako retry");
   const page = read("app/nastavenia/page.tsx");
   assert.match(page, /\{financeView && <EinvoiceReceptionPanel \/>\}/);
   for (const f of ["app/api/einvoice/reception/route.ts", "app/api/einvoice/reception/enroll/route.ts", "lib/einvoice/ui/reception-routes.ts", "lib/einvoice/ui/reception-server.ts"]) {
@@ -188,6 +192,92 @@ await check("i18n: všetky stavy príjmu majú preklad v sk / en / de", () => {
     const block = d.slice(d.indexOf("reception: {"), d.indexOf("panel: {", d.indexOf("reception: {")));
     for (const s of ["not_configured", "pending", "active", "send_only", "failed", "deactivated", "legacy"]) assert.ok(block.includes(`${s}:`), `${lang} ${s}`);
   }
+});
+
+
+// --- ACCESS_CHECK_FAILED root cause (PGRST303 „JWT issued at future“) ---------------------
+const skew = { code: "PGRST303", message: "JWT issued at future" };
+const expired = { code: "PGRST303", message: "JWT expired" };
+await check("klasifikácia: clock skew ≠ expirovaný JWT ≠ zamietnutie ≠ dočasná chyba", () => {
+  assert.equal(classifyAccessError(skew, 401), "clock_skew");
+  assert.equal(classifyAccessError(expired, 401), "unauthenticated");
+  assert.equal(classifyAccessError({ code: "PGRST301", message: "JWSError" }, 401), "unauthenticated");
+  assert.equal(classifyAccessError({ code: "42501", message: "permission denied" }, 403), "forbidden");
+  assert.equal(classifyAccessError({ code: "57014", message: "canceling statement" }, 500), "temporary");
+  assert.equal(classifyAccessError({ code: "", message: "fetch failed" }, 0), "temporary");
+  assert.equal(classifyAccessError({ code: "P0001", message: "ESBLU_NO_ACTIVE_COMPANY" }, 400), "forbidden");
+  assert.equal(classifyAccessError({ code: "28000", message: "NOT_AUTHENTICATED" }, 400), "unauthenticated");
+});
+function rpcScript(script: Record<string, ({ data: unknown; error: unknown; status?: number } | Error)[]>) {
+  const calls: string[] = [];
+  const rpc: RpcLike = async (fn) => {
+    calls.push(fn);
+    const q = script[fn] ?? [];
+    const next = q.length > 1 ? q.shift()! : q[0] ?? { data: true, error: null };
+    if (next instanceof Error) throw next;
+    return next as { data: unknown; error: { code: string; message: string } | null; status?: number };
+  };
+  return { rpc, calls };
+}
+const ok = (data: unknown) => ({ data, error: null, status: 200 });
+const fail = (error: unknown, status: number) => ({ data: null, error, status });
+const noSleep = async () => undefined;
+await check("cold start / čerstvý JWT: prvý pokus PGRST303 issued-at-future → ohraničené zopakovanie → OK (žiadne 500)", async () => {
+  const { rpc, calls } = rpcScript({ esblu_my_finance_view: [fail(skew, 401), ok(true)], esblu_my_finance_manage: [ok(true)], esblu_get_my_company_entitlements: [ok({})] });
+  const r = await loadAccessFlags(rpc, { rolloutEnvironment: null, sleep: noSleep });
+  assert.ok(r.ok);
+  assert.equal(calls.filter((c) => c === "esblu_my_finance_view").length, 2);
+});
+await check("pretrvávajúci clock skew → temporary (503), max 3 pokusy", async () => {
+  const { rpc, calls } = rpcScript({ esblu_my_finance_view: [fail(skew, 401)] });
+  const r = await loadAccessFlags(rpc, { rolloutEnvironment: null, sleep: noSleep });
+  assert.deepEqual(r, { ok: false, kind: "temporary" });
+  assert.equal(calls.filter((c) => c === "esblu_my_finance_view").length, 3);
+  assert.deepEqual(accessFailure("temporary"), { ok: false, status: 503, code: "TEMPORARILY_UNAVAILABLE" });
+});
+await check("expirovaný JWT → 401 SESSION_EXPIRED bez opakovania (nie retry, nie 500)", async () => {
+  const { rpc, calls } = rpcScript({ esblu_my_finance_manage: [fail(expired, 401)] });
+  const r = await loadAccessFlags(rpc, { rolloutEnvironment: null, sleep: noSleep });
+  assert.deepEqual(r, { ok: false, kind: "unauthenticated" });
+  assert.ok(calls.length <= 3 && calls.filter((c) => c === "esblu_my_finance_manage").length === 1, "bez opakovania");
+  assert.deepEqual(accessFailure("unauthenticated"), { ok: false, status: 401, code: "SESSION_EXPIRED" });
+});
+await check("dočasná DB chyba (aj pri nárokoch) → 503, NIE „E-Faktúra nie je zapnutá“", async () => {
+  const { rpc } = rpcScript({ esblu_get_my_company_entitlements: [fail({ code: "57014", message: "statement timeout" }, 500)] });
+  const r = await loadAccessFlags(rpc, { rolloutEnvironment: null, sleep: noSleep });
+  assert.deepEqual(r, { ok: false, kind: "temporary" });
+});
+await check("chyba rollout RPC: dočasná → 503; zamietnutie → fail-closed (rollout false)", async () => {
+  const t = await loadAccessFlags(rpcScript({ esblu_einvoice_my_rollout: [fail({ code: "08006", message: "connection failure" }, 503)] }).rpc, { rolloutEnvironment: "sandbox", sleep: noSleep });
+  assert.deepEqual(t, { ok: false, kind: "temporary" });
+  const f = await loadAccessFlags(rpcScript({ esblu_einvoice_my_rollout: [fail({ code: "42501", message: "denied" }, 403)] }).rpc, { rolloutEnvironment: "sandbox", sleep: noSleep });
+  assert.ok(f.ok && f.flags.rollout === false);
+});
+await check("DB (RLS): chýbajúci membership a nedostatočné financie → financeView false → 403 (nie 500)", async () => {
+  const NOMEMBER = "32000000-0000-4000-8000-000000000001";
+  await h.exec(`insert into auth.users (id) values ('${NOMEMBER}')`);
+  for (const uid of [NOMEMBER, U.employee, U.admin]) {
+    const acc = await loadAccessResult(h.userDb(uid), {}, noSleep);
+    assert.ok(acc.ok, uid);
+    if (acc.ok) assert.equal(acc.financeView, false, uid);
+    const r = await loadReception({ db: h.userDb(uid), access: (db) => loadAccessResult(db, {}, noSleep), environment: "sandbox" });
+    assert.equal(r.status, 403, uid);
+  }
+  const owner = await loadReception({ db: h.userDb(U.owner), access: (db) => loadAccessResult(db, {}, noSleep), environment: "sandbox" });
+  assert.equal(owner.status, 200);
+});
+await check("route: 401 / 403 / 503 sa prenášajú do odpovede (reception GET aj enroll)", async () => {
+  for (const [kind, status] of [["unauthenticated", 401], ["forbidden", 403], ["temporary", 503]] as const) {
+    const d = { db: h.userDb(U.owner), access: async () => ({ ok: false as const, kind }), environment: "sandbox" as const, onboarding: () => null };
+    assert.equal((await loadReception(d)).status, status);
+    assert.equal((await enrollReception(d, body(CODE_OK))).status, status);
+  }
+});
+await check("klient: 401 → jeden refresh session a jeden nový pokus, potom 401 vráti volajúcemu", () => {
+  const c = read("lib/einvoice/ui/client.ts");
+  assert.match(c, /first\.status === 401/);
+  assert.match(c, /supabase\.auth\.refreshSession\(\)/);
+  assert.equal((c.match(/callOnce<T>\(path, locale, init\)/g) ?? []).length, 2, "najviac jeden opakovaný pokus");
 });
 
 console.log(`\neinvoice-reception: ${passed} passed, ${failures.length} failed`);

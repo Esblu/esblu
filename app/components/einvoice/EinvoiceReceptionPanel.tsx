@@ -18,7 +18,13 @@ type ReceptionDto = {
   environment: "sandbox" | "live" | null;
   reception: { state: ReceptionState; receivingActive: boolean; sendingEnabled: boolean; errorCode: string | null };
 };
-type Load = { state: "loading" } | { state: "hidden" } | { state: "error" } | { state: "ready"; data: ReceptionDto };
+type Load =
+  | { state: "loading" }
+  | { state: "sessionExpired" }
+  | { state: "forbidden" }
+  | { state: "temporary" }
+  | { state: "error" }
+  | { state: "ready"; data: ReceptionDto };
 
 const TONE: Record<ReceptionState, string> = {
   active: "bg-emerald-100 text-emerald-900",
@@ -43,7 +49,10 @@ export default function EinvoiceReceptionPanel() {
   const fetchState = useCallback(async (): Promise<Load> => {
     const res = await getEinvoiceJson<ReceptionDto>("/api/einvoice/reception", h.locale);
     if (res.status === 200 && res.body) return { state: "ready", data: res.body };
-    if (res.status === 401 || res.status === 403) return { state: "hidden" };
+    // Skutočné autorizačné stavy sa zobrazia ako také — nie ako „skúste znova“.
+    if (res.status === 401) return { state: "sessionExpired" };
+    if (res.status === 403) return { state: "forbidden" };
+    if (res.status === 503 || res.status === 0) return { state: "temporary" };
     return { state: "error" };
   }, [h.locale]);
 
@@ -80,9 +89,19 @@ export default function EinvoiceReceptionPanel() {
     }
   }, [code, fetchState, h.locale]);
 
-  if (load.state === "hidden") return null;
   if (load.state === "loading") return <p className="mt-4 text-sm text-secondary" role="status">{tr("invoices.einvoice.reception.loading")}</p>;
-  if (load.state === "error") return <p className="mt-4 text-sm text-secondary" role="alert">{tr("invoices.einvoice.reception.loadFailed")}</p>;
+  if (load.state === "sessionExpired") return <p className="mt-4 text-sm text-red-700" role="alert">{tr("invoices.einvoice.reception.sessionExpired")}</p>;
+  if (load.state === "forbidden") return <p className="mt-4 text-sm text-secondary" role="note">{tr("invoices.einvoice.reception.forbidden")}</p>;
+  if (load.state === "temporary" || load.state === "error") {
+    return (
+      <div className="mt-4 flex flex-wrap items-center gap-3 text-sm" role="alert">
+        <span className="text-secondary">{tr(load.state === "temporary" ? "invoices.einvoice.reception.temporary" : "invoices.einvoice.reception.loadFailed")}</span>
+        <button type="button" className="font-medium text-primary underline underline-offset-2" onClick={() => void fetchState().then(setLoad)}>
+          {tr("invoices.einvoice.panel.reload")}
+        </button>
+      </div>
+    );
+  }
 
   const { access, reception, environment } = load.data;
   const canActivate =

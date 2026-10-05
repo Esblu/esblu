@@ -1,8 +1,8 @@
 import "server-only";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { getCompanyEntitlements } from "@/lib/entitlements-server";
-import { hasEntitlement } from "@/lib/entitlements";
+import { hasEntitlement, parseCompanyEntitlements } from "@/lib/entitlements";
+import { loadAccessFlags } from "./access.ts";
 import { getEinvoiceProvider } from "../provider/index.ts";
 import { loadEinvoiceReadiness } from "../readiness-server.ts";
 import { inboundCategory, outboundCategory } from "../ops/categories.ts";
@@ -27,7 +27,7 @@ import type {
 // surové dôkazy ani UUID iných používateľov.
 // =============================================================================
 
-export type SummaryResult<T> = { ok: true; data: T } | { ok: false; status: 403 | 404 | 500; code: string };
+export type SummaryResult<T> = { ok: true; data: T } | { ok: false; status: 401 | 403 | 404 | 500 | 503; code: string };
 
 const OUTBOUND_COLS =
   "id, attempt, state, updated_at, sent_at, delivered_at, last_error_code, provider_submission_id, next_retry_at, " +
@@ -61,27 +61,47 @@ function providerConfigured(env: Record<string, string | undefined>): boolean {
   }
 }
 
-export async function loadAccess(db: SupabaseClient, env: Record<string, string | undefined>): Promise<{ financeView: boolean; access: EinvoiceAccess } | null> {
-  const [view, manage] = await Promise.all([db.rpc("esblu_my_finance_view"), db.rpc("esblu_my_finance_manage")]);
-  if (view.error || manage.error) return null;
-  const entitlements = await getCompanyEntitlements(db);
+export type AccessResult =
+  | { ok: true; financeView: boolean; access: EinvoiceAccess }
+  | { ok: false; kind: "unauthenticated" | "forbidden" | "temporary" };
+
+/**
+ * Prístup volajúceho (RLS/RPC pod jeho JWT). Chyby sú klasifikované (lib/einvoice/ui/access.ts):
+ * expirovaný JWT → unauthenticated, odmietnutie → forbidden, inak temporary. Clock skew
+ * čerstvého JWT (PGRST303 „issued at future“) sa ohraničene zopakuje.
+ */
+export async function loadAccessResult(db: SupabaseClient, env: Record<string, string | undefined>, sleep?: (ms: number) => Promise<void>): Promise<AccessResult> {
   const configured = providerConfigured(env);
-  // Phase 6: rollout allowlist pre serverové prostredie (fail-closed: chyba = nepovolené).
-  let rolloutEnabled = false;
-  if (configured && view.data === true) {
-    const environment = env.ESBLU_EINVOICE_ENVIRONMENT?.trim();
-    const rollout = await db.rpc("esblu_einvoice_my_rollout", { p_environment: environment });
-    rolloutEnabled = !rollout.error && rollout.data === true;
-  }
+  const res = await loadAccessFlags((fn, args) => db.rpc(fn, args), {
+    rolloutEnvironment: configured ? env.ESBLU_EINVOICE_ENVIRONMENT?.trim() || null : null,
+    sleep,
+  });
+  if (!res.ok) return res;
+  const entitlements = parseCompanyEntitlements(res.flags.entitlements);
   return {
-    financeView: view.data === true,
+    ok: true,
+    financeView: res.flags.financeView,
     access: {
-      financeManage: manage.data === true,
+      financeManage: res.flags.financeManage,
       entitlementActive: hasEntitlement(entitlements, "einvoice"),
       providerConfigured: configured,
-      rolloutEnabled,
+      // Phase 6: rollout allowlist pre serverové prostredie (fail-closed).
+      rolloutEnabled: res.flags.rollout === true,
     },
   };
+}
+
+/** Spätná kompatibilita: null = akákoľvek chyba (nové volania používajú loadAccessResult). */
+export async function loadAccess(db: SupabaseClient, env: Record<string, string | undefined>): Promise<{ financeView: boolean; access: EinvoiceAccess } | null> {
+  const r = await loadAccessResult(db, env);
+  return r.ok ? { financeView: r.financeView, access: r.access } : null;
+}
+
+/** Klasifikovaná chyba prístupu → HTTP (nikdy nemaskuje 401/403 ako dočasnú chybu). */
+export function accessFailure(kind: "unauthenticated" | "forbidden" | "temporary"): { ok: false; status: 401 | 403 | 503; code: string } {
+  if (kind === "unauthenticated") return { ok: false, status: 401, code: "SESSION_EXPIRED" };
+  if (kind === "forbidden") return { ok: false, status: 403, code: "FORBIDDEN" };
+  return { ok: false, status: 503, code: "TEMPORARILY_UNAVAILABLE" };
 }
 
 function toTimeline(rows: EventRow[], requesterId: string, requestedBy: string | null): EinvoiceTimelineItem[] {
@@ -253,8 +273,8 @@ export async function loadInvoiceEinvoiceSummary(
   requesterId: string,
   env: Record<string, string | undefined> = process.env
 ): Promise<SummaryResult<InvoiceEinvoiceSummaryDto>> {
-  const acc = await loadAccess(db, env);
-  if (!acc) return { ok: false, status: 500, code: "QUERY_FAILED" };
+  const acc = await loadAccessResult(db, env);
+  if (!acc.ok) return accessFailure(acc.kind);
   if (!acc.financeView) return { ok: false, status: 403, code: "FORBIDDEN" };
 
   const { data: invoice, error } = await db
@@ -276,8 +296,8 @@ export async function loadInvoiceEinvoiceSummary(
 }
 
 export async function loadInboundList(db: SupabaseClient, env: Record<string, string | undefined> = process.env): Promise<SummaryResult<InboundListDto>> {
-  const acc = await loadAccess(db, env);
-  if (!acc) return { ok: false, status: 500, code: "QUERY_FAILED" };
+  const acc = await loadAccessResult(db, env);
+  if (!acc.ok) return accessFailure(acc.kind);
   if (!acc.financeView) return { ok: false, status: 403, code: "FORBIDDEN" };
   const { data, error } = await db
     .from("einvoice_inbound")
@@ -297,8 +317,8 @@ export async function loadInboundDetail(
   requesterId: string,
   env: Record<string, string | undefined> = process.env
 ): Promise<SummaryResult<InboundDetailDto>> {
-  const acc = await loadAccess(db, env);
-  if (!acc) return { ok: false, status: 500, code: "QUERY_FAILED" };
+  const acc = await loadAccessResult(db, env);
+  if (!acc.ok) return accessFailure(acc.kind);
   if (!acc.financeView) return { ok: false, status: 403, code: "FORBIDDEN" };
   const { data, error } = await db.from("einvoice_inbound").select(INBOUND_COLS).eq("id", inboundId).maybeSingle<InboundRowLite>();
   if (error) return { ok: false, status: 500, code: "QUERY_FAILED" };

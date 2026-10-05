@@ -2597,6 +2597,9 @@ const sk = {
     },
     einvoice: {
       reception: {
+        sessionExpired: "Relácia vypršala. Prihláste sa znova.",
+        forbidden: "Na zobrazenie stavu E-Faktúry nemáte oprávnenie.",
+        temporary: "Stav príjmu je dočasne nedostupný. Skúste to o chvíľu.",
         title: "Príjem e-faktúr (Peppol)",
         loading: "Načítavam stav príjmu…",
         loadFailed: "Stav príjmu sa nepodarilo načítať.",
