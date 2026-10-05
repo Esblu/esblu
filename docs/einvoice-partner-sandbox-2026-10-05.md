@@ -61,7 +61,11 @@ SAPI-SK client ID/secret Esblu nepoužíva (Agent API). Nepatria do repo ani do 
 ## 6. Otvorené
 
 - Migrácie `20261005100000_einvoice_partner_onboarding.sql` a `20261005110000_einvoice_enroll_error_code_active.sql` (oprava z E2E: neplatný FS kód pri aktívnom príjme už nezapíše chybový kód) sú aplikované IBA na staging `esblu-test` (5. 10. 2026). Produkcia: neaplikované.
-- UI pre zadanie FS overovacieho kódu a zobrazenie stavu príjmu ešte nie je (serverová logika `enrollCompany` / `receptionView` pripravená).
+- 6. 10. 2026: UI stavu príjmu + aktivácia FS kódom (`/api/einvoice/reception`, panel v Nastaveniach),
+  kurzor feedu v DB (`/api/cron/einvoice-events`, migrácia `20261006100000`, aplikovaná iba na staging),
+  DIČ automaticky založeného dodávateľa, idempotentná opakovaná `delivered` udalosť (`ALREADY_FINAL`).
+- Právna / účtovná pripravenosť: `docs/einvoice-legal-accounting-readiness-2026-10-06.md`.
+- Bezpečnosť Preview env: `docs/security-vercel-preview-env-audit-2026-10-06.md` (náprava čaká na súhlas).
 
 ## 7. Staging E2E (Vercel Preview × esblu-test × partner sandbox)
 
@@ -86,5 +90,4 @@ Rollback stagingu: `supabase/rollback/20261005100000_einvoice_partner_onboarding
 (ručne v SQL editore stagingu); legacy L3 organizácia (starý sandbox účet) bola vyradená z pollingu
 `reception_status = 'deactivated'` — vrátenie: `reception_status = null`. Vypnutie drivera:
 `ESBLU_STAGING_E2E_ENABLED` ≠ `true` (redeploy) alebo zmazanie branch env.
-- Kurzor feedu sa zatiaľ neukladá v DB (cron fallback na feed je ďalší krok).
 - Otázka na eFaktura.sk: čo presne znamená „Peppol kredit 0" v portáli.
