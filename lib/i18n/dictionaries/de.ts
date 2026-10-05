@@ -2634,6 +2634,9 @@ const de = {
         entitlementRequired: "E-Rechnung ist für dieses Unternehmen nicht aktiviert.",
         notAvailable: "Die Aktivierung ist für dieses Unternehmen noch nicht verfügbar.",
         result: {
+          TOO_MANY_ATTEMPTS: "Zu viele Aktivierungsversuche. Bitte später erneut versuchen.",
+          SESSION_EXPIRED: "Ihre Sitzung ist abgelaufen. Bitte melden Sie sich erneut an.",
+          TEMPORARILY_UNAVAILABLE: "Der Dienst ist vorübergehend nicht verfügbar. Bitte gleich erneut versuchen.",
           ENROLLED: "Der E-Rechnungsempfang ist aktiv.",
           SEND_ONLY: "Versand aktiviert; der Empfang liegt bei einem anderen Anbieter.",
           PENDING: "Registrierung läuft. Der Status wird automatisch aktualisiert.",

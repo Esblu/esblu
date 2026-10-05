@@ -82,9 +82,22 @@ export function parseEnrollBody(raw: unknown): { ok: true; code: string } | { ok
   return { ok: true, code };
 }
 
+/**
+ * Esblu-side limit pokusov o aktiváciu (FS kód) — firma 5/15 min a 20/24 h, používateľ 10/h
+ * (RPC esblu_einvoice_enroll_attempt_begin). Ukladá iba firmu, používateľa, čas a výsledok.
+ */
+export interface EnrollAttemptLimiter {
+  begin(companyId: string, userId: string): Promise<{ allowed: boolean; attemptId: string | null; retryAfterSeconds: number; reason: string | null }>;
+  finish(attemptId: string, outcome: string): Promise<void>;
+}
+
 export type EnrollDeps = ReceptionDeps & {
+  /** Overený používateľ (z JWT) — kvôli limitu pokusov. */
+  userId: string;
   /** Privilegovaná vrstva + poskytovateľ — vytvorí sa až PO overení oprávnení (lenivo). */
   onboarding: () => OnboardingDeps | null;
+  /** Limit pokusov — vytvorí sa lenivo spolu s privilegovanou vrstvou. */
+  limiter: () => EnrollAttemptLimiter | null;
 };
 
 export async function enrollReception(deps: EnrollDeps, rawBody: unknown): Promise<Result<{ code: string; reception: ReceptionView }>> {
@@ -113,7 +126,15 @@ export async function enrollReception(deps: EnrollDeps, rawBody: unknown): Promi
     const prov = await provisionCompany(onboarding, companyId);
     if (!prov.ok) return { status: prov.code.startsWith("BILLING_") || prov.code === "DIC_REQUIRED_FOR_PEPPOL" ? 422 : 502, body: { code: prov.code } };
   }
+  const limiter = deps.limiter();
+  if (!limiter) return { status: 503, body: { code: "NOT_CONFIGURED" } };
+  const gate = await limiter.begin(companyId, deps.userId);
+  if (!gate.allowed || !gate.attemptId) {
+    return { status: 429, body: { code: "TOO_MANY_ATTEMPTS", retry_after_seconds: gate.retryAfterSeconds } as unknown as { code: string } };
+  }
   const res = await enrollCompany(onboarding, companyId, parsed.code);
+  // Výsledok pokusu (iba kód výsledku — nikdy FS kód). Chyba zápisu nesmie zmeniť odpoveď.
+  await limiter.finish(gate.attemptId, res.ok ? (res.status === "enrolled" ? "ENROLLED" : res.status === "send_only" ? "SEND_ONLY" : "PENDING") : res.code).catch(() => undefined);
   if (res.ok) return { status: 200, body: { code: res.status === "enrolled" ? "ENROLLED" : res.status === "send_only" ? "SEND_ONLY" : "PENDING", reception: res.reception } };
   const status = res.code === "EINVOICE_ENROLL_TOKEN_INVALID" || res.code === "EINVOICE_ENROLL_TOKEN_FORMAT" ? 422 : res.code === "EINVOICE_ENROLL_CONFLICT" ? 409 : res.retryable ? 503 : 502;
   const reception = res.reception ?? receptionView(await onboarding.store.organization(companyId, onboarding.environment));

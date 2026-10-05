@@ -2,6 +2,7 @@ import "server-only";
 
 import { DEFAULT_ALERT_THRESHOLDS, evaluateAlerts, sanitizeHealth, type AlertCandidate, type EinvoiceHealth } from "./alerts.ts";
 import type { OpsStore } from "./store.ts";
+import { evaluateEventAlerts, sanitizeEventOps, type EventAlert, type EventOpsSummary } from "./event-ops.ts";
 
 // =============================================================================
 // E-Faktúra — interná údržba: health, alert kandidáti, retencia, konzistencia
@@ -18,6 +19,9 @@ export type MaintenanceReport = {
   alerts: AlertCandidate[];
   retention: { older_than_days: number; webhook_events_deleted: number; rejection_buckets_deleted: number } | null;
   storage: Record<string, number>;
+  /** 20261007100000: udalosti webhook/feed (null = store bez podpory). */
+  events: EventOpsSummary | null;
+  eventAlerts: EventAlert[];
 };
 
 function onlyNumbers(raw: Record<string, unknown>): Record<string, number> {
@@ -29,5 +33,7 @@ export async function runEinvoiceMaintenance(ops: OpsStore, options: { retention
   const alerts = evaluateAlerts(health, DEFAULT_ALERT_THRESHOLDS);
   const retention = options.retention ? await ops.retention(WEBHOOK_RETENTION_DAYS, RETENTION_BATCH) : null;
   const storage = onlyNumbers(await ops.storageConsistency());
-  return { health, alerts, retention, storage };
+  const events = ops.eventOps ? sanitizeEventOps(await ops.eventOps()) : null;
+  const eventAlerts = events ? evaluateEventAlerts(events) : [];
+  return { health, alerts, retention, storage, events, eventAlerts };
 }

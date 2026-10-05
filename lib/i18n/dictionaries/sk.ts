@@ -2642,6 +2642,9 @@ const sk = {
         entitlementRequired: "E-Faktúra nie je pre túto firmu zapnutá.",
         notAvailable: "Aktivácia príjmu zatiaľ nie je pre túto firmu dostupná.",
         result: {
+          TOO_MANY_ATTEMPTS: "Príliš veľa pokusov o aktiváciu. Skúste to znova neskôr.",
+          SESSION_EXPIRED: "Relácia vypršala. Prihláste sa znova.",
+          TEMPORARILY_UNAVAILABLE: "Služba je dočasne nedostupná. Skúste to o chvíľu.",
           ENROLLED: "Príjem e-faktúr je aktívny.",
           SEND_ONLY: "Odosielanie je povolené; príjem drží iný poskytovateľ.",
           PENDING: "Registrácia prebieha. Stav sa aktualizuje automaticky.",

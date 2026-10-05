@@ -2613,6 +2613,9 @@ const en = {
         entitlementRequired: "E-invoicing is not enabled for this company.",
         notAvailable: "Reception activation is not yet available for this company.",
         result: {
+          TOO_MANY_ATTEMPTS: "Too many activation attempts. Please try again later.",
+          SESSION_EXPIRED: "Your session has expired. Please sign in again.",
+          TEMPORARILY_UNAVAILABLE: "The service is temporarily unavailable. Please try again shortly.",
           ENROLLED: "E-invoice reception is active.",
           SEND_ONLY: "Sending is enabled; reception is held by another provider.",
           PENDING: "Registration in progress. The status will update automatically.",

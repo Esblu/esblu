@@ -14,6 +14,7 @@ import { processProviderEvent, type WebhookDeps } from "../lib/einvoice/inbound/
 import { runPartnerFeedSync } from "../lib/einvoice/inbound/feed.ts";
 import type { InboundStore } from "../lib/einvoice/inbound/store.ts";
 import type { PartnerEvent, PartnerEventPage } from "../lib/einvoice/provider/types.ts";
+import { evaluateEventAlerts, sanitizeEventOps } from "../lib/einvoice/ops/event-ops.ts";
 
 let passed = 0;
 const failures: string[] = [];
@@ -263,6 +264,85 @@ await check("feed: zlyhanie zoznamu udalostí → kurzor sa nemení, lease uvoľ
   const c = await h.cursor.claim("efaktura_sk", "sandbox", 60);
   assert.ok(c, "lease uvoľnený");
   await h.cursor.advance("efaktura_sk", "sandbox", c!.lockToken, c!.lastEventId, true);
+});
+
+
+// --- 5) prevádzka udalostí: vyčerpanie, audit, manuálny retry, retencia, monitoring --------
+const svc = <T = Record<string, unknown>>(q: string, p: unknown[] = []) => h.asService(() => h.db.query<T>(q, p)).then((r) => r.rows);
+await check("vyčerpanie: po 5 zlyhaniach exhausted_at + monitoring EVENTS_EXHAUSTED (bez payloadu)", async () => {
+  const [row] = await svc<{ id: string; attempts: number; exhausted_at: string | null; processing_status: string }>("select id, attempts, exhausted_at, processing_status from public.einvoice_webhook_events where delivery_id = 'retry-2'");
+  assert.equal(row.processing_status, "failed");
+  assert.equal(row.attempts, 5);
+  assert.ok(row.exhausted_at, "exhausted_at nastavené");
+  const [ops] = await svc<{ j: unknown }>("select public.esblu_einvoice_event_ops() j");
+  const summary = sanitizeEventOps(ops.j);
+  assert.ok(summary.exhausted_unresolved >= 1);
+  assert.ok(summary.exhausted_by_event["participant.activated"] >= 1);
+  const alerts = evaluateEventAlerts(summary);
+  assert.ok(alerts.some((a) => a.code === "EVENTS_EXHAUSTED" && a.severity === "critical"));
+  const text = JSON.stringify(ops.j);
+  assert.ok(!/retry-2|org-a|9915:|delivery/i.test(text), "súhrn bez ID doručenia, org ani participant ID");
+});
+await check("retencia: vyčerpaná a neuzavretá udalosť sa NEZMAŽE ani po 90+ dňoch; uzavretá áno", async () => {
+  await svc("update public.einvoice_webhook_events set received_at = now() - interval '200 days' where delivery_id = 'retry-2'");
+  await svc("select public.esblu_einvoice_webhook_retention(90, 5000)");
+  assert.equal((await svc("select 1 from public.einvoice_webhook_events where delivery_id = 'retry-2'")).length, 1, "neuzavretá ostáva");
+});
+await check("manuálny requeue (auditovaný) → ďalší pokus toho istého doručenia sa spracuje; nič sa nestratí", async () => {
+  const [row] = await svc<{ id: string }>("select id from public.einvoice_webhook_events where delivery_id = 'retry-2'");
+  const bad = await svc(`select public.esblu_einvoice_event_requeue('${row.id}', 'ops@esblu', 'bad reason!')`).then(() => "", (e) => String(e.message));
+  assert.match(bad, /INVALID_INPUT/);
+  const [r] = await svc<{ j: { source: string } }>(`select public.esblu_einvoice_event_requeue('${row.id}', 'ops@esblu', 'DB_FIXED') j`);
+  assert.equal(r.j.source, "webhook");
+  const deps: WebhookDeps = { inbound: h.inbound, outbound: h.outbound, provider: { name: "efaktura_sk" } as never, environment: "sandbox", secrets: ["x"], nowSeconds: () => 0 };
+  const res = await processProviderEvent(deps, { deliveryId: "retry-2", payload: participantPayload("org-a", "2026-10-06T09:30:00.000Z"), bodySha256: "2".repeat(64) });
+  assert.ok(["PARTICIPANT_UPDATED", "IGNORED"].includes(res.body.code), res.body.code);
+  const [after] = await svc<{ processing_status: string; exhausted_at: string | null }>("select processing_status, exhausted_at from public.einvoice_webhook_events where delivery_id = 'retry-2'");
+  assert.notEqual(after.processing_status, "failed");
+  assert.equal(after.exhausted_at, null);
+  const audit = await svc<{ actor: string; action: string; reason_code: string }>("select actor, action, reason_code from public.einvoice_ops_audit where action = 'event_requeue'");
+  assert.deepEqual(audit.map((a) => [a.actor, a.reason_code]), [["ops@esblu", "DB_FIXED"]]);
+  const notFailed = await svc(`select public.esblu_einvoice_event_requeue('${row.id}', 'ops@esblu', 'AGAIN')`).then(() => "", (e) => String(e.message));
+  assert.match(notFailed, /NOT_REQUEUEABLE/, "spracovanú udalosť nemožno requeue");
+});
+await check("uzavretie operátorom (resolve) + rewind kurzora iba dozadu, auditované", async () => {
+  // nová vyčerpaná udalosť
+  let fail = true;
+  const inbound: InboundStore = { ...h.inbound, participantEvent: async (i) => { if (fail) throw new Error("x"); return h.inbound.participantEvent!(i); } };
+  const deps: WebhookDeps = { inbound, outbound: h.outbound, provider: { name: "efaktura_sk" } as never, environment: "sandbox", secrets: ["x"], nowSeconds: () => 0 };
+  const input = { deliveryId: "resolve-1", payload: participantPayload("org-b", "2026-10-06T14:00:00.000Z"), bodySha256: "5".repeat(64) };
+  for (let i = 0; i < 5; i++) await processProviderEvent(deps, input);
+  fail = false;
+  const [row] = await svc<{ id: string; exhausted_at: string | null }>("select id, exhausted_at from public.einvoice_webhook_events where delivery_id = 'resolve-1'");
+  assert.ok(row.exhausted_at);
+  await svc(`select public.esblu_einvoice_event_resolve('${row.id}', 'ops@esblu', 'HANDLED_MANUALLY')`);
+  const [ops] = await svc<{ j: unknown }>("select public.esblu_einvoice_event_ops() j");
+  assert.equal(sanitizeEventOps(ops.j).exhausted_unresolved, 0, "po uzavretí nie je alert");
+  await svc("update public.einvoice_webhook_events set received_at = now() - interval '200 days' where delivery_id = 'resolve-1'");
+  await svc("select public.esblu_einvoice_webhook_retention(90, 5000)");
+  assert.equal((await svc("select 1 from public.einvoice_webhook_events where delivery_id = 'resolve-1'")).length, 0, "uzavretá po retencii zmizne");
+  // rewind
+  const [cur] = await svc<{ last_event_id: string }>("select last_event_id from public.einvoice_event_cursors where provider = 'efaktura_sk' and environment = 'sandbox'");
+  const fwd = await svc(`select public.esblu_einvoice_event_cursor_rewind('efaktura_sk', 'sandbox', ${Number(cur.last_event_id) + 10}, 'ops@esblu', 'TEST')`).then(() => "", (e) => String(e.message));
+  assert.match(fwd, /REWIND_FORWARD/);
+  const [rw] = await svc<{ v: string }>(`select public.esblu_einvoice_event_cursor_rewind('efaktura_sk', 'sandbox', 100, 'ops@esblu', 'REPROCESS_AFTER_FIX') v`);
+  assert.equal(Number(rw.v), 100);
+  const audit = await svc<{ action: string; detail: { from: number; to: number } }>("select action, detail from public.einvoice_ops_audit where action = 'cursor_rewind'");
+  assert.equal(audit.length, 1);
+  assert.equal(audit[0].detail.to, 100);
+  // opätovný beh feedu po rewinde: už spracované udalosti = DUPLICATE, nič nové
+  const all = feedEvents([{ id: 101, org: "org-a", at: "2026-10-06T12:00:00.000Z" }, { id: 201, org: "org-a", at: "2026-10-06T13:00:00.000Z" }]);
+  const r = await runPartnerFeedSync({ cursor: h.cursor, listEvents: async (i) => ({ events: all.filter((e) => Number(e.id) > Number(i.after ?? 0)), nextAfter: null, hasMore: false }), webhook: deps });
+  assert.ok(r.code === "OK" && r.processed === 2 && (r as { results: Record<string, number> }).results.DUPLICATE === 2, JSON.stringify(r));
+});
+await check("prevádzkové RPC iba service_role (authenticated/anon permission denied)", async () => {
+  for (const uid of [UA, null]) {
+    for (const q of ["select public.esblu_einvoice_event_ops()", "select * from public.einvoice_ops_audit",
+      `select public.esblu_einvoice_event_requeue('${randomUUID()}', 'x', 'Y')`, `select public.esblu_einvoice_event_cursor_rewind('efaktura_sk','sandbox',1,'x','Y')`]) {
+      const e = await h.as(uid, () => h.db.query(q)).then((res) => `rows:${res.rows.length}`, (x) => String(x.message));
+      assert.ok(/permission denied/i.test(e) || e === "rows:0", `${q.slice(0, 50)} → ${e}`);
+    }
+  }
 });
 
 console.log(`\neinvoice-hardening: ${passed} passed, ${failures.length} failed`);

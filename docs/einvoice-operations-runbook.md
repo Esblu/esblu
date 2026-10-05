@@ -230,5 +230,47 @@ Stage 1+ sa **nevykonáva** bez explicitného súhlasu vlastníka (produkčná m
 - **Alerty sa nikam nedoručujú.** Maintenance vracia kandidátov iba v JSON odpovedi. Pre Stage 2+ treba
   napojiť notifikáciu (e-mail / Slack / monitoring).
 - `retry_exhausted_unknown` vyžaduje eskaláciu, kým poskytovateľ nemá lookup podľa kľúča (P3).
-- Partner feed `GET /v1/agent/events` (kurzor, 90 dní) zatiaľ nie je využitý. Poll ide cez `received`.
+- Partner feed `GET /v1/agent/events` sa číta cez `/api/cron/einvoice-events` s kurzorom v DB (sekcia 10); plánovanie cronu zatiaľ nie je vo `vercel.json`.
 - Storage objekty sa pri zmazaní firmy nemažú automaticky (CLIA Q5).
+
+## 10. Udalosti webhook / feed — vyčerpané pokusy, manuálny retry (20261007100000)
+
+Stav udalosti (`einvoice_webhook_events`, bez payloadu — iba hash tela, typ, firma z mapovania):
+
+| Stav | Význam | Čo robí systém |
+| --- | --- | --- |
+| `failed`, `exhausted_at` NULL | zlyhalo, ďalší pokus povolený | rovnaké doručenie (webhook retry poskytovateľa alebo feed) sa spracuje znova; max 5 pokusov |
+| `failed`, `exhausted_at` vyplnené | 5 pokusov vyčerpaných | **alert `EVENTS_EXHAUSTED` (critical)** v `/api/cron/einvoice-maintenance`; retencia ho NEMAŽE |
+| `failed`, `resolved_at` vyplnené | operátor uzavrel | bez alertu; po 90 dňoch retencia zmaže |
+
+Monitoring (bez payloadu): `select public.esblu_einvoice_event_ops();` alebo pole `events` /
+`eventAlerts` v maintenance odpovedi — počty vyčerpaných podľa typu udalosti, zaseknuté `received`,
+stav kurzora feedu (vek posledného behu, posledná chyba). Alerty: `EVENTS_EXHAUSTED`,
+`EVENTS_STUCK_RECEIVED`, `EVENT_FEED_STALE` (> 2 h bez behu), `EVENT_FEED_ERROR`.
+
+Manuálny postup (SQL editor, service_role; `actor` = e-mail/označenie operátora, `reason` = KÓD):
+1. Odstrániť príčinu (DB, mapovanie, kód). Zoznam: `select id, event, error, attempts, exhausted_at,
+   case when delivery_id like 'feed:%' then 'feed' else 'webhook' end source from public.einvoice_webhook_events
+   where exhausted_at is not null and resolved_at is null order by exhausted_at;`
+2. `select public.esblu_einvoice_event_requeue('<id>', '<actor>', 'CAUSE_FIXED');` — reset pokusov, audit.
+3. Znovu doručiť udalosť: **feed** → `select public.esblu_einvoice_event_cursor_rewind('efaktura_sk', '<env>',
+   <id_pred_udalosťou>, '<actor>', 'REPROCESS_AFTER_FIX');` a spustiť `/api/cron/einvoice-events`
+   (už spracované udalosti = `DUPLICATE`, bez vedľajších účinkov); **webhook** → v portáli eFaktura.sk
+   „Znova“ pri doručení (nové ID doručenia) alebo nechať dobehnúť feed.
+4. Ak udalosť nie je potrebné spracovať (napr. neplatná org): `select public.esblu_einvoice_event_resolve('<id>',
+   '<actor>', 'NOT_APPLICABLE');`
+Všetky zásahy sú v `einvoice_ops_audit` (actor, akcia, cieľ, kód, bez payloadu).
+
+Prečo sa nič potichu nestratí: každá udalosť je aj vo feede (90 dní) — webhook zlyhanie dobehne feed
+s vlastným kurzorom; feed sa zastaví PRED zlyhanou udalosťou, po 5 pokusoch ju označí ako vyčerpanú
+(alert) a pokračuje; vyčerpané neuzavreté udalosti retencia nemaže.
+
+## 11. Limit aktivácie príjmu (FS kód)
+
+Esblu obmedzuje pokusy o aktiváciu (`/api/einvoice/reception/enroll`) nad rámec poskytovateľa:
+firma 5 / 15 min a 20 / 24 h, používateľ 10 / h naprieč firmami → `429 TOO_MANY_ATTEMPTS`
+s `retry_after_seconds`. Dôvody: (a) partnerský kľúč má spoločný rate limit (≥ 100 req/min) pre všetky
+firmy — jeden tenant by inak mohol vyčerpať kapacitu ostatným, (b) Esblu nesmie byť nástroj na
+skúšanie overovacích kódov, (c) poskytovateľ môže pri opakovaných chybách zablokovať organizáciu.
+Ukladá sa iba firma, používateľ, čas a výsledok (`einvoice_enroll_attempts`, 30 dní) — nikdy kód ani hash.
+Uvoľnenie pre konkrétnu firmu (iba po overení): `delete from public.einvoice_enroll_attempts where company_id = '<id>';`

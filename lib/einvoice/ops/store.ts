@@ -31,6 +31,8 @@ export interface OpsStore {
   retention(olderThanDays: number, limit: number): Promise<{ older_than_days: number; webhook_events_deleted: number; rejection_buckets_deleted: number }>;
   storageConsistency(): Promise<Record<string, number>>;
   recordWebhookRejection(provider: string, environment: EinvoiceEnvironment, reason: WebhookRejectionReason): Promise<void>;
+  /** 20261007100000: súhrn udalostí (vyčerpané / zaseknuté / kurzor feedu). Voliteľné. */
+  eventOps?(): Promise<unknown>;
 }
 
 export class OpsStoreError extends Error {

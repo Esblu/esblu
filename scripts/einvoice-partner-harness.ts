@@ -15,6 +15,7 @@ import { dbErrorCode, OutboundStoreError, type OutboundRow, type OutboundStore }
 import { InboundStoreError, type InboundRow, type InboundStore } from "../lib/einvoice/inbound/store.ts";
 import type { OnboardingStore, ReceptionStatus } from "../lib/einvoice/onboarding.ts";
 import type { EventCursorStore } from "../lib/einvoice/inbound/feed.ts";
+import type { EnrollAttemptLimiter } from "../lib/einvoice/ui/reception-server.ts";
 
 export type Row = Record<string, unknown>;
 type Db = {
@@ -58,6 +59,7 @@ export const EINVOICE_MIGRATIONS = [
   "20261005100000_einvoice_partner_onboarding.sql",
   "20261005110000_einvoice_enroll_error_code_active.sql",
   "20261006100000_einvoice_supplier_dic_feed_cursor.sql",
+  "20261007100000_einvoice_event_ops_enroll_limit.sql",
 ];
 
 async function loadPglite(): Promise<Db> {
@@ -332,7 +334,17 @@ export async function createPartnerHarness() {
     },
   };
 
-  return { db, as, asService, sql, exec, userDb, outbound, inbound, onboarding, cursor, ublStorage, xmlStorage };
+  const limiter: EnrollAttemptLimiter = {
+    async begin(companyId, userId) {
+      const [r] = await svcRows<Row>("select * from public.esblu_einvoice_enroll_attempt_begin($1, $2)", [companyId, userId]);
+      return { allowed: r?.allowed === true, attemptId: (r?.attempt_id as string) ?? null, retryAfterSeconds: Number(r?.retry_after_seconds ?? 0), reason: (r?.reason as string) ?? null };
+    },
+    async finish(id, outcome) {
+      await svcRows("select public.esblu_einvoice_enroll_attempt_finish($1, $2)", [id, outcome.slice(0, 60)]);
+    },
+  };
+
+  return { db, as, asService, sql, exec, userDb, outbound, inbound, onboarding, cursor, limiter, ublStorage, xmlStorage };
 }
 
 /** Slovenské IČO (8 číslic) s platnou kontrolnou číslicou z 7-ciferného základu. */

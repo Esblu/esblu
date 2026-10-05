@@ -4,6 +4,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import type { EinvoiceEnvironment } from "./provider/types.ts";
 import type { BillingIdentity, OnboardingStore, OrganizationState, ReceptionStatus } from "./onboarding.ts";
+import type { EnrollAttemptLimiter } from "./ui/reception-server.ts";
 
 // =============================================================================
 // E-Faktúra onboarding — PRODUKČNÁ privilegovaná vrstva (service_role). SERVER-ONLY.
@@ -86,6 +87,22 @@ export function createSupabaseOnboardingStore(admin: SupabaseClient = getSupabas
       if (error) throw new OnboardingStoreError(dbCode(error.message));
       const r = first<{ reception_status: string; peppol_eligible: boolean }>(data);
       return { receptionStatus: r.reception_status, peppolEligible: r.peppol_eligible === true };
+    },
+  };
+}
+
+/** Limit pokusov o aktiváciu príjmu (RPC z 20261007100000). FS kód sa sem nikdy nedostane. */
+export function createSupabaseEnrollLimiter(admin: SupabaseClient = getSupabaseAdmin()): EnrollAttemptLimiter {
+  return {
+    async begin(companyId, userId) {
+      const { data, error } = await admin.rpc("esblu_einvoice_enroll_attempt_begin", { p_company_id: companyId, p_user_id: userId });
+      if (error) throw new OnboardingStoreError(dbCode(error.message));
+      const r = (Array.isArray(data) ? data[0] : data) as { allowed: boolean; attempt_id: string | null; retry_after_seconds: number; reason: string | null } | null;
+      return { allowed: r?.allowed === true, attemptId: r?.attempt_id ?? null, retryAfterSeconds: Number(r?.retry_after_seconds ?? 0), reason: r?.reason ?? null };
+    },
+    async finish(attemptId, outcome) {
+      const { error } = await admin.rpc("esblu_einvoice_enroll_attempt_finish", { p_attempt_id: attemptId, p_outcome: outcome.slice(0, 60) });
+      if (error) throw new OnboardingStoreError(dbCode(error.message));
     },
   };
 }

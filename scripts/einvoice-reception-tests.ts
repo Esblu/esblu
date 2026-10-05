@@ -90,6 +90,8 @@ const deps = (uid: string, over = {}) => ({
   db: h.userDb(uid),
   access: access(over),
   environment: "sandbox" as const,
+  userId: uid,
+  limiter: () => h.limiter,
   onboarding: () => {
     providerCalls++;
     return { store: h.onboarding, provider, environment: "sandbox" as const };
@@ -268,7 +270,7 @@ await check("DB (RLS): chýbajúci membership a nedostatočné financie → fina
 });
 await check("route: 401 / 403 / 503 sa prenášajú do odpovede (reception GET aj enroll)", async () => {
   for (const [kind, status] of [["unauthenticated", 401], ["forbidden", 403], ["temporary", 503]] as const) {
-    const d = { db: h.userDb(U.owner), access: async () => ({ ok: false as const, kind }), environment: "sandbox" as const, onboarding: () => null };
+    const d = { db: h.userDb(U.owner), access: async () => ({ ok: false as const, kind }), environment: "sandbox" as const, userId: U.owner, limiter: () => null, onboarding: () => null };
     assert.equal((await loadReception(d)).status, status);
     assert.equal((await enrollReception(d, body(CODE_OK))).status, status);
   }
@@ -278,6 +280,49 @@ await check("klient: 401 → jeden refresh session a jeden nový pokus, potom 40
   assert.match(c, /first\.status === 401/);
   assert.match(c, /supabase\.auth\.refreshSession\(\)/);
   assert.equal((c.match(/callOnce<T>\(path, locale, init\)/g) ?? []).length, 2, "najviac jeden opakovaný pokus");
+});
+
+
+// --- limit pokusov FS kódu (Esblu-side) -----------------------------------------------
+await check("limit: 5 pokusov / 15 min na firmu → 6. pokus 429 bez volania poskytovateľa; kód sa neukladá", async () => {
+  await h.exec(`delete from public.einvoice_enroll_attempts`);
+  const before = fake.requests.length;
+  const statuses: number[] = [];
+  for (let i = 0; i < 6; i++) statuses.push((await enrollReception(deps(U.owner), body(CODE_BAD))).status);
+  assert.deepEqual(statuses.slice(0, 5), [422, 422, 422, 422, 422]);
+  assert.equal(statuses[5], 429);
+  const enrollCalls = fake.requests.slice(before).filter((r) => r.path === "/v1/agent/peppol/enroll").length;
+  assert.equal(enrollCalls, 5, "6. pokus nejde k poskytovateľovi");
+  const r6 = await enrollReception(deps(U.adminFin), body(CODE_OK));
+  assert.equal(r6.status, 429, "limit je na firmu (iný používateľ tej istej firmy)");
+  assert.ok(((r6.body as unknown as { retry_after_seconds: number }).retry_after_seconds) > 0);
+  const rows = (await h.sql<Record<string, unknown>>("select * from public.einvoice_enroll_attempts")).rows;
+  assert.equal(rows.length, 5);
+  assert.ok(rows.every((r) => r.outcome === "EINVOICE_ENROLL_TOKEN_INVALID"));
+  assert.ok(!JSON.stringify(rows).includes(CODE_BAD) && !JSON.stringify(rows).includes(CODE_OK));
+  assert.deepEqual(Object.keys(rows[0]).sort(), ["attempted_at", "company_id", "id", "outcome", "user_id"]);
+});
+await check("limit: iná firma nie je ovplyvnená (tenant-aware); limit používateľa 10 / h naprieč firmami", async () => {
+  const rb = await enrollReception(deps(U.otherOwner), body(CODE_SENDONLY));
+  assert.equal(rb.status, 200, "firma B má vlastný limit");
+  await h.exec(`delete from public.einvoice_enroll_attempts`);
+  // používateľ: 10 / h — simulácia 10 pokusov naprieč firmami (priamo cez limiter)
+  for (let i = 0; i < 10; i++) {
+    const g = await h.limiter.begin(i % 2 ? CA : CB, U.owner);
+    assert.ok(g.allowed, `pokus ${i + 1}`);
+    await h.exec(`update public.einvoice_enroll_attempts set attempted_at = now() - interval '20 minutes' where user_id = '${U.owner}'`);
+  }
+  const g11 = await h.limiter.begin(CB, U.owner);
+  assert.deepEqual([g11.allowed, g11.reason], [false, "USER_1H"]);
+  await h.exec(`delete from public.einvoice_enroll_attempts`);
+});
+await check("limit: authenticated/anon nemôžu volať limiter RPC ani čítať pokusy", async () => {
+  for (const uid of [U.owner, null]) {
+    const e = await h.as(uid, () => h.db.query(`select * from public.esblu_einvoice_enroll_attempt_begin('${CA}', '${U.owner}')`)).then(() => "", (x) => String(x.message));
+    assert.match(e, /permission denied/i);
+    const t = await h.as(uid, () => h.db.query("select * from public.einvoice_enroll_attempts")).then((r) => `rows:${r.rows.length}`, (x) => String(x.message));
+    assert.ok(/permission denied/i.test(t) || t === "rows:0", t);
+  }
 });
 
 console.log(`\neinvoice-reception: ${passed} passed, ${failures.length} failed`);
