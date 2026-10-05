@@ -163,7 +163,7 @@ async function stepParse(deps: InboundDeps, row: InboundRow): Promise<StepOutcom
   if (!parsed.ok) return failPermanently(deps, row, INBOUND_ERROR.INVALID_XML, parsed.error);
 
   const org = await deps.store.organizationFor(row.company_id, row.environment);
-  const mapped = mapInboundDraft(parsed.document, parsed.reviewReasons, org?.participantId ?? null);
+  const mapped = mapInboundDraft(parsed.document, parsed.reviewReasons, org?.participantId ?? null, { allowTestScheme: deps.environment === "sandbox" });
   if (!mapped.ok) return failPermanently(deps, row, mapped.code, mapped.detail);
 
   const d = parsed.document;
@@ -190,7 +190,7 @@ async function stepDraft(deps: InboundDeps, row: InboundRow): Promise<StepOutcom
   if ("error" in read) return failPermanently(deps, row, INBOUND_ERROR.STORAGE_FAILED, read.error ?? null);
   if (!read.parsed.ok) return failPermanently(deps, row, INBOUND_ERROR.INVALID_XML, read.parsed.error);
   const org = await deps.store.organizationFor(row.company_id, row.environment);
-  const mapped = mapInboundDraft(read.parsed.document, read.parsed.reviewReasons, org?.participantId ?? null);
+  const mapped = mapInboundDraft(read.parsed.document, read.parsed.reviewReasons, org?.participantId ?? null, { allowTestScheme: deps.environment === "sandbox" });
   if (!mapped.ok) return failPermanently(deps, row, mapped.code, mapped.detail);
 
   try {

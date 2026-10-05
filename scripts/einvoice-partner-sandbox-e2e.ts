@@ -508,9 +508,15 @@ await step("J3", "spracovanie → koncept prijatej faktúry (draft na kontrolu),
   assert.equal(inv.company_id, CO.B);
   assert.equal(inv.direction, "received");
   assert.equal(inv.document_status, "draft", "nesmie vzniknúť finálny účtovný zápis bez kontroly");
-  const partners = (await sql<Row>("select id, kind from public.business_partners where company_id = $1 and ico = $2", [CO.B, ID.A.ico])).rows;
+  const partners = (await sql<Row>("select id, kind, dic, ic_dph from public.business_partners where company_id = $1 and ico = $2", [CO.B, ID.A.ico])).rows;
   assert.equal(partners.length, 1);
-  return { status: INB.processing_status, acknowledged: Boolean(INB.acknowledged_at), draft: { direction: inv.direction, status: inv.document_status, source: inv.source }, supplier_partner_before: partnersBefore, supplier_partner_after: partners.length, supplier_linked: inv.supplier_business_partner_id === partners[0].id };
+  // 20261006100000: DIČ dodávateľa z XML (IČ DPH SK+DIČ / endpoint 9915|0245:DIČ), nie z IČO.
+  assert.equal(partners[0].dic, ID.A.dic, "DIČ automaticky založeného dodávateľa");
+  assert.equal(partners[0].ic_dph, ID.A.icDph);
+  // Tenant izolácia: v inej firme (A) nevznikol žiadny partner s DIČ dodávateľa z inboundu B.
+  const foreign = (await sql<{ n: number }>("select count(*)::int n from public.business_partners where company_id <> $1 and dic = $2 and kind = 'supplier'", [CO.B, ID.A.dic])).rows[0].n;
+  assert.equal(foreign, 0);
+  return { status: INB.processing_status, acknowledged: Boolean(INB.acknowledged_at), draft: { direction: inv.direction, status: inv.document_status, source: inv.source }, supplier_partner_before: partnersBefore, supplier_partner_after: partners.length, supplier_linked: inv.supplier_business_partner_id === partners[0].id, supplier_dic_from_xml: partners[0].dic === ID.A.dic };
 });
 await step("J4", "duplicitný doklad: opätovný poll/registrácia → žiadny nový koncept ani partner", ["J3"], async () => {
   const drafts = async () => (await sql<{ n: number }>("select count(*)::int n from public.invoices where company_id = $1 and direction = 'received'", [CO.B])).rows[0].n;

@@ -70,6 +70,12 @@ export type OrganizationWithCompany = OrganizationRef & { companyId: string; env
 export interface InboundStore {
   webhookRecord(input: { provider: string; environment: EinvoiceEnvironment; deliveryId: string; providerOrgId: string | null; event: string; bodySha256: string }): Promise<WebhookRecordResult>;
   webhookComplete(webhookEventId: string, status: "processed" | "ignored" | "failed" | "rejected", code: string | null): Promise<void>;
+  /**
+   * Zlyhané spracovanie toho istého doručenia (rovnaké ID aj telo) → znova „received“,
+   * najviac 5 pokusov (RPC esblu_einvoice_webhook_retry). true = smie sa spracovať znova.
+   * Voliteľné: bez metódy sa opakované doručenie berie ako DUPLICATE (pôvodné správanie).
+   */
+  webhookRetry?(webhookEventId: string): Promise<boolean>;
   register(input: { provider: string; environment: EinvoiceEnvironment; providerOrgId: string; providerReceivedId: string; source: "webhook" | "poll"; meta: RegisterMeta }): Promise<{ inboundId: string; created: boolean; processingStatus: string; companyId: string }>;
   claim(limit: number, leaseSeconds: number): Promise<InboundRow[]>;
   transition(id: string, expectedState: string, toState: string | null, source: InboundSource, providerCode: string | null, fields: InboundTransitionFields): Promise<InboundRow>;
@@ -82,6 +88,12 @@ export interface InboundStore {
   /** Firma podľa provider_org_id (iba mapovanie v DB). */
   companyForOrg(provider: string, environment: EinvoiceEnvironment, providerOrgId: string): Promise<string | null>;
   claimOutboundBySubmission(companyId: string, providerSubmissionId: string, leaseSeconds: number): Promise<OutboundRow | null>;
+  /**
+   * Stav pokusu podľa ID podania (iba v rámci firmy) — rozlíšenie „už terminálne / práve
+   * spracúvané / neexistuje“, keď claim nič nevráti (opakované delivered/sent udalosti).
+   * Voliteľné: bez metódy sa správa ako predtým (SUBMISSION_NOT_FOUND).
+   */
+  outboundStateBySubmission?(companyId: string, providerSubmissionId: string): Promise<string | null>;
   /**
    * Webhook / feed participant.* → stav PRÍJMU organizácie (RPC esblu_einvoice_org_participant_event).
    * Voliteľné: store bez tejto metódy participant udalosti ignoruje (EVENT_NOT_HANDLED).

@@ -25,6 +25,8 @@ const SUPPORTED_VAT = new Set(["S", "Z", "E", "AE", "K", "G", "O"]);
 export type InboundDraftSupplier = {
   legal_name: string | null;
   ico: string | null;
+  /** SK DIČ (10 číslic) — iba spoľahlivo odvodené z XML (deriveSupplierDic), inak null. */
+  dic: string | null;
   vat_id: string | null;
   country_code: string | null;
   address_line1: string | null;
@@ -114,7 +116,36 @@ export function checkInboundProfile(doc: ParsedInboundUbl): { ok: true } | { ok:
   return { ok: true };
 }
 
-export function mapInboundDraft(doc: ParsedInboundUbl, parserReviewReasons: string[], recipientParticipantId: string | null): MappingResult {
+/**
+ * SK DIČ dodávateľa z XML — iba z jednoznačných zdrojov (nikdy z IČO ani názvu):
+ *   1) IČ DPH (BT-31) „SK“ + 10 číslic → DIČ = tých 10 číslic (IČ DPH = SK + DIČ),
+ *   2) Peppol endpoint (BT-34) schéma 0245 (SK DIČ) s 10 číslicami,
+ *      v sandboxe aj testovacia schéma 9915 (eFaktura.sk sandbox: 9915:DIČ).
+ * Ak sa zdroje nezhodujú → null + review reason (radšej človek než zlý údaj).
+ * Krajina iná ako SK → null.
+ */
+export function deriveSupplierDic(
+  s: { vatId: string | null; endpointId: string | null; endpointScheme: string | null; countryCode: string | null },
+  opts: { allowTestScheme?: boolean } = {}
+): { dic: string | null; conflict: boolean } {
+  const country = (s.countryCode ?? "").trim().toUpperCase();
+  if (country && country !== "SK") return { dic: null, conflict: false };
+  const vat = (s.vatId ?? "").replace(/[\s.\-/]/g, "").toUpperCase();
+  const fromVat = /^SK[0-9]{10}$/.test(vat) ? vat.slice(2) : null;
+  const scheme = (s.endpointScheme ?? "").trim();
+  const ep = (s.endpointId ?? "").trim();
+  const schemeOk = scheme === "0245" || (opts.allowTestScheme === true && scheme === "9915");
+  const fromEndpoint = schemeOk && /^[0-9]{10}$/.test(ep) ? ep : null;
+  if (fromVat && fromEndpoint && fromVat !== fromEndpoint) return { dic: null, conflict: true };
+  return { dic: fromVat ?? fromEndpoint, conflict: false };
+}
+
+export function mapInboundDraft(
+  doc: ParsedInboundUbl,
+  parserReviewReasons: string[],
+  recipientParticipantId: string | null,
+  opts: { allowTestScheme?: boolean } = {}
+): MappingResult {
   const profile = checkInboundProfile(doc);
   if (!profile.ok) return { ok: false, code: "UNSUPPORTED_PROFILE", detail: profile.detail };
 
@@ -246,6 +277,8 @@ export function mapInboundDraft(doc: ParsedInboundUbl, parserReviewReasons: stri
   const legalId = (s.legalId ?? "").replace(/\s+/g, "");
   const country = (s.countryCode ?? "").trim().toUpperCase() || null;
   const ico = /^[0-9]{8}$/.test(legalId) && (s.legalIdScheme === "0158" || (!s.legalIdScheme && country === "SK")) ? legalId : null;
+  const dic = deriveSupplierDic({ vatId: s.vatId, endpointId: s.endpointId, endpointScheme: s.endpointScheme, countryCode: country }, opts);
+  if (dic.conflict) reasons.add("SUPPLIER_DIC_CONFLICT");
 
   return {
     ok: true,
@@ -254,6 +287,7 @@ export function mapInboundDraft(doc: ParsedInboundUbl, parserReviewReasons: stri
       supplier: {
         legal_name: s.name!.trim(),
         ico,
+        dic: dic.dic,
         vat_id: s.vatId?.trim() || null,
         country_code: country,
         address_line1: s.street,

@@ -6,6 +6,7 @@ import type { EinvoiceEnvironment } from "../provider/types.ts";
 import { dbErrorCode, type OutboundRow } from "../outbound/store.ts";
 import { EINVOICE_BUCKET } from "../outbound/supabase-store.ts";
 import { InboundStoreError, type InboundRow, type InboundStore } from "./store.ts";
+import type { EventCursorStore } from "./feed.ts";
 
 // =============================================================================
 // E-Faktúra inbound — PRODUKČNÁ privilegovaná vrstva. SERVER-ONLY.
@@ -133,6 +134,21 @@ export function createSupabaseInboundStore(admin: SupabaseClient = getSupabaseAd
       });
       return rows?.[0] ?? null;
     },
+    async webhookRetry(id) {
+      return (await rpc<boolean>("esblu_einvoice_webhook_retry", { p_webhook_event_id: id, p_max: 5 })) === true;
+    },
+    async outboundStateBySubmission(companyId, submissionId) {
+      const { data, error } = await admin
+        .from("einvoice_outbound")
+        .select("state")
+        .eq("company_id", companyId)
+        .eq("provider_submission_id", submissionId)
+        .order("attempt", { ascending: false })
+        .limit(1)
+        .maybeSingle<{ state: string }>();
+      if (error) throw new InboundStoreError("DB_ERROR");
+      return data?.state ?? null;
+    },
     async participantEvent(i) {
       const row = first<{ company_id: string | null; applied: boolean; reception_status: string | null }>(
         await rpc("esblu_einvoice_org_participant_event", {
@@ -162,6 +178,25 @@ export function createSupabaseInboundStore(admin: SupabaseClient = getSupabaseAd
       const { data, error } = await admin.storage.from(EINVOICE_BUCKET).download(path);
       if (error || !data) return null;
       return new Uint8Array(await data.arrayBuffer());
+    },
+  };
+}
+
+/** Kurzor partnerského feedu (RPC z 20261006100000, iba service_role). */
+export function createSupabaseEventCursorStore(admin: SupabaseClient = getSupabaseAdmin()): EventCursorStore {
+  return {
+    async claim(provider, environment, leaseSeconds) {
+      const { data, error } = await admin.rpc("esblu_einvoice_event_cursor_claim", { p_provider: provider, p_environment: environment, p_lease_seconds: leaseSeconds });
+      if (error) throw new InboundStoreError(dbErrorCode(error.message));
+      const row = (Array.isArray(data) ? data[0] : data) as { last_event_id: number | string; lock_token: string } | null | undefined;
+      return row?.lock_token ? { lastEventId: Number(row.last_event_id), lockToken: row.lock_token } : null;
+    },
+    async advance(provider, environment, lockToken, lastEventId, release, errorCode = null) {
+      const { data, error } = await admin.rpc("esblu_einvoice_event_cursor_advance", {
+        p_provider: provider, p_environment: environment, p_lock_token: lockToken, p_last_event_id: lastEventId, p_release: release, p_error_code: errorCode,
+      });
+      if (error) throw new InboundStoreError(dbErrorCode(error.message));
+      return Number(data);
     },
   };
 }

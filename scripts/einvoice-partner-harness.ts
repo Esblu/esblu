@@ -14,6 +14,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { dbErrorCode, OutboundStoreError, type OutboundRow, type OutboundStore } from "../lib/einvoice/outbound/store.ts";
 import { InboundStoreError, type InboundRow, type InboundStore } from "../lib/einvoice/inbound/store.ts";
 import type { OnboardingStore, ReceptionStatus } from "../lib/einvoice/onboarding.ts";
+import type { EventCursorStore } from "../lib/einvoice/inbound/feed.ts";
 
 export type Row = Record<string, unknown>;
 type Db = {
@@ -56,6 +57,7 @@ export const EINVOICE_MIGRATIONS = [
   "20261003100000_einvoice_inbound_draft_totals.sql",
   "20261005100000_einvoice_partner_onboarding.sql",
   "20261005110000_einvoice_enroll_error_code_active.sql",
+  "20261006100000_einvoice_supplier_dic_feed_cursor.sql",
 ];
 
 async function loadPglite(): Promise<Db> {
@@ -264,6 +266,14 @@ export async function createPartnerHarness() {
       const rows = await svcRows<{ j: OutboundRow }>("select to_jsonb(t) j from public.esblu_einvoice_claim_outbound_by_submission($1, $2, $3) t", [companyId, submissionId, lease]);
       return rows[0]?.j ?? null;
     },
+    async outboundStateBySubmission(companyId, submissionId) {
+      const rows = await svcRows<{ state: string }>("select state from public.einvoice_outbound where company_id = $1 and provider_submission_id = $2 order by attempt desc limit 1", [companyId, submissionId]);
+      return rows[0]?.state ?? null;
+    },
+    async webhookRetry(id) {
+      const [r] = await svcRows<{ ok: boolean }>("select public.esblu_einvoice_webhook_retry($1, 5) ok", [id]);
+      return r?.ok === true;
+    },
     async participantEvent(i) {
       const [r] = await svcRows<Row>("select * from public.esblu_einvoice_org_participant_event($1, $2, $3, $4, $5, $6, $7)", [
         i.provider, i.environment, i.providerOrgId, i.event, i.participantId, i.code, i.occurredAt,
@@ -311,7 +321,18 @@ export async function createPartnerHarness() {
     },
   };
 
-  return { db, as, asService, sql, exec, userDb, outbound, inbound, onboarding, ublStorage, xmlStorage };
+  const cursor: EventCursorStore = {
+    async claim(provider, environment, lease) {
+      const [r] = await svcRows<Row>("select * from public.esblu_einvoice_event_cursor_claim($1, $2, $3)", [provider, environment, lease]);
+      return r?.lock_token ? { lastEventId: Number(r.last_event_id), lockToken: r.lock_token as string } : null;
+    },
+    async advance(provider, environment, token, last, release, code = null) {
+      const [r] = await svcRows<{ v: string }>("select public.esblu_einvoice_event_cursor_advance($1, $2, $3, $4, $5, $6) v", [provider, environment, token, last, release, code]);
+      return Number(r.v);
+    },
+  };
+
+  return { db, as, asService, sql, exec, userDb, outbound, inbound, onboarding, cursor, ublStorage, xmlStorage };
 }
 
 /** Slovenské IČO (8 číslic) s platnou kontrolnou číslicou z 7-ciferného základu. */

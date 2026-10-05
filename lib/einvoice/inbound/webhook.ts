@@ -43,6 +43,9 @@ const DELIVERY_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/;
 const ORG_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const EVENT = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/;
 
+/** Terminálne stavy pokusu (DB trigger ich už nedovolí zmeniť). */
+const TERMINAL_OUTBOUND = new Set(["delivered", "failed", "rejected"]);
+
 type EventKind = "inbound" | "outbound" | "participant" | "other";
 
 export const PARTICIPANT_EVENTS = ["participant.activated", "participant.failed", "participant.deactivated"] as const;
@@ -148,8 +151,12 @@ export async function processProviderEvent(
     bodySha256,
   });
   if (!record.inserted) {
-    // To isté doručenie znova: rovnaké telo = idempotentné OK; iné telo pod tým istým ID = replay.
-    return record.bodyMatches ? { status: 200, body: { code: "DUPLICATE" } } : { status: 409, body: { code: "REPLAYED_WEBHOOK" } };
+    // To isté doručenie znova: iné telo pod tým istým ID = replay (409). Rovnaké telo =
+    // idempotentné OK — okrem predošlého ZLYHANÉHO spracovania, ktoré sa smie zopakovať
+    // (ohraničený počet pokusov v DB; webhook aj feed kurzor).
+    if (!record.bodyMatches) return { status: 409, body: { code: "REPLAYED_WEBHOOK" } };
+    const retry = record.processingStatus === "failed" && deps.inbound.webhookRetry ? await deps.inbound.webhookRetry(record.webhookEventId) : false;
+    if (!retry) return { status: 200, body: { code: "DUPLICATE" } };
   }
   if (!record.companyId || !orgId) {
     // Zaznamenané ako rejected/UNKNOWN_ORG; 200 = poskytovateľ to neopakuje donekonečna.
@@ -208,9 +215,18 @@ export async function processProviderEvent(
         return { status: 200, body: { code: "IGNORED" } };
       }
       const row = await deps.inbound.claimOutboundBySubmission(record.companyId, submissionId, 120);
-      if (row) await reconcileOutboundRow({ store: deps.outbound, provider: deps.provider }, row);
-      await deps.inbound.webhookComplete(record.webhookEventId, row ? "processed" : "ignored", row ? null : "SUBMISSION_NOT_FOUND");
-      return { status: 200, body: { code: row ? "RECONCILED" : "IGNORED" } };
+      if (row) {
+        await reconcileOutboundRow({ store: deps.outbound, provider: deps.provider }, row);
+        await deps.inbound.webhookComplete(record.webhookEventId, "processed", null);
+        return { status: 200, body: { code: "RECONCILED" } };
+      }
+      // Claim nič nevrátil: opakovaná udalosť k už ukončenému podaniu (idempotentné, nič sa
+      // nemení), súbežne spracúvané podanie (reconcile worker ho dokončí), alebo naozaj neznáme.
+      const state = deps.inbound.outboundStateBySubmission ? await deps.inbound.outboundStateBySubmission(record.companyId, submissionId) : null;
+      const outcome =
+        state && TERMINAL_OUTBOUND.has(state) ? "ALREADY_FINAL" : state ? "RECONCILE_IN_PROGRESS" : "SUBMISSION_NOT_FOUND";
+      await deps.inbound.webhookComplete(record.webhookEventId, "ignored", outcome);
+      return { status: 200, body: { code: outcome === "SUBMISSION_NOT_FOUND" ? "IGNORED" : outcome } };
     }
     await deps.inbound.webhookComplete(record.webhookEventId, "ignored", "EVENT_NOT_HANDLED");
     return { status: 200, body: { code: "IGNORED" } };
