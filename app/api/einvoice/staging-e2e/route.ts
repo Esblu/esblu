@@ -255,6 +255,38 @@ export async function POST(req: Request) {
         }
       }
 
+      case "reception-route": {
+        // Skutočné routy /api/einvoice/reception(/enroll) cez HTTP s JWT syntetického ownera A/B.
+        const t = body.target === "A" || body.target === "B" ? body.target : null;
+        if (!t) return json(400, { code: "INVALID_TARGET" });
+        const op = body.op === "enroll" ? "enroll" : "get";
+        const tokenKey = typeof body.token === "string" ? body.token : "";
+        if (op === "enroll" && !(tokenKey in STAGING_E2E_TOKENS)) return json(400, { code: "INVALID_TOKEN_KEY" });
+        const bypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET ?? "";
+        const session = await userSession(admin, t);
+        try {
+          const origin = new URL(req.url).origin;
+          const res = await fetch(`${origin}/api/einvoice/reception${op === "enroll" ? "/enroll" : ""}`, {
+            method: op === "enroll" ? "POST" : "GET",
+            headers: {
+              authorization: `Bearer ${session.token}`,
+              ...(op === "enroll" ? { "content-type": "application/json" } : {}),
+              ...(bypass ? { "x-vercel-protection-bypass": bypass } : {}),
+            },
+            body: op === "enroll" ? JSON.stringify({ verification_code: STAGING_E2E_TOKENS[tokenKey as keyof typeof STAGING_E2E_TOKENS], confirm_enroll: true }) : undefined,
+          });
+          let parsed: unknown = null;
+          try {
+            parsed = await res.json();
+          } catch {
+            parsed = { non_json: true };
+          }
+          return json(200, { code: "OK", target: t, op, route_status: res.status, route_body: parsed });
+        } finally {
+          await endSession(admin, session.token);
+        }
+      }
+
       case "isolation": {
         // RLS matica cez skutočné user JWT: A a B vidia iba svoje E-Faktúra dáta;
         // privilegované RPC onboardingu sú pre authenticated zakázané.
