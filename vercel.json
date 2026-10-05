@@ -4,10 +4,5 @@
       "path": "/api/cron/deadline-notifications",
       "schedule": "0 6 * * *"
     }
-  ],
-  "git": {
-    "deploymentEnabled": {
-      "einvoice-port": false
-    }
-  }
+  ]
 }

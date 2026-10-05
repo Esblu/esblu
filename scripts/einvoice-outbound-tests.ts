@@ -1255,7 +1255,9 @@ await check("service_role iba v privilegovanej vrstve: supabase-store.ts; route/
   };
   const files = [...walk("lib/einvoice"), ...walk("app/api/einvoice"), ...walk("app/api/cron/einvoice-outbound"), ...walk("app/api/cron/einvoice-maintenance")];
   const admin = files.filter((f) => /supabase-admin|getSupabaseAdmin|SUPABASE_SERVICE_ROLE_KEY/.test(read(f)));
-  assert.deepEqual(admin.sort(), ["lib/einvoice/inbound/supabase-store.ts", "lib/einvoice/onboarding-supabase-store.ts", "lib/einvoice/ops/supabase-store.ts", "lib/einvoice/outbound/supabase-store.ts"]);
+  // app/api/einvoice/staging-e2e: STAGING-ONLY driver (hard guard → 404 mimo preview einvoice-port so staging DB);
+  // staging-e2e/guard.ts iba overuje ref v SUPABASE_SERVICE_ROLE_KEY (nevytvára klienta).
+  assert.deepEqual(admin.sort(), ["app/api/einvoice/staging-e2e/route.ts", "lib/einvoice/inbound/supabase-store.ts", "lib/einvoice/onboarding-supabase-store.ts", "lib/einvoice/ops/supabase-store.ts", "lib/einvoice/outbound/supabase-store.ts", "lib/einvoice/staging-e2e/guard.ts"]);
   for (const f of files.filter((x) => x.startsWith("app/") || /(outbound|inbound)\/(worker|request|supabase-store|processor|webhook)\.ts$/.test(x))) {
     assert.match(read(f), /^import "server-only";/, f);
   }
