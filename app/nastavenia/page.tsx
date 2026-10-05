@@ -213,10 +213,6 @@ export default function NastaveniaPage() {
   const [deleteSubmitting, setDeleteSubmitting] = useState(false);
   const [deleteError, setDeleteError] = useState("");
 
-  useEffect(() => {
-    checkUser();
-  }, []);
-
   async function loadCompanyUsers(currentUserId: string) {
     setUsersLoading(true);
 
@@ -824,6 +820,15 @@ export default function NastaveniaPage() {
       setDeleteError(message);
     }
   }
+
+  // Prvé načítanie stránky (session → firma → profil). Efekt je za deklaráciami všetkých
+  // načítavacích funkcií (react-hooks/immutability); správanie je nezmenené — beží raz
+  // po mount-e, rovnako ako predtým. setState prebieha asynchrónne po await (vzor v repe).
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void checkUser();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- zámerne iba pri mount-e (ako doteraz)
+  }, []);
 
   return (
     <main className="app-shell-bg min-h-screen p-4 sm:p-6 lg:p-10">
