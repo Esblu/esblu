@@ -55,6 +55,13 @@ SAPI-SK client ID/secret Esblu nepoužíva (Agent API). Nepatria do repo ani do 
   rovnaké telo) bez duplicitného inboundu, konceptu ani partnera. Starý testovací secret po prepnutí
   odmietnutý (401). Endpoint je zaregistrovaný bez `participant.*` udalostí (tie overené iba cez feed
   a syntetický podpis). Po teste: endpoint v portáli **vypnutý**, Protection Bypass **zrušený**.
+- **Participant webhooky reálne z eFaktura.sk (5. 10. 2026, 2. endpoint s `participant.*`):** enroll A cez
+  skutočnú route `/api/einvoice/reception/enroll` (synthetic owner JWT) → `participant.activated` (A);
+  B → `participant.activated`; C (neplatný kód) → `participant.failed`; D → `participant.failed`
+  `PARTICIPANT_HELD_ELSEWHERE` — všetky HTTP 200, spracované, firma podľa mapovania org. Replay všetkých
+  štyroch z portálu a ten istý feed cez kurzor (275 → 279) bez zmeny stavu (A/B active, C failed, D send_only).
+  Podvrhnutá `participant.deactivated` (zlý podpis / stará pečiatka) → 401, stav A nezmenený.
+  Po teste: endpoint **vypnutý**, bypass **zrušený**, `ESBLU_STAGING_E2E_ENABLED=false`, `ESBLU_STAGING_E2E_SECRET` zmazaný.
 - Endpoint na preview (`esblu-git-einvoice-port-esblu.vercel.app/api/einvoice/webhook`) beží proti staging DB. Podpis, okno, duplicita, konflikt tela, rotácia, neznáma org, cudzí tenant a limit veľkosti overené cez HTTP (5. 10. 2026). Registrácia partner endpointu v portáli vyžaduje prihlásenú session portálu (`POST /v1/partner/webhooks`, nie API kľúč); URL musí niesť `x-vercel-protection-bypass` (Vercel Authentication).
 - Kým webhook nie je registrovaný, udalosti sa overujú cez partnerský feed `GET /v1/agent/events` (telo = presne telo webhooku).
 
@@ -76,7 +83,7 @@ Prostredie (bez hodnôt):
 | Vercel Preview | vetva `einvoice-port`, alias `esblu-git-einvoice-port-esblu.vercel.app`, chránené Vercel Authentication |
 | Branch env (Preview, iba `einvoice-port`) | `NEXT_PUBLIC_SUPABASE_URL/ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` (staging), `CRON_SECRET`, `ESBLU_ACTION_CONFIRMATION_SECRET` (nové staging), `ESBLU_EINVOICE_PROVIDER/ENVIRONMENT`, `ESBLU_EFAKTURA_API_KEY` (partner `efk_pk_test_`), `ESBLU_EFAKTURA_WEBHOOK_SECRETS`, `ESBLU_STAGING_E2E_ENABLED/SECRET` |
 | Protection Bypass for Automation | po teste zrušený (5. 10. 2026); nový test vyžaduje nový bypass + aktualizáciu URL v portáli |
-| Driver E2E | `ESBLU_STAGING_E2E_ENABLED=false` (route vracia 404); rollout firiem A/B `paused`, allowlist syntetických e-mailov revoked |
+| Driver E2E | `ESBLU_STAGING_E2E_ENABLED=false`, `ESBLU_STAGING_E2E_SECRET` zmazaný (route vracia 404); rollout firiem A/B `paused`, allowlist syntetických e-mailov revoked |
 | Lokálne hodnoty | iba mimo repa (`Documents\esblu-l3-staging.env`, `Documents\esblu-einvoice-staging-e2e.env`) |
 
 Driver `POST /api/einvoice/staging-e2e` (`lib/einvoice/staging-e2e/guard.ts`): mimo preview vetvy
