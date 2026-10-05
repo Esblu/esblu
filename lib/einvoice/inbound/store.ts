@@ -82,6 +82,19 @@ export interface InboundStore {
   /** Firma podľa provider_org_id (iba mapovanie v DB). */
   companyForOrg(provider: string, environment: EinvoiceEnvironment, providerOrgId: string): Promise<string | null>;
   claimOutboundBySubmission(companyId: string, providerSubmissionId: string, leaseSeconds: number): Promise<OutboundRow | null>;
+  /**
+   * Webhook / feed participant.* → stav PRÍJMU organizácie (RPC esblu_einvoice_org_participant_event).
+   * Voliteľné: store bez tejto metódy participant udalosti ignoruje (EVENT_NOT_HANDLED).
+   */
+  participantEvent?(input: {
+    provider: string;
+    environment: EinvoiceEnvironment;
+    providerOrgId: string;
+    event: "participant.activated" | "participant.failed" | "participant.deactivated";
+    participantId: string | null;
+    code: string | null;
+    occurredAt: string | null;
+  }): Promise<{ companyId: string | null; applied: boolean; receptionStatus: string | null }>;
   /** Zapíše bajty iba ak objekt neexistuje (nikdy neprepisuje). */
   putXml(path: string, bytes: Uint8Array): Promise<"created" | "exists">;
   getXml(path: string): Promise<Uint8Array | null>;

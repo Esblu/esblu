@@ -101,7 +101,9 @@ export function createSupabaseInboundStore(admin: SupabaseClient = getSupabaseAd
         .eq("provider", provider)
         .eq("environment", environment)
         .eq("peppol_eligible", true)
-        .not("provider_org_id", "is", null);
+        .not("provider_org_id", "is", null)
+        // Príjem: iba aktívny (alebo legacy NULL). send_only / failed / pending / deactivated sa nepolluje.
+        .or("reception_status.is.null,reception_status.eq.active");
       if (error) throw new InboundStoreError("DB_ERROR");
       return ((data as { company_id: string; provider: string; provider_org_id: string; participant_id: string | null; peppol_eligible: boolean; environment: EinvoiceEnvironment }[] | null) ?? []).map((o) => ({
         companyId: o.company_id,
@@ -130,6 +132,20 @@ export function createSupabaseInboundStore(admin: SupabaseClient = getSupabaseAd
         p_lease_seconds: leaseSeconds,
       });
       return rows?.[0] ?? null;
+    },
+    async participantEvent(i) {
+      const row = first<{ company_id: string | null; applied: boolean; reception_status: string | null }>(
+        await rpc("esblu_einvoice_org_participant_event", {
+          p_provider: i.provider,
+          p_environment: i.environment,
+          p_provider_org_id: i.providerOrgId,
+          p_event: i.event,
+          p_participant_id: i.participantId,
+          p_code: i.code,
+          p_occurred_at: i.occurredAt,
+        })
+      );
+      return { companyId: row?.company_id ?? null, applied: row?.applied === true, receptionStatus: row?.reception_status ?? null };
     },
     async putXml(path, bytes) {
       const { error } = await admin.storage.from(EINVOICE_BUCKET).upload(path, bytes, {

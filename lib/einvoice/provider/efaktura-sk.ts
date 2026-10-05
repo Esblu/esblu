@@ -5,7 +5,12 @@ import {
   EinvoiceProviderError,
   type DeliveryEvidence,
   type EinvoiceEnvironment,
+  type EinvoiceOnboardingProvider,
   type EinvoiceProvider,
+  type EnrollInput,
+  type EnrollResult,
+  type PartnerEvent,
+  type PartnerEventPage,
   type InboundDocument,
   type InboundSummary,
   type OrganizationInfo,
@@ -34,6 +39,9 @@ import { sanitizeDeliveryEvidence } from "../evidence.ts";
 // Použité endpointy:
 //   POST /v1/agent/organizations                   org:provision, bez X-Organization-Id, idempotentné podľa IČO
 //   GET  /v1/agent/organizations/{id}              partner kľúč, odpoveď NIE JE obalená v `data`
+//   POST /v1/agent/peppol/enroll                   invoice:send, X-Organization-Id, verificationTokenHex
+//                                                  (API partner model: príjem aktivuje Esblu FS kódom klienta)
+//   GET  /v1/agent/events?after=                   invoice:read, partnerský feed (telo = telo webhooku)
 //   GET  /v1/agent/peppol/recipient?peppolId=      invoice:read, vždy 200 (found:false nie je chyba)
 //   POST /v1/agent/peppol/preflight                invoice:read, bez zápisu, bez kreditu
 //   POST /v1/agent/peppol/connector/send           invoice:send, Idempotency-Key POVINNÝ
@@ -257,7 +265,7 @@ type RequestOptions = {
   maxBytes?: number;
 };
 
-export class EfakturaSkProvider implements EinvoiceProvider {
+export class EfakturaSkProvider implements EinvoiceProvider, EinvoiceOnboardingProvider {
   readonly name = "efaktura_sk";
 
   readonly #apiKey: string;
@@ -384,6 +392,98 @@ export class EfakturaSkProvider implements EinvoiceProvider {
       peppolEligible: bool(body.peppol_eligible),
       reused: false,
     };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Enroll príjmu (API partner model) + partnerský feed udalostí
+  // ---------------------------------------------------------------------------
+
+  /**
+   * POST /v1/agent/peppol/enroll — registrácia DIČ organizácie ako Peppol účastníka.
+   * Token (a migračný kód) ide iba do tela požiadavky: nikdy do chýb, logov ani DB.
+   * Neopakuje sa automaticky (volajúci rozhodne podľa `retryable`).
+   */
+  async enrollPeppol(ctx: ProviderContext, input: EnrollInput): Promise<EnrollResult> {
+    const token = typeof input.verificationTokenHex === "string" ? input.verificationTokenHex.trim() : "";
+    if (!/^[0-9a-fA-F]{2,128}$/.test(token)) {
+      throw new EinvoiceProviderError("EINVOICE_ENROLL_TOKEN_FORMAT", "Overovací kód musí byť hexadecimálny");
+    }
+    const body: Record<string, unknown> = { verificationTokenHex: token };
+    if (input.migrationCode !== undefined) {
+      const code = input.migrationCode.trim();
+      if (this.#environment !== "live") {
+        throw new EinvoiceProviderError("EINVOICE_ENROLL_MIGRATION_LIVE_ONLY", "Migračný kód je iba pre live");
+      }
+      if (!/^[^\s]{8,24}$/.test(code)) {
+        throw new EinvoiceProviderError("EINVOICE_ENROLL_MIGRATION_FORMAT", "Neplatný migračný kód");
+      }
+      body.migrationCode = code;
+    }
+
+    let res: { status: number; bytes: Uint8Array };
+    try {
+      res = await this.#request({ method: "POST", path: "/v1/agent/peppol/enroll", ctx, json: body });
+    } catch (error) {
+      if (error instanceof EinvoiceProviderError) {
+        const msg = error.message.split(token).join("[redacted]");
+        if (error.code === "EINVOICE_PROVIDER_REJECTED") throw new EinvoiceProviderError("EINVOICE_ENROLL_TOKEN_INVALID", msg);
+        if (error.code === "EINVOICE_PROVIDER_CONFLICT") throw new EinvoiceProviderError("EINVOICE_ENROLL_CONFLICT", msg);
+        if (msg !== error.message) throw new EinvoiceProviderError(error.code, msg, error.retryable);
+      }
+      throw error;
+    }
+
+    const root = obj(parseJson(res.bytes));
+    const data = obj(root?.data) ?? root;
+    if (!data) throw new EinvoiceProviderError("EINVOICE_PROVIDER_BAD_RESPONSE", "Neočakávaná odpoveď enroll");
+    const status = str(data.status);
+    if (status !== "enrolled" && status !== "skipped" && status !== "send_only") {
+      throw new EinvoiceProviderError("EINVOICE_PROVIDER_UNKNOWN_STATE", "Neznámy výsledok enroll — stav sa nemení");
+    }
+    const participant = str(data.participant_id);
+    const heldBy = obj(obj(data.reception)?.held_by);
+    const warnings: string[] = [];
+    if (Array.isArray(root?.warnings)) {
+      for (const w of root!.warnings as unknown[]) {
+        const code = str(obj(w)?.code);
+        if (code && /^[A-Z0-9_]{1,80}$/.test(code)) warnings.push(code);
+      }
+    }
+    return {
+      status,
+      participantId: participant && isValidParticipantId(participant) ? participant : null,
+      registrationId: str(data.registration_id),
+      claim: str(data.claim),
+      receptionHeldBy:
+        status === "send_only"
+          ? { apHost: scrubProviderText(heldBy?.ap_host), certOrg: scrubProviderText(heldBy?.cert_org) }
+          : null,
+      warnings,
+    };
+  }
+
+  /** GET /v1/agent/events — partnerský feed (bez X-Organization-Id). Fallback/kontrola webhookov. */
+  async listPartnerEvents(input: { after?: string; limit?: number } = {}): Promise<PartnerEventPage> {
+    const query: Record<string, string> = { limit: String(Math.max(1, Math.min(500, Math.floor(input.limit ?? 100)))) };
+    if (input.after !== undefined) {
+      if (!/^[0-9]{1,15}$/.test(input.after)) throw new EinvoiceProviderError("EINVOICE_INVALID_ID", "Neplatný kurzor");
+      query.after = input.after;
+    }
+    const res = await this.#request({ method: "GET", path: "/v1/agent/events", query });
+    const root = obj(parseJson(res.bytes));
+    const list = Array.isArray(root?.data) ? (root!.data as unknown[]) : null;
+    if (!list) throw new EinvoiceProviderError("EINVOICE_PROVIDER_BAD_RESPONSE", "Neočakávaný feed udalostí");
+    const events: PartnerEvent[] = [];
+    for (const raw of list) {
+      const row = obj(raw);
+      const id = str(row?.id);
+      const event = str(row?.event);
+      const payload = obj(row?.payload);
+      if (!row || !id || !/^[0-9]{1,15}$/.test(id) || !event || !payload) continue;
+      events.push({ id, event, eventId: str(row.event_id), orgId: str(row.org_id), createdAt: str(row.created_at), payload });
+    }
+    const next = str(root?.next_after);
+    return { events, nextAfter: next && /^[0-9]{1,15}$/.test(next) ? next : null, hasMore: root?.has_more === true };
   }
 
   // ---------------------------------------------------------------------------

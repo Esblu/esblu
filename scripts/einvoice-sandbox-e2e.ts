@@ -1,6 +1,10 @@
 // =============================================================================
 // E-Faktúra — SANDBOX E2E aktuálnej architektúry (Phase 1–6) proti eFaktura.sk.
 //
+// DEPRECATED (2026-10-05): viazané na STARÝ sandbox účet (mäkký sandbox, auto-enroll,
+// organizácia „Tatra Servis" 9915:2099999999). Pre nový API partner účet používaj
+// scripts/einvoice-partner-sandbox-e2e.ts (enroll, A → B, participant.*).
+//
 // RUČNÉ spúšťanie, REÁLNE sieťové volania IBA na sandbox (efk_pk_test_…).
 // NIE JE súčasťou CI ani `npm test`.
 //

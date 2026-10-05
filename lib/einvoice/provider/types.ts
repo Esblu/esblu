@@ -134,6 +134,51 @@ export interface EinvoiceProvider {
   acknowledgeInbound(ctx: ProviderContext, providerReceivedId: string): Promise<void>;
 }
 
+// -----------------------------------------------------------------------------
+// API partner onboarding (enroll príjmu + partnerský feed udalostí).
+// Samostatné rozhranie, aby existujúce test fakes EinvoiceProvider ostali platné.
+// -----------------------------------------------------------------------------
+
+/** Výsledok POST /peppol/enroll. `send_only` = príjem drží iný poskytovateľ, odosielanie funguje. */
+export type EnrollStatus = "enrolled" | "skipped" | "send_only";
+
+export type EnrollResult = {
+  status: EnrollStatus;
+  participantId: string | null;
+  registrationId: string | null;
+  claim: string | null;
+  /** Iba pri send_only: AP host a subjekt certifikátu aktuálneho držiteľa príjmu (firemné údaje). */
+  receptionHeldBy: { apHost: string | null; certOrg: string | null } | null;
+  /** Kódy varovaní poskytovateľa (napr. SANDBOX_TOKEN_MISSING) — nikdy text s údajmi. */
+  warnings: string[];
+};
+
+export type EnrollInput = {
+  /** FS verifikačný token (hex). NIKDY sa neukladá ani neloguje. */
+  verificationTokenHex: string;
+  /** SML migračný kód od aktuálneho držiteľa príjmu (iba live). NIKDY sa neukladá ani neloguje. */
+  migrationCode?: string;
+};
+
+/** Jedna udalosť z partnerského feedu GET /v1/agent/events (telo = presne telo webhooku). */
+export type PartnerEvent = {
+  id: string;
+  event: string;
+  eventId: string | null;
+  orgId: string | null;
+  createdAt: string | null;
+  /** Obálka {event, timestamp, data}. Spracúva sa iba allowlist identifikátorov; neloguje sa. */
+  payload: Record<string, unknown>;
+};
+
+export type PartnerEventPage = { events: PartnerEvent[]; nextAfter: string | null; hasMore: boolean };
+
+export interface EinvoiceOnboardingProvider {
+  readonly name: string;
+  enrollPeppol(ctx: ProviderContext, input: EnrollInput): Promise<EnrollResult>;
+  listPartnerEvents(input?: { after?: string; limit?: number }): Promise<PartnerEventPage>;
+}
+
 export class EinvoiceProviderError extends Error {
   readonly code: string;
   readonly retryable: boolean;

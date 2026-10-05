@@ -1,6 +1,10 @@
 // =============================================================================
 // eFaktura.sk SANDBOX smoke — RUČNÉ spúšťanie, REÁLNE sieťové volania.
 //
+// DEPRECATED (2026-10-05): viazané na STARÝ sandbox účet (mäkký sandbox, auto-enroll,
+// organizácia „Tatra Servis" 9915:2099999999). Pre nový API partner účet používaj
+// scripts/einvoice-partner-sandbox-e2e.ts (enroll, A → B, participant.*).
+//
 // NIE JE súčasťou CI ani `npm test`. Spúšťa sa iba lokálne, po krokoch, s
 // explicitným --confirm-sandbox. Kľúč sa číta IBA z process.env (napr. cez
 // `node --env-file=<súbor MIMO repozitára>`), nikdy sa nevypisuje.

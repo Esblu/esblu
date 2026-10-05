@@ -43,11 +43,21 @@ const DELIVERY_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/;
 const ORG_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const EVENT = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/;
 
-type EventKind = "inbound" | "outbound" | "other";
+type EventKind = "inbound" | "outbound" | "participant" | "other";
 
-/** Typ udalosti → druh (presné názvy udalostí poskytovateľa TO CONFIRM v sandboxe; neznáme = ignorované). */
+export const PARTICIPANT_EVENTS = ["participant.activated", "participant.failed", "participant.deactivated"] as const;
+export type ParticipantEvent = (typeof PARTICIPANT_EVENTS)[number];
+
+/**
+ * Typ udalosti → druh. participant.* sa kontroluje PRVÉ (inak by „participant.failed"
+ * spadol do outbound kvôli slovu „failed"). Neznáme = ignorované.
+ * Partnerské udalosti (docs/webhooks, 2026-10): peppol.document.{sent,delivered,failed,received},
+ * participant.{activated,failed,deactivated}, usage.limit_exceeded.
+ */
 export function classifyWebhookEvent(event: string): EventKind {
   const e = event.toLowerCase();
+  if ((PARTICIPANT_EVENTS as readonly string[]).includes(e)) return "participant";
+  if (e.startsWith("participant.") || e.startsWith("usage.") || e.startsWith("webhook.")) return "other";
   if (/(^|[._:])(received|inbound|incoming)([._:]|$)/.test(e)) return "inbound";
   if (/(^|[._:])(sent|delivered|deferred|failed|error|status|outbound|transmission)([._:]|$)/.test(e)) return "outbound";
   return "other";
@@ -104,9 +114,21 @@ async function handleVerified(
     payload = null;
   }
   if (!payload) return { status: 400, body: { code: "INVALID_PAYLOAD" } };
-  const data = obj(payload.data);
-
   const deliveryId = str(input.deliveryIdHeader) ?? str(payload.id) ?? str(payload.delivery_id);
+  const bodySha256 = createHash("sha256").update(input.rawBody).digest("hex");
+  return processProviderEvent(deps, { deliveryId, payload, bodySha256 });
+}
+
+/**
+ * Spracovanie UŽ OVERENEJ udalosti (webhook po HMAC, alebo partnerský feed
+ * GET /v1/agent/events cez autentifikovaný API kľúč). Spoločné pre oba zdroje.
+ */
+export async function processProviderEvent(
+  deps: WebhookDeps,
+  input: { deliveryId: string | null; payload: Record<string, unknown>; bodySha256: string }
+): Promise<WebhookResponse> {
+  const { deliveryId, payload, bodySha256 } = input;
+  const data = obj(payload.data);
   const event = str(payload.event) ?? str(payload.type);
   // Docs (developers.efaktura.sk/docs/webhooks, 2026-10): obálka {event, timestamp, data},
   // `data.orgId` je VŽDY prítomné. snake_case varianty ostávajú ako fallback.
@@ -116,7 +138,6 @@ async function handleVerified(
     return { status: 400, body: { code: "INVALID_PAYLOAD" } };
   }
   const orgId = providerOrgId && ORG_ID.test(providerOrgId) ? providerOrgId : null;
-  const bodySha256 = createHash("sha256").update(input.rawBody).digest("hex");
 
   const record = await deps.inbound.webhookRecord({
     provider: deps.provider.name,
@@ -145,6 +166,29 @@ async function handleVerified(
 
   const kind = classifyWebhookEvent(event);
   try {
+    if (kind === "participant") {
+      if (!deps.inbound.participantEvent) {
+        await deps.inbound.webhookComplete(record.webhookEventId, "ignored", "EVENT_NOT_HANDLED");
+        return { status: 200, body: { code: "IGNORED" } };
+      }
+      // Z tela iba: participantId (formát overí DB), kód chyby (A-Z0-9_), čas udalosti.
+      const participantId = str(data?.participantId);
+      const code = str(data?.code);
+      const occurredAt =
+        str(data?.activatedAt) ?? str(data?.failedAt) ?? str(data?.deactivatedAt) ?? str(payload.timestamp);
+      const iso = occurredAt && !Number.isNaN(Date.parse(occurredAt)) ? new Date(occurredAt).toISOString() : null;
+      const res = await deps.inbound.participantEvent({
+        provider: deps.provider.name,
+        environment: deps.environment,
+        providerOrgId: orgId,
+        event: event.toLowerCase() as ParticipantEvent,
+        participantId: participantId && /^[0-9]{4}:[^\s:]{1,200}$/.test(participantId) ? participantId : null,
+        code: code && /^[A-Z0-9_]{1,80}$/.test(code) ? code : null,
+        occurredAt: iso,
+      });
+      await deps.inbound.webhookComplete(record.webhookEventId, res.applied ? "processed" : "ignored", res.applied ? null : "STALE_PARTICIPANT_EVENT");
+      return { status: 200, body: { code: res.applied ? "PARTICIPANT_UPDATED" : "IGNORED" } };
+    }
     if (kind === "inbound") {
       const sync = await syncInboundList(
         { store: deps.inbound, provider: deps.provider, environment: deps.environment },
@@ -180,4 +224,28 @@ async function handleVerified(
     }
     return { status: 200, body: { code: "ACCEPTED_RETRY_LATER" } };
   }
+}
+
+/**
+ * Partnerský feed GET /v1/agent/events → tie isté spracovanie ako webhook
+ * (fallback za firewallom / po výpadku dlhšom než opakovania webhookov).
+ * Autenticita = náš API kľúč (TLS na povolený host), nie HMAC. Dedupe: `feed:<event_id|id>`.
+ * Kurzor si drží volajúci (vráti sa `nextAfter`).
+ */
+export async function processPartnerEventPage(
+  deps: WebhookDeps,
+  page: { events: { id: string; eventId: string | null; payload: Record<string, unknown> }[] }
+): Promise<{ processed: number; results: { id: string; code: string }[] }> {
+  const results: { id: string; code: string }[] = [];
+  for (const e of page.events) {
+    const raw = JSON.stringify(e.payload);
+    const deliveryId = `feed:${e.eventId ?? e.id}`.slice(0, 200);
+    const res = await processProviderEvent(deps, {
+      deliveryId,
+      payload: e.payload,
+      bodySha256: createHash("sha256").update(raw).digest("hex"),
+    });
+    results.push({ id: e.id, code: res.body.code });
+  }
+  return { processed: results.length, results };
 }
