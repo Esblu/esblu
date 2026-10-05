@@ -1,7 +1,8 @@
 # E-Faktúra — technická, právna a účtovná pripravenosť (stav 6. 10. 2026)
 
 Interný podklad pre rozhodnutie o prechode zo sandbox/staging do produkčnej prípravy.
-**Nič v tomto dokumente nie je právne ani účtovné stanovisko.** To, že testy prešli, neznamená
+**Nič v tomto dokumente nie je právne ani účtovné stanovisko.** Podklad pre CLIA a otázky pre
+CLIA aj účtovníčku: `docs/clia-delta-einvoice-api-partner-2026-10-06.md`. To, že testy prešli, neznamená
 právne schválenie. Body v sekciách 2–4 musia potvrdiť uvedené strany písomne.
 
 ## 1. Čo technicky overil Esblu (staging `esblu-test` × eFaktura.sk sandbox, syntetické dáta)

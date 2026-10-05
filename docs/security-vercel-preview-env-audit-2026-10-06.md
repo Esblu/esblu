@@ -29,48 +29,64 @@ Preview sú chránené Vercel Authentication (`all_except_custom_domains`), Prot
 zrušený, fork protection zapnutá. Riziko je teda hlavne **latentné**: prvý push akejkoľvek novej
 vetvy (alebo PR) dostane produkčný service_role a OpenAI kľúč do build aj runtime prostredia.
 
-## 2. Cieľový stav
+## 2. Doplnený audit (7. 10. 2026)
 
-- Žiadna bežná Preview vetva nedostane produkčný `SUPABASE_SERVICE_ROLE_KEY` ani `OPENAI_API_KEY`.
-- Production sa nezmení (rovnaké hodnoty, rovnaký cieľ `production`).
-- `einvoice-port` override ostáva funkčný.
-- Odporúčanie: všeobecné Preview = staging `esblu-test` (URL, anon, service_role stagingu),
-  bez OpenAI (AI funkcie v Preview vypnuté), alebo samostatný OpenAI kľúč s limitom.
+- **Build závislosti:** `lib/supabase.ts` číta `NEXT_PUBLIC_SUPABASE_URL` pri importe (klientsky bundle) a
+  `lib/intents/ai-fallback.ts` vytvára OpenAI klienta s `OPENAI_API_KEY` už pri načítaní modulu. Ak by sa
+  preview cieľ iba odobral bez náhrady, Preview build/runtime bežných vetiev môže zlyhať. Preto plán
+  nahrádza hodnoty (nie iba odoberá).
+- **Prednosť:** branch-specific záznamy (`gitBranch`) majú prednosť pred všeobecnými Preview záznamami —
+  `einvoice-port` override ostáva funkčný bez zmeny.
+- **Konflikt:** Vercel nedovolí dva všeobecné záznamy s rovnakým kľúčom a prekrývajúcim sa cieľom → pre
+  každý kľúč treba najprv odobrať `preview` zo spoločného záznamu, potom vytvoriť nový Preview záznam.
+- **Typ:** spoločné záznamy sú `sensitive` (hodnota sa nedá prečítať) — hodnota sa preto nemení ani
+  nekopíruje; mení sa iba zoznam cieľov.
+- **Expozícia:** od 31. 8. 2026 neexistuje žiadny Preview deployment inej vetvy než `einvoice-port`
+  (ktorá mala staging override od prvého deployu). Pred 31. 8. nevieme overiť.
 
-## 3. Plán (vyžaduje súhlas — mení produkčne používané záznamy)
+## 3. Cieľový stav
 
-Vykonanie cez Vercel REST API (`PATCH /v9/projects/esblu/env/{id}`), hodnoty sa NEMENIA, mení sa
-iba zoznam cieľov. Production deployment sa tým nemení (env sa aplikuje na nové deploye).
+| Kľúč | Production | Preview (všetky vetvy) | Preview `einvoice-port` |
+| --- | --- | --- | --- |
+| `SUPABASE_SERVICE_ROLE_KEY` | produkčný (bez zmeny) | **staging esblu-test** | staging (bez zmeny) |
+| `NEXT_PUBLIC_SUPABASE_URL` | produkčný (bez zmeny) | **staging esblu-test** | staging (bez zmeny) |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | produkčný (bez zmeny) | **staging esblu-test** | staging (bez zmeny) |
+| `OPENAI_API_KEY` | produkčný (bez zmeny) | **`preview-disabled`** (nefunkčná hodnota → AI volania v Preview zlyhajú 401, build prejde) alebo samostatný staging kľúč s limitom (rozhodnutie vlastníka) | dedí všeobecný Preview |
 
-1. **Snapshot** — `GET /v10/projects/esblu/env` (ID, kľúč, ciele, vetva, typ) uložiť mimo repa.
-2. `SUPABASE_SERVICE_ROLE_KEY` `94eoB742kId6zQAW`: ciele `["production"]`.
-3. `OPENAI_API_KEY` `dsDOdiAUOs3kVZLd`: ciele `["production"]`.
-4. (Odporúčané) `NEXT_PUBLIC_SUPABASE_URL` `lvLXSNBt82Av1YV4` a `NEXT_PUBLIC_SUPABASE_ANON_KEY`
-   `Fc1URq2hniY1JgEJ`: ciele `["production"]`.
-5. Nové všeobecné Preview záznamy (bez `gitBranch`): `NEXT_PUBLIC_SUPABASE_URL`,
-   `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` = staging `esblu-test`.
-   (Bez kroku 5 sa Preview bez override zostaví bez Supabase konfigurácie → serverové funkcie
-   zlyhajú fail-closed; build môže zlyhať, ak niečo vyžaduje `NEXT_PUBLIC_SUPABASE_*` pri builde.)
-6. **Overenie:**
-   - `GET env` → žiadny produkčný záznam s cieľom `preview`;
-   - `einvoice-port` override nezmenené (8 kľúčov + E2E prepínač);
-   - redeploy Preview `einvoice-port` → READY, `staging-e2e` guard OK (staging DB);
-   - skúšobná vetva `chore/preview-env-check` (bez zmien kódu) → Preview READY a jej runtime
-     ukazuje staging ref (napr. read-only endpoint health / log bez hodnôt) → vetvu zmazať;
-   - Production: **žiadny** redeploy nie je potrebný; pri najbližšom produkčnom deployi skontrolovať
-     smoke test www.esblu.com.
-7. **Rotácia** (rozhodnutie vlastníka): ak nemožno vylúčiť, že staršia Preview vetva (pred 31. 8.)
-   bežala s produkčným service_role, zvážiť rotáciu Supabase service_role / JWT secretu a OpenAI
-   kľúča. Rotácia = zásah do produkcie (výpadok pri nesynchronizovanej zmene) → samostatný plán.
+## 4. Presný plán (VYŽADUJE SÚHLAS — mení produkčne používané záznamy)
 
-## 4. Rollback
+Okno: bez pushov na iné vetvy než `main` počas zmeny (~5 min). Production deployment sa nemení — env sa
+aplikuje až na nové deploye; produkčné hodnoty a cieľ `production` zostávajú.
 
-- Kroky 2–4: `PATCH` toho istého ID späť na `["production","preview"]` (ID sú stabilné, hodnoty
+| Krok | Volanie (Vercel REST, token mimo repa) | Dopad |
+| --- | --- | --- |
+| 0 | `GET /v10/projects/esblu/env` → snapshot (ID, kľúč, ciele, vetva, typ) mimo repa | žiadny |
+| 1 | `PATCH /v9/projects/esblu/env/94eoB742kId6zQAW` `{"target":["production"]}` (SUPABASE_SERVICE_ROLE_KEY) | Preview bez service_role do kroku 2 |
+| 2 | `POST /v10/projects/esblu/env` `{"key":"SUPABASE_SERVICE_ROLE_KEY","value":<staging>,"type":"sensitive","target":["preview"]}` | Preview = staging |
+| 3 | `PATCH …/lvLXSNBt82Av1YV4` `{"target":["production"]}` + `POST` staging `NEXT_PUBLIC_SUPABASE_URL` (preview, encrypted) | Preview klient → staging |
+| 4 | `PATCH …/Fc1URq2hniY1JgEJ` `{"target":["production"]}` + `POST` staging `NEXT_PUBLIC_SUPABASE_ANON_KEY` (preview, encrypted) | Preview klient → staging |
+| 5 | `PATCH …/dsDOdiAUOs3kVZLd` `{"target":["production"]}` + `POST` `OPENAI_API_KEY`=`preview-disabled` (preview, encrypted) | AI v Preview nefunguje (zámerne) |
+| 6 | Overenie: `GET env` — žiadny záznam bez `gitBranch` s cieľom `preview` a produkčnou hodnotou; 4 nové Preview záznamy; `einvoice-port` override nezmenené | — |
+| 7 | Redeploy Preview `einvoice-port` → READY (`guard ok` iba ak sa driver dočasne zapne — inak 404) | overenie buildu |
+| 8 | Production: žiadna akcia; pri najbližšom produkčnom deployi bežný smoke test www.esblu.com | — |
+
+Hodnoty stagingu: `Documents\esblu-l3-staging.env` (mimo repa), prenos bez výpisu (rovnako ako pri
+`einvoice-port` override).
+
+## 5. Rollback (každý krok samostatne)
+
+- Kroky 1, 3, 4, 5: `DELETE /v9/projects/esblu/env/<nové Preview ID>` a potom
+  `PATCH /v9/projects/esblu/env/<pôvodné ID>` `{"target":["production","preview"]}` (pôvodné ID a hodnoty
   sa nemenili).
-- Krok 5: `DELETE /v9/projects/esblu/env/{id}` nových Preview záznamov.
-- Production nie je ovplyvnená ani pri rollbacku (cieľ `production` sa nikdy neodoberá).
+- Production nie je dotknutá ani pri rollbacku (cieľ `production` sa nikdy neodoberá).
 
-## 5. Stav
+## 6. Rotácia (samostatné rozhodnutie)
+
+Ak nemožno vylúčiť, že pred 31. 8. 2026 bežala Preview vetva s produkčným service_role, zvážiť rotáciu
+Supabase JWT secret / service_role a OpenAI kľúča. Rotácia je zásah do produkcie s rizikom výpadku a
+vyžaduje vlastný plán (poradie: nový kľúč do Vercel Production → redeploy → zneplatnenie starého).
+
+## 7. Stav
 
 - Audit: **hotový** (read-only).
-- Náprava: **pripravená, nevykonaná** — čaká na výslovný súhlas.
+- Plán: **hotový**, **nevykonaný** — čaká na výslovný súhlas vlastníka.
