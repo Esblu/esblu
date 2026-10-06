@@ -89,6 +89,6 @@ nahrádza zákonnú archiváciu.
 4. Retenčná politika a export (sekcia 5).
 5. Bezpečnosť Vercel Preview env — produkčný service_role / OpenAI v Preview
    (`docs/security-vercel-preview-env-audit-2026-10-06.md`) — vyžaduje súhlas.
-6. Produkčné migrácie E-Faktúry a SK súladu fakturácie (20261002… až 20261008100004) — nespustené,
+6. Produkčné migrácie E-Faktúry a SK súladu fakturácie (20261002… až 20261008100007) — nespustené,
    vyžadujú súhlas. Právno-účtovný audit: `docs/einvoice-sk-accounting-legal-audit-2026-10.md`.
 7. Produkčný kľúč eFaktura.sk, produkčné webhook URL a secret — po bodoch 1–3.

@@ -195,6 +195,19 @@ await check("chýbajúci BT-25 a dôvod → review dôvody; zamietnutie → ned�
   assert.equal((await inv(c.id as string)).correction_review_status, "rejected");
   assert.match(await errOf(rpc(U.owner, "select public.esblu_received_correction_link($1, $2)", [c.id, FA1])), /ESBLU_CORRECTION_NOT_IN_REVIEW/);
 });
+await check("oprava spracovaná PRED originálom → po príchode originálu sa sama prepojí (stále review, nie prijatá)", async () => {
+  const cn = await receive(CO.A, "org-a", ubl({ root: "CreditNote", type: "381", id: "DO-S-9", date: "2026-09-28", lines: [{ qty: 1, price: 4 }], ref: { id: "FA-S-9", date: "2026-09-27" }, note: "Zľava" }));
+  const before = await inv(cn.result!.invoiceId);
+  assert.deepEqual([before.corrects_invoice_id, before.correction_review_reasons], [null, ["ORIGINAL_NOT_FOUND"]]);
+  const orig = await receive(CO.A, "org-a", ubl({ root: "Invoice", type: "380", id: "FA-S-9", date: "2026-09-27", lines: [{ qty: 1, price: 40 }] }));
+  const after = await inv(cn.result!.invoiceId);
+  assert.deepEqual([after.corrects_invoice_id, after.correction_review_status, after.correction_review_reasons], [orig.result!.invoiceId, "review", ["ORIGINAL_NOT_FINALIZED"]]);
+  const ev = (await h.sql<{ n: number }>("select count(*)::int n from public.invoice_events where invoice_id = $1 and event_type = 'correction_reviewed' and payload->>'action' = 'auto_linked'", [after.id])).rows[0].n;
+  assert.equal(ev, 1);
+  const otherDate = await receive(CO.A, "org-a", ubl({ root: "CreditNote", type: "381", id: "DO-S-10", date: "2026-09-28", lines: [{ qty: 1, price: 1 }], ref: { id: "FA-S-10", date: "2026-01-01" }, note: "Zľava" }));
+  await receive(CO.A, "org-a", ubl({ root: "Invoice", type: "380", id: "FA-S-10", date: "2026-09-27", lines: [{ qty: 1, price: 40 }] }));
+  assert.equal((await inv(otherDate.result!.invoiceId)).corrects_invoice_id, null, "iný dátum BT-26 → bez automatického prepojenia");
+});
 await check("nepodporované typy opráv (CreditNote 396, Invoice 384) → žiadny koncept (manuálne spracovanie)", async () => {
   const a = await receive(CO.A, "org-a", ubl({ root: "CreditNote", type: "396", id: "DO-F-1", date: "2026-09-22", lines: [{ qty: 1, price: 3 }], ref: { id: "FA-S-1" } }));
   assert.deepEqual(a.mapped, { ok: false, code: "UNSUPPORTED_PROFILE", detail: "CREDIT_NOTE_TYPE_UNSUPPORTED" });
@@ -326,6 +339,13 @@ await check("konečná faktúra: odpočet zálohy → saldo = celkom − záloha
     { advance_invoice_id: ADV, vat_category_code: "S", vat_rate: 23, taxable_amount: 1, vat_amount: 0.23 }])])), "OK", "dvakrát v jednom zozname");
   await pay(FIN, 123);
   assert.equal((await inv(FIN)).payment_status, "paid");
+});
+await check("e-faktúra: faktúra k prijatej platbe (386) sa smie odoslať, proforma nie (20261008100006)", async () => {
+  await h.exec(`insert into public.company_entitlements (company_id, entitlement_key, source, note) values ('${CO.A}', 'einvoice', 'manual', 'test') on conflict do nothing`);
+  const req = (id: string) => errOf(svc("select * from public.esblu_einvoice_request_outbound($1, $2, 'sandbox', $3, 'p', 10, '0245:2044444444')", [U.owner, id, "a".repeat(64)]));
+  assert.doesNotMatch(await req(ADV), /ESBLU_EINVOICE_KIND_UNSUPPORTED/);
+  const pf = (await h.sql<{ id: string }>("select id from public.invoices where kind = 'proforma' and document_status = 'finalized' limit 1")).rows[0].id;
+  assert.match(await req(pf), /ESBLU_EINVOICE_KIND_UNSUPPORTED/);
 });
 await check("odpočty nesmú prevýšiť konečnú faktúru ani DPH zálohy", async () => {
   const adv2 = await issued("payment_received_invoice", { items: [{ price: 500 }], header: { tax_point_date: "2026-10-02", delivery_date: null } });

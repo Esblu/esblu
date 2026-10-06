@@ -106,6 +106,8 @@ for (const migration of [
   "20261008100003_fx_rate_date_exact.sql",
   "20261008100004_fx_official_reference_rates.sql",
   "20261008100005_invoicing_corrections_payments_advances.sql",
+  "20261008100006_einvoice_outbound_payment_received.sql",
+  "20261008100007_einvoice_correction_backlink.sql",
 ]) {
   if (migration === "20261002100000_einvoice_foundation.sql") {
     // Simulácia: main medzičasom pridal nový typ udalosti. Migrácia E-Faktúry
