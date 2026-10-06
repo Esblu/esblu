@@ -84,7 +84,7 @@ import { downloadBlob } from "@/lib/file-actions";
 import { invoiceDetailHref } from "@/lib/entity-links";
 import { creditedTotals, isFullyCredited, remainingAfterCredits, signedAmount } from "@/lib/invoicing/credit-note-semantics";
 import { navigateHard } from "@/lib/app-navigation";
-import { fxReferenceRateDate, issueDeadline, isIssuedAfterDeadline } from "@/lib/invoicing/sk-deadlines";
+import { issueDeadline, isIssuedAfterDeadline } from "@/lib/invoicing/sk-deadlines";
 import { confirmAction, notify } from "@/app/components/ui/AppDialog";
 import EinvoiceInvoicePanel from "@/app/components/einvoice/EinvoiceInvoicePanel";
 
@@ -181,6 +181,10 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
   // prefill zdroj pre NOVÉ S-kategórie položky, nikdy hardcoded universal
   // fallback. null = firma default nemá nastavený (žiadny 20/23/19/5 % odhad).
   const [companyDefaultVatRate, setCompanyDefaultVatRate] = useState<number | null>(null);
+  // § 73: platiteľ DPH / IČ DPH dodávateľa (null = neznáme → lehota sa neurčí).
+  const [sellerVat, setSellerVat] = useState<{ vatPayer: boolean | null; hasIcDph: boolean }>({ vatPayer: null, hasIcDph: false });
+  // § 26: oficiálny kurz ECB z DB (žiadne sieťové volanie na ECB z klienta).
+  const [officialFx, setOfficialFx] = useState<{ status: string; rate_date: string | null; rate: number | null } | null>(null);
 
   // Draft edit state (iba kým document_status='draft').
   const [customerId, setCustomerId] = useState("");
@@ -303,6 +307,10 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
         ]);
         const defaultVatRate = billingProfile?.default_vat_rate ?? null;
         setCompanyDefaultVatRate(defaultVatRate);
+        setSellerVat({
+          vatPayer: billingProfile?.vat_payer_status === "vat_payer" ? true : billingProfile?.vat_payer_status === "non_vat_payer" ? false : null,
+          hasIcDph: Boolean(billingProfile?.ic_dph && billingProfile.ic_dph.trim()),
+        });
         setCustomerId(inv.customer_business_partner_id ?? "");
         setSupplierId(inv.supplier_business_partner_id ?? "");
         setSupplierInvoiceNumber(inv.supplier_invoice_number ?? "");
@@ -479,7 +487,7 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
   }
 
   const isReceived = invoice?.direction === "received";
-  // § 73 lehota (iba upozornenie) a § 26 požadovaný dátum kurzu (nápoveda; autoritatívna je DB).
+  // § 73 lehota (iba upozornenie; neurčená = REVIEW) a § 26 oficiálny kurz ECB (z DB; autoritatívna je finalizácia).
   const deadlinePartner = partners.find((p) => p.id === customerId);
   const skIssueDeadline = invoice
     ? issueDeadline({
@@ -487,19 +495,30 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
         kind: invoice.kind,
         deliveryDate: deliveryDate || null,
         taxPointDate: taxPointDate || null,
-        hasIntraEuGoods: draftItems.some((i) => i.vat_category_code === "K"),
-        hasEuServiceReverseCharge:
-          draftItems.some((i) => i.vat_category_code === "AE") &&
-          Boolean(deadlinePartner?.country_code) &&
-          (deadlinePartner?.country_code ?? "").toUpperCase() !== "SK",
+        vatCategories: draftItems.map((i) => i.vat_category_code),
+        buyerCountry: deadlinePartner?.country_code ? deadlinePartner.country_code : null,
+        sellerVatPayer: sellerVat.vatPayer,
+        sellerHasIcDph: sellerVat.hasIcDph,
       })
     : null;
-  const issuedLate = isIssuedAfterDeadline(issueDate, skIssueDeadline);
+  const issuedLate = skIssueDeadline ? isIssuedAfterDeadline(issueDate, skIssueDeadline) : false;
   const isCorrection = invoice?.kind === "credit_note" || invoice?.kind === "debit_note";
-  const expectedFxDate =
-    !isReceived && !isCorrection && fxRateSource
-      ? fxReferenceRateDate(taxPointDate || deliveryDate || issueDate || null, fxRateSource)
-      : null;
+  const fxTaxPoint = taxPointDate || deliveryDate || issueDate || "";
+  const fxCurrency = currency.trim().toUpperCase();
+  const wantsOfficialFx = !isReceived && !isCorrection && (fxRateSource === "ECB" || fxRateSource === "NBS") && fxCurrency !== "EUR" && /^[A-Z]{3}$/.test(fxCurrency) && Boolean(fxTaxPoint);
+  useEffect(() => {
+    if (!wantsOfficialFx) return;
+    let cancelled = false;
+    void Promise.resolve(supabase.rpc("esblu_fx_official_rate", { p_currency: fxCurrency, p_tax_point: fxTaxPoint })).then(({ data, error }) => {
+      if (cancelled) return;
+      const row = !error && Array.isArray(data) ? (data[0] as { status: string; rate_date: string | null; rate: number | null } | undefined) : undefined;
+      setOfficialFx(row ?? { status: "data_missing", rate_date: null, rate: null });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [wantsOfficialFx, fxCurrency, fxTaxPoint]);
+  const officialFxShown = wantsOfficialFx ? officialFx : null;
 
   /**
    * Hlavička draftu podľa smeru. Prijatá faktúra má protistranu v
@@ -967,10 +986,15 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
                   disabled={!canEdit}
                   onChange={(event) => handleIssueDateChange(event.target.value)}
                 />
-                {skIssueDeadline && (
+                {skIssueDeadline && skIssueDeadline.status === "determined" && (
                   <p className={`mt-1 text-xs ${issuedLate ? "text-amber-700" : "text-slate-500"}`} role={issuedLate ? "status" : undefined}>
-                    {t(issuedLate ? "invoices.detail.issueDeadlineLate" : "invoices.detail.issueDeadlineInfo", { date: formatDate(skIssueDeadline.deadline, locale) })}
+                    {skIssueDeadline.alternativeDeadline
+                      ? t("invoices.detail.issueDeadlineEither", { date: formatDate(skIssueDeadline.alternativeDeadline, locale), date2: formatDate(skIssueDeadline.deadline, locale) })
+                      : t(issuedLate ? "invoices.detail.issueDeadlineLate" : "invoices.detail.issueDeadlineInfo", { date: formatDate(skIssueDeadline.deadline, locale) })}
                   </p>
+                )}
+                {skIssueDeadline && skIssueDeadline.status === "review" && (
+                  <p className="mt-1 text-xs text-slate-500">{t("invoices.detail.issueDeadlineReview")}</p>
                 )}
               </div>
 
@@ -1050,9 +1074,14 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
                     <label className={docLabel}>{t("invoices.detail.fxRateDateLabel")}</label>
                     <input type="date" className={docField} value={fxRateDate} disabled={!canEdit}
                       onChange={(event) => setFxRateDate(event.target.value)} />
-                    {expectedFxDate && (
-                      <p className={`mt-1 text-xs ${fxRateDate && fxRateDate !== expectedFxDate ? "text-amber-700" : "text-slate-500"}`}>
-                        {t(fxRateDate && fxRateDate !== expectedFxDate ? "invoices.detail.fxRateDateMismatch" : "invoices.detail.fxRateDateExpected", { date: formatDate(expectedFxDate, locale) })}
+                    {officialFxShown && officialFxShown.status === "ok" && officialFxShown.rate_date && (
+                      <p className={`mt-1 text-xs ${fxRateDate !== officialFxShown.rate_date || Number(fxRate.replace(",", ".")) !== Number(officialFxShown.rate) ? "text-amber-700" : "text-slate-500"}`}>
+                        {t("invoices.detail.fxOfficialRate", { date: formatDate(officialFxShown.rate_date, locale), rate: String(officialFxShown.rate) })}
+                      </p>
+                    )}
+                    {officialFxShown && officialFxShown.status !== "ok" && (
+                      <p className="mt-1 text-xs text-amber-700">
+                        {t(officialFxShown.status === "not_published" ? "invoices.detail.fxOfficialNotPublished" : "invoices.detail.fxOfficialMissing")}
                       </p>
                     )}
                   </div>

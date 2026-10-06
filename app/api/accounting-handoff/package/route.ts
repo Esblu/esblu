@@ -485,17 +485,31 @@ export async function POST(req: Request) {
           vat_total_eur: (invoice as Invoice & { vat_total_eur?: number | null }).vat_total_eur ?? null,
           // § 73: informatívne; skutočný dátum vyhotovenia (issue_date) a finalized_at sa nemenia.
           ...(() => {
+            const seller = parties.find((p) => p.role === "seller");
+            const buyer = parties.find((p) => p.role === "buyer");
+            const sellerIcDph = Boolean(seller?.ic_dph && String(seller.ic_dph).trim());
             const dl = issueDeadline({
               direction: invoice.direction === "received" ? "received" : "issued",
               kind: invoice.kind,
               deliveryDate: invoice.delivery_date ?? null,
               taxPointDate: invoice.tax_point_date ?? null,
-              hasIntraEuGoods: breakdown.some((b) => b.vat_category_code === "K"),
-              hasEuServiceReverseCharge: breakdown.some((b) => b.vat_category_code === "AE") &&
-                parties.some((p) => p.role === "buyer" && Boolean(p.country_code) && String(p.country_code).toUpperCase() !== "SK"),
+              vatCategories: breakdown.map((b) => b.vat_category_code),
+              buyerCountry: buyer?.country_code ? String(buyer.country_code) : null,
+              // Snapshot nemá stav platiteľa: IČ DPH = platiteľ; bez IČ DPH neznáme → lehota sa neurčí (REVIEW).
+              sellerVatPayer: sellerIcDph ? true : null,
+              sellerHasIcDph: sellerIcDph,
             });
-            return { issue_deadline: dl?.deadline ?? null, issue_deadline_rule: dl?.rule ?? null, issued_after_deadline: dl ? isIssuedAfterDeadline(invoice.issue_date, dl) : null };
+            return {
+              issue_deadline_status: dl.status,
+              issue_deadline: dl.status === "determined" ? dl.deadline : null,
+              issue_deadline_alternative: dl.status === "determined" ? dl.alternativeDeadline ?? null : null,
+              issue_deadline_rule: dl.status === "determined" ? dl.rule : null,
+              issue_deadline_review_reason: dl.status === "review" ? dl.reason : null,
+              issued_after_deadline: dl.status === "determined" ? isIssuedAfterDeadline(invoice.issue_date, dl) : null,
+            };
           })(),
+          fx_tax_point_date: (invoice as Invoice & { fx_tax_point_date?: string | null }).fx_tax_point_date ?? null,
+          fx_reference_rate_id: (invoice as Invoice & { fx_reference_rate_id?: string | null }).fx_reference_rate_id ?? null,
         },
         payments: (paymentsByInvoice.get(invoice.id) ?? []).map((p) => ({
           paid_amount: p.paid_amount, paid_at: p.paid_at, payment_method: p.payment_method, note: p.note, recorded_at: p.created_at,

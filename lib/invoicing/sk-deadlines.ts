@@ -1,18 +1,24 @@
 // =============================================================================
-// SK lehoty a dátumy pre fakturáciu — čisté funkcie (bez DB, bez I/O).
+// § 73 zákona č. 222/2004 Z. z. — lehota na vyhotovenie faktúry. Čistá funkcia (bez DB, bez I/O).
 //
-// 1) § 26 ods. 1 zákona č. 222/2004 Z. z.: referenčný kurz ECB/NBS „vyhlásený v deň predchádzajúci
-//    dňu vzniku daňovej povinnosti“. fxReferenceRateDate() vráti posledný deň vyhlásenia kurzu
-//    pred dňom vzniku (kalendár TARGET). Zrkadlo SQL public.esblu_fx_reference_rate_date — DB je
-//    autoritatívna (pozná aj mimoriadne výnimky); tu je iba nápoveda pre UI.
-// 2) § 73 ods. 1 zákona o DPH: lehota 15 dní na vyhotovenie faktúry. issueDeadline() iba
-//    UPOZORŇUJE — Esblu vystavenie po lehote neblokuje (doklad je potrebný aj po lehote) a skutočný
-//    dátum vyhotovenia aj čas finalizácie (finalized_at) zostávajú v audite.
-//    Neriešené: § 73 ods. 2 (registrácia pre daň) a posun konca lehoty na pracovný deň podľa
-//    daňového poriadku — upozornenie je preto konzervatívne (skôr než neskôr). LEGAL REVIEW.
+// Znenie (rovnaké v znení 1. 1. 2026 – 31. 12. 2026 aj od 1. 1. 2027):
+// (1) Faktúra podľa § 72 musí byť vyhotovená do 15 dní
+//   a) odo dňa dodania tovaru alebo služby, ak odsek 2 neustanovuje inak,
+//   b) odo dňa prijatia platby pred dodaním tovaru alebo služby alebo do konca kalendárneho mesiaca,
+//      v ktorom bola platba prijatá, ak odsek 2 neustanovuje inak,
+//   c) od konca kalendárneho mesiaca, v ktorom bol dodaný tovar oslobodený od dane podľa § 43,
+//   d) od konca kalendárneho mesiaca, v ktorom bola dodaná služba alebo prijatá platba pred dodaním
+//      služby s miestom dodania podľa § 15 ods. 1 v inom členskom štáte,
+//   e) od konca kalendárneho mesiaca, v ktorom nastala skutočnosť rozhodná pre vykonanie opravy
+//      základu dane podľa § 25 ods. 1.
+// § 72 ods. 8: faktúra sa nevyhotovuje pri tuzemských plneniach oslobodených podľa § 28 až 42.
+// (2) platiteľ, ktorý splnil registračnú povinnosť, ale do uplynutia lehoty podľa ods. 1 a) alebo b)
+//     nemá pridelené IČ DPH → do 5 pracovných dní odo dňa doručenia rozhodnutia o registrácii.
+//
+// Zásady: Esblu NEBLOKUJE vystavenie. Termín vráti iba tam, kde ho vie určiť bez aproximácie; inak
+// status 'review' (lehota neurčená — nepodsúvame nesprávny zákonný termín) alebo 'not_applicable'.
+// Posun konca lehoty na pracovný deň sa nerieši (termín je konzervatívny).
 // =============================================================================
-
-export type FxRateSource = "ECB" | "NBS" | "CUSTOMS";
 
 const ISO = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -26,42 +32,16 @@ const fmt = (d: Date) => d.toISOString().slice(0, 10);
 const addDays = (d: Date, n: number) => new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + n));
 const endOfMonth = (d: Date) => new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0));
 
-/** Veľkonočná nedeľa (gregoriánsky kalendár, anonymný algoritmus) — rovnaký ako esblu_easter_sunday. */
-export function easterSunday(year: number): string {
-  const a = year % 19, b = Math.floor(year / 100), c = year % 100;
-  const d = Math.floor(b / 4), e = b % 4, f = Math.floor((b + 8) / 25), g = Math.floor((b - f + 1) / 3);
-  const h = (19 * a + b - d - g + 15) % 30, i = Math.floor(c / 4), k = c % 4;
-  const l = (32 + 2 * e + 2 * i - h - k) % 7, m = Math.floor((a + 11 * h + 22 * l) / 451);
-  const month = Math.floor((h + l - 7 * m + 114) / 31), day = ((h + l - 7 * m + 114) % 31) + 1;
-  return fmt(new Date(Date.UTC(year, month - 1, day)));
-}
+export type IssueDeadlineRule = "a_delivery" | "b_payment" | "c_intra_eu_goods" | "e_correction";
 
-/** Deň, v ktorý ECB vyhlasuje referenčné kurzy (pracovný deň TARGET). */
-export function isTargetPublicationDay(date: string): boolean {
-  const d = parse(date);
-  if (!d) return false;
-  const dow = d.getUTCDay();
-  if (dow === 0 || dow === 6) return false;
-  const md = date.slice(5);
-  if (md === "01-01" || md === "05-01" || md === "12-25" || md === "12-26") return false;
-  const easter = parse(easterSunday(d.getUTCFullYear()))!;
-  return date !== fmt(addDays(easter, -2)) && date !== fmt(addDays(easter, 1));
-}
-
-/**
- * Jediný prípustný dátum kurzu pre daný deň vzniku daňovej povinnosti.
- * ECB/NBS: posledný deň vyhlásenia ≤ (deň vzniku − 1). CUSTOMS: deň vzniku. Neplatný vstup → null.
- */
-export function fxReferenceRateDate(taxPointDate: string | null | undefined, source: FxRateSource | "" | null | undefined): string | null {
-  const t = parse(taxPointDate ?? null);
-  if (!t || !source) return null;
-  if (source === "CUSTOMS") return fmt(t);
-  let d = addDays(t, -1);
-  for (let n = 0; n < 30 && !isTargetPublicationDay(fmt(d)); n++) d = addDays(d, -1);
-  return fmt(d);
-}
-
-export type IssueDeadlineRule = "a_delivery" | "b_payment" | "c_intra_eu_goods" | "d_eu_service" | "e_correction";
+export type IssueDeadlineReviewReason =
+  | "missing_date" // chýba dátum, od ktorého lehota plynie
+  | "seller_vat_status_unknown" // nevieme, či je dodávateľ platiteľ (§ 72 sa vzťahuje na platiteľa)
+  | "vat_registration_pending" // platiteľ bez IČ DPH → môže platiť § 73 ods. 2
+  | "cross_border_or_mixed" // odberateľ mimo SK alebo zmiešané režimy → c) / d) / § 72 ods. 1 b), c) nevieme spoľahlivo určiť
+  | "unclassified_vat_category" // kategória (napr. O) bez spoľahlivého mapovania na písmeno § 73
+  | "correction_fact_date_missing" // pri oprave chýba deň skutočnosti rozhodnej pre opravu
+  | "non_vat_payer_foreign_service"; // § 72 ods. 2 (neplatiteľ, služba do zahraničia)
 
 export type IssueDeadlineInput = {
   direction: "issued" | "received";
@@ -69,38 +49,72 @@ export type IssueDeadlineInput = {
   deliveryDate?: string | null;
   /** DUZP; pri faktúre k prijatej platbe = deň prijatia platby; pri oprave = deň skutočnosti rozhodnej pre opravu. */
   taxPointDate?: string | null;
-  /** Aspoň jedna položka v kategórii K (dodanie tovaru do iného členského štátu, § 43). */
-  hasIntraEuGoods?: boolean;
-  /** Služba s miestom dodania v inom členskom štáte (§ 15 ods. 1) — napr. AE s odberateľom mimo SK. */
-  hasEuServiceReverseCharge?: boolean;
+  /** Kategórie DPH položiek (S, Z, E, AE, K, G, O …). */
+  vatCategories: string[];
+  /** Krajina odberateľa (ISO 3166-1 alpha-2); null = neznáma. */
+  buyerCountry: string | null;
+  /** true = platiteľ DPH, false = neplatiteľ, null = neznáme. */
+  sellerVatPayer: boolean | null;
+  /** Dodávateľ má IČ DPH. */
+  sellerHasIcDph: boolean;
 };
 
-export type IssueDeadline = { deadline: string; rule: IssueDeadlineRule; from: string };
+export type IssueDeadline =
+  | { status: "determined"; rule: IssueDeadlineRule; from: string; deadline: string; alternativeDeadline?: string }
+  | { status: "review"; reason: IssueDeadlineReviewReason }
+  | { status: "not_applicable" };
 
-/** § 73 ods. 1 — posledný deň lehoty na vyhotovenie faktúry. null = pravidlo sa neuplatní alebo chýba dátum. */
-export function issueDeadline(input: IssueDeadlineInput): IssueDeadline | null {
-  if (input.direction !== "issued" || input.kind === "proforma") return null;
+// S = tuzemská sadzba, AE = tuzemské prenesenie (§ 69 ods. 12), E = oslobodené (§ 28–42). Z (0 %) SK sadzbu nemá → REVIEW.
+const DOMESTIC_CATEGORIES = new Set(["S", "E", "AE"]);
+
+export function issueDeadline(input: IssueDeadlineInput): IssueDeadline {
+  if (input.direction !== "issued" || input.kind === "proforma") return { status: "not_applicable" };
+  const cats = [...new Set(input.vatCategories.map((c) => c.toUpperCase()))];
+  const buyerSk = (input.buyerCountry ?? "SK").toUpperCase() === "SK";
+  if (input.sellerVatPayer === null) return { status: "review", reason: "seller_vat_status_unknown" };
+  if (input.sellerVatPayer === false) {
+    // § 72 ods. 1 ukladá povinnosť platiteľovi; neplatiteľ iba pri službe do zahraničia (§ 72 ods. 2).
+    return buyerSk ? { status: "not_applicable" } : { status: "review", reason: "non_vat_payer_foreign_service" };
+  }
+  if (!input.sellerHasIcDph) return { status: "review", reason: "vat_registration_pending" };
+
   const tax = parse(input.taxPointDate ?? null);
   const delivery = parse(input.deliveryDate ?? null);
+
   if (input.kind === "credit_note" || input.kind === "debit_note") {
-    const fact = tax ?? delivery;
-    return fact ? { deadline: fmt(addDays(endOfMonth(fact), 15)), rule: "e_correction", from: fmt(fact) } : null;
+    // e) — iba ak je zadaný deň skutočnosti rozhodnej pre opravu; dátum dodania pôvodného plnenia to nie je.
+    if (!tax) return { status: "review", reason: "correction_fact_date_missing" };
+    return { status: "determined", rule: "e_correction", from: fmt(tax), deadline: fmt(addDays(endOfMonth(tax), 15)) };
   }
+
+  // c) — výlučne tovar oslobodený podľa § 43 (kategória K; Esblu pri K uvádza § 43).
+  if (cats.length > 0 && cats.every((c) => c === "K")) {
+    if (buyerSk) return { status: "review", reason: "cross_border_or_mixed" };
+    if (input.kind === "payment_received_invoice") return { status: "review", reason: "cross_border_or_mixed" };
+    if (!delivery) return { status: "review", reason: "missing_date" };
+    return { status: "determined", rule: "c_intra_eu_goods", from: fmt(delivery), deadline: fmt(addDays(endOfMonth(delivery), 15)) };
+  }
+
+  // a) / b) — iba tuzemský odberateľ a tuzemské režimy; inak d) alebo § 72 ods. 1 b), c) → REVIEW.
+  if (!buyerSk || cats.some((c) => c === "K")) return { status: "review", reason: "cross_border_or_mixed" };
+  if (cats.length === 0 || cats.some((c) => !DOMESTIC_CATEGORIES.has(c))) return { status: "review", reason: "unclassified_vat_category" };
+  // § 72 ods. 8: povinnosť vyhotoviť faktúru sa nevzťahuje na tuzemské plnenia oslobodené podľa § 28 až 42.
+  if (cats.every((c) => c === "E")) return { status: "not_applicable" };
+
   if (input.kind === "payment_received_invoice") {
-    if (!tax) return null;
-    if (input.hasEuServiceReverseCharge) return { deadline: fmt(addDays(endOfMonth(tax), 15)), rule: "d_eu_service", from: fmt(tax) };
-    // „do 15 dní odo dňa prijatia platby … alebo do konca kalendárneho mesiaca, v ktorom bola platba prijatá“ → neskorší z oboch.
+    if (!tax) return { status: "review", reason: "missing_date" };
+    // Zákon uvádza dva termíny spojené „alebo“ — zobrazia sa oba, za oneskorenú sa považuje až po neskoršom.
     const a = addDays(tax, 15), b = endOfMonth(tax);
-    return { deadline: fmt(a > b ? a : b), rule: "b_payment", from: fmt(tax) };
+    const [early, late] = a <= b ? [a, b] : [b, a];
+    return { status: "determined", rule: "b_payment", from: fmt(tax), deadline: fmt(late), alternativeDeadline: fmt(early) };
   }
+  // § 74 ods. 1 d): dátum dodania; ak chýba, DUZP (pri bežnej faktúre totožný deň).
   const event = delivery ?? tax;
-  if (!event) return null;
-  if (input.hasIntraEuGoods) return { deadline: fmt(addDays(endOfMonth(event), 15)), rule: "c_intra_eu_goods", from: fmt(event) };
-  if (input.hasEuServiceReverseCharge) return { deadline: fmt(addDays(endOfMonth(event), 15)), rule: "d_eu_service", from: fmt(event) };
-  return { deadline: fmt(addDays(event, 15)), rule: "a_delivery", from: fmt(event) };
+  if (!event) return { status: "review", reason: "missing_date" };
+  return { status: "determined", rule: "a_delivery", from: fmt(event), deadline: fmt(addDays(event, 15)) };
 }
 
 /** true = dátum vyhotovenia je po lehote § 73 (iba upozornenie, nikdy blokovanie). */
-export function isIssuedAfterDeadline(issueDate: string | null | undefined, deadline: IssueDeadline | null): boolean {
-  return Boolean(deadline && issueDate && ISO.test(issueDate) && issueDate > deadline.deadline);
+export function isIssuedAfterDeadline(issueDate: string | null | undefined, deadline: IssueDeadline): boolean {
+  return deadline.status === "determined" && Boolean(issueDate && ISO.test(issueDate) && issueDate > deadline.deadline);
 }

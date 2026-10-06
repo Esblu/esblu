@@ -6,7 +6,9 @@
 // =============================================================================
 import assert from "node:assert/strict";
 import { createPartnerHarness, type Row } from "./einvoice-partner-harness.ts";
-import { fxReferenceRateDate, issueDeadline, isIssuedAfterDeadline, easterSunday } from "../lib/invoicing/sk-deadlines.ts";
+import { issueDeadline, isIssuedAfterDeadline } from "../lib/invoicing/sk-deadlines.ts";
+import { readFileSync } from "node:fs";
+import { buildEcbImportBatch, parseEcbEurofxrefXml } from "../lib/fx/ecb-reference-rates.ts";
 
 let passed = 0;
 const failures: string[] = [];
@@ -207,89 +209,104 @@ await check("neplatiteľ DPH: kategória S odmietnutá, O áno", async () => {
   assert.equal(Number((await inv(ok)).vat_total_amount), 0);
 });
 
-// --- 6. Cudzia mena (§ 26) -------------------------------------------------------------------
+// --- 6. Cudzia mena (§ 26) — oficiálne dáta ECB (20261008100004) ------------------------------------
+// Fixture = nezmenený výňatok oficiálnych kurzov ECB (www.ecb.europa.eu, stiahnuté 2026-10-06).
+const ECB_FIXTURE = JSON.parse(readFileSync(new URL("./fixtures/ecb-reference-rates-2025-2026.json", import.meta.url), "utf8")) as {
+  batches: { source_url: string; document_sha256: string; coverage_from: string; coverage_to: string; rows: { currency: string; rate_date: string; rate: string }[] }[];
+};
+const importBatch = (b: { source_url: string; document_sha256: string; coverage_from: string; coverage_to: string; rows: unknown[] }) =>
+  svc("select public.esblu_fx_import_ecb_batch($1, $2, $3::date, $4::date, $5::jsonb) r", [b.source_url, b.document_sha256, b.coverage_from, b.coverage_to, JSON.stringify(b.rows)]);
+const official = async (cur: string, taxPoint: string) =>
+  (await h.sql<{ status: string; rate_date: string | null; rate: number | null }>(
+    "select status, rate_date::text rate_date, rate::float8 rate from public.esblu_fx_official_rate($1, $2::date)", [cur, taxPoint])).rows[0];
 let USD = "";
-const fxOf = async (id: string) => (await h.sql<Row>("select fx_rate::float8 fx_rate, fx_rate_date::text fx_rate_date, fx_rate_source, tax_base_eur::float8 tax_base_eur, vat_total_eur::float8 vat_total_eur from public.invoices where id = $1", [id])).rows[0];
-const rateDate = async (taxPoint: string, source = "ECB") =>
-  String((await h.sql<{ d: string }>("select public.esblu_fx_reference_rate_date($1::date, $2)::text d", [taxPoint, source])).rows[0].d);
-await check("§ 26 kalendár: pracovný deň → predchádzajúci deň; víkend → piatok; sviatky TARGET → posledný vyhlásený kurz", async () => {
-  assert.equal(await rateDate("2026-10-07"), "2026-10-06", "streda → utorok");
-  assert.equal(await rateDate("2026-10-05"), "2026-10-02", "pondelok → piatok (víkend sa preskočí)");
-  assert.equal(await rateDate("2026-10-04"), "2026-10-02", "nedeľa → piatok");
-  assert.equal(await rateDate("2026-04-07"), "2026-04-02", "utorok po Veľkej noci → štvrtok (Veľkonočný pondelok, víkend a Veľký piatok sa preskočia)");
-  assert.equal(await rateDate("2026-01-02"), "2025-12-31", "2. 1. → 31. 12. (1. 1. sa nevyhlasuje)");
-  assert.equal(await rateDate("2026-12-28"), "2026-12-24", "pondelok 28. 12. → 24. 12. (25.–27. 12.)");
-  assert.equal(await rateDate("2026-05-04"), "2026-04-30", "pondelok 4. 5. → 30. 4. (1. 5. piatok, víkend)");
-  await svc("insert into public.fx_rate_publication_exceptions (rate_source, day, note) values ('ECB', '2026-10-06', 'test: mimoriadne nevyhlásené')");
-  assert.equal(await rateDate("2026-10-07"), "2026-10-05", "mimoriadna výnimka → posledný vyhlásený kurz");
-  assert.equal(await rateDate("2026-10-07", "NBS"), "2026-10-06", "výnimka platí iba pre svoj zdroj");
-  await svc("delete from public.fx_rate_publication_exceptions where day = '2026-10-06'");
-  assert.equal(await errOf(rpc(U.owner, "select * from public.fx_rate_publication_exceptions")) === "OK", false, "klient výnimky nečíta");
+const fxOf = async (id: string) => (await h.sql<Row>("select fx_rate::float8 fx_rate, fx_rate_date::text fx_rate_date, fx_rate_source, tax_base_eur::float8 tax_base_eur, vat_total_eur::float8 vat_total_eur, fx_tax_point_date::text fx_tax_point_date, fx_reference_rate_id from public.invoices where id = $1", [id])).rows[0];
+
+await check("ECB parser: formát eurofxref, pokrytie po deň pred stiahnutím (deň stiahnutia iba ak už obsahuje kurz), neoficiálny zdroj odmietnutý", async () => {
+  const xml = `<?xml version="1.0" encoding="UTF-8"?><gesmes:Envelope xmlns:gesmes="http://www.gesmes.org/xml/2002-08-01" xmlns="http://www.ecb.int/vocabulary/2002-08-01/eurofxref"><gesmes:subject>Reference rates</gesmes:subject><gesmes:Sender><gesmes:name>European Central Bank</gesmes:name></gesmes:Sender><Cube><Cube time="2026-10-06"><Cube currency="USD" rate="1.1269"/><Cube currency="CZK" rate="24.405"/></Cube>
+<Cube time="2026-10-05"><Cube currency="USD" rate="1.1204"/><Cube currency="CZK" rate="24.456"/></Cube>
+<Cube time="2026-10-02"><Cube currency="USD" rate="1.1225"/><Cube currency="CZK" rate="24.47"/></Cube></Cube></gesmes:Envelope>`;
+  const p = parseEcbEurofxrefXml(xml);
+  assert.deepEqual(p.dates, ["2026-10-02", "2026-10-05", "2026-10-06"]);
+  assert.equal(p.rows.length, 6);
+  // stiahnuté 6. 10. o 18:00 SELČ (obsahuje 6. 10.) → pokrytie do 6. 10.; stiahnuté 8. 10. → do 7. 10.
+  assert.equal(buildEcbImportBatch(xml, "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-hist-90d.xml", new Date("2026-10-06T16:00:00Z")).coverage_to, "2026-10-06");
+  assert.equal(buildEcbImportBatch(xml, "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-hist-90d.xml", new Date("2026-10-08T05:00:00Z")).coverage_to, "2026-10-07");
+  assert.equal(buildEcbImportBatch(xml, "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-hist-90d.xml", new Date("2026-10-06T16:00:00Z")).coverage_from, "2026-10-02");
+  assert.throws(() => buildEcbImportBatch(xml, "https://example.com/rates.xml", new Date()), /NOT_OFFICIAL/);
+  assert.throws(() => buildEcbImportBatch(xml, "https://www.ecb.europa.eu/x.xml", new Date("2026-10-05T10:00:00Z")), /FROM_FUTURE/);
+  assert.throws(() => parseEcbEurofxrefXml("<html>not ecb</html>"), /UNEXPECTED_FORMAT/);
+  assert.throws(() => parseEcbEurofxrefXml(xml.replace('rate="1.1269"', 'rate="1,1269"')), /BAD_RATE/);
 });
-await check("§ 26 kalendár: TS nápoveda (UI) = SQL pravidlo (DB) pre každý deň 2025–2027, ECB aj NBS; Veľká noc", async () => {
-  assert.deepEqual([easterSunday(2025), easterSunday(2026), easterSunday(2027)], ["2025-04-20", "2026-04-05", "2027-03-28"]);
-  const rows = (await h.sql<{ d: string; e: string; n: string }>(
-    "select d::date::text d, public.esblu_fx_reference_rate_date(d::date, 'ECB')::text e, public.esblu_fx_reference_rate_date(d::date, 'NBS')::text n from generate_series('2025-01-01'::date, '2027-12-31'::date, '1 day') d")).rows;
-  assert.equal(rows.length, 1095);
-  for (const r of rows) {
-    assert.equal(fxReferenceRateDate(r.d, "ECB"), r.e, r.d);
-    assert.equal(fxReferenceRateDate(r.d, "NBS"), r.n, r.d);
-  }
-  assert.equal(fxReferenceRateDate("2026-10-07", "CUSTOMS"), "2026-10-07");
+await check("ECB import: oficiálne dávky sa uložia, opakovaný import je idempotentný, rozpor ani zmena minulosti nie sú možné", async () => {
+  for (const b of ECB_FIXTURE.batches) await importBatch(b);
+  const again = await importBatch(ECB_FIXTURE.batches[0]);
+  assert.equal(((again.rows[0] as Row).r as { duplicate: boolean }).duplicate, true);
+  const n = (await h.sql<{ n: number }>("select count(*)::int n from public.fx_reference_rates")).rows[0].n;
+  assert.equal(n, ECB_FIXTURE.batches.reduce((a, b) => a + b.rows.length, 0));
+  const base = { source_url: "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml" };
+  assert.match(await errOf(importBatch({ ...base, document_sha256: "a".repeat(64), coverage_from: "2026-10-06", coverage_to: "2026-10-06", rows: [{ currency: "USD", rate_date: "2026-10-06", rate: "1.2000" }] })), /ESBLU_FX_RATE_CONFLICT/);
+  assert.match(await errOf(importBatch({ ...base, document_sha256: "b".repeat(64), coverage_from: "2026-10-04", coverage_to: "2026-10-04", rows: [{ currency: "USD", rate_date: "2026-10-04", rate: "1.1300" }] })), /ESBLU_FX_COVERAGE_CONFLICT/, "nedeľa v pokrytom intervale nemôže dodatočne „získať“ kurz");
+  assert.match(await errOf(importBatch({ source_url: "https://example.com/x.xml", document_sha256: "c".repeat(64), coverage_from: "2026-10-07", coverage_to: "2026-10-07", rows: [{ currency: "USD", rate_date: "2026-10-07", rate: "1.1" }] })), /check|violates/i, "iba oficiálny zdroj ECB");
+  assert.notEqual(await errOf(svc("update public.fx_reference_rates set rate = 1 where currency = 'USD' and rate_date = '2026-10-06'")), "OK", "append-only aj pre service_role");
+  assert.notEqual(await errOf(svc("delete from public.fx_reference_rates where currency = 'USD'")), "OK");
+  assert.notEqual(await errOf(rpc(U.owner, "select public.esblu_fx_import_ecb_batch('https://www.ecb.europa.eu/x', $1, '2026-10-07', '2026-10-07', '[]'::jsonb)", ["d".repeat(64)])), "OK", "klient neimportuje");
+  assert.equal((await rpc<{ n: number }>(U.owner, "select count(*)::int n from public.fx_reference_rates where currency = 'USD'"))[0].n > 0, true, "kurzy sú verejné dáta — čítať môže prihlásený");
 });
-await check("§ 73 lehota: dodanie +15; platba = neskorší z (+15, koniec mesiaca); K a služba EÚ = koniec mesiaca +15; oprava = koniec mesiaca +15; proforma/prijatá bez lehoty", async () => {
-  assert.deepEqual(issueDeadline({ direction: "issued", kind: "regular_invoice", deliveryDate: "2026-10-05" }), { deadline: "2026-10-20", rule: "a_delivery", from: "2026-10-05" });
-  assert.equal(issueDeadline({ direction: "issued", kind: "payment_received_invoice", taxPointDate: "2026-10-05" })?.deadline, "2026-10-31");
-  assert.equal(issueDeadline({ direction: "issued", kind: "payment_received_invoice", taxPointDate: "2026-10-25" })?.deadline, "2026-11-09");
-  assert.equal(issueDeadline({ direction: "issued", kind: "regular_invoice", deliveryDate: "2026-10-05", hasIntraEuGoods: true })?.deadline, "2026-11-15");
-  assert.equal(issueDeadline({ direction: "issued", kind: "regular_invoice", deliveryDate: "2026-12-10", hasEuServiceReverseCharge: true })?.deadline, "2027-01-15");
-  assert.equal(issueDeadline({ direction: "issued", kind: "credit_note", taxPointDate: "2026-02-03" })?.deadline, "2026-03-15");
-  assert.equal(issueDeadline({ direction: "issued", kind: "proforma", deliveryDate: "2026-10-05" }), null);
-  assert.equal(issueDeadline({ direction: "received", kind: "regular_invoice", deliveryDate: "2026-10-05" }), null);
-  assert.equal(issueDeadline({ direction: "issued", kind: "regular_invoice" }), null);
-  const dl = issueDeadline({ direction: "issued", kind: "regular_invoice", deliveryDate: "2026-10-05" });
-  assert.equal(isIssuedAfterDeadline("2026-10-20", dl), false);
-  assert.equal(isIssuedAfterDeadline("2026-10-21", dl), true);
+await check("§ 26 podľa oficiálnych dát: bežný pracovný deň a víkend", async () => {
+  assert.deepEqual(await official("USD", "2026-10-07"), { status: "ok", rate_date: "2026-10-06", rate: 1.1269 }, "streda → utorok");
+  assert.deepEqual(await official("USD", "2026-10-05"), { status: "ok", rate_date: "2026-10-02", rate: 1.1225 }, "pondelok → piatok");
+  assert.deepEqual(await official("USD", "2026-10-04"), { status: "ok", rate_date: "2026-10-02", rate: 1.1225 }, "nedeľa → piatok");
 });
-await check("§ 73 po lehote: finalizácia sa NEblokuje, dátum vyhotovenia ostane skutočný a finalized_at sa zaznamená", async () => {
-  const id = await draft(U.owner, CO.A, { header: { delivery_date: "2026-08-01" } });
-  await finalize(U.owner, id);
-  const r = (await h.sql<{ issue_date: string; finalized_at: string | null; n: number }>(
-    "select issue_date::text, finalized_at::text, (select count(*)::int from public.invoice_events e where e.invoice_id = i.id and e.event_type = 'finalized') n from public.invoices i where id = $1", [id])).rows[0];
-  assert.equal(r.issue_date, "2026-10-06");
-  assert.ok(r.finalized_at, "finalized_at je uložený");
-  assert.equal(r.n, 1);
-  assert.equal(isIssuedAfterDeadline(r.issue_date, issueDeadline({ direction: "issued", kind: "regular_invoice", deliveryDate: "2026-08-01" })), true);
+await check("§ 26: slovenský sviatok, ktorý nie je dňom zatvorenia TARGET → ECB kurz existuje a použije sa", async () => {
+  assert.deepEqual(await official("USD", "2026-01-07"), { status: "ok", rate_date: "2026-01-06", rate: 1.1707 }, "6. 1. Zjavenie Pána");
+  assert.deepEqual(await official("CZK", "2026-09-16"), { status: "ok", rate_date: "2026-09-15", rate: 24.292 }, "15. 9. Sedembolestná Panna Mária");
+  assert.deepEqual(await official("USD", "2026-09-02"), { status: "ok", rate_date: "2026-09-01", rate: 1.159 }, "1. 9.");
 });
-await check("cudzia mena: kurz povinný; prípustný je IBA kurz z posledného dňa vyhlásenia pred dňom vzniku; EUR základ a daň sa uložia", async () => {
-  // dodanie pondelok 5. 10. 2026 → kurz z piatku 2. 10.
+await check("§ 26: dni zatvorenia TARGET → posledný vyhlásený kurz (podľa dát, nie kalendára)", async () => {
+  assert.deepEqual(await official("USD", "2025-12-29"), { status: "ok", rate_date: "2025-12-24", rate: 1.1787 }, "25.–26. 12. + víkend");
+  assert.deepEqual(await official("USD", "2026-01-02"), { status: "ok", rate_date: "2025-12-31", rate: 1.175 }, "1. 1.");
+  assert.deepEqual(await official("CZK", "2026-04-07"), { status: "ok", rate_date: "2026-04-02", rate: 24.54 }, "Veľký piatok, víkend, Veľkonočný pondelok");
+  assert.deepEqual(await official("USD", "2026-05-04"), { status: "ok", rate_date: "2026-04-30", rate: 1.1702 }, "1. 5. + víkend");
+});
+await check("§ 26: chýbajúce dáta a nevyhlásená mena sa nikdy nenahradia odhadom", async () => {
+  assert.equal((await official("USD", "2026-10-08")).status, "data_missing", "7. 10. ešte nie je importovaný");
+  assert.equal((await official("USD", "2026-02-16")).status, "data_missing", "obdobie bez importu");
+  assert.equal((await official("RSD", "2026-10-07")).status, "data_missing", "mena bez oficiálnych dát");
+  // Syntetická mena XTS (ISO testovací kód): pokrytá, ale v posledné dni vyhlásenia ECB pre ňu kurz nie je.
+  await importBatch({ source_url: "https://www.ecb.europa.eu/test/xts", document_sha256: "e".repeat(64), coverage_from: "2026-10-01", coverage_to: "2026-10-06", rows: [{ currency: "XTS", rate_date: "2026-10-01", rate: "2" }, { currency: "XTS", rate_date: "2026-10-02", rate: "2" }] });
+  assert.equal((await official("XTS", "2026-10-07")).status, "not_published");
+});
+await check("finalizácia: dátum aj hodnota kurzu musia zodpovedať oficiálnemu kurzu; uloží sa referencia a rozhodný deň", async () => {
   const id = await draft(U.owner, CO.A, { currency: "USD", header: DELIVERY, items: [{ unit_price: 108 }] });
   assert.match(await errOf(finalize(U.owner, id)), /ESBLU_FX_RATE_REQUIRED/);
-  await setFields(U.owner, id, { fx_rate: 1.08, fx_rate_date: "2026-10-05", fx_rate_source: "ECB" });
+  await setFields(U.owner, id, { fx_rate: 1.1225, fx_rate_date: "2026-10-05", fx_rate_source: "ECB" });
   assert.match(await errOf(finalize(U.owner, id)), /ESBLU_FX_RATE_DATE_INVALID/, "kurz v deň vzniku");
-  await setFields(U.owner, id, { fx_rate_date: "2026-10-04" });
-  assert.match(await errOf(finalize(U.owner, id)), /ESBLU_FX_RATE_DATE_INVALID/, "nedeľa — ECB kurz nevyhlasuje");
   await setFields(U.owner, id, { fx_rate_date: "2026-10-01" });
-  assert.match(await errOf(finalize(U.owner, id)), /ESBLU_FX_RATE_DATE_INVALID/, "starší kurz v 10-dňovom okne už NIE je prípustný");
-  await setFields(U.owner, id, { fx_rate_date: "2026-09-28" });
-  assert.match(await errOf(finalize(U.owner, id)), /ESBLU_FX_RATE_DATE_INVALID/);
-  await setFields(U.owner, id, { fx_rate_date: "2026-10-02" });
+  assert.match(await errOf(finalize(U.owner, id)), /ESBLU_FX_RATE_DATE_INVALID/, "starší kurz");
+  await setFields(U.owner, id, { fx_rate: 1.08, fx_rate_date: "2026-10-02" });
+  assert.match(await errOf(finalize(U.owner, id)), /ESBLU_FX_RATE_MISMATCH/, "svojvoľná hodnota kurzu");
+  await setFields(U.owner, id, { fx_rate: 1.1225 });
   await finalize(U.owner, id);
   const r = await fxOf(id);
-  assert.deepEqual([r.tax_base_eur, r.vat_total_eur, r.fx_rate, r.fx_rate_source, r.fx_rate_date], [100, 23, 1.08, "ECB", "2026-10-02"]);
+  assert.deepEqual([r.fx_rate, r.fx_rate_date, r.fx_rate_source, r.fx_tax_point_date, r.tax_base_eur, r.vat_total_eur], [1.1225, "2026-10-02", "ECB", "2026-10-05", 96.21, 22.13]);
+  assert.ok(r.fx_reference_rate_id, "referencia na oficiálny kurz");
   USD = id;
 });
-await check("cudzia mena: pracovný deň (streda → utorok) a dodanie po sviatku (7. 4. → 2. 4.)", async () => {
-  const wd = await draft(U.owner, CO.A, { currency: "USD", header: { delivery_date: "2026-10-07" } });
-  await setFields(U.owner, wd, { fx_rate: 1.1, fx_rate_date: "2026-10-05", fx_rate_source: "ECB" });
-  assert.match(await errOf(finalize(U.owner, wd)), /ESBLU_FX_RATE_DATE_INVALID/, "pondelok nie je deň predchádzajúci strede");
-  await setFields(U.owner, wd, { fx_rate_date: "2026-10-06" });
-  await finalize(U.owner, wd);
+await check("finalizácia: slovenský sviatok (15. 9.), dni zatvorenia TARGET (Veľká noc, NBS) a chýbajúce dáta", async () => {
+  const sk = await draft(U.owner, CO.A, { currency: "USD", header: { delivery_date: "2026-09-16" } });
+  await setFields(U.owner, sk, { fx_rate: 1.1539, fx_rate_date: "2026-09-14", fx_rate_source: "ECB" });
+  assert.match(await errOf(finalize(U.owner, sk)), /ESBLU_FX_RATE_DATE_INVALID/, "ECB 15. 9. kurz vyhlásila — 14. 9. nie je prípustný");
+  await setFields(U.owner, sk, { fx_rate_date: "2026-09-15" });
+  await finalize(U.owner, sk);
   const hol = await draft(U.owner, CO.A, { currency: "CZK", header: { delivery_date: "2026-04-07" } });
-  await setFields(U.owner, hol, { fx_rate: 24.5, fx_rate_date: "2026-04-06", fx_rate_source: "NBS" });
-  assert.match(await errOf(finalize(U.owner, hol)), /ESBLU_FX_RATE_DATE_INVALID/, "Veľkonočný pondelok sa kurz nevyhlasuje");
-  await setFields(U.owner, hol, { fx_rate_date: "2026-04-02" });
+  await setFields(U.owner, hol, { fx_rate: 24.531, fx_rate_date: "2026-04-06", fx_rate_source: "NBS" });
+  assert.match(await errOf(finalize(U.owner, hol)), /ESBLU_FX_RATE_DATE_INVALID/, "Veľkonočný pondelok: ECB kurz nevyhlásila");
+  await setFields(U.owner, hol, { fx_rate: 24.54, fx_rate_date: "2026-04-02" });
   await finalize(U.owner, hol);
+  const miss = await draft(U.owner, CO.A, { currency: "USD", header: { delivery_date: "2026-10-08" } });
+  await setFields(U.owner, miss, { fx_rate: 1.1269, fx_rate_date: "2026-10-06", fx_rate_source: "ECB" });
+  assert.match(await errOf(finalize(U.owner, miss)), /ESBLU_FX_RATE_DATA_MISSING/, "bez importu sa nefinalizuje odhadom");
 });
 await check("colný kurz: dátum = deň vzniku; v kalendárnom roku sa nemieša s ECB/NBS", async () => {
   const c = await draft(U.owner, CO.A, { currency: "USD", header: { delivery_date: "2026-10-07" } });
@@ -298,27 +315,76 @@ await check("colný kurz: dátum = deň vzniku; v kalendárnom roku sa nemieša 
   await setFields(U.owner, c, { fx_rate_date: "2026-10-07" });
   assert.match(await errOf(finalize(U.owner, c)), /ESBLU_FX_SOURCE_YEAR_MISMATCH/, "firma A už v 2026 použila ECB/NBS");
 });
-await check("kurz po finalizácii nemenný a historický doklad sa spätne neprepočíta; EUR doklad kurz nesmie mať", async () => {
+await check("historický doklad sa spätne neprepočíta (úhrada, pokus o zmenu); EUR doklad kurz nesmie mať", async () => {
+  const before = await fxOf(USD);
   assert.notEqual(await errOf(svc(`update public.invoices set fx_rate = 1.2, tax_base_eur = 90 where id = '${USD}'`)), "OK");
+  assert.notEqual(await errOf(svc(`update public.invoices set fx_tax_point_date = '2026-10-06', fx_reference_rate_id = null where id = '${USD}'`)), "OK");
   await rpc(U.owner, "select public.esblu_add_invoice_payment($1, 10, '2026-10-10', 'bank_transfer', null)", [USD]);
-  const r = await fxOf(USD);
-  assert.deepEqual([r.fx_rate, r.fx_rate_date, r.tax_base_eur, r.vat_total_eur], [1.08, "2026-10-02", 100, 23]);
+  assert.deepEqual(await fxOf(USD), before);
   const eur = await draft(U.owner, CO.A, { header: DELIVERY });
   await setFields(U.owner, eur, { fx_rate: 1, fx_rate_date: "2026-10-02", fx_rate_source: "ECB" });
   assert.match(await errOf(finalize(U.owner, eur)), /ESBLU_FX_RATE_NOT_ALLOWED_FOR_EUR/);
 });
-await check("oprava (§ 25): kurz, dátum aj zdroj pôvodnej faktúry, aj keď je oprava o mesiace neskôr", async () => {
+await check("oprava (§ 25) o mesiace neskôr: kurz, dátum, zdroj aj rozhodný deň pôvodnej faktúry (aj bez dát ECB za december)", async () => {
   const cn = await draft(U.owner, CO.A, { kind: "credit_note", corrects: USD, currency: "USD", header: { tax_point_date: "2026-12-15" }, items: [{ unit_price: 10 }] });
   await setFields(U.owner, cn, { correction_reason: "Zľava", fx_rate: 1.1, fx_rate_date: "2026-12-14", fx_rate_source: "ECB" });
   assert.match(await errOf(finalize(U.owner, cn)), /ESBLU_CORRECTION_FX_RATE_MISMATCH/, "aktuálny kurz pri oprave nie je prípustný");
-  await setFields(U.owner, cn, { fx_rate: 1.08, fx_rate_date: "2026-12-14" });
+  await setFields(U.owner, cn, { fx_rate: 1.1225, fx_rate_date: "2026-12-14" });
   assert.match(await errOf(finalize(U.owner, cn)), /ESBLU_CORRECTION_FX_RATE_MISMATCH/, "dátum kurzu musí byť pôvodný");
   await setFields(U.owner, cn, { fx_rate_date: "2026-10-02", fx_rate_source: "NBS" });
   assert.match(await errOf(finalize(U.owner, cn)), /ESBLU_CORRECTION_FX_RATE_MISMATCH/, "zdroj musí byť pôvodný");
   await setFields(U.owner, cn, { fx_rate_source: "ECB" });
   await finalize(U.owner, cn);
-  const r = await fxOf(cn);
-  assert.deepEqual([r.fx_rate, r.fx_rate_date, r.tax_base_eur], [1.08, "2026-10-02", 9.26]);
+  const r = await fxOf(cn), o = await fxOf(USD);
+  assert.deepEqual([r.fx_rate, r.fx_rate_date, r.fx_tax_point_date, r.fx_reference_rate_id, r.tax_base_eur], [1.1225, "2026-10-02", o.fx_tax_point_date, o.fx_reference_rate_id, 8.91]);
+});
+
+// --- § 73 lehota (iba upozornenie; neurčená = REVIEW) ---------------------------------------------------
+const SELLER = { sellerVatPayer: true, sellerHasIcDph: true } as const;
+await check("§ 73: písm. a) až e) iba tam, kde ich vieme určiť bez aproximácie", async () => {
+  assert.deepEqual(issueDeadline({ direction: "issued", kind: "regular_invoice", deliveryDate: "2026-10-05", vatCategories: ["S"], buyerCountry: "SK", ...SELLER }),
+    { status: "determined", rule: "a_delivery", from: "2026-10-05", deadline: "2026-10-20" });
+  assert.deepEqual(issueDeadline({ direction: "issued", kind: "regular_invoice", deliveryDate: "2026-10-05", vatCategories: ["AE"], buyerCountry: "SK", ...SELLER }),
+    { status: "determined", rule: "a_delivery", from: "2026-10-05", deadline: "2026-10-20" }, "tuzemské prenesenie § 69 ods. 12");
+  assert.deepEqual(issueDeadline({ direction: "issued", kind: "payment_received_invoice", taxPointDate: "2026-10-05", vatCategories: ["S"], buyerCountry: "SK", ...SELLER }),
+    { status: "determined", rule: "b_payment", from: "2026-10-05", deadline: "2026-10-31", alternativeDeadline: "2026-10-20" });
+  assert.deepEqual(issueDeadline({ direction: "issued", kind: "payment_received_invoice", taxPointDate: "2026-10-25", vatCategories: ["S"], buyerCountry: "SK", ...SELLER }),
+    { status: "determined", rule: "b_payment", from: "2026-10-25", deadline: "2026-11-09", alternativeDeadline: "2026-10-31" });
+  assert.deepEqual(issueDeadline({ direction: "issued", kind: "regular_invoice", deliveryDate: "2026-10-05", vatCategories: ["K"], buyerCountry: "DE", ...SELLER }),
+    { status: "determined", rule: "c_intra_eu_goods", from: "2026-10-05", deadline: "2026-11-15" });
+  assert.deepEqual(issueDeadline({ direction: "issued", kind: "credit_note", taxPointDate: "2026-02-03", vatCategories: ["S"], buyerCountry: "SK", ...SELLER }),
+    { status: "determined", rule: "e_correction", from: "2026-02-03", deadline: "2026-03-15" });
+});
+await check("§ 73: neurčiteľné prípady = REVIEW (žiadny podsunutý termín); § 72 ods. 8 a neplatiteľ = neuplatňuje sa", async () => {
+  const rv = (x: Partial<Parameters<typeof issueDeadline>[0]>) => issueDeadline({ direction: "issued", kind: "regular_invoice", deliveryDate: "2026-10-05", vatCategories: ["S"], buyerCountry: "SK", ...SELLER, ...x });
+  assert.deepEqual(rv({ vatCategories: ["AE"], buyerCountry: "DE" }), { status: "review", reason: "cross_border_or_mixed" }, "služba do EÚ (d) — tovar/služba sa nerozlišuje");
+  assert.deepEqual(rv({ vatCategories: ["S", "K"], buyerCountry: "DE" }), { status: "review", reason: "cross_border_or_mixed" });
+  assert.deepEqual(rv({ vatCategories: ["O"] }), { status: "review", reason: "unclassified_vat_category" });
+  assert.deepEqual(rv({ vatCategories: ["G"], buyerCountry: "US" }), { status: "review", reason: "cross_border_or_mixed" });
+  assert.deepEqual(rv({ sellerHasIcDph: false }), { status: "review", reason: "vat_registration_pending" }, "§ 73 ods. 2");
+  assert.deepEqual(rv({ sellerVatPayer: null }), { status: "review", reason: "seller_vat_status_unknown" });
+  assert.deepEqual(rv({ deliveryDate: null }), { status: "review", reason: "missing_date" });
+  assert.deepEqual(rv({ kind: "credit_note", deliveryDate: "2026-10-05" }), { status: "review", reason: "correction_fact_date_missing" });
+  assert.deepEqual(rv({ kind: "payment_received_invoice", vatCategories: ["AE"], buyerCountry: "AT", taxPointDate: "2026-10-05" }), { status: "review", reason: "cross_border_or_mixed" });
+  assert.deepEqual(rv({ vatCategories: ["E"] }), { status: "not_applicable" }, "§ 72 ods. 8");
+  assert.deepEqual(rv({ vatCategories: ["E", "S"] }).status, "determined");
+  assert.deepEqual(rv({ sellerVatPayer: false, sellerHasIcDph: false }), { status: "not_applicable" });
+  assert.deepEqual(rv({ sellerVatPayer: false, sellerHasIcDph: false, buyerCountry: "CZ" }), { status: "review", reason: "non_vat_payer_foreign_service" }, "§ 72 ods. 2");
+  assert.deepEqual(rv({ kind: "proforma" }), { status: "not_applicable" });
+  assert.deepEqual(rv({ direction: "received" }), { status: "not_applicable" });
+  assert.equal(isIssuedAfterDeadline("2026-10-21", rv({})), true);
+  assert.equal(isIssuedAfterDeadline("2026-10-20", rv({})), false);
+  assert.equal(isIssuedAfterDeadline("2027-01-01", rv({ vatCategories: ["O"] })), false, "REVIEW nikdy nehlási oneskorenie");
+});
+await check("§ 73 po lehote: finalizácia sa NEblokuje, dátum vyhotovenia ostane skutočný a finalized_at sa zaznamená", async () => {
+  const id = await draft(U.owner, CO.A, { header: { delivery_date: "2026-08-01" } });
+  await finalize(U.owner, id);
+  const r = (await h.sql<{ issue_date: string; finalized_at: string | null; n: number }>(
+    "select issue_date::text, finalized_at::text, (select count(*)::int from public.invoice_events e where e.invoice_id = i.id and e.event_type = 'finalized') n from public.invoices i where id = $1", [id])).rows[0];
+  assert.equal(r.issue_date, "2026-10-06");
+  assert.ok(r.finalized_at);
+  assert.equal(r.n, 1);
+  assert.equal(isIssuedAfterDeadline(r.issue_date, issueDeadline({ direction: "issued", kind: "regular_invoice", deliveryDate: "2026-08-01", vatCategories: ["S"], buyerCountry: "SK", ...SELLER })), true);
 });
 
 // --- 7. Úhrady -------------------------------------------------------------------------------

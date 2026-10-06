@@ -3,10 +3,10 @@
 Interný technický podklad. **Nie je to právne ani daňové stanovisko. Nič v ňom nie je schválené CLIA,
 daňovým poradcom ani účtovníčkou.** Prešlé testy dokazujú iba to, že kód robí to, čo je tu opísané.
 
-Vetva `einvoice-port`. Migrácie `20261008100000` – `20261008100003` sú aplikované **iba** na staging
+Vetva `einvoice-port`. Migrácie `20261008100000` – `20261008100004` sú aplikované **iba** na staging
 `esblu-test`. Produkčná DB, `main`, produkčné migrácie, produkčné secrets ani live eFaktúra sa nemenili.
 
-Verzia dokumentu: 2 (korekčný audit). Zmeny oproti verzii 1 sú v sekcii 12.
+Verzia dokumentu: 3 (FX podľa oficiálnych dát ECB, presné § 73). Zmeny sú v sekcii 12.
 
 ## 0. Legenda a zdroje
 
@@ -31,43 +31,60 @@ hotové, právna kvalifikácia otvorená).
 | FS eFaktúra | FS SR — eFaktúra (FAQ 15. 9. 2026, MI 7/DPH/2025/I, 1/DPH/2026/I, SK transpozícia Peppol BIS v1.11 z 10. 9. 2026) | https://www.financnasprava.sk/sk/podnikatelia/dane/dan-z-pridanej-hodnoty/e-faktura |
 | Peppol BIS | Peppol BIS Billing 3.0 (May 2026 release) | https://docs.peppol.eu/poacc/billing/3.0/ — kódy faktúry https://docs.peppol.eu/poacc/billing/3.0/codelist/UNCL1001-inv/ , dobropisu https://docs.peppol.eu/poacc/billing/3.0/codelist/UNCL1001-cn/ |
 | SK TDD | Peppol Slovak Republic Tax Data Document 1.0.0 (14. 4. 2026) | https://docs.peppol.eu/tdd/sk/tdd-sk/ |
+| SK transpozícia | FS SR: „Transpozície štandardu Peppol BIS v podmienkach Slovenskej legislatívy“ v1.11 (10. 9. 2026), xlsx 942 719 B | https://www.financnasprava.sk/_img/pfsedit/Dokumenty_PFS/Podnikatelia/Dan_z_pridanej_hodnoty/efaktura/2026/2026.09.11_Peppol_Bis3_v1_11.xlsx |
+| ECB kurzy | ECB „Euro foreign exchange reference rates“ (publikačné pravidlo, súbory eurofxref, história mien) | https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/index.en.html |
+| NBS kurzy | NBS „Exchange rates“ — referenčné kurzy ECB a mesačné kurzy vybraných mien | https://nbs.sk/en/statistics/exchange-rates/ |
 
-Citované paragrafy sú zo znenia účinného od 1. 1. 2027. Pre rok 2026 platí predchádzajúce znenie;
+Citované paragrafy sú zo znenia účinného od 1. 1. 2027; § 26, § 72 a § 73 som porovnal aj so znením 1. 1. 2026 – 31. 12. 2026 (https://static.slov-lex.sk/static/SK/ZZ/2004/222/20260101.html) — sú zhodné. Pre rok 2026 platí predchádzajúce znenie;
 pre fakturáciu sa líšia najmä § 71 ods. 5, § 76a, § 85o ZDPH a § 31, § 35 ZoÚ. Čísla otázok vo FAQ FS
 sa môžu meniť — pred citovaním overiť.
 
 ---
 
-## 1. Kurzy cudzej meny (§ 26 ZDPH) — OPRAVENÉ
+## 1. Kurzy cudzej meny (§ 26 ZDPH) — podľa oficiálnych dát ECB
 
-**Text zákona (LAW, § 26 ods. 1):** platba v cudzej mene sa prepočíta „referenčným výmenným kurzom
+### 1a. LAW
+
+§ 26 ods. 1 (znenie 2026 aj 2027 zhodné): platba v cudzej mene sa prepočíta „referenčným výmenným kurzom
 určeným a vyhláseným Európskou centrálnou bankou alebo Národnou bankou Slovenska v deň predchádzajúci
 dňu vzniku daňovej povinnosti“. Alternatíva: „kurz platný podľa colných predpisov v deň vzniku daňovej
-povinnosti“; rozhodnutie treba vopred písomne oznámiť daňovému úradu a je „záväzné počas celého
+povinnosti“ — rozhodnutie treba vopred písomne oznámiť daňovému úradu a je „záväzné počas celého
 kalendárneho roka“. „Pri oprave základu dane podľa § 25 sa použije kurz, ktorý sa použil pri vzniku
-daňovej povinnosti.“
+daňovej povinnosti.“ Zákon výslovne nerieši deň, v ktorý sa kurz nevyhlásil.
 
-**Čo bolo nesprávne (verzia 1):** migrácia `20261008100000` pri ECB/NBS prijala **ľubovoľný** dátum
-kurzu v okne ⟨deň vzniku − 10; deň vzniku). Nešlo o hľadanie posledného vyhláseného kurzu — prijala aj
-svojvoľne zvolený starší kurz v bežný pracovný deň a dátum, ku ktorému sa kurz nevyhlasuje (nedeľa).
-Navyše opravný doklad vystavený neskôr ako 10 dní po pôvodnej faktúre s pôvodným dátumom kurzu by
-finalizácia odmietla.
+### 1b. ECB/NBS publication rule
 
-**Oprava (`20261008100003_fx_rate_date_exact.sql`):**
+| Pravidlo | Zdroj | Typ |
+| --- | --- | --- |
+| ECB aktualizuje referenčné kurzy okolo 16:00 SEČ **každý pracovný deň okrem dní zatvorenia TARGET** | stránka ECB „Euro foreign exchange reference rates“ | OFFICIAL GUIDANCE (ECB) |
+| Súbory eurofxref obsahujú každý deň, keď ECB kurzy vyhlásila; deň, ktorý chýba, nebol dňom vyhlásenia | štruktúra oficiálnych súborov ECB (overené na dátach: 25.–26. 12. 2025, 1. 1., 3. 4., 6. 4., 1. 5. 2026 chýbajú; 6. 1., 1. 9., 15. 9. 2026 sú prítomné) | PEPPOL/TECH STANDARD (dátový formát) |
+| Slovenský sviatok sám osebe neznamená, že kurz ECB neexistuje (napr. 6. 1. 2026, 15. 9. 2026 — kurz ECB vyhlásený) | dáta ECB | OFFICIAL GUIDANCE (ECB) |
+| NBS na svojom webe zverejňuje referenčné kurzy ECB; vlastné „kurzy vybraných cudzích mien“ NBS sú **mesačné a len informatívne** | stránky NBS „ECB foreign exchange reference rates“ a „Exchange Rates of Selected Foreign Currencies“ | OFFICIAL GUIDANCE (NBS) |
+| Ak sa v deň predchádzajúci dňu vzniku kurz nevyhlásil, použije sa posledný vyhlásený kurz pred ním | technický výklad (zákon to výslovne neuvádza) | **LEGAL REVIEW** |
+| Mesačné kurzy NBS pre meny mimo zoznamu ECB ako „kurz vyhlásený v deň predchádzajúci“ | — | **LEGAL REVIEW** (Esblu ich nepoužíva) |
 
-| Pravidlo | Typ | Implementácia | Stav |
-| --- | --- | --- | --- |
-| ECB/NBS: prípustný je **práve jeden** dátum kurzu = `esblu_fx_reference_rate_date(deň vzniku, zdroj)` | LAW | finalizácia odmietne iný dátum (`ESBLU_FX_RATE_DATE_INVALID`, v `detail` požadovaný dátum) | PASS |
-| Ak sa v deň predchádzajúci dňu vzniku kurz nevyhlásil (víkend, sviatok), použije sa posledný vyhlásený kurz pred ním | LEGAL REVIEW (zákon tento prípad výslovne nerieši; ide o technický výklad) | algoritmus ide spätne po dňoch, kým nenájde deň vyhlásenia (max. 30 dní) | REVIEW |
-| Dni vyhlásenia = pracovné dni TARGET: bez sobôt, nedieľ, 1. 1., Veľkého piatku, Veľkonočného pondelka, 1. 5., 25. 12., 26. 12. | PEPPOL/TECH STANDARD (kalendár ECB/TARGET) | `esblu_fx_is_publication_day`; mimoriadne nevyhlásené dni v tabuľke `fx_rate_publication_exceptions` (iba service_role) | PASS |
-| NBS kurzy pre meny, ktoré ECB nevyhlasuje — rovnaký kalendár | LEGAL REVIEW | rovnaký kalendár + výnimky pre zdroj NBS | REVIEW |
-| Deň vzniku = DUZP (`tax_point_date`), inak dátum dodania, inak dátum vyhotovenia; pri faktúre k prijatej platbe deň prijatia platby | LAW (§ 19) | `coalesce(tax_point_date, delivery_date, issue_date)` | PASS |
-| Colný kurz: dátum = deň vzniku; v kalendárnom roku sa v rámci firmy nemieša s ECB/NBS | LAW | `ESBLU_FX_SOURCE_YEAR_MISMATCH`; písomné oznámenie daňovému úradu Esblu neeviduje | PASS / GAP (evidencia oznámenia) |
-| Oprava (§ 25): kurz, dátum aj zdroj pôvodnej faktúry; pravidlo dňa sa nepočíta znova | LAW | `ESBLU_CORRECTION_FX_RATE_MISMATCH` | PASS |
-| Mena, kurz, dátum, zdroj, základ a DPH v EUR sa uložia raz pri finalizácii a nikdy sa neprepočítavajú | LAW + PRODUCT DECISION | stĺpce sú po finalizácii nemenné (trigger, aj pre service_role) | PASS |
-| Prijaté doklady: kurz a dátum preberá Esblu z dokladu dodávateľa, pravidlo dňa nevynucuje | LEGAL REVIEW | — | REVIEW |
-| Hodnota kurzu (nie dátum) sa neoveruje voči ECB/NBS | — | zadáva používateľ; automatické načítanie kurzu chýba | GAP |
-| UI nápoveda požadovaného dátumu | PRODUCT DECISION | `lib/invoicing/sk-deadlines.ts` `fxReferenceRateDate` — zhodný s DB pre každý deň 2025–2027 (test) | PASS |
+### 1c. PRODUCT IMPLEMENTATION (`20261008100004_fx_official_reference_rates.sql`)
+
+**Čo bolo nepresné (verzia 2, `20261008100003`):** dostupnosť kurzu určoval ručne zakódovaný kalendár
+TARGET (víkendy, 1. 1., Veľký piatok, Veľkonočný pondelok, 1. 5., 25. a 26. 12.) + tabuľka výnimiek.
+Nebol to slovenský sviatkový kalendár (slovenské sviatky správne neovplyvňoval), ale bol to predpoklad,
+nie oficiálny údaj: nevedel, či ECB kurz konkrétnej meny v daný deň skutočne vyhlásila, a **hodnotu kurzu
+neoveroval vôbec**. Kalendár, výnimky a TS nápoveda boli odstránené.
+
+| Prvok | Implementácia | Stav |
+| --- | --- | --- |
+| Oficiálne dáta | `fx_reference_rates` (ECB, mena, dátum, kurz) + `fx_rate_import_batches` (URL ECB, SHA-256, meny, interval úplného pokrytia); obe append-only aj pre service_role; čítanie pre prihlásených (verejné dáta) | PASS |
+| Import | `lib/fx/ecb-reference-rates.ts` (prísny parser eurofxref XML, iba `https://www.ecb.europa.eu/`), `GET /api/cron/fx-rates` (CRON_SECRET) → `esblu_fx_import_ecb_batch` (iba service_role); idempotentný podľa SHA-256; iný kurz pre ten istý deň = `ESBLU_FX_RATE_CONFLICT`; nový kurz v už pokrytom intervale = `ESBLU_FX_COVERAGE_CONFLICT` — minulosť sa nikdy nemení | PASS |
+| Pokrytie | od prvého dňa v súbore po deň pred stiahnutím (Europe/Bratislava); deň stiahnutia iba ak ho súbor už obsahuje | PASS |
+| Vyhľadanie | `esblu_fx_official_rate(mena, deň vzniku)` = posledný kurz meny s dátumom ≤ deň vzniku − 1; vyžaduje, aby celý interval po deň vzniku − 1 bol pokrytý importom (inak `data_missing`); ak ECB v intervale vyhlásila iné meny a túto nie → `not_published` | PASS |
+| Finalizácia (vydaná, ECB/NBS) | povinne `ok`, presný dátum (`ESBLU_FX_RATE_DATE_INVALID`) a presná hodnota kurzu (`ESBLU_FX_RATE_MISMATCH`); bez dát `ESBLU_FX_RATE_DATA_MISSING` / `ESBLU_FX_RATE_NOT_PUBLISHED` — žiadny odhad ani 10-dňové okno | PASS |
+| Nemennosť | uloží sa `fx_rate`, `fx_rate_date`, `fx_rate_source`, `fx_tax_point_date` (rozhodný deň), `fx_reference_rate_id`, `tax_base_eur`, `vat_total_eur`; po finalizácii nemenné (trigger, aj service_role) | PASS |
+| Oprava (§ 25) | kurz, dátum, zdroj, rozhodný deň aj referencia z pôvodnej faktúry; nevyžaduje nové dáta | PASS |
+| Colný kurz | dátum = deň vzniku; v kalendárnom roku sa v rámci firmy nemieša s ECB/NBS; hodnota sa neoveruje (dáta colných kurzov Esblu nemá); evidencia oznámenia daňovému úradu chýba | PASS / GAP |
+| Zobrazenie faktúry | žiadne sieťové volanie; UI číta oficiálny kurz z DB (`esblu_fx_official_rate`) iba pri koncepte | PASS |
+| Prijaté doklady | kurz a dátum sa preberajú z dokladu dodávateľa, pravidlo dňa sa nevynucuje | LEGAL REVIEW |
+| Prevádzka | cron zatiaľ nie je naplánovaný (`vercel.json`); odporúčané denne ráno; bez importu sa doklady v cudzej mene so zdrojom ECB/NBS nefinalizujú | GAP (produkčný krok) |
+| Staging | importované reálne kurzy ECB (USD, CZK: 9. 7. – 6. 10. 2026 a okná okolo 25. 12. 2025 – 9. 1. 2026, Veľkej noci a 1. 5. 2026) | PASS |
 
 ## 2. Faktúra k prijatej platbe a kód 386
 
@@ -76,7 +93,7 @@ finalizácia odmietla.
 | Platba pred dodaním → daňová povinnosť dňom prijatia platby (§ 19 ods. 4) → faktúra (§ 71, § 73 ods. 1 b)) | LAW | `payment_received_invoice` vyžaduje dátum prijatia platby | PASS |
 | Proforma (výzva na platbu) nie je daňový doklad | OFFICIAL GUIDANCE (FAQ FS) | druh `proforma`, séria PF, neodosiela sa ako e-faktúra, nejde do balíka ako daňový doklad | PASS |
 | Faktúra k prijatej platbe v UBL ako `InvoiceTypeCode` **386 (Prepayment invoice)** | PEPPOL/TECH STANDARD | **PEPPOL PASS:** 386 je v Peppol BIS Billing 3.0 (UNCL1001-inv subset, May 2026 release) | PASS |
-| 386 v slovenskom profile | PEPPOL/TECH STANDARD | **SK TDD:** 386 je v code liste `UNCL1001-inv` Peppol SK TDD 1.0.0 (14. 4. 2026); v obchodných pravidlách SK TDD som nenašiel pravidlo, ktoré by 386 vylučovalo (prehľadané podľa kľúčových slov, nie celý dokument). **SK transpozícia Peppol BIS v1.11 (xlsx FS, 10. 9. 2026) nebola prečítaná** — stiahnutie súboru vyžaduje súhlas | **SLOVAK PROFILE REVIEW** |
+| 386 v slovenskom profile | PEPPOL/TECH STANDARD | **SK TDD 1.0.0:** 386 je v code liste `UNCL1001-inv`. **SK transpozícia Peppol BIS v1.11 (FS, 10. 9. 2026), prečítaná:** BT-3 je povinný (1..1), popis „Obchodné faktúry a dobropisy sú definované podľa položiek číselníka UNTDID 1001. Ostatné položky UNTDID 1001 sa môžu u konkrétnych faktúr alebo dobropisov použiť podľa potreby“; žiadne slovenské obmedzenie kódov (380/381/383/386) v hárkoch pravidiel ani termínov (UBL-CR-380 … UBL-CR-389 sú čísla pravidiel UBL, nie kódy typu faktúry). Pri BT-3 je poznámka „nebude doplnené do § 74, bude riešené v podzákonnej norme“ | **technicky PASS; SLOVAK PROFILE REVIEW** (podzákonná norma ešte nie je) |
 | Konečná faktúra odpočíta zálohy; UBL `PrepaidAmount` (BT-113) | LAW (§ 74) + PEPPOL | `invoice_advance_deductions`, `PrepaidAmount` | PASS (DB/UBL), GAP (UI) |
 
 ## 3. Účtovný doklad — originál XML, vizualizácia, koncept
@@ -114,18 +131,38 @@ poskytuje:
 | Dôkaz doručenia | `einvoice_outbound` dôkaz poskytovateľa (povolené polia), stav `delivered` | PASS |
 | **Či toto spĺňa požiadavku vnútorného kontrolného systému** | — | **LEGAL REVIEW** |
 
-## 5. Lehota 15 dní (§ 73 ZDPH) — DOPLNENÉ
+## 5. Lehota na vyhotovenie faktúry (§ 73 ZDPH) — presné pravidlá, inak REVIEW
 
-| Pravidlo (§ 73 ods. 1) | Typ | Výpočet v Esblu (`issueDeadline`) | Stav |
-| --- | --- | --- | --- |
-| a) 15 dní odo dňa dodania | LAW | dátum dodania (inak DUZP) + 15 | PASS |
-| b) 15 dní odo dňa prijatia platby **alebo** do konca mesiaca prijatia platby | LAW | neskorší z oboch dátumov | PASS / LEGAL REVIEW (výklad „alebo“) |
-| c) 15 dní od konca mesiaca dodania tovaru oslobodeného podľa § 43 | LAW | položka kategórie K → koniec mesiaca + 15 | PASS |
-| d) 15 dní od konca mesiaca dodania služby s miestom dodania v inom členskom štáte | LAW | AE a odberateľ mimo SK → koniec mesiaca + 15 | PASS (aproximácia) / LEGAL REVIEW |
-| e) 15 dní od konca mesiaca skutočnosti rozhodnej pre opravu (§ 25) | LAW | dobropis/ťarchopis: DUZP opravy (inak dátum dodania) → koniec mesiaca + 15 | PASS |
-| § 73 ods. 2 (registrácia pre daň), posun konca lehoty na pracovný deň | LAW / LEGAL REVIEW | neriešené → upozornenie je konzervatívne (skôr) | GAP |
-| Upozornenie, **nie blokovanie**; doklad po lehote sa vystaví so skutočným dátumom vyhotovenia | PRODUCT DECISION | UI: info o lehote, varovanie po lehote; finalizácia prebehne; `issue_date` aj `finalized_at` ostávajú | PASS |
-| Export | PRODUCT DECISION | `metadata.json`: `issue_deadline`, `issue_deadline_rule`, `issued_after_deadline`, `finalized_at` | PASS |
+**LAW** (znenie 1. 1. 2026 aj 1. 1. 2027 zhodné): faktúra **podľa § 72** do 15 dní a) odo dňa dodania,
+b) odo dňa prijatia platby pred dodaním **alebo** do konca kalendárneho mesiaca prijatia platby,
+c) od konca mesiaca dodania tovaru oslobodeného podľa § 43, d) od konca mesiaca dodania služby (alebo
+prijatia platby pred dodaním služby) s miestom dodania podľa § 15 ods. 1 v inom členskom štáte, e) od konca
+mesiaca skutočnosti rozhodnej pre opravu podľa § 25 ods. 1; a) a b) platia, „ak odsek 2 neustanovuje
+inak“. **Ods. 2:** platiteľ, ktorý splnil registračnú povinnosť, no do uplynutia lehoty nemá IČ DPH → do
+5 pracovných dní od doručenia rozhodnutia o registrácii. **§ 72 ods. 1** ukladá povinnosť platiteľovi,
+**§ 72 ods. 2** neplatiteľovi iba pri službe s miestom dodania v inom členskom alebo treťom štáte,
+**§ 72 ods. 8** — faktúra sa nevyhotovuje pri tuzemských plneniach oslobodených podľa § 28 až 42.
+
+**PRODUCT IMPLEMENTATION** (`lib/invoicing/sk-deadlines.ts`): výsledok je `determined` (termín),
+`review` (Esblu termín neurčí a žiadny nepodsunie) alebo `not_applicable`. Vystavenie sa nikdy neblokuje.
+
+| Prípad | Výsledok | Stav |
+| --- | --- | --- |
+| Platiteľ s IČ DPH, odberateľ SK, kategórie S / AE (§ 69 ods. 12) / E+S, bežná faktúra | a) dátum dodania (inak DUZP) + 15 | PASS |
+| To isté, faktúra k prijatej platbe | b) zobrazia sa **oba** termíny (deň platby + 15 a koniec mesiaca); oneskorenie sa hlási až po neskoršom | PASS / LEGAL REVIEW (výklad „alebo“) |
+| Výlučne K (§ 43), odberateľ mimo SK, bežná faktúra | c) koniec mesiaca dodania + 15 | PASS |
+| Dobropis/ťarchopis so zadaným dňom skutočnosti rozhodnej pre opravu | e) koniec mesiaca + 15 | PASS |
+| Dobropis/ťarchopis bez tohto dňa | REVIEW (`correction_fact_date_missing`) — dátum dodania pôvodného plnenia sa nepoužije | PASS |
+| Odberateľ mimo SK okrem čistého K (služby do EÚ — d), tretie štáty, AE so zahraničným odberateľom), zmiešané K + iné | REVIEW (`cross_border_or_mixed`) — Esblu nerozlišuje tovar/službu ani miesto dodania podľa § 15 | PASS (bez aproximácie) |
+| Kategórie O, G, Z | REVIEW (`unclassified_vat_category`) | PASS |
+| Platiteľ bez IČ DPH | REVIEW (`vat_registration_pending`, možný § 73 ods. 2) | PASS |
+| Neznámy stav platiteľa | REVIEW (`seller_vat_status_unknown`) | PASS |
+| Výlučne E, odberateľ SK | `not_applicable` (§ 72 ods. 8) | PASS |
+| Neplatiteľ: odberateľ SK → `not_applicable`; odberateľ mimo SK → REVIEW (§ 72 ods. 2) | — | PASS |
+| Proforma, prijatá faktúra | `not_applicable` | PASS |
+| Posun konca lehoty na pracovný deň | neriešené → termín je konzervatívny | LEGAL REVIEW |
+| UI | termín / oba termíny pri b) / varovanie po lehote / text „lehotu Esblu neurčuje“ pri REVIEW | PASS |
+| Export (`metadata.json`) | `issue_deadline_status`, `issue_deadline`, `issue_deadline_alternative`, `issue_deadline_rule`, `issue_deadline_review_reason`, `issued_after_deadline`, `finalized_at` | PASS |
 
 ## 6. Prijaté dobropisy a opravy cez Peppol — NÁVRH (neimplementované)
 
@@ -221,36 +258,51 @@ nemá finance nikde; (3) druhé aktívne členstvo DB odmietne; (4) pri simulova
 
 ## 9. Testy
 
-`npm run test:invoicing-sk` — 28 testov (PGlite so všetkými migráciami), z toho nové v tomto audite:
+`npm run test:invoicing-sk` — **33 testov** (PGlite so všetkými migráciami). FX testy používajú nezmenený
+výňatok oficiálnych kurzov ECB (`scripts/fixtures/ecb-reference-rates-2025-2026.json`, 186 kurzov USD/CZK,
+stiahnuté 6. 10. 2026 z www.ecb.europa.eu):
 
-- § 26 kalendár: pracovný deň, víkend, Veľká noc, 1. 1., Vianoce, 1. 5., mimoriadna výnimka podľa zdroja;
-- TS nápoveda = DB pravidlo pre každý deň 2025–2027 (ECB aj NBS);
-- finalizácia: kurz v deň vzniku, nedeľa, starší kurz v 10-dňovom okne → odmietnuté; jediný správny dátum → OK;
-- pracovný deň (streda → utorok) a dodanie po Veľkej noci (NBS);
-- colný kurz: dátum = deň vzniku, nemiešanie v roku;
-- oprava o 2 mesiace neskôr: aktuálny kurz, iný dátum, iný zdroj → odmietnuté; pôvodný → OK;
-- historický doklad: po úhrade aj po pokuse o zmenu ako service_role sú kurz a EUR sumy nezmenené;
-- § 73 výpočty (a–e, proforma, prijatá) a finalizácia po lehote nie je blokovaná, `finalized_at` uložený;
+- parser eurofxref a pokrytie; neoficiálny zdroj odmietnutý;
+- import: idempotentný, rozpor kurzu a zmena pokrytej minulosti odmietnuté, append-only aj pre service_role, klient neimportuje;
+- **bežný pracovný deň** (7. 10. → 6. 10., 1,1269) a **víkend** (5. 10. → 2. 10.; nedeľa → piatok);
+- **slovenský sviatok, ktorý nie je dňom zatvorenia TARGET:** 6. 1. 2026, 15. 9. 2026, 1. 9. 2026 → kurz ECB z toho dňa;
+- **dni zatvorenia TARGET:** 25.–26. 12. 2025 (→ 24. 12.), 1. 1. 2026 (→ 31. 12.), Veľký piatok + Veľkonočný pondelok (→ 2. 4.), 1. 5. (→ 30. 4.);
+- chýbajúce dáta a nevyhlásená mena → nikdy odhad;
+- finalizácia: zlý dátum, svojvoľná hodnota kurzu, chýbajúce dáta odmietnuté; uložená referencia a rozhodný deň;
+- **oprava používa pôvodný kurz** (o 2 mesiace neskôr, bez dát za december) a preberá referenciu;
+- historický doklad sa po úhrade ani po pokuse o zmenu neprepočíta;
+- colný kurz; § 73 (všetky prípady vrátane REVIEW a § 72 ods. 8); finalizácia po lehote nie je blokovaná;
 - cross-company finance (sekcia 7).
+
+Staging `esblu-test`: telá funkcií zhodné s repom (md5), oficiálne kurzy importované, lookup vrátil rovnaké
+výsledky ako testy (pracovný deň, víkend, SK sviatky, dni TARGET, chýbajúce dáta).
 
 ## 10. Na potvrdenie (LEGAL REVIEW)
 
-1. Posun na posledný vyhlásený kurz ECB/NBS, ak sa v deň predchádzajúci dňu vzniku kurz nevyhlásil; kalendár pre NBS kurzy.
+1. Posun na posledný vyhlásený kurz ECB, ak sa v deň predchádzajúci dňu vzniku kurz nevyhlásil; zdroj „NBS“ = kurzy ECB zverejnené NBS; mesačné kurzy NBS pre iné meny Esblu nepoužíva.
 2. Kurz pri prijatých dokladoch (preberá sa z dokladu dodávateľa).
-3. 386 v SK transpozícii Peppol BIS v1.11 (xlsx FS) — Peppol BIS aj SK TDD code list 386 obsahujú.
+3. 386: Peppol BIS, SK TDD aj SK transpozícia v1.11 ho nevylučujú; zoznam typov dokladov má upraviť podzákonná norma (zatiaľ nie je).
 4. Čo je účtovným dokladom pri e-faktúre (XML / vizualizácia / záznam) — ZoÚ § 10, § 31, § 35 ods. 2.
 5. Či technické prvky v sekcii 4 spĺňajú vnútorný kontrolný systém (ZoÚ § 32 ods. 3 c)).
-6. § 73 ods. 1 b) — „alebo“ ako neskorší z dvoch termínov; § 73 ods. 1 d) — aproximácia cez AE + krajinu odberateľa; posun konca lehoty.
+6. § 73 ods. 1 b) — výklad „alebo“ (Esblu zobrazuje oba termíny); posun konca lehoty na pracovný deň; prípady označené REVIEW (cezhraničné plnenia, O/G/Z, ods. 2).
 7. Návrh prijatých dobropisov (sekcia 6), najmä kód 83 a vrátenie peňazí.
 8. Uchovávanie a archív (zmluva Esblu aj eFaktura.sk), rola Esblu voči FS — `docs/clia-delta-einvoice-api-partner-2026-10-06.md`.
 9. Zodpovednosť za voľbu sadzby a režimu DPH vo VOP.
 
 ## 11. Produkčné blokery
 
-Produkčné migrácie `20261002…` až `20261008100003` nespustené; zmluva a DPA s eFaktura.sk; CLIA;
+Produkčné migrácie `20261002…` až `20261008100004` nespustené; plánovaný import kurzov ECB (cron); zmluva a DPA s eFaktura.sk; CLIA;
 potvrdenie účtovníčky; retencia a export; produkčný kľúč eFaktura.sk. Nič z toho nebolo vykonané.
 
-## 12. Zmeny oproti verzii 1
+## 12. Zmeny
+
+Verzia 3:
+
+- FX: ručný kalendár TARGET + výnimky nahradené oficiálnymi dátami ECB (import, pokrytie, append-only); overuje sa aj hodnota kurzu; uložený rozhodný deň a referencia; oprava preberá referenciu.
+- § 73: overené znenie 2026 aj 2027 vrátane ods. 2 a § 72 ods. 2, 8; odstránené aproximácie (písm. d) cez AE, oprava cez dátum dodania); neurčiteľné prípady = REVIEW, nie termín.
+- 386: prečítaná SK transpozícia v1.11 — žiadne obmedzenie; ostáva REVIEW kvôli budúcej podzákonnej norme.
+
+Verzia 2 (oproti 1):
 
 - § 26: 10-dňové okno nahradené presným dátumom; oprava používa pôvodný kurz aj dátum; colný kurz za rok.
 - 386: rozdelené na PEPPOL PASS a SLOVAK PROFILE REVIEW (predtým nepresne ako otázka akceptácie 386).

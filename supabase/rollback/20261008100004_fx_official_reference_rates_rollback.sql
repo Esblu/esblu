@@ -1,0 +1,10 @@
+-- Rollback 20261008100004. Iba staging / po výslovnom schválení. Poradie je dôležité.
+-- 1) esblu_invoice_finalize_compliance: znovu spustiť definíciu z 20261008100003 a jej kalendárne
+--    funkcie (esblu_easter_sunday, esblu_fx_is_publication_day, esblu_fx_reference_rate_date,
+--    fx_rate_publication_exceptions) — ručný kalendár TARGET, nepresné (viď audit v3).
+-- 2) Väzby na faktúre (dáta finalizovaných dokladov sa tým stratia — iba ak žiadny doklad nie je finalizovaný):
+--    alter table public.invoices drop column if exists fx_reference_rate_id, drop column if exists fx_tax_point_date;
+-- 3) drop function if exists public.esblu_fx_official_rate(text, date);
+--    drop function if exists public.esblu_fx_import_ecb_batch(text, text, date, date, jsonb);
+--    drop table if exists public.fx_reference_rates; drop table if exists public.fx_rate_import_batches;
+--    drop function if exists public.esblu_fx_append_only();
