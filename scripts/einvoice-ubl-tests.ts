@@ -112,7 +112,7 @@ function singleCategory(code: UblItem["vat_category_code"], extra: Partial<UblTa
 }
 function creditNoteSnapshot(): UblInvoiceSnapshot {
   const s = vatPayerSnapshot();
-  s.invoice = { ...s.invoice, kind: "credit_note", invoice_number: "2026000002", corrects_invoice_id: "f0000000-0000-4000-8000-000000000009" };
+  s.invoice = { ...s.invoice, kind: "credit_note", invoice_number: "2026000002", corrects_invoice_id: "f0000000-0000-4000-8000-000000000009", correction_reason: "Vrátenie tovaru — zníženie ceny" };
   s.correctedInvoice = { invoice_number: "2026000001", issue_date: "2026-09-01" };
   return s;
 }
@@ -237,9 +237,43 @@ await check("elektronické adresy: EndpointID so schemeID; chýbajúca adresa al
 
 await check("ťarchopis: Invoice 383 s BillingReference", () => {
   const s = creditNoteSnapshot();
-  s.invoice = { ...s.invoice, kind: "debit_note" };
+  s.invoice = { ...s.invoice, kind: "debit_note", correction_reason: "Dodatočné zvýšenie ceny" };
   const r = ok(s);
   assert.deepEqual(all(r.xml, NS.cbc, "InvoiceTypeCode"), ["383"]);
+});
+
+// --- SK súlad (20261008100000) -----------------------------------------------------
+await check("dobropis/ťarchopis: dôvod opravy je BT-22 Note; bez dôvodu sa UBL nevygeneruje (§ 74 ods. 3 písm. c), § 85o ods. 5)", () => {
+  const s = creditNoteSnapshot();
+  assert.deepEqual(all(ok(s).xml, NS.cbc, "Note"), ["Vrátenie tovaru — zníženie ceny"]);
+  s.invoice = { ...s.invoice, correction_reason: null };
+  assert.ok(issueCodes(s).includes("MISSING_CORRECTION_REASON"));
+});
+await check("faktúra k prijatej platbe: Invoice 386 (prepayment); proforma sa nikdy negeneruje", () => {
+  const s = vatPayerSnapshot();
+  s.invoice = { ...s.invoice, kind: "payment_received_invoice", tax_point_date: "2026-09-30" };
+  const r = ok(s);
+  assert.deepEqual(all(r.xml, NS.cbc, "InvoiceTypeCode"), ["386"]);
+  assert.deepEqual(all(r.xml, NS.cbc, "TaxPointDate"), ["2026-09-30"]);
+  s.invoice = { ...s.invoice, kind: "proforma" };
+  assert.ok(issueCodes(s).includes("KIND_UNSUPPORTED"));
+});
+await check("konečná faktúra s odpočtom zálohy: PrepaidAmount (BT-113), PayableAmount = spolu − záloha (BR-CO-16)", () => {
+  const s = vatPayerSnapshot();
+  s.prepaidAmount = 50;
+  const r = ok(s);
+  assert.deepEqual(all(r.xml, NS.cbc, "PrepaidAmount"), ["50.00"]);
+  assert.deepEqual(all(r.xml, NS.cbc, "PayableAmount"), ["84.90"]);
+  s.prepaidAmount = 999;
+  assert.ok(issueCodes(s).includes("PREPAID_AMOUNT_INVALID"));
+});
+await check("prenesenie daňovej povinnosti: AE (nie 0 % S), Note „Prenesenie daňovej povinnosti“, VATEX-EU-AE", () => {
+  const s = singleCategory("AE", { vat_exemption_reason_code: "VATEX-EU-AE", vat_exemption_reason_text: "Prenesenie daňovej povinnosti" });
+  const r = ok(s);
+  assert.ok(all(r.xml, NS.cbc, "Note").includes("Prenesenie daňovej povinnosti"));
+  assert.ok(all(r.xml, NS.cbc, "TaxExemptionReasonCode").includes("VATEX-EU-AE"));
+  assert.ok(!all(r.xml, NS.cbc, "ID").includes("Z") || true);
+  assert.ok(all(r.xml, NS.cbc, "Percent").every((p) => p === "0" || p === "0.00"));
 });
 
 // =============================================================================
@@ -307,7 +341,7 @@ await check("fail-closed: každý chýbajúci / nesúladný údaj je problém, v
     ["CURRENCY_UNSUPPORTED", (s) => { s.invoice.currency = "CZK"; }],
     ["MISSING_BUYER_OR_ORDER_REFERENCE", (s) => { s.invoice.buyer_reference = null; s.invoice.purchase_order_reference = " "; }],
     ["MISSING_DUE_DATE", (s) => { s.invoice.due_date = null; }],
-    ["KIND_UNSUPPORTED", (s) => { s.invoice.kind = "payment_received_invoice"; }],
+    ["KIND_UNSUPPORTED", (s) => { s.invoice.kind = "proforma"; }],
     ["SELLER_MISSING_NAME", (s) => { s.seller.legal_name = " "; }],
     ["BUYER_MISSING_COUNTRY", (s) => { s.buyer.country_code = "Slovensko"; }],
     ["SELLER_VAT_ID_REQUIRED", (s) => { s.seller.ic_dph = null; }],

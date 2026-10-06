@@ -60,6 +60,8 @@ export const EINVOICE_MIGRATIONS = [
   "20261005110000_einvoice_enroll_error_code_active.sql",
   "20261006100000_einvoice_supplier_dic_feed_cursor.sql",
   "20261007100000_einvoice_event_ops_enroll_limit.sql",
+  "20261008100000_invoicing_sk_compliance.sql",
+  "20261008100001_invoicing_sk_trigger_fn_revoke.sql",
 ];
 
 async function loadPglite(): Promise<Db> {

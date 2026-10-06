@@ -40,7 +40,9 @@ export type InvoiceKind =
   | "regular_invoice"
   | "payment_received_invoice"
   | "credit_note"
-  | "debit_note";
+  | "debit_note"
+  /** 20261008100000: výzva na úhradu — NIE JE daňový doklad (vlastná séria PF, nikdy e-faktúra). */
+  | "proforma";
 export type DocumentStatus = "draft" | "finalized";
 export type PaymentStatus = "unpaid" | "partially_paid" | "paid";
 export type InvoiceSource = "manual" | "ai_inbox" | "efaktura_peppol";
@@ -58,6 +60,13 @@ export type Invoice = {
   issue_date: string;
   due_date: string | null;
   delivery_date: string | null;
+  /** 20261008100000 — draft-only, po finalizácii nemenné. */
+  correction_reason?: string | null;
+  fx_rate?: number | string | null;
+  fx_rate_date?: string | null;
+  fx_rate_source?: "ECB" | "NBS" | "CUSTOMS" | null;
+  tax_base_eur?: number | string | null;
+  vat_total_eur?: number | string | null;
   tax_point_date: string | null;
   currency: string;
   subtotal_amount: number;
@@ -699,6 +708,22 @@ const FINALIZE_ERROR_CODES = [
   "ESBLU_MISSING_SUPPLIER_INVOICE_NUMBER",
   "ESBLU_SUPPLIER_NOT_FOUND",
   "ESBLU_DUPLICATE_RECEIVED_INVOICE",
+  // 20261008100000 — súlad so zákonom o DPH (finalizačné kontroly).
+  "ESBLU_DELIVERY_DATE_REQUIRED",
+  "ESBLU_PAYMENT_RECEIVED_DATE_REQUIRED",
+  "ESBLU_VAT_RATE_NOT_ALLOWED",
+  "ESBLU_NON_VAT_PAYER_CATEGORY",
+  "ESBLU_BUYER_VAT_ID_REQUIRED",
+  "ESBLU_FX_RATE_REQUIRED",
+  "ESBLU_FX_RATE_DATE_INVALID",
+  "ESBLU_FX_RATE_NOT_ALLOWED_FOR_EUR",
+  "ESBLU_CORRECTION_REASON_REQUIRED",
+  "ESBLU_CORRECTION_OF_PROFORMA",
+  "ESBLU_CORRECTION_CURRENCY_MISMATCH",
+  "ESBLU_CORRECTION_FX_RATE_MISMATCH",
+  "ESBLU_CREDIT_EXCEEDS_ORIGINAL",
+  "ESBLU_ADVANCE_DEDUCTION_INVALID",
+  "ESBLU_ADVANCE_DEDUCTION_EXCEEDS",
 ] as const;
 export type FinalizeErrorCode = (typeof FINALIZE_ERROR_CODES)[number];
 
@@ -714,6 +739,19 @@ export function parseFinalizeErrorCode(error: unknown): FinalizeErrorCode | null
  * invoice_parties snapshot, všetko v jednej DB transakcii. Táto funkcia
  * nikdy nič sama nezapisuje, iba volá RPC a vracia jeho výsledok.
  */
+/** Draft-only daňové polia (RPC esblu_set_invoice_compliance_fields, 20261008100000). */
+export type InvoiceComplianceFields = {
+  correction_reason?: string | null;
+  fx_rate?: number | null;
+  fx_rate_date?: string | null;
+  fx_rate_source?: "ECB" | "NBS" | "CUSTOMS" | null;
+  tax_point_date?: string | null;
+};
+export async function setInvoiceComplianceFields(invoiceId: string, fields: InvoiceComplianceFields): Promise<void> {
+  const { error } = await supabase.rpc("esblu_set_invoice_compliance_fields", { p_invoice_id: invoiceId, p_fields: fields });
+  if (error) throw error;
+}
+
 export async function finalizeInvoice(invoiceId: string): Promise<FinalizeInvoiceResult> {
   const { data, error } = await supabase.rpc("esblu_finalize_invoice", {
     p_invoice_id: invoiceId,

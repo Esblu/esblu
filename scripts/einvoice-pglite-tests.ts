@@ -100,6 +100,8 @@ for (const migration of [
   // --- predmet testu ---
   "20261002100000_einvoice_foundation.sql",
   "20261002110000_einvoice_en16931_fields.sql",
+  "20261008100000_invoicing_sk_compliance.sql",
+  "20261008100001_invoicing_sk_trigger_fn_revoke.sql",
 ]) {
   if (migration === "20261002100000_einvoice_foundation.sql") {
     // Simulácia: main medzičasom pridal nový typ udalosti. Migrácia E-Faktúry

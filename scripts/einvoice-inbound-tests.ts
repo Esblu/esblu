@@ -113,6 +113,8 @@ for (const migration of [
   "20261002140000_einvoice_operations.sql",
   "20261002150000_einvoice_rollout_gate.sql",
   "20261003100000_einvoice_inbound_draft_totals.sql",
+  "20261008100000_invoicing_sk_compliance.sql",
+  "20261008100001_invoicing_sk_trigger_fn_revoke.sql",
 ]) {
   try {
     await db.exec(read(`supabase/migrations/${migration}`));
@@ -758,7 +760,7 @@ await check("outbound webhook: stav z tela sa NEpoužije — iba reconciliation 
     `insert into public.invoices (company_id, direction, kind, issue_date, currency, source) values ($1, 'issued', 'regular_invoice', '2026-10-01', 'EUR', 'manual') returning id`, [CA]))).rows[0].id;
   const partner = (await sql<{ id: string }>("select id from public.business_partners where company_id = $1 and ico = '55555555'", [CA])).rows[0].id;
   await as(U.owner, () => db.query("select id from public.esblu_save_invoice_draft($1, $2::jsonb, $3::jsonb, null)", [inv,
-    JSON.stringify({ issue_date: "2026-10-01", due_date: "2026-10-15", currency: "EUR", customer_business_partner_id: partner, buyer_reference: "R" }),
+    JSON.stringify({ issue_date: "2026-10-01", due_date: "2026-10-15", delivery_date: "2026-10-01", currency: "EUR", customer_business_partner_id: partner, buyer_reference: "R" }),
     JSON.stringify([{ description: "X", quantity: 1, unit: "ks", unit_code: "H87", unit_price: 10, price_mode: "net", vat_category_code: "S", vat_rate: 23, line_net_amount: 10, line_vat_amount: 2.3, line_gross_amount: 12.3 }])]));
   await as(U.owner, () => db.query("select public.esblu_finalize_invoice($1)", [inv]));
   const sha64 = "c".repeat(64);

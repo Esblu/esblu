@@ -145,6 +145,8 @@ for (const migration of [
   "20261002140000_einvoice_operations.sql",
   "20261002150000_einvoice_rollout_gate.sql",
   "20261003100000_einvoice_inbound_draft_totals.sql",
+  "20261008100000_invoicing_sk_compliance.sql",
+  "20261008100001_invoicing_sk_trigger_fn_revoke.sql",
 ]) {
   try {
     await db.exec(read(`supabase/migrations/${migration}`));
@@ -552,9 +554,9 @@ const HEADER = {
 async function invoice(uid: string, company: string, partner: string, header: Row = HEADER, finalize = true, kind = "regular_invoice", corrects: string | null = null): Promise<string> {
   const { rows } = await as(uid, () =>
     db.query<{ id: string }>(
-      `insert into public.invoices (company_id, direction, kind, issue_date, currency, customer_business_partner_id, source, corrects_invoice_id)
-       values ($1, 'issued', $3, $4, 'EUR', $2, 'manual', $5) returning id`,
-      [company, partner, kind, TODAY, corrects]
+      `insert into public.invoices (company_id, direction, kind, issue_date, currency, customer_business_partner_id, source, corrects_invoice_id, correction_reason)
+       values ($1, 'issued', $3, $4, 'EUR', $2, 'manual', $5, $6) returning id`,
+      [company, partner, kind, TODAY, corrects, kind === "credit_note" || kind === "debit_note" ? "E2E oprava: vrátenie tovaru" : null]
     )
   );
   const id = rows[0].id;

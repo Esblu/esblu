@@ -57,6 +57,7 @@
     "test:einvoice-partner": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/einvoice-partner-onboarding-tests.ts",
     "test:einvoice-hardening": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/einvoice-hardening-tests.ts",
     "test:einvoice-reception": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/einvoice-reception-tests.ts",
+    "test:invoicing-sk": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/invoicing-sk-compliance-tests.ts",
     "test:einvoice-staging-guard": "node --experimental-strip-types --no-warnings scripts/einvoice-staging-e2e-guard-tests.ts",
     "test:einvoice-partner-e2e-selftest": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/einvoice-partner-sandbox-e2e.ts --offline-selftest",
     "verify:mobile-bundle": "node scripts/verify-mobile-bundle.mjs"

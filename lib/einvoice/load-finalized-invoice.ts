@@ -19,7 +19,7 @@ export type LoadSnapshotResult =
 const HEADER_COLUMNS =
   "id, company_id, direction, kind, document_status, invoice_number, issue_date, due_date, delivery_date, " +
   "tax_point_date, currency, subtotal_amount, vat_total_amount, total_amount, rounding_amount, buyer_reference, " +
-  "purchase_order_reference, payment_means_code, payment_reference, corrects_invoice_id";
+  "purchase_order_reference, payment_means_code, payment_reference, corrects_invoice_id, correction_reason";
 
 const PARTY_COLUMNS =
   "role, legal_name, ico, dic, ic_dph, address_line1, address_line2, city, postal_code, country_code, iban, bic, " +
@@ -71,9 +71,19 @@ export async function loadFinalizedIssuedInvoiceSnapshot(
     }
   }
 
+  // Odpočet záloh (konečná faktúra): suma s DPH → BT-113.
+  const { data: deductions, error: dedError } = await db
+    .from("invoice_advance_deductions")
+    .select("taxable_amount, vat_amount")
+    .eq("invoice_id", invoice.id)
+    .returns<{ taxable_amount: number | string; vat_amount: number | string }[]>();
+  if (dedError) return { ok: false, reason: "QUERY_FAILED" };
+  const prepaidAmount = (deductions ?? []).reduce((acc, d) => acc + Math.round((Number(d.taxable_amount) + Number(d.vat_amount)) * 100), 0) / 100;
+
   return {
     ok: true,
     snapshot: {
+      prepaidAmount,
       invoice,
       seller,
       buyer,

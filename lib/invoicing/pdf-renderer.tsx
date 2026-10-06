@@ -369,7 +369,7 @@ function InvoicePdfDocument({ invoice, seller, buyer, items, taxBreakdowns, loca
             )}
             {invoice.tax_point_date && invoice.tax_point_date !== invoice.delivery_date && (
               <Text style={styles.metaLine}>
-                {translate(locale, "invoices.pdf.taxPointDateLabel")}: {formatDate(invoice.tax_point_date, locale)}
+                {translate(locale, invoice.kind === "payment_received_invoice" ? "invoices.pdf.paymentReceivedDateLabel" : "invoices.pdf.taxPointDateLabel")}: {formatDate(invoice.tax_point_date, locale)}
               </Text>
             )}
             {invoice.variable_symbol && (
@@ -486,6 +486,32 @@ function InvoicePdfDocument({ invoice, seller, buyer, items, taxBreakdowns, loca
             </Text>
           </View>
         </View>
+
+        {/* 20261008100000: zákonné slovné informácie (§ 74 ods. 1 písm. h), i), k), § 74 ods. 3 písm. c)). */}
+        {(() => {
+          const ext = invoice as typeof invoice & { correction_reason?: string | null; fx_rate?: number | string | null; fx_rate_date?: string | null; fx_rate_source?: string | null; tax_base_eur?: number | string | null; vat_total_eur?: number | string | null };
+          const reasons = Array.from(new Set(taxBreakdowns
+            .map((b) => (b as typeof b & { vat_exemption_reason_text?: string | null }).vat_exemption_reason_text)
+            .filter((t): t is string => Boolean(t && t.trim()))));
+          const notes: string[] = [];
+          if (invoice.kind === "proforma") notes.push(translate(locale, "invoices.pdf.proformaNotice"));
+          if ((invoice.kind === "credit_note" || invoice.kind === "debit_note") && ext.correction_reason) {
+            notes.push(`${translate(locale, "invoices.pdf.correctionReasonLabel")}: ${ext.correction_reason}`);
+          }
+          notes.push(...reasons);
+          if (invoice.currency !== "EUR" && ext.fx_rate) {
+            notes.push(`${translate(locale, "invoices.pdf.fxLabel")}: 1 EUR = ${formatNumber(Number(ext.fx_rate), locale)} ${invoice.currency} (${translate(locale, "invoices.pdf.fxSourceLabel")} ${ext.fx_rate_source ?? "—"}, ${ext.fx_rate_date ? formatDate(ext.fx_rate_date, locale) : "—"})`);
+            if (ext.tax_base_eur !== null && ext.tax_base_eur !== undefined) notes.push(`${translate(locale, "invoices.pdf.taxBaseEurLabel")}: ${formatMoney(Number(ext.tax_base_eur) * sign, "EUR", locale)}`);
+            if (ext.vat_total_eur !== null && ext.vat_total_eur !== undefined) notes.push(`${translate(locale, "invoices.pdf.vatEurLabel")}: ${formatMoney(Number(ext.vat_total_eur) * sign, "EUR", locale)}`);
+          }
+          if (notes.length === 0) return null;
+          return (
+            <View style={styles.paymentBox}>
+              <Text style={styles.partyLabel}>{translate(locale, "invoices.pdf.vatNotesTitle")}</Text>
+              {notes.map((n, i) => <Text key={i} style={styles.paymentLine}>{n}</Text>)}
+            </View>
+          );
+        })()}
 
         {(seller?.iban || invoice.variable_symbol || invoice.due_date) && (
           <View style={styles.paymentBox}>

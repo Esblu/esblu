@@ -62,9 +62,12 @@ function documentTypeFor(kind: string): TypeInfo {
       return { root: "Invoice", typeCode: "383" };
     case "credit_note":
       return { root: "CreditNote", typeCode: "381" };
+    case "payment_received_invoice":
+      // Faktúra k prijatej platbe (§ 72 ods. 1 písm. f), § 85o ods. 2 — povinná e-faktúra od 1. 1. 2027):
+      // UNCL1001 386 „Prepayment invoice“ (Peppol BIS Billing 3.0). Overiť v SK pravidlách FS (TAX REVIEW).
+      return { root: "Invoice", typeCode: "386" };
     default:
-      // payment_received_invoice (daňový doklad k prijatej platbe): typ dokladu
-      // pre SK Peppol nevieme potvrdiť — TODO po OpenAPI / odpovedi poskytovateľa.
+      // proforma (výzva na úhradu) NIE JE daňový doklad → nikdy e-faktúra.
       return null;
   }
 }
@@ -163,7 +166,11 @@ export function checkUblPreconditions(s: UblInvoiceSnapshot): { issues: UblIssue
     if (!s.correctedInvoice || blank(s.correctedInvoice.invoice_number)) {
       add("MISSING_PRECEDING_INVOICE", "BT-25");
     }
+    // § 74 ods. 3 písm. c), § 85o ods. 5: opravný doklad uvádza menené údaje / dôvod.
+    if (blank(inv.correction_reason)) add("MISSING_CORRECTION_REASON", "BT-22 (§ 85o ods. 5)");
   }
+  const prepaid = toDecimal(s.prepaidAmount ?? 0);
+  if (prepaid.lt(0) || prepaid.gt(toDecimal(inv.total_amount))) add("PREPAID_AMOUNT_INVALID", "BT-113 / BR-CO-16");
 
   for (const [party, isSeller] of [[s.seller, true], [s.buyer, false]] as const) {
     const P = isSeller ? "SELLER" : "BUYER";
@@ -335,6 +342,11 @@ export function generateUbl(s: UblInvoiceSnapshot): UblGenerationResult {
     x.text(r, "cbc:IssueDate", isoDate(inv.issue_date)!);
     if (!isCredit && isoDate(inv.due_date)) x.text(r, "cbc:DueDate", isoDate(inv.due_date)!);
     x.text(r, isCredit ? "cbc:CreditNoteTypeCode" : "cbc:InvoiceTypeCode", type.typeCode);
+    // BT-22: dôvod opravy; pri prenesení daňovej povinnosti aj slovná informácia (§ 74 ods. 1 písm. k)).
+    if ((inv.kind === "credit_note" || inv.kind === "debit_note") && !blank(inv.correction_reason)) {
+      x.text(r, "cbc:Note", inv.correction_reason!.trim());
+    }
+    if (s.taxBreakdowns.some((b) => b.vat_category_code === "AE")) x.text(r, "cbc:Note", "Prenesenie daňovej povinnosti");
     if (isoDate(inv.tax_point_date)) x.text(r, "cbc:TaxPointDate", isoDate(inv.tax_point_date)!);
     x.text(r, "cbc:DocumentCurrencyCode", inv.currency);
     if (!blank(inv.buyer_reference)) x.text(r, "cbc:BuyerReference", inv.buyer_reference!.trim());
@@ -387,8 +399,10 @@ export function generateUbl(s: UblInvoiceSnapshot): UblGenerationResult {
     x.text(totals, "cbc:LineExtensionAmount", money(taxExclusive), cur);
     x.text(totals, "cbc:TaxExclusiveAmount", money(taxExclusive), cur);
     x.text(totals, "cbc:TaxInclusiveAmount", money(taxExclusive.plus(toDecimal(inv.vat_total_amount))), cur);
+    const prepaidAmount = toDecimal(s.prepaidAmount ?? 0);
+    if (prepaidAmount.gt(0)) x.text(totals, "cbc:PrepaidAmount", money(prepaidAmount), cur);
     if (!toDecimal(inv.rounding_amount).eq(0)) x.text(totals, "cbc:PayableRoundingAmount", money(inv.rounding_amount), cur);
-    x.text(totals, "cbc:PayableAmount", money(inv.total_amount), cur);
+    x.text(totals, "cbc:PayableAmount", money(toDecimal(inv.total_amount).minus(prepaidAmount)), cur);
 
     const items = [...s.items].sort((a, b) => a.position - b.position);
     for (const item of items) {

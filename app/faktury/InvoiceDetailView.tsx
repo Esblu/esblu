@@ -39,6 +39,7 @@ import {
   previewDraftTotals,
   removeInvoicePayment,
   saveInvoiceDraft,
+  setInvoiceComplianceFields,
   listFinalizedCreditNotesFor,
   getInvoiceNumberLabel,
   validateDraftBeforeFinalize,
@@ -192,6 +193,12 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
   const [variableSymbol, setVariableSymbol] = useState("");
   // EN16931 / Peppol polia vydanej faktúry (BT-72, BT-10, BT-13, BT-81, BT-83).
   const [deliveryDate, setDeliveryDate] = useState("");
+  // 20261008100000: dátum prijatia platby / DUZP, dôvod opravy, kurz cudzej meny (§ 19 ods. 4, § 26, § 74).
+  const [taxPointDate, setTaxPointDate] = useState("");
+  const [correctionReason, setCorrectionReason] = useState("");
+  const [fxRate, setFxRate] = useState("");
+  const [fxRateDate, setFxRateDate] = useState("");
+  const [fxRateSource, setFxRateSource] = useState<"" | "ECB" | "NBS" | "CUSTOMS">("");
   const [buyerReference, setBuyerReference] = useState("");
   const [purchaseOrderReference, setPurchaseOrderReference] = useState("");
   const [paymentMeansCode, setPaymentMeansCode] = useState("");
@@ -302,6 +309,11 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
         setDueDate(inv.due_date ?? "");
         setVariableSymbol(inv.variable_symbol ?? "");
         setDeliveryDate(inv.delivery_date ?? "");
+        setTaxPointDate(inv.tax_point_date ?? "");
+        setCorrectionReason(inv.correction_reason ?? "");
+        setFxRate(inv.fx_rate != null ? String(inv.fx_rate) : "");
+        setFxRateDate(inv.fx_rate_date ?? "");
+        setFxRateSource(inv.fx_rate_source ?? "");
         setBuyerReference(inv.buyer_reference ?? "");
         setPurchaseOrderReference(inv.purchase_order_reference ?? "");
         setPaymentMeansCode(inv.payment_means_code ?? "");
@@ -482,6 +494,18 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
       : { customer_business_partner_id: customerId || null };
   }
 
+  /** Draft-only daňové polia (whitelist v DB). Kurz iba pri cudzej mene. */
+  function complianceFieldsPatch() {
+    const foreign = currency.trim().toUpperCase() !== "EUR";
+    return {
+      ...(isReceived ? {} : { tax_point_date: taxPointDate || null }),
+      ...(invoice && (invoice.kind === "credit_note" || invoice.kind === "debit_note") ? { correction_reason: correctionReason.trim() || null } : {}),
+      fx_rate: foreign && fxRate.trim() ? Number(fxRate.replace(",", ".")) : null,
+      fx_rate_date: foreign ? fxRateDate || null : null,
+      fx_rate_source: foreign ? fxRateSource || null : null,
+    };
+  }
+
   /** EN16931 polia — iba pre vydanú faktúru; prijatú faktúru nemeníme. */
   function einvoiceHeaderPatch() {
     if (isReceived) return {};
@@ -543,6 +567,7 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
         relevantItems,
         invoice.updated_at
       );
+      await setInvoiceComplianceFields(invoice.id, complianceFieldsPatch());
       await finalizeInvoice(invoice.id);
       await loadAll();
     } catch (error) {
@@ -972,6 +997,47 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
               </div>
 
               {!isReceived && (
+                <div>
+                  <label className={docLabel}>
+                    {t(invoice.kind === "payment_received_invoice" ? "invoices.pdf.paymentReceivedDateLabel" : "invoices.pdf.taxPointDateLabel")}
+                  </label>
+                  <input type="date" className={docField} value={taxPointDate} disabled={!canEdit}
+                    onChange={(event) => setTaxPointDate(event.target.value)} />
+                </div>
+              )}
+              {(invoice.kind === "credit_note" || invoice.kind === "debit_note") && (
+                <div className="sm:col-span-2">
+                  <label className={docLabel}>{t("invoices.pdf.correctionReasonLabel")}</label>
+                  <input className={docField} value={correctionReason} disabled={!canEdit} maxLength={500}
+                    onChange={(event) => setCorrectionReason(event.target.value)} />
+                </div>
+              )}
+              {currency.trim().toUpperCase() !== "EUR" && (
+                <>
+                  <div>
+                    <label className={docLabel}>{t("invoices.pdf.fxLabel")} (1 EUR = ? {currency.trim().toUpperCase()})</label>
+                    <input inputMode="decimal" className={docField} value={fxRate} disabled={!canEdit}
+                      onChange={(event) => setFxRate(event.target.value)} />
+                  </div>
+                  <div>
+                    <label className={docLabel}>{t("invoices.detail.fxRateDateLabel")}</label>
+                    <input type="date" className={docField} value={fxRateDate} disabled={!canEdit}
+                      onChange={(event) => setFxRateDate(event.target.value)} />
+                  </div>
+                  <div>
+                    <label className={docLabel}>{t("invoices.pdf.fxSourceLabel")}</label>
+                    <select className={docField} value={fxRateSource} disabled={!canEdit}
+                      onChange={(event) => setFxRateSource(event.target.value as "" | "ECB" | "NBS" | "CUSTOMS")}>
+                      <option value="">—</option>
+                      <option value="ECB">ECB</option>
+                      <option value="NBS">NBS</option>
+                      <option value="CUSTOMS">{t("invoices.detail.fxCustomsOption")}</option>
+                    </select>
+                  </div>
+                </>
+              )}
+
+              {!isReceived && (
                 <>
                   <div>
                     <label className={docLabel}>{t("invoices.einvoice.deliveryDateLabel")}</label>
@@ -1399,10 +1465,15 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
 
                   {/* Opravný doklad dedí smer opravovanej faktúry — krížiť ich
                       zakazuje ESBLU_CORRECTED_INVOICE_DIRECTION_MISMATCH. */}
-                  {canEdit && !isReceived && !creditNote && (
-                    <Link href={`/faktury/new?corrects=${invoice.id}`} className={docButtonSecondary}>
-                      {t("invoices.detail.createCorrectionButton")}
-                    </Link>
+                  {canEdit && !isReceived && !creditNote && invoice.kind !== "proforma" && (
+                    <>
+                      <Link href={`/faktury/new?corrects=${invoice.id}`} className={docButtonSecondary}>
+                        {t("invoices.detail.createCorrectionButton")}
+                      </Link>
+                      <Link href={`/faktury/new?corrects=${invoice.id}&kind=debit_note`} className={docButtonSecondary}>
+                        {t("invoices.detail.createDebitNoteButton")}
+                      </Link>
+                    </>
                   )}
                 </div>
 

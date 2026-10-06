@@ -117,6 +117,8 @@ for (const migration of [
   "20261002140000_einvoice_operations.sql",
   "20261002150000_einvoice_rollout_gate.sql",
   "20261003100000_einvoice_inbound_draft_totals.sql",
+  "20261008100000_invoicing_sk_compliance.sql",
+  "20261008100001_invoicing_sk_trigger_fn_revoke.sql",
 ]) {
   await db.exec(read(`supabase/migrations/${migration}`));
 }
@@ -245,7 +247,7 @@ function ubl(kind: "regular_invoice" | "credit_note", number: string): Uint8Arra
       id: "f0000000-0000-4000-8000-000000000004", company_id: "x", direction: "issued", kind, document_status: "finalized",
       invoice_number: number, issue_date: "2026-10-03", due_date: "2026-12-11", delivery_date: null, tax_point_date: null, currency: "EUR",
       subtotal_amount: 1000, vat_total_amount: 230, total_amount: 1230, rounding_amount: 0, buyer_reference: "L3-REF-002", purchase_order_reference: null,
-      payment_means_code: "30", payment_reference: null, corrects_invoice_id: kind === "credit_note" ? "f0000000-0000-4000-8000-000000000009" : null,
+      payment_means_code: "30", payment_reference: null, corrects_invoice_id: kind === "credit_note" ? "f0000000-0000-4000-8000-000000000009" : null, correction_reason: kind === "credit_note" ? "Vrátenie tovaru" : null,
     },
     seller: tatra(),
     buyer: tatra({ role: "buyer", iban: null }),

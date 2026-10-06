@@ -31,6 +31,8 @@ export type UblInvoiceHeader = {
   payment_means_code: string | null;
   payment_reference: string | null;
   corrects_invoice_id: string | null;
+  /** 20261008100000: dôvod opravy (BT-22 Note pri dobropise / ťarchopise). */
+  correction_reason?: string | null;
 };
 
 export type UblParty = {
@@ -88,6 +90,8 @@ export type UblInvoiceSnapshot = {
   taxBreakdowns: UblTaxBreakdown[];
   /** Iba pre dobropis / ťarchopis (BT-25 / BT-26). */
   correctedInvoice: UblCorrectedInvoice | null;
+  /** Odpočet záloh (BT-113 PrepaidAmount, s DPH) — z invoice_advance_deductions. */
+  prepaidAmount?: number | string | null;
 };
 
 /**

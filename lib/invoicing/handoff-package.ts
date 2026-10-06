@@ -177,7 +177,9 @@ export type EligibilityProblem =
   | "missing_supplier_invoice_number"
   | "missing_original_document"
   | "missing_items"
-  | "totals_do_not_reconcile";
+  | "totals_do_not_reconcile"
+  /** 20261008100000: proforma (výzva na úhradu) nie je účtovný ani daňový doklad. */
+  | "not_tax_document";
 
 export type EligibilityInput = {
   invoice: PackageInvoice;
@@ -212,6 +214,7 @@ export function eligibilityProblems(input: EligibilityInput): EligibilityProblem
   if (!/^\d{4}-\d{2}-\d{2}$/.test(invoice.issue_date ?? "")) problems.push("missing_issue_date");
   if (input.itemCount <= 0) problems.push("missing_items");
 
+  if (invoice.kind === "proforma") problems.push("not_tax_document");
   if (invoice.direction === "issued" && !invoice.invoice_number) {
     problems.push("missing_invoice_number");
   }
@@ -243,7 +246,9 @@ export type ManifestFileKind =
   | "attachment"
   | "invoice_metadata"
   | "workbook"
-  | "readme";
+  | "readme"
+  /** 20261008100000: pôvodné XML prijatej e-faktúry (originál) / odoslané UBL vydanej e-faktúry. */
+  | "einvoice_xml";
 
 export type ManifestFile = {
   /** Cesta vnútri ZIP-u, relatívna ku koreňovému priečinku balíka. */

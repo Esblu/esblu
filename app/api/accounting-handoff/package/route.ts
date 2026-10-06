@@ -13,6 +13,7 @@ import {
 } from "@/lib/invoicing/handoff-errors";
 import { renderInvoicePdfBuffer } from "@/lib/invoicing/pdf-renderer";
 import { documentSign } from "@/lib/invoicing/credit-note-semantics";
+import { createSupabaseOutboundStore } from "@/lib/einvoice/outbound/supabase-store";
 import {
   buildManifest,
   directionFolder,
@@ -306,6 +307,50 @@ export async function POST(req: Request) {
   }
 
   const documentById = new Map(documents.map((d) => [d.id, d]));
+
+  // ---------------------------------------------------------------------------
+  // 20261008100000: úhrady, odpočty záloh, opravné väzby a e-faktúra (XML + dôkaz
+  // doručenia). Všetko pod RLS volajúceho; bajty XML sa čítajú až po overení
+  // riadku pod RLS a pred zabalením sa overí SHA-256 (ako pri sťahovaní XML).
+  // ---------------------------------------------------------------------------
+  const [paymentsRes, deductionsRes, inboundRes, outboundRes] = await Promise.all([
+    db.from("invoice_payments").select("invoice_id, paid_amount, paid_at, payment_method, note, created_at").in("invoice_id", ids)
+      .returns<{ invoice_id: string; paid_amount: number; paid_at: string; payment_method: string | null; note: string | null; created_at: string }[]>(),
+    db.from("invoice_advance_deductions").select("invoice_id, advance_invoice_id, vat_category_code, vat_rate, taxable_amount, vat_amount").in("invoice_id", ids)
+      .returns<{ invoice_id: string; advance_invoice_id: string; vat_category_code: string; vat_rate: number; taxable_amount: number; vat_amount: number }[]>(),
+    db.from("einvoice_inbound").select("invoice_id, xml_storage_path, xml_sha256, provider, provider_received_id, received_at, acknowledged_at, sender_participant_id").in("invoice_id", ids)
+      .returns<{ invoice_id: string; xml_storage_path: string | null; xml_sha256: string | null; provider: string; provider_received_id: string; received_at: string; acknowledged_at: string | null; sender_participant_id: string | null }[]>(),
+    db.from("einvoice_outbound").select("invoice_id, attempt, state, ubl_storage_path, ubl_sha256, provider, sent_at, delivered_at, evidence, receiver_participant_id").in("invoice_id", ids)
+      .returns<{ invoice_id: string; attempt: number; state: string; ubl_storage_path: string | null; ubl_sha256: string | null; provider: string; sent_at: string | null; delivered_at: string | null; evidence: Record<string, unknown> | null; receiver_participant_id: string | null }[]>(),
+  ]);
+  if (paymentsRes.error || deductionsRes.error || inboundRes.error || outboundRes.error) {
+    console.error("handoff/package: načítanie úhrad / e-faktúr zlyhalo.");
+    return errorResponse(locale, 500, "INTERNAL_ERROR");
+  }
+  const paymentsByInvoice = groupBy(paymentsRes.data ?? [], (x) => x.invoice_id);
+  const deductionsByInvoice = groupBy(deductionsRes.data ?? [], (x) => x.invoice_id);
+  const inboundByInvoice = new Map((inboundRes.data ?? []).filter((r) => r.xml_storage_path && r.xml_sha256).map((r) => [r.invoice_id, r]));
+  const outboundByInvoice = new Map<string, NonNullable<typeof outboundRes.data>[number]>();
+  for (const o of outboundRes.data ?? []) {
+    const prev = outboundByInvoice.get(o.invoice_id);
+    if (o.ubl_storage_path && o.ubl_sha256 && (!prev || o.attempt > prev.attempt)) outboundByInvoice.set(o.invoice_id, o);
+  }
+  // Čísla opravovaných dokladov (aj keď nie sú vo výbere).
+  const correctedIds = Array.from(new Set(invoices.map((i) => (i as Invoice & { corrects_invoice_id?: string | null }).corrects_invoice_id).filter((x): x is string => Boolean(x))));
+  const correctedNumber = new Map<string, string | null>();
+  if (correctedIds.length > 0) {
+    const { data: corr, error: corrError } = await db.from("invoices").select("id, invoice_number, supplier_invoice_number").in("id", correctedIds)
+      .returns<{ id: string; invoice_number: string | null; supplier_invoice_number: string | null }[]>();
+    if (corrError) return errorResponse(locale, 500, "INTERNAL_ERROR");
+    for (const c of corr ?? []) correctedNumber.set(c.id, c.invoice_number ?? c.supplier_invoice_number);
+  }
+  const einvoiceStorage = createSupabaseOutboundStore();
+  const readVerified = async (path: string, sha: string): Promise<Uint8Array> => {
+    const bytes = await einvoiceStorage.getUbl(path);
+    if (!bytes) throw new Error("EINVOICE_XML_MISSING");
+    if (createHash("sha256").update(bytes).digest("hex") !== sha) throw new Error("EINVOICE_XML_INTEGRITY");
+    return bytes;
+  };
   const attachmentsByDoc = groupBy(attachments, (a) => a.document_id);
 
   // ---------------------------------------------------------------------------
@@ -338,9 +383,10 @@ export async function POST(req: Request) {
       invoice,
       itemCount: (itemsByInvoice.get(invoice.id) ?? []).length,
       // IBA kanonický originál. Sprievodné dokumenty sa sem nezapočítavajú.
+      // Prijatá e-faktúra: originálom je nemenné XML z einvoice_inbound (§ 35 ods. 2 ZoÚ, § 85o ods. 15).
       hasOriginalDocument: Boolean(
         documentById.get(originalDocIdByInvoice.get(invoice.id) ?? "")
-      ),
+      ) || inboundByInvoice.has(invoice.id),
     });
 
     if (problems.length === 0) {
@@ -427,7 +473,28 @@ export async function POST(req: Request) {
           // −1 = dobropis (znižuje), +1 inak; sumy sú uložené kladné.
           accounting_sign: documentSign(invoice.kind),
           finalized_at: invoice.finalized_at,
+          source: (invoice as Invoice & { source?: string }).source ?? null,
+          corrects_invoice_id: (invoice as Invoice & { corrects_invoice_id?: string | null }).corrects_invoice_id ?? null,
+          corrects_invoice_number: correctedNumber.get((invoice as Invoice & { corrects_invoice_id?: string | null }).corrects_invoice_id ?? "") ?? null,
+          correction_reason: (invoice as Invoice & { correction_reason?: string | null }).correction_reason ?? null,
+          fx_rate: (invoice as Invoice & { fx_rate?: number | null }).fx_rate ?? null,
+          fx_rate_date: (invoice as Invoice & { fx_rate_date?: string | null }).fx_rate_date ?? null,
+          fx_rate_source: (invoice as Invoice & { fx_rate_source?: string | null }).fx_rate_source ?? null,
+          tax_base_eur: (invoice as Invoice & { tax_base_eur?: number | null }).tax_base_eur ?? null,
+          vat_total_eur: (invoice as Invoice & { vat_total_eur?: number | null }).vat_total_eur ?? null,
         },
+        payments: (paymentsByInvoice.get(invoice.id) ?? []).map((p) => ({
+          paid_amount: p.paid_amount, paid_at: p.paid_at, payment_method: p.payment_method, note: p.note, recorded_at: p.created_at,
+        })),
+        advance_deductions: (deductionsByInvoice.get(invoice.id) ?? []).map((d) => ({
+          advance_invoice_id: d.advance_invoice_id, vat_category_code: d.vat_category_code, vat_rate: d.vat_rate,
+          taxable_amount: d.taxable_amount, vat_amount: d.vat_amount,
+        })),
+        einvoice: inboundByInvoice.has(invoice.id)
+          ? (() => { const r = inboundByInvoice.get(invoice.id)!; return { direction: "received", provider: r.provider, provider_document_id: r.provider_received_id, xml_sha256: r.xml_sha256, received_at: r.received_at, acknowledged_at: r.acknowledged_at, sender_participant_id: r.sender_participant_id }; })()
+          : outboundByInvoice.has(invoice.id)
+            ? (() => { const o = outboundByInvoice.get(invoice.id)!; return { direction: "sent", provider: o.provider, attempt: o.attempt, state: o.state, ubl_sha256: o.ubl_sha256, sent_at: o.sent_at, delivered_at: o.delivered_at, receiver_participant_id: o.receiver_participant_id, delivery_evidence: o.evidence }; })()
+            : null,
         parties: parties.map((p) => ({
           role: p.role, legal_name: p.legal_name, ico: p.ico, dic: p.dic, ic_dph: p.ic_dph,
           address_line1: p.address_line1, address_line2: p.address_line2, city: p.city,
@@ -444,6 +511,8 @@ export async function POST(req: Request) {
         vat_breakdown: breakdown.map((b) => ({
           vat_category_code: b.vat_category_code, vat_rate: b.vat_rate,
           taxable_amount: b.taxable_amount, vat_amount: b.vat_amount,
+          vat_exemption_reason_code: (b as InvoiceTaxBreakdown & { vat_exemption_reason_code?: string | null }).vat_exemption_reason_code ?? null,
+          vat_exemption_reason_text: (b as InvoiceTaxBreakdown & { vat_exemption_reason_text?: string | null }).vat_exemption_reason_text ?? null,
         })),
         disclaimer: MANIFEST_DISCLAIMER,
       };
@@ -469,6 +538,7 @@ export async function POST(req: Request) {
             invoice, seller,
             buyer: parties.find((p) => p.role === "buyer") ?? null,
             items, taxBreakdowns: breakdown, locale,
+            correctedInvoiceNumber: correctedNumber.get((invoice as Invoice & { corrects_invoice_id?: string | null }).corrects_invoice_id ?? "") ?? null,
           });
         } catch (renderError) {
           console.error("handoff/package: PDF zlyhalo:", invoice.id,
@@ -559,6 +629,32 @@ export async function POST(req: Request) {
       };
 
       if (originalDoc) await packDocument(originalDoc, true, 0);
+
+      // E-faktúra: presné XML (prijaté = originál dokladu; odoslané = vydaný UBL).
+      const inbound = inboundByInvoice.get(invoice.id);
+      const outbound = outboundByInvoice.get(invoice.id);
+      const einv = inbound
+        ? { path: inbound.xml_storage_path!, sha: inbound.xml_sha256!, name: originalDoc ? "einvoice-received.xml" : "original.xml" }
+        : outbound
+          ? { path: outbound.ubl_storage_path!, sha: outbound.ubl_sha256!, name: "einvoice-sent.xml" }
+          : null;
+      if (einv) {
+        let xmlBytes: Uint8Array;
+        try {
+          xmlBytes = await readVerified(einv.path, einv.sha);
+        } catch {
+          throw new HandoffFailure(inbound ? "missing_original_document" : "einvoice_xml_unavailable", invoice.id);
+        }
+        addFile(
+          {
+            path: `${dir}/${einv.name}`, kind: "einvoice_xml", invoice_id: invoice.id,
+            source_document_id: null, provenance: inbound ? "original" : "generated", mime_type: "application/xml",
+            original_filename: null,
+          },
+          xmlBytes
+        );
+        artifactCount++;
+      }
       for (const [index, doc] of supportingDocs.entries()) {
         await packDocument(doc, false, index);
       }
