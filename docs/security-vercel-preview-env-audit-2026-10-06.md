@@ -89,4 +89,18 @@ vyžaduje vlastný plán (poradie: nový kľúč do Vercel Production → redepl
 ## 7. Stav
 
 - Audit: **hotový** (read-only).
-- Plán: **hotový**, **nevykonaný** — čaká na výslovný súhlas vlastníka.
+- **Náprava vykonaná 6. 10. 2026 so súhlasom vlastníka** (variant OpenAI: `preview-disabled`):
+
+| Kľúč | Pôvodne (ID, ciele) | Teraz Production | Teraz všeobecný Preview (nové ID) |
+| --- | --- | --- | --- |
+| `SUPABASE_SERVICE_ROLE_KEY` | `94eoB742kId6zQAW` preview+production | `94eoB742kId6zQAW` (hodnota nezmenená) | `pbmpFkGLIaVLfDrJ` staging esblu-test (sensitive) |
+| `NEXT_PUBLIC_SUPABASE_URL` | `lvLXSNBt82Av1YV4` production+preview | `lvLXSNBt82Av1YV4` | `Wmqd7d5xX6pCkhbg` staging |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | `Fc1URq2hniY1JgEJ` production+preview | `Fc1URq2hniY1JgEJ` | `AEk28LXqYo2wIa4e` staging |
+| `OPENAI_API_KEY` | `dsDOdiAUOs3kVZLd` production+preview | `dsDOdiAUOs3kVZLd` | `SnsgXI7Q5RAOoLI4` `preview-disabled` |
+
+- Production záznamy: rovnaké ID a `createdAt`, zmenený iba zoznam cieľov (PATCH bez hodnoty);
+  žiadny produkčný deploy; www.esblu.com 200.
+- `einvoice-port` override (10 záznamov) nezmenené (ID aj `updatedAt`) — majú prednosť.
+- Preview `einvoice-port` redeploy `dpl_84MP4yvvJj1M4mCp8pTYwc7gLjU9` READY.
+- Snapshoty (iba názvy / ciele / vetvy, bez hodnôt) a záznam zmeny: mimo repa v `Documents`.
+- Rollback pripravený podľa sekcie 5 (ID v tabuľke vyššie).
