@@ -6,6 +6,7 @@
 // =============================================================================
 import assert from "node:assert/strict";
 import { createPartnerHarness, type Row } from "./einvoice-partner-harness.ts";
+import { fxReferenceRateDate, issueDeadline, isIssuedAfterDeadline, easterSunday } from "../lib/invoicing/sk-deadlines.ts";
 
 let passed = 0;
 const failures: string[] = [];
@@ -208,27 +209,116 @@ await check("neplatiteľ DPH: kategória S odmietnutá, O áno", async () => {
 
 // --- 6. Cudzia mena (§ 26) -------------------------------------------------------------------
 let USD = "";
-await check("cudzia mena: kurz povinný, dátum kurzu = deň pred vznikom daňovej povinnosti; EUR základ a daň sa uložia", async () => {
+const fxOf = async (id: string) => (await h.sql<Row>("select fx_rate::float8 fx_rate, fx_rate_date::text fx_rate_date, fx_rate_source, tax_base_eur::float8 tax_base_eur, vat_total_eur::float8 vat_total_eur from public.invoices where id = $1", [id])).rows[0];
+const rateDate = async (taxPoint: string, source = "ECB") =>
+  String((await h.sql<{ d: string }>("select public.esblu_fx_reference_rate_date($1::date, $2)::text d", [taxPoint, source])).rows[0].d);
+await check("§ 26 kalendár: pracovný deň → predchádzajúci deň; víkend → piatok; sviatky TARGET → posledný vyhlásený kurz", async () => {
+  assert.equal(await rateDate("2026-10-07"), "2026-10-06", "streda → utorok");
+  assert.equal(await rateDate("2026-10-05"), "2026-10-02", "pondelok → piatok (víkend sa preskočí)");
+  assert.equal(await rateDate("2026-10-04"), "2026-10-02", "nedeľa → piatok");
+  assert.equal(await rateDate("2026-04-07"), "2026-04-02", "utorok po Veľkej noci → štvrtok (Veľkonočný pondelok, víkend a Veľký piatok sa preskočia)");
+  assert.equal(await rateDate("2026-01-02"), "2025-12-31", "2. 1. → 31. 12. (1. 1. sa nevyhlasuje)");
+  assert.equal(await rateDate("2026-12-28"), "2026-12-24", "pondelok 28. 12. → 24. 12. (25.–27. 12.)");
+  assert.equal(await rateDate("2026-05-04"), "2026-04-30", "pondelok 4. 5. → 30. 4. (1. 5. piatok, víkend)");
+  await svc("insert into public.fx_rate_publication_exceptions (rate_source, day, note) values ('ECB', '2026-10-06', 'test: mimoriadne nevyhlásené')");
+  assert.equal(await rateDate("2026-10-07"), "2026-10-05", "mimoriadna výnimka → posledný vyhlásený kurz");
+  assert.equal(await rateDate("2026-10-07", "NBS"), "2026-10-06", "výnimka platí iba pre svoj zdroj");
+  await svc("delete from public.fx_rate_publication_exceptions where day = '2026-10-06'");
+  assert.equal(await errOf(rpc(U.owner, "select * from public.fx_rate_publication_exceptions")) === "OK", false, "klient výnimky nečíta");
+});
+await check("§ 26 kalendár: TS nápoveda (UI) = SQL pravidlo (DB) pre každý deň 2025–2027, ECB aj NBS; Veľká noc", async () => {
+  assert.deepEqual([easterSunday(2025), easterSunday(2026), easterSunday(2027)], ["2025-04-20", "2026-04-05", "2027-03-28"]);
+  const rows = (await h.sql<{ d: string; e: string; n: string }>(
+    "select d::date::text d, public.esblu_fx_reference_rate_date(d::date, 'ECB')::text e, public.esblu_fx_reference_rate_date(d::date, 'NBS')::text n from generate_series('2025-01-01'::date, '2027-12-31'::date, '1 day') d")).rows;
+  assert.equal(rows.length, 1095);
+  for (const r of rows) {
+    assert.equal(fxReferenceRateDate(r.d, "ECB"), r.e, r.d);
+    assert.equal(fxReferenceRateDate(r.d, "NBS"), r.n, r.d);
+  }
+  assert.equal(fxReferenceRateDate("2026-10-07", "CUSTOMS"), "2026-10-07");
+});
+await check("§ 73 lehota: dodanie +15; platba = neskorší z (+15, koniec mesiaca); K a služba EÚ = koniec mesiaca +15; oprava = koniec mesiaca +15; proforma/prijatá bez lehoty", async () => {
+  assert.deepEqual(issueDeadline({ direction: "issued", kind: "regular_invoice", deliveryDate: "2026-10-05" }), { deadline: "2026-10-20", rule: "a_delivery", from: "2026-10-05" });
+  assert.equal(issueDeadline({ direction: "issued", kind: "payment_received_invoice", taxPointDate: "2026-10-05" })?.deadline, "2026-10-31");
+  assert.equal(issueDeadline({ direction: "issued", kind: "payment_received_invoice", taxPointDate: "2026-10-25" })?.deadline, "2026-11-09");
+  assert.equal(issueDeadline({ direction: "issued", kind: "regular_invoice", deliveryDate: "2026-10-05", hasIntraEuGoods: true })?.deadline, "2026-11-15");
+  assert.equal(issueDeadline({ direction: "issued", kind: "regular_invoice", deliveryDate: "2026-12-10", hasEuServiceReverseCharge: true })?.deadline, "2027-01-15");
+  assert.equal(issueDeadline({ direction: "issued", kind: "credit_note", taxPointDate: "2026-02-03" })?.deadline, "2026-03-15");
+  assert.equal(issueDeadline({ direction: "issued", kind: "proforma", deliveryDate: "2026-10-05" }), null);
+  assert.equal(issueDeadline({ direction: "received", kind: "regular_invoice", deliveryDate: "2026-10-05" }), null);
+  assert.equal(issueDeadline({ direction: "issued", kind: "regular_invoice" }), null);
+  const dl = issueDeadline({ direction: "issued", kind: "regular_invoice", deliveryDate: "2026-10-05" });
+  assert.equal(isIssuedAfterDeadline("2026-10-20", dl), false);
+  assert.equal(isIssuedAfterDeadline("2026-10-21", dl), true);
+});
+await check("§ 73 po lehote: finalizácia sa NEblokuje, dátum vyhotovenia ostane skutočný a finalized_at sa zaznamená", async () => {
+  const id = await draft(U.owner, CO.A, { header: { delivery_date: "2026-08-01" } });
+  await finalize(U.owner, id);
+  const r = (await h.sql<{ issue_date: string; finalized_at: string | null; n: number }>(
+    "select issue_date::text, finalized_at::text, (select count(*)::int from public.invoice_events e where e.invoice_id = i.id and e.event_type = 'finalized') n from public.invoices i where id = $1", [id])).rows[0];
+  assert.equal(r.issue_date, "2026-10-06");
+  assert.ok(r.finalized_at, "finalized_at je uložený");
+  assert.equal(r.n, 1);
+  assert.equal(isIssuedAfterDeadline(r.issue_date, issueDeadline({ direction: "issued", kind: "regular_invoice", deliveryDate: "2026-08-01" })), true);
+});
+await check("cudzia mena: kurz povinný; prípustný je IBA kurz z posledného dňa vyhlásenia pred dňom vzniku; EUR základ a daň sa uložia", async () => {
+  // dodanie pondelok 5. 10. 2026 → kurz z piatku 2. 10.
   const id = await draft(U.owner, CO.A, { currency: "USD", header: DELIVERY, items: [{ unit_price: 108 }] });
   assert.match(await errOf(finalize(U.owner, id)), /ESBLU_FX_RATE_REQUIRED/);
   await setFields(U.owner, id, { fx_rate: 1.08, fx_rate_date: "2026-10-05", fx_rate_source: "ECB" });
-  assert.match(await errOf(finalize(U.owner, id)), /ESBLU_FX_RATE_DATE_INVALID/, "kurz v deň vzniku nie je kurz predchádzajúceho dňa");
+  assert.match(await errOf(finalize(U.owner, id)), /ESBLU_FX_RATE_DATE_INVALID/, "kurz v deň vzniku");
   await setFields(U.owner, id, { fx_rate_date: "2026-10-04" });
+  assert.match(await errOf(finalize(U.owner, id)), /ESBLU_FX_RATE_DATE_INVALID/, "nedeľa — ECB kurz nevyhlasuje");
+  await setFields(U.owner, id, { fx_rate_date: "2026-10-01" });
+  assert.match(await errOf(finalize(U.owner, id)), /ESBLU_FX_RATE_DATE_INVALID/, "starší kurz v 10-dňovom okne už NIE je prípustný");
+  await setFields(U.owner, id, { fx_rate_date: "2026-09-28" });
+  assert.match(await errOf(finalize(U.owner, id)), /ESBLU_FX_RATE_DATE_INVALID/);
+  await setFields(U.owner, id, { fx_rate_date: "2026-10-02" });
   await finalize(U.owner, id);
-  const r = await inv(id);
-  assert.deepEqual([Number(r.tax_base_eur), Number(r.vat_total_eur), Number(r.fx_rate), r.fx_rate_source], [100, 23, 1.08, "ECB"]);
+  const r = await fxOf(id);
+  assert.deepEqual([r.tax_base_eur, r.vat_total_eur, r.fx_rate, r.fx_rate_source, r.fx_rate_date], [100, 23, 1.08, "ECB", "2026-10-02"]);
   USD = id;
 });
-await check("kurz po finalizácii nemenný (žiadny prepočet dnešným kurzom); EUR doklad kurz nesmie mať; oprava používa pôvodný kurz", async () => {
+await check("cudzia mena: pracovný deň (streda → utorok) a dodanie po sviatku (7. 4. → 2. 4.)", async () => {
+  const wd = await draft(U.owner, CO.A, { currency: "USD", header: { delivery_date: "2026-10-07" } });
+  await setFields(U.owner, wd, { fx_rate: 1.1, fx_rate_date: "2026-10-05", fx_rate_source: "ECB" });
+  assert.match(await errOf(finalize(U.owner, wd)), /ESBLU_FX_RATE_DATE_INVALID/, "pondelok nie je deň predchádzajúci strede");
+  await setFields(U.owner, wd, { fx_rate_date: "2026-10-06" });
+  await finalize(U.owner, wd);
+  const hol = await draft(U.owner, CO.A, { currency: "CZK", header: { delivery_date: "2026-04-07" } });
+  await setFields(U.owner, hol, { fx_rate: 24.5, fx_rate_date: "2026-04-06", fx_rate_source: "NBS" });
+  assert.match(await errOf(finalize(U.owner, hol)), /ESBLU_FX_RATE_DATE_INVALID/, "Veľkonočný pondelok sa kurz nevyhlasuje");
+  await setFields(U.owner, hol, { fx_rate_date: "2026-04-02" });
+  await finalize(U.owner, hol);
+});
+await check("colný kurz: dátum = deň vzniku; v kalendárnom roku sa nemieša s ECB/NBS", async () => {
+  const c = await draft(U.owner, CO.A, { currency: "USD", header: { delivery_date: "2026-10-07" } });
+  await setFields(U.owner, c, { fx_rate: 1.09, fx_rate_date: "2026-10-06", fx_rate_source: "CUSTOMS" });
+  assert.match(await errOf(finalize(U.owner, c)), /ESBLU_FX_RATE_DATE_INVALID/);
+  await setFields(U.owner, c, { fx_rate_date: "2026-10-07" });
+  assert.match(await errOf(finalize(U.owner, c)), /ESBLU_FX_SOURCE_YEAR_MISMATCH/, "firma A už v 2026 použila ECB/NBS");
+});
+await check("kurz po finalizácii nemenný a historický doklad sa spätne neprepočíta; EUR doklad kurz nesmie mať", async () => {
   assert.notEqual(await errOf(svc(`update public.invoices set fx_rate = 1.2, tax_base_eur = 90 where id = '${USD}'`)), "OK");
+  await rpc(U.owner, "select public.esblu_add_invoice_payment($1, 10, '2026-10-10', 'bank_transfer', null)", [USD]);
+  const r = await fxOf(USD);
+  assert.deepEqual([r.fx_rate, r.fx_rate_date, r.tax_base_eur, r.vat_total_eur], [1.08, "2026-10-02", 100, 23]);
   const eur = await draft(U.owner, CO.A, { header: DELIVERY });
-  await setFields(U.owner, eur, { fx_rate: 1, fx_rate_date: "2026-10-04", fx_rate_source: "ECB" });
+  await setFields(U.owner, eur, { fx_rate: 1, fx_rate_date: "2026-10-02", fx_rate_source: "ECB" });
   assert.match(await errOf(finalize(U.owner, eur)), /ESBLU_FX_RATE_NOT_ALLOWED_FOR_EUR/);
-  const cn = await draft(U.owner, CO.A, { kind: "credit_note", corrects: USD, currency: "USD", items: [{ unit_price: 10 }] });
-  await setFields(U.owner, cn, { correction_reason: "Zľava", fx_rate: 1.1, fx_rate_date: "2026-10-04", fx_rate_source: "ECB" });
-  assert.match(await errOf(finalize(U.owner, cn)), /ESBLU_CORRECTION_FX_RATE_MISMATCH/);
-  await setFields(U.owner, cn, { fx_rate: 1.08 });
+});
+await check("oprava (§ 25): kurz, dátum aj zdroj pôvodnej faktúry, aj keď je oprava o mesiace neskôr", async () => {
+  const cn = await draft(U.owner, CO.A, { kind: "credit_note", corrects: USD, currency: "USD", header: { tax_point_date: "2026-12-15" }, items: [{ unit_price: 10 }] });
+  await setFields(U.owner, cn, { correction_reason: "Zľava", fx_rate: 1.1, fx_rate_date: "2026-12-14", fx_rate_source: "ECB" });
+  assert.match(await errOf(finalize(U.owner, cn)), /ESBLU_CORRECTION_FX_RATE_MISMATCH/, "aktuálny kurz pri oprave nie je prípustný");
+  await setFields(U.owner, cn, { fx_rate: 1.08, fx_rate_date: "2026-12-14" });
+  assert.match(await errOf(finalize(U.owner, cn)), /ESBLU_CORRECTION_FX_RATE_MISMATCH/, "dátum kurzu musí byť pôvodný");
+  await setFields(U.owner, cn, { fx_rate_date: "2026-10-02", fx_rate_source: "NBS" });
+  assert.match(await errOf(finalize(U.owner, cn)), /ESBLU_CORRECTION_FX_RATE_MISMATCH/, "zdroj musí byť pôvodný");
+  await setFields(U.owner, cn, { fx_rate_source: "ECB" });
   await finalize(U.owner, cn);
+  const r = await fxOf(cn);
+  assert.deepEqual([r.fx_rate, r.fx_rate_date, r.tax_base_eur], [1.08, "2026-10-02", 9.26]);
 });
 
 // --- 7. Úhrady -------------------------------------------------------------------------------
@@ -273,6 +363,54 @@ await check("compliance RPC: iba whitelisted polia (napr. total_amount / kind ni
   const id = await draft(U.owner, CO.A);
   assert.match(await errOf(setFields(U.owner, id, { total_amount: 1 })), /ESBLU_INVALID_FIELD/);
   assert.match(await errOf(setFields(U.owner, id, { kind: "credit_note" })), /ESBLU_INVALID_FIELD/);
+});
+
+// --- Finance oprávnenie viazané na firmu zdroja (20261008100002) -------------------------------
+await check("cross-company: finance z firmy A neudelí finance prístup vo firme B (neaktívne členstvo v B)", async () => {
+  const X = "a5a00000-0000-4000-8000-0000000000a1", Y = "a5a00000-0000-4000-8000-0000000000a2", PB = "b5a00000-0000-4000-8000-0000000000b1";
+  await h.exec(`
+    insert into auth.users (id) values ('${X}'), ('${Y}');
+    insert into public.company_members (company_id, user_id, role, status, permissions) values
+      ('${CO.A}', '${X}', 'owner', 'active', '{}'), ('${CO.B}', '${X}', 'employee', 'disabled', '{}'),
+      ('${CO.A}', '${Y}', 'admin', 'active', '{}'), ('${CO.B}', '${Y}', 'owner', 'invited', '{}');
+    insert into public.business_partners (id, company_id, kind, legal_name, ico, dic, ic_dph, address_line1, city, postal_code, country_code)
+      values ('${PB}', '${CO.B}', 'customer', 'Odberateľ B s.r.o.', '47777777', '2047777777', 'SK2047777777', 'Ulica 7', 'Prešov', '08001', 'SK');
+  `);
+  const bDraft = await draft(U.ownerB, CO.B, { partner: PB, header: DELIVERY });
+  const bFinal = await draft(U.ownerB, CO.B, { partner: PB, header: DELIVERY });
+  await finalize(U.ownerB, bFinal);
+  // X: finance manage v A (owner) — vo firme B nič.
+  assert.equal((await rpc<{ v: boolean }>(X, "select public.esblu_my_finance_manage() v"))[0].v, true, "X má finance v aktívnej firme A");
+  assert.equal((await rpc<{ n: number }>(X, "select count(*)::int n from public.invoices where company_id = $1", [CO.B]))[0].n, 0, "X nevidí faktúry B");
+  assert.match(await errOf(finalize(X, bDraft)), /NOT_FOUND|FORBIDDEN/, "X nefinalizuje faktúru B");
+  assert.match(await errOf(setFields(X, bDraft, { tax_point_date: "2026-10-01" })), /NOT_FOUND|FORBIDDEN/, "X nemení polia faktúry B");
+  assert.notEqual(await errOf(rpc(X, "select public.esblu_add_invoice_payment($1, 1, '2026-10-07', 'bank_transfer', null)", [bFinal])), "OK", "X nezapíše úhradu do B");
+  assert.equal((await rpc<{ n: number }>(X, "select count(*)::int n from public.invoice_events e join public.invoices i on i.id = e.invoice_id where i.company_id = $1", [CO.B]))[0].n, 0);
+  // Y: owner v B iba pozvaný, aktívny admin bez financií v A → nemá finance nikde.
+  assert.equal((await rpc<{ v: boolean }>(Y, "select public.esblu_my_finance_manage() v"))[0].v, false, "pozvánka owner v B neudelí finance");
+  assert.equal((await rpc<{ v: boolean }>(Y, "select public.esblu_my_finance_view() v"))[0].v, false);
+  assert.match(await errOf(finalize(Y, bDraft)), /NOT_FOUND|FORBIDDEN/);
+  assert.match(await errOf(finalize(Y, await draft(U.owner, CO.A, { header: DELIVERY }))), /FORBIDDEN|NOT_FOUND/, "Y nefinalizuje ani v A");
+  // Invariant: druhé aktívne členstvo nie je možné.
+  assert.notEqual(await errOf(h.exec(`update public.company_members set status = 'active' where user_id = '${X}' and company_id = '${CO.B}'`)), "OK");
+});
+await check("cross-company (simulované porušenie invariantu jedného aktívneho členstva): oprávnenie sa vyhodnotí pre aktívnu firmu, nie pre inú", async () => {
+  const Z = "a5a00000-0000-4000-8000-0000000000a3";
+  await h.exec(`insert into auth.users (id) values ('${Z}');
+    insert into public.company_members (company_id, user_id, role, status, permissions) values ('${CO.A}', '${Z}', 'employee', 'active', '{}');
+    drop index public.company_members_one_active_per_user_idx;
+    insert into public.company_members (company_id, user_id, role, status, permissions) values ('${CO.B}', '${Z}', 'owner', 'active', '{}');`);
+  try {
+    const active = (await rpc<{ c: string }>(Z, "select public.esblu_my_active_company_id() c"))[0].c;
+    const role = (await h.sql<{ role: string }>("select role from public.company_members where user_id = $1 and company_id = $2", [Z, active])).rows[0].role;
+    const manage = (await rpc<{ v: boolean }>(Z, "select public.esblu_my_finance_manage() v"))[0].v;
+    assert.equal(manage, role === "owner", `finance_manage zodpovedá role v aktívnej firme (${role})`);
+    const other = active === CO.A ? CO.B : CO.A;
+    assert.equal((await rpc<{ n: number }>(Z, "select count(*)::int n from public.invoices where company_id = $1", [other]))[0].n, 0, "neaktívna firma je neviditeľná");
+  } finally {
+    await h.exec(`delete from public.company_members where user_id = '${Z}' and company_id = '${CO.B}';
+      create unique index company_members_one_active_per_user_idx on public.company_members (user_id) where status = 'active';`);
+  }
 });
 
 await check("triggerové funkcie nie sú volateľné cez RPC (20261008100001), triggre ďalej fungujú", async () => {

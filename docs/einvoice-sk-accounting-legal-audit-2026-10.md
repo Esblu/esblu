@@ -1,231 +1,261 @@
 # Fakturácia a eFaktúra Esblu — právno-účtovný audit podľa SK predpisov (október 2026)
 
-Interný technický podklad. **Nie je to právne ani daňové stanovisko a nič v ňom nie je schválené CLIA,
+Interný technický podklad. **Nie je to právne ani daňové stanovisko. Nič v ňom nie je schválené CLIA,
 daňovým poradcom ani účtovníčkou.** Prešlé testy dokazujú iba to, že kód robí to, čo je tu opísané.
 
-Vetva `einvoice-port`. Migrácie `20261008100000_invoicing_sk_compliance.sql` a
-`20261008100001_invoicing_sk_trigger_fn_revoke.sql` sú aplikované **iba** na staging `esblu-test`.
-Produkčná DB, `main`, produkčné secrets ani live eFaktúra neboli zmenené.
+Vetva `einvoice-port`. Migrácie `20261008100000` – `20261008100003` sú aplikované **iba** na staging
+`esblu-test`. Produkčná DB, `main`, produkčné migrácie, produkčné secrets ani live eFaktúra sa nemenili.
+
+Verzia dokumentu: 2 (korekčný audit). Zmeny oproti verzii 1 sú v sekcii 12.
 
 ## 0. Legenda a zdroje
 
-Pri každom pravidle je typ:
+Každé pravidlo má práve jeden typ zdroja:
 
-- **ZÁKON** — priamo z textu zákona (Slov-Lex).
-- **USMERNENIE** — oficiálny výklad FS / MF SR (FAQ, metodické informácie), nie je to zákon.
-- **PRODUKT** — rozhodnutie Esblu (prísnejšie alebo pohodlnejšie než zákon). Dá sa zmeniť.
-- **REVIEW** — výklad nie je istý → otázka pre CLIA / daňového poradcu / účtovníčku.
+| Značka | Význam |
+| --- | --- |
+| **LAW** | priamo z textu zákona (Slov-Lex, citované znenie) |
+| **OFFICIAL GUIDANCE** | oficiálny výklad alebo materiál FS SR / MF SR (FAQ, metodické informácie, manuály) — nie je to zákon |
+| **PEPPOL/TECH STANDARD** | EN 16931, Peppol BIS Billing 3.0, Peppol SK TDD, SK transpozícia Peppol BIS |
+| **PRODUCT DECISION** | rozhodnutie Esblu (prísnejšie alebo pohodlnejšie než predpis); dá sa zmeniť |
+| **LEGAL REVIEW** | právna kvalifikácia alebo výklad nie je istý → CLIA / daňový poradca / účtovníčka |
 
-Stav: **PASS** (implementované a otestované), **GAP** (chýba), **REVIEW** (implementované podľa
-pracovného výkladu, potrebné potvrdenie).
+Stav implementácie: **PASS** (implementované a otestované), **GAP** (chýba), **REVIEW** (technicky
+hotové, právna kvalifikácia otvorená).
 
-| Skratka | Predpis | Zdroj (verzia) |
+| Skratka | Zdroj | Odkaz (verzia) |
 | --- | --- | --- |
 | ZoÚ | zákon č. 431/2002 Z. z. o účtovníctve | https://static.slov-lex.sk/static/SK/ZZ/2002/431/20270101.html (znenie účinné od 1. 1. 2027) |
 | ZDPH | zákon č. 222/2004 Z. z. o DPH | https://static.slov-lex.sk/static/SK/ZZ/2004/222/20270101.html (znenie účinné od 1. 1. 2027) |
 | 385/2025 | novela ZDPH a ZoÚ (eFaktúra), vyhlásená 19. 12. 2025 | https://static.slov-lex.sk/static/SK/ZZ/2025/385/20270101.html |
-| FS eFaktúra | Finančná správa — e-faktúra, FAQ (stav 15. 9. 2026) | https://www.financnasprava.sk/sk/podnikatelia/dane/dan-z-pridanej-hodnoty/e-faktura |
-| FS sadzby | Finančná správa — sadzby DPH | https://www.financnasprava.sk/sk/podnikatelia/dane/dan-z-pridanej-hodnoty/sadzby-dane |
-| EN 16931 / Peppol | EN 16931-1, Peppol BIS Billing 3.0, SK národné pravidlá (xlsx v1.11, 10. 9. 2026) | https://docs.peppol.eu/poacc/billing/3.0/ |
+| FS eFaktúra | FS SR — eFaktúra (FAQ 15. 9. 2026, MI 7/DPH/2025/I, 1/DPH/2026/I, SK transpozícia Peppol BIS v1.11 z 10. 9. 2026) | https://www.financnasprava.sk/sk/podnikatelia/dane/dan-z-pridanej-hodnoty/e-faktura |
+| Peppol BIS | Peppol BIS Billing 3.0 (May 2026 release) | https://docs.peppol.eu/poacc/billing/3.0/ — kódy faktúry https://docs.peppol.eu/poacc/billing/3.0/codelist/UNCL1001-inv/ , dobropisu https://docs.peppol.eu/poacc/billing/3.0/codelist/UNCL1001-cn/ |
+| SK TDD | Peppol Slovak Republic Tax Data Document 1.0.0 (14. 4. 2026) | https://docs.peppol.eu/tdd/sk/tdd-sk/ |
 
-Paragrafy citované nižšie sú zo znení účinných od 1. 1. 2027 (zahŕňajú 385/2025). Pre rok 2026 platí
-predchádzajúce znenie; zmeny relevantné pre fakturáciu sú najmä § 71 ods. 5, § 85o ZDPH a § 31, § 35 ZoÚ.
-Odkazy na čísla FAQ FS sú podľa stavu 15. 9. 2026 — FS ich priebežne prečísluje, pred citovaním overiť.
-
----
-
-## 1. Účtovný doklad (ZoÚ § 10, § 31–§ 35)
-
-| Pravidlo | Typ | Esblu | Stav |
-| --- | --- | --- | --- |
-| Náležitosti § 10 ods. 1 a)–f): označenie, obsah a účastníci, suma/cena za MJ a množstvo, dátum vyhotovenia, dátum uskutočnenia (ak iný), podpisový záznam (ak nie § 32 ods. 3 b/c) | ZÁKON | číslo, strany (snapshot), položky, `issue_date`, `delivery_date`/`tax_point_date`; podpisový záznam sa nahrádza vnútorným kontrolným systémom (audit `invoice_events`, kto finalizoval) | REVIEW (je audit Esblu „vnútorný kontrolný systém“ § 32 ods. 3 c)?) |
-| Preukázateľnosť, neporušenosť, čitateľnosť (§ 8, § 31 ods. 3, § 32) | ZÁKON | finalizovaný doklad nemenný (DB trigger, aj pre service_role), XML so SHA-256 | PASS |
-| Oprava účtovného záznamu len dokladom; zaznamenať kto, kedy, obsah pred a po (§ 34) | ZÁKON | oprava len dobropisom/ťarchopisom (nový doklad) s `correction_reason`; udalosť `correction_created` na pôvodnej faktúre; pôvodný doklad sa nemení | PASS |
-| Elektronický záznam „zaslaný a prijatý“ (§ 31, z. 385/2025 od 1. 1. 2027); uchovanie v elektronickom formáte určenom osobitným predpisom (§ 35 ods. 2) | ZÁKON | pri eFaktúre je dokladom XML; Esblu ho uchováva nemenné | REVIEW (či je účtovným dokladom XML, nie PDF vizualizácia — CLIA/účtovníčka) |
-
-## 2. Faktúra podľa ZDPH (§ 71, § 73, § 74)
-
-| Pravidlo | Typ | Esblu | Stav |
-| --- | --- | --- | --- |
-| § 74 ods. 1 c) poradové číslo z jednej alebo viacerých sérií | ZÁKON | séria FA/DO/ID/PF, číslo až pri finalizácii, advisory lock | PASS |
-| § 74 ods. 1 d) dátum dodania alebo prijatia platby, ak sa líši od vyhotovenia | ZÁKON | **nové:** finalizácia vydanej riadnej faktúry/ťarchopisu bez `delivery_date` aj `tax_point_date` → `ESBLU_DELIVERY_DATE_REQUIRED` | PASS (PRODUKT: vyžadujeme vždy, aj keď je zhodný s dátumom vyhotovenia) |
-| § 74 ods. 1 h) sadzba alebo oslobodenie s odkazom / „dodanie je oslobodené od dane“ | ZÁKON | **nové:** rozpis DPH pre E/K/G/O/AE automaticky dostane text a kód VATEX; PDF aj UBL ich zobrazujú | PASS |
-| § 74 ods. 1 i) daň spolu v eurách | ZÁKON | **nové:** `tax_base_eur`, `vat_total_eur` pri cudzej mene (sekcia 8) | PASS |
-| § 74 ods. 1 k) „prenesenie daňovej povinnosti“ | ZÁKON | **nové:** text v rozpise (AE) aj `cbc:Note` v UBL | PASS |
-| § 27 sadzby 23 / 19 / 5 % (od 1. 1. 2025) | ZÁKON | **nové:** `esblu_sk_vat_rates(date)`; sadzba S mimo zoznamu → `ESBLU_VAT_RATE_NOT_ALLOWED` | PASS (Esblu nerozhoduje, ktorá sadzba patrí tovaru — iba neprijme neexistujúcu) |
-| § 73 lehota 15 dní na vyhotovenie | ZÁKON | žiadne upozornenie | GAP |
-| § 74 ods. 3 zjednodušená faktúra (≤ 100 €, e-kasa ≤ 400 €) | ZÁKON | Esblu nevystavuje zjednodušené faktúry (vždy plné náležitosti) | PASS (PRODUKT) |
-
-## 3. Nemennosť a číslovanie
-
-| Pravidlo | Typ | Esblu | Stav |
-| --- | --- | --- | --- |
-| Doklad sa po vyhotovení nemení (ZoÚ § 34, ZDPH § 71 ods. 3) | ZÁKON | trigger deny-by-default: po finalizácii smie meniť len `payment_status`; **nové:** aj zápis do snapshotov (strany, rozpis DPH, odpočty záloh) je zablokovaný; `invoice_events` append-only | PASS |
-| Proforma nesmie spotrebovať číslo daňovej série | PRODUKT (vychádza z § 74 ods. 1 c)) | **nové:** vlastná séria `PF` | PASS |
-| Medzery v číslovaní (zmazaný draft nemá číslo; číslo vzniká len pri finalizácii) | PRODUKT | medzera nevzniká; report medzier neexistuje | PASS / GAP (report) |
-
-## 4. Dobropis a ťarchopis (ZDPH § 25, § 71 ods. 2, § 74 ods. 3 c), § 85o ods. 5)
-
-| Pravidlo | Typ | Esblu | Stav |
-| --- | --- | --- | --- |
-| Opravný doklad obsahuje poradové číslo pôvodnej faktúry a menené údaje | ZÁKON | `corrects_invoice_id` (povinné), **nové:** `correction_reason` povinný pri finalizácii (`ESBLU_CORRECTION_REASON_REQUIRED`), v PDF aj UBL (BT-22 Note, BillingReference) | PASS |
-| UBL: dobropis = `CreditNote` (381), ťarchopis = `Invoice` (383) | USMERNENIE (Peppol BIS 3.0) | áno | PASS |
-| Súčet dobropisov ≤ pôvodná faktúra + ťarchopisy | PRODUKT | `ESBLU_CREDIT_EXCEEDS_ORIGINAL` | PASS |
-| Rovnaká mena a kurz ako pôvodná faktúra (§ 26 ods. 1 — pri oprave kurz pôvodnej) | ZÁKON | `ESBLU_CORRECTION_CURRENCY_MISMATCH`, `ESBLU_CORRECTION_FX_RATE_MISMATCH` | PASS |
-| Proforma sa neopravuje dobropisom | USMERNENIE (proforma nie je daňový doklad) | `ESBLU_CORRECTION_OF_PROFORMA` | PASS |
-| Úhrada sa neeviduje na dobropis | PRODUKT | `ESBLU_PAYMENT_ON_CREDIT_NOTE` | PASS |
-| UI ťarchopisu | — | **nové:** tlačidlo „Vytvoriť ťarchopis“ | PASS |
-| FS odporúča pri e-faktúre dobropis + novú faktúru namiesto zložitých opráv | USMERNENIE | podporované | PASS |
-| Prijaté dobropisy cez Peppol | — | stále odmietnuté (`CREDIT_NOTE_NOT_SUPPORTED`), idú na ručné spracovanie | GAP |
-
-## 5. Zálohy: proforma vs. faktúra k prijatej platbe vs. konečná faktúra
-
-| Pravidlo | Typ | Esblu | Stav |
-| --- | --- | --- | --- |
-| Platba pred dodaním → daňová povinnosť dňom prijatia platby (§ 19 ods. 4) → faktúra do 15 dní | ZÁKON | `payment_received_invoice` vyžaduje dátum prijatia platby (`ESBLU_PAYMENT_RECEIVED_DATE_REQUIRED`) | PASS |
-| Proforma (výzva na platbu) nie je daňový doklad | USMERNENIE (FAQ FS) | **nové:** druh `proforma`, séria PF, iba vydaná, v PDF upozornenie, vylúčená z odovzdania účtovníkovi ako daňový doklad (`not_tax_document`), UBL ju neodošle | PASS |
-| Konečná faktúra odpočíta zálohy (základ a daň podľa sadzieb) | ZÁKON (§ 72, § 74) | **nové:** `invoice_advance_deductions` + RPC; kontrola, že záloha je vlastná finalizovaná faktúra k platbe toho istého odberateľa, rovnaká mena, nepresiahne zálohu (`ESBLU_ADVANCE_DEDUCTION_*`); UBL `PrepaidAmount` | PASS (DB/UBL) |
-| UI pre odpočet záloh | — | chýba (iba RPC) | GAP |
-| Kód dokladu 386 pre faktúru k prijatej platbe v UBL | REVIEW | Esblu posiela 386; akceptácia v SK národných pravidlách nie je potvrdená | REVIEW (daňový poradca / eFaktura.sk) |
-
-## 6. Režimy DPH (sadzba oddelene od režimu)
-
-| Pravidlo | Typ | Esblu | Stav |
-| --- | --- | --- | --- |
-| Režim (kategória S/Z/E/AE/K/G/O) je oddelený od sadzby; 0 % ≠ oslobodené ≠ nepodlieha | ZÁKON + EN 16931 | kategória a sadzba sú samostatné polia; E/K/G/O/AE majú vlastné texty | PASS |
-| Neplatiteľ DPH nefakturuje DPH | ZÁKON | **nové:** `ESBLU_NON_VAT_PAYER_CATEGORY` (iba O) | PASS |
-| AI iba navrhuje režim/sadzbu, nerozhoduje | PRODUKT | AI návrh ide do konceptu, finalizuje človek s oprávnením | PASS |
-| Správnosť zvolenej sadzby pre konkrétny tovar/službu (príloha 7, 7a) | ZÁKON | Esblu to neoveruje | REVIEW (zodpovednosť používateľa — uviesť vo VOP) |
-
-## 7. Prenesenie daňovej povinnosti (§ 69 ods. 12, § 74 ods. 1 k))
-
-| Pravidlo | Typ | Esblu | Stav |
-| --- | --- | --- | --- |
-| Text „prenesenie daňovej povinnosti“, faktúra bez dane | ZÁKON | AE → text + VATEX-EU-AE, daň 0 | PASS |
-| IČ DPH odberateľa povinné (AE, K) | ZÁKON | `ESBLU_BUYER_VAT_ID_REQUIRED` | PASS |
-| Či plnenie spadá pod § 69 ods. 12 (šrot, stavebné práce, mobily ≥ 5 000 € …) | ZÁKON | Esblu nerozhoduje | REVIEW (používateľ) |
-
-## 8. Cudzie meny (§ 26 ZDPH)
-
-| Pravidlo | Typ | Esblu | Stav |
-| --- | --- | --- | --- |
-| Kurz ECB/NBS z dňa predchádzajúceho vzniku daňovej povinnosti, alebo colný kurz | ZÁKON | **nové:** `fx_rate` (jednotky meny za 1 EUR), `fx_rate_date`, `fx_rate_source` (ECB/NBS/CUSTOMS); kontrola dátumu (`ESBLU_FX_RATE_DATE_INVALID`) | PASS |
-| Uložiť menu, kurz, zdroj, dátum, EUR základ a daň; nikdy neprepočítavať | ZÁKON + PRODUKT | `tax_base_eur`, `vat_total_eur` sa vypočítajú raz pri finalizácii a sú nemenné | PASS |
-| Pri oprave kurz pôvodnej faktúry | ZÁKON | sekcia 4 | PASS |
-| Automatické načítanie kurzu ECB | — | nie (zadáva používateľ) | GAP |
-| Cudzia mena v UBL | — | generátor stále blokuje ne-EUR (BT-6/BT-111 nedoplnené) | GAP |
-| Kurz pri prijatých faktúrach v AI kontrole | — | polia v UI chýbajú | GAP |
-| Tolerancia dátumu kurzu ECB/NBS (posledných 10 dní pre víkendy/sviatky) | PRODUKT | áno | REVIEW |
-
-## 9. Prijaté faktúry
-
-| Pravidlo | Typ | Esblu | Stav |
-| --- | --- | --- | --- |
-| Prijaté XML sa nemení, ukladá sa so SHA-256 | ZÁKON (§ 71 ods. 3) | áno | PASS |
-| Kontrola (review) je oddelená od dokladu | PRODUKT | koncept z XML, finalizuje človek | PASS |
-| Esblu netvrdí nárok na odpočet DPH | PRODUKT | žiadne automatické rozhodnutie o odpočte | PASS |
-| Automaticky založený dodávateľ nie je účtovné rozhodnutie | PRODUKT | iba kmeňový záznam z XML | PASS / REVIEW (účtovníčka: kontrola pri prvom doklade?) |
-| Prijaté cez eFaktúru — väzba na zdrojový dokument pri odovzdaní účtovníkovi | — | **nové:** XML sa počíta ako originál a pribalí sa do balíka | PASS |
-
-## 10. Úhrady
-
-| Pravidlo | Typ | Esblu | Stav |
-| --- | --- | --- | --- |
-| Úhrada nemení doklad | ZÁKON | po finalizácii sa mení len `payment_status` | PASS |
-| Čiastočné, viacnásobné úhrady, preplatok | PRODUKT | povolené, testované | PASS |
-| Stav úhrady zohľadní dobropisy a zálohy; stav „preplatená“ | — | nie | GAP |
-| § 75 ods. 2 dohoda o platbách pri e-faktúre | USMERNENIE (FAQ FS) | Esblu nepodporuje | PASS (n/a) |
-
-## 11. eFaktúra 2027 (§ 71 ods. 5, § 85o ZDPH, z. 385/2025)
-
-| Pravidlo | Typ | Esblu | Stav |
-| --- | --- | --- | --- |
-| 1. 1. 2027 – 30. 6. 2030: povinná e-faktúra medzi tuzemskými platiteľmi B2B/B2G, aj pri prijatej platbe; výnimky oslobodené plnenia (§ 28–43, § 47) a zjednodušená faktúra (§ 85o ods. 1–2) | ZÁKON | Esblu vie odoslať UBL cez eFaktura.sk (sandbox); rozhodnutie, ktorá faktúra musí ísť ako e-faktúra, nie je automatizované | GAP (pravidlo „povinná e-faktúra“ v UI) |
-| Formát EN 16931 (§ 85o ods. 4), Peppol BIS 3.0, `0245:DIČ` | ZÁKON + USMERNENIE | áno | PASS |
-| Opravné doklady tiež ako e-faktúra, s číslom pôvodnej, rovnakou cestou (§ 85o ods. 5) | ZÁKON | dobropis/ťarchopis sa generuje ako UBL; prijaté dobropisy GAP (sekcia 4) | PASS / GAP |
-| Oznamovanie cez doručovaciu službu, lehoty 15 dní, pokuty (§ 85o ods. 6–14) | ZÁKON | rieši poskytovateľ eFaktura.sk | REVIEW (zmluva) |
-| Certifikovaný poskytovateľ (§ 85o ods. 18–19) | ZÁKON | eFaktura.sk; Esblu nie je poskytovateľ | REVIEW (CLIA) |
-| Produkcia | — | **vypnutá**, žiadny live kľúč, žiadna zmluva | — |
-
-## 12. Uchovávanie a archivácia
-
-| Pravidlo | Typ | Esblu | Stav |
-| --- | --- | --- | --- |
-| Účtovné doklady 10 rokov nasledujúcich po roku (ZoÚ § 35 ods. 3 c)), faktúry 10 rokov (ZDPH § 76, § 85o ods. 15) | ZÁKON | povinnosť má **klient**; Esblu uchováva XML a PDF, ale **nesľubuje zákonný archív** | REVIEW |
-| Archív musí obsahovať XML (nie len vizualizáciu) | USMERNENIE (FAQ FS) | XML uložené | PASS |
-| Musí archív obsahovať aj obálku/dôkaz poskytovateľa? | REVIEW | ukladá sa dôkaz doručenia (povolené polia) | REVIEW |
-| Zmluvný záväzok 10-ročného archívu, export po ukončení zmluvy | — | **CLIA blocker**; marketing ani UI nesmú tvrdiť zákonný archív | GAP / CLIA |
-
-## 13. Export pre účtovníka
-
-| Pravidlo | Typ | Esblu | Stav |
-| --- | --- | --- | --- |
-| Úplné podklady: doklad, opravy, úhrady, režimy DPH | PRODUKT | **nové:** balík obsahuje metadata opráv (`corrects_invoice_number`, dôvod), FX a EUR sumy, úhrady, odpočty záloh, texty oslobodenia, e-faktúra stav a dôkaz doručenia, overené XML (`original.xml` / `einvoice-received.xml` / `einvoice-sent.xml`, SHA-256) | PASS |
-| Proforma nie je v balíku ako daňový doklad | USMERNENIE | `not_tax_document` | PASS |
-| Hromadný export za obdobie (napr. pri ukončení služby) | — | nie | GAP |
-
-## 14. Roly a bezpečnosť
-
-| Pravidlo | Typ | Esblu | Stav |
-| --- | --- | --- | --- |
-| Finalizovať a meniť fakturačné polia smie iba `finance.manage` v aktívnej firme | PRODUKT | RPC aj RLS; testované owner/admin-fin/accountant/employee/admin bez financií/iná firma | PASS |
-| RPC s whitelistom polí | PRODUKT | `esblu_set_invoice_compliance_fields` iba 5 polí, iba draft | PASS |
-| Triggerové funkcie nie sú volateľné cez REST | PRODUKT | `20261008100001` (Supabase advisor 0028/0029) | PASS |
-| Finančné helpery používajú ľubovoľné členstvo namiesto aktívnej firmy (pozorovanie z auditu) | — | nezmenené | REVIEW (bezpečnostné) |
+Citované paragrafy sú zo znenia účinného od 1. 1. 2027. Pre rok 2026 platí predchádzajúce znenie;
+pre fakturáciu sa líšia najmä § 71 ods. 5, § 76a, § 85o ZDPH a § 31, § 35 ZoÚ. Čísla otázok vo FAQ FS
+sa môžu meniť — pred citovaním overiť.
 
 ---
 
-## 15. Implementácia (tento audit)
+## 1. Kurzy cudzej meny (§ 26 ZDPH) — OPRAVENÉ
 
-| Súbor | Zmena |
-| --- | --- |
-| `supabase/migrations/20261008100000_invoicing_sk_compliance.sql` | proforma, FX polia, EUR sumy, `correction_reason`, sadzby, compliance trigger pri finalizácii, odpočty záloh, texty oslobodenia, INSERT guardy, append-only udalosti, blok úhrady na dobropis, udalosť `correction_created`, séria PF |
-| `supabase/migrations/20261008100001_invoicing_sk_trigger_fn_revoke.sql` | revoke EXECUTE na triggerové funkcie |
-| `supabase/rollback/20261008100000_invoicing_sk_compliance_rollback.sql` | rollback (finalize sa obnoví z `20260923190000`) |
-| `lib/einvoice/ubl/*`, `lib/einvoice/load-finalized-invoice.ts` | 386, BT-22 dôvod opravy, PrepaidAmount, poznámka AE, proforma neodosielateľná |
-| `lib/invoices.ts`, `lib/invoicing/pdf-renderer.tsx` | nové polia, chyby, PDF poznámky (proforma, dôvod opravy, oslobodenie, kurz, EUR sumy) |
-| `app/faktury/InvoiceDetailView.tsx`, `app/faktury/new/page.tsx` | dátum prijatia platby, dôvod opravy, kurz/dátum/zdroj, ťarchopis, proforma |
-| `app/api/accounting-handoff/package/route.ts`, `lib/invoicing/handoff-package.ts` | úplnejší export (sekcia 13) |
-| i18n sk/en/de | nové texty a chybové kódy |
+**Text zákona (LAW, § 26 ods. 1):** platba v cudzej mene sa prepočíta „referenčným výmenným kurzom
+určeným a vyhláseným Európskou centrálnou bankou alebo Národnou bankou Slovenska v deň predchádzajúci
+dňu vzniku daňovej povinnosti“. Alternatíva: „kurz platný podľa colných predpisov v deň vzniku daňovej
+povinnosti“; rozhodnutie treba vopred písomne oznámiť daňovému úradu a je „záväzné počas celého
+kalendárneho roka“. „Pri oprave základu dane podľa § 25 sa použije kurz, ktorý sa použil pri vzniku
+daňovej povinnosti.“
 
-Staging `esblu-test`: obe migrácie aplikované 6. 10. 2026; telá funkcií overené voči repu (zhoda
-logiky, rozdiel iba v komentároch), RLS a granty overené, nové advisor nálezy 0.
+**Čo bolo nesprávne (verzia 1):** migrácia `20261008100000` pri ECB/NBS prijala **ľubovoľný** dátum
+kurzu v okne ⟨deň vzniku − 10; deň vzniku). Nešlo o hľadanie posledného vyhláseného kurzu — prijala aj
+svojvoľne zvolený starší kurz v bežný pracovný deň a dátum, ku ktorému sa kurz nevyhlasuje (nedeľa).
+Navyše opravný doklad vystavený neskôr ako 10 dní po pôvodnej faktúre s pôvodným dátumom kurzu by
+finalizácia odmietla.
 
-## 16. Testy
+**Oprava (`20261008100003_fx_rate_date_exact.sql`):**
 
-Nový `npm run test:invoicing-sk` (19 testov, PGlite so všetkými migráciami): dátumy, sadzby, číslovanie
-FA/PF, nemennosť (aj service_role), dobropis (dôvod, udalosť, strop), ťarchopis, proforma (oprava,
-úhrada), zálohy (dátum, odpočty), AE/E/O texty, neplatiteľ, FX (povinnosť, dátum, nemennosť, kurz pri
-oprave), úhrady, append-only udalosti, roly, whitelist, revoke triggerových funkcií.
+| Pravidlo | Typ | Implementácia | Stav |
+| --- | --- | --- | --- |
+| ECB/NBS: prípustný je **práve jeden** dátum kurzu = `esblu_fx_reference_rate_date(deň vzniku, zdroj)` | LAW | finalizácia odmietne iný dátum (`ESBLU_FX_RATE_DATE_INVALID`, v `detail` požadovaný dátum) | PASS |
+| Ak sa v deň predchádzajúci dňu vzniku kurz nevyhlásil (víkend, sviatok), použije sa posledný vyhlásený kurz pred ním | LEGAL REVIEW (zákon tento prípad výslovne nerieši; ide o technický výklad) | algoritmus ide spätne po dňoch, kým nenájde deň vyhlásenia (max. 30 dní) | REVIEW |
+| Dni vyhlásenia = pracovné dni TARGET: bez sobôt, nedieľ, 1. 1., Veľkého piatku, Veľkonočného pondelka, 1. 5., 25. 12., 26. 12. | PEPPOL/TECH STANDARD (kalendár ECB/TARGET) | `esblu_fx_is_publication_day`; mimoriadne nevyhlásené dni v tabuľke `fx_rate_publication_exceptions` (iba service_role) | PASS |
+| NBS kurzy pre meny, ktoré ECB nevyhlasuje — rovnaký kalendár | LEGAL REVIEW | rovnaký kalendár + výnimky pre zdroj NBS | REVIEW |
+| Deň vzniku = DUZP (`tax_point_date`), inak dátum dodania, inak dátum vyhotovenia; pri faktúre k prijatej platbe deň prijatia platby | LAW (§ 19) | `coalesce(tax_point_date, delivery_date, issue_date)` | PASS |
+| Colný kurz: dátum = deň vzniku; v kalendárnom roku sa v rámci firmy nemieša s ECB/NBS | LAW | `ESBLU_FX_SOURCE_YEAR_MISMATCH`; písomné oznámenie daňovému úradu Esblu neeviduje | PASS / GAP (evidencia oznámenia) |
+| Oprava (§ 25): kurz, dátum aj zdroj pôvodnej faktúry; pravidlo dňa sa nepočíta znova | LAW | `ESBLU_CORRECTION_FX_RATE_MISMATCH` | PASS |
+| Mena, kurz, dátum, zdroj, základ a DPH v EUR sa uložia raz pri finalizácii a nikdy sa neprepočítavajú | LAW + PRODUCT DECISION | stĺpce sú po finalizácii nemenné (trigger, aj pre service_role) | PASS |
+| Prijaté doklady: kurz a dátum preberá Esblu z dokladu dodávateľa, pravidlo dňa nevynucuje | LEGAL REVIEW | — | REVIEW |
+| Hodnota kurzu (nie dátum) sa neoveruje voči ECB/NBS | — | zadáva používateľ; automatické načítanie kurzu chýba | GAP |
+| UI nápoveda požadovaného dátumu | PRODUCT DECISION | `lib/invoicing/sk-deadlines.ts` `fxReferenceRateDate` — zhodný s DB pre každý deň 2025–2027 (test) | PASS |
 
-Regresia: einvoice-ubl 63, einvoice-ui 53, einvoice-db 44, outbound 47, inbound 47, ops 23, partner 23,
-hardening 19, reception 23, efaktura 17, sandbox-e2e selftest 27 PASS + 1 PARTIAL (offline webhook,
-zámerne), partner-e2e selftest 25, staging-guard 8, l3-inbound-one 16, handoff 107, i18n 114,
-lifecycle 30, register 23, money 41, vat 29, pricemode 55, gross 230, items 109, state 43, format 55,
-m1-authz-db 47, p0-bank-sql 17, push-db 31, company-lookup-db 13, closed-beta-p0 36, folders 45,
-intent-permissions 44. `tsc --noEmit` bez chýb. Lint dotknutých súborov: iba pre-existujúce
-`react-hooks` chyby v `InvoiceDetailView.tsx` a `new/page.tsx` (rovnaké na `main`).
-`test:plan-entitlements` 46/47 — pre-existujúce zlyhanie regexu na CRLF súbore, nesúvisí.
+## 2. Faktúra k prijatej platbe a kód 386
 
-## 17. Otvorené body
+| Pravidlo | Typ | Esblu | Stav |
+| --- | --- | --- | --- |
+| Platba pred dodaním → daňová povinnosť dňom prijatia platby (§ 19 ods. 4) → faktúra (§ 71, § 73 ods. 1 b)) | LAW | `payment_received_invoice` vyžaduje dátum prijatia platby | PASS |
+| Proforma (výzva na platbu) nie je daňový doklad | OFFICIAL GUIDANCE (FAQ FS) | druh `proforma`, séria PF, neodosiela sa ako e-faktúra, nejde do balíka ako daňový doklad | PASS |
+| Faktúra k prijatej platbe v UBL ako `InvoiceTypeCode` **386 (Prepayment invoice)** | PEPPOL/TECH STANDARD | **PEPPOL PASS:** 386 je v Peppol BIS Billing 3.0 (UNCL1001-inv subset, May 2026 release) | PASS |
+| 386 v slovenskom profile | PEPPOL/TECH STANDARD | **SK TDD:** 386 je v code liste `UNCL1001-inv` Peppol SK TDD 1.0.0 (14. 4. 2026); v obchodných pravidlách SK TDD som nenašiel pravidlo, ktoré by 386 vylučovalo (prehľadané podľa kľúčových slov, nie celý dokument). **SK transpozícia Peppol BIS v1.11 (xlsx FS, 10. 9. 2026) nebola prečítaná** — stiahnutie súboru vyžaduje súhlas | **SLOVAK PROFILE REVIEW** |
+| Konečná faktúra odpočíta zálohy; UBL `PrepaidAmount` (BT-113) | LAW (§ 74) + PEPPOL | `invoice_advance_deductions`, `PrepaidAmount` | PASS (DB/UBL), GAP (UI) |
 
-**GAP (technické, bez právneho rozhodnutia):** prijaté dobropisy; UI odpočtu záloh; UBL v cudzej mene;
-automatický kurz ECB; FX v kontrole prijatých faktúr; stav úhrady s dobropismi/zálohami a „preplatená“;
-upozornenie na 15-dňovú lehotu; report medzier v číslovaní; hromadný export; pravidlo „kedy je
-e-faktúra povinná“ v UI; mobilná aplikácia neprešla lintom.
+## 3. Účtovný doklad — originál XML, vizualizácia, koncept
 
-**Na potvrdenie CLIA / daňovým poradcom / účtovníčkou (nič z toho nie je vyriešené):**
+Dátový model (technický stav):
 
-1. Je audit Esblu (`invoice_events`, kto finalizoval) vnútorným kontrolným systémom podľa ZoÚ § 32 ods. 3 c)?
-2. Je pri e-faktúre účtovným dokladom XML a PDF iba vizualizácia (ZoÚ § 31, § 35 ods. 2)?
-3. Akceptuje SK Peppol / FS kód 386 pre faktúru k prijatej platbe?
-4. Tolerancia 10 dní pre dátum kurzu ECB/NBS (víkendy, sviatky) — postačuje?
-5. Musí archív obsahovať aj obálku a dôkaz poskytovateľa?
-6. Zmluvný záväzok k retencii a exportu (Esblu aj eFaktura.sk), formulácia VOP „Esblu neposkytuje zákonný archív“.
-7. Rola Esblu voči FS a eFaktura.sk (nie je poskytovateľ, nie je certifikovaný) — `docs/clia-delta-einvoice-api-partner-2026-10-06.md`.
-8. Kontrola automaticky založeného dodávateľa pri prvom prijatom doklade.
-9. Zodpovednosť za voľbu sadzby a režimu (príloha 7/7a, § 69 ods. 12) — VOP.
+| Vrstva | Čo to je | Integrita | Stav |
+| --- | --- | --- | --- |
+| **Originálny UBL/XML** (prijatý aj odoslaný) | nemenný originálny elektronický dokument | privátny bucket `einvoice-documents` (žiadna storage policy pre klientov; zápis iba server s `upsert: false`); `einvoice_inbound`/`einvoice_outbound` drží SHA-256, cestu a veľkosť — po zápise ich trigger nedovolí zmeniť (`ESBLU_EINVOICE_INBOUND_IDENTITY_IMMUTABLE`); pri exporte sa hash znovu overí | PASS |
+| **PDF / render** | ľudsky čitateľná vizualizácia generovaná z dát Esblu | nie je originálom; v balíku pre účtovníka sa pri e-faktúre vždy pribalí aj originál XML s overeným SHA-256 | PASS |
+| **Koncept / review v Esblu** | samostatný aplikačný záznam (`invoices` draft + položky) | vzniká z XML; úpravy používateľa ani AI sa zapisujú iba do konceptu, **nikdy do XML**; finalizácia prijatej e-faktúry musí súhlasiť so súčtami a rozpisom DPH z XML (`ESBLU_EINVOICE_FINALIZE_TOTALS_MISMATCH`, 20261003100000) | PASS |
+| Záznam o úpravách konceptu po poliach (pred/po) | — | neexistuje; „pred“ = XML, „po“ = finalizovaný záznam | GAP |
 
-**Produkčné blokery:** produkčné migrácie (20261002… až 20261008100001) nespustené; zmluva a DPA
-s eFaktura.sk; CLIA stanovisko; potvrdenie účtovníčky; retenčná politika a export; produkčný kľúč
-eFaktura.sk. Nič z toho nebolo vykonané.
+Právna kvalifikácia:
+
+| Otázka | Typ | Stav |
+| --- | --- | --- |
+| Čo je účtovným dokladom pri e-faktúre (XML, XML + vizualizácia, alebo záznam v účtovníctve)? ZoÚ § 10, § 31 (elektronický záznam „zaslaný a prijatý“ od 1. 1. 2027), § 35 ods. 2 a ZDPH § 71 ods. 1 b) („elektronickou faktúrou je faktúra … vydaná a prijatá v akomkoľvek elektronickom formáte“) | LEGAL REVIEW | Esblu **netvrdí**, že XML je jediný zákonný účtovný doklad. FS uvádza, že e-faktúra „nie je len obyčajný PDF súbor“ (OFFICIAL GUIDANCE, stránka eFaktúra), čo podporuje uchovanie XML, ale nerieši právnu kvalifikáciu konceptu ani PDF. |
+| Technická integrita originálu (vierohodnosť pôvodu, neporušenosť, čitateľnosť — § 71 ods. 1 c), d), ods. 3 ZDPH; § 31 ods. 3 ZoÚ) | LAW | technicky PASS (hash, nemennosť, dôkaz doručenia); právne posúdenie postačujúcosti → LEGAL REVIEW |
+
+## 4. Vnútorný kontrolný systém (ZoÚ § 32 ods. 3 c)) — iba technický opis
+
+Esblu **netvrdí**, že jeho audit trail je vnútorným kontrolným systémom v zmysle zákona. Technicky
+poskytuje:
+
+| Prvok | Ako | Stav |
+| --- | --- | --- |
+| Nemenný originál | XML v privátnom úložisku, identita (hash, cesta, veľkosť) nemenná | PASS |
+| Hash | SHA-256 pri príjme aj odoslaní, overenie pri exporte | PASS |
+| Audit opráv | oprava iba novým dokladom (dobropis/ťarchopis) s povinným dôvodom; udalosť `correction_created` na pôvodnej faktúre; pôvodný doklad sa nemení | PASS |
+| Identita používateľa | `invoice_events.actor_user_id`, `updated_by`, operátorské akcie v `einvoice_events` | PASS |
+| Čas | `finalized_at`, `created_at` udalostí (DB čas, nie zadaný používateľom) | PASS |
+| Stav pred/po | pri dokladoch: pôvodný doklad + opravný doklad (nemenné oba); pri prijatých: XML + finalizovaný záznam; prechody stavov e-faktúry v `einvoice_events` | PASS; GAP: diff úprav konceptu po poliach |
+| Append-only udalosti | `invoice_events` nemožno meniť ani mazať (aj service_role) | PASS |
+| Dôkaz doručenia | `einvoice_outbound` dôkaz poskytovateľa (povolené polia), stav `delivered` | PASS |
+| **Či toto spĺňa požiadavku vnútorného kontrolného systému** | — | **LEGAL REVIEW** |
+
+## 5. Lehota 15 dní (§ 73 ZDPH) — DOPLNENÉ
+
+| Pravidlo (§ 73 ods. 1) | Typ | Výpočet v Esblu (`issueDeadline`) | Stav |
+| --- | --- | --- | --- |
+| a) 15 dní odo dňa dodania | LAW | dátum dodania (inak DUZP) + 15 | PASS |
+| b) 15 dní odo dňa prijatia platby **alebo** do konca mesiaca prijatia platby | LAW | neskorší z oboch dátumov | PASS / LEGAL REVIEW (výklad „alebo“) |
+| c) 15 dní od konca mesiaca dodania tovaru oslobodeného podľa § 43 | LAW | položka kategórie K → koniec mesiaca + 15 | PASS |
+| d) 15 dní od konca mesiaca dodania služby s miestom dodania v inom členskom štáte | LAW | AE a odberateľ mimo SK → koniec mesiaca + 15 | PASS (aproximácia) / LEGAL REVIEW |
+| e) 15 dní od konca mesiaca skutočnosti rozhodnej pre opravu (§ 25) | LAW | dobropis/ťarchopis: DUZP opravy (inak dátum dodania) → koniec mesiaca + 15 | PASS |
+| § 73 ods. 2 (registrácia pre daň), posun konca lehoty na pracovný deň | LAW / LEGAL REVIEW | neriešené → upozornenie je konzervatívne (skôr) | GAP |
+| Upozornenie, **nie blokovanie**; doklad po lehote sa vystaví so skutočným dátumom vyhotovenia | PRODUCT DECISION | UI: info o lehote, varovanie po lehote; finalizácia prebehne; `issue_date` aj `finalized_at` ostávajú | PASS |
+| Export | PRODUCT DECISION | `metadata.json`: `issue_deadline`, `issue_deadline_rule`, `issued_after_deadline`, `finalized_at` | PASS |
+
+## 6. Prijaté dobropisy a opravy cez Peppol — NÁVRH (neimplementované)
+
+Stav: **GAP**. Dnes sa prijatý `CreditNote` odmietne (`UNSUPPORTED_PROFILE` / `CREDIT_NOTE_NOT_SUPPORTED`),
+XML sa uloží, koncept nevznikne → ručné spracovanie.
+
+**Typy dokumentov (PEPPOL/TECH STANDARD):**
+
+| Dokument | Kód | Návrh |
+| --- | --- | --- |
+| `ubl:CreditNote` — Credit note | 381 | podporiť (hlavný prípad) |
+| `ubl:CreditNote` — related to goods or services / financial adjustments | 81 / 83 | podporiť ako 381 (83 = bonus/zľava bez položiek tovaru — LEGAL REVIEW pre DPH) |
+| `ubl:CreditNote` — factored / forwarder's | 396 / 532 | odmietnuť → ručné spracovanie |
+| `ubl:Invoice` — Debit note | 383 | podporiť ako prijatý ťarchopis |
+| `ubl:Invoice` — Corrected invoice | 384 | odmietnuť → ručné (FS odporúča dobropis + novú faktúru — OFFICIAL GUIDANCE) |
+| `ubl:Invoice` — Prepayment invoice | 386 | podporiť ako prijatá faktúra k platbe (bez nároku Esblu na posúdenie odpočtu) |
+
+**Väzba na originál:**
+
+1. Zdroj väzby: `cac:BillingReference/cac:InvoiceDocumentReference` (BT-25 číslo, BT-26 dátum). § 74 ods. 3
+   c) vyžaduje poradové číslo pôvodnej faktúry (LAW) → chýbajúce BT-25 = koncept na ručnú kontrolu.
+2. Párovanie iba v rámci **tej istej firmy** (`company_id` z príjmu e-faktúry, nie z XML), smeru
+   `received`, toho istého dodávateľa (`supplier_business_partner_id` podľa Peppol ID / IČO z XML) a
+   `supplier_invoice_number = BT-25`. Viac zhôd alebo žiadna → koncept bez väzby, používateľ vyberie.
+3. Dátový model: dnes CHECK vyžaduje `corrects_invoice_id` pri `credit_note`. Návrh: pre
+   `direction = 'received'` povoliť `corrects_invoice_id` null, ak je vyplnený nový stĺpec
+   `corrected_document_reference` (BT-25 + BT-26 ako text), a doplniť `corrects_invoice_id` neskôr
+   (iba v koncepte).
+
+**Ochrana proti cross-tenant väzbe:**
+
+- DB trigger pri vložení aj zmene: `corrects_invoice_id` musí ukazovať na doklad s rovnakým `company_id`,
+  rovnakým `direction` a (pri prijatých) rovnakým dodávateľom; inak `ESBLU_CORRECTION_CROSS_TENANT`.
+- Párovanie beží v SECURITY DEFINER funkcii s `company_id` z riadku `einvoice_inbound`, nikdy z XML.
+- Regresný test: dobropis firmy B s BT-25 = číslo faktúry firmy A sa nesmie naviazať.
+
+**DPH a saldo:**
+
+- Sumy kladné, znamienko podľa druhu (`accounting_sign = −1`) — rovnako ako vydané dobropisy.
+- DPH z dobropisu znižuje odpočet príjemcu (oprava odpočítanej dane, § 53 ZDPH — LEGAL REVIEW pre presné uplatnenie); Esblu o nároku na odpočet nerozhoduje
+  (PRODUCT DECISION) — v exporte iba znamienko a rozpis DPH z XML.
+- Saldo pôvodnej faktúry = suma − úhrady − finalizované dobropisy + ťarchopisy; úhrada sa na dobropis
+  neeviduje (už platí). Vrátenie peňazí dodávateľom → nový typ záznamu „prijaté vrátenie“ k pôvodnej
+  faktúre (návrh), nie úhrada dobropisu.
+- Kurz pri cudzej mene: z XML dobropisu; kontrola zhody s kurzom pôvodnej prijatej faktúry iba ako
+  upozornenie (LEGAL REVIEW).
+
+Implementácia čaká na potvrdenie tohto návrhu.
+
+## 7. Finance oprávnenie viazané na firmu — AUDIT A OPRAVA
+
+**Zistenie z verzie 1:** `esblu_my_finance_manage()` a `esblu_my_finance_view()` vyhodnocovali
+„prvé aktívne členstvo“ (`limit 1`) bez väzby na firmu zdroja.
+
+**Audit (server-side a RLS, staging):**
+
+- Unikátny index `company_members_one_active_per_user_idx` (od 20260814…) dovoľuje používateľovi
+  **najviac jedno aktívne členstvo** (staging overené: 0 používateľov s viac ako jedným aktívnym).
+  Prvé aktívne členstvo = aktívna firma.
+- Všetky RLS politiky a SECURITY DEFINER funkcie, ktoré volajú `esblu_my_finance_*`, porovnávajú
+  zároveň `company_id` zdroja s `esblu_my_active_company_id()` (staging dotaz: 0 výnimiek).
+- Serverové route (PDF, UBL, odovzdanie účtovníkovi, operátorské akcie e-faktúry) čítajú zdroj cez
+  RLS alebo porovnávajú `company_id` riadku s aktívnou firmou (`esblu_einvoice_operator_begin`).
+- **Záver:** dnes **nie je zneužiteľné** — väzba však bola iba implicitná (závislá od indexu).
+
+**Oprava (defense in depth, `20261008100002_finance_helpers_bind_active_company.sql`):** helpery
+explicitne vyhodnotia oprávnenie pre `esblu_my_active_company_id()`. Sémantika rolí nezmenená.
+PGlite baseline doplnený o produkčné unikátne indexy (predtým chýbali — testy by multi-membership
+nezachytili).
+
+**Regresné testy:** (1) owner firmy A s neaktívnym členstvom vo firme B nevidí faktúry B, nefinalizuje,
+nemení polia ani nezapíše úhradu; (2) pozvaný (nie aktívny) owner B s aktívnym členstvom bez financií v A
+nemá finance nikde; (3) druhé aktívne členstvo DB odmietne; (4) pri simulovanom porušení invariantu
+(index dočasne odstránený) sa oprávnenie vyhodnotí pre aktívnu firmu a druhá firma je neviditeľná.
+
+---
+
+## 8. Ostatné oblasti (bez zmeny oproti verzii 1, iba nové značky)
+
+| Oblasť | Pravidlo | Typ | Stav |
+| --- | --- | --- | --- |
+| Náležitosti dokladu | ZoÚ § 10 ods. 1 a)–f) | LAW | PASS; podpisový záznam → sekcia 4 (LEGAL REVIEW) |
+| Náležitosti faktúry | ZDPH § 74 ods. 1 (číslo, dátumy, sadzba/oslobodenie, daň v EUR, „prenesenie daňovej povinnosti“) | LAW | PASS |
+| Sadzby | § 27: 23 / 19 / 5 % od 1. 1. 2025; Esblu neprijme neexistujúcu sadzbu, nerozhoduje o správnej | LAW + PRODUCT DECISION | PASS; voľba sadzby → LEGAL REVIEW (zodpovednosť používateľa) |
+| Nemennosť, číslovanie | séria FA/DO/ID/PF, číslo pri finalizácii, nemenný snapshot aj pre service_role | LAW (§ 74 ods. 1 c), ZoÚ § 34) + PRODUCT DECISION | PASS; report medzier GAP |
+| Dobropis/ťarchopis vydaný | § 25, § 71 ods. 2, § 74 ods. 3 c), § 85o ods. 5; UBL 381/383 | LAW + PEPPOL | PASS |
+| Režimy DPH | kategória oddelená od sadzby; E/K/G/O/AE texty; neplatiteľ iba O | LAW + PEPPOL | PASS |
+| Prenesenie daňovej povinnosti | § 69 ods. 12, IČ DPH odberateľa | LAW | PASS; či plnenie spadá pod § 69 ods. 12 → LEGAL REVIEW |
+| Úhrady | doklad sa úhradou nemení; čiastočné/viacnásobné | PRODUCT DECISION | PASS; saldo s dobropismi/zálohami GAP |
+| eFaktúra 2027 | § 85o: povinná pre tuzemských platiteľov od 1. 1. 2027, EN 16931, opravné doklady tiež e-faktúrou | LAW + PEPPOL | PASS formát; GAP pravidlo „povinná e-faktúra“ v UI; poskytovateľ a zmluva → LEGAL REVIEW |
+| Uchovávanie | ZoÚ § 35 ods. 3 c), ZDPH § 76 — 10 rokov; povinnosť klienta | LAW | Esblu **nesľubuje** zákonný archív; zmluvný záväzok → LEGAL REVIEW (CLIA blocker) |
+| Export pre účtovníka | opravy, kurzy, úhrady, zálohy, overené XML, lehota § 73 | PRODUCT DECISION | PASS; hromadný export GAP |
+
+## 9. Testy
+
+`npm run test:invoicing-sk` — 28 testov (PGlite so všetkými migráciami), z toho nové v tomto audite:
+
+- § 26 kalendár: pracovný deň, víkend, Veľká noc, 1. 1., Vianoce, 1. 5., mimoriadna výnimka podľa zdroja;
+- TS nápoveda = DB pravidlo pre každý deň 2025–2027 (ECB aj NBS);
+- finalizácia: kurz v deň vzniku, nedeľa, starší kurz v 10-dňovom okne → odmietnuté; jediný správny dátum → OK;
+- pracovný deň (streda → utorok) a dodanie po Veľkej noci (NBS);
+- colný kurz: dátum = deň vzniku, nemiešanie v roku;
+- oprava o 2 mesiace neskôr: aktuálny kurz, iný dátum, iný zdroj → odmietnuté; pôvodný → OK;
+- historický doklad: po úhrade aj po pokuse o zmenu ako service_role sú kurz a EUR sumy nezmenené;
+- § 73 výpočty (a–e, proforma, prijatá) a finalizácia po lehote nie je blokovaná, `finalized_at` uložený;
+- cross-company finance (sekcia 7).
+
+## 10. Na potvrdenie (LEGAL REVIEW)
+
+1. Posun na posledný vyhlásený kurz ECB/NBS, ak sa v deň predchádzajúci dňu vzniku kurz nevyhlásil; kalendár pre NBS kurzy.
+2. Kurz pri prijatých dokladoch (preberá sa z dokladu dodávateľa).
+3. 386 v SK transpozícii Peppol BIS v1.11 (xlsx FS) — Peppol BIS aj SK TDD code list 386 obsahujú.
+4. Čo je účtovným dokladom pri e-faktúre (XML / vizualizácia / záznam) — ZoÚ § 10, § 31, § 35 ods. 2.
+5. Či technické prvky v sekcii 4 spĺňajú vnútorný kontrolný systém (ZoÚ § 32 ods. 3 c)).
+6. § 73 ods. 1 b) — „alebo“ ako neskorší z dvoch termínov; § 73 ods. 1 d) — aproximácia cez AE + krajinu odberateľa; posun konca lehoty.
+7. Návrh prijatých dobropisov (sekcia 6), najmä kód 83 a vrátenie peňazí.
+8. Uchovávanie a archív (zmluva Esblu aj eFaktura.sk), rola Esblu voči FS — `docs/clia-delta-einvoice-api-partner-2026-10-06.md`.
+9. Zodpovednosť za voľbu sadzby a režimu DPH vo VOP.
+
+## 11. Produkčné blokery
+
+Produkčné migrácie `20261002…` až `20261008100003` nespustené; zmluva a DPA s eFaktura.sk; CLIA;
+potvrdenie účtovníčky; retencia a export; produkčný kľúč eFaktura.sk. Nič z toho nebolo vykonané.
+
+## 12. Zmeny oproti verzii 1
+
+- § 26: 10-dňové okno nahradené presným dátumom; oprava používa pôvodný kurz aj dátum; colný kurz za rok.
+- 386: rozdelené na PEPPOL PASS a SLOVAK PROFILE REVIEW (predtým nepresne ako otázka akceptácie 386).
+- Účtovný doklad: odstránené tvrdenie „pri eFaktúre je dokladom XML“; technická integrita PASS, kvalifikácia LEGAL REVIEW.
+- Vnútorný kontrolný systém: iba technický opis, nie tvrdenie o splnení.
+- § 73: z GAP na upozornenie + export.
+- Prijaté dobropisy: návrh namiesto „GAP“ bez riešenia.
+- Finance helpery: z „REVIEW (bezpečnostné)“ na auditované (nezneužiteľné) + defenzívna oprava a testy.

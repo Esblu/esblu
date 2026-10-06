@@ -118,6 +118,8 @@ for (const migration of [
   "20261003100000_einvoice_inbound_draft_totals.sql",
   "20261008100000_invoicing_sk_compliance.sql",
   "20261008100001_invoicing_sk_trigger_fn_revoke.sql",
+  "20261008100002_finance_helpers_bind_active_company.sql",
+  "20261008100003_fx_rate_date_exact.sql",
 ]) {
   try {
     await db.exec(read(`supabase/migrations/${migration}`));

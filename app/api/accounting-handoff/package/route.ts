@@ -37,6 +37,7 @@ import type {
   InvoiceParty,
   InvoiceTaxBreakdown,
 } from "@/lib/invoices";
+import { issueDeadline, isIssuedAfterDeadline } from "@/lib/invoicing/sk-deadlines";
 
 // =============================================================================
 // POST /api/accounting-handoff/package — úplný balík pre účtovníka.
@@ -482,6 +483,19 @@ export async function POST(req: Request) {
           fx_rate_source: (invoice as Invoice & { fx_rate_source?: string | null }).fx_rate_source ?? null,
           tax_base_eur: (invoice as Invoice & { tax_base_eur?: number | null }).tax_base_eur ?? null,
           vat_total_eur: (invoice as Invoice & { vat_total_eur?: number | null }).vat_total_eur ?? null,
+          // § 73: informatívne; skutočný dátum vyhotovenia (issue_date) a finalized_at sa nemenia.
+          ...(() => {
+            const dl = issueDeadline({
+              direction: invoice.direction === "received" ? "received" : "issued",
+              kind: invoice.kind,
+              deliveryDate: invoice.delivery_date ?? null,
+              taxPointDate: invoice.tax_point_date ?? null,
+              hasIntraEuGoods: breakdown.some((b) => b.vat_category_code === "K"),
+              hasEuServiceReverseCharge: breakdown.some((b) => b.vat_category_code === "AE") &&
+                parties.some((p) => p.role === "buyer" && Boolean(p.country_code) && String(p.country_code).toUpperCase() !== "SK"),
+            });
+            return { issue_deadline: dl?.deadline ?? null, issue_deadline_rule: dl?.rule ?? null, issued_after_deadline: dl ? isIssuedAfterDeadline(invoice.issue_date, dl) : null };
+          })(),
         },
         payments: (paymentsByInvoice.get(invoice.id) ?? []).map((p) => ({
           paid_amount: p.paid_amount, paid_at: p.paid_at, payment_method: p.payment_method, note: p.note, recorded_at: p.created_at,

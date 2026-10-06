@@ -84,6 +84,7 @@ import { downloadBlob } from "@/lib/file-actions";
 import { invoiceDetailHref } from "@/lib/entity-links";
 import { creditedTotals, isFullyCredited, remainingAfterCredits, signedAmount } from "@/lib/invoicing/credit-note-semantics";
 import { navigateHard } from "@/lib/app-navigation";
+import { fxReferenceRateDate, issueDeadline, isIssuedAfterDeadline } from "@/lib/invoicing/sk-deadlines";
 import { confirmAction, notify } from "@/app/components/ui/AppDialog";
 import EinvoiceInvoicePanel from "@/app/components/einvoice/EinvoiceInvoicePanel";
 
@@ -478,6 +479,27 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
   }
 
   const isReceived = invoice?.direction === "received";
+  // § 73 lehota (iba upozornenie) a § 26 požadovaný dátum kurzu (nápoveda; autoritatívna je DB).
+  const deadlinePartner = partners.find((p) => p.id === customerId);
+  const skIssueDeadline = invoice
+    ? issueDeadline({
+        direction: invoice.direction === "received" ? "received" : "issued",
+        kind: invoice.kind,
+        deliveryDate: deliveryDate || null,
+        taxPointDate: taxPointDate || null,
+        hasIntraEuGoods: draftItems.some((i) => i.vat_category_code === "K"),
+        hasEuServiceReverseCharge:
+          draftItems.some((i) => i.vat_category_code === "AE") &&
+          Boolean(deadlinePartner?.country_code) &&
+          (deadlinePartner?.country_code ?? "").toUpperCase() !== "SK",
+      })
+    : null;
+  const issuedLate = isIssuedAfterDeadline(issueDate, skIssueDeadline);
+  const isCorrection = invoice?.kind === "credit_note" || invoice?.kind === "debit_note";
+  const expectedFxDate =
+    !isReceived && !isCorrection && fxRateSource
+      ? fxReferenceRateDate(taxPointDate || deliveryDate || issueDate || null, fxRateSource)
+      : null;
 
   /**
    * Hlavička draftu podľa smeru. Prijatá faktúra má protistranu v
@@ -945,6 +967,11 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
                   disabled={!canEdit}
                   onChange={(event) => handleIssueDateChange(event.target.value)}
                 />
+                {skIssueDeadline && (
+                  <p className={`mt-1 text-xs ${issuedLate ? "text-amber-700" : "text-slate-500"}`} role={issuedLate ? "status" : undefined}>
+                    {t(issuedLate ? "invoices.detail.issueDeadlineLate" : "invoices.detail.issueDeadlineInfo", { date: formatDate(skIssueDeadline.deadline, locale) })}
+                  </p>
+                )}
               </div>
 
               <div>
@@ -1023,6 +1050,11 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
                     <label className={docLabel}>{t("invoices.detail.fxRateDateLabel")}</label>
                     <input type="date" className={docField} value={fxRateDate} disabled={!canEdit}
                       onChange={(event) => setFxRateDate(event.target.value)} />
+                    {expectedFxDate && (
+                      <p className={`mt-1 text-xs ${fxRateDate && fxRateDate !== expectedFxDate ? "text-amber-700" : "text-slate-500"}`}>
+                        {t(fxRateDate && fxRateDate !== expectedFxDate ? "invoices.detail.fxRateDateMismatch" : "invoices.detail.fxRateDateExpected", { date: formatDate(expectedFxDate, locale) })}
+                      </p>
+                    )}
                   </div>
                   <div>
                     <label className={docLabel}>{t("invoices.pdf.fxSourceLabel")}</label>

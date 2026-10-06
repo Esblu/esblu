@@ -62,6 +62,8 @@ export const EINVOICE_MIGRATIONS = [
   "20261007100000_einvoice_event_ops_enroll_limit.sql",
   "20261008100000_invoicing_sk_compliance.sql",
   "20261008100001_invoicing_sk_trigger_fn_revoke.sql",
+  "20261008100002_finance_helpers_bind_active_company.sql",
+  "20261008100003_fx_rate_date_exact.sql",
 ];
 
 async function loadPglite(): Promise<Db> {

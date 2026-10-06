@@ -43,6 +43,9 @@ create function storage.foldername(name text) returns text[] language sql immuta
 alter table storage.objects enable row level security;
 create table public.companies (id uuid primary key default gen_random_uuid(), name text not null, plan text not null default 'free', created_at timestamptz default now());
 create table public.company_members (id uuid primary key default gen_random_uuid(), company_id uuid not null references public.companies(id), user_id uuid not null, role text not null, status text not null default 'active', permissions jsonb not null default '{}', created_at timestamptz default now());
+-- Invarianty z prod (20260814…): jedno členstvo na firmu a najviac JEDNO aktívne členstvo na používateľa.
+create unique index company_members_unique_company_user on public.company_members (company_id, user_id);
+create unique index company_members_one_active_per_user_idx on public.company_members (user_id) where status = 'active';
 -- Pomocné funkcie (doslovne z prod) -------------------------------------------
 create or replace function public.esblu_my_active_company_id() returns uuid language sql stable security definer set search_path to '' as $f$
   select cm.company_id from public.company_members cm where cm.user_id = auth.uid() and cm.status = 'active' limit 1;

@@ -102,6 +102,8 @@ for (const migration of [
   "20261002110000_einvoice_en16931_fields.sql",
   "20261008100000_invoicing_sk_compliance.sql",
   "20261008100001_invoicing_sk_trigger_fn_revoke.sql",
+  "20261008100002_finance_helpers_bind_active_company.sql",
+  "20261008100003_fx_rate_date_exact.sql",
 ]) {
   if (migration === "20261002100000_einvoice_foundation.sql") {
     // Simulácia: main medzičasom pridal nový typ udalosti. Migrácia E-Faktúry
