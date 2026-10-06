@@ -115,6 +115,7 @@ for (const migration of [
   "20261008100002_finance_helpers_bind_active_company.sql",
   "20261008100003_fx_rate_date_exact.sql",
   "20261008100004_fx_official_reference_rates.sql",
+  "20261008100005_invoicing_corrections_payments_advances.sql",
 ]) {
   try {
     await db.exec(read(`supabase/migrations/${migration}`));

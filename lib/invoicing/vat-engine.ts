@@ -452,6 +452,6 @@ export function isInvoiceOverdue(
    */
   today: string = todayLocalDate()
 ): boolean {
-  if (!dueDate || paymentStatus === "paid") return false;
+  if (!dueDate || paymentStatus === "paid" || paymentStatus === "overpaid") return false;
   return dueDate < today;
 }

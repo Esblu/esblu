@@ -82,10 +82,6 @@ export default function NewInvoicePage() {
   const [saving, setSaving] = useState(false);
   const [submitError, setSubmitError] = useState("");
 
-  useEffect(() => {
-    void init();
-  }, []);
-
   async function init() {
     const {
       data: { session },
@@ -118,6 +114,13 @@ export default function NewInvoicePage() {
       console.error("Načítanie obchodných partnerov zlyhalo:", error);
     }
   }
+
+  // Efekt až za deklaráciou init (react-hooks/immutability); init zapisuje stav až po await.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void init();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function handleCorrectsId(id: string, correctionKind: "credit_note" | "debit_note" = "credit_note") {
     setCorrectsInvoiceId(id);

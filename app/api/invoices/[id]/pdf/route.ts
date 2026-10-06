@@ -219,6 +219,23 @@ export async function GET(req: Request, context: RouteContext) {
     correctedInvoiceNumber = corrected?.invoice_number ?? null;
   }
 
+  // 20261008100005: odpočty záloh konečnej faktúry (pod RLS tej istej firmy).
+  const { data: deductionRows } = await userClient
+    .from("invoice_advance_deductions")
+    .select("advance_invoice_id, taxable_amount, vat_amount")
+    .eq("invoice_id", invoice.id)
+    .returns<{ advance_invoice_id: string; taxable_amount: number; vat_amount: number }[]>();
+  const advanceIds = Array.from(new Set((deductionRows ?? []).map((d) => d.advance_invoice_id)));
+  const advanceNumbers = new Map<string, string | null>();
+  if (advanceIds.length > 0) {
+    const { data: adv } = await userClient.from("invoices").select("id, invoice_number").in("id", advanceIds)
+      .returns<{ id: string; invoice_number: string | null }[]>();
+    for (const a of adv ?? []) advanceNumbers.set(a.id, a.invoice_number);
+  }
+  const advanceDeductions = (deductionRows ?? []).map((d) => ({
+    taxable_amount: Number(d.taxable_amount), vat_amount: Number(d.vat_amount), advance_number: advanceNumbers.get(d.advance_invoice_id) ?? null,
+  }));
+
   let pdfBuffer: Buffer;
   try {
     pdfBuffer = await renderInvoicePdfBuffer({
@@ -229,6 +246,7 @@ export async function GET(req: Request, context: RouteContext) {
       taxBreakdowns,
       locale,
       correctedInvoiceNumber,
+      advanceDeductions,
     });
   } catch (renderError) {
     console.error(

@@ -16,7 +16,10 @@ import { documentSign } from "@/lib/invoicing/credit-note-semantics";
 import { createSupabaseOutboundStore } from "@/lib/einvoice/outbound/supabase-store";
 import {
   buildManifest,
-  directionFolder,
+  packageFolder,
+  parseExportPeriod,
+  toCsv,
+  type ExportPeriod,
   eligibilityProblems,
   invoiceFolderName,
   isSafeZipPath,
@@ -159,20 +162,27 @@ export async function POST(req: Request) {
   // ---------------------------------------------------------------------------
   // 1. Vstup
   // ---------------------------------------------------------------------------
-  let invoiceIds: string[];
+  // 20261008100005: buď výber dokladov (invoiceIds), alebo hromadný export za obdobie (period).
+  let invoiceIds: string[] = [];
+  let period: ExportPeriod | null = null;
   let note: string | null = null;
   try {
-    const body = (await req.json()) as { invoiceIds?: unknown; note?: unknown };
-    if (!Array.isArray(body.invoiceIds)) throw new Error("invoiceIds");
-    invoiceIds = Array.from(
-      new Set(body.invoiceIds.filter((id): id is string => typeof id === "string" && UUID_RE.test(id)))
-    );
+    const body = (await req.json()) as { invoiceIds?: unknown; note?: unknown; period?: unknown };
+    if (body.period !== undefined) {
+      period = parseExportPeriod(body.period);
+      if (!period) throw new Error("period");
+    } else {
+      if (!Array.isArray(body.invoiceIds)) throw new Error("invoiceIds");
+      invoiceIds = Array.from(
+        new Set(body.invoiceIds.filter((id): id is string => typeof id === "string" && UUID_RE.test(id)))
+      );
+    }
     if (typeof body.note === "string" && body.note.trim()) note = body.note.trim().slice(0, 500);
   } catch {
     return errorResponse(locale, 400, "BAD_REQUEST");
   }
 
-  if (invoiceIds.length === 0) {
+  if (!period && invoiceIds.length === 0) {
     return errorResponse(locale, 400, "NO_DOCUMENTS_SELECTED");
   }
   if (invoiceIds.length > PACKAGE_LIMITS.maxInvoices) {
@@ -211,12 +221,24 @@ export async function POST(req: Request) {
   // ---------------------------------------------------------------------------
   // 3. Zber. Každý dotaz beží pod RLS ako prihlásený používateľ.
   // ---------------------------------------------------------------------------
-  const { data: invoiceRows, error: invoiceError } = await db
-    .from("invoices")
-    .select("*")
-    .in("id", invoiceIds)
-    .order("issue_date", { ascending: true })
-    .returns<Invoice[]>();
+  // Obdobie: iba finalizované doklady aktívnej firmy (RLS + explicitný filter); koncepty do exportu nepatria.
+  const { data: invoiceRows, error: invoiceError } = period
+    ? await db
+        .from("invoices")
+        .select("*")
+        .eq("company_id", companyId)
+        .eq("document_status", "finalized")
+        .gte("issue_date", period.from)
+        .lte("issue_date", period.to)
+        .order("issue_date", { ascending: true })
+        .limit(PACKAGE_LIMITS.maxInvoices + 1)
+        .returns<Invoice[]>()
+    : await db
+        .from("invoices")
+        .select("*")
+        .in("id", invoiceIds)
+        .order("issue_date", { ascending: true })
+        .returns<Invoice[]>();
 
   if (invoiceError) {
     console.error("handoff/package: načítanie faktúr zlyhalo:", invoiceError.code);
@@ -225,8 +247,11 @@ export async function POST(req: Request) {
 
   // Cudzia firma sa sem cez RLS nedostane; explicitný filter je druhá vrstva.
   const invoices = (invoiceRows ?? []).filter((i) => i.company_id === companyId);
+  if (period && invoices.length > PACKAGE_LIMITS.maxInvoices) {
+    return failed("TOO_MANY_INVOICES", undefined, { max: PACKAGE_LIMITS.maxInvoices });
+  }
   if (invoices.length === 0) {
-    return errorResponse(locale, 404, "NO_DOCUMENTS_SELECTED");
+    return period ? failed("NO_FINALIZED_DOCUMENTS", { excludedDrafts: [], eligibleCount: 0 }) : errorResponse(locale, 404, "NO_DOCUMENTS_SELECTED");
   }
 
   const ids = invoices.map((i) => i.id);
@@ -315,8 +340,8 @@ export async function POST(req: Request) {
   // riadku pod RLS a pred zabalením sa overí SHA-256 (ako pri sťahovaní XML).
   // ---------------------------------------------------------------------------
   const [paymentsRes, deductionsRes, inboundRes, outboundRes] = await Promise.all([
-    db.from("invoice_payments").select("invoice_id, paid_amount, paid_at, payment_method, note, created_at").in("invoice_id", ids)
-      .returns<{ invoice_id: string; paid_amount: number; paid_at: string; payment_method: string | null; note: string | null; created_at: string }[]>(),
+    db.from("invoice_payments").select("invoice_id, paid_amount, paid_at, payment_method, note, created_at, entry_type").in("invoice_id", ids)
+      .returns<{ invoice_id: string; paid_amount: number; paid_at: string; payment_method: string | null; note: string | null; created_at: string; entry_type: string }[]>(),
     db.from("invoice_advance_deductions").select("invoice_id, advance_invoice_id, vat_category_code, vat_rate, taxable_amount, vat_amount").in("invoice_id", ids)
       .returns<{ invoice_id: string; advance_invoice_id: string; vat_category_code: string; vat_rate: number; taxable_amount: number; vat_amount: number }[]>(),
     db.from("einvoice_inbound").select("invoice_id, xml_storage_path, xml_sha256, provider, provider_received_id, received_at, acknowledged_at, sender_participant_id").in("invoice_id", ids)
@@ -337,7 +362,11 @@ export async function POST(req: Request) {
     if (o.ubl_storage_path && o.ubl_sha256 && (!prev || o.attempt > prev.attempt)) outboundByInvoice.set(o.invoice_id, o);
   }
   // Čísla opravovaných dokladov (aj keď nie sú vo výbere).
-  const correctedIds = Array.from(new Set(invoices.map((i) => (i as Invoice & { corrects_invoice_id?: string | null }).corrects_invoice_id).filter((x): x is string => Boolean(x))));
+  // Čísla opravovaných dokladov aj zálohových faktúr (odpočty) — aj keď nie sú vo výbere.
+  const correctedIds = Array.from(new Set([
+    ...invoices.map((i) => (i as Invoice & { corrects_invoice_id?: string | null }).corrects_invoice_id),
+    ...(deductionsRes.data ?? []).map((d) => d.advance_invoice_id),
+  ].filter((x): x is string => Boolean(x))));
   const correctedNumber = new Map<string, string | null>();
   if (correctedIds.length > 0) {
     const { data: corr, error: corrError } = await db.from("invoices").select("id, invoice_number, supplier_invoice_number").in("id", correctedIds)
@@ -388,7 +417,7 @@ export async function POST(req: Request) {
       hasOriginalDocument: Boolean(
         documentById.get(originalDocIdByInvoice.get(invoice.id) ?? "")
       ) || inboundByInvoice.has(invoice.id),
-    });
+    }, { includeNonTaxDocuments: Boolean(period) });
 
     if (problems.length === 0) {
       eligible.push(invoice);
@@ -442,7 +471,7 @@ export async function POST(req: Request) {
 
   try {
     for (const invoice of eligible) {
-      const folder = directionFolder(invoice.direction);
+      const folder = packageFolder(invoice);
       if (!folder) throw new HandoffFailure("unknown_direction", invoice.id);
 
       const dir = `${folder}/${invoiceFolderName(invoice)}`;
@@ -512,7 +541,7 @@ export async function POST(req: Request) {
           fx_reference_rate_id: (invoice as Invoice & { fx_reference_rate_id?: string | null }).fx_reference_rate_id ?? null,
         },
         payments: (paymentsByInvoice.get(invoice.id) ?? []).map((p) => ({
-          paid_amount: p.paid_amount, paid_at: p.paid_at, payment_method: p.payment_method, note: p.note, recorded_at: p.created_at,
+          entry_type: p.entry_type, paid_amount: p.paid_amount, paid_at: p.paid_at, payment_method: p.payment_method, note: p.note, recorded_at: p.created_at,
         })),
         advance_deductions: (deductionsByInvoice.get(invoice.id) ?? []).map((d) => ({
           advance_invoice_id: d.advance_invoice_id, vat_category_code: d.vat_category_code, vat_rate: d.vat_rate,
@@ -567,6 +596,9 @@ export async function POST(req: Request) {
             buyer: parties.find((p) => p.role === "buyer") ?? null,
             items, taxBreakdowns: breakdown, locale,
             correctedInvoiceNumber: correctedNumber.get((invoice as Invoice & { corrects_invoice_id?: string | null }).corrects_invoice_id ?? "") ?? null,
+            advanceDeductions: (deductionsByInvoice.get(invoice.id) ?? []).map((d) => ({
+              taxable_amount: Number(d.taxable_amount), vat_amount: Number(d.vat_amount), advance_number: correctedNumber.get(d.advance_invoice_id) ?? null,
+            })),
           });
         } catch (renderError) {
           console.error("handoff/package: PDF zlyhalo:", invoice.id,
@@ -702,6 +734,54 @@ export async function POST(req: Request) {
         folder: dir,
         artifact_count: artifactCount,
       });
+    }
+
+    // --- 20261008100005: súhrnné CSV (doklady, úhrady, partneri, DPH, opravy, audit, saldo)
+    {
+      const byId = new Map(eligible.map((i) => [i.id, i]));
+      const label = (id: string | null | undefined) => {
+        if (!id) return "";
+        const i = byId.get(id);
+        return i ? (i.invoice_number ?? i.supplier_invoice_number ?? i.id) : (correctedNumber.get(id) ?? id);
+      };
+      const settlements = new Map<string, Record<string, unknown>>();
+      const roots = eligible.filter((i) => i.kind !== "proforma");
+      for (let k = 0; k < roots.length; k += 20) {
+        await Promise.all(roots.slice(k, k + 20).map(async (i) => {
+          const { data } = await db.rpc("esblu_invoice_settlement", { p_invoice_id: i.id });
+          if (data) settlements.set(i.id, data as Record<string, unknown>);
+        }));
+      }
+      const { data: eventRows } = await db.from("invoice_events").select("invoice_id, event_type, actor_source, created_at")
+        .in("invoice_id", eligible.map((i) => i.id)).order("created_at", { ascending: true })
+        .returns<{ invoice_id: string; event_type: string; actor_source: string; created_at: string }[]>();
+      const ext = (i: Invoice) => i as Invoice & { corrects_invoice_id?: string | null; correction_reason?: string | null; correction_review_status?: string | null; fx_rate?: number | null; fx_rate_date?: string | null; fx_rate_source?: string | null; tax_base_eur?: number | null; vat_total_eur?: number | null };
+      const csv = (name: string, header: string[], rows: unknown[][]) => addFile(
+        { path: `summary/${name}`, kind: "summary_csv", invoice_id: null, source_document_id: null, provenance: "generated", mime_type: "text/csv", original_filename: null },
+        toCsv(header, rows)
+      );
+      csv("invoices.csv",
+        ["invoice_id", "folder", "direction", "kind", "number", "supplier_number", "issue_date", "delivery_date", "tax_point_date", "due_date", "currency", "subtotal", "vat_total", "total", "accounting_sign", "fx_rate", "fx_rate_date", "fx_rate_source", "tax_base_eur", "vat_total_eur", "payment_status", "amount_due", "paid", "refunded", "balance", "corrects", "correction_reason", "correction_review_status", "source"],
+        eligible.map((i) => {
+          const st = settlements.get(i.id);
+          return [i.id, packageFolder(i), i.direction, i.kind, i.invoice_number, i.supplier_invoice_number, i.issue_date, i.delivery_date, i.tax_point_date, i.due_date, i.currency,
+            i.subtotal_amount, i.vat_total_amount, i.total_amount, documentSign(i.kind), ext(i).fx_rate ?? "", ext(i).fx_rate_date ?? "", ext(i).fx_rate_source ?? "",
+            ext(i).tax_base_eur ?? "", ext(i).vat_total_eur ?? "", i.kind === "proforma" ? "" : (st?.payment_status ?? i.payment_status), st?.amount_due ?? "", st?.paid ?? "", st?.refunded ?? "", st?.balance ?? "",
+            label(ext(i).corrects_invoice_id), ext(i).correction_reason ?? "", ext(i).correction_review_status ?? "", (i as Invoice & { source?: string }).source ?? ""];
+        }));
+      csv("payments.csv", ["invoice", "entry_type", "amount", "date", "method", "recorded_at"],
+        eligible.flatMap((i) => (paymentsByInvoice.get(i.id) ?? []).map((p) => [label(i.id), p.entry_type, p.paid_amount, p.paid_at, p.payment_method ?? "", p.created_at])));
+      csv("partners.csv", ["invoice", "role", "legal_name", "ico", "dic", "ic_dph", "country"],
+        eligible.flatMap((i) => (partiesByInvoice.get(i.id) ?? []).map((p) => [label(i.id), p.role, p.legal_name, p.ico ?? "", p.dic ?? "", p.ic_dph ?? "", p.country_code ?? ""])));
+      csv("vat-breakdown.csv", ["invoice", "accounting_sign", "vat_category", "vat_rate", "taxable", "vat", "exemption_reason"],
+        eligible.flatMap((i) => (taxByInvoice.get(i.id) ?? []).map((b) => [label(i.id), documentSign(i.kind), b.vat_category_code, b.vat_rate, b.taxable_amount, b.vat_amount,
+          (b as typeof b & { vat_exemption_reason_text?: string | null }).vat_exemption_reason_text ?? ""])));
+      csv("corrections.csv", ["correction", "kind", "direction", "corrects", "reason", "review_status"],
+        eligible.filter((i) => i.kind === "credit_note" || i.kind === "debit_note").map((i) => [label(i.id), i.kind, i.direction, label(ext(i).corrects_invoice_id), ext(i).correction_reason ?? "", ext(i).correction_review_status ?? ""]));
+      csv("advance-deductions.csv", ["final_invoice", "advance_invoice", "vat_category", "vat_rate", "taxable", "vat"],
+        eligible.flatMap((i) => (deductionsByInvoice.get(i.id) ?? []).map((d) => [label(i.id), label(d.advance_invoice_id), d.vat_category_code, d.vat_rate, d.taxable_amount, d.vat_amount])));
+      csv("audit-events.csv", ["invoice", "event_type", "actor_source", "created_at"],
+        (eventRows ?? []).map((e) => [label(e.invoice_id), e.event_type, e.actor_source, e.created_at]));
     }
 
     // --- README

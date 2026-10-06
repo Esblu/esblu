@@ -486,7 +486,9 @@ await check("parser: neznáme elementy sa ignorujú bez zmeny namapovaných hodn
   const b = parseInboundUbl(extended);
   assert.equal(b.ok, true);
   if (a.ok && b.ok) {
-    assert.deepEqual(b.document, a.document);
+    // 20261008100005: BT-22 (Note) sa už mapuje (dôvod opravy); ostatné neznáme elementy sa ignorujú.
+    assert.equal(b.document.note, "poznámka");
+    assert.deepEqual({ ...b.document, note: null }, { ...a.document, note: null });
     assert.deepEqual(b.reviewReasons, []);
   }
 });

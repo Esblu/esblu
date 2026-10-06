@@ -67,7 +67,23 @@ export type InboundDraftTotals = {
   breakdown: InboundDraftTaxBreakdown[];
 };
 
+/** Druh prijatého dokladu (20261008100005): opravy idú do review toku, nikdy sa neaplikujú automaticky. */
+export type InboundDocumentKind = "regular_invoice" | "credit_note" | "debit_note";
+
+export type InboundDraftCorrection = {
+  /** BT-25 — číslo opravovanej faktúry dodávateľa (null = chýba → review). */
+  original_number: string | null;
+  /** BT-26 — dátum opravovanej faktúry (YYYY-MM-DD) alebo null. */
+  original_issue_date: string | null;
+  /** BT-22 — dôvod opravy z XML (3–500 znakov) alebo null → používateľ doplní. */
+  reason: string | null;
+  /** Typ opravy, ktorý je právne menej jednoznačný (napr. 83 finančná úprava) → explicitný review dôvod. */
+  type_review: boolean;
+};
+
 export type InboundDraftPayload = {
+  document_kind: InboundDocumentKind;
+  correction: InboundDraftCorrection | null;
   supplier: InboundDraftSupplier;
   invoice_number: string;
   issue_date: string;
@@ -106,14 +122,26 @@ export function mapPaymentMeansCode(code: string | null): { code: string | null;
   return /^[0-9]{1,3}$/.test(c) ? { code: c, unsupported: false } : { code: null, unsupported: true };
 }
 
-/** Profil / typ dokladu, ktorý vieme prijať ako koncept prijatej faktúry. */
-export function checkInboundProfile(doc: ParsedInboundUbl): { ok: true } | { ok: false; detail: string } {
+/**
+ * Profil / typ dokladu, ktorý vieme prijať ako koncept.
+ * Invoice 380 (aj iné, s review) → faktúra; Invoice 383 → ťarchopis; CreditNote 381/81/83 → dobropis
+ * (83 = finančná úprava → type_review). CreditNote 396/532 a Invoice 384 (opravená faktúra) → manuálne.
+ */
+export function checkInboundProfile(doc: ParsedInboundUbl):
+  | { ok: true; kind: InboundDocumentKind; typeReview: boolean }
+  | { ok: false; detail: string } {
   if (blank(doc.customizationId) || !doc.customizationId!.trim().startsWith(EN16931_CUSTOMIZATION_PREFIX)) {
     return { ok: false, detail: "CUSTOMIZATION_NOT_EN16931" };
   }
-  // Koncept prijatej faktúry (esblu_received_invoice_draft_core) vytvára iba kind regular_invoice.
-  if (doc.documentType !== "Invoice") return { ok: false, detail: "CREDIT_NOTE_NOT_SUPPORTED" };
-  return { ok: true };
+  const code = (doc.typeCode ?? "").trim();
+  if (doc.documentType === "CreditNote") {
+    if (code === "381" || code === "81" || code === "") return { ok: true, kind: "credit_note", typeReview: code === "" };
+    if (code === "83") return { ok: true, kind: "credit_note", typeReview: true };
+    return { ok: false, detail: "CREDIT_NOTE_TYPE_UNSUPPORTED" };
+  }
+  if (code === "383") return { ok: true, kind: "debit_note", typeReview: false };
+  if (code === "384") return { ok: false, detail: "CORRECTED_INVOICE_UNSUPPORTED" };
+  return { ok: true, kind: "regular_invoice", typeReview: false };
 }
 
 /**
@@ -156,7 +184,11 @@ export function mapInboundDraft(
   if (blank(doc.supplier.name)) return { ok: false, code: "INVALID_XML", detail: "MISSING_SUPPLIER_NAME" };
 
   const reasons = new Set(parserReviewReasons.filter((r) => /^[A-Z0-9_]{1,60}$/.test(r)));
-  if (doc.typeCode && doc.typeCode !== "380") reasons.add("INVOICE_TYPE_CODE_UNUSUAL");
+  if (profile.kind === "regular_invoice" && doc.typeCode && doc.typeCode !== "380") reasons.add("INVOICE_TYPE_CODE_UNUSUAL");
+  if (profile.kind !== "regular_invoice") {
+    if (blank(doc.precedingInvoiceNumber)) reasons.add("ORIGINAL_REFERENCE_MISSING");
+    if (profile.typeReview) reasons.add("CORRECTION_TYPE_REVIEW");
+  }
 
   // Príjemca musí byť naša organizácia (Peppol to zaručuje; ak nesedí, iba na kontrolu).
   if (recipientParticipantId) {
@@ -284,6 +316,13 @@ export function mapInboundDraft(
     ok: true,
     reviewReasons: [...reasons].slice(0, 30),
     draft: {
+      document_kind: profile.kind,
+      correction: profile.kind === "regular_invoice" ? null : {
+        original_number: blank(doc.precedingInvoiceNumber) ? null : doc.precedingInvoiceNumber!.trim().slice(0, 200),
+        original_issue_date: doc.precedingInvoiceIssueDate && /^\d{4}-\d{2}-\d{2}$/.test(doc.precedingInvoiceIssueDate) ? doc.precedingInvoiceIssueDate : null,
+        reason: doc.note && doc.note.trim().length >= 3 ? doc.note.trim().slice(0, 500) : null,
+        type_review: profile.typeReview,
+      },
       supplier: {
         legal_name: s.name!.trim(),
         ico,

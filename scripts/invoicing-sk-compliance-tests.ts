@@ -153,9 +153,8 @@ await check("dobropisy spolu nesmú prekročiť pôvodnú faktúru (+ ťarchopis
 await check("opravný doklad k proforme a úhrada dobropisu sú zakázané", async () => {
   const pf = await draft(U.owner, CO.A, { kind: "proforma" });
   await finalize(U.owner, pf);
-  const cn = await draft(U.owner, CO.A, { kind: "credit_note", corrects: pf });
-  await setFields(U.owner, cn, { correction_reason: "Oprava" });
-  assert.match(await errOf(finalize(U.owner, cn)), /ESBLU_CORRECTION_OF_PROFORMA/);
+  // 20261008100005: väzbu na proformu odmietne už guard pri vytvorení konceptu.
+  assert.match(await errOf(draft(U.owner, CO.A, { kind: "credit_note", corrects: pf })), /ESBLU_CORRECTION_OF_PROFORMA/);
   const cnId = (await h.sql<Row>("select id from public.invoices where kind = 'credit_note' and document_status = 'finalized' limit 1")).rows[0].id as string;
   assert.match(await errOf(rpc(U.owner, "select public.esblu_add_invoice_payment($1, 10, '2026-10-06', 'bank_transfer', null)", [cnId])), /ESBLU_PAYMENT_ON_CREDIT_NOTE/);
 });
@@ -398,7 +397,7 @@ await check("úhrady: čiastočná, viacnásobná, preplatok; faktúra sa pri ú
   await pay(100);
   assert.equal((await inv(id)).payment_status, "paid");
   await pay(5);
-  assert.equal((await inv(id)).payment_status, "paid", "preplatok sa eviduje, stav paid");
+  assert.equal((await inv(id)).payment_status, "overpaid", "preplatok sa eviduje, stav overpaid (20261008100005)");
   const after = await inv(id);
   for (const k of ["invoice_number", "total_amount", "subtotal_amount", "vat_total_amount", "issue_date", "document_status"]) assert.deepEqual(after[k], before[k], k);
   const n = (await h.sql<{ n: number }>("select count(*)::int n from public.invoice_payments where invoice_id = $1", [id])).rows[0].n;

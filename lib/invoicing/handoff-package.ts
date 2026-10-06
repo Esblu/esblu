@@ -165,6 +165,41 @@ export function directionFolder(direction: string): "issued" | "received" | null
   return null;
 }
 
+/**
+ * 20261008100005: priečinok dokladu v balíku. Proforma (nedaňový doklad) ide do samostatného
+ * `proforma/`, aby ju účtovník nezamenil s daňovými dokladmi.
+ */
+export function packageFolder(invoice: Pick<PackageInvoice, "direction"> & { kind?: string }): "issued" | "received" | "proforma" | null {
+  if (invoice.kind === "proforma" && invoice.direction === "issued") return "proforma";
+  return directionFolder(invoice.direction);
+}
+
+export type ExportPeriod = { from: string; to: string };
+
+/** Hromadný export za obdobie: ISO dátumy, from ≤ to, najviac 366 dní. Inak null. */
+export function parseExportPeriod(raw: unknown): ExportPeriod | null {
+  if (!raw || typeof raw !== "object") return null;
+  const { from, to } = raw as { from?: unknown; to?: unknown };
+  const iso = /^\d{4}-\d{2}-\d{2}$/;
+  if (typeof from !== "string" || typeof to !== "string" || !iso.test(from) || !iso.test(to)) return null;
+  const a = Date.parse(`${from}T00:00:00Z`), b = Date.parse(`${to}T00:00:00Z`);
+  if (!Number.isFinite(a) || !Number.isFinite(b) || a > b) return null;
+  if (new Date(a).toISOString().slice(0, 10) !== from || new Date(b).toISOString().slice(0, 10) !== to) return null;
+  if ((b - a) / 86_400_000 > 366) return null;
+  return { from, to };
+}
+
+/** CSV (RFC 4180, `;` oddeľovač pre SK Excel, UTF-8 s BOM). Bunky začínajúce =+-@ sa neutralizujú (CSV injection). */
+export function toCsv(header: readonly string[], rows: readonly (readonly unknown[])[]): Uint8Array {
+  const cell = (v: unknown) => {
+    let t = v === null || v === undefined ? "" : String(v);
+    if (/^[=+\-@\t\r]/.test(t) && !/^-?\d+(\.\d+)?$/.test(t)) t = `'${t}`;
+    return /[";\r\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
+  };
+  const lines = [header, ...rows].map((r) => r.map(cell).join(";"));
+  return new TextEncoder().encode(`\uFEFF${lines.join("\r\n")}\r\n`);
+}
+
 // -----------------------------------------------------------------------------
 // Kto sa do úplného balíka smie dostať
 // -----------------------------------------------------------------------------
@@ -205,7 +240,7 @@ export type EligibilityInput = {
  * dôkazom. Keď sa nenájde, doklad NESMIE prejsť ako úplne odovzdaný — a
  * Esblu naň nevygeneruje vlastné PDF, ktoré by sa za originál vydávalo.
  */
-export function eligibilityProblems(input: EligibilityInput): EligibilityProblem[] {
+export function eligibilityProblems(input: EligibilityInput, opts: { includeNonTaxDocuments?: boolean } = {}): EligibilityProblem[] {
   const { invoice } = input;
   const problems: EligibilityProblem[] = [];
 
@@ -214,7 +249,7 @@ export function eligibilityProblems(input: EligibilityInput): EligibilityProblem
   if (!/^\d{4}-\d{2}-\d{2}$/.test(invoice.issue_date ?? "")) problems.push("missing_issue_date");
   if (input.itemCount <= 0) problems.push("missing_items");
 
-  if (invoice.kind === "proforma") problems.push("not_tax_document");
+  if (invoice.kind === "proforma" && !opts.includeNonTaxDocuments) problems.push("not_tax_document");
   if (invoice.direction === "issued" && !invoice.invoice_number) {
     problems.push("missing_invoice_number");
   }
@@ -248,7 +283,9 @@ export type ManifestFileKind =
   | "workbook"
   | "readme"
   /** 20261008100000: pôvodné XML prijatej e-faktúry (originál) / odoslané UBL vydanej e-faktúry. */
-  | "einvoice_xml";
+  | "einvoice_xml"
+  /** 20261008100005: súhrnné CSV hromadného exportu (doklady, úhrady, partneri, DPH, opravy, audit). */
+  | "summary_csv";
 
 export type ManifestFile = {
   /** Cesta vnútri ZIP-u, relatívna ku koreňovému priečinku balíka. */

@@ -87,6 +87,7 @@ import { navigateHard } from "@/lib/app-navigation";
 import { issueDeadline, isIssuedAfterDeadline } from "@/lib/invoicing/sk-deadlines";
 import { confirmAction, notify } from "@/app/components/ui/AppDialog";
 import EinvoiceInvoicePanel from "@/app/components/einvoice/EinvoiceInvoicePanel";
+import InvoiceFlowPanel from "@/app/components/invoicing/InvoiceFlowPanel";
 
 // K/G/O (EN16931 / Peppol) pribudli v 20261002110000 — finalizácia ich počíta ako 0 %.
 const VAT_CATEGORIES: VatCategoryCode[] = ["S", "Z", "E", "AE", "K", "G", "O"];
@@ -237,11 +238,6 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
   const [savingPayment, setSavingPayment] = useState(false);
   const [paymentError, setPaymentError] = useState("");
 
-  useEffect(() => {
-    void init();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [entityId]);
-
   async function init() {
     const {
       data: { session },
@@ -265,6 +261,14 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
 
     await loadAll();
   }
+
+  // Efekt až za deklaráciou init (react-hooks/immutability: prístup pred deklaráciou).
+  // init() zapisuje stav až po await (session, členstvo) — rovnaký vzor ako ChatConversationList.tsx.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void init();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entityId]);
 
   async function loadAll() {
     setLoading(true);
@@ -1602,6 +1606,8 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
               Oprávnenia a povolené akcie rozhoduje server; bez finančného
               prístupu sa panel nezobrazí vôbec. */}
           {canView && <EinvoiceInvoicePanel invoiceId={invoice.id} />}
+          {/* 20261008100005: typ dokladu, review prijatej opravy, zálohy a saldo. */}
+          {canView && <InvoiceFlowPanel invoice={invoice} canManage={canEdit} onChanged={() => void loadAll()} />}
 
           {creditNote ? (
             <p className="mt-8 text-sm text-secondary">{t("invoices.creditNote.noPaymentsNotice")}</p>

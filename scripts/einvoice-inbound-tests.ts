@@ -118,6 +118,7 @@ for (const migration of [
   "20261008100002_finance_helpers_bind_active_company.sql",
   "20261008100003_fx_rate_date_exact.sql",
   "20261008100004_fx_official_reference_rates.sql",
+  "20261008100005_invoicing_corrections_payments_advances.sql",
 ]) {
   try {
     await db.exec(read(`supabase/migrations/${migration}`));
@@ -439,7 +440,11 @@ await check("mapovanie: profil EN16931, dobropis a neznáma DPH kategória = UNS
     assert.deepEqual(m.reviewReasons, []);
   }
   assert.deepEqual(mapInboundDraft({ ...ok.document, customizationId: "urn:other:profile" }, [], null), { ok: false, code: "UNSUPPORTED_PROFILE", detail: "CUSTOMIZATION_NOT_EN16931" });
-  assert.deepEqual(mapInboundDraft({ ...ok.document, documentType: "CreditNote" }, [], null), { ok: false, code: "UNSUPPORTED_PROFILE", detail: "CREDIT_NOTE_NOT_SUPPORTED" });
+  // 20261008100005: dobropis 381 → koncept opravy (review); 396 a opravená faktúra 384 → manuálne.
+  const cnMapped = mapInboundDraft({ ...ok.document, documentType: "CreditNote", typeCode: "381" }, [], null);
+  assert.equal(cnMapped.ok && cnMapped.draft.document_kind, "credit_note");
+  assert.deepEqual(mapInboundDraft({ ...ok.document, documentType: "CreditNote", typeCode: "396" }, [], null), { ok: false, code: "UNSUPPORTED_PROFILE", detail: "CREDIT_NOTE_TYPE_UNSUPPORTED" });
+  assert.deepEqual(mapInboundDraft({ ...ok.document, typeCode: "384" }, [], null), { ok: false, code: "UNSUPPORTED_PROFILE", detail: "CORRECTED_INVOICE_UNSUPPORTED" });
   assert.deepEqual(mapInboundDraft({ ...ok.document, lines: [{ ...ok.document.lines[0], vatCategory: "L" }] }, [], null), { ok: false, code: "UNSUPPORTED_PROFILE", detail: "VAT_CATEGORY_UNSUPPORTED" });
   assert.deepEqual(mapInboundDraft({ ...ok.document, invoiceNumber: null }, [], null), { ok: false, code: "INVALID_XML", detail: "MISSING_INVOICE_NUMBER" });
   const wrongRecipient = mapInboundDraft(ok.document, [], "9915:9999999999");

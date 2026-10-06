@@ -219,7 +219,7 @@ async function enrich(db: SupabaseClient, rows: InboundRowLite[]): Promise<Inbou
       if (r.last_error_code === "UNSUPPORTED_PROFILE") {
         const ev = await events(db, "inbound_id", r.id);
         if (ev === null) return null;
-        if (ev.some((e) => e.to_state === "failed" && e.provider_code === "CREDIT_NOTE_NOT_SUPPORTED")) notice = "credit_note_unsupported";
+        if (ev.some((e) => e.to_state === "failed" && ["CREDIT_NOTE_NOT_SUPPORTED", "CREDIT_NOTE_TYPE_UNSUPPORTED", "CORRECTED_INVOICE_UNSUPPORTED"].includes(e.provider_code ?? ""))) notice = "credit_note_unsupported";
       }
     }
     out.push({

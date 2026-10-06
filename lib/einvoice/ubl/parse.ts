@@ -55,6 +55,10 @@ export type ParsedInboundUbl = {
   buyerReference: string | null;
   orderReference: string | null;
   precedingInvoiceNumber: string | null;
+  /** BT-26 dátum vyhotovenia opravovanej faktúry. */
+  precedingInvoiceIssueDate: string | null;
+  /** BT-22 prvá poznámka k dokladu (pri opravách dôvod opravy). */
+  note: string | null;
   deliveryDate: string | null;
   supplier: ParsedParty;
   customer: ParsedParty;
@@ -198,6 +202,8 @@ export function parseInboundUbl(input: string | Uint8Array): InboundParseResult 
     buyerReference: cbc(root, "BuyerReference"),
     orderReference: cbc(cac(root, "OrderReference"), "ID"),
     precedingInvoiceNumber: cbc(billingRef, "ID"),
+    precedingInvoiceIssueDate: cbc(billingRef, "IssueDate"),
+    note: cbc(root, "Note"),
     deliveryDate: cbc(cac(root, "Delivery"), "ActualDeliveryDate"),
     supplier: party(cac(root, "AccountingSupplierParty")),
     customer: party(cac(root, "AccountingCustomerParty")),

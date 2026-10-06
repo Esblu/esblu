@@ -150,6 +150,7 @@ for (const migration of [
   "20261008100002_finance_helpers_bind_active_company.sql",
   "20261008100003_fx_rate_date_exact.sql",
   "20261008100004_fx_official_reference_rates.sql",
+  "20261008100005_invoicing_corrections_payments_advances.sql",
 ]) {
   try {
     await db.exec(read(`supabase/migrations/${migration}`));
@@ -982,7 +983,7 @@ await step("I10", "ACK retry: opätovný ACK u poskytovateľa je idempotentný",
   await provider.acknowledgeInbound(providerCtx, String(INBOUND_ROW!.provider_received_id));
   return { repeated_ack_ok: true };
 });
-await step("I11", "nepodporovaný typ (dobropis) → failed UNSUPPORTED_PROFILE, XML uložené, bez konceptu", ["O2"], async () => {
+await step("I11", "prijatý dobropis (CreditNote 381) → koncept opravy v review (nič sa neaplikuje automaticky), XML uložené, ACK", ["O2"], async () => {
   const cn = await invoice(U.owner, CA, PARTNER_A, { ...HEADER, buyer_reference: `E2E-CN-${RUN}` }, true, "credit_note", INV1);
   const r = await postOutbound(U.owner, { invoice_id: cn, confirm_send: true });
   if (r.status !== 202) return { verdict: "SKIP", evidence: { stage: "outbound_request", reason: "dobropis sa nedal zaradiť", status: r.status, code: r.body.code, issues: (r.body.issues as unknown[] | undefined)?.length ?? 0 } };
@@ -1004,8 +1005,12 @@ await step("I11", "nepodporovaný typ (dobropis) → failed UNSUPPORTED_PROFILE,
     await runInboundProcessBatch(inboundDeps(), { batchSize: 10 });
   }
   row = (await sql<Row>("select * from public.einvoice_inbound where id = $1", [row.id])).rows[0];
-  const ok = row.processing_status === "failed" && row.last_error_code === "UNSUPPORTED_PROFILE" && !row.invoice_id && INBOUND_STORAGE.has(row.xml_storage_path as string);
-  return { verdict: ok ? "PASS" : "FAIL", evidence: { stage: "inbound_processing", status: row.processing_status, last_error_code: row.last_error_code, xml_stored: INBOUND_STORAGE.has(row.xml_storage_path as string), draft_created: Boolean(row.invoice_id) } };
+  // 20261008100005: dobropis vytvorí koncept opravy v stave review; účtovne platným ho urobí až používateľ.
+  const draft = row.invoice_id ? (await sql<Row>("select kind, direction, document_status, correction_review_status, corrects_invoice_id, correction_review_reasons from public.invoices where id = $1", [row.invoice_id])).rows[0] : null;
+  const ok = ["acknowledged", "draft_created", "ack_pending"].includes(row.processing_status as string) && Boolean(draft) && draft!.kind === "credit_note"
+    && draft!.direction === "received" && draft!.document_status === "draft" && draft!.correction_review_status === "review" && INBOUND_STORAGE.has(row.xml_storage_path as string);
+  return { verdict: ok ? "PASS" : "FAIL", evidence: { stage: "inbound_processing", status: row.processing_status, last_error_code: row.last_error_code, xml_stored: INBOUND_STORAGE.has(row.xml_storage_path as string),
+    draft_kind: draft?.kind ?? null, review_status: draft?.correction_review_status ?? null, original_linked: Boolean(draft?.corrects_invoice_id), review_reasons: draft?.correction_review_reasons ?? null } };
 });
 await step("I12", "webhook (iba OFFLINE časť): docs tvar s data.orgId, HMAC t=…,v1=… → spracované; zlý podpis → 401", [], async () => {
   const secret = "whsec_local_e2e_only_" + RUN;

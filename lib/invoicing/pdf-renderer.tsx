@@ -67,6 +67,8 @@ export type InvoicePdfBundle = {
   locale: Locale;
   /** Číslo opravovanej faktúry (iba dobropis/ťarchopis) — voliteľné. */
   correctedInvoiceNumber?: string | null;
+  /** 20261008100005: odpočty záloh konečnej faktúry (základ + DPH) a čísla zálohových faktúr. */
+  advanceDeductions?: { taxable_amount: number; vat_amount: number; advance_number: string | null }[];
 };
 
 const styles = StyleSheet.create({
@@ -324,7 +326,7 @@ function documentNumberFor(invoice: InvoicePdfBundle["invoice"]): string | null 
     : (invoice.invoice_number ?? null);
 }
 
-function InvoicePdfDocument({ invoice, seller, buyer, items, taxBreakdowns, locale, correctedInvoiceNumber }: InvoicePdfBundle) {
+function InvoicePdfDocument({ invoice, seller, buyer, items, taxBreakdowns, locale, correctedInvoiceNumber, advanceDeductions = [] }: InvoicePdfBundle) {
   const documentLabel = translate(locale, `invoices.kind.${invoice.kind}`);
   // Dobropis: sumy sa tlačia so znamienkom mínus (v DB sú kladné; znamienko
   // určuje druh dokladu — lib/invoicing/credit-note-semantics.ts).
@@ -485,6 +487,24 @@ function InvoicePdfDocument({ invoice, seller, buyer, items, taxBreakdowns, loca
               {formatMoney(sign * invoice.total_amount, invoice.currency, locale)}
             </Text>
           </View>
+          {advanceDeductions.length > 0 && (
+            <>
+              {advanceDeductions.map((d, i) => (
+                <View key={i} style={styles.totalsRow}>
+                  <Text style={styles.totalsLabel}>
+                    {translate(locale, "invoices.pdf.advanceDeductedLabel", { number: d.advance_number ?? "—" })}
+                  </Text>
+                  <Text style={styles.totalsValue}>{formatMoney(-(d.taxable_amount + d.vat_amount), invoice.currency, locale)}</Text>
+                </View>
+              ))}
+              <View style={styles.grandTotalRow}>
+                <Text style={styles.grandTotalLabel}>{translate(locale, "invoices.pdf.amountPayableLabel")}</Text>
+                <Text style={styles.grandTotalValue}>
+                  {formatMoney(invoice.total_amount - advanceDeductions.reduce((s, d) => s + d.taxable_amount + d.vat_amount, 0), invoice.currency, locale)}
+                </Text>
+              </View>
+            </>
+          )}
         </View>
 
         {/* 20261008100000: zákonné slovné informácie (§ 74 ods. 1 písm. h), i), k), § 74 ods. 3 písm. c)). */}

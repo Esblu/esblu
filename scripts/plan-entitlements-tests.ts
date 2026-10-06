@@ -290,7 +290,7 @@ await check("transcribe route never trusts a client voice flag", () => {
 await check("intent route: entitlement gate derived server-side and passed to orchestrator", () => {
   const src = read("app/api/assistant/intent/route.ts");
   assert.match(src, /getCompanyEntitlements\(supabase\)/);
-  assert.match(src, /entitlementGate,\n/);
+  assert.match(src, /entitlementGate,\r?\n/);
   assert.equal(/body\?\.(entitlements|plan|voice)/.test(src), false, "nothing from request body");
 });
 

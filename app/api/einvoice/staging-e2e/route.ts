@@ -33,6 +33,14 @@ import {
 // =============================================================================
 
 export const runtime = "nodejs";
+
+/** RPC fakturácie, ktoré smie driver volať ako syntetický owner (nič iné). */
+const USER_RPC_ALLOWLIST = new Set([
+  "esblu_save_invoice_draft", "esblu_set_invoice_compliance_fields", "esblu_finalize_invoice",
+  "esblu_add_invoice_payment", "esblu_add_invoice_refund", "esblu_invoice_settlement",
+  "esblu_set_invoice_advance_deductions", "esblu_available_advances",
+  "esblu_received_correction_link", "esblu_received_correction_reject",
+]);
 export const maxDuration = 60;
 
 type Json = Record<string, unknown>;
@@ -313,6 +321,100 @@ export async function POST(req: Request) {
           }
         }
         return json(200, { code: "OK", isolation: out });
+      }
+
+      case "user-rpc": {
+        // 20261008100005: RPC fakturácie cez skutočné user JWT syntetického ownera A/B (PostgREST + RLS).
+        const t = body.target === "A" || body.target === "B" ? body.target : null;
+        const fn = typeof body.fn === "string" ? body.fn : "";
+        if (!t) return json(400, { code: "INVALID_TARGET" });
+        if (!USER_RPC_ALLOWLIST.has(fn)) return json(400, { code: "RPC_NOT_ALLOWED" });
+        const args = body.args && typeof body.args === "object" ? (body.args as Json) : {};
+        const s = await userSession(admin, t);
+        try {
+          const { data, error } = await s.client.rpc(fn, args);
+          return json(200, { code: "OK", target: t, fn, data: data ?? null, error: error ? (error.message.match(/ESBLU_[A-Z0-9_]+/)?.[0] ?? `PG:${error.code ?? "?"}`) : null });
+        } finally {
+          await endSession(admin, s.token);
+        }
+      }
+
+      case "user-insert-invoice": {
+        // Koncept vydaného dokladu ako owner A/B (insert pod RLS, potom esblu_save_invoice_draft cez user-rpc).
+        const t = body.target === "A" || body.target === "B" ? body.target : null;
+        const kind = typeof body.kind === "string" ? body.kind : "";
+        if (!t || !["regular_invoice", "payment_received_invoice", "credit_note", "debit_note", "proforma"].includes(kind)) return json(400, { code: "INVALID_INPUT" });
+        const corrects = typeof body.corrects_invoice_id === "string" && /^[0-9a-f-]{36}$/.test(body.corrects_invoice_id) ? body.corrects_invoice_id : null;
+        const partner = typeof body.customer_business_partner_id === "string" && /^[0-9a-f-]{36}$/.test(body.customer_business_partner_id) ? body.customer_business_partner_id : null;
+        const issueDate = typeof body.issue_date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.issue_date) ? body.issue_date : null;
+        if (!partner || !issueDate) return json(400, { code: "INVALID_INPUT" });
+        const s = await userSession(admin, t);
+        try {
+          const { data, error } = await s.client.from("invoices").insert({
+            company_id: STAGING_E2E_COMPANIES[t], direction: "issued", kind, issue_date: issueDate, currency: "EUR",
+            customer_business_partner_id: partner, source: "manual", corrects_invoice_id: corrects,
+          }).select("id").single<{ id: string }>();
+          return json(200, { code: "OK", target: t, invoice_id: data?.id ?? null, error: error ? (error.message.match(/ESBLU_[A-Z0-9_]+/)?.[0] ?? `PG:${error.code ?? "?"}`) : null });
+        } finally {
+          await endSession(admin, s.token);
+        }
+      }
+
+      case "user-select": {
+        // Čítanie vlastných dokladov cez user JWT (iba povolené stĺpce; RLS rozhoduje o firme).
+        const t = body.target === "A" || body.target === "B" ? body.target : null;
+        const ids = Array.isArray(body.ids) ? body.ids.filter((x): x is string => typeof x === "string" && /^[0-9a-f-]{36}$/.test(x)).slice(0, 50) : [];
+        const company = body.company === "A" || body.company === "B" ? STAGING_E2E_COMPANIES[body.company] : null;
+        if (!t) return json(400, { code: "INVALID_TARGET" });
+        const s = await userSession(admin, t);
+        try {
+          let q = s.client.from("invoices").select("id, company_id, direction, kind, document_status, payment_status, invoice_number, supplier_invoice_number, total_amount, corrects_invoice_id, correction_review_status, correction_review_reasons, corrected_document_reference, source");
+          if (ids.length > 0) q = q.in("id", ids);
+          if (company) q = q.eq("company_id", company);
+          const { data, error } = await q.order("created_at", { ascending: true }).limit(100);
+          return json(200, { code: "OK", target: t, rows: data ?? [], error: error ? `PG:${error.code ?? "?"}` : null });
+        } finally {
+          await endSession(admin, s.token);
+        }
+      }
+
+      case "handoff-export": {
+        // Skutočná route /api/accounting-handoff/package (hromadný export za obdobie) s JWT ownera A/B.
+        // Vracia iba hlavičky, počty a zoznam ciest v ZIP-e — nie obsah dokladov.
+        const t = body.target === "A" || body.target === "B" ? body.target : null;
+        const period = body.period && typeof body.period === "object" ? body.period : null;
+        if (!t || !period) return json(400, { code: "INVALID_INPUT" });
+        const bypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET ?? "";
+        const session = await userSession(admin, t);
+        try {
+          const origin = new URL(req.url).origin;
+          const res = await fetch(`${origin}/api/accounting-handoff/package`, {
+            method: "POST",
+            headers: { authorization: `Bearer ${session.token}`, "content-type": "application/json", ...(bypass ? { "x-vercel-protection-bypass": bypass } : {}) },
+            body: JSON.stringify({ period }),
+          });
+          if (!res.ok) {
+            let parsed: unknown = null;
+            try { parsed = await res.json(); } catch { parsed = { non_json: true }; }
+            return json(200, { code: "OK", target: t, route_status: res.status, route_body: parsed });
+          }
+          const bytes = new Uint8Array(await res.arrayBuffer());
+          const JSZip = (await import("jszip")).default;
+          const zip = await JSZip.loadAsync(bytes);
+          const paths = Object.keys(zip.files).filter((p) => !zip.files[p].dir).map((p) => p.split("/").slice(1).join("/"));
+          const manifestPath = Object.keys(zip.files).find((p) => p.endsWith("/manifest.json"));
+          const manifest = manifestPath ? JSON.parse(await zip.files[manifestPath].async("string")) as { invoices?: { kind: string; direction: string; folder: string }[]; file_count?: number } : null;
+          return json(200, {
+            code: "OK", target: t, route_status: res.status,
+            package_sha256: res.headers.get("x-esblu-package-sha256"), invoice_count: res.headers.get("x-esblu-invoice-count"),
+            sha_matches: createHash("sha256").update(bytes).digest("hex") === res.headers.get("x-esblu-package-sha256"),
+            file_count: manifest?.file_count ?? null,
+            kinds: (manifest?.invoices ?? []).map((i) => `${i.direction}:${i.kind}:${i.folder.split("/")[0]}`),
+            paths: paths.filter((p) => p.startsWith("summary/") || p.endsWith(".xml") || p.endsWith(".pdf") || p.endsWith("metadata.json")).slice(0, 200),
+          });
+        } finally {
+          await endSession(admin, session.token);
+        }
       }
 
       default:

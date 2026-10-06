@@ -163,6 +163,9 @@ export default function FakturyPage() {
   const [handoffStatuses, setHandoffStatuses] = useState<Record<string, HandoffStatus>>({});
   const [exportBusy, setExportBusy] = useState(false);
   const [packageBusy, setPackageBusy] = useState(false);
+  // 20261008100005: hromadný export za obdobie (server vyberie všetky finalizované doklady firmy).
+  const [periodFrom, setPeriodFrom] = useState("");
+  const [periodTo, setPeriodTo] = useState("");
   const [exportFeedback, setExportFeedback] = useState<
     { type: "success" | "error" | "warning"; text: string } | null
   >(null);
@@ -176,10 +179,6 @@ export default function FakturyPage() {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [folderPickerOpen, setFolderPickerOpen] = useState(false);
   const [userId, setUserId] = useState("");
-
-  useEffect(() => {
-    void init();
-  }, []);
 
   async function init() {
     const {
@@ -235,6 +234,13 @@ export default function FakturyPage() {
       setLoading(false);
     }
   }
+
+  // Efekt až za deklaráciou init a loadInvoices (react-hooks/immutability); init zapisuje stav až po await.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void init();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Smerový filter sa aplikuje PRED počítaním sekcií, aby počty v záložkách
   // zodpovedali tomu, čo sa po kliknutí naozaj zobrazí.
@@ -478,8 +484,8 @@ export default function FakturyPage() {
   // Prehliadač by na originály v súkromných bucketoch aj tak nedosiahol
   // jedným autorizovaným krokom a PDF sa generuje v Node runtime.
   // ---------------------------------------------------------------------------
-  async function handleCompletePackage() {
-    if (packageBusy || filteredInvoices.length === 0) return;
+  async function handleCompletePackage(period?: { from: string; to: string }) {
+    if (packageBusy || (!period && filteredInvoices.length === 0)) return;
 
     setPackageBusy(true);
     setExportFeedback(null);
@@ -496,7 +502,7 @@ export default function FakturyPage() {
           Authorization: `Bearer ${session.access_token}`,
           [REQUEST_LOCALE_HEADER]: locale,
         },
-        body: JSON.stringify({ invoiceIds: filteredInvoices.map((invoice) => invoice.id) }),
+        body: JSON.stringify(period ? { period } : { invoiceIds: filteredInvoices.map((invoice) => invoice.id) }),
       });
 
       if (!response.ok) {
@@ -640,7 +646,7 @@ export default function FakturyPage() {
                   zámerne sa nedá zameniť s exportom údajov vedľa. */}
               <button
                 type="button"
-                onClick={handleCompletePackage}
+                onClick={() => void handleCompletePackage()}
                 disabled={packageBusy || exportBusy || filteredInvoices.length === 0}
                 aria-busy={packageBusy}
                 title={t("handoff.packageWarningBody")}
@@ -648,6 +654,18 @@ export default function FakturyPage() {
               >
                 {packageBusy ? t("handoff.packageBusy") : t("handoff.packageButton")}
               </button>
+              <span className="flex flex-wrap items-center gap-1" data-testid="period-export">
+                <input type="date" aria-label={t("handoff.periodFrom")} value={periodFrom} onChange={(e) => setPeriodFrom(e.target.value)}
+                  className="rounded-doc-sm border border-doc-border bg-surface-1 px-2 py-1 text-sm" />
+                <input type="date" aria-label={t("handoff.periodTo")} value={periodTo} onChange={(e) => setPeriodTo(e.target.value)}
+                  className="rounded-doc-sm border border-doc-border bg-surface-1 px-2 py-1 text-sm" />
+                <button type="button" title={t("handoff.periodHint")}
+                  disabled={packageBusy || exportBusy || !periodFrom || !periodTo || periodFrom > periodTo}
+                  onClick={() => void handleCompletePackage({ from: periodFrom, to: periodTo })}
+                  className={`${docButtonSecondary} disabled:pointer-events-none disabled:opacity-40`}>
+                  {t("handoff.periodButton")}
+                </button>
+              </span>
               <Link href="/priecinky" className={`${docButtonSecondary} gap-2`}>
                 <FolderIcon size={16} />
                 {t("folders.navLabel")}

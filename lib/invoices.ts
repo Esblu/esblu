@@ -44,7 +44,7 @@ export type InvoiceKind =
   /** 20261008100000: výzva na úhradu — NIE JE daňový doklad (vlastná séria PF, nikdy e-faktúra). */
   | "proforma";
 export type DocumentStatus = "draft" | "finalized";
-export type PaymentStatus = "unpaid" | "partially_paid" | "paid";
+export type PaymentStatus = "unpaid" | "partially_paid" | "paid" | "overpaid";
 export type InvoiceSource = "manual" | "ai_inbox" | "efaktura_peppol";
 export type InvoicePartyRole = "seller" | "buyer";
 
@@ -62,6 +62,12 @@ export type Invoice = {
   delivery_date: string | null;
   /** 20261008100000 — draft-only, po finalizácii nemenné. */
   correction_reason?: string | null;
+  /** 20261008100005 — prijaté opravy: review stav a väzba z XML (BT-25/26). */
+  correction_review_status?: "review" | "accepted" | "rejected" | null;
+  correction_review_reasons?: string[] | null;
+  correction_review_note?: string | null;
+  corrected_document_reference?: string | null;
+  corrected_document_issue_date?: string | null;
   fx_rate?: number | string | null;
   fx_rate_date?: string | null;
   fx_rate_source?: "ECB" | "NBS" | "CUSTOMS" | null;
@@ -726,6 +732,11 @@ const FINALIZE_ERROR_CODES = [
   "ESBLU_CORRECTION_CURRENCY_MISMATCH",
   "ESBLU_CORRECTION_FX_RATE_MISMATCH",
   "ESBLU_CREDIT_EXCEEDS_ORIGINAL",
+  "ESBLU_CORRECTION_REJECTED",
+  "ESBLU_CORRECTION_ORIGINAL_REQUIRED",
+  "ESBLU_CORRECTION_TARGET_INVALID",
+  "ESBLU_CORRECTION_SUPPLIER_MISMATCH",
+  "ESBLU_ADVANCE_DEDUCTION_EXCEEDS_TOTAL",
   "ESBLU_ADVANCE_DEDUCTION_INVALID",
   "ESBLU_ADVANCE_DEDUCTION_EXCEEDS",
 ] as const;
