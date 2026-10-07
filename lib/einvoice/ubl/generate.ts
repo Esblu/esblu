@@ -171,6 +171,11 @@ export function checkUblPreconditions(s: UblInvoiceSnapshot): { issues: UblIssue
   }
   const prepaid = toDecimal(s.prepaidAmount ?? 0);
   if (prepaid.lt(0) || prepaid.gt(toDecimal(inv.total_amount))) add("PREPAID_AMOUNT_INVALID", "BT-113 / BR-CO-16");
+  // Pre-production closure (10/2026): FS FAQ k eFaktúre (15. 9. 2026, príklad 38) — ZDANENÁ záloha (vystavená
+  // faktúra k prijatej platbe) sa v konečnej faktúre odpočíta mínusovým riadkom (základ + DPH, rovnaká sadzba,
+  // BT-25), nie cez PrepaidAmount (BT-113 je iba pre nezdanené zálohy). Odpočty záloh v Esblu sú vždy zdanené
+  // zálohy → kým nebude DB/PDF/XML model konečnej faktúry upravený, e-faktúra s odpočtom sa NEVYGENERUJE.
+  else if (prepaid.gt(0)) add("ADVANCE_DEDUCTION_EINVOICE_UNSUPPORTED", "BT-113 vs. mínusový riadok (FS FAQ eFaktúra, príklad 38)");
 
   for (const [party, isSeller] of [[s.seller, true], [s.buyer, false]] as const) {
     const P = isSeller ? "SELLER" : "BUYER";

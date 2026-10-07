@@ -1,0 +1,31 @@
+# NÁVRH — NEAKTÍVNE. Aktivácia (vlastník, po produkčnom spustení eFaktúry):
+#   1. GitHub → Esblu/esblu → Settings → Secrets and variables → Actions → New repository secret
+#      ESBLU_CRON_SECRET = rovnaká hodnota ako Vercel Production CRON_SECRET (nikdy do repa).
+#   2. Skopírovať tento súbor do .github/workflows/einvoice-health.yml na vetve main.
+#   3. GitHub pošle e-mail pri zlyhanom behu osobe, ktorá naposledy upravila `schedule` v tomto súbore
+#      (Settings → Notifications → Actions: "Send notifications for failed workflows only").
+# Telo odpovede obsahuje iba počty a kódy (žiadne faktúry, firmy, IČO ani XML); workflow vypíše iba kódy.
+name: einvoice-health
+on:
+  schedule:
+    - cron: "23 * * * *" # 1× za hodinu (GitHub cron je best-effort, oneskorenie býva niekoľko minút)
+  workflow_dispatch: {}
+permissions: {}
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: eFaktúra maintenance health
+        env:
+          CRON_SECRET: ${{ secrets.ESBLU_CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          code=$(curl -sS -m 90 -o body.json -w '%{http_code}' \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            https://www.esblu.com/api/cron/einvoice-maintenance) || code=000
+          codes=$(jq -r '[(.alerts // [])[], (.eventAlerts // [])[]] | map("\(.severity):\(.code)") | join(" ")' body.json 2>/dev/null || true)
+          echo "HTTP ${code} alerts: ${codes:-none}"
+          rm -f body.json
+          # 503 = kritický alert (maintenanceHttpStatus); iné ne-200 = route/cron nedostupný.
+          test "${code}" = "200"

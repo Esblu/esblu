@@ -3070,6 +3070,7 @@ const de = {
         MISSING_PRECEDING_INVOICE: "Ein Korrekturbeleg muss auf die Nummer der korrigierten Rechnung verweisen.",
         MISSING_CORRECTION_REASON: "Ein Korrekturbeleg muss den Korrekturgrund und die geänderten Angaben enthalten.",
         PREPAID_AMOUNT_INVALID: "Der Abzug der Anzahlungen darf nicht negativ sein oder den Rechnungsbetrag übersteigen.",
+        ADVANCE_DEDUCTION_EINVOICE_UNSUPPORTED: "Eine Schlussrechnung mit Anzahlungsabzug kann noch nicht als E-Rechnung gesendet werden (das von der slowakischen Finanzverwaltung geforderte Abzugsformat wird vorbereitet). Die Rechnung ist gültig ausgestellt; senden Sie sie auf anderem Weg.",
         SELLER_MISSING_NAME: "Lieferant: Der Firmenname fehlt.",
         BUYER_MISSING_NAME: "Kunde: Der Firmenname fehlt.",
         SELLER_MISSING_COUNTRY: "Lieferant: Der Ländercode fehlt.",

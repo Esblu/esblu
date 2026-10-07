@@ -259,21 +259,24 @@ await check("faktúra k prijatej platbe: Invoice 386 (prepayment); proforma sa n
   s.invoice = { ...s.invoice, kind: "proforma" };
   assert.ok(issueCodes(s).includes("KIND_UNSUPPORTED"));
 });
-await check("konečná faktúra s odpočtom zálohy: PrepaidAmount (BT-113), PayableAmount = spolu − záloha (BR-CO-16)", () => {
+await check("konečná faktúra s odpočtom ZDANENEJ zálohy → e-faktúra sa NEVYGENERUJE (FS FAQ príklad 38: mínusový riadok, nie BT-113)", () => {
   const s = vatPayerSnapshot();
   s.prepaidAmount = 50;
-  const r = ok(s);
-  assert.deepEqual(all(r.xml, NS.cbc, "PrepaidAmount"), ["50.00"]);
-  assert.deepEqual(all(r.xml, NS.cbc, "PayableAmount"), ["84.90"]);
+  assert.ok(issueCodes(s).includes("ADVANCE_DEDUCTION_EINVOICE_UNSUPPORTED"), "fail-closed až do úpravy modelu konečnej faktúry");
+  assert.ok(hasTranslation("sk", "invoices.einvoice.issues.ADVANCE_DEDUCTION_EINVOICE_UNSUPPORTED"));
   s.prepaidAmount = 999;
   assert.ok(issueCodes(s).includes("PREPAID_AMOUNT_INVALID"));
+  s.prepaidAmount = 0;
+  ok(s);
 });
-await check("konečná faktúra: BG-3 pre každú zálohu → príjemca (parser + mapovanie) dostane BT-113 aj odkazy na zálohy", () => {
+await check("prijatá konečná faktúra s BT-113 + BG-3 (iný dodávateľ) → mapovanie dostane odpočet aj odkazy na zálohy", () => {
   const s = vatPayerSnapshot();
-  s.prepaidAmount = 50;
   s.advanceInvoices = [{ invoice_number: "FA2026001", issue_date: "2026-09-01" }, { invoice_number: "FA2026002", issue_date: null }];
+  // Prijatý doklad od iného dodávateľa s BT-113 (Esblu ho sám negeneruje — FS príklad 38); BG-3 z generátora + BT-113 vložené.
   const r = ok(s);
-  const parsed = parseInboundUbl(new TextEncoder().encode(r.xml));
+  const xml = r.xml.replace(/<cbc:PayableAmount currencyID="EUR">134\.90<\/cbc:PayableAmount>/, '<cbc:PrepaidAmount currencyID="EUR">50.00</cbc:PrepaidAmount><cbc:PayableAmount currencyID="EUR">84.90</cbc:PayableAmount>');
+  assert.notEqual(xml, r.xml, "BT-113 vložené");
+  const parsed = parseInboundUbl(new TextEncoder().encode(xml));
   assert.ok(parsed.ok);
   if (!parsed.ok) return;
   assert.deepEqual(parsed.document.precedingInvoices, [{ number: "FA2026001", issueDate: "2026-09-01" }, { number: "FA2026002", issueDate: null }]);

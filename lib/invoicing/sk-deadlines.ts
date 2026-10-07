@@ -18,6 +18,14 @@
 // Zásady: Esblu NEBLOKUJE vystavenie. Termín vráti iba tam, kde ho vie určiť bez aproximácie; inak
 // status 'review' (lehota neurčená — nepodsúvame nesprávny zákonný termín) alebo 'not_applicable'.
 // Posun konca lehoty na pracovný deň sa nerieši (termín je konzervatívny).
+// FS (podpora.financnasprava.sk 903288): lehota § 73 je hmotnoprávna, § 27 ods. 4 daňového poriadku
+// sa neuplatní — lehota sa na pracovný deň NEPOSÚVA (potvrdené, nie aproximácia).
+//
+// Od 1. 1. 2027 — § 85o ods. 6 (tuzemská e-faktúra): do 15 dní odo dňa dodania alebo odo dňa prijatia
+// platby pred dodaním; FS FAQ k eFaktúre (15. 9. 2026): v lehote musí byť e-faktúra aj odoslaná.
+// Alternatíva „do konca kalendárneho mesiaca“ (§ 73 ods. 1 b)) sa pri e-faktúre neuvádza → pri faktúre
+// k prijatej platbe s dňom prijatia platby od 1. 1. 2027 a tuzemským odberateľom sa zobrazí iba 15-dňový
+// termín (konzervatívne aj pre zriedkavé prípady mimo režimu e-faktúr; Esblu nikdy neblokuje).
 // =============================================================================
 
 const ISO = /^\d{4}-\d{2}-\d{2}$/;
@@ -30,6 +38,8 @@ function parse(d: string | null | undefined): Date | null {
 }
 const fmt = (d: Date) => d.toISOString().slice(0, 10);
 const addDays = (d: Date, n: number) => new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + n));
+/** § 85o ods. 6 ZDPH — povinná tuzemská e-faktúra (lehota 15 dní bez alternatívy konca mesiaca). */
+export const EINVOICE_REGIME_FROM = "2027-01-01";
 const endOfMonth = (d: Date) => new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0));
 
 export type IssueDeadlineRule = "a_delivery" | "b_payment" | "c_intra_eu_goods" | "e_correction";
@@ -103,6 +113,9 @@ export function issueDeadline(input: IssueDeadlineInput): IssueDeadline {
 
   if (input.kind === "payment_received_invoice") {
     if (!tax) return { status: "review", reason: "missing_date" };
+    if (fmt(tax) >= EINVOICE_REGIME_FROM) {
+      return { status: "determined", rule: "b_payment", from: fmt(tax), deadline: fmt(addDays(tax, 15)) };
+    }
     // Zákon uvádza dva termíny spojené „alebo“ — zobrazia sa oba, za oneskorenú sa považuje až po neskoršom.
     const a = addDays(tax, 15), b = endOfMonth(tax);
     const [early, late] = a <= b ? [a, b] : [b, a];

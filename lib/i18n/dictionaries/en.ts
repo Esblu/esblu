@@ -3049,6 +3049,7 @@ const en = {
         MISSING_PRECEDING_INVOICE: "A corrective document must reference the corrected invoice number.",
         MISSING_CORRECTION_REASON: "A corrective document must state the reason for the correction and the changed data.",
         PREPAID_AMOUNT_INVALID: "The advance deduction must not be negative or exceed the invoice total.",
+        ADVANCE_DEDUCTION_EINVOICE_UNSUPPORTED: "A final invoice with an advance deduction cannot be sent as an e-invoice yet (the deduction format required by the Slovak Financial Administration is being prepared). The invoice is validly issued; send it another way.",
         SELLER_MISSING_NAME: "Supplier: the legal name is missing.",
         BUYER_MISSING_NAME: "Customer: the legal name is missing.",
         SELLER_MISSING_COUNTRY: "Supplier: the country code is missing.",

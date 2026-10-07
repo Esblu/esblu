@@ -3078,6 +3078,7 @@ const sk = {
         MISSING_PRECEDING_INVOICE: "Opravný doklad musí odkazovať na číslo opravovanej faktúry.",
         MISSING_CORRECTION_REASON: "Opravný doklad musí uvádzať dôvod opravy a menené údaje.",
         PREPAID_AMOUNT_INVALID: "Odpočet záloh nesmie byť záporný ani vyšší ako suma faktúry.",
+        ADVANCE_DEDUCTION_EINVOICE_UNSUPPORTED: "Konečnú faktúru s odpočtom zálohy zatiaľ nemožno odoslať ako e-faktúru (formát odpočtu podľa Finančnej správy sa pripravuje). Faktúra je platne vystavená; odošlite ju iným spôsobom.",
         SELLER_MISSING_NAME: "Dodávateľ: chýba obchodné meno.",
         BUYER_MISSING_NAME: "Odberateľ: chýba obchodné meno.",
         SELLER_MISSING_COUNTRY: "Dodávateľ: chýba kód krajiny.",

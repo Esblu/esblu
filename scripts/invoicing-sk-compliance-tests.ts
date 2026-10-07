@@ -349,6 +349,11 @@ await check("§ 73: písm. a) až e) iba tam, kde ich vieme určiť bez aproxim�
     { status: "determined", rule: "b_payment", from: "2026-10-05", deadline: "2026-10-31", alternativeDeadline: "2026-10-20" });
   assert.deepEqual(issueDeadline({ direction: "issued", kind: "payment_received_invoice", taxPointDate: "2026-10-25", vatCategories: ["S"], buyerCountry: "SK", ...SELLER }),
     { status: "determined", rule: "b_payment", from: "2026-10-25", deadline: "2026-11-09", alternativeDeadline: "2026-10-31" });
+  // Od 1. 1. 2027 (§ 85o ods. 6, FS FAQ eFaktúra 15. 9. 2026): iba 15 dní od prijatia platby, bez konca mesiaca.
+  assert.deepEqual(issueDeadline({ direction: "issued", kind: "payment_received_invoice", taxPointDate: "2027-01-05", vatCategories: ["S"], buyerCountry: "SK", ...SELLER }),
+    { status: "determined", rule: "b_payment", from: "2027-01-05", deadline: "2027-01-20" });
+  assert.deepEqual(issueDeadline({ direction: "issued", kind: "payment_received_invoice", taxPointDate: "2026-12-25", vatCategories: ["S"], buyerCountry: "SK", ...SELLER }),
+    { status: "determined", rule: "b_payment", from: "2026-12-25", deadline: "2027-01-09", alternativeDeadline: "2026-12-31" }, "platba v 2026 → § 73 b)");
   assert.deepEqual(issueDeadline({ direction: "issued", kind: "regular_invoice", deliveryDate: "2026-10-05", vatCategories: ["K"], buyerCountry: "DE", ...SELLER }),
     { status: "determined", rule: "c_intra_eu_goods", from: "2026-10-05", deadline: "2026-11-15" });
   assert.deepEqual(issueDeadline({ direction: "issued", kind: "credit_note", taxPointDate: "2026-02-03", vatCategories: ["S"], buyerCountry: "SK", ...SELLER }),
