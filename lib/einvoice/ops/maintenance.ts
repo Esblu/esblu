@@ -37,3 +37,11 @@ export async function runEinvoiceMaintenance(ops: OpsStore, options: { retention
   const eventAlerts = events ? evaluateEventAlerts(events) : [];
   return { health, alerts, retention, storage, events, eventAlerts };
 }
+
+/**
+ * HTTP stav behu údržby pre monitoring (pre-production audit 10/2026): pri kritickom alerte 503, inak 200.
+ * Vercel Cron / log monitoring tak vidí zlyhanie behu bez logovania obsahu (telo = iba kódy a čísla).
+ */
+export function maintenanceHttpStatus(report: Pick<MaintenanceReport, "alerts" | "eventAlerts">): 200 | 503 {
+  return [...report.alerts, ...report.eventAlerts].some((a) => a.severity === "critical") ? 503 : 200;
+}

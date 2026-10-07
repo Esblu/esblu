@@ -987,6 +987,8 @@ const sk = {
         "Zrušenie účtu zlyhalo. Skús to prosím znova alebo kontaktuj podporu.",
       accountVerificationFailedContactSupport:
         "Zrušenie účtu sa nepodarilo úplne overiť. Kontaktuj podporu.",
+      companyHasAccountingRecords:
+        "Firma má vystavené alebo prijaté účtovné doklady (faktúry, e-faktúry). Pred zrušením si ich exportuj (Odovzdanie účtovníkovi) a kontaktuj podporu — doklady sa nemažú automaticky.",
       companyDeletionFailedRetry:
         "Zrušenie firemného účtu zlyhalo pred dokončením. Skús to prosím znova alebo kontaktuj podporu.",
       companyDataDeletedButLoginRemained:
@@ -2874,7 +2876,7 @@ const sk = {
         sending: "Systém dokument odovzdáva poskytovateľovi. Pri výpadku to automaticky zopakuje s tým istým dokumentom.",
         sent: "Poskytovateľ dokument prijal a doručuje ho odberateľovi.",
         deferred: "Doručenie sa oneskorilo na strane siete; poskytovateľ ho opakuje.",
-        delivered: "Odberateľ e-faktúru prijal.",
+        delivered: "E-faktúra bola doručená odberateľovi. Doručenie neznamená úhradu — platbu evidujte samostatne.",
         rejected: "Poskytovateľ dokument odmietol. Opravte údaje a skúste nové odoslanie.",
         failed: "Doručenie zlyhalo. Ak je to povolené, môžete skúsiť nové odoslanie.",
         unknown: "Výsledok odoslania nie je istý. Pred novým odoslaním je potrebné overenie u poskytovateľa, aby sa faktúra neodoslala dvakrát.",

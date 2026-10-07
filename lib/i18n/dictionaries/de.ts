@@ -975,6 +975,8 @@ const de = {
         "Die Kontolöschung ist fehlgeschlagen. Bitte versuchen Sie es erneut oder kontaktieren Sie den Support.",
       accountVerificationFailedContactSupport:
         "Die Kontolöschung konnte nicht vollständig überprüft werden. Bitte kontaktieren Sie den Support.",
+      companyHasAccountingRecords:
+        "Das Unternehmen hat ausgestellte oder empfangene Buchhaltungsbelege (Rechnungen, E-Rechnungen). Exportieren Sie diese zuerst (Übergabe an die Buchhaltung) und kontaktieren Sie den Support — Belege werden nicht automatisch gelöscht.",
       companyDeletionFailedRetry:
         "Die Löschung des Firmenkontos ist vor Abschluss fehlgeschlagen. Bitte versuchen Sie es erneut oder kontaktieren Sie den Support.",
       companyDataDeletedButLoginRemained:
@@ -2866,7 +2868,7 @@ const de = {
         sending: "Das System übergibt das Dokument an den Anbieter und wiederholt bei Bedarf automatisch mit demselben Dokument.",
         sent: "Der Anbieter hat das Dokument angenommen und stellt es dem Kunden zu.",
         deferred: "Die Zustellung verzögert sich im Netzwerk; der Anbieter versucht es weiter.",
-        delivered: "Der Kunde hat die E-Rechnung erhalten.",
+        delivered: "Die E-Rechnung wurde dem Kunden zugestellt. Zustellung bedeutet keine Zahlung — Zahlungen bitte separat erfassen.",
         rejected: "Der Anbieter hat das Dokument abgelehnt. Korrigieren Sie die Daten und versuchen Sie einen neuen Versand.",
         failed: "Die Zustellung ist fehlgeschlagen. Falls erlaubt, können Sie einen neuen Versand versuchen.",
         unknown: "Das Versandergebnis ist unklar. Vor einem neuen Versand muss es beim Anbieter geprüft werden, damit die Rechnung nicht doppelt gesendet wird.",

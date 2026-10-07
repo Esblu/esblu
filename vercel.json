@@ -3,6 +3,30 @@
     {
       "path": "/api/cron/deadline-notifications",
       "schedule": "0 6 * * *"
+    },
+    {
+      "path": "/api/cron/fx-rates",
+      "schedule": "0 5,16 * * *"
+    },
+    {
+      "path": "/api/cron/einvoice-outbound?mode=send",
+      "schedule": "*/2 * * * *"
+    },
+    {
+      "path": "/api/cron/einvoice-outbound?mode=reconcile",
+      "schedule": "*/10 * * * *"
+    },
+    {
+      "path": "/api/cron/einvoice-events",
+      "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/einvoice-inbound",
+      "schedule": "*/30 * * * *"
+    },
+    {
+      "path": "/api/cron/einvoice-maintenance",
+      "schedule": "7 * * * *"
     }
   ]
 }

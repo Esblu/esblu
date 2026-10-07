@@ -1,7 +1,7 @@
 import "server-only";
 
 import { timingSafeEqual } from "node:crypto";
-import { runEinvoiceMaintenance } from "@/lib/einvoice/ops/maintenance";
+import { maintenanceHttpStatus, runEinvoiceMaintenance } from "@/lib/einvoice/ops/maintenance";
 import { createSupabaseOpsStore } from "@/lib/einvoice/ops/supabase-store";
 
 // =============================================================================
@@ -28,5 +28,6 @@ function authorized(req: Request): boolean {
 export async function GET(req: Request) {
   if (!authorized(req)) return Response.json({ success: false }, { status: 401 });
   const report = await runEinvoiceMaintenance(createSupabaseOpsStore(), { retention: true });
-  return Response.json({ success: true, ...report }, { headers: { "Cache-Control": "no-store" } });
+  // Kritický alert → 503 (beh cronu sa v monitoringu prejaví ako zlyhanie); telo stále iba čísla a kódy.
+  return Response.json({ success: true, ...report }, { status: maintenanceHttpStatus(report), headers: { "Cache-Control": "no-store" } });
 }

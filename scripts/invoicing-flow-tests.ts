@@ -630,5 +630,58 @@ await check("export route: user-scoped klient, finance.manage, explicitný filte
   assert.match(src, /"Content-Disposition": `attachment;/);
 });
 
+// =============================================================================
+// Pre-production audit (10/2026): doručenie / prijatie e-faktúry NIKDY neznamená úhradu.
+// payment_status mení iba ručná evidencia úhrad (RPC) a prepočet skupiny; žiadna udalosť poskytovateľa.
+// =============================================================================
+await check("doručenie ≠ úhrada: žiadna eFaktúra funkcia/trigger ani kód poskytovateľa nemení payment_status", async () => {
+  const fns = (await h.sql<{ proname: string; src: string }>(`
+    select p.proname, p.prosrc src from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public' and (p.proname like 'esblu_einvoice%' or p.proname like 'esblu_received_advance%')`)).rows;
+  assert.ok(fns.length > 20, "eFaktúra funkcie načítané");
+  for (const f of fns) {
+    assert.doesNotMatch(f.src, /payment_status|esblu_add_invoice_payment|esblu_recalc_invoice_group_status|invoice_payments/, f.proname);
+  }
+  const { readdirSync, statSync } = await import("node:fs");
+  const walk = (dir: string): string[] => readdirSync(new URL(`../${dir}`, import.meta.url)).flatMap((e) => {
+    const rel = `${dir}/${e}`;
+    return statSync(new URL(`../${rel}`, import.meta.url)).isDirectory() ? walk(rel) : /\.(ts|tsx)$/.test(e) ? [rel] : [];
+  });
+  const files = [...walk("lib/einvoice"), ...walk("app/api/einvoice"), ...["einvoice-outbound", "einvoice-inbound", "einvoice-events", "einvoice-maintenance"].flatMap((c) => walk(`app/api/cron/${c}`))]
+    .filter((f) => !f.startsWith("app/api/einvoice/staging-e2e/"));
+  for (const f of files) {
+    const src = readFileSync(new URL(`../${f}`, import.meta.url), "utf8");
+    assert.doesNotMatch(src, /payment_status|esblu_add_invoice_payment|invoice_payments|esblu_recalc_invoice_group_status/, f);
+  }
+});
+await check("doručenie ≠ úhrada: prijatá a finalizovaná e-faktúra je neuhradená, kým sa úhrada neeviduje ručne", async () => {
+  const r = await receive(CO.A, "org-a", ubl({ root: "Invoice", type: "380", id: "PAY-SEP-1", date: "2026-10-01", lines: [{ qty: 1, price: 10 }] }));
+  const id = r.result!.invoiceId;
+  await finalize(U.owner, id);
+  assert.equal((await inv(id)).payment_status, "unpaid");
+  await h.exec(`update public.einvoice_inbound set processing_status = 'acknowledged' where invoice_id = '${id}'`).catch(() => undefined);
+  assert.equal((await inv(id)).payment_status, "unpaid", "ACK poskytovateľovi nemení úhradu");
+  await pay(id, 12.3);
+  assert.equal((await inv(id)).payment_status, "paid", "až ručná evidencia");
+  const sk = readFileSync(new URL("../lib/i18n/dictionaries/sk.ts", import.meta.url), "utf8");
+  assert.match(sk, /delivered: "E-faktúra bola doručená odberateľovi\. Doručenie neznamená úhradu/);
+});
+
+await check("zrušenie firmy s účtovnými dokladmi: DB zmazanie zlyhá → route to odmietne PRED mazaním Storage (žiadne čiastočné zmazanie)", async () => {
+  // DB fakt: finalizovanú faktúru nemožno zmazať ani kaskádou z companies.
+  assert.match(await errOf(h.exec(`delete from public.company_members where company_id = '${CO.A}'; delete from public.companies where id = '${CO.A}';`)), /ESBLU_INVOICE_FINALIZED_NO_DELETE|violates foreign key/);
+  assert.equal((await h.sql<{ n: number }>("select count(*)::int n from public.companies where id = $1", [CO.A])).rows[0].n, 1, "nič sa nezmazalo");
+  const src = readFileSync(new URL("../app/api/account/delete/route.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  const owner = src.slice(src.indexOf('if (membership.role === "owner")'));
+  const pre = owner.indexOf("countCompanyAccountingRecords(admin, membership.company_id)");
+  const storage = owner.indexOf("collectOwnerStorageTargets(");
+  const remove = owner.indexOf("removeStorageTargets(");
+  assert.ok(pre > 0 && pre < storage && storage < remove, "kontrola účtovných záznamov beží pred zberom aj mazaním Storage");
+  assert.match(owner, /COMPANY_HAS_ACCOUNTING_RECORDS[\s\S]*status: 409/);
+  assert.match(src, /\{ table: "invoices", finalizedOnly: true \}/);
+  assert.match(src, /\{ table: "einvoice_inbound", finalizedOnly: false \}/);
+  assert.match(src, /\{ table: "einvoice_outbound", finalizedOnly: false \}/);
+});
+
 console.log(`\ninvoicing-flow: ${passed} passed, ${failures.length} failed`);
 if (failures.length) process.exit(1);

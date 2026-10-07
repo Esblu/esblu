@@ -38,7 +38,7 @@ import { runOperatorAction } from "../lib/einvoice/ops/actions.ts";
 import { parseOperatorBody } from "../lib/einvoice/ops/request-body.ts";
 import { inboundCategory, outboundCategory } from "../lib/einvoice/ops/categories.ts";
 import { evaluateAlerts, sanitizeHealth } from "../lib/einvoice/ops/alerts.ts";
-import { runEinvoiceMaintenance } from "../lib/einvoice/ops/maintenance.ts";
+import { maintenanceHttpStatus, runEinvoiceMaintenance } from "../lib/einvoice/ops/maintenance.ts";
 import { downloadStoredDocument } from "../lib/einvoice/ops/download.ts";
 import { OpsStoreError, type OperatorAction, type OperatorBeginResult, type OperatorReasonCode, type OpsStore } from "../lib/einvoice/ops/store.ts";
 
@@ -1002,6 +1002,11 @@ await check("alert kandidáti: neistý výsledok / vyčerpané pokusy / podpisov
   for (const a of report.alerts) {
     assert.deepEqual(Object.keys(a).sort(), ["code", "severity", "threshold", "value"]);
   }
+  // Monitoring: kritický alert → 503, iba varovania alebo nič → 200.
+  assert.equal(maintenanceHttpStatus(report), 503);
+  assert.equal(maintenanceHttpStatus({ alerts: [], eventAlerts: [] }), 200);
+  assert.equal(maintenanceHttpStatus({ alerts: [{ code: "WEBHOOK_REPLAYS", severity: "warning", value: 9, threshold: 5 }], eventAlerts: [] }), 200);
+  assert.equal(maintenanceHttpStatus({ alerts: [], eventAlerts: [{ code: "EVENTS_EXHAUSTED", severity: "critical", value: 1, threshold: 1 }] }), 503);
   const calm = evaluateAlerts(sanitizeHealth({}));
   assert.deepEqual(calm, []);
   // Phase 6: odmietnutia iba za 24 h; podiel ≥ 20 % pri ≥ 3 prípadoch = kritický alert

@@ -35,6 +35,33 @@ import type { Locale } from "@/lib/i18n/locales";
 
 type StorageTarget = { bucket: string; path: string };
 
+/**
+ * Pre-production audit (10/2026): firma s účtovnými záznamami (finalizované faktúry, e-faktúry)
+ * sa nedá zmazať — DB krok by zlyhal (ESBLU_INVOICE_FINALIZED_NO_DELETE) až PO zmazaní súborov
+ * v Storage (nevratné čiastočné zmazanie podkladov). Kontrola beží PRED akýmkoľvek mazaním.
+ * Vracia počet záznamov alebo null pri chybe dotazu. Chýbajúca e-faktúra tabuľka (pred migráciou)
+ * sa počíta ako 0.
+ */
+async function countCompanyAccountingRecords(admin: SupabaseClient, companyId: string): Promise<number | null> {
+  const checks: Array<{ table: string; finalizedOnly: boolean }> = [
+    { table: "invoices", finalizedOnly: true },
+    { table: "einvoice_inbound", finalizedOnly: false },
+    { table: "einvoice_outbound", finalizedOnly: false },
+  ];
+  let total = 0;
+  for (const c of checks) {
+    let q = admin.from(c.table).select("id", { count: "exact", head: true }).eq("company_id", companyId);
+    if (c.finalizedOnly) q = q.eq("document_status", "finalized");
+    const { count, error } = await q;
+    if (error) {
+      if (c.table !== "invoices" && (error.code === "42P01" || error.code === "PGRST205")) continue;
+      return null;
+    }
+    total += count ?? 0;
+  }
+  return total;
+}
+
 async function collectOwnerStorageTargets(
   admin: SupabaseClient,
   companyId: string,
@@ -416,6 +443,22 @@ export async function POST(req: Request) {
         return Response.json(
           { error: translate(locale, "settings.errors.confirmPhraseMismatch") },
           { status: 400 }
+        );
+      }
+
+      // Účtovné záznamy → odmietnuť PRED mazaním Storage (nič sa nezmaže). Postup uzavretia
+      // firmy s účtovnými dokladmi (export, retencia) je LEGAL/CLIA REVIEW, rieši podpora.
+      const accountingRecords = await countCompanyAccountingRecords(admin, membership.company_id);
+      if (accountingRecords === null) {
+        return Response.json(
+          { error: translate(locale, "settings.errors.companyDeletionFailedRetry") },
+          { status: 500 }
+        );
+      }
+      if (accountingRecords > 0) {
+        return Response.json(
+          { error: translate(locale, "settings.errors.companyHasAccountingRecords"), code: "COMPANY_HAS_ACCOUNTING_RECORDS" },
+          { status: 409 }
         );
       }
 

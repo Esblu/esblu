@@ -973,6 +973,8 @@ const en = {
         "Account deletion failed. Please try again or contact support.",
       accountVerificationFailedContactSupport:
         "The account deletion could not be fully verified. Please contact support.",
+      companyHasAccountingRecords:
+        "The company has issued or received accounting documents (invoices, e-invoices). Export them first (Accountant handoff) and contact support — documents are not deleted automatically.",
       companyDeletionFailedRetry:
         "The company account deletion failed before completing. Please try again or contact support.",
       companyDataDeletedButLoginRemained:
@@ -2845,7 +2847,7 @@ const en = {
         sending: "The system is handing the document to the provider and retries automatically with the same document if needed.",
         sent: "The provider accepted the document and is delivering it to the customer.",
         deferred: "Delivery is delayed on the network side; the provider keeps retrying.",
-        delivered: "The customer received the e-invoice.",
+        delivered: "The e-invoice was delivered to the customer. Delivery does not mean payment — record payments separately.",
         rejected: "The provider rejected the document. Correct the data and try a new sending.",
         failed: "Delivery failed. If allowed, you can try a new sending.",
         unknown: "The sending result is uncertain. It must be verified with the provider before any new sending so the invoice is not sent twice.",
