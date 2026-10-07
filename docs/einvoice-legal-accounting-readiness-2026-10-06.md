@@ -56,8 +56,11 @@ sandboxu, výkonnosť pri objeme, správanie pri výpadku eFaktura.sk dlhšom ne
   kontroly, alebo vyžadovať kontrolu pri prvom doklade.
 - Dátumy (dodanie, DUZP, splatnosť), zaokrúhlenie, rozpis DPH podľa XML — potvrdiť, že mapovanie na
   účtovné polia Esblu je správne pre bežné prípady (S, Z, E, AE, K, G, O).
-- Opravné doklady (dobropisy) — **zatiaľ nepodporované** (koncept nevznikne, ide na manuálne
-  spracovanie).
+- Prijaté opravné doklady (dobropis, ťarchopis) — koncept v review, prijatie až po kontrole (`20261008100005`);
+  potvrdiť postup kontroly.
+- Prijaté faktúry k prijatej platbe (UBL 386) a konečné faktúry s odpočítanými zálohami (BT-113) — evidencia
+  a párovanie záloh s kontrolou (`20261008100008`). Esblu **nerozhoduje** o nároku na odpočet DPH zo zálohy;
+  potvrdiť postup a slovenský profil 386 (stále REVIEW).
 - Číslovanie a nemennosť vydaných faktúr (Esblu číslovanie pri finalizácii, nemenný snapshot).
 
 ## 5. Uchovávanie, export, archivácia
@@ -89,6 +92,6 @@ nahrádza zákonnú archiváciu.
 4. Retenčná politika a export (sekcia 5).
 5. Bezpečnosť Vercel Preview env — produkčný service_role / OpenAI v Preview
    (`docs/security-vercel-preview-env-audit-2026-10-06.md`) — vyžaduje súhlas.
-6. Produkčné migrácie E-Faktúry a SK súladu fakturácie (20261002… až 20261008100007) — nespustené,
+6. Produkčné migrácie E-Faktúry a SK súladu fakturácie (20261002… až 20261008100008) — nespustené,
    vyžadujú súhlas. Právno-účtovný audit: `docs/einvoice-sk-accounting-legal-audit-2026-10.md`.
 7. Produkčný kľúč eFaktura.sk, produkčné webhook URL a secret — po bodoch 1–3.

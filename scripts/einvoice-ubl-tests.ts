@@ -504,7 +504,7 @@ await check("parser: nesúlad súm a nemapované zľavy/zálohy → dôvody na k
   if (allowance.ok) assert.ok(allowance.reviewReasons.includes("DOCUMENT_ALLOWANCE_CHARGE_NOT_MAPPED"));
   const prepaid = parseInboundUbl(base.replace("<cbc:PayableAmount", '<cbc:PrepaidAmount currencyID="EUR">10.00</cbc:PrepaidAmount><cbc:PayableAmount'));
   assert.equal(prepaid.ok, true);
-  if (prepaid.ok) assert.ok(prepaid.reviewReasons.includes("PREPAID_AMOUNT_NOT_MAPPED"));
+  if (prepaid.ok) assert.ok(!prepaid.reviewReasons.includes("PREPAID_AMOUNT_NOT_MAPPED"), "BT-113 sa mapuje (20261008100008)");
   const vat = parseInboundUbl(base.replace('<cbc:TaxAmount currencyID="EUR">24.90', '<cbc:TaxAmount currencyID="EUR">25.90'));
   assert.equal(vat.ok, true);
   if (vat.ok) assert.ok(vat.reviewReasons.includes("VAT_BREAKDOWN_MISMATCH"));

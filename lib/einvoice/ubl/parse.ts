@@ -250,7 +250,7 @@ export function parseInboundUbl(input: string | Uint8Array): InboundParseResult 
   if (document.dueDate && !isIsoDate(document.dueDate)) reviewReasons.push("INVALID_DUE_DATE");
   if (!document.currency) reviewReasons.push("MISSING_CURRENCY");
   if (lines.length === 0) reviewReasons.push("NO_LINES");
-  if (document.totals.prepaid && !new Decimal(document.totals.prepaid).eq(0)) reviewReasons.push("PREPAID_AMOUNT_NOT_MAPPED");
+  // BT-113 (odpočítané zálohy) sa od 20261008100008 mapuje (prepaid_amount + párovanie záloh) — nie je to review dôvod.
 
   // Číselné polia musia byť čísla — inak by sa neskôr ticho zmenili.
   const numeric: (string | null)[] = [

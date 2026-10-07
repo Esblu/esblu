@@ -1,7 +1,7 @@
 # Účtovný a eFaktúra tok — dokončenie a staging E2E (6. 10. 2026)
 
 Interný technický podklad. Nie je to právne ani daňové stanovisko. Vetva `einvoice-port`; migrácie
-`20261008100005` – `20261008100007` sú iba na stagingu `esblu-test`. Produkcia, `main`, produkčné
+`20261008100005` – `20261008100008` sú iba na stagingu `esblu-test`. Produkcia, `main`, produkčné
 migrácie, produkčné secrets ani live eFaktúra sa nemenili.
 
 ## 1. Implementované
@@ -43,6 +43,33 @@ skutočnú route `/api/accounting-handoff/package`.
 Úprava stagingu počas E2E: rollout E2E firiem dočasne `internal`, po teste znovu `paused`; driver
 `ESBLU_STAGING_E2E_ENABLED=false`, `ESBLU_STAGING_E2E_SECRET` zmazaný, Protection Bypass zrušený.
 
+## 2b. Príjem zálohy (386) a konečnej faktúry s odpočtom (7. 10. 2026, migrácia `20261008100008`)
+
+Reálny sandbox eFaktura.sk × staging, tie isté firmy a driver ako v sekcii 2 (Preview `da05b20`). A vydala tri
+faktúry k prijatej platbe FA20260009 (123,00), FA20260010 (61,50), FA20260011 (24,60) a dve konečné faktúry:
+FA20260012 (369,00 − 123,00) a FA20260013 (246,00 − 61,50 − 24,60). FA20260013 bola zámerne odoslaná PRED
+zálohami FA20260010/11.
+
+| | Scenár | Výsledok | Typ |
+| --- | --- | --- | --- |
+| N | prijatá 386 | PASS: u B druh `payment_received_invoice`, BT-7 → `tax_point_date` (2026-10-02/03), sumy a DPH z XML, bez `INVOICE_TYPE_CODE_UNUSUAL`; finalizácia B | reálny provider |
+| O | konečná faktúra s 1 zálohou | PASS: BT-113 123,00 + BG-3 → návrh (`proposed`) na FA20260009; finalizácia pred finalizáciou zálohy → `ESBLU_RECEIVED_ADVANCE_NOT_FINALIZED`; potvrdenie → `linked`; saldo 369 − 123 = 246; úhrada 246 → uhradená; záloha: spotrebované 123, zostáva 0 | reálny provider + user JWT |
+| P | konečná faktúra s 2 zálohami, zálohy doručené až po nej | PASS: najprv `ADVANCE_NOT_FOUND`, po príchode záloh automatický návrh 61,50 + 24,60 = BT-113 86,10; saldo 159,90 | reálny provider |
+| S | ručné párovanie | PASS: kandidáti (iba ten istý dodávateľ, zostatok), zamietnutie bez dôvodu odmietnuté, so dôvodom → review `ADVANCE_LINK_REJECTED`, finalizácia v review → `ESBLU_RECEIVED_ADVANCE_REVIEW_REQUIRED`, ručné priradenie 61,50 → review (čiastočne), druhé (predvolená suma) → `linked`, finalizácia | user JWT |
+| — | dvojitý odpočet | PASS: priradenie už spotrebovanej FA20260009 na inú faktúru → `ESBLU_RECEIVED_ADVANCE_EXCEEDS` | user JWT |
+| R | cross-tenant | PASS: owner A → potvrdenie / priradenie na konečnej faktúre B → `ESBLU_INVOICE_NOT_FOUND` | user JWT |
+| I2 | replay feedu | PASS: 6 udalostí → 6× `DUPLICATE`, počet dokladov B 14 → 14 | reálny provider |
+| M2 | export B (7. 10.) | PASS: 5 dokladov (3× `payment_received_invoice`, 2× konečná), 5 originálnych XML (SHA-256 overené), `summary/received-advance-links.csv`, SHA-256 balíka sedí | reálna route |
+
+Nález počas E2E: parser stále pridával review dôvod `PREPAID_AMOUNT_NOT_MAPPED`, hoci BT-113 sa už mapuje —
+opravené v kóde (dôvod odstránený); na stagingu ho nesú už prijaté záznamy (iba informatívne).
+Pôvodné FA20260005 (386 prijatá 6. 10. ešte ako bežná faktúra) a FA20260006 (`UNSUPPORTED_PROFILE`) ostávajú
+nezmenené ako historické záznamy pred `20261008100008`.
+
+Syntetické (PGlite, `test:invoicing-flow`, UBL označené ako syntetické): nejednoznačná záloha (rovnaké číslo,
+iný dátum), zlý dodávateľ, cross-tenant aj cez service_role/guard, chýbajúci BG-3, nemennosť väzieb po
+finalizácii, role (employee bez financií, účtovník), druhá vrstva DB (BT-113 na 386 / > celková suma).
+
 ## 3. Testy (offline)
 
 `test:invoicing-flow` 21 (nový; syntetické UBL označené v súbore): prijatý dobropis/ťarchopis, oprava bez
@@ -52,10 +79,10 @@ limity, export tenant izolácia a statická kontrola route, odoslanie 386. Ostat
 
 ## 4. GAP / blokery
 
-Technické: príjem faktúry k prijatej platbe (386) ako `payment_received_invoice`; príjem konečnej faktúry
-s PrepaidAmount (dnes manuálne); prijaté zálohy a ich odpočet na strane príjemcu;
-naplánovanie cronu kurzov ECB a e-faktúry v produkcii;
-produkčné migrácie `20261002…` – `20261008100007`.
+Technické: príjem 386 a konečnej faktúry s BT-113 — vyriešené (sekcia 2b, `20261008100008`).
+Zostáva: naplánovanie cronu kurzov ECB a e-faktúry v produkcii; produkčné migrácie `20261002…` – `20261008100008`;
+BT-113 na prijatej 386 alebo opravnom doklade ide naďalej na manuálne spracovanie; rozklad DPH priradenej zálohy
+je iba informatívny (pomerne), nie rozhodnutie o odpočte.
 
 Právne (bez zmeny): kvalifikácia XML ako účtovného dokladu, vnútorný kontrolný systém, 386 v slovenskej
 podzákonnej norme, kód 83 (finančná úprava), archív a zmluva s eFaktura.sk, CLIA.
