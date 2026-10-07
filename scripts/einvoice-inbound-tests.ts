@@ -122,6 +122,7 @@ for (const migration of [
   "20261008100006_einvoice_outbound_payment_received.sql",
   "20261008100007_einvoice_correction_backlink.sql",
   "20261008100008_received_advances.sql",
+  "20261008100009_taxed_advance_deduction_lines.sql",
 ]) {
   try {
     await db.exec(read(`supabase/migrations/${migration}`));

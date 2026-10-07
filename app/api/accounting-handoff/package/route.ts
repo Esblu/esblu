@@ -349,8 +349,8 @@ export async function POST(req: Request) {
     db.from("einvoice_outbound").select("invoice_id, attempt, state, ubl_storage_path, ubl_sha256, provider, sent_at, delivered_at, evidence, receiver_participant_id").in("invoice_id", ids)
       .returns<{ invoice_id: string; attempt: number; state: string; ubl_storage_path: string | null; ubl_sha256: string | null; provider: string; sent_at: string | null; delivered_at: string | null; evidence: Record<string, unknown> | null; receiver_participant_id: string | null }[]>(),
     // 20261008100008: prijaté zálohy (386) odpočítané na prijatej konečnej faktúre (BT-113).
-    db.from("received_advance_links").select("invoice_id, advance_invoice_id, amount, taxable_amount, vat_amount, source, created_at").in("invoice_id", ids)
-      .returns<{ invoice_id: string; advance_invoice_id: string; amount: number; taxable_amount: number; vat_amount: number; source: string; created_at: string }[]>(),
+    db.from("received_advance_links").select("invoice_id, advance_invoice_id, vat_category_code, vat_rate, amount, taxable_amount, vat_amount, source, created_at").in("invoice_id", ids)
+      .returns<{ invoice_id: string; advance_invoice_id: string; vat_category_code: string | null; vat_rate: number | null; amount: number; taxable_amount: number; vat_amount: number; source: string; created_at: string }[]>(),
   ]);
   if (paymentsRes.error || deductionsRes.error || inboundRes.error || outboundRes.error || receivedAdvRes.error) {
     console.error("handoff/package: načítanie úhrad / e-faktúr zlyhalo.");
@@ -580,6 +580,10 @@ export async function POST(req: Request) {
           vat_category_code: i.vat_category_code, vat_rate: i.vat_rate,
           line_net_amount: i.line_net_amount, line_vat_amount: i.line_vat_amount,
           line_gross_amount: i.line_gross_amount,
+          // 20261008100009: mínusový riadok zdanenej zálohy + odkaz na faktúru k prijatej platbe.
+          advance_deduction: Boolean((i as typeof i & { is_advance_deduction?: boolean }).is_advance_deduction),
+          advance_invoice_number: (i as typeof i & { advance_invoice_id?: string | null }).advance_invoice_id
+            ? correctedNumber.get((i as typeof i & { advance_invoice_id?: string | null }).advance_invoice_id!) ?? null : null,
         })),
         vat_breakdown: breakdown.map((b) => ({
           vat_category_code: b.vat_category_code, vat_rate: b.vat_rate,
@@ -771,20 +775,20 @@ export async function POST(req: Request) {
       const { data: eventRows } = await db.from("invoice_events").select("invoice_id, event_type, actor_source, created_at")
         .in("invoice_id", eligible.map((i) => i.id)).order("created_at", { ascending: true })
         .returns<{ invoice_id: string; event_type: string; actor_source: string; created_at: string }[]>();
-      const ext = (i: Invoice) => i as Invoice & { corrects_invoice_id?: string | null; correction_reason?: string | null; correction_review_status?: string | null; fx_rate?: number | null; fx_rate_date?: string | null; fx_rate_source?: string | null; tax_base_eur?: number | null; vat_total_eur?: number | null; prepaid_amount?: number | null; advance_review_status?: string | null };
+      const ext = (i: Invoice) => i as Invoice & { corrects_invoice_id?: string | null; correction_reason?: string | null; correction_review_status?: string | null; fx_rate?: number | null; fx_rate_date?: string | null; fx_rate_source?: string | null; tax_base_eur?: number | null; vat_total_eur?: number | null; prepaid_amount?: number | null; advance_review_status?: string | null; untaxed_prepaid_amount?: number | null; untaxed_prepaid_reference?: string | null };
       const csv = (name: string, header: string[], rows: unknown[][]) => addFile(
         { path: `summary/${name}`, kind: "summary_csv", invoice_id: null, source_document_id: null, provenance: "generated", mime_type: "text/csv", original_filename: null },
         toCsv(header, rows)
       );
       csv("invoices.csv",
-        ["invoice_id", "folder", "direction", "kind", "number", "supplier_number", "issue_date", "delivery_date", "tax_point_date", "due_date", "currency", "subtotal", "vat_total", "total", "accounting_sign", "fx_rate", "fx_rate_date", "fx_rate_source", "tax_base_eur", "vat_total_eur", "payment_status", "amount_due", "paid", "refunded", "balance", "corrects", "correction_reason", "correction_review_status", "source", "prepaid_amount", "advance_review_status"],
+        ["invoice_id", "folder", "direction", "kind", "number", "supplier_number", "issue_date", "delivery_date", "tax_point_date", "due_date", "currency", "subtotal", "vat_total", "total", "accounting_sign", "fx_rate", "fx_rate_date", "fx_rate_source", "tax_base_eur", "vat_total_eur", "payment_status", "amount_due", "paid", "refunded", "balance", "corrects", "correction_reason", "correction_review_status", "source", "prepaid_amount", "advance_review_status", "untaxed_prepaid_amount"],
         eligible.map((i) => {
           const st = settlements.get(i.id);
           return [i.id, packageFolder(i), i.direction, i.kind, i.invoice_number, i.supplier_invoice_number, i.issue_date, i.delivery_date, i.tax_point_date, i.due_date, i.currency,
             i.subtotal_amount, i.vat_total_amount, i.total_amount, documentSign(i.kind), ext(i).fx_rate ?? "", ext(i).fx_rate_date ?? "", ext(i).fx_rate_source ?? "",
             ext(i).tax_base_eur ?? "", ext(i).vat_total_eur ?? "", i.kind === "proforma" ? "" : (st?.payment_status ?? i.payment_status), st?.amount_due ?? "", st?.paid ?? "", st?.refunded ?? "", st?.balance ?? "",
             label(ext(i).corrects_invoice_id), ext(i).correction_reason ?? "", ext(i).correction_review_status ?? "", (i as Invoice & { source?: string }).source ?? "",
-            ext(i).prepaid_amount ?? "", ext(i).advance_review_status ?? ""];
+            ext(i).prepaid_amount ?? "", ext(i).advance_review_status ?? "", ext(i).untaxed_prepaid_amount ?? ""];
         }));
       csv("payments.csv", ["invoice", "entry_type", "amount", "date", "method", "recorded_at"],
         eligible.flatMap((i) => (paymentsByInvoice.get(i.id) ?? []).map((p) => [label(i.id), p.entry_type, p.paid_amount, p.paid_at, p.payment_method ?? "", p.created_at])));
@@ -795,11 +799,25 @@ export async function POST(req: Request) {
           (b as typeof b & { vat_exemption_reason_text?: string | null }).vat_exemption_reason_text ?? ""])));
       csv("corrections.csv", ["correction", "kind", "direction", "corrects", "reason", "review_status"],
         eligible.filter((i) => i.kind === "credit_note" || i.kind === "debit_note").map((i) => [label(i.id), i.kind, i.direction, label(ext(i).corrects_invoice_id), ext(i).correction_reason ?? "", ext(i).correction_review_status ?? ""]));
-      csv("advance-deductions.csv", ["final_invoice", "advance_invoice", "vat_category", "vat_rate", "taxable", "vat"],
-        eligible.flatMap((i) => (deductionsByInvoice.get(i.id) ?? []).map((d) => [label(i.id), label(d.advance_invoice_id), d.vat_category_code, d.vat_rate, d.taxable_amount, d.vat_amount])));
+      // 20261008100009 (FS FAQ eFaktúra, príklad 38): typ odpočtu — taxed_line = zdanená záloha ako mínusový
+      // riadok (znižuje základ aj DPH; odkaz na faktúru k prijatej platbe), untaxed_prepaid = nezdanená záloha
+      // (BT-113, znižuje iba sumu na úhradu), legacy_outside_lines = staršia konečná faktúra (odpočet mimo riadkov).
+      csv("advance-deductions.csv", ["final_invoice", "direction", "deduction_type", "advance_invoice", "reference", "vat_category", "vat_rate", "taxable", "vat", "amount"],
+        eligible.flatMap((i) => {
+          const hasLines = (itemsByInvoice.get(i.id) ?? []).some((it) => (it as typeof it & { is_advance_deduction?: boolean }).is_advance_deduction);
+          const taxed = (deductionsByInvoice.get(i.id) ?? []).map((d) => [label(i.id), i.direction, hasLines ? "taxed_line" : "legacy_outside_lines",
+            label(d.advance_invoice_id), "", d.vat_category_code, d.vat_rate, d.taxable_amount, d.vat_amount,
+            Math.round((Number(d.taxable_amount) + Number(d.vat_amount)) * 100) / 100]);
+          const received = (receivedAdvByInvoice.get(i.id) ?? []).map((l) => [label(i.id), i.direction, l.vat_category_code ? "taxed_line" : "legacy_outside_lines",
+            label(l.advance_invoice_id), "", l.vat_category_code ?? "", l.vat_rate ?? "", l.taxable_amount, l.vat_amount, l.amount]);
+          const untaxedAmount = i.direction === "issued" ? ext(i).untaxed_prepaid_amount : ext(i).prepaid_amount;
+          const untaxed = untaxedAmount ? [[label(i.id), i.direction, "untaxed_prepaid", "", i.direction === "issued" ? ext(i).untaxed_prepaid_reference ?? "" : "BT-113",
+            "", "", "", "", untaxedAmount]] : [];
+          return [...taxed, ...received, ...untaxed];
+        }));
       // Prijaté zálohy (UBL 386) → prijatá konečná faktúra: suma odpočtu a pomerná DPH (informatívne).
-      csv("received-advance-links.csv", ["final_invoice", "advance_invoice", "advance_kind", "amount", "taxable", "vat", "source"],
-        eligible.flatMap((i) => (receivedAdvByInvoice.get(i.id) ?? []).map((l) => [label(i.id), label(l.advance_invoice_id), "payment_received_invoice", l.amount, l.taxable_amount, l.vat_amount, l.source])));
+      csv("received-advance-links.csv", ["final_invoice", "advance_invoice", "advance_kind", "vat_category", "vat_rate", "amount", "taxable", "vat", "source"],
+        eligible.flatMap((i) => (receivedAdvByInvoice.get(i.id) ?? []).map((l) => [label(i.id), label(l.advance_invoice_id), "payment_received_invoice", l.vat_category_code ?? "", l.vat_rate ?? "", l.amount, l.taxable_amount, l.vat_amount, l.source])));
       csv("audit-events.csv", ["invoice", "event_type", "actor_source", "created_at"],
         (eventRows ?? []).map((e) => [label(e.invoice_id), e.event_type, e.actor_source, e.created_at]));
     }

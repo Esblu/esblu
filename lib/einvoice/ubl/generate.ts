@@ -171,11 +171,16 @@ export function checkUblPreconditions(s: UblInvoiceSnapshot): { issues: UblIssue
   }
   const prepaid = toDecimal(s.prepaidAmount ?? 0);
   if (prepaid.lt(0) || prepaid.gt(toDecimal(inv.total_amount))) add("PREPAID_AMOUNT_INVALID", "BT-113 / BR-CO-16");
-  // Pre-production closure (10/2026): FS FAQ k eFaktúre (15. 9. 2026, príklad 38) — ZDANENÁ záloha (vystavená
-  // faktúra k prijatej platbe) sa v konečnej faktúre odpočíta mínusovým riadkom (základ + DPH, rovnaká sadzba,
-  // BT-25), nie cez PrepaidAmount (BT-113 je iba pre nezdanené zálohy). Odpočty záloh v Esblu sú vždy zdanené
-  // zálohy → kým nebude DB/PDF/XML model konečnej faktúry upravený, e-faktúra s odpočtom sa NEVYGENERUJE.
-  else if (prepaid.gt(0)) add("ADVANCE_DEDUCTION_EINVOICE_UNSUPPORTED", "BT-113 vs. mínusový riadok (FS FAQ eFaktúra, príklad 38)");
+  // FS FAQ k eFaktúre (15. 9. 2026, príklad 38): ZDANENÁ záloha = mínusový riadok (základ + DPH, rovnaká
+  // sadzba, BT-25); BT-113 iba pre nezdanené zálohy. Staršie finalizované konečné faktúry (pred 20261008100009)
+  // majú odpočet mimo riadkov → ich e-faktúra sa NEVYGENERUJE (fail-closed).
+  if (s.legacyAdvanceDeduction) add("ADVANCE_DEDUCTION_EINVOICE_UNSUPPORTED", "BT-113 vs. mínusový riadok (FS FAQ eFaktúra, príklad 38)");
+  for (const item of s.items.filter((i) => i.is_advance_deduction)) {
+    const ref = (s.advanceInvoices ?? []).find((a) => a.id && a.id === item.advance_invoice_id);
+    if (inv.kind !== "regular_invoice" || !ref || blank(ref.invoice_number)) {
+      add("ADVANCE_REFERENCE_MISSING", "BT-25 (FS FAQ eFaktúra, príklad 38)", { position: item.position });
+    }
+  }
 
   for (const [party, isSeller] of [[s.seller, true], [s.buyer, false]] as const) {
     const P = isSeller ? "SELLER" : "BUYER";
@@ -272,8 +277,14 @@ export function checkUblPreconditions(s: UblInvoiceSnapshot): { issues: UblIssue
  * s DPH sa odvodí zo sumy riadka. Ak presná hodnota neexistuje, vráti null.
  */
 function netUnitPrice(item: UblItem): Decimal | null {
-  const qty = toDecimal(item.quantity);
   const lineNet = toDecimal(item.line_net_amount);
+  if (item.is_advance_deduction) {
+    // Mínusový riadok zálohy: v UBL množstvo -1 a kladná cena (BR-27) — súčin = záporná suma riadka.
+    const price = toDecimal(item.unit_price).neg();
+    const ublQty = toDecimal(item.quantity).neg();
+    return price.gte(0) && ublQty.lt(0) && ublQty.times(price).toDecimalPlaces(2, Decimal.ROUND_HALF_UP).eq(lineNet) ? price : null;
+  }
+  const qty = toDecimal(item.quantity);
   if (qty.lte(0)) return null;
   const candidate = item.price_mode === "net"
     ? toDecimal(item.unit_price)
@@ -422,7 +433,8 @@ export function generateUbl(s: UblInvoiceSnapshot): UblGenerationResult {
     for (const item of items) {
       const line = x.group(r, isCredit ? "cac:CreditNoteLine" : "cac:InvoiceLine");
       x.text(line, "cbc:ID", String(item.position));
-      x.text(line, isCredit ? "cbc:CreditedQuantity" : "cbc:InvoicedQuantity", plainDecimal(item.quantity), { unitCode: item.unit_code!.trim() });
+      const ublQuantity = item.is_advance_deduction ? toDecimal(item.quantity).neg() : item.quantity;
+      x.text(line, isCredit ? "cbc:CreditedQuantity" : "cbc:InvoicedQuantity", plainDecimal(ublQuantity), { unitCode: item.unit_code!.trim() });
       x.text(line, "cbc:LineExtensionAmount", money(item.line_net_amount), cur);
       const it = x.group(line, "cac:Item");
       x.text(it, "cbc:Name", item.description.trim());

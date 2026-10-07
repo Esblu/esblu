@@ -14,6 +14,7 @@ import { formatDate, formatNumber, formatMoney as formatMoneyIntl } from "@/lib/
 import { translate } from "@/lib/i18n/translate";
 import { documentSign } from "@/lib/invoicing/credit-note-semantics";
 import type { Locale } from "@/lib/i18n/locales";
+import { advanceSummary } from "@/lib/invoicing/advance-summary";
 
 // =============================================================================
 // FÁZA 3A — deterministic PDF renderer finalizovanej faktúry.
@@ -415,12 +416,21 @@ function InvoicePdfDocument({ invoice, seller, buyer, items, taxBreakdowns, loca
           </View>
           {items.map((item) => (
             <View key={item.id} style={styles.tableRow} wrap={false}>
-              <Text style={[styles.td, styles.colDescription]}>{item.description}</Text>
+              <Text style={[styles.td, styles.colDescription]}>
+                {item.description}
+                {/* 20261008100009: mínusový riadok zdanenej zálohy — základ aj DPH (FS FAQ eFaktúra, príklad 38). */}
+                {item.is_advance_deduction
+                  ? `\n${translate(locale, "invoices.pdf.advanceLineDetail", {
+                      taxable: formatMoney(item.line_net_amount, invoice.currency, locale),
+                      vat: formatMoney(item.line_vat_amount, invoice.currency, locale),
+                    })}`
+                  : ""}
+              </Text>
               <Text style={[styles.td, styles.colQuantity]}>
-                {formatNumber(item.quantity, locale)} {item.unit}
+                {formatNumber(item.is_advance_deduction ? -item.quantity : item.quantity, locale)} {item.unit}
               </Text>
               <Text style={[styles.td, styles.colUnitPrice]}>
-                {formatMoney(item.unit_price, invoice.currency, locale)}
+                {formatMoney(item.is_advance_deduction ? -item.unit_price : item.unit_price, invoice.currency, locale)}
               </Text>
               <Text style={[styles.td, styles.colVat]}>
                 {vatCategoryLabel(item.vat_category_code, item.vat_rate, locale)}
@@ -487,6 +497,23 @@ function InvoicePdfDocument({ invoice, seller, buyer, items, taxBreakdowns, loca
               {formatMoney(sign * invoice.total_amount, invoice.currency, locale)}
             </Text>
           </View>
+          {/* 20261008100009: nezdanená záloha (BT-113) — platba znižujúca sumu na úhradu, nie daňový riadok. */}
+          {!isCreditNote && Number(invoice.untaxed_prepaid_amount ?? 0) > 0 && (
+            <>
+              <View style={styles.totalsRow}>
+                <Text style={styles.totalsLabel}>
+                  {translate(locale, "invoices.pdf.untaxedPrepaidLabel", { reference: invoice.untaxed_prepaid_reference ?? "" })}
+                </Text>
+                <Text style={styles.totalsValue}>{formatMoney(-Number(invoice.untaxed_prepaid_amount), invoice.currency, locale)}</Text>
+              </View>
+              <View style={styles.grandTotalRow}>
+                <Text style={styles.grandTotalLabel}>{translate(locale, "invoices.pdf.amountPayableLabel")}</Text>
+                <Text style={styles.grandTotalValue}>
+                  {formatMoney(advanceSummary({ totalAmount: invoice.total_amount, untaxedPrepaidAmount: invoice.untaxed_prepaid_amount, items }).payable, invoice.currency, locale)}
+                </Text>
+              </View>
+            </>
+          )}
           {advanceDeductions.length > 0 && (
             <>
               {advanceDeductions.map((d, i) => (
@@ -500,7 +527,7 @@ function InvoicePdfDocument({ invoice, seller, buyer, items, taxBreakdowns, loca
               <View style={styles.grandTotalRow}>
                 <Text style={styles.grandTotalLabel}>{translate(locale, "invoices.pdf.amountPayableLabel")}</Text>
                 <Text style={styles.grandTotalValue}>
-                  {formatMoney(invoice.total_amount - advanceDeductions.reduce((s, d) => s + d.taxable_amount + d.vat_amount, 0), invoice.currency, locale)}
+                  {formatMoney(advanceSummary({ totalAmount: invoice.total_amount, items, legacyDeductions: advanceDeductions }).payable, invoice.currency, locale)}
                 </Text>
               </View>
             </>

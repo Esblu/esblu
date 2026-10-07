@@ -73,6 +73,9 @@ export type Invoice = {
   advance_review_status?: "review" | "proposed" | "linked" | null;
   advance_review_reasons?: string[] | null;
   advance_review_note?: string | null;
+  /** 20261008100009: nezdanená záloha vydanej konečnej faktúry (BT-113 PrepaidAmount) a referencia. */
+  untaxed_prepaid_amount?: number | string | null;
+  untaxed_prepaid_reference?: string | null;
   fx_rate?: number | string | null;
   fx_rate_date?: string | null;
   fx_rate_source?: "ECB" | "NBS" | "CUSTOMS" | null;
@@ -154,6 +157,10 @@ export type InvoiceItem = {
   line_net_amount: number;
   line_vat_amount: number;
   line_gross_amount: number;
+  /** 20261008100009: mínusový riadok zdanenej zálohy (FS FAQ eFaktúra, príklad 38) — 1 × záporná cena. */
+  is_advance_deduction?: boolean;
+  advance_invoice_id?: string | null;
+  advance_vat_amount?: number | null;
   created_at: string;
   updated_at: string | null;
 };
@@ -766,6 +773,9 @@ export type InvoiceComplianceFields = {
   fx_rate_date?: string | null;
   fx_rate_source?: "ECB" | "NBS" | "CUSTOMS" | null;
   tax_point_date?: string | null;
+  /** 20261008100009: nezdanená záloha vydanej konečnej faktúry (BT-113). */
+  untaxed_prepaid_amount?: number | null;
+  untaxed_prepaid_reference?: string | null;
 };
 export async function setInvoiceComplianceFields(invoiceId: string, fields: InvoiceComplianceFields): Promise<void> {
   const { error } = await supabase.rpc("esblu_set_invoice_compliance_fields", { p_invoice_id: invoiceId, p_fields: fields });

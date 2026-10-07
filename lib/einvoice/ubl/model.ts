@@ -66,6 +66,12 @@ export type UblItem = {
   vat_category_code: UblVatCategoryCode;
   vat_rate: number | string;
   line_net_amount: number | string;
+  /**
+   * 20261008100009: mínusový riadok ZDANENEJ zálohy (FS FAQ eFaktúra, príklad 38). V DB 1 × záporná cena;
+   * v UBL InvoicedQuantity -1, PriceAmount = základ zálohy (BR-27), väzba BillingReference na zálohu.
+   */
+  is_advance_deduction?: boolean;
+  advance_invoice_id?: string | null;
 };
 
 export type UblTaxBreakdown = {
@@ -90,10 +96,15 @@ export type UblInvoiceSnapshot = {
   taxBreakdowns: UblTaxBreakdown[];
   /** Iba pre dobropis / ťarchopis (BT-25 / BT-26). */
   correctedInvoice: UblCorrectedInvoice | null;
-  /** Odpočet záloh (BT-113 PrepaidAmount, s DPH) — z invoice_advance_deductions. */
+  /**
+   * BT-113 PrepaidAmount — IBA NEZDANENÁ záloha (invoices.untaxed_prepaid_amount). Zdanené zálohy sú
+   * mínusovými riadkami a v PrepaidAmount sa neuvádzajú (FS FAQ eFaktúra, príklad 38).
+   */
   prepaidAmount?: number | string | null;
   /** Zálohové faktúry odpočítané na konečnej faktúre (BG-3 BT-25/BT-26) — príjemca podľa nich páruje zálohy. */
-  advanceInvoices?: UblCorrectedInvoice[];
+  advanceInvoices?: (UblCorrectedInvoice & { id?: string })[];
+  /** Staršia finalizovaná konečná faktúra (pred 20261008100009): odpočet mimo riadkov → e-faktúra sa nevygeneruje. */
+  legacyAdvanceDeduction?: boolean;
 };
 
 /**

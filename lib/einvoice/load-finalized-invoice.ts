@@ -19,14 +19,14 @@ export type LoadSnapshotResult =
 const HEADER_COLUMNS =
   "id, company_id, direction, kind, document_status, invoice_number, issue_date, due_date, delivery_date, " +
   "tax_point_date, currency, subtotal_amount, vat_total_amount, total_amount, rounding_amount, buyer_reference, " +
-  "purchase_order_reference, payment_means_code, payment_reference, corrects_invoice_id, correction_reason";
+  "purchase_order_reference, payment_means_code, payment_reference, corrects_invoice_id, correction_reason, untaxed_prepaid_amount";
 
 const PARTY_COLUMNS =
   "role, legal_name, ico, dic, ic_dph, address_line1, address_line2, city, postal_code, country_code, iban, bic, " +
   "email, electronic_address, electronic_address_scheme_id, legal_registration_id, legal_registration_scheme_id, vat_identifier";
 
 const ITEM_COLUMNS =
-  "position, description, quantity, unit_code, unit_price, price_mode, vat_category_code, vat_rate, line_net_amount";
+  "position, description, quantity, unit_code, unit_price, price_mode, vat_category_code, vat_rate, line_net_amount, is_advance_deduction, advance_invoice_id";
 
 const TAX_COLUMNS =
   "vat_category_code, vat_rate, taxable_amount, vat_amount, vat_exemption_reason_code, vat_exemption_reason_text";
@@ -78,10 +78,15 @@ export async function loadFinalizedIssuedInvoiceSnapshot(
     .eq("invoice_id", invoice.id)
     .returns<{ taxable_amount: number | string; vat_amount: number | string; advance_invoice_id: string }[]>();
   if (dedError) return { ok: false, reason: "QUERY_FAILED" };
-  const prepaidAmount = (deductions ?? []).reduce((acc, d) => acc + Math.round((Number(d.taxable_amount) + Number(d.vat_amount)) * 100), 0) / 100;
+  // 20261008100009: zdanené zálohy sú mínusové riadky; BT-113 = iba nezdanená záloha.
+  const prepaidAmount = Number((invoice as UblInvoiceHeader & { untaxed_prepaid_amount?: number | string | null }).untaxed_prepaid_amount ?? 0);
+  const legacyAdvanceDeduction = (deductions ?? []).length > 0 && !(itemsRes.data ?? []).some((i) => i.is_advance_deduction);
 
   // BG-3 pre každú odpočítanú zálohu (číslo + dátum) — iba doklady tej istej firmy.
-  const advanceIds = Array.from(new Set((deductions ?? []).map((d) => d.advance_invoice_id)));
+  const advanceIds = Array.from(new Set([
+    ...(deductions ?? []).map((d) => d.advance_invoice_id),
+    ...(itemsRes.data ?? []).map((i) => i.advance_invoice_id).filter((x): x is string => Boolean(x)),
+  ]));
   let advanceInvoices: UblInvoiceSnapshot["advanceInvoices"] = [];
   if (advanceIds.length > 0) {
     const { data: advances, error: advError } = await db
@@ -93,7 +98,7 @@ export async function loadFinalizedIssuedInvoiceSnapshot(
     advanceInvoices = (advances ?? [])
       .filter((a) => a.company_id === activeCompanyId && a.invoice_number)
       .sort((a, b) => String(a.invoice_number).localeCompare(String(b.invoice_number)))
-      .map((a) => ({ invoice_number: a.invoice_number, issue_date: a.issue_date }));
+      .map((a) => ({ id: a.id, invoice_number: a.invoice_number, issue_date: a.issue_date }));
   }
 
   return {
@@ -101,6 +106,7 @@ export async function loadFinalizedIssuedInvoiceSnapshot(
     snapshot: {
       prepaidAmount,
       advanceInvoices,
+      legacyAdvanceDeduction,
       invoice,
       seller,
       buyer,

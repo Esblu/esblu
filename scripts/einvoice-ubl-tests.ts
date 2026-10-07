@@ -259,15 +259,49 @@ await check("faktúra k prijatej platbe: Invoice 386 (prepayment); proforma sa n
   s.invoice = { ...s.invoice, kind: "proforma" };
   assert.ok(issueCodes(s).includes("KIND_UNSUPPORTED"));
 });
-await check("konečná faktúra s odpočtom ZDANENEJ zálohy → e-faktúra sa NEVYGENERUJE (FS FAQ príklad 38: mínusový riadok, nie BT-113)", () => {
+await check("nezdanená záloha → PrepaidAmount (BT-113), PayableAmount = spolu − záloha (BR-CO-16); staršia konečná faktúra s odpočtom mimo riadkov → fail-closed", () => {
   const s = vatPayerSnapshot();
   s.prepaidAmount = 50;
-  assert.ok(issueCodes(s).includes("ADVANCE_DEDUCTION_EINVOICE_UNSUPPORTED"), "fail-closed až do úpravy modelu konečnej faktúry");
-  assert.ok(hasTranslation("sk", "invoices.einvoice.issues.ADVANCE_DEDUCTION_EINVOICE_UNSUPPORTED"));
+  const r = ok(s);
+  assert.deepEqual(all(r.xml, NS.cbc, "PrepaidAmount"), ["50.00"]);
+  assert.deepEqual(all(r.xml, NS.cbc, "PayableAmount"), ["84.90"]);
   s.prepaidAmount = 999;
   assert.ok(issueCodes(s).includes("PREPAID_AMOUNT_INVALID"));
   s.prepaidAmount = 0;
-  ok(s);
+  s.legacyAdvanceDeduction = true;
+  assert.ok(issueCodes(s).includes("ADVANCE_DEDUCTION_EINVOICE_UNSUPPORTED"));
+  assert.ok(hasTranslation("sk", "invoices.einvoice.issues.ADVANCE_DEDUCTION_EINVOICE_UNSUPPORTED"));
+});
+await check("zdanená záloha (FS FAQ eFaktúra, príklad 38): mínusový riadok -1 × kladná cena, BT-25, bez PrepaidAmount; bez odkazu → ADVANCE_REFERENCE_MISSING", () => {
+  const s = vatPayerSnapshot();
+  const base = s.items[0];
+  const deduction = { ...base, position: 99, description: "Odpočet zálohy – faktúra k prijatej platbe č. FA2026001", quantity: 1,
+    unit_price: -10, price_mode: "net" as const, vat_category_code: "S" as const, vat_rate: 23, line_net_amount: -10,
+    is_advance_deduction: true, advance_invoice_id: "adv-1", unit_code: "C62" };
+  // Snapshot po finalizácii: rozpis a hlavička už po odpočte (−10 základ, −2,30 DPH v skupine S 23 %).
+  const s23 = s.taxBreakdowns.find((b) => b.vat_category_code === "S" && Number(b.vat_rate) === 23);
+  if (!s23) throw new Error("fixture bez S 23");
+  s.items = [...s.items, deduction];
+  s.taxBreakdowns = s.taxBreakdowns.map((b) => b === s23 ? { ...b, taxable_amount: Number(b.taxable_amount) - 10, vat_amount: Math.round((Number(b.vat_amount) - 2.3) * 100) / 100 } : b);
+  s.invoice = { ...s.invoice, subtotal_amount: Number(s.invoice.subtotal_amount) - 10, vat_total_amount: Math.round((Number(s.invoice.vat_total_amount) - 2.3) * 100) / 100,
+    total_amount: Math.round((Number(s.invoice.total_amount) - 12.3) * 100) / 100 };
+  s.advanceInvoices = [{ id: "adv-1", invoice_number: "FA2026001", issue_date: "2026-09-01" }];
+  const r = ok(s);
+  assert.deepEqual(all(r.xml, NS.cbc, "PrepaidAmount"), []);
+  assert.ok(all(r.xml, NS.cbc, "InvoicedQuantity").includes("-1"));
+  assert.ok(all(r.xml, NS.cbc, "LineExtensionAmount").includes("-10.00"));
+  assert.ok(all(r.xml, NS.cbc, "PriceAmount").includes("10"), "cena kladná (BR-27)");
+  assert.ok(all(r.xml, NS.cbc, "ID").includes("FA2026001"), "BT-25");
+  const parsed = parseInboundUbl(new TextEncoder().encode(r.xml));
+  assert.ok(parsed.ok);
+  if (parsed.ok) {
+    const m = mapInboundDraft(parsed.document, parsed.reviewReasons, null);
+    assert.ok(m.ok, JSON.stringify(m));
+    if (m.ok) assert.ok(m.draft.items.some((i) => i.advance_deduction && i.unit_price === "-10.00"));
+  }
+  s.advanceInvoices = [];
+  assert.ok(issueCodes(s).includes("ADVANCE_REFERENCE_MISSING"));
+  assert.ok(hasTranslation("en", "invoices.einvoice.issues.ADVANCE_REFERENCE_MISSING"));
 });
 await check("prijatá konečná faktúra s BT-113 + BG-3 (iný dodávateľ) → mapovanie dostane odpočet aj odkazy na zálohy", () => {
   const s = vatPayerSnapshot();

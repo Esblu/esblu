@@ -171,14 +171,13 @@ await check("proforma ≠ daňový doklad; faktúra k prijatej platbe vyžaduje 
 });
 await check("konečná faktúra: odpočet zálohy do výšky zálohy; viac → odmietnuté; po finalizácii nemenný", async () => {
   const fin = await draft(U.owner, CO.A, { header: DELIVERY, items: [{ unit_price: 500 }] });
-  await rpc(U.owner, "select public.esblu_set_invoice_advance_deductions($1, $2::jsonb)", [fin, JSON.stringify([{ advance_invoice_id: ADV, vat_category_code: "S", vat_rate: 23, taxable_amount: 250, vat_amount: 57.5 }])]);
-  assert.match(await errOf(finalize(U.owner, fin)), /ESBLU_ADVANCE_DEDUCTION_EXCEEDS/);
+  // 20261008100009: nad zostatok zálohy sa odpočet odmietne už pri zadaní.
+  assert.match(await errOf(rpc(U.owner, "select public.esblu_set_invoice_advance_deductions($1, $2::jsonb)", [fin, JSON.stringify([{ advance_invoice_id: ADV, vat_category_code: "S", vat_rate: 23, taxable_amount: 250, vat_amount: 57.5 }])])), /ESBLU_ADVANCE_DEDUCTION_EXCEEDS/);
   await rpc(U.owner, "select public.esblu_set_invoice_advance_deductions($1, $2::jsonb)", [fin, JSON.stringify([{ advance_invoice_id: ADV, vat_category_code: "S", vat_rate: 23, taxable_amount: 200, vat_amount: 46 }])]);
   await finalize(U.owner, fin);
   assert.notEqual(await errOf(svc(`delete from public.invoice_advance_deductions where invoice_id = '${fin}'`)), "OK");
   const second = await draft(U.owner, CO.A, { header: DELIVERY, items: [{ unit_price: 50 }] });
-  await rpc(U.owner, "select public.esblu_set_invoice_advance_deductions($1, $2::jsonb)", [second, JSON.stringify([{ advance_invoice_id: ADV, vat_category_code: "S", vat_rate: 23, taxable_amount: 1, vat_amount: 0.23 }])]);
-  assert.match(await errOf(finalize(U.owner, second)), /ESBLU_ADVANCE_DEDUCTION_EXCEEDS/, "záloha už celá odpočítaná");
+  assert.match(await errOf(rpc(U.owner, "select public.esblu_set_invoice_advance_deductions($1, $2::jsonb)", [second, JSON.stringify([{ advance_invoice_id: ADV, vat_category_code: "S", vat_rate: 23, taxable_amount: 1, vat_amount: 0.23 }])])), /ESBLU_ADVANCE_DEDUCTION_EXCEEDS/, "záloha už celá odpočítaná");
 });
 
 // --- 5. DPH režimy ---------------------------------------------------------------------------

@@ -1,5 +1,5 @@
 -- =============================================================================
--- eFaktúra — PRODUKČNÝ PRECHECK pred migráciami 20261002100000 … 20261008100008
+-- eFaktúra — PRODUKČNÝ PRECHECK pred migráciami 20261002100000 … 20261008100009
 --
 -- ČISTO READ-ONLY. Spúšťa iba vlastník (alebo na jeho výslovný súhlas) nad projektom
 -- `assetpilot` (fkpgvgvsmbpieduoatrt), PRED oknom migrácií. Nič nemení: transakcia je READ ONLY
@@ -54,7 +54,8 @@ new_cols(tbl, col) as (values
   ('invoices', 'correction_reason'), ('invoices', 'fx_rate'), ('invoices', 'fx_rate_date'), ('invoices', 'fx_rate_source'),
   ('invoices', 'tax_base_eur'), ('invoices', 'vat_total_eur'), ('invoices', 'fx_tax_point_date'), ('invoices', 'fx_reference_rate_id'),
   ('invoices', 'corrected_document_reference'), ('invoices', 'correction_review_status'), ('invoices', 'prepaid_amount'),
-  ('invoices', 'advance_review_status'), ('invoice_payments', 'entry_type')
+  ('invoices', 'advance_review_status'), ('invoice_payments', 'entry_type'),
+  ('invoices', 'untaxed_prepaid_amount'), ('invoice_items', 'is_advance_deduction'), ('invoice_items', 'advance_invoice_id')
 ),
 vat_mismatch as (
   select i.id
@@ -184,6 +185,16 @@ select * from (
                         count(*), count(*) filter (where document_status = 'finalized'), count(*) filter (where document_status = 'draft'),
                         count(*) filter (where direction = 'received'), count(*) filter (where kind in ('credit_note','debit_note')))
           from public.invoices)
+  union all
+  select 24, 'items_negative_unit_price',
+         case when (select count(*) from public.invoice_items where unit_price < 0) = 0 then 'OK' else 'STOP' end,
+         '20261008100009: záporná cena je povolená iba pre riadok odpočtu zálohy — ' ||
+         (select count(*)::text from public.invoice_items where unit_price < 0)
+  union all
+  select 25, 'items_unit_price_check',
+         case when (select count(*) from pg_constraint where conrelid = 'public.invoice_items'::regclass and contype = 'c'
+                    and pg_get_constraintdef(oid) ~ '^CHECK \(\(unit_price >= ') = 1 then 'OK' else 'WARN' end,
+         '20261008100009 nahrádza pôvodný CHECK (unit_price >= 0) — očakávaný práve 1'
 ) r
 order by ord;
 

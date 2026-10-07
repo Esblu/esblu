@@ -60,7 +60,7 @@ const n = (v: unknown) => Number(v);
 // --- Syntetické UBL (EN 16931 / Peppol BIS 3.0) ---------------------------------------------------
 type Line = { qty: number; price: number; rate?: number; cat?: string };
 const SUPPLIER = { name: "Dodávateľ S s.r.o.", ico: "31411801", vat: "SK2023333330", endpoint: "2023333330" };
-function ubl(o: { root: "Invoice" | "CreditNote"; type: string; id: string; date: string; lines: Line[]; ref?: { id: string; date?: string }; refs?: { id: string; date?: string }[]; note?: string; supplier?: typeof SUPPLIER; customerEndpoint?: string; prepaid?: number; taxPoint?: string }): string {
+function ubl(o: { root: "Invoice" | "CreditNote"; type: string; id: string; date: string; lines: Line[]; ref?: { id: string; date?: string }; refs?: { id: string; date?: string }[]; note?: string; supplier?: typeof SUPPLIER; customerEndpoint?: string; prepaid?: number; taxPoint?: string; vatOverride?: Record<string, number> }): string {
   const s = o.supplier ?? SUPPLIER;
   const isCn = o.root === "CreditNote";
   const groups = new Map<string, { cat: string; rate: number; taxable: number }>();
@@ -74,7 +74,8 @@ function ubl(o: { root: "Invoice" | "CreditNote"; type: string; id: string; date
   }).join("");
   let taxable = 0, vat = 0;
   const sub = [...groups.values()].map((g) => {
-    const v = g.cat === "S" ? Math.round(g.taxable * g.rate) / 100 : 0;
+    const raw = g.taxable * g.rate;
+    const v = g.cat === "S" ? (o.vatOverride?.[`${g.cat}|${g.rate}`] ?? Math.sign(raw) * Math.round(Math.abs(raw)) / 100) : 0;
     taxable += g.taxable; vat += v;
     return `<cac:TaxSubtotal><cbc:TaxableAmount currencyID="EUR">${g.taxable.toFixed(2)}</cbc:TaxableAmount><cbc:TaxAmount currencyID="EUR">${v.toFixed(2)}</cbc:TaxAmount><cac:TaxCategory><cbc:ID>${g.cat}</cbc:ID><cbc:Percent>${g.rate}</cbc:Percent><cac:TaxScheme><cbc:ID>VAT</cbc:ID></cac:TaxScheme></cac:TaxCategory></cac:TaxSubtotal>`;
   }).join("");
@@ -329,11 +330,11 @@ await check("konečná faktúra: odpočet zálohy → saldo = celkom − záloha
   await rpc(U.owner, "select public.esblu_set_invoice_advance_deductions($1, $2::jsonb)", [FIN, JSON.stringify([{ advance_invoice_id: ADV, vat_category_code: "S", vat_rate: 23, taxable_amount: 100, vat_amount: 23 }])]);
   await finalize(U.owner, FIN);
   const s = await settlement(U.owner, FIN);
-  assert.deepEqual([n(s.original_total), n(s.advances_deducted), n(s.amount_due), s.payment_status], [246, 123, 123, "unpaid"]);
+  // 20261008100009: zdanená záloha = mínusový riadok → total už po odpočte, nič sa neodpočítava druhýkrát.
+  assert.deepEqual([n(s.items_total), n(s.advances_taxed), n(s.original_total), n(s.advances_deducted), n(s.amount_due), s.payment_status], [246, 123, 123, 0, 123, "unpaid"]);
   assert.equal((await rpc(U.owner, "select * from public.esblu_available_advances($1)", [await issued()])).length, 0, "vyčerpaná záloha sa už neponúka");
   const second = await issued("regular_invoice", { items: [{ price: 300 }] });
-  await rpc(U.owner, "select public.esblu_set_invoice_advance_deductions($1, $2::jsonb)", [second, JSON.stringify([{ advance_invoice_id: ADV, vat_category_code: "S", vat_rate: 23, taxable_amount: 100, vat_amount: 23 }])]);
-  assert.match(await errOf(finalize(U.owner, second)), /ESBLU_ADVANCE_DEDUCTION_EXCEEDS/, "duplicitný odpočet");
+  assert.match(await errOf(rpc(U.owner, "select public.esblu_set_invoice_advance_deductions($1, $2::jsonb)", [second, JSON.stringify([{ advance_invoice_id: ADV, vat_category_code: "S", vat_rate: 23, taxable_amount: 100, vat_amount: 23 }])])), /ESBLU_ADVANCE_DEDUCTION_EXCEEDS/, "duplicitný odpočet");
   assert.notEqual(await errOf(rpc(U.owner, "select public.esblu_set_invoice_advance_deductions($1, $2::jsonb)", [second, JSON.stringify([
     { advance_invoice_id: ADV, vat_category_code: "S", vat_rate: 23, taxable_amount: 1, vat_amount: 0.23 },
     { advance_invoice_id: ADV, vat_category_code: "S", vat_rate: 23, taxable_amount: 1, vat_amount: 0.23 }])])), "OK", "dvakrát v jednom zozname");
@@ -354,8 +355,214 @@ await check("odpočty nesmú prevýšiť konečnú faktúru ani DPH zálohy", as
   await rpc(U.owner, "select public.esblu_set_invoice_advance_deductions($1, $2::jsonb)", [small, JSON.stringify([{ advance_invoice_id: adv2, vat_category_code: "S", vat_rate: 23, taxable_amount: 100, vat_amount: 23 }])]);
   assert.match(await errOf(finalize(U.owner, small)), /ESBLU_ADVANCE_DEDUCTION_EXCEEDS_TOTAL/);
   const vatHeavy = await issued("regular_invoice", { items: [{ price: 1000 }] });
-  await rpc(U.owner, "select public.esblu_set_invoice_advance_deductions($1, $2::jsonb)", [vatHeavy, JSON.stringify([{ advance_invoice_id: adv2, vat_category_code: "S", vat_rate: 23, taxable_amount: 10, vat_amount: 200 }])]);
-  assert.match(await errOf(finalize(U.owner, vatHeavy)), /ESBLU_ADVANCE_DEDUCTION_EXCEEDS/);
+  assert.match(await errOf(rpc(U.owner, "select public.esblu_set_invoice_advance_deductions($1, $2::jsonb)", [vatHeavy, JSON.stringify([{ advance_invoice_id: adv2, vat_category_code: "S", vat_rate: 23, taxable_amount: 10, vat_amount: 200 }])])), /ESBLU_ADVANCE_DEDUCTION_EXCEEDS/);
+});
+
+// =============================================================================
+// 20261008100009 — ZDANENÁ záloha = mínusový riadok (FS SR, FAQ k eFaktúre 15. 9. 2026, tech. príklad 38).
+// Referencia: pravidlo z príkladu 38 (text FAQ sa nekopíruje); fixtúry sú SYNTETICKÉ, postavené podľa neho:
+//   mínusový InvoiceLine (množstvo -1), základ + DPH, rovnaká sadzba ako zálohová faktúra, BT-25 na zálohu,
+//   PrepaidAmount (BT-113) iba pre nezdanené zálohy.
+// =============================================================================
+const NEW = { generate: (await import("../lib/einvoice/ubl/generate.ts")) as typeof import("../lib/einvoice/ubl/generate.ts") };
+const setDed = (id: string, rows: Record<string, unknown>[], uid = U.owner) =>
+  rpc(uid, "select public.esblu_set_invoice_advance_deductions($1, $2::jsonb)", [id, JSON.stringify(rows)]);
+const itemsOf = (id: string) => h.sql<Row>(`select position, description, quantity::float8 q, unit_price::float8 p, vat_category_code c, vat_rate::float8 r,
+  line_net_amount::float8 net, line_vat_amount::float8 vat, line_gross_amount::float8 gross, is_advance_deduction d, advance_invoice_id a
+  from public.invoice_items where invoice_id = $1 order by position`, [id]).then((r) => r.rows);
+const breakdownOf = (id: string) => h.sql<Row>("select vat_category_code c, vat_rate::float8 r, taxable_amount::float8 t, vat_amount::float8 v from public.invoice_tax_breakdowns where invoice_id = $1 order by vat_category_code, vat_rate desc", [id]).then((r) => r.rows.map((b) => [b.c, b.r, b.t, b.v]));
+async function issuedAdvance(items: { price: number; rate?: number }[], taxPoint = "2026-10-01") {
+  const id = await issued("payment_received_invoice", { items, header: { tax_point_date: taxPoint, delivery_date: null } });
+  await finalize(U.owner, id);
+  return id;
+}
+/** Snapshot rovnako ako lib/einvoice/load-finalized-invoice.ts (bez Supabase klienta). */
+async function snapshotOf(id: string) {
+  const head = (await h.sql<Row>(`select id, company_id, direction, kind, document_status, invoice_number, issue_date::text issue_date, due_date::text due_date,
+    delivery_date::text delivery_date, tax_point_date::text tax_point_date, currency, subtotal_amount, vat_total_amount, total_amount, rounding_amount,
+    buyer_reference, purchase_order_reference, payment_means_code, payment_reference, corrects_invoice_id, correction_reason, untaxed_prepaid_amount
+    from public.invoices where id = $1`, [id])).rows[0];
+  const parties = (await h.sql<Row>("select * from public.invoice_parties where invoice_id = $1", [id])).rows;
+  const items = (await h.sql<Row>(`select position, description, quantity, unit_code, unit_price, price_mode, vat_category_code, vat_rate, line_net_amount,
+    is_advance_deduction, advance_invoice_id from public.invoice_items where invoice_id = $1 order by position`, [id])).rows;
+  const tax = (await h.sql<Row>("select vat_category_code, vat_rate, taxable_amount, vat_amount, vat_exemption_reason_code, vat_exemption_reason_text from public.invoice_tax_breakdowns where invoice_id = $1", [id])).rows;
+  const ded = (await h.sql<Row>("select advance_invoice_id from public.invoice_advance_deductions where invoice_id = $1", [id])).rows;
+  const advIds = [...new Set([...ded.map((d) => d.advance_invoice_id as string), ...items.map((i) => i.advance_invoice_id as string | null).filter((x): x is string => Boolean(x))])];
+  const adv = advIds.length ? (await h.sql<Row>("select id, invoice_number, issue_date::text issue_date from public.invoices where id = any($1::uuid[]) order by invoice_number", [advIds])).rows : [];
+  const fix = (p: Row) => ({ ...p, electronic_address: p.electronic_address ?? (p.role === "seller" ? "2021111111" : "2044444444"), electronic_address_scheme_id: p.electronic_address_scheme_id ?? "0245" });
+  return {
+    invoice: { ...head, payment_means_code: head.payment_means_code ?? "30", buyer_reference: head.buyer_reference ?? "E2E-REF" },
+    seller: fix(parties.find((p) => p.role === "seller")!), buyer: fix(parties.find((p) => p.role === "buyer")!),
+    items: items.map((i) => ({ ...i, unit_code: i.unit_code ?? "H87" })), taxBreakdowns: tax, correctedInvoice: null,
+    prepaidAmount: Number(head.untaxed_prepaid_amount ?? 0),
+    advanceInvoices: adv.map((a) => ({ id: a.id as string, invoice_number: a.invoice_number as string, issue_date: a.issue_date as string })),
+    legacyAdvanceDeduction: ded.length > 0 && !items.some((i) => i.is_advance_deduction),
+  } as unknown as import("../lib/einvoice/ubl/model.ts").UblInvoiceSnapshot;
+}
+const xmlAll = (xml: string, local: string) => [...xml.matchAll(new RegExp(`<cbc:${local}[^>]*>([^<]*)</cbc:${local}>`, "g"))].map((m) => m[1]);
+
+let TADV1 = "", TFIN1 = "";
+await check("zdanená záloha → mínusový riadok (základ + DPH zálohy, rovnaká sadzba, odkaz na 386); rozpis DPH a hlavička po odpočte", async () => {
+  TADV1 = await issuedAdvance([{ price: 100 }]);
+  TFIN1 = await issued("regular_invoice", { items: [{ price: 300 }] });
+  await setDed(TFIN1, [{ advance_invoice_id: TADV1, vat_category_code: "S", vat_rate: 23, taxable_amount: 100, vat_amount: 23 }]);
+  await finalize(U.owner, TFIN1);
+  const its = await itemsOf(TFIN1);
+  const d = its.find((i) => i.d)!;
+  const advNo = (await inv(TADV1)).invoice_number as string;
+  assert.deepEqual([d.q, d.p, d.c, d.r, d.net, d.vat, d.gross, d.a], [1, -100, "S", 23, -100, -23, -123, TADV1]);
+  assert.ok(String(d.description).includes(advNo), "popis odkazuje na faktúru k prijatej platbe");
+  assert.deepEqual(await breakdownOf(TFIN1), [["S", 23, 200, 46]]);
+  const f = await inv(TFIN1);
+  assert.deepEqual([n(f.subtotal_amount), n(f.vat_total_amount), n(f.total_amount)], [200, 46, 246]);
+});
+await check("zdanená záloha NEPOUŽÍVA PrepaidAmount; UBL: InvoicedQuantity -1, kladná cena, BT-25, súčty sedia; príjemca XML prijme", async () => {
+  const r = NEW.generate.generateUbl(await snapshotOf(TFIN1));
+  assert.ok(r.ok, r.ok ? "" : JSON.stringify(r.issues));
+  if (!r.ok) return;
+  assert.deepEqual(xmlAll(r.xml, "PrepaidAmount"), [], "bez BT-113");
+  assert.deepEqual(xmlAll(r.xml, "InvoicedQuantity"), ["1", "-1"]);
+  assert.deepEqual(xmlAll(r.xml, "LineExtensionAmount"), ["200.00", "300.00", "-100.00"]);
+  assert.deepEqual(xmlAll(r.xml, "PriceAmount"), ["300", "100"]);
+  assert.deepEqual(xmlAll(r.xml, "TaxableAmount"), ["200.00"]);
+  assert.deepEqual(xmlAll(r.xml, "PayableAmount"), ["246.00"]);
+  assert.ok(r.xml.includes(`<cac:BillingReference><cac:InvoiceDocumentReference><cbc:ID>${(await inv(TADV1)).invoice_number}</cbc:ID>`));
+  // EN 16931 aritmetika a pravidlá cez parser + mapovanie príjemcu (BR-CO-10/13/15/16/17, BR-27, BR-S-08).
+  const parsed = parseInboundUbl(new TextEncoder().encode(r.xml));
+  assert.ok(parsed.ok);
+  if (!parsed.ok) return;
+  const m = mapInboundDraft(parsed.document, parsed.reviewReasons, null);
+  assert.ok(m.ok, JSON.stringify(m));
+  if (!m.ok) return;
+  assert.deepEqual(m.draft.items.map((i) => [i.unit_price, Boolean(i.advance_deduction)]), [["300", false], ["-100.00", true]]);
+  assert.deepEqual(m.draft.advance?.references.map((x) => x.number), [(await inv(TADV1)).invoice_number]);
+  assert.equal(m.draft.totals.prepaid, "0.00");
+});
+await check("saldo: zdanená záloha sa nezapočíta dvakrát; úhrada zvyšku → uhradená (nie preplatená)", async () => {
+  const s = await settlement(U.owner, TFIN1);
+  assert.deepEqual([n(s.items_total), n(s.advances_taxed), n(s.original_total), n(s.advances_deducted), n(s.amount_due)], [369, 123, 246, 0, 246]);
+  await pay(TFIN1, 246);
+  assert.equal((await inv(TFIN1)).payment_status, "paid");
+  const sa = await settlement(U.owner, TADV1);
+  assert.deepEqual([n(sa.advance_consumed), n(sa.advance_remaining)], [123, 0]);
+});
+await check("viac zdanených záloh s rovnakou sadzbou → riadok za každú zálohu, každý s vlastným BT-25", async () => {
+  const a1 = await issuedAdvance([{ price: 50 }]);
+  const a2 = await issuedAdvance([{ price: 20 }]);
+  const fin = await issued("regular_invoice", { items: [{ price: 400 }] });
+  await setDed(fin, [{ advance_invoice_id: a1, vat_category_code: "S", vat_rate: 23, taxable_amount: 50, vat_amount: 11.5 },
+                     { advance_invoice_id: a2, vat_category_code: "S", vat_rate: 23, taxable_amount: 20, vat_amount: 4.6 }]);
+  await finalize(U.owner, fin);
+  const ded = (await itemsOf(fin)).filter((i) => i.d);
+  assert.deepEqual(ded.map((i) => [i.a, i.net, i.vat]).sort((x, y) => n(x[1]) - n(y[1])), [[a1, -50, -11.5], [a2, -20, -4.6]]);
+  assert.deepEqual(await breakdownOf(fin), [["S", 23, 330, 75.9]]);
+  const r = NEW.generate.generateUbl(await snapshotOf(fin));
+  assert.ok(r.ok);
+  if (r.ok) {
+    const refs = [...r.xml.matchAll(/<cac:BillingReference><cac:InvoiceDocumentReference><cbc:ID>([^<]+)<\/cbc:ID>/g)].map((m) => m[1]).sort();
+    assert.deepEqual(refs, [(await inv(a1)).invoice_number, (await inv(a2)).invoice_number].sort());
+    assert.deepEqual(xmlAll(r.xml, "PayableAmount"), ["405.90"]);
+  }
+});
+await check("rôzne sadzby: záloha 23 % aj 19 % → mínusové riadky po sadzbách; rozpis DPH sedí po každej sadzbe", async () => {
+  const a = await issuedAdvance([{ price: 100, rate: 23 }, { price: 50, rate: 19 }]);
+  const fin = await issued("regular_invoice", { items: [{ price: 300, rate: 23 }, { price: 200, rate: 19 }] });
+  await setDed(fin, [{ advance_invoice_id: a, vat_category_code: "S", vat_rate: 23, taxable_amount: 100, vat_amount: 23 },
+                     { advance_invoice_id: a, vat_category_code: "S", vat_rate: 19, taxable_amount: 50, vat_amount: 9.5 }]);
+  await finalize(U.owner, fin);
+  assert.deepEqual(await breakdownOf(fin), [["S", 23, 200, 46], ["S", 19, 150, 28.5]]);
+  const f = await inv(fin);
+  assert.deepEqual([n(f.subtotal_amount), n(f.vat_total_amount), n(f.total_amount)], [350, 74.5, 424.5]);
+  const r = NEW.generate.generateUbl(await snapshotOf(fin));
+  assert.ok(r.ok);
+  if (r.ok) {
+    const parsed = parseInboundUbl(new TextEncoder().encode(r.xml));
+    assert.ok(parsed.ok && mapInboundDraft(parsed.document, parsed.reviewReasons, null).ok, "rozpis po sadzbách prejde kontrolou príjemcu");
+  }
+});
+await check("čiastočná záloha: odpočet 40 zo 100 (DPH pomerne), zvyšok na ďalšej faktúre; ďalší odpočet nad zostatok → odmietnutý", async () => {
+  const a = await issuedAdvance([{ price: 100 }]);
+  const f1 = await issued("regular_invoice", { items: [{ price: 300 }] });
+  await setDed(f1, [{ advance_invoice_id: a, vat_category_code: "S", vat_rate: 23, taxable_amount: 40, vat_amount: 9.2 }]);
+  await finalize(U.owner, f1);
+  const f2 = await issued("regular_invoice", { items: [{ price: 300 }] });
+  assert.match(await errOf(setDed(f2, [{ advance_invoice_id: a, vat_category_code: "S", vat_rate: 23, taxable_amount: 61, vat_amount: 14.03 }])), /ESBLU_ADVANCE_DEDUCTION_EXCEEDS/);
+  await setDed(f2, [{ advance_invoice_id: a, vat_category_code: "S", vat_rate: 23, taxable_amount: 60, vat_amount: 13.8 }]);
+  await finalize(U.owner, f2);
+  assert.deepEqual([n((await settlement(U.owner, f1)).amount_due), n((await settlement(U.owner, f2)).amount_due)], [319.8, 295.2]);
+  assert.deepEqual([n((await settlement(U.owner, a)).advance_consumed), n((await settlement(U.owner, a)).advance_remaining)], [123, 0]);
+});
+await check("konečná faktúra s doplatkom 0: celá suma pokrytá zálohou → na úhradu 0, stav uhradená, žiadny preplatok", async () => {
+  const a = await issuedAdvance([{ price: 100 }]);
+  const fin = await issued("regular_invoice", { items: [{ price: 100 }] });
+  await setDed(fin, [{ advance_invoice_id: a, vat_category_code: "S", vat_rate: 23, taxable_amount: 100, vat_amount: 23 }]);
+  await finalize(U.owner, fin);
+  const f = await inv(fin);
+  assert.deepEqual([n(f.subtotal_amount), n(f.vat_total_amount), n(f.total_amount), f.payment_status], [0, 0, 0, "paid"]);
+  const s = await settlement(U.owner, fin);
+  assert.deepEqual([n(s.amount_due), n(s.balance), s.payment_status], [0, 0, "paid"]);
+  const r = NEW.generate.generateUbl(await snapshotOf(fin));
+  assert.ok(r.ok && xmlAll(r.xml, "PayableAmount")[0] === "0.00");
+});
+await check("zlá sadzba voči zálohe → odmietnutá (ESBLU_ADVANCE_DEDUCTION_RATE_MISMATCH); cudzia/iná záloha → INVALID", async () => {
+  const a = await issuedAdvance([{ price: 100, rate: 23 }]);
+  const fin = await issued("regular_invoice", { items: [{ price: 300, rate: 19 }] });
+  assert.match(await errOf(setDed(fin, [{ advance_invoice_id: a, vat_category_code: "S", vat_rate: 19, taxable_amount: 100, vat_amount: 19 }])), /ESBLU_ADVANCE_DEDUCTION_RATE_MISMATCH/);
+  const other = await issued("regular_invoice", { partner: P.other });
+  assert.match(await errOf(setDed(other, [{ advance_invoice_id: a, vat_category_code: "S", vat_rate: 23, taxable_amount: 1, vat_amount: 0.23 }])), /ESBLU_ADVANCE_DEDUCTION_INVALID/, "záloha iného odberateľa");
+  assert.match(await errOf(setDed(fin, [{ advance_invoice_id: a, vat_category_code: "S", vat_rate: 23, taxable_amount: 1, vat_amount: 0.23 }], U.ownerB)), /NOT_FOUND|FORBIDDEN/, "cudzia firma");
+});
+await check("nezdanená záloha → PrepaidAmount, rozpis DPH nemení; spolu so zdanenou; nad sumu faktúry → odmietnutá", async () => {
+  const fin = await issued("regular_invoice", { items: [{ price: 300 }] });
+  await rpc(U.owner, "select public.esblu_set_invoice_compliance_fields($1, $2::jsonb)", [fin, JSON.stringify({ untaxed_prepaid_amount: 50, untaxed_prepaid_reference: "PF20260001" })]);
+  const a = await issuedAdvance([{ price: 100 }]);
+  await setDed(fin, [{ advance_invoice_id: a, vat_category_code: "S", vat_rate: 23, taxable_amount: 100, vat_amount: 23 }]);
+  await finalize(U.owner, fin);
+  assert.deepEqual(await breakdownOf(fin), [["S", 23, 200, 46]], "nezdanená záloha nemení DPH");
+  const s = await settlement(U.owner, fin);
+  assert.deepEqual([n(s.original_total), n(s.prepaid_untaxed), n(s.advances_taxed), n(s.amount_due)], [246, 50, 123, 196]);
+  const r = NEW.generate.generateUbl(await snapshotOf(fin));
+  assert.ok(r.ok);
+  if (r.ok) {
+    assert.deepEqual(xmlAll(r.xml, "PrepaidAmount"), ["50.00"]);
+    assert.deepEqual(xmlAll(r.xml, "PayableAmount"), ["196.00"]);
+  }
+  const big = await issued("regular_invoice", { items: [{ price: 10 }] });
+  await rpc(U.owner, "select public.esblu_set_invoice_compliance_fields($1, $2::jsonb)", [big, JSON.stringify({ untaxed_prepaid_amount: 100 })]);
+  assert.match(await errOf(finalize(U.owner, big)), /ESBLU_UNTAXED_PREPAID_EXCEEDS_TOTAL/);
+  const adv = await issued("payment_received_invoice", { header: { tax_point_date: "2026-10-01", delivery_date: null } });
+  assert.match(await errOf(rpc(U.owner, "select public.esblu_set_invoice_compliance_fields($1, $2::jsonb)", [adv, JSON.stringify({ untaxed_prepaid_amount: 1 })])), /ESBLU_UNTAXED_PREPAID_KIND/);
+});
+await check("chýbajúca BillingReference (BT-25) alebo staršia faktúra s odpočtom mimo riadkov → e-faktúra sa nevygeneruje", async () => {
+  const s = await snapshotOf(TFIN1);
+  const noRef = { ...s, advanceInvoices: [] };
+  const r = NEW.generate.generateUbl(noRef);
+  assert.ok(!r.ok && r.issues.some((i) => i.code === "ADVANCE_REFERENCE_MISSING"));
+  const legacy = { ...s, items: s.items.filter((i) => !i.is_advance_deduction), legacyAdvanceDeduction: true };
+  const l = NEW.generate.generateUbl(legacy);
+  assert.ok(!l.ok && l.issues.some((i) => i.code === "ADVANCE_DEDUCTION_EINVOICE_UNSUPPORTED"));
+});
+await check("klient nemôže vložiť ani zmeniť riadok odpočtu ani nezdanenú zálohu priamo (iba DB/RPC)", async () => {
+  const fin = await issued("regular_invoice");
+  assert.match(await errOf(rpc(U.owner, `insert into public.invoice_items (invoice_id, position, description, quantity, unit, unit_price, vat_category_code, vat_rate, is_advance_deduction)
+    values ($1, 99, 'x', 1, 'ks', -10, 'S', 23, true)`, [fin])), /ESBLU_ADVANCE_LINE_PROTECTED/);
+  assert.notEqual(await errOf(rpc(U.owner, `insert into public.invoice_items (invoice_id, position, description, quantity, unit, unit_price, vat_category_code, vat_rate)
+    values ($1, 98, 'x', 1, 'ks', -10, 'S', 23)`, [fin])), "OK", "záporná cena bežnej položky");
+  assert.match(await errOf(rpc(U.owner, "update public.invoices set untaxed_prepaid_amount = 5 where id = $1", [fin])), /ESBLU_ADVANCE_REVIEW_FIELDS_PROTECTED/);
+  assert.match(await errOf(svc("delete from public.invoice_items where invoice_id = $1 and is_advance_deduction", [TFIN1])), /ESBLU_INVOICE_ITEMS_FINALIZED_IMMUTABLE/);
+});
+await check("PDF súčty: položky − mínusové riadky = spolu; na úhradu = spolu − nezdanená záloha (advanceSummary použitý v PDF)", async () => {
+  const { advanceSummary } = await import("../lib/invoicing/advance-summary.ts");
+  const fin = (await h.sql<{ id: string }>("select id from public.invoices where untaxed_prepaid_amount = 50 and document_status = 'finalized' limit 1")).rows[0].id;
+  const f = await inv(fin);
+  const its = (await h.sql<Row>("select description, is_advance_deduction, line_net_amount, line_vat_amount, line_gross_amount from public.invoice_items where invoice_id = $1", [fin])).rows;
+  const sum = advanceSummary({ totalAmount: f.total_amount as string, untaxedPrepaidAmount: f.untaxed_prepaid_amount as string, items: its as never });
+  assert.deepEqual([sum.itemsTotal, sum.taxedDeductions.map((d) => [d.taxable, d.vat, d.gross]), sum.total, sum.untaxedPrepaid, sum.payable],
+    [369, [[100, 23, 123]], 246, 50, 196]);
+  assert.equal(sum.itemsTotal - sum.taxedDeductions.reduce((s, d) => s + d.gross, 0), sum.total);
+  const pdf = readFileSync(new URL("../lib/invoicing/pdf-renderer.tsx", import.meta.url), "utf8");
+  assert.match(pdf, /advanceSummary\(\{ totalAmount: invoice\.total_amount, untaxedPrepaidAmount/);
+  assert.match(pdf, /invoices\.pdf\.advanceLineDetail/);
 });
 
 // =============================================================================
@@ -365,14 +572,6 @@ await check("odpočty nesmú prevýšiť konečnú faktúru ani DPH zálohy", as
 const SUPPLIER2 = { name: "Iný dodávateľ s.r.o.", ico: "31411802", vat: "SK2024444440", endpoint: "2024444440" };
 const advXml = (id: string, net: number, o: { date?: string; taxPoint?: string; supplier?: typeof SUPPLIER; note?: string; customerEndpoint?: string } = {}) =>
   ubl({ root: "Invoice", type: "386", id, date: o.date ?? "2026-09-01", taxPoint: o.taxPoint ?? "2026-08-30", lines: [{ qty: 1, price: net }], supplier: o.supplier, note: o.note, customerEndpoint: o.customerEndpoint });
-const finXml = (id: string, net: number, prepaid: number, refs: { id: string; date?: string }[], supplier?: typeof SUPPLIER) =>
-  ubl({ root: "Invoice", type: "380", id, date: "2026-09-25", lines: [{ qty: 1, price: net }], prepaid, refs, supplier });
-const links = (id: string) => h.sql<Row>("select advance_invoice_id, amount::float8 amount, taxable_amount::float8 t, vat_amount::float8 v, source from public.received_advance_links where invoice_id = $1 order by amount desc", [id]).then((r) => r.rows);
-const finalOf = async (xml: string) => {
-  const r = await receive(CO.A, "org-a", xml);
-  assert.equal(r.result?.status, "created", JSON.stringify(r.mapped));
-  return r.result!.invoiceId;
-};
 
 let RADV1 = "", RADV1_INBOUND = "", RADV1_SHA = "", RFIN1 = "", RFIN1_INBOUND = "", RFIN1_SHA = "";
 await check("386 prijatá: samostatný druh payment_received_invoice, dodávateľ, sumy, rozpis DPH, BT-7; XML nemenné", async () => {
@@ -412,24 +611,37 @@ await check("duplicitná 386 (rovnaké XML aj iné XML s rovnakým číslom) →
   const after = (await h.sql<{ n: number }>("select count(*)::int n from public.invoices where kind = 'payment_received_invoice' and direction = 'received' and company_id = $1", [CO.A])).rows[0].n;
   assert.equal(after, before);
 });
-await check("konečná faktúra s 1 zálohou → automatický návrh (jednoznačná zhoda), saldo = celkom − BT-113, finalizácia → linked", async () => {
-  const r = await receive(CO.A, "org-a", finXml("ZF-FIN-1", 300, 123, [{ id: "ZF-ADV-1", date: "2026-09-01" }]));
+// --- Prijatá konečná faktúra podľa FS (príklad 38): mínusový riadok zálohy + BT-25 (SYNTETICKÉ UBL) --------
+const finFs = (id: string, items: Line[], deductions: { price: number; rate?: number }[], refs: { id: string; date?: string }[],
+  o: { prepaid?: number; supplier?: typeof SUPPLIER; vatOverride?: Record<string, number>; customerEndpoint?: string } = {}) =>
+  ubl({ root: "Invoice", type: "380", id, date: "2026-09-25", lines: [...items, ...deductions.map((d) => ({ qty: -1, price: d.price, rate: d.rate }))],
+    refs, prepaid: o.prepaid, supplier: o.supplier, vatOverride: o.vatOverride, customerEndpoint: o.customerEndpoint });
+const rlinks = (id: string) => h.sql<Row>(`select advance_invoice_id, vat_category_code c, vat_rate::float8 r, amount::float8 amount, taxable_amount::float8 t,
+  vat_amount::float8 v, source from public.received_advance_links where invoice_id = $1 order by taxable_amount desc`, [id]).then((r) => r.rows);
+const recvAdv = async (no: string, net: number, o: Parameters<typeof advXml>[2] = {}, finalizeIt = true) => {
+  const id = (await receive(o.customerEndpoint ? CO.B : CO.A, o.customerEndpoint ? "org-b" : "org-a", advXml(no, net, o))).result!.invoiceId;
+  if (finalizeIt) await finalize(o.customerEndpoint ? U.ownerB : U.owner, id);
+  return id;
+};
+
+await check("prijatá konečná faktúra s mínusovým riadkom zálohy → riadok odpočtu, návrh väzby po sadzbe; saldo bez dvojitého odpočtu", async () => {
+  const r = await receive(CO.A, "org-a", finFs("ZF-FIN-1", [{ qty: 1, price: 300 }], [{ price: 100 }], [{ id: "ZF-ADV-1", date: "2026-09-01" }]));
   assert.equal(r.result?.status, "created", JSON.stringify(r.mapped));
   RFIN1 = r.result!.invoiceId; RFIN1_INBOUND = r.inboundId; RFIN1_SHA = r.sha!;
   const f = await inv(RFIN1);
-  assert.deepEqual([f.kind, n(f.total_amount), n(f.prepaid_amount), f.advance_review_status], ["regular_invoice", 369, 123, "proposed"]);
-  assert.deepEqual(await links(RFIN1), [{ advance_invoice_id: RADV1, amount: 123, t: 100, v: 23, source: "auto" }]);
-  const x = (await h.sql<Row>("select xml_totals from public.einvoice_inbound where id = $1", [RFIN1_INBOUND])).rows[0].xml_totals as Record<string, unknown>;
-  assert.deepEqual([n(x.prepaid), n(x.payable)], [123, 246]);
-  const s = await settlement(U.owner, RFIN1);
-  assert.deepEqual([n(s.original_total), n(s.advances_deducted), n(s.advances_linked), n(s.amount_due)], [369, 123, 123, 246]);
+  assert.deepEqual([n(f.subtotal_amount), n(f.vat_total_amount), n(f.total_amount), f.prepaid_amount, f.advance_review_status], [200, 46, 246, null, "proposed"]);
+  const ded = (await h.sql<Row>("select quantity::float8 q, unit_price::float8 p, line_net_amount::float8 net, line_vat_amount::float8 vat from public.invoice_items where invoice_id = $1 and is_advance_deduction", [RFIN1])).rows;
+  assert.deepEqual(ded.map((d) => [d.q, d.p, d.net, d.vat]), [[1, -100, -100, -23]]);
+  assert.deepEqual(await rlinks(RFIN1), [{ advance_invoice_id: RADV1, c: "S", r: 23, amount: 123, t: 100, v: 23, source: "auto" }]);
   await finalize(U.owner, RFIN1);
   const g = await inv(RFIN1);
-  assert.deepEqual([g.document_status, g.advance_review_status, g.payment_status], ["finalized", "linked", "unpaid"]);
+  assert.deepEqual([g.document_status, g.advance_review_status], ["finalized", "linked"]);
+  const s = await settlement(U.owner, RFIN1);
+  assert.deepEqual([n(s.items_total), n(s.advances_taxed), n(s.original_total), n(s.advances_deducted), n(s.amount_due)], [369, 123, 246, 0, 246]);
   const sa = await settlement(U.owner, RADV1);
   assert.deepEqual([n(sa.advance_consumed), n(sa.advance_remaining)], [123, 0]);
 });
-await check("zostatok po odpočte: úhrada 246 → uhradená; ďalších 10 → preplatená", async () => {
+await check("zostatok po odpočte: úhrada 246 → uhradená; ďalších 10 → preplatená; vrátenie → uhradená", async () => {
   await pay(RFIN1, 246);
   assert.equal((await inv(RFIN1)).payment_status, "paid");
   await pay(RFIN1, 10);
@@ -437,139 +649,149 @@ await check("zostatok po odpočte: úhrada 246 → uhradená; ďalších 10 → 
   await refund(RFIN1, 10);
   assert.equal(n((await settlement(U.owner, RFIN1)).balance), 0);
 });
-await check("konečná faktúra s viacerými zálohami → návrh pre každú (celé zálohy, súčet = BT-113)", async () => {
-  const a2 = (await receive(CO.A, "org-a", advXml("ZF-ADV-2", 100))).result!.invoiceId;
-  const a3 = (await receive(CO.A, "org-a", advXml("ZF-ADV-3", 50))).result!.invoiceId;
-  await finalize(U.owner, a2); await finalize(U.owner, a3);
-  const fin = await finalOf(finXml("ZF-FIN-2", 400, 184.5, [{ id: "ZF-ADV-2" }, { id: "ZF ADV 3" }]));
+await check("prijatá konečná faktúra s viacerými zálohami → každý mínusový riadok priradený jednoznačne (presný zostatok)", async () => {
+  const a2 = await recvAdv("ZF-ADV-2", 100);
+  const a3 = await recvAdv("ZF-ADV-3", 50);
+  const fin = (await receive(CO.A, "org-a", finFs("ZF-FIN-2", [{ qty: 1, price: 400 }], [{ price: 100 }, { price: 50 }], [{ id: "ZF-ADV-2" }, { id: "ZF ADV 3" }]))).result!.invoiceId;
   assert.equal((await inv(fin)).advance_review_status, "proposed");
-  assert.deepEqual((await links(fin)).map((l) => [l.advance_invoice_id, l.amount, l.v]), [[a2, 123, 23], [a3, 61.5, 11.5]]);
+  assert.deepEqual((await rlinks(fin)).map((l) => [l.advance_invoice_id, l.t, l.v]), [[a2, 100, 23], [a3, 50, 11.5]]);
   await finalize(U.owner, fin);
   assert.equal(n((await settlement(U.owner, fin)).amount_due), 492 - 184.5);
 });
 let RMISS = "";
-await check("záloha nenájdená → review ADVANCE_NOT_FOUND, finalizácia zablokovaná; po príchode zálohy sa spáruje", async () => {
-  RMISS = await finalOf(finXml("ZF-FIN-3", 200, 61.5, [{ id: "ZF-ADV-LATE" }]));
-  const f = await inv(RMISS);
-  assert.deepEqual([f.advance_review_status, f.advance_review_reasons], ["review", ["ADVANCE_NOT_FOUND"]]);
+await check("záloha nenájdená → review ADVANCE_NOT_FOUND, finalizácia zablokovaná; po príchode zálohy sa spáruje; bez BT-25 → review", async () => {
+  RMISS = (await receive(CO.A, "org-a", finFs("ZF-FIN-3", [{ qty: 1, price: 200 }], [{ price: 50 }], [{ id: "ZF-ADV-LATE" }]))).result!.invoiceId;
+  assert.deepEqual([(await inv(RMISS)).advance_review_status, (await inv(RMISS)).advance_review_reasons], ["review", ["ADVANCE_NOT_FOUND"]]);
   assert.match(await errOf(finalize(U.owner, RMISS)), /ESBLU_RECEIVED_ADVANCE_REVIEW_REQUIRED/);
-  const late = (await receive(CO.A, "org-a", advXml("ZF-ADV-LATE", 50))).result!.invoiceId;
+  const late = await recvAdv("ZF-ADV-LATE", 50, {}, false);
   assert.equal((await inv(RMISS)).advance_review_status, "proposed");
-  assert.deepEqual((await links(RMISS)).map((l) => l.advance_invoice_id), [late]);
+  assert.deepEqual((await rlinks(RMISS)).map((l) => l.advance_invoice_id), [late]);
   assert.match(await errOf(finalize(U.owner, RMISS)), /ESBLU_RECEIVED_ADVANCE_NOT_FINALIZED/, "záloha ešte koncept");
   await finalize(U.owner, late);
   await finalize(U.owner, RMISS);
   assert.equal((await inv(RMISS)).advance_review_status, "linked");
-  const noRef = await finalOf(finXml("ZF-FIN-4", 200, 10, []));
+  const noRef = (await receive(CO.A, "org-a", finFs("ZF-FIN-4", [{ qty: 1, price: 200 }], [{ price: 10 }], []))).result!.invoiceId;
   assert.deepEqual((await inv(noRef)).advance_review_reasons, ["ADVANCE_REFERENCE_MISSING"]);
 });
 await check("nejednoznačná záloha (2 zálohy s rovnakým číslom, rôzne dátumy; syntetický stav DB) → ADVANCE_AMBIGUOUS; s BT-26 jednoznačná", async () => {
-  const a = (await receive(CO.A, "org-a", advXml("ZF-ADV-AMB", 100, { date: "2026-01-10" }))).result!.invoiceId;
-  // Druhá záloha s tým istým číslom (napr. ručne evidovaná v inom roku) — synteticky kópiou riadku.
+  const a = await recvAdv("ZF-ADV-AMB", 100, { date: "2026-01-10" });
   await svc(`insert into public.invoices (company_id, direction, kind, document_status, issue_date, tax_point_date, currency, supplier_business_partner_id, supplier_invoice_number, received_at, source, subtotal_amount, vat_total_amount, total_amount)
              select company_id, direction, kind, 'draft', '2026-05-10', tax_point_date, currency, supplier_business_partner_id, supplier_invoice_number, received_at, 'manual', subtotal_amount, vat_total_amount, total_amount from public.invoices where id = $1`, [a]);
-  const amb = await finalOf(finXml("ZF-FIN-5", 200, 123, [{ id: "ZF-ADV-AMB" }]));
+  const amb = (await receive(CO.A, "org-a", finFs("ZF-FIN-5", [{ qty: 1, price: 200 }], [{ price: 100 }], [{ id: "ZF-ADV-AMB" }]))).result!.invoiceId;
   assert.deepEqual([(await inv(amb)).advance_review_status, (await inv(amb)).advance_review_reasons], ["review", ["ADVANCE_AMBIGUOUS"]]);
-  assert.equal((await links(amb)).length, 0);
-  const dated = await finalOf(finXml("ZF-FIN-6", 200, 123, [{ id: "ZF-ADV-AMB", date: "2026-01-10" }]));
+  const dated = (await receive(CO.A, "org-a", finFs("ZF-FIN-6", [{ qty: 1, price: 200 }], [{ price: 100 }], [{ id: "ZF-ADV-AMB", date: "2026-01-10" }]))).result!.invoiceId;
   assert.equal((await inv(dated)).advance_review_status, "proposed");
-  assert.deepEqual((await links(dated)).map((l) => l.advance_invoice_id), [a]);
+  assert.deepEqual((await rlinks(dated)).map((l) => l.advance_invoice_id), [a]);
 });
 await check("zlý dodávateľ: záloha od iného dodávateľa → ADVANCE_SUPPLIER_MISMATCH; ručné priradenie odmietnuté", async () => {
-  const w = (await receive(CO.A, "org-a", advXml("ZF-ADV-W", 100, { supplier: SUPPLIER2 }))).result!.invoiceId;
-  const fin = await finalOf(finXml("ZF-FIN-7", 200, 123, [{ id: "ZF-ADV-W" }]));
+  const w = await recvAdv("ZF-ADV-W", 100, { supplier: SUPPLIER2 });
+  const fin = (await receive(CO.A, "org-a", finFs("ZF-FIN-7", [{ qty: 1, price: 200 }], [{ price: 100 }], [{ id: "ZF-ADV-W" }]))).result!.invoiceId;
   assert.deepEqual((await inv(fin)).advance_review_reasons, ["ADVANCE_SUPPLIER_MISMATCH"]);
-  assert.match(await errOf(rpc(U.owner, "select public.esblu_received_advance_link($1, $2, 123)", [fin, w])), /ESBLU_RECEIVED_ADVANCE_SUPPLIER_MISMATCH/);
-  assert.ok(!(await rpc<Row>(U.owner, "select advance_invoice_id from public.esblu_received_advance_candidates($1)", [fin])).some((c) => c.advance_invoice_id === w), "kandidáti iba od toho istého dodávateľa");
+  assert.match(await errOf(rpc(U.owner, "select public.esblu_received_advance_link($1, $2, 100)", [fin, w])), /ESBLU_RECEIVED_ADVANCE_SUPPLIER_MISMATCH/);
+  assert.ok(!(await rpc<Row>(U.owner, "select advance_invoice_id from public.esblu_received_advance_candidates($1)", [fin])).some((c) => c.advance_invoice_id === w));
 });
 await check("cross-tenant: záloha firmy B sa na faktúru A nenaviaže (ani automaticky, ani ručne); B nevidí väzby A", async () => {
-  const bAdv = (await receive(CO.B, "org-b", advXml("ZF-ADV-X", 100, { customerEndpoint: "2022222220" }))).result!.invoiceId;
-  const fin = await finalOf(finXml("ZF-FIN-8", 200, 123, [{ id: "ZF-ADV-X" }]));
+  const bAdv = await recvAdv("ZF-ADV-X", 100, { customerEndpoint: "2022222220" });
+  const fin = (await receive(CO.A, "org-a", finFs("ZF-FIN-8", [{ qty: 1, price: 200 }], [{ price: 100 }], [{ id: "ZF-ADV-X" }]))).result!.invoiceId;
   assert.deepEqual((await inv(fin)).advance_review_reasons, ["ADVANCE_NOT_FOUND"], "cudzí doklad = neexistuje (žiadny únik)");
-  assert.match(await errOf(rpc(U.owner, "select public.esblu_received_advance_link($1, $2, 123)", [fin, bAdv])), /ESBLU_RECEIVED_ADVANCE_NOT_FOUND/);
-  assert.match(await errOf(rpc(U.ownerB, "select public.esblu_received_advance_link($1, $2, 123)", [fin, bAdv])), /ESBLU_INVOICE_NOT_FOUND/);
+  assert.match(await errOf(rpc(U.owner, "select public.esblu_received_advance_link($1, $2, 100)", [fin, bAdv])), /ESBLU_RECEIVED_ADVANCE_NOT_FOUND/);
+  assert.match(await errOf(rpc(U.ownerB, "select public.esblu_received_advance_link($1, $2, 100)", [fin, bAdv])), /ESBLU_INVOICE_NOT_FOUND/);
   assert.match(await errOf(rpc(U.ownerB, "select public.esblu_received_advance_confirm($1)", [RFIN1])), /ESBLU_INVOICE_NOT_FOUND/);
-  assert.match(await errOf(rpc(U.ownerB, "select * from public.esblu_received_advance_candidates($1)", [fin])), /ESBLU_INVOICE_NOT_FOUND/);
   assert.equal((await rpc(U.ownerB, "select * from public.received_advance_links")).length, 0);
-  assert.notEqual(await errOf(svc("insert into public.received_advance_links (company_id, invoice_id, advance_invoice_id, amount, taxable_amount, vat_amount, source) values ($1, $2, $3, 1, 0, 0, 'manual')", [CO.A, fin, bAdv])), "OK", "ani service_role cez guard");
+  assert.notEqual(await errOf(svc("insert into public.received_advance_links (company_id, invoice_id, advance_invoice_id, vat_category_code, vat_rate, amount, taxable_amount, vat_amount, source) values ($1, $2, $3, 'S', 23, 0, 1, null, 'manual')", [CO.A, fin, bAdv])), "OK", "ani service_role cez guard");
 });
 await check("dvojitý odpočet: spotrebovaná záloha → ADVANCE_ALREADY_DEDUCTED; ručne → ESBLU_RECEIVED_ADVANCE_EXCEEDS", async () => {
-  const fin = await finalOf(finXml("ZF-FIN-9", 200, 123, [{ id: "ZF-ADV-1" }]));
+  const fin = (await receive(CO.A, "org-a", finFs("ZF-FIN-9", [{ qty: 1, price: 200 }], [{ price: 100 }], [{ id: "ZF-ADV-1" }]))).result!.invoiceId;
   assert.deepEqual((await inv(fin)).advance_review_reasons, ["ADVANCE_ALREADY_DEDUCTED"]);
   assert.match(await errOf(rpc(U.owner, "select public.esblu_received_advance_link($1, $2, 1)", [fin, RADV1])), /ESBLU_RECEIVED_ADVANCE_EXCEEDS/);
-  // Návrh na koncepte drží zálohu → iná konečná faktúra ju nedostane.
-  const a = (await receive(CO.A, "org-a", advXml("ZF-ADV-HOLD", 100))).result!.invoiceId;
-  await finalize(U.owner, a);
-  const f1 = await finalOf(finXml("ZF-FIN-10", 200, 123, [{ id: "ZF-ADV-HOLD" }]));
-  const f2 = await finalOf(finXml("ZF-FIN-11", 200, 123, [{ id: "ZF-ADV-HOLD" }]));
+  const a = await recvAdv("ZF-ADV-HOLD", 100);
+  const f1 = (await receive(CO.A, "org-a", finFs("ZF-FIN-10", [{ qty: 1, price: 200 }], [{ price: 100 }], [{ id: "ZF-ADV-HOLD" }]))).result!.invoiceId;
+  const f2 = (await receive(CO.A, "org-a", finFs("ZF-FIN-11", [{ qty: 1, price: 200 }], [{ price: 100 }], [{ id: "ZF-ADV-HOLD" }]))).result!.invoiceId;
   assert.equal((await inv(f1)).advance_review_status, "proposed");
-  assert.deepEqual((await inv(f2)).advance_review_reasons, ["ADVANCE_ALREADY_DEDUCTED"]);
+  assert.deepEqual((await inv(f2)).advance_review_reasons, ["ADVANCE_ALREADY_DEDUCTED"], "návrh na koncepte drží zálohu");
+  assert.ok(a);
   assert.match(await errOf(svc("update public.received_advance_links set amount = 1 where invoice_id = $1", [f1])), /ESBLU_RECEIVED_ADVANCE_LINK_LOCKED/);
 });
-await check("ručné párovanie: kandidáti, čiastočné priradenie → review, odobratie, plné → linked; zamietnutie návrhu s dôvodom", async () => {
-  const a = (await receive(CO.A, "org-a", advXml("ZF-ADV-M", 200))).result!.invoiceId;
-  await finalize(U.owner, a);
-  const fin = await finalOf(finXml("ZF-FIN-12", 500, 200, [{ id: "ZF-ADV-UNKNOWN" }]));
+await check("sadzba mínusového riadku ≠ sadzba zálohy → ADVANCE_RATE_MISMATCH; ručne → ESBLU_RECEIVED_ADVANCE_RATE_MISMATCH", async () => {
+  const a = await recvAdv("ZF-ADV-R23", 100);
+  const fin = (await receive(CO.A, "org-a", finFs("ZF-FIN-12", [{ qty: 1, price: 200, rate: 19 }], [{ price: 100, rate: 19 }], [{ id: "ZF-ADV-R23" }]))).result!.invoiceId;
+  assert.deepEqual((await inv(fin)).advance_review_reasons, ["ADVANCE_RATE_MISMATCH"]);
+  assert.match(await errOf(rpc(U.owner, "select public.esblu_received_advance_link($1, $2)", [fin, a])), /ESBLU_RECEIVED_ADVANCE_RATE_MISMATCH/);
+});
+await check("DPH mínusového riadku nesedí s DPH zálohy → review ADVANCE_VAT_MISMATCH (žiadna automatická interpretácia)", async () => {
+  await recvAdv("ZF-ADV-V", 10.01);
+  const fin = (await receive(CO.A, "org-a", finFs("ZF-FIN-13", [{ qty: 1, price: 10.02 }], [{ price: 10.01 }], [{ id: "ZF-ADV-V" }]))).result!.invoiceId;
+  assert.deepEqual((await inv(fin)).advance_review_reasons, ["ADVANCE_VAT_MISMATCH"]);
+  assert.equal((await rlinks(fin)).length, 0);
+});
+await check("rekapitulácia podľa FS (DPH položiek − DPH zálohy, odchýlka 0,01 od základ × sadzba) → prijatá, spárovaná, finalizovateľná", async () => {
+  await recvAdv("ZF-ADV-T", 0.03);
+  const xml = finFs("ZF-FIN-14", [{ qty: 1, price: 10.02 }], [{ price: 0.03 }], [{ id: "ZF-ADV-T" }], { vatOverride: { "S|23": 2.29 } });
+  const r = await receive(CO.A, "org-a", xml);
+  assert.equal(r.result?.status, "created", JSON.stringify(r.mapped));
+  const fin = r.result!.invoiceId;
+  assert.deepEqual([n((await inv(fin)).vat_total_amount), (await inv(fin)).advance_review_status], [2.29, "proposed"]);
+  assert.deepEqual((await rlinks(fin)).map((l) => [l.t, l.v]), [[0.03, 0.01]]);
+  await finalize(U.owner, fin);
+  assert.equal(n((await inv(fin)).vat_total_amount), 2.29, "finalizácia drží DPH z XML");
+});
+await check("ručné párovanie: kandidáti, čiastočné priradenie → review, odobratie, plné → linked; zamietnutie návrhu s dôvodom; potvrdenie účtovníkom", async () => {
+  const a = await recvAdv("ZF-ADV-M", 200);
+  const fin = (await receive(CO.A, "org-a", finFs("ZF-FIN-15", [{ qty: 1, price: 500 }], [{ price: 200 }], [{ id: "ZF-ADV-UNKNOWN" }]))).result!.invoiceId;
   const cands = await rpc<Row>(U.owner, "select advance_invoice_id, remaining_amount::float8 r from public.esblu_received_advance_candidates($1)", [fin]);
   assert.ok(cands.some((c) => c.advance_invoice_id === a && c.r === 246));
   assert.ok(!cands.some((c) => c.advance_invoice_id === RADV1), "spotrebovaná záloha sa neponúka");
-  assert.equal((await rpc<{ s: string }>(U.owner, "select public.esblu_received_advance_link($1, $2, 100) s", [fin, a]))[0].s, "review");
+  assert.equal((await rpc<{ s: string }>(U.owner, "select public.esblu_received_advance_link($1, $2, 80) s", [fin, a]))[0].s, "review");
   assert.deepEqual((await inv(fin)).advance_review_reasons, ["ADVANCE_PARTIALLY_ASSIGNED"]);
   assert.match(await errOf(finalize(U.owner, fin)), /ESBLU_RECEIVED_ADVANCE_REVIEW_REQUIRED/);
-  assert.match(await errOf(rpc(U.owner, "select public.esblu_received_advance_link($1, $2, 300)", [fin, a])), /ESBLU_RECEIVED_ADVANCE_ALREADY_LINKED/);
+  assert.match(await errOf(rpc(U.owner, "select public.esblu_received_advance_link($1, $2, 120)", [fin, a])), /ESBLU_RECEIVED_ADVANCE_ALREADY_LINKED/);
   await rpc(U.owner, "select public.esblu_received_advance_unlink($1, $2)", [fin, a]);
   assert.match(await errOf(rpc(U.owner, "select public.esblu_received_advance_link($1, $2, 250)", [fin, a])), /ESBLU_RECEIVED_ADVANCE_EXCEEDS/);
-  assert.equal((await rpc<{ s: string }>(U.owner, "select public.esblu_received_advance_link($1, $2, 200) s", [fin, a]))[0].s, "linked");
-  const l = await links(fin);
-  assert.deepEqual([l[0].amount, l[0].v, l[0].t, l[0].source], [200, 37.4, 162.6, "manual"], "DPH pomerne (informatívne)");
-  // Zamietnutie návrhu (auto) a potvrdenie.
-  const b = (await receive(CO.A, "org-a", advXml("ZF-ADV-R", 10))).result!.invoiceId;
-  await finalize(U.owner, b);
-  const fr = await finalOf(finXml("ZF-FIN-13", 100, 12.3, [{ id: "ZF-ADV-R" }]));
+  assert.equal((await rpc<{ s: string }>(U.owner, "select public.esblu_received_advance_link($1, $2) s", [fin, a]))[0].s, "linked", "predvolene = zvyšok");
+  const l = await rlinks(fin);
+  assert.deepEqual([l[0].t, l[0].v, l[0].c, l[0].r, l[0].source], [200, 46, "S", 23, "manual"]);
+  const b = await recvAdv("ZF-ADV-RJ", 10);
+  const fr = (await receive(CO.A, "org-a", finFs("ZF-FIN-16", [{ qty: 1, price: 100 }], [{ price: 10 }], [{ id: "ZF-ADV-RJ" }]))).result!.invoiceId;
   assert.equal((await inv(fr)).advance_review_status, "proposed");
   assert.match(await errOf(rpc(U.owner, "select public.esblu_received_advance_reject($1, '')", [fr])), /ESBLU_ADVANCE_REVIEW_NOTE_REQUIRED/);
   await rpc(U.owner, "select public.esblu_received_advance_reject($1, 'Záloha patrí k inej zákazke')", [fr]);
   const rj = await inv(fr);
   assert.deepEqual([rj.advance_review_status, rj.advance_review_reasons, rj.advance_review_note], ["review", ["ADVANCE_LINK_REJECTED"], "Záloha patrí k inej zákazke"]);
-  assert.equal((await links(fr)).length, 0);
+  assert.equal((await rlinks(fr)).length, 0);
   assert.match(await errOf(rpc(U.owner, "select public.esblu_received_advance_confirm($1)", [fr])), /ESBLU_RECEIVED_ADVANCE_NOT_PROPOSED/);
   await rpc(U.owner, "select public.esblu_received_advance_link($1, $2)", [fr, b]);
-  assert.equal((await inv(fr)).advance_review_status, "linked", "predvolená suma = zvyšok BT-113");
-  const c = (await receive(CO.A, "org-a", advXml("ZF-ADV-C", 10))).result!.invoiceId;
-  await finalize(U.owner, c);
-  const fc = await finalOf(finXml("ZF-FIN-14", 100, 12.3, [{ id: "ZF-ADV-C" }]));
+  assert.equal((await inv(fr)).advance_review_status, "linked");
+  await recvAdv("ZF-ADV-C", 10);
+  const fc = (await receive(CO.A, "org-a", finFs("ZF-FIN-17", [{ qty: 1, price: 100 }], [{ price: 10 }], [{ id: "ZF-ADV-C" }]))).result!.invoiceId;
   assert.equal((await rpc<{ s: string }>(U.accountant, "select public.esblu_received_advance_confirm($1) s", [fc]))[0].s, "linked", "účtovník potvrdí návrh");
-  const ev = (await h.sql<Row>("select payload from public.invoice_events where invoice_id = $1 and event_type = 'advance_reviewed' order by created_at", [fc])).rows.map((e) => (e.payload as Record<string, string>).action);
-  assert.deepEqual(ev, ["auto_proposed", "confirmed"]);
 });
-await check("role: employee bez financií nič nevidí ani nemení; klient nemení polia review ani väzby priamo", async () => {
-  assert.match(await errOf(rpc(U.employee, "select public.esblu_received_advance_confirm($1)", [RMISS])), /FORBIDDEN/);
-  assert.match(await errOf(rpc(U.employee, "select public.esblu_received_advance_link($1, $2, 1)", [RMISS, RADV1])), /FORBIDDEN/);
-  assert.match(await errOf(rpc(U.employee, "select public.esblu_received_advance_unlink($1, $2)", [RMISS, RADV1])), /FORBIDDEN/);
-  assert.match(await errOf(rpc(U.employee, "select public.esblu_received_advance_reject($1, 'xxx')", [RMISS])), /FORBIDDEN/);
-  assert.match(await errOf(rpc(U.employee, "select * from public.esblu_received_advance_candidates($1)", [RMISS])), /FORBIDDEN/);
+await check("BT-113 = nezdanená záloha: bez mínusových riadkov sa nič nepáruje, finalizácia bez review, na úhradu = celkom − BT-113", async () => {
+  const fin = (await receive(CO.A, "org-a", finFs("ZF-FIN-18", [{ qty: 1, price: 200 }], [], [], { prepaid: 50 }))).result!.invoiceId;
+  const f = await inv(fin);
+  assert.deepEqual([n(f.total_amount), n(f.prepaid_amount), f.advance_review_status], [246, 50, null]);
+  await finalize(U.owner, fin);
+  const s = await settlement(U.owner, fin);
+  assert.deepEqual([n(s.prepaid_untaxed), n(s.advances_taxed), n(s.amount_due)], [50, 0, 196]);
+});
+await check("role: employee bez financií nič nevidí ani nemení; klient nemení polia review, riadky odpočtu ani väzby priamo", async () => {
+  assert.match(await errOf(rpc(U.employee, "select public.esblu_received_advance_confirm($1)", [RFIN1])), /FORBIDDEN/);
+  assert.match(await errOf(rpc(U.employee, "select public.esblu_received_advance_link($1, $2, 1)", [RFIN1, RADV1])), /FORBIDDEN/);
+  assert.match(await errOf(rpc(U.employee, "select * from public.esblu_received_advance_candidates($1)", [RFIN1])), /FORBIDDEN/);
   assert.equal((await rpc(U.employee, "select * from public.received_advance_links")).length, 0);
   assert.ok((await rpc(U.accountant, "select * from public.received_advance_links")).length > 0, "účtovník vidí väzby");
-  assert.notEqual(await errOf(rpc(U.owner, "insert into public.received_advance_links (company_id, invoice_id, advance_invoice_id, amount, taxable_amount, vat_amount, source) values ($1, $2, $3, 1, 0, 0, 'manual')", [CO.A, RMISS, RADV1])), "OK");
-  assert.notEqual(await errOf(rpc(U.owner, "delete from public.received_advance_links where invoice_id = $1 returning 1", [RFIN1]).then((r) => { if (r.length) throw new Error("deleted"); return r; })), "deleted");
-  const fin = await finalOf(finXml("ZF-FIN-15", 100, 5, [{ id: "ZF-NOTHING" }]));
-  assert.match(await errOf(rpc(U.owner, "update public.invoices set advance_review_status = 'linked' where id = $1", [fin])), /ESBLU_ADVANCE_REVIEW_FIELDS_PROTECTED/);
-  assert.match(await errOf(rpc(U.owner, "update public.invoices set prepaid_amount = 1 where id = $1", [fin])), /ESBLU_ADVANCE_REVIEW_FIELDS_PROTECTED/);
-  const draftAdv = (await receive(CO.A, "org-a", advXml("ZF-ADV-KIND", 10))).result!.invoiceId;
-  for (const id of [RADV1, draftAdv]) {
-    await errOf(rpc(U.owner, "update public.invoices set kind = 'regular_invoice' where id = $1", [id]));
-    assert.equal((await inv(id)).kind, "payment_received_invoice", "druh prijatej 386 klient nezmení");
-  }
-  assert.match(await errOf(rpc(U.owner, "update public.invoices set kind = 'regular_invoice' where id = $1", [draftAdv])), /PROTECTED/);
+  const draftFin = (await receive(CO.A, "org-a", finFs("ZF-FIN-19", [{ qty: 1, price: 100 }], [{ price: 5 }], [{ id: "ZF-NOTHING" }]))).result!.invoiceId;
+  assert.match(await errOf(rpc(U.owner, "update public.invoices set advance_review_status = 'linked' where id = $1", [draftFin])), /ESBLU_ADVANCE_REVIEW_FIELDS_PROTECTED/);
+  assert.match(await errOf(rpc(U.owner, "update public.invoice_items set unit_price = -1 where invoice_id = $1 and is_advance_deduction", [draftFin])), /ESBLU_ADVANCE_LINE_PROTECTED/);
+  assert.notEqual(await errOf(rpc(U.owner, "insert into public.received_advance_links (company_id, invoice_id, advance_invoice_id, vat_category_code, vat_rate, amount, taxable_amount, source) values ($1, $2, $3, 'S', 23, 0, 1, 'manual')", [CO.A, draftFin, RADV1])), "OK");
 });
-await check("nemenné XML a väzby: hash zálohy aj konečnej faktúry sedí; väzby finalizovanej faktúry sa nedajú zmazať; BT-113 nemenné", async () => {
+await check("nemenné XML a väzby: hash zálohy aj konečnej faktúry sedí; väzby a riadky odpočtu finalizovanej faktúry sa nedajú zmeniť", async () => {
   for (const [id, sha] of [[RADV1_INBOUND, RADV1_SHA], [RFIN1_INBOUND, RFIN1_SHA]]) {
-    const row = (await h.sql<Row>("select xml_sha256, xml_storage_path from public.einvoice_inbound where id = $1", [id])).rows[0];
+    const row = (await h.sql<Row>("select xml_sha256 from public.einvoice_inbound where id = $1", [id])).rows[0];
     assert.equal(row.xml_sha256, sha);
     assert.notEqual(await errOf(svc("update public.einvoice_inbound set xml_storage_path = 'x' where id = $1", [id])), "OK");
   }
   assert.match(await errOf(svc("delete from public.received_advance_links where invoice_id = $1", [RFIN1])), /ESBLU_RECEIVED_ADVANCE_LINK_LOCKED/);
-  assert.notEqual(await errOf(svc("update public.invoices set prepaid_amount = 1 where id = $1", [RFIN1])), "OK");
+  assert.match(await errOf(svc("delete from public.invoice_items where invoice_id = $1 and is_advance_deduction", [RFIN1])), /ESBLU_INVOICE_ITEMS_FINALIZED_IMMUTABLE/);
   assert.match(await errOf(rpc(U.owner, "select public.esblu_received_advance_unlink($1, $2)", [RFIN1, RADV1])), /ESBLU_RECEIVED_ADVANCE_LINK_LOCKED/);
 });
 await check("DB druhá vrstva: BT-113 na 386 alebo oprave → odmietnuté; BT-113 > celkom → odmietnuté", async () => {
@@ -587,19 +809,22 @@ await check("DB druhá vrstva: BT-113 na 386 alebo oprave → odmietnuté; BT-11
   const over = { ...draft, document_kind: "regular_invoice", totals: { ...(draft.totals as Record<string, unknown>), prepaid: "20.00", payable: "-7.70" } };
   assert.match(await errOf(h.inbound.createDraft(reg.inboundId, over as never)), /ESBLU_EINVOICE_TOTALS_INCONSISTENT/);
 });
-await check("export: prijatá 386 ako samostatný druh, väzby záloha → konečná faktúra so sumou a DPH, originálne XML v balíku", async () => {
+await check("export: typ odpočtu (zdanený riadok / nezdanená BT-113 / staršie), odkaz na 386, základ a DPH; 386 ako samostatný druh; originálne XML", async () => {
   const src = readFileSync(new URL("../app/api/accounting-handoff/package/route.ts", import.meta.url), "utf8");
-  assert.match(src, /received-advance-links\.csv/);
-  assert.match(src, /from\("received_advance_links"\)/);
-  assert.match(src, /prepaid_amount/);
-  const rows = await rpc<Row>(U.owner, `select f.supplier_invoice_number fin, a.supplier_invoice_number adv, a.kind, l.amount::float8 amount, l.vat_amount::float8 vat
-    from public.received_advance_links l join public.invoices f on f.id = l.invoice_id join public.invoices a on a.id = l.advance_invoice_id
-    where f.document_status = 'finalized' and l.company_id = $1 order by f.supplier_invoice_number, a.supplier_invoice_number`, [CO.A]);
-  assert.ok(rows.some((r) => r.fin === "ZF-FIN-1" && r.adv === "ZF-ADV-1" && r.amount === 123 && r.vat === 23 && r.kind === "payment_received_invoice"));
-  assert.ok(rows.some((r) => r.fin === "ZF-FIN-2" && r.adv === "ZF-ADV-3"));
+  for (const re of [/"deduction_type"/, /"taxed_line"/, /"untaxed_prepaid"/, /"legacy_outside_lines"/, /received-advance-links\.csv/, /advance_invoice_number/, /"untaxed_prepaid_amount"\]/, /from\("received_advance_links"\)/]) {
+    assert.match(src, re);
+  }
+  const rec = await rpc<Row>(U.owner, `select f.supplier_invoice_number fin, a.supplier_invoice_number adv, a.kind, l.vat_category_code c, l.vat_rate::float8 r,
+    l.taxable_amount::float8 t, l.vat_amount::float8 v from public.received_advance_links l join public.invoices f on f.id = l.invoice_id
+    join public.invoices a on a.id = l.advance_invoice_id where f.id = $1`, [RFIN1]);
+  assert.deepEqual(rec.map((x) => [x.fin, x.adv, x.kind, x.c, x.r, x.t, x.v]), [["ZF-FIN-1", "ZF-ADV-1", "payment_received_invoice", "S", 23, 100, 23]]);
+  const iss = await rpc<Row>(U.owner, `select d.taxable_amount::float8 t, d.vat_amount::float8 v, a.invoice_number adv,
+    exists (select 1 from public.invoice_items it where it.invoice_id = d.invoice_id and it.is_advance_deduction) as taxed_line
+    from public.invoice_advance_deductions d join public.invoices a on a.id = d.advance_invoice_id where d.invoice_id = $1`, [TFIN1]);
+  assert.deepEqual(iss.map((x) => [x.t, x.v, x.taxed_line]), [[100, 23, true]]);
   assert.equal((await rpc(U.ownerB, `select 1 from public.received_advance_links l where l.company_id = $1`, [CO.A])).length, 0);
   const xmls = await rpc<Row>(U.owner, "select i.invoice_id from public.einvoice_inbound i where i.invoice_id = any($1::uuid[])", [[RADV1, RFIN1]]);
-  assert.equal(xmls.length >= 2, true, "XML záznamy zálohy aj konečnej faktúry dostupné pre balík (pod RLS)");
+  assert.ok(xmls.length >= 2, "XML zálohy aj konečnej faktúry dostupné pre balík (pod RLS)");
 });
 
 // =============================================================================

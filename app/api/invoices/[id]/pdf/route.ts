@@ -232,7 +232,9 @@ export async function GET(req: Request, context: RouteContext) {
       .returns<{ id: string; invoice_number: string | null }[]>();
     for (const a of adv ?? []) advanceNumbers.set(a.id, a.invoice_number);
   }
-  const advanceDeductions = (deductionRows ?? []).map((d) => ({
+  // 20261008100009: zdanené zálohy sú mínusové riadky položiek; samostatný odpočet iba pre staršie doklady.
+  const hasDeductionLines = items.some((i) => i.is_advance_deduction);
+  const advanceDeductions = (hasDeductionLines ? [] : deductionRows ?? []).map((d) => ({
     taxable_amount: Number(d.taxable_amount), vat_amount: Number(d.vat_amount), advance_number: advanceNumbers.get(d.advance_invoice_id) ?? null,
   }));
 

@@ -11,7 +11,7 @@ import Link from "next/link";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import { formatDate, formatMoney } from "@/lib/i18n/format";
 import { invoiceDetailHref } from "@/lib/entity-links";
-import { finalizeInvoice, type Invoice } from "@/lib/invoices";
+import { finalizeInvoice, setInvoiceComplianceFields, type Invoice } from "@/lib/invoices";
 import {
   addInvoiceRefund,
   confirmReceivedAdvances,
@@ -67,13 +67,18 @@ export default function InvoiceFlowPanel({ invoice, canManage, onChanged }: Prop
   const [rcvPick, setRcvPick] = useState("");
   const [rcvAmount, setRcvAmount] = useState("");
   const [rcvRejectNote, setRcvRejectNote] = useState("");
+  const [untaxedAmount, setUntaxedAmount] = useState(invoice.untaxed_prepaid_amount == null ? "" : String(invoice.untaxed_prepaid_amount));
+  const [untaxedRef, setUntaxedRef] = useState(invoice.untaxed_prepaid_reference ?? "");
 
   const isDraft = invoice.document_status === "draft";
   const isFinal = invoice.direction === "issued" && invoice.kind === "regular_invoice";
   const isReceivedCorrection = invoice.direction === "received" && (invoice.kind === "credit_note" || invoice.kind === "debit_note") && Boolean(invoice.correction_review_status);
   const showSettlement = invoice.document_status === "finalized" && invoice.kind !== "proforma";
   const prepaid = invoice.prepaid_amount == null ? null : Number(invoice.prepaid_amount);
-  const isReceivedFinal = invoice.direction === "received" && invoice.kind === "regular_invoice" && prepaid !== null;
+  // 20261008100009: review záloh iba pri mínusových riadkoch (zdanené zálohy); BT-113 = nezdanená záloha.
+  const isReceivedFinal = invoice.direction === "received" && invoice.kind === "regular_invoice" && Boolean(invoice.advance_review_status);
+  const isReceivedUntaxedOnly = invoice.direction === "received" && invoice.kind === "regular_invoice" && !isReceivedFinal && prepaid !== null;
+  const untaxedIssued = invoice.untaxed_prepaid_amount == null ? null : Number(invoice.untaxed_prepaid_amount);
   const isReceivedAdvance = invoice.direction === "received" && invoice.kind === "payment_received_invoice";
 
   useEffect(() => {
@@ -222,9 +227,7 @@ export default function InvoiceFlowPanel({ invoice, canManage, onChanged }: Prop
                 </li>
               ))}
               <li className="flex justify-between gap-2 font-medium"><span>{t("invoices.flow.advances.deductedTotal")}</span><span className="tabular-nums">{money(deductedTotal)}</span></li>
-              {!isDraft && (
-                <li className="flex justify-between gap-2"><span>{t("invoices.flow.advances.remaining")}</span><span className="tabular-nums">{money(invoice.total_amount - deductedTotal)}</span></li>
-              )}
+              <li className="text-secondary">{t("invoices.flow.advances.lineNote")}</li>
             </ul>
           )}
           {isDraft && canManage && available.length > 0 && (
@@ -247,15 +250,60 @@ export default function InvoiceFlowPanel({ invoice, canManage, onChanged }: Prop
         </div>
       )}
 
-      {/* Prijatá konečná faktúra — zálohy odpočítané dodávateľom (BT-113) */}
-      {isReceivedFinal && prepaid !== null && (
+      {/* Vydaná konečná faktúra — nezdanená záloha (BT-113): platba, nie daňový riadok */}
+      {isFinal && (untaxedIssued !== null || (isDraft && canManage)) && (
+        <div className="mt-4 space-y-2" data-untaxed-prepaid={untaxedIssued ?? ""}>
+          <h3 className="font-medium text-primary">{t("invoices.flow.advances.untaxedTitle")}</h3>
+          <p className="text-secondary">{t("invoices.flow.advances.untaxedHint")}</p>
+          {untaxedIssued !== null && (
+            <p className="tabular-nums">{`${money(untaxedIssued)}${invoice.untaxed_prepaid_reference ? ` · ${invoice.untaxed_prepaid_reference}` : ""}`}</p>
+          )}
+          {isDraft && canManage && (
+            <div className="flex flex-wrap items-end gap-2">
+              <label className="flex flex-col text-xs text-secondary">
+                {t("invoices.flow.advances.untaxedAmount")}
+                <input inputMode="decimal" className="mt-1 w-32 rounded-doc-sm border border-doc-border bg-surface-1 px-2 py-1 text-right text-sm tabular-nums"
+                  value={untaxedAmount} onChange={(e) => setUntaxedAmount(e.target.value)} />
+              </label>
+              <label className="flex flex-col text-xs text-secondary">
+                {t("invoices.flow.advances.untaxedReference")}
+                <input className="mt-1 rounded-doc-sm border border-doc-border bg-surface-1 px-2 py-1 text-sm" maxLength={200}
+                  value={untaxedRef} onChange={(e) => setUntaxedRef(e.target.value)} />
+              </label>
+              <button type="button" disabled={busy} className="rounded-doc-sm border border-doc-border px-3 py-1"
+                onClick={() => run(() => setInvoiceComplianceFields(invoice.id, {
+                  untaxed_prepaid_amount: untaxedAmount.trim() ? Number(untaxedAmount.replace(",", ".")) : null,
+                  untaxed_prepaid_reference: untaxedRef.trim() || null,
+                }))}>
+                {t("invoices.flow.advances.untaxedSave")}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Prijatá faktúra iba s nezdanenou zálohou (BT-113) — nič sa nepáruje */}
+      {isReceivedUntaxedOnly && prepaid !== null && (
+        <div className="mt-4">
+          <dl className="grid grid-cols-[1fr_auto] gap-x-4 gap-y-1 tabular-nums">
+            <dt>{t("invoices.flow.receivedAdvances.original")}</dt><dd>{money(Number(invoice.total_amount))}</dd>
+            <dt>{t("invoices.flow.receivedAdvances.untaxedPrepaid")}</dt><dd>{money(-prepaid)}</dd>
+            <dt className="font-medium">{t("invoices.flow.receivedAdvances.remaining")}</dt><dd className="font-medium">{money(Number(invoice.total_amount) - prepaid)}</dd>
+          </dl>
+        </div>
+      )}
+
+      {/* Prijatá konečná faktúra — zdanené zálohy ako mínusové riadky (FS príklad 38) */}
+      {isReceivedFinal && (
         <div className="mt-4 space-y-2" data-advance-review-status={invoice.advance_review_status ?? ""}>
           <h3 className="font-medium text-primary">{t("invoices.flow.receivedAdvances.title")}</h3>
           <dl className="grid grid-cols-[1fr_auto] gap-x-4 gap-y-1 tabular-nums">
+            {rcvLinks.length > 0 && (<><dt>{t("invoices.flow.settlement.advancesTaxed")}</dt><dd>{money(-rcvLinks.reduce((s, l) => s + l.amount, 0))}</dd></>)}
             <dt>{t("invoices.flow.receivedAdvances.original")}</dt><dd>{money(Number(invoice.total_amount))}</dd>
-            <dt>{t("invoices.flow.receivedAdvances.prepaid")}</dt><dd>{money(-prepaid)}</dd>
-            <dt className="font-medium">{t("invoices.flow.receivedAdvances.remaining")}</dt><dd className="font-medium">{money(Number(invoice.total_amount) - prepaid)}</dd>
+            {prepaid !== null && (<><dt>{t("invoices.flow.receivedAdvances.untaxedPrepaid")}</dt><dd>{money(-prepaid)}</dd></>)}
+            <dt className="font-medium">{t("invoices.flow.receivedAdvances.remaining")}</dt><dd className="font-medium">{money(Number(invoice.total_amount) - (prepaid ?? 0))}</dd>
           </dl>
+          <p className="text-secondary">{t("invoices.flow.receivedAdvances.taxedLinesNote")}</p>
           {invoice.advance_review_status && <p className="font-medium text-primary">{t(`invoices.flow.receivedAdvances.status.${invoice.advance_review_status}`)}</p>}
           {(invoice.advance_review_reasons ?? []).length > 0 && (
             <ul className="list-disc pl-5 text-secondary">
@@ -358,8 +406,11 @@ export default function InvoiceFlowPanel({ invoice, canManage, onChanged }: Prop
         <div className="mt-4" data-payment-status={settlement.payment_status}>
           <h3 className="font-medium text-primary">{t("invoices.flow.settlement.title")}</h3>
           <dl className="mt-1 grid grid-cols-[1fr_auto] gap-x-4 gap-y-1 tabular-nums">
+            {settlement.advances_taxed > 0 && (<><dt>{t("invoices.flow.settlement.itemsTotal")}</dt><dd>{money(settlement.items_total)}</dd>
+              <dt>{t("invoices.flow.settlement.advancesTaxed")}</dt><dd>{money(-settlement.advances_taxed)}</dd></>)}
             <dt>{t("invoices.flow.settlement.original")}</dt><dd>{money(settlement.original_total)}</dd>
-            {settlement.advances_deducted > 0 && (<><dt>{t("invoices.flow.settlement.advances")}</dt><dd>{money(-settlement.advances_deducted)}</dd></>)}
+            {settlement.advances_deducted - settlement.prepaid_untaxed > 0 && (<><dt>{t("invoices.flow.settlement.advances")}</dt><dd>{money(-(settlement.advances_deducted - settlement.prepaid_untaxed))}</dd></>)}
+            {settlement.prepaid_untaxed > 0 && (<><dt>{t("invoices.flow.settlement.prepaidUntaxed")}</dt><dd>{money(-settlement.prepaid_untaxed)}</dd></>)}
             {settlement.advance_consumed !== null && settlement.advance_consumed > 0 && (<><dt>{t("invoices.flow.settlement.advanceConsumed")}</dt><dd>{money(settlement.advance_consumed)}</dd></>)}
             {settlement.advance_remaining !== null && settlement.advance_consumed !== null && settlement.advance_consumed > 0 && (<><dt>{t("invoices.flow.settlement.advanceRemaining")}</dt><dd>{money(settlement.advance_remaining)}</dd></>)}
             {settlement.credit_notes_total > 0 && (<><dt>{t("invoices.flow.settlement.credits")}</dt><dd>{money(-settlement.credit_notes_total)}</dd></>)}

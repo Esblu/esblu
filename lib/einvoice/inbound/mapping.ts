@@ -44,6 +44,11 @@ export type InboundDraftItem = {
   vat_category_code: string;
   vat_rate: string;
   unit_code: string | null;
+  /**
+   * 20261008100009: mínusový riadok ZDANENEJ zálohy (FS FAQ eFaktúra, príklad 38): v XML množstvo < 0
+   * a kladná cena; v Esblu množstvo 1 × záporná cena = suma riadka (BT-131).
+   */
+  advance_deduction?: true;
 };
 
 /** Rozpis DPH (BG-23) presne podľa XML; sadzba je pre iné kategórie ako S vždy 0 (rovnako ako finalizácia). */
@@ -74,9 +79,13 @@ export type InboundDraftTotals = {
  */
 export type InboundDocumentKind = "regular_invoice" | "payment_received_invoice" | "credit_note" | "debit_note";
 
-/** Konečná faktúra s odpočítanými zálohami (BT-113 PrepaidAmount > 0) — odkazy BG-3 na zálohové faktúry. */
+/**
+ * Konečná faktúra so zálohami — odkazy BG-3 na zálohové faktúry.
+ * 20261008100009 (FS FAQ eFaktúra, príklad 38): ZDANENÉ zálohy = mínusové riadky (`advance_deduction`),
+ * BT-113 PrepaidAmount = iba NEZDANENÉ zálohy (znižuje sumu na úhradu, nič sa nepáruje).
+ */
 export type InboundDraftAdvance = {
-  /** BT-113 v mene dokladu (reťazec, 2 desatinné miesta). */
+  /** BT-113 (nezdanená záloha) v mene dokladu (reťazec, 2 desatinné miesta); "0.00" ak nie je. */
   prepaid: string;
   /** BG-3 BillingReference (BT-25/BT-26) — kandidáti na prijaté faktúry k prijatej platbe. */
   references: { number: string; issue_date: string | null }[];
@@ -96,7 +105,7 @@ export type InboundDraftCorrection = {
 export type InboundDraftPayload = {
   document_kind: InboundDocumentKind;
   correction: InboundDraftCorrection | null;
-  /** Iba regular_invoice s BT-113 > 0, inak null. */
+  /** Iba regular_invoice s BT-113 > 0 alebo s mínusovými riadkami záloh, inak null. */
   advance: InboundDraftAdvance | null;
   /** BT-7 (YYYY-MM-DD) — pri 386 dátum prijatia platby; null ak chýba. */
   tax_point_date: string | null;
@@ -233,7 +242,8 @@ export function mapInboundDraft(
   if (prepaid.gt(dec(t.taxInclusive).plus(dec(t.rounding)))) return { ok: false, code: "INVALID_XML", detail: "PREPAID_EXCEEDS_TOTAL" };
   const isoDate = (v: string | null) => (v && /^\d{4}-\d{2}-\d{2}$/.test(v.trim()) ? v.trim() : null);
   let advance: InboundDraftAdvance | null = null;
-  if (prepaid.gt(0)) {
+  const hasDeductionLines = profile.kind === "regular_invoice" && doc.lines.some((l) => l.quantity !== null && new Decimal(l.quantity).lt(0));
+  if (prepaid.gt(0) || hasDeductionLines) {
     const refs = new Map<string, { number: string; issue_date: string | null }>();
     for (const r of doc.precedingInvoices) {
       const n = r.number.trim().slice(0, 200);
@@ -251,8 +261,31 @@ export function mapInboundDraft(
     if (!SUPPORTED_VAT.has(category)) return { ok: false, code: "UNSUPPORTED_PROFILE", detail: "VAT_CATEGORY_UNSUPPORTED" };
     if (line.quantity === null || line.lineNetAmount === null) return { ok: false, code: "INVALID_XML", detail: "LINE_INCOMPLETE" };
     const qty = new Decimal(line.quantity);
-    if (qty.lte(0)) return { ok: false, code: "UNSUPPORTED_PROFILE", detail: "NON_POSITIVE_QUANTITY" };
     const lineNet = new Decimal(line.lineNetAmount);
+    // 20261008100009: mínusový riadok zdanenej zálohy — iba v konečnej (bežnej) faktúre, množstvo < 0,
+    // suma < 0, cena ≥ 0 (BR-27). Iné záporné riadky (vrátky, zľavy) → manuálne.
+    if (qty.lt(0) && profile.kind === "regular_invoice" && lineNet.lt(0) && lineNet.decimalPlaces() <= 2) {
+      if (!SUPPORTED_VAT.has(category)) return { ok: false, code: "UNSUPPORTED_PROFILE", detail: "VAT_CATEGORY_UNSUPPORTED" };
+      if (line.netUnitPrice !== null && new Decimal(line.netUnitPrice).lt(0)) return { ok: false, code: "UNSUPPORTED_PROFILE", detail: "NEGATIVE_UNIT_PRICE" };
+      if (category === "S" && (line.vatPercent === null || new Decimal(line.vatPercent).lte(0))) {
+        return { ok: false, code: "INVALID_XML", detail: "S_RATE_MISSING" };
+      }
+      const rate = category === "S" ? new Decimal(line.vatPercent!) : new Decimal(0);
+      items.push({
+        description: ((line.name ?? "").trim() || "Odpočet zálohy").slice(0, 500),
+        quantity: "1",
+        unit_price: lineNet.toFixed(2),
+        vat_category_code: category,
+        vat_rate: rate.toFixed(),
+        unit_code: line.unitCode && /^[A-Z0-9]{1,3}$/.test(line.unitCode) ? line.unitCode : null,
+        advance_deduction: true,
+      });
+      const key = groupKey(category, rate);
+      lineGroups.set(key, (lineGroups.get(key) ?? new Decimal(0)).plus(lineNet));
+      lineSum = lineSum.plus(lineNet);
+      continue;
+    }
+    if (qty.lte(0)) return { ok: false, code: "UNSUPPORTED_PROFILE", detail: "NON_POSITIVE_QUANTITY" };
     if (lineNet.decimalPlaces() > 2) return { ok: false, code: "INVALID_XML", detail: "LINE_AMOUNT_PRECISION" };
     // Suma riadka (BT-131) je zdroj pravdy: koncept ju uloží ako round(množstvo × cena, 2)
     // (esblu_received_invoice_draft_core), preto cena musí dať PRESNE túto sumu.
@@ -319,8 +352,12 @@ export function mapInboundDraft(
     if (seen.has(key)) return { ok: false, code: "INVALID_XML", detail: "VAT_BREAKDOWN_DUPLICATE" };
     seen.add(key);
     // BR-CO-17 (rovnaký vzorec ako finalizácia Esblu); iné kategórie nesú nulovú daň.
+    // Peppol BR-CO-17 pripúšťa ±1; Esblu akceptuje ±0,01 (mínusový riadok zálohy nesie DPH zálohy,
+    // ktorá sa od základ × sadzba skupiny môže líšiť o zaokrúhlenie). Zaokrúhlenie symetricky od nuly.
     const expectedVat = category === "S" ? taxable.times(rate).div(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP) : new Decimal(0);
-    if (!vat.eq(expectedVat)) return { ok: false, code: "INVALID_XML", detail: "VAT_BREAKDOWN_AMOUNT_MISMATCH" };
+    if (vat.minus(expectedVat).abs().gt("0.01") || (category !== "S" && !vat.eq(0))) {
+      return { ok: false, code: "INVALID_XML", detail: "VAT_BREAKDOWN_AMOUNT_MISMATCH" };
+    }
     if (!taxable.eq(lineGroups.get(key) ?? new Decimal(-1))) return { ok: false, code: "INVALID_XML", detail: "VAT_BREAKDOWN_LINE_MISMATCH" };
     taxableSum = taxableSum.plus(taxable);
     vatSum = vatSum.plus(vat);

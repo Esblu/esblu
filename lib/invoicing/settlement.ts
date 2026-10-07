@@ -10,6 +10,12 @@ export type InvoiceSettlement = {
   currency: string;
   original_total: number;
   advances_deducted: number;
+  /** 20261008100009: položky bez mínusových riadkov záloh (s DPH). */
+  items_total: number;
+  /** Mínusové riadky zdanených záloh (s DPH) — už sú v original_total. */
+  advances_taxed: number;
+  /** Nezdanená záloha (BT-113) — znižuje sumu na úhradu. */
+  prepaid_untaxed: number;
   /** Prijatá konečná faktúra: súčet priradených prijatých záloh (20261008100008). */
   advances_linked: number;
   /** Záloha (faktúra k prijatej platbe): spotrebované vo finalizovaných konečných faktúrach; inak null. */
@@ -62,6 +68,9 @@ export async function getInvoiceSettlement(invoiceId: string): Promise<InvoiceSe
     currency: String(d.currency),
     original_total: num(d.original_total),
     advances_deducted: num(d.advances_deducted),
+    items_total: num(d.items_total ?? d.original_total),
+    advances_taxed: num(d.advances_taxed),
+    prepaid_untaxed: num(d.prepaid_untaxed),
     advances_linked: num(d.advances_linked),
     advance_consumed: d.advance_consumed == null ? null : num(d.advance_consumed),
     advance_remaining: d.advance_remaining == null ? null : num(d.advance_remaining),
