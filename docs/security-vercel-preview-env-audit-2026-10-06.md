@@ -1,5 +1,9 @@
 # Vercel Preview env — audit a plán nápravy (6. 10. 2026)
 
+> **Stav 7. 10. 2026: VYRIEŠENÉ vlastníkom.** Read-only kontrola (iba kľúče, ciele a vetvy; z hodnôt iba
+> verejná Supabase URL): všeobecný Preview `NEXT_PUBLIC_SUPABASE_URL` → staging `cjbdijbbcujvmrzezusd`;
+> Production má samostatné záznamy; `einvoice-port` má branch override. Zvyšok dokumentu je historický.
+
 Interný bezpečnostný podklad. Neobsahuje hodnoty secrets. **Nič z plánu nižšie nebolo vykonané** —
 každý krok mení produkčne používaný Vercel env záznam a vyžaduje výslovný súhlas vlastníka.
 

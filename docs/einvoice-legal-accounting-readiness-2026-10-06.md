@@ -86,12 +86,15 @@ nahrádza zákonnú archiváciu.
 
 ## 7. Čo blokuje prechod do produkčnej prípravy
 
+> **Aktualizované 7. 10. 2026:** aktuálny zoznam blockerov, runbook migrácií, crony a rollout plán sú
+> v `docs/einvoice-preproduction-readiness-2026-10-07.md`. Bod 5 je uzavretý.
+
 1. Zmluva + DPA s eFaktura.sk (sekcia 2) a rozhodnutie o programe — rozhodnutie vlastníka.
 2. CLIA stanovisko (sekcia 3) a úprava VOP/DPA Esblu.
 3. Potvrdenie účtovníčky (sekcia 4).
 4. Retenčná politika a export (sekcia 5).
-5. Bezpečnosť Vercel Preview env — produkčný service_role / OpenAI v Preview
-   (`docs/security-vercel-preview-env-audit-2026-10-06.md`) — vyžaduje súhlas.
+5. ~~Bezpečnosť Vercel Preview env~~ — **vyriešené vlastníkom** (všeobecný Preview → staging Supabase,
+   bez produkčného OpenAI kľúča, Production samostatne, `einvoice-port` s branch override; overené 7. 10.).
 6. Produkčné migrácie E-Faktúry a SK súladu fakturácie (20261002… až 20261008100008) — nespustené,
    vyžadujú súhlas. Právno-účtovný audit: `docs/einvoice-sk-accounting-legal-audit-2026-10.md`.
 7. Produkčný kľúč eFaktura.sk, produkčné webhook URL a secret — po bodoch 1–3.

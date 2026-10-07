@@ -65,7 +65,7 @@
 
 | Oblasť | Verdikt |
 | --- | --- |
-| Cron konfigurácia | Pripravená (`docs/einvoice-vercel-cron.example.json`), neaktivovaná. Vyžaduje Vercel Pro. |
+| Cron konfigurácia | 7. 10. 2026: vo `vercel.json` vetvy `einvoice-port` (aktívna až v produkcii). Vyžaduje Vercel Pro. |
 | Overlap / lease / batching / timeout | **FIXED** (termín behu, `?mode=`) |
 | Alerty | **FIXED:** reject rate za 24 h (`OUTBOUND_REJECT_RATE_HIGH`); predtým kumulatívny počet alertoval navždy. WARNING: alerty sa nikam nedoručujú (iba JSON). Pre Stage 2+ treba notifikačný kanál. |
 | Kill switch / rollout | **NEW:** `einvoice_rollout` (default DENY, `paused`), live brána v env (`ESBLU_EINVOICE_LIVE_ENABLED` + `VERCEL_ENV=production`) |

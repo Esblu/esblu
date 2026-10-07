@@ -107,6 +107,9 @@ Nič v tomto dokumente nie je odhad. Čo dokumentácia neuvádza, je označené 
 
 ## 3. Čo blokuje produkčné spustenie
 
+> **Aktualizované 7. 10. 2026:** sandbox E2E aktuálnej architektúry je hotový (staging, reálny sandbox);
+> aktuálny checklist a rollout: `docs/einvoice-preproduction-readiness-2026-10-07.md` (sekcie 6 a 10).
+
 | Blocker | Kto | Poznámka |
 | --- | --- | --- |
 | Partnerská zmluva + live kľúč (`efk_pk_live_…`) | používateľ (Esblu s. r. o.) | Portál, 3 kroky. |

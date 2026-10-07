@@ -10,11 +10,11 @@
     },
     {
       "path": "/api/cron/einvoice-outbound?mode=send",
-      "schedule": "*/2 * * * *"
+      "schedule": "* * * * *"
     },
     {
       "path": "/api/cron/einvoice-outbound?mode=reconcile",
-      "schedule": "*/10 * * * *"
+      "schedule": "*/5 * * * *"
     },
     {
       "path": "/api/cron/einvoice-events",
@@ -22,11 +22,11 @@
     },
     {
       "path": "/api/cron/einvoice-inbound",
-      "schedule": "*/30 * * * *"
+      "schedule": "*/10 * * * *"
     },
     {
       "path": "/api/cron/einvoice-maintenance",
-      "schedule": "7 * * * *"
+      "schedule": "17 * * * *"
     }
   ]
 }

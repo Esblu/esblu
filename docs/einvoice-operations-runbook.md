@@ -23,16 +23,18 @@ Najprv **reconciliation**.
 Všetky cron routes vyžadujú `Authorization: Bearer $CRON_SECRET` (≥ 16 znakov, porovnanie v konštantnom čase).
 Bez secretu vrátia 401. Bez nakonfigurovaného poskytovateľa vrátia `{configured:false}` a nič nerobia.
 
-## 2. Cron konfigurácia (pripravená, NEAKTIVOVANÁ)
+## 2. Cron konfigurácia (vo `vercel.json` vetvy `einvoice-port`; aktívna až po zlúčení do `main`)
 
-Súbor: `docs/einvoice-vercel-cron.example.json`. Pri Stage 1 sa záznamy zlúčia do `vercel.json`.
+Vercel spúšťa crony iba pre produkčný deployment. Pridané (7. 10. 2026): `fx-rates` (`0 5,16 * * *`)
+a `einvoice-events` (`*/5 * * * *`, partnerský feed). Úplný checklist:
+`docs/einvoice-preproduction-readiness-2026-10-07.md` sekcia 5.
 
 | Route | Interval | Prečo |
 | --- | --- | --- |
 | outbound `?mode=send` | každú minútu | Odoslanie do ~1 min od potvrdenia. Backoff 1, 2, 4 … min. |
 | outbound `?mode=reconcile` | každých 5 min | Stav sa dopytuje až po 5 min od poslednej zmeny. Webhook urýchli. |
 | inbound | každých 10 min | Webhook je primárny, poll je záchranná sieť. |
-| maintenance | 1× za hodinu (`17 * * * *`) | Health, alerty, retencia. |
+| maintenance | 1× za hodinu (`17 * * * *`) | Health, alerty, retencia. Kritický alert → HTTP 503. |
 
 - **Vercel plán:** Hobby dovolí cron iba 1× denne, takže je potrebný Pro. Na Pro: `maxDuration` 60 s
   (nastavené v route), termín behu 50 s.
