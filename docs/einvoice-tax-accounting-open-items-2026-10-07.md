@@ -27,9 +27,13 @@ Kategórie: **A** = vyriešené primárnym zdrojom · **B** = čaká na podzáko
 | 7 | Dobropis kód 83 (bonus bez položiek), vrátenie zálohy | **C** | Rámec je jasný (§ 25 ods. 1 b), § 53 ods. 1, § 71 ods. 2, § 85o ods. 5). Kvalifikácia bonusu za viac faktúr a priradenie k pôvodným faktúram zákon ani FS neriešia. | ZDPH; SK TDD UNCL1001-cn | Esblu: 83 → review, nič automaticky |
 | 8 | Kto nesie 10-ročnú povinnosť uchovávania | **A** | Platiteľ a účtovná jednotka (10 rokov, v XML). Poverenie inej osoby ich zodpovednosti nezbavuje. Poskytovateľ doručovacej služby ani výrobca softvéru zákonnú povinnosť nemajú. | § 76, § 85o ods. 15 ZDPH; § 5 ods. 2, § 35 ZoÚ; FAQ FS tech. príklad 18 | zmluvný záväzok Esblu je otázka pre CLIA, nie účtovníčku |
 | 9 | Kto zodpovedá za sadzbu a režim DPH | **A** | Dodávateľ (platiteľ) uvádza uplatnenú sadzbu alebo oslobodenie. Správnosť je zodpovednosťou odosielateľa. | § 69 ods. 1, § 74 ods. 1 h) ZDPH; FAQ FS tech. príklad 10 | formulácia vo VOP → CLIA |
-| 10 | Odpočet DPH z prijatej zálohy a odpočet zálohy v konečnej faktúre | **A** | Daňová povinnosť aj právo na odpočet vznikajú dňom prijatia platby (§ 19 ods. 4, § 49, § 51 ods. 1 a)). Zdanená záloha sa v konečnej e-faktúre odpočíta **mínusovým riadkom** (základ + DPH, rovnaká sadzba, BT-25). **PrepaidAmount (BT-113) je iba pre nezdanené zálohy.** | ZDPH § 19 ods. 4, § 49, § 51; **FAQ FS tech. príklad 38** | **NÁLEZ** — pozri nižšie |
+| 10 | Odpočet DPH z prijatej zálohy a odpočet zálohy v konečnej faktúre | **A** | Daňová povinnosť aj právo na odpočet vznikajú dňom prijatia platby (§ 19 ods. 4, § 49, § 51 ods. 1 a)). Zdanená záloha sa v konečnej e-faktúre odpočíta **mínusovým riadkom** (základ + DPH, rovnaká sadzba, BT-25). **PrepaidAmount (BT-113) je iba pre nezdanené zálohy.** | ZDPH § 19 ods. 4, § 49, § 51; **FAQ FS tech. príklad 38** | **NÁLEZ → OPRAVENÉ 7. 10.** (`20261008100009/100010`) — pozri nižšie |
 
 ## Nález s dopadom na produkt (bod 10)
+
+> **Stav 7. 10. 2026 (neskôr): OPRAVENÉ v kóde.** Model podľa FS príkladu 38 je implementovaný a overený reálnym
+> sandbox E2E — `docs/einvoice-taxed-advance-model-2026-10-07.md`. Text nižšie popisuje pôvodný stav a dočasné opatrenie.
+> Účtovné zaúčtovanie mínusového riadku (predkontácia) ostáva otázkou pre účtovníčku; Esblu ho nerozhoduje.
 
 Esblu dnes pri vydanej konečnej faktúre odpočítava zálohy (vždy zdanené, z faktúry k prijatej platbe) cez
 BT-113. Rozpis DPH konečnej faktúry pritom ostáva v plnej výške. Podľa FAQ FS (príklad 38) to v e-faktúre

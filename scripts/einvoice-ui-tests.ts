@@ -837,8 +837,24 @@ await test("migrácie E-Faktúry končia súčtami prijatého konceptu z XML (UI
   const migrations = readdirSync(path.join(ROOT, "supabase/migrations")).filter((f) => f.startsWith("20261002") || f.startsWith("2026100"));
   // 20261005100000: API partner onboarding (iba einvoice_organizations + service_role RPC, UI nemení).
   // 20261005090000/091000: storage migrácie z main (nie E-Faktúra) — po zlúčení main → einvoice-port.
-  const allowed = new Set(["20261005090000_media_storage_access_model.sql", "20261005091000_private_media_buckets.sql", "20261005100000_einvoice_partner_onboarding.sql", "20261005110000_einvoice_enroll_error_code_active.sql", "20261006100000_einvoice_supplier_dic_feed_cursor.sql", "20261007100000_einvoice_event_ops_enroll_limit.sql", "20261008100000_invoicing_sk_compliance.sql", "20261008100001_invoicing_sk_trigger_fn_revoke.sql", "20261008100002_finance_helpers_bind_active_company.sql", "20261008100003_fx_rate_date_exact.sql", "20261008100004_fx_official_reference_rates.sql", "20261008100005_invoicing_corrections_payments_advances.sql", "20261008100006_einvoice_outbound_payment_received.sql", "20261008100007_einvoice_correction_backlink.sql", "20261008100008_received_advances.sql", "20261008100009_taxed_advance_deduction_lines.sql"]);
+  const allowed = new Set(["20261005090000_media_storage_access_model.sql", "20261005091000_private_media_buckets.sql", "20261005100000_einvoice_partner_onboarding.sql", "20261005110000_einvoice_enroll_error_code_active.sql", "20261006100000_einvoice_supplier_dic_feed_cursor.sql", "20261007100000_einvoice_event_ops_enroll_limit.sql", "20261008100000_invoicing_sk_compliance.sql", "20261008100001_invoicing_sk_trigger_fn_revoke.sql", "20261008100002_finance_helpers_bind_active_company.sql", "20261008100003_fx_rate_date_exact.sql", "20261008100004_fx_official_reference_rates.sql", "20261008100005_invoicing_corrections_payments_advances.sql", "20261008100006_einvoice_outbound_payment_received.sql", "20261008100007_einvoice_correction_backlink.sql", "20261008100008_received_advances.sql", "20261008100009_taxed_advance_deduction_lines.sql", "20261008100010_received_advance_match_safeupdate.sql"]);
   assert.ok(migrations.every((f) => f <= "20261003100000_einvoice_inbound_draft_totals.sql" || allowed.has(f)), migrations.join(","));
+});
+
+await test("platná definícia funkcií nemá DELETE bez WHERE (pg_safeupdate cez PostgREST)", () => {
+  // 20261008100010: Supabase načítava pre PostgREST pg_safeupdate → „DELETE requires a WHERE clause“.
+  // PGlite to nezachytí, preto statická kontrola poslednej definície každej funkcie.
+  const dir = path.join(ROOT, "supabase/migrations");
+  const files = readdirSync(dir).filter((f) => f.endsWith(".sql")).sort();
+  const latest = new Map<string, string>();
+  for (const f of files) {
+    const sql = readFileSync(path.join(dir, f), "utf8");
+    const re = /create\s+or\s+replace\s+function\s+(public\.[a-z0-9_]+)\s*\([\s\S]*?\$(\w*)\$([\s\S]*?)\$\2\$/gi;
+    for (const m of sql.matchAll(re)) latest.set(m[1].toLowerCase(), m[3]);
+  }
+  const bad = [...latest.entries()].filter(([, body]) => /^\s*delete\s+from\s+[\w."]+\s*;/im.test(body)).map(([n]) => n);
+  assert.deepEqual(bad, []);
+  assert.ok(/delete from pg_temp\.esblu_adv_rem where true;/.test(latest.get("public.esblu_received_advance_match") ?? ""));
 });
 
 console.log(`\n${passed} passed, ${failures.length} failed`);

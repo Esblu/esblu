@@ -1,5 +1,5 @@
 -- =============================================================================
--- eFaktúra — PRODUKČNÝ PRECHECK pred migráciami 20261002100000 … 20261008100009
+-- eFaktúra — PRODUKČNÝ PRECHECK pred migráciami 20261002100000 … 20261008100010
 --
 -- ČISTO READ-ONLY. Spúšťa iba vlastník (alebo na jeho výslovný súhlas) nad projektom
 -- `assetpilot` (fkpgvgvsmbpieduoatrt), PRED oknom migrácií. Nič nemení: transakcia je READ ONLY

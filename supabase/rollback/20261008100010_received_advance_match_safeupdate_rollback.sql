@@ -1,0 +1,3 @@
+-- Rollback 20261008100010: obnoviť esblu_received_advance_match z 20261008100009 (sekcia 7).
+-- POZOR: verzia z 20261008100009 cez PostgREST zlyháva (pg_safeupdate) pri párovaní, ktoré dôjde až po
+-- nájdení všetkých záloh. Rollback iba spolu s rollbackom 20261008100009.

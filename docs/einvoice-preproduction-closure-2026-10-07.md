@@ -14,7 +14,7 @@ Produkčná DB sa v tejto fáze ani nečítala. Supabase a Vercel sa čítali ib
 
 | Dimenzia | Stav | Čo chýba |
 | --- | --- | --- |
-| **CODE READY** | **ÁNO pre rozsah spustenia** (odoslanie a príjem faktúr, 386, opravy, review, úhrady, export) | Konečná faktúra so zdanenou zálohou sa do prepracovania (FS FAQ príklad 38) **neodošle** ako e-faktúra (fail-closed). Prijatá konečná faktúra vo formáte FS (mínusové riadky) ide na manuálne spracovanie. Prepracovanie modelu treba pred 1. 1. 2027 pre klientov so zálohami. |
+| **CODE READY** | **ÁNO pre rozsah spustenia** (odoslanie a príjem faktúr, 386, opravy, review, úhrady, export) | Model zdanenej zálohy opravený podľa FS FAQ príklad 38 (migrácie `20261008100009` + `20261008100010`, reálny sandbox E2E 7. 10. 2026 — pozri `docs/einvoice-taxed-advance-model-2026-10-07.md`). Fail-closed ostáva iba pre staršie finalizované konečné faktúry bez mínusových riadkov (`ADVANCE_DEDUCTION_EINVOICE_UNSUPPORTED`). |
 | **PRODUCTION CONFIG READY** | **NIE** | Migrácie, merge do `main`, prvý import kurzov ECB, produkčné env eFaktúry, alert kanál (GitHub secret + workflow), backup pred oknom. Vercel plán **Pro** crony podporuje. |
 | **LEGAL READY** | **NIE** | Delta pre CLIA pripravená, neodoslaná. Stanovisko CLIA k zrušeniu firmy s dokladmi, k retencii a k eFaktura.sk/DPA. 4 otázky pre účtovníčku (kategória C). |
 | **PROVIDER READY** | **NIE** | E-mail pre eFaktura.sk pripravený, neodoslaný. Zmluva, DPA, live kľúč, webhook, odpovede P1–P4, P10–P12. |
@@ -24,7 +24,7 @@ Produkčná DB sa v tejto fáze ani nečítala. Supabase a Vercel sa čítali ib
 
 | Nález | Zdroj | Opatrenie |
 | --- | --- | --- |
-| Konečná faktúra odpočítavala zdanenú zálohu cez `PrepaidAmount` (BT-113). FS: mínusový riadok (základ + DPH, BT-25); BT-113 iba pre nezdanené zálohy. | FAQ FS k eFaktúre 15. 9. 2026, tech. príklad 38 | Fail-closed: readiness kód `ADVANCE_DEDUCTION_EINVOICE_UNSUPPORTED` (sk/en/de, test). Prepracovanie modelu je samostatná úloha. |
+| Konečná faktúra odpočítavala zdanenú zálohu cez `PrepaidAmount` (BT-113). FS: mínusový riadok (základ + DPH, BT-25); BT-113 iba pre nezdanené zálohy. | FAQ FS k eFaktúre 15. 9. 2026, tech. príklad 38 | **Opravené 7. 10.:** zdanená záloha = mínusový riadok (InvoicedQuantity −1, základ + DPH zálohy, sadzba zálohy, BT-25); BT-113 iba nezdanená záloha. Fail-closed ostáva len pre staršie doklady bez riadkov odpočtu. |
 | Lehota faktúry k prijatej platbe od 1. 1. 2027 zobrazovala aj alternatívu „koniec mesiaca“. Pri tuzemskej e-faktúre platí iba 15 dní (§ 85o ods. 6). | § 85o ods. 6 ZDPH, FAQ FS príklady 13 a 74 | Opravené (`lib/invoicing/sk-deadlines.ts`) + testy. Posun na pracovný deň potvrdený ako neuplatniteľný (FS 903288). |
 
 ## 3. Vercel cron capability (overené cez API 7. 10.)
@@ -157,7 +157,7 @@ Závislosti z `einvoice-port`:
 | eFaktúra a fakturácia (einvoice-db 44, ubl 65, efaktura 17, outbound 47, inbound 47, ops 23, ui 53, invoicing-sk 33, invoicing-flow 39, l3-inbound-one 16, e2e self-test 27+1 PARTIAL, partner 23, partner e2e 25, hardening 19, reception 23, staging-guard 8) | PASS |
 | main + ostatné (google-oauth 17, google-oauth-db 18, storage-media 10, storage-media-db 33, m1-authz-db 47, push-db 31, company-lookup-db 13, closed-beta-p0 36, p0-bank-sql 17, handoff 122, i18n 114, plan-entitlements 47, partners 84, master-control 34, mobile-m1 64, voice 38, gross 230) | PASS |
 | Storage + eFaktúra kombinácia (storage migrácie → `20261008100002`) | storage-media-db 33/33 PASS |
-| Poradie migrácií | `20261005090000/091000` (main, v produkcii) → `20261005100000` … `20261008100008` (eFaktúra) |
+| Poradie migrácií | `20261005090000/091000` (main, v produkcii) → `20261005100000` … `20261008100010` (eFaktúra) |
 | `next build` | **lokálne nespustené** — prostredie nemá prístup k npm registru pre natívny SWC. Oba rodičia sú READY na Verceli (main produkcia `901c46c`, einvoice-port preview `df6c683`). Build zlúčeného stromu overí Vercel po zlúčení (pozri sekciu 9). |
 
 ## 8. Pripravené dokumenty na odoslanie (NEODOSLANÉ)
