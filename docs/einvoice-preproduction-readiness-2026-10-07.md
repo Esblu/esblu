@@ -1,5 +1,9 @@
 # eFaktúra — PRE-PRODUCTION READINESS audit a rollout plán (7. 10. 2026)
 
+> **Aktualizované 7. 10. 2026 (closure):** stav podľa dimenzií CODE / CONFIG / LEGAL / PROVIDER / ROLL-OUT,
+> nálezy (konečná faktúra so zálohou — FS FAQ príklad 38; lehota § 85o ods. 6), Vercel Pro crony, alerting,
+> backup, read-only precheck a merge readiness: `docs/einvoice-preproduction-closure-2026-10-07.md`.
+
 Interný technický podklad. **Nie je to povolenie produkčného nasadenia** ani právne stanovisko.
 Vetva `einvoice-port`. Produkčná DB, `main`, produkčné secrets ani live eFaktúra sa počas auditu
 nemenili. Na produkčnej DB (`fkpgvgvsmbpieduoatrt`) sa vykonalo **iba** čítanie zoznamu

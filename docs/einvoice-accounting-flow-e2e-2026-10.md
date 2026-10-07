@@ -1,5 +1,10 @@
 # Účtovný a eFaktúra tok — dokončenie a staging E2E (6. 10. 2026)
 
+> **Poznámka 7. 10. 2026 (closure):** FS FAQ k eFaktúre (15. 9. 2026, príklad 38) — zdanená záloha sa v konečnej
+> e-faktúre odpočíta mínusovým riadkom, nie BT-113. Odoslanie konečnej faktúry s odpočtom zálohy je preto
+> fail-closed (`ADVANCE_DEDUCTION_EINVOICE_UNSUPPORTED`); príjem cez BT-113 (sekcia 2b) ostáva pre dodávateľov,
+> ktorí BT-113 posielajú. Pozri `docs/einvoice-tax-accounting-open-items-2026-10-07.md`.
+
 Interný technický podklad. Nie je to právne ani daňové stanovisko. Vetva `einvoice-port`; migrácie
 `20261008100005` – `20261008100008` sú iba na stagingu `esblu-test`. Produkcia, `main`, produkčné
 migrácie, produkčné secrets ani live eFaktúra sa nemenili.
