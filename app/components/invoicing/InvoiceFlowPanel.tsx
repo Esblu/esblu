@@ -14,19 +14,27 @@ import { invoiceDetailHref } from "@/lib/entity-links";
 import { finalizeInvoice, type Invoice } from "@/lib/invoices";
 import {
   addInvoiceRefund,
+  confirmReceivedAdvances,
   esbluErrorCode,
   getInvoiceSettlement,
+  linkReceivedAdvance,
   linkReceivedCorrection,
   listAdvanceDeductions,
   listAvailableAdvances,
   listCorrectionCandidates,
+  listReceivedAdvanceCandidates,
+  listReceivedAdvanceLinks,
   proportionalVat,
+  rejectReceivedAdvances,
   rejectReceivedCorrection,
   setAdvanceDeductions,
+  unlinkReceivedAdvance,
   type AdvanceDeduction,
   type AvailableAdvance,
   type CorrectionCandidate,
   type InvoiceSettlement,
+  type ReceivedAdvanceCandidate,
+  type ReceivedAdvanceLink,
 } from "@/lib/invoicing/settlement";
 import { todayLocalDate } from "@/lib/local-date";
 
@@ -53,11 +61,20 @@ export default function InvoiceFlowPanel({ invoice, canManage, onChanged }: Prop
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [reloadKey, setReloadKey] = useState(0);
+  // 20261008100008 — prijaté zálohy (386) a prijatá konečná faktúra (BT-113).
+  const [rcvLinks, setRcvLinks] = useState<ReceivedAdvanceLink[]>([]);
+  const [rcvCandidates, setRcvCandidates] = useState<ReceivedAdvanceCandidate[]>([]);
+  const [rcvPick, setRcvPick] = useState("");
+  const [rcvAmount, setRcvAmount] = useState("");
+  const [rcvRejectNote, setRcvRejectNote] = useState("");
 
   const isDraft = invoice.document_status === "draft";
   const isFinal = invoice.direction === "issued" && invoice.kind === "regular_invoice";
   const isReceivedCorrection = invoice.direction === "received" && (invoice.kind === "credit_note" || invoice.kind === "debit_note") && Boolean(invoice.correction_review_status);
   const showSettlement = invoice.document_status === "finalized" && invoice.kind !== "proforma";
+  const prepaid = invoice.prepaid_amount == null ? null : Number(invoice.prepaid_amount);
+  const isReceivedFinal = invoice.direction === "received" && invoice.kind === "regular_invoice" && prepaid !== null;
+  const isReceivedAdvance = invoice.direction === "received" && invoice.kind === "payment_received_invoice";
 
   useEffect(() => {
     let cancelled = false;
@@ -67,13 +84,18 @@ export default function InvoiceFlowPanel({ invoice, canManage, onChanged }: Prop
       tasks.push(listAdvanceDeductions(invoice.id).then((d) => { if (!cancelled) setDeductions(d); }));
       if (isDraft && canManage) tasks.push(listAvailableAdvances(invoice.id).then((a) => { if (!cancelled) setAvailable(a); }));
     }
+    if (isReceivedFinal) {
+      tasks.push(listReceivedAdvanceLinks(invoice.id, "invoice").then((l) => { if (!cancelled) setRcvLinks(l); }));
+      if (isDraft && canManage) tasks.push(listReceivedAdvanceCandidates(invoice.id).then((c) => { if (!cancelled) setRcvCandidates(c); }));
+    }
+    if (isReceivedAdvance) tasks.push(listReceivedAdvanceLinks(invoice.id, "advance").then((l) => { if (!cancelled) setRcvLinks(l); }));
     if (isReceivedCorrection && isDraft && !invoice.corrects_invoice_id && invoice.supplier_business_partner_id) {
       tasks.push(listCorrectionCandidates(invoice.supplier_business_partner_id).then((c) => { if (!cancelled) setCandidates(c); }));
     }
     void Promise.all(tasks).catch((e) => { if (!cancelled) setError(errorText(e)); });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [invoice.id, invoice.document_status, invoice.corrects_invoice_id, reloadKey]);
+  }, [invoice.id, invoice.document_status, invoice.corrects_invoice_id, invoice.advance_review_status, reloadKey]);
 
   function errorText(e: unknown): string {
     const code = esbluErrorCode(e);
@@ -97,7 +119,10 @@ export default function InvoiceFlowPanel({ invoice, canManage, onChanged }: Prop
   }
 
   const docTypeKey =
-    invoice.kind === "proforma" ? "invoices.flow.type.proforma"
+    isReceivedAdvance ? "invoices.flow.type.receivedPaymentReceived"
+    : isReceivedFinal ? "invoices.flow.type.receivedFinal"
+    : invoice.direction === "received" && invoice.kind === "regular_invoice" ? "invoices.flow.type.receivedRegular"
+    : invoice.kind === "proforma" ? "invoices.flow.type.proforma"
     : invoice.kind === "payment_received_invoice" ? "invoices.flow.type.paymentReceived"
     : invoice.kind === "credit_note" || invoice.kind === "debit_note" ? "invoices.flow.type.correction"
     : isFinal && deductions.length > 0 ? "invoices.flow.type.final"
@@ -222,6 +247,112 @@ export default function InvoiceFlowPanel({ invoice, canManage, onChanged }: Prop
         </div>
       )}
 
+      {/* Prijatá konečná faktúra — zálohy odpočítané dodávateľom (BT-113) */}
+      {isReceivedFinal && prepaid !== null && (
+        <div className="mt-4 space-y-2" data-advance-review-status={invoice.advance_review_status ?? ""}>
+          <h3 className="font-medium text-primary">{t("invoices.flow.receivedAdvances.title")}</h3>
+          <dl className="grid grid-cols-[1fr_auto] gap-x-4 gap-y-1 tabular-nums">
+            <dt>{t("invoices.flow.receivedAdvances.original")}</dt><dd>{money(Number(invoice.total_amount))}</dd>
+            <dt>{t("invoices.flow.receivedAdvances.prepaid")}</dt><dd>{money(-prepaid)}</dd>
+            <dt className="font-medium">{t("invoices.flow.receivedAdvances.remaining")}</dt><dd className="font-medium">{money(Number(invoice.total_amount) - prepaid)}</dd>
+          </dl>
+          {invoice.advance_review_status && <p className="font-medium text-primary">{t(`invoices.flow.receivedAdvances.status.${invoice.advance_review_status}`)}</p>}
+          {(invoice.advance_review_reasons ?? []).length > 0 && (
+            <ul className="list-disc pl-5 text-secondary">
+              {(invoice.advance_review_reasons ?? []).map((r) => <li key={r}>{t(`invoices.flow.receivedAdvances.reason.${r}`)}</li>)}
+            </ul>
+          )}
+          {invoice.advance_review_note && <p className="text-secondary">{t("invoices.flow.receivedAdvances.rejectedNote", { note: invoice.advance_review_note })}</p>}
+          {rcvLinks.length > 0 && (
+            <ul className="space-y-1">
+              {rcvLinks.map((l) => (
+                <li key={l.advance_invoice_id} className="flex flex-wrap items-center justify-between gap-2">
+                  <Link href={invoiceDetailHref(l.advance_invoice_id)} className="underline">
+                    {t("invoices.flow.receivedAdvances.advanceRow", { number: l.number ?? "?" })}
+                  </Link>
+                  <span className="tabular-nums">
+                    {`${money(l.amount)} (${t("invoices.flow.receivedAdvances.vatPart")} ${money(l.vat_amount)}) · ${t(`invoices.flow.receivedAdvances.source.${l.source}`)}`}
+                  </span>
+                  {canManage && isDraft && (
+                    <button type="button" disabled={busy} className="rounded-doc-sm border border-doc-border px-2 py-0.5 text-xs"
+                      onClick={() => run(() => unlinkReceivedAdvance(invoice.id, l.advance_invoice_id))}>
+                      {t("invoices.flow.receivedAdvances.unlink")}
+                    </button>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+          {canManage && isDraft && (
+            <div className="space-y-3">
+              {invoice.advance_review_status === "proposed" && (
+                <div className="flex flex-wrap gap-2">
+                  <button type="button" disabled={busy} className="rounded-doc-sm bg-primary px-3 py-1 text-on-primary"
+                    onClick={() => run(() => confirmReceivedAdvances(invoice.id))}>
+                    {t("invoices.flow.receivedAdvances.confirm")}
+                  </button>
+                </div>
+              )}
+              {(invoice.advance_review_status === "proposed" || invoice.advance_review_status === "linked") && (
+                <div className="flex flex-wrap items-end gap-2">
+                  <label className="flex flex-col text-xs text-secondary">
+                    {t("invoices.flow.receivedAdvances.rejectNoteLabel")}
+                    <input className="mt-1 rounded-doc-sm border border-doc-border bg-surface-1 px-2 py-1 text-sm" value={rcvRejectNote} maxLength={500} onChange={(e) => setRcvRejectNote(e.target.value)} />
+                  </label>
+                  <button type="button" disabled={busy || rcvRejectNote.trim().length < 3} className="rounded-doc-sm border border-doc-border px-3 py-1"
+                    onClick={() => run(() => rejectReceivedAdvances(invoice.id, rcvRejectNote.trim()))}>
+                    {t("invoices.flow.receivedAdvances.reject")}
+                  </button>
+                </div>
+              )}
+              {invoice.advance_review_status === "review" && (
+                <div className="flex flex-wrap items-end gap-2">
+                  <label className="flex flex-col text-xs text-secondary">
+                    {t("invoices.flow.receivedAdvances.pick")}
+                    <select className="mt-1 rounded-doc-sm border border-doc-border bg-surface-1 px-2 py-1 text-sm" value={rcvPick} onChange={(e) => setRcvPick(e.target.value)}>
+                      <option value="">—</option>
+                      {rcvCandidates.filter((c) => !rcvLinks.some((l) => l.advance_invoice_id === c.advance_invoice_id)).map((c) => (
+                        <option key={c.advance_invoice_id} value={c.advance_invoice_id}>
+                          {`${c.supplier_invoice_number ?? "?"} · ${formatDate(c.issue_date, locale)} · ${t("invoices.flow.advances.availableLabel")} ${formatMoney(c.remaining_amount, c.currency, locale)}`}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="flex flex-col text-xs text-secondary">
+                    {t("invoices.flow.receivedAdvances.amountLabel")}
+                    <input inputMode="decimal" className="mt-1 w-32 rounded-doc-sm border border-doc-border bg-surface-1 px-2 py-1 text-right text-sm tabular-nums"
+                      value={rcvAmount} onChange={(e) => setRcvAmount(e.target.value)} />
+                  </label>
+                  <button type="button" disabled={busy || !rcvPick} className="rounded-doc-sm border border-doc-border px-3 py-1"
+                    onClick={() => run(() => linkReceivedAdvance(invoice.id, rcvPick, rcvAmount.trim() ? Number(rcvAmount.replace(",", ".")) : null))}>
+                    {t("invoices.flow.receivedAdvances.link")}
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Prijatá faktúra k prijatej platbe — kde bola odpočítaná */}
+      {isReceivedAdvance && (
+        <div className="mt-4 space-y-1">
+          <h3 className="font-medium text-primary">{t("invoices.flow.receivedAdvances.consumedTitle")}</h3>
+          {rcvLinks.length === 0 ? (
+            <p className="text-secondary">{t("invoices.flow.receivedAdvances.notConsumed")}</p>
+          ) : (
+            <ul className="space-y-1">
+              {rcvLinks.map((l) => (
+                <li key={l.invoice_id} className="flex justify-between gap-2">
+                  <Link href={invoiceDetailHref(l.invoice_id)} className="underline">{t("invoices.flow.receivedAdvances.finalRow", { number: l.number ?? "?" })}</Link>
+                  <span className="tabular-nums">{money(l.amount)}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
       {/* Saldo */}
       {showSettlement && settlement && (
         <div className="mt-4" data-payment-status={settlement.payment_status}>
@@ -229,6 +360,8 @@ export default function InvoiceFlowPanel({ invoice, canManage, onChanged }: Prop
           <dl className="mt-1 grid grid-cols-[1fr_auto] gap-x-4 gap-y-1 tabular-nums">
             <dt>{t("invoices.flow.settlement.original")}</dt><dd>{money(settlement.original_total)}</dd>
             {settlement.advances_deducted > 0 && (<><dt>{t("invoices.flow.settlement.advances")}</dt><dd>{money(-settlement.advances_deducted)}</dd></>)}
+            {settlement.advance_consumed !== null && settlement.advance_consumed > 0 && (<><dt>{t("invoices.flow.settlement.advanceConsumed")}</dt><dd>{money(settlement.advance_consumed)}</dd></>)}
+            {settlement.advance_remaining !== null && settlement.advance_consumed !== null && settlement.advance_consumed > 0 && (<><dt>{t("invoices.flow.settlement.advanceRemaining")}</dt><dd>{money(settlement.advance_remaining)}</dd></>)}
             {settlement.credit_notes_total > 0 && (<><dt>{t("invoices.flow.settlement.credits")}</dt><dd>{money(-settlement.credit_notes_total)}</dd></>)}
             {settlement.debit_notes_total > 0 && (<><dt>{t("invoices.flow.settlement.debits")}</dt><dd>{money(settlement.debit_notes_total)}</dd></>)}
             <dt className="font-medium">{t("invoices.flow.settlement.due")}</dt><dd className="font-medium">{money(settlement.amount_due)}</dd>

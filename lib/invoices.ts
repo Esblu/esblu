@@ -68,6 +68,11 @@ export type Invoice = {
   correction_review_note?: string | null;
   corrected_document_reference?: string | null;
   corrected_document_issue_date?: string | null;
+  /** 20261008100008 — prijatá konečná faktúra: BT-113 z XML a review priradenia prijatých záloh (386). */
+  prepaid_amount?: number | string | null;
+  advance_review_status?: "review" | "proposed" | "linked" | null;
+  advance_review_reasons?: string[] | null;
+  advance_review_note?: string | null;
   fx_rate?: number | string | null;
   fx_rate_date?: string | null;
   fx_rate_source?: "ECB" | "NBS" | "CUSTOMS" | null;

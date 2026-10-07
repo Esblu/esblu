@@ -10,6 +10,11 @@ export type InvoiceSettlement = {
   currency: string;
   original_total: number;
   advances_deducted: number;
+  /** Prijatá konečná faktúra: súčet priradených prijatých záloh (20261008100008). */
+  advances_linked: number;
+  /** Záloha (faktúra k prijatej platbe): spotrebované vo finalizovaných konečných faktúrach; inak null. */
+  advance_consumed: number | null;
+  advance_remaining: number | null;
   credit_notes_total: number;
   debit_notes_total: number;
   amount_due: number;
@@ -57,6 +62,9 @@ export async function getInvoiceSettlement(invoiceId: string): Promise<InvoiceSe
     currency: String(d.currency),
     original_total: num(d.original_total),
     advances_deducted: num(d.advances_deducted),
+    advances_linked: num(d.advances_linked),
+    advance_consumed: d.advance_consumed == null ? null : num(d.advance_consumed),
+    advance_remaining: d.advance_remaining == null ? null : num(d.advance_remaining),
     credit_notes_total: num(d.credit_notes_total),
     debit_notes_total: num(d.debit_notes_total),
     amount_due: num(d.amount_due),
@@ -148,4 +156,94 @@ export async function listCorrectionCandidates(supplierId: string): Promise<Corr
     total_amount: num(r.total_amount),
     currency: String(r.currency),
   }));
+}
+
+// =============================================================================
+// 20261008100008 — prijaté zálohy (UBL 386) odpočítané na prijatej konečnej faktúre (BT-113).
+// Review iba cez RPC (finance.manage v DB); čítanie väzieb pod RLS (finance.view, aktívna firma).
+// =============================================================================
+
+export type ReceivedAdvanceLink = {
+  invoice_id: string;
+  advance_invoice_id: string;
+  amount: number;
+  taxable_amount: number;
+  vat_amount: number;
+  source: "auto" | "manual";
+  /** Číslo dokladu dodávateľa (zálohy alebo konečnej faktúry podľa smeru dotazu). */
+  number: string | null;
+};
+
+export type ReceivedAdvanceCandidate = {
+  advance_invoice_id: string;
+  supplier_invoice_number: string | null;
+  issue_date: string;
+  tax_point_date: string | null;
+  currency: string;
+  total_amount: number;
+  remaining_amount: number;
+  document_status: string;
+};
+
+async function numbersOf(ids: string[]): Promise<Map<string, string | null>> {
+  if (ids.length === 0) return new Map();
+  const { data, error } = await supabase.from("invoices").select("id, supplier_invoice_number, invoice_number").in("id", ids);
+  if (error) throw error;
+  return new Map(((data ?? []) as Record<string, unknown>[]).map((r) => [String(r.id), ((r.supplier_invoice_number ?? r.invoice_number) as string | null) ?? null]));
+}
+
+/** Väzby z pohľadu konečnej faktúry (`by: "invoice"`) alebo zálohy (`by: "advance"`). */
+export async function listReceivedAdvanceLinks(invoiceId: string, by: "invoice" | "advance"): Promise<ReceivedAdvanceLink[]> {
+  const { data, error } = await supabase
+    .from("received_advance_links")
+    .select("invoice_id, advance_invoice_id, amount, taxable_amount, vat_amount, source")
+    .eq(by === "invoice" ? "invoice_id" : "advance_invoice_id", invoiceId);
+  if (error) throw error;
+  const rows = (data ?? []) as Record<string, unknown>[];
+  const other = (r: Record<string, unknown>) => String(by === "invoice" ? r.advance_invoice_id : r.invoice_id);
+  const numbers = await numbersOf(Array.from(new Set(rows.map(other))));
+  return rows.map((r) => ({
+    invoice_id: String(r.invoice_id),
+    advance_invoice_id: String(r.advance_invoice_id),
+    amount: num(r.amount),
+    taxable_amount: num(r.taxable_amount),
+    vat_amount: num(r.vat_amount),
+    source: r.source === "manual" ? "manual" : "auto",
+    number: numbers.get(other(r)) ?? null,
+  }));
+}
+
+export async function listReceivedAdvanceCandidates(invoiceId: string): Promise<ReceivedAdvanceCandidate[]> {
+  const { data, error } = await supabase.rpc("esblu_received_advance_candidates", { p_invoice_id: invoiceId });
+  if (error) throw error;
+  return ((data ?? []) as Record<string, unknown>[]).map((r) => ({
+    advance_invoice_id: String(r.advance_invoice_id),
+    supplier_invoice_number: (r.supplier_invoice_number as string | null) ?? null,
+    issue_date: String(r.issue_date),
+    tax_point_date: (r.tax_point_date as string | null) ?? null,
+    currency: String(r.currency),
+    total_amount: num(r.total_amount),
+    remaining_amount: num(r.remaining_amount),
+    document_status: String(r.document_status),
+  }));
+}
+
+export async function confirmReceivedAdvances(invoiceId: string): Promise<void> {
+  const { error } = await supabase.rpc("esblu_received_advance_confirm", { p_invoice_id: invoiceId });
+  if (error) throw error;
+}
+
+export async function linkReceivedAdvance(invoiceId: string, advanceId: string, amount: number | null): Promise<void> {
+  const { error } = await supabase.rpc("esblu_received_advance_link", { p_invoice_id: invoiceId, p_advance_invoice_id: advanceId, p_amount: amount });
+  if (error) throw error;
+}
+
+export async function unlinkReceivedAdvance(invoiceId: string, advanceId: string): Promise<void> {
+  const { error } = await supabase.rpc("esblu_received_advance_unlink", { p_invoice_id: invoiceId, p_advance_invoice_id: advanceId });
+  if (error) throw error;
+}
+
+export async function rejectReceivedAdvances(invoiceId: string, note: string): Promise<void> {
+  const { error } = await supabase.rpc("esblu_received_advance_reject", { p_invoice_id: invoiceId, p_note: note });
+  if (error) throw error;
 }

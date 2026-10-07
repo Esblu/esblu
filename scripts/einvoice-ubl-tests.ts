@@ -21,6 +21,7 @@ import {
   PEPPOL_BIS3_CUSTOMIZATION_ID, PEPPOL_BIS3_PROFILE_ID,
 } from "../lib/einvoice/ubl/generate.ts";
 import { parseInboundUbl, MAX_INBOUND_XML_BYTES } from "../lib/einvoice/ubl/parse.ts";
+import { mapInboundDraft } from "../lib/einvoice/inbound/mapping.ts";
 import { NS } from "../lib/einvoice/ubl/xml.ts";
 import type { UblInvoiceSnapshot, UblItem, UblParty, UblTaxBreakdown } from "../lib/einvoice/ubl/model.ts";
 import { buildIssuedInvoiceUblExport, ublExportFileName } from "../lib/einvoice/export.ts";
@@ -266,6 +267,37 @@ await check("konečná faktúra s odpočtom zálohy: PrepaidAmount (BT-113), Pay
   assert.deepEqual(all(r.xml, NS.cbc, "PayableAmount"), ["84.90"]);
   s.prepaidAmount = 999;
   assert.ok(issueCodes(s).includes("PREPAID_AMOUNT_INVALID"));
+});
+await check("konečná faktúra: BG-3 pre každú zálohu → príjemca (parser + mapovanie) dostane BT-113 aj odkazy na zálohy", () => {
+  const s = vatPayerSnapshot();
+  s.prepaidAmount = 50;
+  s.advanceInvoices = [{ invoice_number: "FA2026001", issue_date: "2026-09-01" }, { invoice_number: "FA2026002", issue_date: null }];
+  const r = ok(s);
+  const parsed = parseInboundUbl(new TextEncoder().encode(r.xml));
+  assert.ok(parsed.ok);
+  if (!parsed.ok) return;
+  assert.deepEqual(parsed.document.precedingInvoices, [{ number: "FA2026001", issueDate: "2026-09-01" }, { number: "FA2026002", issueDate: null }]);
+  const m = mapInboundDraft(parsed.document, parsed.reviewReasons, null);
+  assert.ok(m.ok, JSON.stringify(m));
+  if (!m.ok) return;
+  assert.deepEqual(m.draft.advance, { prepaid: "50.00", references: [{ number: "FA2026001", issue_date: "2026-09-01" }, { number: "FA2026002", issue_date: null }] });
+  assert.equal(m.draft.document_kind, "regular_invoice");
+  s.invoice = { ...s.invoice, kind: "credit_note", correction_reason: "Oprava ceny" };
+  s.correctedInvoice = { invoice_number: "FA1", issue_date: "2026-01-01" };
+  s.prepaidAmount = 0;
+  const cn = ok(s);
+  assert.ok(!all(cn.xml, NS.cbc, "ID").includes("FA2026001"), "dobropis nenesie odkazy na zálohy");
+});
+await check("prijatá 386: mapovanie na payment_received_invoice, BT-7; BT-113 na 386 → manuálne", () => {
+  const s = vatPayerSnapshot();
+  s.invoice = { ...s.invoice, kind: "payment_received_invoice", tax_point_date: "2026-09-30", delivery_date: null };
+  const r = ok(s);
+  const parsed = parseInboundUbl(new TextEncoder().encode(r.xml));
+  assert.ok(parsed.ok);
+  if (!parsed.ok) return;
+  const m = mapInboundDraft(parsed.document, parsed.reviewReasons, null);
+  assert.ok(m.ok && m.draft.document_kind === "payment_received_invoice" && m.draft.tax_point_date === "2026-09-30" && m.draft.advance === null);
+  assert.ok(m.ok && !m.reviewReasons.includes("INVOICE_TYPE_CODE_UNUSUAL"));
 });
 await check("prenesenie daňovej povinnosti: AE (nie 0 % S), Note „Prenesenie daňovej povinnosti“, VATEX-EU-AE", () => {
   const s = singleCategory("AE", { vat_exemption_reason_code: "VATEX-EU-AE", vat_exemption_reason_text: "Prenesenie daňovej povinnosti" });

@@ -67,8 +67,20 @@ export type InboundDraftTotals = {
   breakdown: InboundDraftTaxBreakdown[];
 };
 
-/** Druh prijatého dokladu (20261008100005): opravy idú do review toku, nikdy sa neaplikujú automaticky. */
-export type InboundDocumentKind = "regular_invoice" | "credit_note" | "debit_note";
+/**
+ * Druh prijatého dokladu (20261008100005): opravy idú do review toku, nikdy sa neaplikujú automaticky.
+ * 20261008100008: Invoice 386 → `payment_received_invoice` (faktúra k prijatej platbe / záloha) —
+ * samostatný druh, nikdy bežná faktúra; o odpočte DPH sa automaticky nerozhoduje.
+ */
+export type InboundDocumentKind = "regular_invoice" | "payment_received_invoice" | "credit_note" | "debit_note";
+
+/** Konečná faktúra s odpočítanými zálohami (BT-113 PrepaidAmount > 0) — odkazy BG-3 na zálohové faktúry. */
+export type InboundDraftAdvance = {
+  /** BT-113 v mene dokladu (reťazec, 2 desatinné miesta). */
+  prepaid: string;
+  /** BG-3 BillingReference (BT-25/BT-26) — kandidáti na prijaté faktúry k prijatej platbe. */
+  references: { number: string; issue_date: string | null }[];
+};
 
 export type InboundDraftCorrection = {
   /** BT-25 — číslo opravovanej faktúry dodávateľa (null = chýba → review). */
@@ -84,6 +96,10 @@ export type InboundDraftCorrection = {
 export type InboundDraftPayload = {
   document_kind: InboundDocumentKind;
   correction: InboundDraftCorrection | null;
+  /** Iba regular_invoice s BT-113 > 0, inak null. */
+  advance: InboundDraftAdvance | null;
+  /** BT-7 (YYYY-MM-DD) — pri 386 dátum prijatia platby; null ak chýba. */
+  tax_point_date: string | null;
   supplier: InboundDraftSupplier;
   invoice_number: string;
   issue_date: string;
@@ -124,7 +140,7 @@ export function mapPaymentMeansCode(code: string | null): { code: string | null;
 
 /**
  * Profil / typ dokladu, ktorý vieme prijať ako koncept.
- * Invoice 380 (aj iné, s review) → faktúra; Invoice 383 → ťarchopis; CreditNote 381/81/83 → dobropis
+ * Invoice 380 (aj iné, s review) → faktúra; Invoice 386 → faktúra k prijatej platbe; Invoice 383 → ťarchopis; CreditNote 381/81/83 → dobropis
  * (83 = finančná úprava → type_review). CreditNote 396/532 a Invoice 384 (opravená faktúra) → manuálne.
  */
 export function checkInboundProfile(doc: ParsedInboundUbl):
@@ -141,6 +157,7 @@ export function checkInboundProfile(doc: ParsedInboundUbl):
   }
   if (code === "383") return { ok: true, kind: "debit_note", typeReview: false };
   if (code === "384") return { ok: false, detail: "CORRECTED_INVOICE_UNSUPPORTED" };
+  if (code === "386") return { ok: true, kind: "payment_received_invoice", typeReview: false };
   return { ok: true, kind: "regular_invoice", typeReview: false };
 }
 
@@ -185,7 +202,7 @@ export function mapInboundDraft(
 
   const reasons = new Set(parserReviewReasons.filter((r) => /^[A-Z0-9_]{1,60}$/.test(r)));
   if (profile.kind === "regular_invoice" && doc.typeCode && doc.typeCode !== "380") reasons.add("INVOICE_TYPE_CODE_UNUSUAL");
-  if (profile.kind !== "regular_invoice") {
+  if (profile.kind === "credit_note" || profile.kind === "debit_note") {
     if (blank(doc.precedingInvoiceNumber)) reasons.add("ORIGINAL_REFERENCE_MISSING");
     if (profile.typeReview) reasons.add("CORRECTION_TYPE_REVIEW");
   }
@@ -206,7 +223,25 @@ export function mapInboundDraft(
   if (parserReviewReasons.includes("DOCUMENT_ALLOWANCE_CHARGE_NOT_MAPPED") || !dec(t.taxExclusive).eq(dec(t.lineExtension))) {
     return { ok: false, code: "UNSUPPORTED_PROFILE", detail: "DOCUMENT_ALLOWANCE_CHARGE_UNSUPPORTED" };
   }
-  if (!dec(t.prepaid).eq(0)) return { ok: false, code: "UNSUPPORTED_PROFILE", detail: "PREPAID_AMOUNT_UNSUPPORTED" };
+  // 20261008100008: BT-113 (odpočítané zálohy) iba na konečnej (bežnej) faktúre; väzbu na prijaté
+  // faktúry k prijatej platbe rieši DB (párovanie / review). Na 386 a opravách → manuálne.
+  const prepaid = dec(t.prepaid);
+  if (prepaid.lt(0)) return { ok: false, code: "INVALID_XML", detail: "PREPAID_AMOUNT_NEGATIVE" };
+  if (!prepaid.eq(0) && profile.kind !== "regular_invoice") {
+    return { ok: false, code: "UNSUPPORTED_PROFILE", detail: "PREPAID_AMOUNT_UNSUPPORTED" };
+  }
+  if (prepaid.gt(dec(t.taxInclusive).plus(dec(t.rounding)))) return { ok: false, code: "INVALID_XML", detail: "PREPAID_EXCEEDS_TOTAL" };
+  const isoDate = (v: string | null) => (v && /^\d{4}-\d{2}-\d{2}$/.test(v.trim()) ? v.trim() : null);
+  let advance: InboundDraftAdvance | null = null;
+  if (prepaid.gt(0)) {
+    const refs = new Map<string, { number: string; issue_date: string | null }>();
+    for (const r of doc.precedingInvoices) {
+      const n = r.number.trim().slice(0, 200);
+      if (n && !refs.has(n.toUpperCase())) refs.set(n.toUpperCase(), { number: n, issue_date: isoDate(r.issueDate) });
+    }
+    advance = { prepaid: money(prepaid), references: [...refs.values()].slice(0, 20) };
+  }
+  if (profile.kind === "payment_received_invoice" && !isoDate(doc.taxPointDate)) reasons.add("TAX_POINT_DATE_MISSING");
 
   const items: InboundDraftItem[] = [];
   const lineGroups = new Map<string, Decimal>();
@@ -317,12 +352,14 @@ export function mapInboundDraft(
     reviewReasons: [...reasons].slice(0, 30),
     draft: {
       document_kind: profile.kind,
-      correction: profile.kind === "regular_invoice" ? null : {
+      correction: profile.kind === "regular_invoice" || profile.kind === "payment_received_invoice" ? null : {
         original_number: blank(doc.precedingInvoiceNumber) ? null : doc.precedingInvoiceNumber!.trim().slice(0, 200),
         original_issue_date: doc.precedingInvoiceIssueDate && /^\d{4}-\d{2}-\d{2}$/.test(doc.precedingInvoiceIssueDate) ? doc.precedingInvoiceIssueDate : null,
         reason: doc.note && doc.note.trim().length >= 3 ? doc.note.trim().slice(0, 500) : null,
         type_review: profile.typeReview,
       },
+      advance,
+      tax_point_date: isoDate(doc.taxPointDate),
       supplier: {
         legal_name: s.name!.trim(),
         ico,

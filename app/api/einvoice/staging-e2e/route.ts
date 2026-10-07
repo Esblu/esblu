@@ -40,6 +40,8 @@ const USER_RPC_ALLOWLIST = new Set([
   "esblu_add_invoice_payment", "esblu_add_invoice_refund", "esblu_invoice_settlement",
   "esblu_set_invoice_advance_deductions", "esblu_available_advances",
   "esblu_received_correction_link", "esblu_received_correction_reject",
+  "esblu_received_advance_confirm", "esblu_received_advance_link", "esblu_received_advance_unlink",
+  "esblu_received_advance_reject", "esblu_received_advance_candidates",
 ]);
 export const maxDuration = 60;
 
@@ -368,11 +370,16 @@ export async function POST(req: Request) {
         if (!t) return json(400, { code: "INVALID_TARGET" });
         const s = await userSession(admin, t);
         try {
-          let q = s.client.from("invoices").select("id, company_id, direction, kind, document_status, payment_status, invoice_number, supplier_invoice_number, total_amount, corrects_invoice_id, correction_review_status, correction_review_reasons, corrected_document_reference, source");
+          let q = s.client.from("invoices").select("id, company_id, direction, kind, document_status, payment_status, invoice_number, supplier_invoice_number, total_amount, corrects_invoice_id, correction_review_status, correction_review_reasons, corrected_document_reference, source, subtotal_amount, vat_total_amount, tax_point_date, prepaid_amount, advance_review_status, advance_review_reasons");
           if (ids.length > 0) q = q.in("id", ids);
           if (company) q = q.eq("company_id", company);
           const { data, error } = await q.order("created_at", { ascending: true }).limit(100);
-          return json(200, { code: "OK", target: t, rows: data ?? [], error: error ? `PG:${error.code ?? "?"}` : null });
+          // 20261008100008: väzby prijatých záloh pod RLS volajúceho (finance.view).
+          const rowIds = (data ?? []).map((r) => (r as { id: string }).id);
+          const links = rowIds.length > 0
+            ? await s.client.from("received_advance_links").select("invoice_id, advance_invoice_id, amount, taxable_amount, vat_amount, source").or(`invoice_id.in.(${rowIds.join(",")}),advance_invoice_id.in.(${rowIds.join(",")})`)
+            : { data: [], error: null };
+          return json(200, { code: "OK", target: t, rows: data ?? [], links: links.data ?? [], error: error ? `PG:${error.code ?? "?"}` : null });
         } finally {
           await endSession(admin, s.token);
         }

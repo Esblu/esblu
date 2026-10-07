@@ -59,6 +59,10 @@ export type ParsedInboundUbl = {
   precedingInvoiceIssueDate: string | null;
   /** BT-22 prvá poznámka k dokladu (pri opravách dôvod opravy). */
   note: string | null;
+  /** Všetky BG-3 BillingReference (pri konečnej faktúre odkazy na zálohové faktúry). */
+  precedingInvoices: { number: string; issueDate: string | null }[];
+  /** BT-7 dátum vzniku daňovej povinnosti (pri 386 dátum prijatia platby). */
+  taxPointDate: string | null;
   deliveryDate: string | null;
   supplier: ParsedParty;
   customer: ParsedParty;
@@ -204,6 +208,11 @@ export function parseInboundUbl(input: string | Uint8Array): InboundParseResult 
     precedingInvoiceNumber: cbc(billingRef, "ID"),
     precedingInvoiceIssueDate: cbc(billingRef, "IssueDate"),
     note: cbc(root, "Note"),
+    precedingInvoices: children(root, NS.cac, "BillingReference")
+      .map((b) => cac(b, "InvoiceDocumentReference"))
+      .map((r) => ({ number: cbc(r, "ID"), issueDate: cbc(r, "IssueDate") }))
+      .filter((r): r is { number: string; issueDate: string | null } => r.number !== null),
+    taxPointDate: cbc(root, "TaxPointDate"),
     deliveryDate: cbc(cac(root, "Delivery"), "ActualDeliveryDate"),
     supplier: party(cac(root, "AccountingSupplierParty")),
     customer: party(cac(root, "AccountingCustomerParty")),

@@ -121,6 +121,7 @@ for (const migration of [
   "20261008100005_invoicing_corrections_payments_advances.sql",
   "20261008100006_einvoice_outbound_payment_received.sql",
   "20261008100007_einvoice_correction_backlink.sql",
+  "20261008100008_received_advances.sql",
 ]) {
   try {
     await db.exec(read(`supabase/migrations/${migration}`));
@@ -1105,7 +1106,8 @@ await check("XML nekonzistentné / nepodporované → koncept NEVZNIKNE, žiadny
   const base = receivedXml("FA-BAD-0");
   const cases: Array<[string, Uint8Array, string, string]> = [
     ["rcv-bad-allow", xmlEdit(base, [[/<cac:TaxTotal>/, `<cac:AllowanceCharge><cbc:ChargeIndicator>false</cbc:ChargeIndicator><cbc:Amount currencyID="EUR">10.00</cbc:Amount><cac:TaxCategory><cbc:ID>S</cbc:ID><cbc:Percent>23</cbc:Percent><cac:TaxScheme><cbc:ID>VAT</cbc:ID></cac:TaxScheme></cac:TaxCategory></cac:AllowanceCharge><cac:TaxTotal>`]]), "UNSUPPORTED_PROFILE", "DOCUMENT_ALLOWANCE_CHARGE_UNSUPPORTED"],
-    ["rcv-bad-prepaid", xmlEdit(base, [[/<cbc:PayableAmount currencyID="EUR">1230.00<\/cbc:PayableAmount>/, `<cbc:PrepaidAmount currencyID="EUR">100.00</cbc:PrepaidAmount><cbc:PayableAmount currencyID="EUR">1130.00</cbc:PayableAmount>`]]), "UNSUPPORTED_PROFILE", "PREPAID_AMOUNT_UNSUPPORTED"],
+    ["rcv-bad-prepaid", xmlEdit(base, [[/<cbc:InvoiceTypeCode>380<\/cbc:InvoiceTypeCode>/, "<cbc:InvoiceTypeCode>386</cbc:InvoiceTypeCode>"], [/<cbc:PayableAmount currencyID="EUR">1230.00<\/cbc:PayableAmount>/, `<cbc:PrepaidAmount currencyID="EUR">100.00</cbc:PrepaidAmount><cbc:PayableAmount currencyID="EUR">1130.00</cbc:PayableAmount>`]]), "UNSUPPORTED_PROFILE", "PREPAID_AMOUNT_UNSUPPORTED"],
+    ["rcv-bad-prepaid-over", xmlEdit(base, [[/<cbc:PayableAmount currencyID="EUR">1230.00<\/cbc:PayableAmount>/, `<cbc:PrepaidAmount currencyID="EUR">1300.00</cbc:PrepaidAmount><cbc:PayableAmount currencyID="EUR">-70.00</cbc:PayableAmount>`]]), "INVALID_XML", "PREPAID_EXCEEDS_TOTAL"],
     ["rcv-bad-vat", xmlEdit(base, [[/<cbc:TaxAmount currencyID="EUR">230.00<\/cbc:TaxAmount>/g, `<cbc:TaxAmount currencyID="EUR">231.00</cbc:TaxAmount>`], [/<cbc:TaxInclusiveAmount currencyID="EUR">1230.00/, `<cbc:TaxInclusiveAmount currencyID="EUR">1231.00`], [/<cbc:PayableAmount currencyID="EUR">1230.00/, `<cbc:PayableAmount currencyID="EUR">1231.00`]]), "INVALID_XML", "VAT_BREAKDOWN_AMOUNT_MISMATCH"],
     ["rcv-bad-linesum", xmlEdit(base, [[/(<cac:InvoiceLine>[\s\S]*?<cbc:LineExtensionAmount currencyID="EUR">)1000.00/, "$1999.00"]]), "INVALID_XML", "TOTALS_LINE_SUM_MISMATCH"],
     ["rcv-bad-payable", xmlEdit(base, [[/<cbc:PayableAmount currencyID="EUR">1230.00/, `<cbc:PayableAmount currencyID="EUR">1229.00`]]), "INVALID_XML", "TOTALS_PAYABLE_MISMATCH"],

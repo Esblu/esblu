@@ -358,6 +358,15 @@ export function generateUbl(s: UblInvoiceSnapshot): UblGenerationResult {
       x.text(ref, "cbc:ID", s.correctedInvoice.invoice_number!.trim());
       if (isoDate(s.correctedInvoice.issue_date)) x.text(ref, "cbc:IssueDate", isoDate(s.correctedInvoice.issue_date)!);
     }
+    // Konečná faktúra: BG-3 pre každú odpočítanú zálohu (20261008100008) — príjemca páruje BT-113 na svoje prijaté 386.
+    if (inv.kind === "regular_invoice") {
+      for (const a of s.advanceInvoices ?? []) {
+        if (blank(a.invoice_number)) continue;
+        const ref = x.group(x.group(r, "cac:BillingReference"), "cac:InvoiceDocumentReference");
+        x.text(ref, "cbc:ID", a.invoice_number!.trim());
+        if (isoDate(a.issue_date)) x.text(ref, "cbc:IssueDate", isoDate(a.issue_date)!);
+      }
+    }
 
     addParty(x, x.group(r, "cac:AccountingSupplierParty"), s.seller);
     addParty(x, x.group(r, "cac:AccountingCustomerParty"), s.buyer);

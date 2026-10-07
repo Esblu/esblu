@@ -92,6 +92,8 @@ export type UblInvoiceSnapshot = {
   correctedInvoice: UblCorrectedInvoice | null;
   /** Odpočet záloh (BT-113 PrepaidAmount, s DPH) — z invoice_advance_deductions. */
   prepaidAmount?: number | string | null;
+  /** Zálohové faktúry odpočítané na konečnej faktúre (BG-3 BT-25/BT-26) — príjemca podľa nich páruje zálohy. */
+  advanceInvoices?: UblCorrectedInvoice[];
 };
 
 /**

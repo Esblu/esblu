@@ -74,16 +74,33 @@ export async function loadFinalizedIssuedInvoiceSnapshot(
   // Odpočet záloh (konečná faktúra): suma s DPH → BT-113.
   const { data: deductions, error: dedError } = await db
     .from("invoice_advance_deductions")
-    .select("taxable_amount, vat_amount")
+    .select("taxable_amount, vat_amount, advance_invoice_id")
     .eq("invoice_id", invoice.id)
-    .returns<{ taxable_amount: number | string; vat_amount: number | string }[]>();
+    .returns<{ taxable_amount: number | string; vat_amount: number | string; advance_invoice_id: string }[]>();
   if (dedError) return { ok: false, reason: "QUERY_FAILED" };
   const prepaidAmount = (deductions ?? []).reduce((acc, d) => acc + Math.round((Number(d.taxable_amount) + Number(d.vat_amount)) * 100), 0) / 100;
+
+  // BG-3 pre každú odpočítanú zálohu (číslo + dátum) — iba doklady tej istej firmy.
+  const advanceIds = Array.from(new Set((deductions ?? []).map((d) => d.advance_invoice_id)));
+  let advanceInvoices: UblInvoiceSnapshot["advanceInvoices"] = [];
+  if (advanceIds.length > 0) {
+    const { data: advances, error: advError } = await db
+      .from("invoices")
+      .select("id, invoice_number, issue_date, company_id")
+      .in("id", advanceIds)
+      .returns<{ id: string; invoice_number: string | null; issue_date: string | null; company_id: string }[]>();
+    if (advError) return { ok: false, reason: "QUERY_FAILED" };
+    advanceInvoices = (advances ?? [])
+      .filter((a) => a.company_id === activeCompanyId && a.invoice_number)
+      .sort((a, b) => String(a.invoice_number).localeCompare(String(b.invoice_number)))
+      .map((a) => ({ invoice_number: a.invoice_number, issue_date: a.issue_date }));
+  }
 
   return {
     ok: true,
     snapshot: {
       prepaidAmount,
+      advanceInvoices,
       invoice,
       seller,
       buyer,
