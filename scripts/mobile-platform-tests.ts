@@ -219,6 +219,12 @@ await check("zrušenie firmy s finalizovanými dokladmi: blokované PRED akýmko
 });
 
 // ----------------------------------------------------------------------------- NATIVE CONFIG (static)
+await check("android-prebuild-check: statické kontroly prechádzajú (bez buildu iba chýbajúce assets)", async () => {
+  const { spawnSync } = await import("node:child_process");
+  const r = spawnSync(process.execPath, [path.join(ROOT, "scripts/android-prebuild-check.mjs")], { cwd: ROOT, encoding: "utf8" });
+  const fails = r.stdout.split("\n").filter((l) => l.startsWith("FAIL"));
+  assert.ok(fails.every((l) => /APK assets existujú/.test(l)), fails.join("\n"));
+});
 await check("Capacitor: appId com.esblu.app, žiadny server.url (lokálne assets), iOS + Android bundle id zhodné", () => {
   const cfg = read("mobile/capacitor.config.ts");
   assert.match(cfg, /appId: "com\.esblu\.app"/);
@@ -506,6 +512,41 @@ await check("AASA / assetlinks šablóny: placeholdery, mimo public/, render fai
 });
 
 // ============================================================================= ICON / SPLASH
+await check("ikony: vygenerované zo schválenej master ikony (iOS 1024 bez alfa, Android legacy/round/adaptive), návrhy nezapojené", async () => {
+  const { spawnSync } = await import("node:child_process");
+  const py = `
+from PIL import Image
+import sys
+r = "mobile/"
+ios = Image.open(r + "ios/App/App/Assets.xcassets/AppIcon.appiconset/AppIcon-512@2x.png")
+assert ios.size == (1024, 1024) and ios.mode == "RGB", ios.mode
+sizes = {"mdpi": (48, 108), "hdpi": (72, 162), "xhdpi": (96, 216), "xxhdpi": (144, 324), "xxxhdpi": (192, 432)}
+for d, (s, f) in sizes.items():
+    base = r + "android/app/src/main/res/mipmap-" + d + "/"
+    assert Image.open(base + "ic_launcher.png").size == (s, s)
+    assert Image.open(base + "ic_launcher_round.png").size == (s, s)
+    fg = Image.open(base + "ic_launcher_foreground.png").convert("RGB")
+    assert fg.size == (f, f)
+    # obsah (modrý symbol) mimo 66dp safe kruhu nesmie byť
+    import math
+    px = fg.load(); c = f / 2; lim = f * 0.3056
+    for y in range(0, f, 2):
+        for x in range(0, f, 2):
+            rr, g, b = px[x, y]
+            if b > 180 and rr < 160 and math.hypot(x - c, y - c) > lim:
+                sys.exit("obsah mimo safe zóny " + d)
+# master sa porovná s iOS výstupom (bez úprav artworku)
+m = Image.open(r + "icon-source/esblu-master-icon.png").convert("RGB").resize((64, 64))
+o = ios.resize((64, 64))
+diff = sum(abs(a - b) for p, q in zip(m.getdata(), o.getdata()) for a, b in zip(p, q)) / (64 * 64 * 3)
+assert diff < 2, diff
+print("ok")
+`;
+  const r = spawnSync("python3", ["-c", py], { cwd: ROOT, encoding: "utf8" });
+  assert.equal(r.status, 0, r.stderr + r.stdout);
+  const res = read("mobile/android/app/src/main/AndroidManifest.xml");
+  assert.doesNotMatch(res, /ic_stat_esblu/, "symbol-only notifikačná ikona je iba návrh");
+});
 await check("ikona: generátor fail-closed bez 1024×1024 zdroja; splash zo schváleného brand assetu", async () => {
   const { spawnSync } = await import("node:child_process");
   const r = spawnSync("python3", [path.join(ROOT, "scripts/generate-mobile-assets.py"), "icon"], { encoding: "utf8" });

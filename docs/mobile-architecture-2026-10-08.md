@@ -59,7 +59,7 @@ READY = hotové v kóde, PARTIAL = funguje s výhradou, MISSING = chýba.
 | Ochrana pred dvojitým odoslaním | PARTIAL | PARTIAL | pozri sekciu 5 |
 | Zrušenie účtu v appke | READY (opravené) | READY | |
 | Hlasový asistent | READY (`RECORD_AUDIO`) | PARTIAL (usage string; WKWebView `getUserMedia`) | REAL DEVICE TEST |
-| Ikony / splash | ikona **MISSING** (default Capacitor), splash READY | ikona **MISSING**, splash READY | jediný vstup: 1024×1024 Esblu master ikona (generátor pripravený) |
+| Ikony / splash | READY (master ikona 2026-10-09) | READY | prvý build na zariadení: `docs/android-first-device-build-2026-10-09.md` |
 | Nákup predplatného | — (mimo scope) | — | billing vetva |
 
 ## 3. Funkčná parita web ↔ mobile

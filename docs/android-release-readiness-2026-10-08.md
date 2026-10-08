@@ -18,7 +18,7 @@ Appka **nie je vydaná** a nebol vytvorený žiadny platený účet ani služba.
 | Deep links (App Links) | READY | `autoVerify` pre `/invite`, `/reset-hesla`, `/onboarding/company`, `/auth/callback`; `assetlinks.json` s upload certifikátom | GOOGLE USER ACTION: po zapnutí Play App Signing doplniť jeho SHA-256 do `assetlinks.json` |
 | Firebase / FCM | PARTIAL | `google-services.json` mimo Git (Gradle ho voliteľne aplikuje); server FCM HTTP v1 | GOOGLE USER ACTION: Firebase projekt + `google-services.json` lokálne + service account v server env |
 | Crash behavior | PARTIAL | WebView chyby sa zobrazia per obrazovku; offline banner; bez crash reportingu (Crashlytics nie je pridaný) | rozhodnutie (voliteľné) |
-| Ikona | **MISSING** | `mipmap-*` je **default Capacitor ikona** (nie Esblu) — opravené zistenie; generátor `scripts/generate-mobile-assets.py icon --source <1024.png>` je pripravený | jediný chýbajúci vstup: 1024×1024 Esblu master ikona |
+| Ikona | READY (2026-10-09) | zo schválenej master ikony `mobile/icon-source/esblu-master-icon.png`: legacy + round + adaptive foreground (zmenšený na 0.77 do safe zóny, biele pozadie). Text „Esblu" je čitateľný od 72 px, pri 48 px rozpoznateľný | STORE REVIEW; symbol-only notifikačná ikona je iba návrh v `mobile/icon-source/proposals/` (nezapojená) |
 | Splash | READY | vygenerovaný zo schválenej `public/icons/icon-512.png` (bez zväčšenia) | STORE REVIEW (vizuálna kontrola) |
 | Store listing | MISSING | názov, krátky/dlhý popis, screenshoty (telefón, 7" / 10" voliteľne), feature graphic 1024×500, kategória Business | GOOGLE USER ACTION |
 | Privacy policy URL | READY | `https://www.esblu.com/ochrana-osobnych-udajov` | LEGAL/CLIA (aktuálnosť) |

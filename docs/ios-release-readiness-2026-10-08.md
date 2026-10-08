@@ -21,7 +21,7 @@ V Apple Developer **nebolo nič registrované** (žiadne App ID, certifikáty an
 | Mikrofón (hlas) | PARTIAL | `NSMicrophoneUsageDescription`; WKWebView `getUserMedia` | REAL DEVICE TEST |
 | ATS / sieť | READY | žiadne `NSAllowsArbitraryLoads`; iba HTTPS (`capacitor://localhost` origin je v CORS allowliste) | — |
 | Sign in with Apple | READY (kód), fail closed | natívne ASAuthorization (`EsbluAppleSignInPlugin.swift`, SHA-256 nonce) → `signInWithIdToken`; bez pluginu systémový prehliadač; entitlement `com.apple.developer.applesignin`. Ponúkne sa iba pri `NEXT_PUBLIC_ESBLU_OAUTH_PROVIDERS` s `apple`; Google na iOS iba spolu s Apple | APPLE USER ACTION: capability na App ID, Services ID + kľúč, Apple provider v Supabase |
-| Ikony | **MISSING (iba vstup)** | `AppIcon.appiconset` = default Capacitor ikona; generátor `scripts/generate-mobile-assets.py icon --source <1024.png>` pripravený (fail closed) | jediný vstup: 1024×1024 Esblu master ikona |
+| Ikony | READY (2026-10-09) | AppIcon 1024 (bez alfa) zo schválenej master ikony; Xcode z nej odvodí všetky veľkosti. V 29 a 40 pt (Settings / Spotlight) text „Esblu" nie je čitateľný, symbol áno | voliteľne: symbol-only varianty malých veľkostí — iba so súhlasom (návrh v `mobile/icon-source/proposals/`) |
 | Splash | READY | vygenerovaný zo schválenej `public/icons/icon-512.png` | STORE REVIEW |
 | `UIRequiredDeviceCapabilities` | READY | `arm64` (pôvodné `armv7` z template opravené) | — |
 | Export compliance | PARTIAL | `ITSAppUsesNonExemptEncryption = false` (iba HTTPS z OS) | LEGAL/CLIA: potvrdiť |
