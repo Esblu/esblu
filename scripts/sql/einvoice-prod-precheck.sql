@@ -1,5 +1,5 @@
 -- =============================================================================
--- eFaktúra — PRODUKČNÝ PRECHECK pred migráciami 20261002100000 … 20261008100010
+-- eFaktúra — PRODUKČNÝ PRECHECK pred migráciami 20261002100000 … 20261008100011
 --
 -- ČISTO READ-ONLY. Spúšťa iba vlastník (alebo na jeho výslovný súhlas) nad projektom
 -- `assetpilot` (fkpgvgvsmbpieduoatrt), PRED oknom migrácií. Nič nemení: transakcia je READ ONLY
@@ -55,7 +55,8 @@ new_cols(tbl, col) as (values
   ('invoices', 'tax_base_eur'), ('invoices', 'vat_total_eur'), ('invoices', 'fx_tax_point_date'), ('invoices', 'fx_reference_rate_id'),
   ('invoices', 'corrected_document_reference'), ('invoices', 'correction_review_status'), ('invoices', 'prepaid_amount'),
   ('invoices', 'advance_review_status'), ('invoice_payments', 'entry_type'),
-  ('invoices', 'untaxed_prepaid_amount'), ('invoice_items', 'is_advance_deduction'), ('invoice_items', 'advance_invoice_id')
+  ('invoices', 'untaxed_prepaid_amount'), ('invoice_items', 'is_advance_deduction'), ('invoice_items', 'advance_invoice_id'),
+  ('einvoice_outbound', 'sbdh_instance_identifier'), ('einvoice_outbound', 'as4_message_id')
 ),
 vat_mismatch as (
   select i.id

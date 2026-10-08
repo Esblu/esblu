@@ -32,6 +32,12 @@ export type OutboundRow = {
   send_in_flight: boolean;
   send_outcome_unknown: boolean;
   updated_at: string;
+  /** Definitívny identifikátor podania u poskytovateľa (eFaktura.sk document_id z connector/send). */
+  document_id?: string | null;
+  sent_at?: string | null;
+  /** 20261008100011: identifikátory prenosu z webhooku (iba podpora / korelácia). */
+  as4_message_id?: string | null;
+  sbdh_instance_identifier?: string | null;
 };
 
 export type RequestOutboundArgs = {

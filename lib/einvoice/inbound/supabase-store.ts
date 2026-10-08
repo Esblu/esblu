@@ -134,6 +134,14 @@ export function createSupabaseInboundStore(admin: SupabaseClient = getSupabaseAd
       });
       return rows?.[0] ?? null;
     },
+    async recordOutboundTransport(companyId, submissionId, ids) {
+      return (await rpc<number>("esblu_einvoice_outbound_record_transport", {
+        p_company_id: companyId,
+        p_provider_submission_id: submissionId,
+        p_as4_message_id: ids.as4MessageId,
+        p_sbdh_instance_identifier: ids.sbdhInstanceIdentifier,
+      })) ?? 0;
+    },
     async webhookRetry(id) {
       return (await rpc<boolean>("esblu_einvoice_webhook_retry", { p_webhook_event_id: id, p_max: 5 })) === true;
     },

@@ -165,6 +165,9 @@ Operátorské akcie majú cooldown 60 s na riadok, vyžadujú finance.manage a z
 - **E-Faktúra kód nepoužíva `console.*`.** Odpovede obsahujú iba strojové kódy a počty.
 - **Bezpečné na zdieľanie (aj s poskytovateľom):**
   - interné UUID riadkov, `provider_submission_id` (invoice_id poskytovateľa), `idempotency_key`,
+  - `document_id` (definitívny identifikátor podania zo send), `sbdh_instance_identifier` (SBDH InstanceIdentifier,
+    z webhooku `transactionId`), `as4_message_id` (`messageId`) — dohľadávací SQL v
+    `docs/efaktura-provider-conformance-2026-10-08.md`, sekcia 4,
   - stav, chybový kód, časy, SHA-256 dokumentu,
   - `X-Webhook-Id`.
 - **Nikdy nezdieľať:**

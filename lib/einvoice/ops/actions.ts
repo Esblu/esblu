@@ -127,7 +127,13 @@ export async function runOperatorAction(
     }
     let lookup;
     try {
-      lookup = await runtime.provider.findSubmissionByIdempotencyKey({ environment: row.environment, providerOrgId: org.providerOrgId }, row.idempotency_key);
+      // Definitívny document_id z connector/send → invoice_id cez /submissions (eFaktura.sk); inak lookup podľa kľúča.
+      const byDocument = row.document_id && runtime.provider.getSubmissionByDocumentId
+        ? await runtime.provider.getSubmissionByDocumentId({ environment: row.environment, providerOrgId: org.providerOrgId }, row.document_id)
+        : null;
+      lookup = byDocument?.invoiceId
+        ? { kind: "found" as const, providerSubmissionId: byDocument.invoiceId, state: byDocument.state ?? "queued" }
+        : await runtime.provider.findSubmissionByIdempotencyKey({ environment: row.environment, providerOrgId: org.providerOrgId }, row.idempotency_key);
     } catch (error) {
       const code = errorCode(error);
       const r = await deps.outbound.transition(row.id, row.state, null, "reconcile", code, { locked_until: null, status_checked_at: iso(now) });

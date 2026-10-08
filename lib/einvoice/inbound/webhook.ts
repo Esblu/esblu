@@ -41,6 +41,11 @@ export type WebhookResponse = { status: number; body: { code: string } };
 
 const DELIVERY_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/;
 const ORG_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+
+/** Identifikátor prenosu z webhooku (AS4 message id / SBDH InstanceIdentifier): tlačiteľné ASCII, max 200. */
+function transportId(value: unknown): string | null {
+  return typeof value === "string" && /^[\x21-\x7e]{1,200}$/.test(value) ? value : null;
+}
 const EVENT = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/;
 
 /** Terminálne stavy pokusu (DB trigger ich už nedovolí zmeniť). */
@@ -213,6 +218,17 @@ export async function processProviderEvent(
       if (!submissionId || !ORG_ID.test(submissionId)) {
         await deps.inbound.webhookComplete(record.webhookEventId, "ignored", "MISSING_SUBMISSION_ID");
         return { status: 200, body: { code: "IGNORED" } };
+      }
+      // Korelácia pre podporu (eFaktura.sk): messageId = AS4, transactionId = SBDH InstanceIdentifier.
+      // Iba identifikátory (tlačiteľné ASCII ≤ 200), write-once, aj k už ukončenému podaniu; best-effort.
+      const as4MessageId = transportId(data?.messageId);
+      const sbdhInstanceIdentifier = transportId(data?.transactionId);
+      if ((as4MessageId || sbdhInstanceIdentifier) && deps.inbound.recordOutboundTransport) {
+        try {
+          await deps.inbound.recordOutboundTransport(record.companyId, submissionId, { as4MessageId, sbdhInstanceIdentifier });
+        } catch {
+          // nezastaví reconciliation; identifikátory sú aj v exporte GET /v1/agent/peppol/events
+        }
       }
       const row = await deps.inbound.claimOutboundBySubmission(record.companyId, submissionId, 120);
       if (row) {

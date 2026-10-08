@@ -124,6 +124,7 @@ for (const migration of [
   "20261008100008_received_advances.sql",
   "20261008100009_taxed_advance_deduction_lines.sql",
   "20261008100010_received_advance_match_safeupdate.sql",
+  "20261008100011_einvoice_outbound_transport_ids.sql",
 ]) {
   try {
     await db.exec(read(`supabase/migrations/${migration}`));
@@ -240,6 +241,10 @@ const inboundStore: InboundStore = {
   async claimOutboundBySubmission(companyId, submissionId, lease) {
     const rows = await svc<{ j: OutboundRow }>("select to_jsonb(t) j from public.esblu_einvoice_claim_outbound_by_submission($1, $2, $3) t", [companyId, submissionId, lease]);
     return rows[0]?.j ?? null;
+  },
+  async recordOutboundTransport(companyId, submissionId, ids) {
+    const rows = await svc<{ n: number }>("select public.esblu_einvoice_outbound_record_transport($1, $2, $3, $4) n", [companyId, submissionId, ids.as4MessageId, ids.sbdhInstanceIdentifier]);
+    return Number(rows[0]?.n ?? 0);
   },
   async putXml(p, bytes) {
     if (storageFail) throw new InboundStoreError("STORAGE_FAILED");
@@ -822,6 +827,39 @@ await check("docs tvar: peppol.document.delivered s data.invoiceId → reconcili
   }, "dlv-docs-2");
   assert.deepEqual(r, { status: 200, body: { code: "RECONCILED" } });
   assert.deepEqual(provider.calls, ["status:prov-out-1"]);
+});
+
+await check("korelácia (eFaktura.sk 8. 10.): sent/delivered messageId (AS4) + transactionId (SBDH InstanceIdentifier) → uložené k podaniu firmy, write-once, bez obsahu", async () => {
+  const sel = () => sql<Row>("select company_id, provider_submission_id, document_id, as4_message_id, sbdh_instance_identifier from public.einvoice_outbound where provider_submission_id = 'prov-out-1'");
+  // iná firma (org-b) s tým istým invoiceId → nič sa nezapíše
+  await webhook({ event: "peppol.document.sent", data: { invoiceId: "prov-out-1", messageId: "foreign-msg", transactionId: "foreign-sbdh", mode: "test", orgId: "org-b" } }, "dlv-corr-0");
+  assert.equal((await sel()).rows[0].sbdh_instance_identifier, null);
+  const r = await webhook({
+    event: "peppol.document.sent",
+    timestamp: "2026-10-08T10:00:00.000Z",
+    data: { invoiceId: "prov-out-1", messageId: "5f4b67ce-ec3b-4467-a307-583593b6be07@phase4.phoss-ap", transactionId: "a1b2c3d4-0000-4000-8000-000000000001", state: "SENT", mode: "test", orgId: "org-a" },
+  }, "dlv-corr-1");
+  assert.equal(r.status, 200);
+  let row = (await sel()).rows[0];
+  assert.equal(row.company_id, CA);
+  assert.equal(row.as4_message_id, "5f4b67ce-ec3b-4467-a307-583593b6be07@phase4.phoss-ap");
+  assert.equal(row.sbdh_instance_identifier, "a1b2c3d4-0000-4000-8000-000000000001");
+  // neskorší / opakovaný event s inou hodnotou ani neplatná hodnota pôvodnú neprepíše
+  await webhook({ event: "peppol.document.delivered", data: { invoiceId: "prov-out-1", messageId: "other", transactionId: "other-sbdh", mode: "test", orgId: "org-a" } }, "dlv-corr-2");
+  await webhook({ event: "peppol.document.delivered", data: { invoiceId: "prov-out-1", transactionId: "with space <xml/>", mode: "test", orgId: "org-a" } }, "dlv-corr-3");
+  row = (await sel()).rows[0];
+  assert.equal(row.sbdh_instance_identifier, "a1b2c3d4-0000-4000-8000-000000000001");
+  assert.equal(row.as4_message_id, "5f4b67ce-ec3b-4467-a307-583593b6be07@phase4.phoss-ap");
+  // podpora: dohľadanie podľa ľubovoľného identifikátora v rámci firmy
+  const byAny = await sql<Row>(
+    "select o.id from public.einvoice_outbound o where o.company_id = $1 and $2 in (o.provider_submission_id, o.document_id, o.sbdh_instance_identifier, o.as4_message_id)",
+    [CA, "a1b2c3d4-0000-4000-8000-000000000001"]);
+  assert.equal(byAny.rows.length, 1);
+  // RPC iba service_role; webhook log neobsahuje telo (iba hash)
+  assert.match(await errorOf(() => as(U.owner, () => db.query("select public.esblu_einvoice_outbound_record_transport($1, 'prov-out-1', 'x', 'y')", [CA]))), /permission denied|42501/);
+  const cols = (await sql<Row>("select column_name from information_schema.columns where table_schema = 'public' and table_name = 'einvoice_webhook_events'")).rows.map((c) => c.column_name);
+  assert.ok(cols.includes("body_sha256"));
+  assert.ok(!cols.some((c) => /^(body|payload|raw|xml|ubl)(?!_sha256$)/.test(String(c))), cols.join(","));
 });
 
 await check("data.mode z inej siete (live udalosť na sandbox serveri) → IGNORED, nič sa nespracuje", async () => {

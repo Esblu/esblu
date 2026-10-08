@@ -95,6 +95,11 @@ export interface InboundStore {
    */
   outboundStateBySubmission?(companyId: string, providerSubmissionId: string): Promise<string | null>;
   /**
+   * 20261008100011: identifikátory prenosu z peppol.document.sent / delivered (messageId = AS4,
+   * transactionId = SBDH InstanceIdentifier) k podaniu firmy — write-once, iba identifikátory.
+   */
+  recordOutboundTransport?(companyId: string, providerSubmissionId: string, ids: { as4MessageId: string | null; sbdhInstanceIdentifier: string | null }): Promise<number>;
+  /**
    * Webhook / feed participant.* → stav PRÍJMU organizácie (RPC esblu_einvoice_org_participant_event).
    * Voliteľné: store bez tejto metódy participant udalosti ignoruje (EVENT_NOT_HANDLED).
    */

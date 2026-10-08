@@ -71,6 +71,7 @@ export const EINVOICE_MIGRATIONS = [
   "20261008100008_received_advances.sql",
   "20261008100009_taxed_advance_deduction_lines.sql",
   "20261008100010_received_advance_match_safeupdate.sql",
+  "20261008100011_einvoice_outbound_transport_ids.sql",
 ];
 
 async function loadPglite(): Promise<Db> {

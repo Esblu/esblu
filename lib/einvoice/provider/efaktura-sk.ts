@@ -24,6 +24,7 @@ import {
   type SendResult,
   type SendUblInput,
   type SubmissionLookup,
+  type SubmissionByDocument,
 } from "./types.ts";
 import { MAX_INBOUND_XML_BYTES } from "../ubl/parse.ts";
 import { sanitizeDeliveryEvidence } from "../evidence.ts";
@@ -46,6 +47,8 @@ import { sanitizeDeliveryEvidence } from "../evidence.ts";
 //   POST /v1/agent/peppol/preflight                invoice:read, bez zápisu, bez kreditu
 //   POST /v1/agent/peppol/connector/send           invoice:send, Idempotency-Key POVINNÝ
 //   GET  /v1/agent/peppol/status/{invoiceId}       invoice:read
+//   GET  /v1/agent/peppol/submissions/{documentId} invoice:read — podľa odpovede poskytovateľa (8. 10. 2026);
+//                                                  verejná OpenAPI ho zatiaľ neuvádza → tolerantné čítanie, fail-closed
 //   GET  /v1/agent/peppol/sent/{invoiceId}/evidence invoice:read, 404 = ešte žiadny prenos
 //   GET  /v1/agent/peppol/received?acknowledged=false
 //   GET  /v1/agent/peppol/received/{id}/xml        pôvodný UBL
@@ -176,6 +179,23 @@ function assertPathId(value: string, label: string): string {
   return encodeURIComponent(value);
 }
 
+/**
+ * document_id poskytovateľa (napr. „0245:2123456789#OF2026001" alebo „<uuid>@<ap>") — tlačiteľné ASCII bez
+ * medzier, max 250 (DB CHECK einvoice_outbound.document_id). Do cesty iba cez encodeURIComponent.
+ */
+export function safeDocumentId(value: unknown): string | null {
+  return typeof value === "string" && /^[\x21-\x7e]{1,250}$/.test(value) ? value : null;
+}
+
+/**
+ * 409 „Požiadavka s týmto Idempotency-Key sa práve spracúva" (eFaktura.sk, 8. 10. 2026) NIE JE finálne zlyhanie —
+ * ten istý kľúč a tie isté bajty sa zopakujú neskôr. Iný 409 (ten istý kľúč s INÝM telom, duplicita) ostáva konflikt.
+ */
+export function isIdempotencyInProgress(providerCode: string | null, message: unknown): boolean {
+  if (providerCode && /IN_PROGRESS|PROCESSING|LOCKED|CONCURRENT/i.test(providerCode)) return true;
+  return typeof message === "string" && /pr[aá]ve\s+spracúva|pr[aá]ve\s+spracuva|in\s+progress|being\s+processed|currently\s+(being\s+)?process/i.test(message);
+}
+
 /** Odstráni čokoľvek, čo vyzerá ako kľúč/tajomstvo, a skráti text od poskytovateľa. */
 export function scrubProviderText(value: unknown): string | null {
   if (typeof value !== "string") return null;
@@ -222,7 +242,12 @@ function errorFromResponse(status: number, body: unknown, retryAfter: string | n
   if (status === 401) return new EinvoiceProviderError("EINVOICE_PROVIDER_UNAUTHORIZED", `Poskytovateľ odmietol kľúč${suffix}`);
   if (status === 403) return new EinvoiceProviderError("EINVOICE_PROVIDER_FORBIDDEN", `${message}${suffix}`);
   if (status === 404) return new EinvoiceProviderError("EINVOICE_PROVIDER_NOT_FOUND", `${message}${suffix}`);
-  if (status === 409) return new EinvoiceProviderError("EINVOICE_PROVIDER_CONFLICT", `${message}${suffix}`);
+  if (status === 409) {
+    if (isIdempotencyInProgress(providerCode, nested?.message ?? root?.message)) {
+      return new EinvoiceProviderError("EINVOICE_PROVIDER_IDEMPOTENCY_IN_PROGRESS", `${message}${suffix}`, true);
+    }
+    return new EinvoiceProviderError("EINVOICE_PROVIDER_CONFLICT", `${message}${suffix}`);
+  }
   if (status === 402) return new EinvoiceProviderError("EINVOICE_PROVIDER_INSUFFICIENT_CREDIT", `${message}${suffix}`);
   if (status === 429) {
     const seconds = Number(retryAfter);
@@ -541,8 +566,10 @@ export class EfakturaSkProvider implements EinvoiceProvider, EinvoiceOnboardingP
       throw new EinvoiceProviderError("EINVOICE_PROVIDER_UNKNOWN_STATE", "Neznámy výsledok odoslania — stav sa nemení");
     }
     const invoiceId = str(body.invoice_id);
-    if (state === "queued" && !invoiceId) {
-      throw new EinvoiceProviderError("EINVOICE_PROVIDER_BAD_RESPONSE", "queued bez invoice_id");
+    // document_id = definitívny identifikátor podania; invoice_id sa z neho dá dohľadať (/submissions).
+    const documentId = safeDocumentId(body.document_id);
+    if (state === "queued" && !invoiceId && !documentId) {
+      throw new EinvoiceProviderError("EINVOICE_PROVIDER_BAD_RESPONSE", "queued bez invoice_id aj document_id");
     }
     let rejectReason: string | null = null;
     if (state === "rejected") {
@@ -556,7 +583,29 @@ export class EfakturaSkProvider implements EinvoiceProvider, EinvoiceOnboardingP
       providerSubmissionId: invoiceId,
       providerStagedId: str(body.staged_id),
       rejectReason,
+      providerDocumentId: documentId,
     };
+  }
+
+  /**
+   * GET /v1/agent/peppol/submissions/{document_id} → invoice_id (+ stav). Tvar odpovede nie je vo verejnej
+   * OpenAPI: čítajú sa iba `invoice_id`/`invoiceId` a `state`/`status`; čokoľvek iné = null (nič sa nerozhodne).
+   */
+  async getSubmissionByDocumentId(ctx: ProviderContext, documentId: string): Promise<SubmissionByDocument | null> {
+    const id = safeDocumentId(documentId);
+    if (!id) throw new EinvoiceProviderError("EINVOICE_INVALID_ID", "documentId: neplatný identifikátor");
+    let body: Record<string, unknown>;
+    try {
+      ({ body } = await this.#json({ method: "GET", path: `/v1/agent/peppol/submissions/${encodeURIComponent(id)}`, ctx }));
+    } catch (error) {
+      if (error instanceof EinvoiceProviderError && error.code === "EINVOICE_PROVIDER_NOT_FOUND") return null;
+      throw error;
+    }
+    const rawInvoice = str(body.invoice_id) ?? str(body.invoiceId);
+    const invoiceId = rawInvoice && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(rawInvoice) ? rawInvoice : null;
+    const state = mapEfakturaSendState(str(body.state) ?? str(body.status));
+    if (!invoiceId && !state) return null;
+    return { invoiceId, state };
   }
 
   async getOutboundStatus(ctx: ProviderContext, submission: { providerSubmissionId: string }): Promise<OutboundStatus> {

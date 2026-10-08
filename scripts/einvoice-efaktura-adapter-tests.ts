@@ -175,7 +175,57 @@ await check("sendUbl: Connector, povinný Idempotency-Key, autoRepair=false, inv
     receiverPeppolId: "9915:9999999902",
     options: { autoRepair: false, validateOnly: false, dispatch: "now" },
   });
-  assert.deepEqual(res, { state: "queued", providerSubmissionId: INV, providerStagedId: null, rejectReason: null });
+  assert.deepEqual(res, { state: "queued", providerSubmissionId: INV, providerStagedId: null, rejectReason: null, providerDocumentId: "9915:9999999902#T1" });
+});
+
+await check("sendUbl retry po timeoute: TEN ISTÝ Idempotency-Key a byte-identické telo", async () => {
+  const ubl = new TextEncoder().encode("<Invoice>retry</Invoice>");
+  const sha = createHash("sha256").update(ubl).digest("hex");
+  const raw: { key: string; body: string }[] = [];
+  let n = 0;
+  const impl: EfakturaFetch = async (input, init) => {
+    raw.push({ key: (init.headers as Record<string, string>)["Idempotency-Key"], body: String(init.body) });
+    n++;
+    if (n === 1) throw Object.assign(new Error("timeout"), { name: "TimeoutError" });
+    return new Response(JSON.stringify({ data: { status: "queued", invoice_id: INV, document_id: "9915:9999999902#T2" } }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  const p = provider(impl);
+  const input = { ubl, ublSha256: sha, idempotencyKey: "einv-out-0000000000000009", receiverParticipantId: "9915:9999999902" };
+  await assert.rejects(p.sendUbl(ctx, input), (e: unknown) => codeOf("EINVOICE_PROVIDER_TIMEOUT")(e) && (e as EinvoiceProviderError).retryable);
+  const res = await p.sendUbl(ctx, input);
+  assert.equal(res.providerDocumentId, "9915:9999999902#T2");
+  assert.equal(raw.length, 2);
+  assert.equal(raw[0].key, raw[1].key);
+  assert.equal(raw[0].body, raw[1].body, "telo retry musí byť byte-identické");
+});
+
+await check("sendUbl: queued iba s document_id (bez invoice_id) je platné podanie; bez oboch → BAD_RESPONSE", async () => {
+  const ubl = new TextEncoder().encode("<Invoice/>");
+  const sha = createHash("sha256").update(ubl).digest("hex");
+  let reply: Reply = { json: { data: { status: "queued", document_id: "0245:2123456789#OF2026001" } } };
+  const f = fake([(r) => is("POST", "/v1/agent/peppol/connector/send")(r) ? reply : undefined]);
+  const p = provider(f.impl);
+  const input = { ubl, ublSha256: sha, idempotencyKey: "einv-out-0000000000000010" };
+  assert.deepEqual(await p.sendUbl(ctx, input), { state: "queued", providerSubmissionId: null, providerStagedId: null, rejectReason: null, providerDocumentId: "0245:2123456789#OF2026001" });
+  reply = { json: { data: { status: "queued", document_id: "with space" } } };
+  await assert.rejects(p.sendUbl(ctx, input), codeOf("EINVOICE_PROVIDER_BAD_RESPONSE"));
+});
+
+await check("getSubmissionByDocumentId: GET /submissions/{document_id} (URL-enkódované) → invoice_id; 404 / nejasné → null", async () => {
+  const doc = "0245:2123456789#OF2026001";
+  let reply: Reply = { json: { data: { document_id: doc, invoice_id: INV, state: "SENT" } } };
+  const f = fake([(r) => r.method === "GET" && r.url.pathname.startsWith("/v1/agent/peppol/submissions/") ? reply : undefined]);
+  const p = provider(f.impl);
+  assert.deepEqual(await p.getSubmissionByDocumentId(ctx, doc), { invoiceId: INV, state: "sent" });
+  assert.equal(f.calls[0].url.pathname, "/v1/agent/peppol/submissions/0245%3A2123456789%23OF2026001");
+  assert.equal(f.calls[0].headers["X-Organization-Id"], ORG);
+  reply = { status: 404, json: { error: { code: "NOT_FOUND", message: "nope" } } };
+  assert.equal(await p.getSubmissionByDocumentId(ctx, doc), null);
+  reply = { json: { data: { something: "else" } } };
+  assert.equal(await p.getSubmissionByDocumentId(ctx, doc), null);
+  reply = { json: { data: { invoiceId: "../../etc" } } };
+  assert.equal(await p.getSubmissionByDocumentId(ctx, doc), null);
+  await assert.rejects(p.getSubmissionByDocumentId(ctx, "bad id"), codeOf("EINVOICE_INVALID_ID"));
 });
 
 await check("sendUbl: rejected (reason + error), neznámy status → chyba, 409 → CONFLICT", async () => {
@@ -185,12 +235,20 @@ await check("sendUbl: rejected (reason + error), neznámy status → chyba, 409 
   const f = fake([(r) => is("POST", "/v1/agent/peppol/connector/send")(r) ? reply : undefined]);
   const p = provider(f.impl);
   const input = { ubl, ublSha256: sha, idempotencyKey: "einv-out-0000000000000002" };
-  assert.deepEqual(await p.sendUbl(ctx, input), { state: "rejected", providerSubmissionId: null, providerStagedId: null, rejectReason: "ingest: Organizácia nemá Peppol účet" });
+  assert.deepEqual(await p.sendUbl(ctx, input), { state: "rejected", providerSubmissionId: null, providerStagedId: null, rejectReason: "ingest: Organizácia nemá Peppol účet", providerDocumentId: null });
   reply = { json: { data: { status: "teleported" } } };
   await assert.rejects(p.sendUbl(ctx, input), codeOf("EINVOICE_PROVIDER_UNKNOWN_STATE"));
   reply = { json: { data: { status: "queued" } } };
   await assert.rejects(p.sendUbl(ctx, input), codeOf("EINVOICE_PROVIDER_BAD_RESPONSE"));
   reply = { status: 409, json: { error: { code: "CONFLICT", message: "Idempotency-Key reused" } } };
+  await assert.rejects(p.sendUbl(ctx, input), (e: unknown) => codeOf("EINVOICE_PROVIDER_CONFLICT")(e) && !(e as EinvoiceProviderError).retryable);
+  // eFaktura.sk 8. 10. 2026: 409 „práve sa spracúva" NIE JE finálne zlyhanie → retryable, iný kód
+  reply = { status: 409, json: { error: { code: "CONFLICT", message: "Požiadavka s týmto Idempotency-Key sa práve spracúva" } } };
+  await assert.rejects(p.sendUbl(ctx, input), (e: unknown) => codeOf("EINVOICE_PROVIDER_IDEMPOTENCY_IN_PROGRESS")(e) && (e as EinvoiceProviderError).retryable);
+  reply = { status: 409, json: { error: { code: "IDEMPOTENCY_IN_PROGRESS", message: "x" } } };
+  await assert.rejects(p.sendUbl(ctx, input), codeOf("EINVOICE_PROVIDER_IDEMPOTENCY_IN_PROGRESS"));
+  // ten istý kľúč s iným telom (OpenAPI) ostáva konflikt — nikdy retry
+  reply = { status: 409, json: { error: { code: "CONFLICT", message: "The Idempotency-Key was already used with a different request body" } } };
   await assert.rejects(p.sendUbl(ctx, input), (e: unknown) => codeOf("EINVOICE_PROVIDER_CONFLICT")(e) && !(e as EinvoiceProviderError).retryable);
 });
 

@@ -20,8 +20,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { requestOutboundForInvoice } from "../lib/einvoice/outbound/request.ts";
 import { handleOutboundSendRequest } from "../lib/einvoice/outbound/route-handler.ts";
 import { parseOutboundRequestBody } from "../lib/einvoice/outbound/request-body.ts";
-import { runOutboundReconcileBatch, runOutboundSendBatch } from "../lib/einvoice/outbound/worker.ts";
-import { backoffMs, classifySendError, MAX_SEND_ATTEMPTS, planAfterError } from "../lib/einvoice/outbound/policy.ts";
+import { reconcileOutboundRow, runOutboundReconcileBatch, runOutboundSendBatch } from "../lib/einvoice/outbound/worker.ts";
+import { backoffMs, classifySendError, MAX_SEND_ATTEMPTS, planAfterError, PROVIDER_IDEMPOTENCY_TTL_MS } from "../lib/einvoice/outbound/policy.ts";
 import { dbErrorCode, OutboundStoreError, outboundUblPath, type OutboundRow, type OutboundStore } from "../lib/einvoice/outbound/store.ts";
 import { sanitizeDeliveryEvidence, EVIDENCE_TOP_LEVEL_KEYS } from "../lib/einvoice/evidence.ts";
 import {
@@ -121,6 +121,7 @@ for (const migration of [
   "20261008100008_received_advances.sql",
   "20261008100009_taxed_advance_deduction_lines.sql",
   "20261008100010_received_advance_match_safeupdate.sql",
+  "20261008100011_einvoice_outbound_transport_ids.sql",
 ]) {
   try {
     await db.exec(read(`supabase/migrations/${migration}`));
@@ -286,7 +287,7 @@ const store: OutboundStore = {
 // -----------------------------------------------------------------------------
 // Skriptovaný poskytovateľ (sandbox semantika, žiadna sieť)
 // -----------------------------------------------------------------------------
-type SendScript = "ok" | "reject" | "staged" | EinvoiceProviderError;
+type SendScript = "ok" | "reject" | "staged" | "doc_only" | EinvoiceProviderError;
 class FakeProvider implements EinvoiceProvider {
   readonly name = "mock";
   calls: string[] = [];
@@ -300,6 +301,9 @@ class FakeProvider implements EinvoiceProvider {
   status = new Map<string, OutboundState>();
   evidenceBody = new Map<string, Record<string, unknown>>();
   statusError: EinvoiceProviderError | null = null;
+  /** document_id → invoice_id pre GET /submissions/{document_id} (null = poskytovateľ ešte nevie). */
+  submissionsByDocument = new Map<string, string | null>();
+  sendBodies: string[] = [];
   private orgs = new Set<string>(["org-a-synthetic", "org-b-synthetic"]);
 
   private ctx(c: ProviderContext) {
@@ -324,6 +328,8 @@ class FakeProvider implements EinvoiceProvider {
     const sha = createHash("sha256").update(input.ubl).digest("hex");
     this.sendShas.push(sha);
     if (sha !== input.ublSha256) throw new EinvoiceProviderError("EINVOICE_UBL_HASH_MISMATCH");
+    // presné „telo" požiadavky (kľúč + bajty + príjemca) pre kontrolu byte-identity pri retry
+    this.sendBodies.push(JSON.stringify([input.idempotencyKey, Buffer.from(input.ubl).toString("base64"), input.receiverParticipantId ?? null]));
     const step = this.sendScript.shift() ?? "ok";
     if (step instanceof EinvoiceProviderError) throw step;
     if (step === "reject") return { state: "rejected", providerSubmissionId: null, providerStagedId: null, rejectReason: "validation_failed" };
@@ -336,7 +342,20 @@ class FakeProvider implements EinvoiceProvider {
     const id = `prov-${this.submissions.size + 1}-${sha.slice(0, 8)}`;
     this.submissions.set(input.idempotencyKey, { id, sha });
     this.status.set(id, "queued");
-    return { state: "queued", providerSubmissionId: id, providerStagedId: null, rejectReason: null };
+    if (step === "doc_only") {
+      // connector/send vráti iba definitívny document_id (invoice_id sa dohľadá cez /submissions)
+      const doc = `9915:2040000000#DOC-${id}`;
+      if (!this.submissionsByDocument.has(doc)) this.submissionsByDocument.set(doc, id);
+      return { state: "queued", providerSubmissionId: null, providerStagedId: null, rejectReason: null, providerDocumentId: doc };
+    }
+    return { state: "queued", providerSubmissionId: id, providerStagedId: null, rejectReason: null, providerDocumentId: `9915:2040000000#DOC-${id}` };
+  }
+  async getSubmissionByDocumentId(c: ProviderContext, documentId: string) {
+    this.calls.push("getSubmissionByDocumentId");
+    this.ctx(c);
+    if (!this.submissionsByDocument.has(documentId)) return null;
+    const invoiceId = this.submissionsByDocument.get(documentId) ?? null;
+    return { invoiceId, state: invoiceId ? ("queued" as const) : null };
   }
   async getOutboundStatus(c: ProviderContext, s: { providerSubmissionId: string }) {
     this.calls.push("getOutboundStatus");
@@ -476,6 +495,15 @@ await check("politika: backoff 1m, 2m, 4m, 8m … strop 6 h; max 8 pokusov", () 
   assert.equal(MAX_SEND_ATTEMPTS, 8);
 });
 
+await check("politika: všetky automatické opakovania s tým istým Idempotency-Key sa zmestia do 24 h TTL poskytovateľa", () => {
+  // claim n+1 nastane najskôr po súčte backoffov po n pokusoch; posledný (8.) pokus je po súčte 1..7
+  let window = 0;
+  for (let n = 1; n < MAX_SEND_ATTEMPTS; n++) window += backoffMs(n);
+  assert.equal(window / 60_000, 127);
+  assert.ok(window < PROVIDER_IDEMPOTENCY_TTL_MS / 6, String(window));
+  assert.equal(PROVIDER_IDEMPOTENCY_TTL_MS, 24 * 60 * 60 * 1000);
+});
+
 await check("politika: 429 / 5xx / sieť / timeout = retry (5xx/sieť/timeout neistý výsledok); 4xx = reject/fail; konflikt = hold", () => {
   const c = (code: string, retryable = false) => classifySendError(new EinvoiceProviderError(code, code, retryable));
   assert.deepEqual(c("EINVOICE_PROVIDER_RATE_LIMITED", true), { kind: "retry", code: "EINVOICE_PROVIDER_RATE_LIMITED", outcomeUnknown: false });
@@ -487,6 +515,9 @@ await check("politika: 429 / 5xx / sieť / timeout = retry (5xx/sieť/timeout ne
     assert.equal(c(code).kind, "fail", code);
   }
   assert.equal(c("EINVOICE_PROVIDER_CONFLICT").kind, "hold");
+  // eFaktura.sk 8. 10. 2026: 409 „Idempotency-Key sa práve spracúva" = odložený retry (nie hold, nie failed)
+  assert.deepEqual(c("EINVOICE_PROVIDER_IDEMPOTENCY_IN_PROGRESS", true), { kind: "retry", code: "EINVOICE_PROVIDER_IDEMPOTENCY_IN_PROGRESS", outcomeUnknown: true });
+  assert.equal(planAfterError({ disposition: c("EINVOICE_PROVIDER_IDEMPOTENCY_IN_PROGRESS", true), attemptsMade: 1, priorOutcomeUnknown: false, now: new Date() }).action, "retry");
   assert.deepEqual(classifySendError(new Error("bug")), { kind: "retry", code: "EINVOICE_INTERNAL_ERROR", outcomeUnknown: true });
   // „fail" po predchádzajúcom neistom pokuse sa NEuzatvára (mohlo by dôjsť k zdvojeniu novým pokusom)
   assert.equal(planAfterError({ disposition: { kind: "fail", code: "X" }, attemptsMade: 2, priorOutcomeUnknown: true, now: new Date() }).action, "hold");
@@ -935,6 +966,87 @@ await check("staged/validated bez ID (neočakávané) → neistý výsledok, opa
   assert.equal(row.send_outcome_unknown, true);
 });
 
+await check("409 „Idempotency-Key sa práve spracúva\" → odložený retry s TÝM ISTÝM kľúčom a bajtmi; potom úspech", async () => {
+  const { outboundId } = await freshQueued();
+  const row0 = await outboundOf(outboundId);
+  provider.sendBodies = [];
+  provider.sendScript = [new EinvoiceProviderError("EINVOICE_PROVIDER_IDEMPOTENCY_IN_PROGRESS", "Požiadavka s týmto Idempotency-Key sa práve spracúva", true)];
+  await sendOnly(outboundId);
+  let row = await outboundOf(outboundId);
+  assert.equal(row.state, "sending");
+  assert.equal(row.last_error_code, "EINVOICE_PROVIDER_IDEMPOTENCY_IN_PROGRESS");
+  assert.equal(row.send_outcome_unknown, true);
+  assert.ok(row.next_retry_at, "retry musí byť naplánovaný");
+  await makeDue(outboundId);
+  await sendOnly(outboundId);
+  row = await outboundOf(outboundId);
+  assert.equal(row.state, "sent");
+  assert.equal(provider.sendBodies.length, 2);
+  assert.equal(provider.sendBodies[0], provider.sendBodies[1], "retry musí byť byte-identický (kľúč, UBL, príjemca)");
+  assert.equal(JSON.parse(provider.sendBodies[0])[0], row0.idempotency_key);
+});
+
+await check("ten istý kľúč + iné telo → 409 konflikt = hold, NIE retry (žiadne ďalšie odoslanie)", async () => {
+  const { outboundId } = await freshQueued();
+  provider.sendScript = [new EinvoiceProviderError("EINVOICE_PROVIDER_CONFLICT", "The Idempotency-Key was already used with a different request body")];
+  await sendOnly(outboundId);
+  const row = await outboundOf(outboundId);
+  assert.equal(row.state, "sending");
+  assert.equal(row.last_error_code, "EINVOICE_PROVIDER_CONFLICT");
+  assert.equal(row.next_retry_at, null, "konflikt sa nesmie automaticky opakovať");
+  const before = provider.sendKeys.length;
+  await sendOnly(outboundId);
+  assert.equal(provider.sendKeys.length, before);
+  // identita pokusu (kľúč, hash, príjemca) je v DB nemenná → iné telo pod tým istým kľúčom nevznikne
+  assert.match(await errorOf(() => sql("update public.einvoice_outbound set idempotency_key = 'einv-out-other-000000000000' where id = $1", [outboundId])), /IDENTITY_IMMUTABLE/);
+  assert.match(await errorOf(() => sql("update public.einvoice_outbound set ubl_sha256 = repeat('0', 64) where id = $1", [outboundId])), /IDENTITY_IMMUTABLE/);
+});
+
+await check("connector/send vráti iba document_id → invoice_id cez /submissions/{document_id}; document_id uložený ako definitívny", async () => {
+  const { outboundId } = await freshQueued();
+  provider.sendScript = ["doc_only"];
+  await sendOnly(outboundId);
+  const row = await outboundOf(outboundId);
+  assert.equal(row.state, "sent");
+  assert.ok(row.provider_submission_id);
+  assert.match(row.document_id as string, /^9915:2040000000#DOC-/);
+  assert.ok(provider.calls.includes("getSubmissionByDocumentId"));
+});
+
+await check("document_id bez invoice_id → neistý retry (SUBMISSION_PENDING), document_id uložený; reconciliation ho dohľadá; status document_id neprepíše", async () => {
+  const { outboundId } = await freshQueued();
+  provider.sendScript = ["doc_only"];
+  // poskytovateľ ešte nevie vrátiť invoice_id
+  const sends = provider.sendKeys.length;
+  const origGet = provider.getSubmissionByDocumentId.bind(provider);
+  provider.getSubmissionByDocumentId = async () => null;
+  await sendOnly(outboundId);
+  provider.getSubmissionByDocumentId = origGet;
+  let row = await outboundOf(outboundId);
+  assert.equal(row.state, "sending");
+  assert.equal(row.last_error_code, "EINVOICE_PROVIDER_SUBMISSION_PENDING");
+  assert.equal(row.send_outcome_unknown, true);
+  const doc = row.document_id as string;
+  assert.match(doc, /^9915:2040000000#DOC-/);
+  assert.equal(provider.sendKeys.length, sends + 1);
+  // reconciliation (nič neodosiela): document_id → invoice_id → sent
+  await sql("update public.einvoice_outbound set next_retry_at = null where id = $1", [outboundId]);
+  row = await outboundOf(outboundId);
+  const r = await reconcileOutboundRow(workerDeps(), row as unknown as OutboundRow);
+  assert.equal(r.code, "RECONCILE_FOUND");
+  row = await outboundOf(outboundId);
+  assert.equal(row.state, "sent");
+  assert.ok(row.provider_submission_id);
+  assert.equal(provider.sendKeys.length, sends + 1, "reconciliation nesmie odosielať");
+  // neskorší status s iným documentId definitívny document_id neprepíše
+  provider.status.set(row.provider_submission_id as string, "delivered");
+  provider.evidenceBody.set(row.provider_submission_id as string, { invoice_id: row.provider_submission_id, document_id: "other@ap", ubl_sha256: row.ubl_sha256, delivery_status: { state: "delivered", at: "2026-10-08T10:00:00.000Z" }, transactions: [] });
+  await reconcileOutboundRow(workerDeps(), (await outboundOf(outboundId)) as unknown as OutboundRow);
+  row = await outboundOf(outboundId);
+  assert.equal(row.state, "delivered");
+  assert.equal(row.document_id, doc);
+});
+
 // =============================================================================
 // Reconciliation + dôkaz doručenia
 // =============================================================================
@@ -972,8 +1084,10 @@ await check("reconciliation: DELIVERED bez dôkazu → čaká (EVIDENCE_PENDING)
   row = await outboundOf(OUT);
   assert.equal(row.state, "delivered");
   assert.equal(row.delivered_at !== null, true);
-  assert.equal(row.document_id, "as4-doc-1");
+  // document_id z connector/send je definitívny (eFaktura.sk) — dôkaz ho neprepíše; jeho document_id ostáva v dôkaze
+  assert.match(row.document_id as string, /^9915:2040000000#DOC-prov-/);
   const evidence = row.evidence as Row;
+  assert.equal(evidence.document_id, "as4-doc-1");
   assert.deepEqual(Object.keys(evidence).sort(), [...EVIDENCE_TOP_LEVEL_KEYS].sort());
   assert.equal(evidence.ubl_sha256, SHA);
   const text = JSON.stringify(evidence);

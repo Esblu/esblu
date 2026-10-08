@@ -69,6 +69,16 @@ Nič v tomto dokumente nie je odhad. Čo dokumentácia neuvádza, je označené 
 
 ## 2. Neoverené / chýbajúce v dokumentácii — PROVIDER QUESTION
 
+> **Stav 8. 10. 2026: technické otázky sú CLOSED** (odpoveď eFaktura.sk).
+> - **P1:** Idempotency-Key platí 24 h.
+> - **P2:** 409 „práve sa spracúva“ = odložený retry s tým istým kľúčom a telom.
+> - **P3:** definitívny identifikátor je `document_id` z connector/send, ďalej `GET /submissions/{document_id}` → `invoice_id`.
+> - **Deduplikácia:** poskytovateľ trvalo deduplikuje SHA-256 UBL v organizácii a pri zmenenom UBL blokuje rovnaké číslo + typ.
+> - **Webhooky:** `messageId` + `transactionId` (= SBDH InstanceIdentifier).
+> - **P10–P12:** API zmluva obsahuje DPA (čl. 28 GDPR) ako Prílohu č. 2; informácie o lokalite a retencii platia aj pre API model.
+>
+> Overenie implementácie: `docs/efaktura-provider-conformance-2026-10-08.md`. Tabuľka nižšie je historická.
+
 | # | Otázka pre eFaktura.sk | Prečo je to dôležité |
 | --- | --- | --- |
 | P1 | **Ako dlho sa drží `Idempotency-Key`** na `connector/send` (TTL)? Je rozsah per organizácia, alebo per API kľúč? | Náš worker opakuje ten istý kľúč najviac 8× počas ~2 h. Ak by TTL bolo kratšie, replay by mohol odoslať druhý raz. |
@@ -113,8 +123,8 @@ Nič v tomto dokumente nie je odhad. Čo dokumentácia neuvádza, je označené 
 | Blocker | Kto | Poznámka |
 | --- | --- | --- |
 | Partnerská zmluva + live kľúč (`efk_pk_live_…`) | používateľ (Esblu s. r. o.) | Portál, 3 kroky. |
-| Odpovede na P1, P2, P4 (bezpečnosť opakovania) | eFaktura.sk | Bez nich nemáme garanciu „žiadne dvojité odoslanie“ mimo docs. |
-| P10–P12 (DPA, lokalita, retencia) a CLIA stanovisko | eFaktura.sk + CLIA | Pozri CLIA change request. |
+| ~~Odpovede na P1, P2, P4~~ | eFaktura.sk | **CLOSED 8. 10. 2026**, implementácia overená (`docs/efaktura-provider-conformance-2026-10-08.md`). |
+| ~~P10–P12 od poskytovateľa~~ / CLIA stanovisko | CLIA | Poskytovateľ: DPA = Príloha č. 2 API zmluvy, lokalita + retencia platia aj pre API. **Otvorené ostáva iba posúdenie CLIA (LEGAL), nie je schválené.** |
 | Aktuálny sandbox E2E aktuálnej architektúry (Phase 1–6) so staging Supabase | používateľ + Claude | Pozri `docs/einvoice-sandbox-e2e-plan.md`. |
 | Registrácia partner webhooku v portáli + `ESBLU_EFAKTURA_WEBHOOK_SECRETS` | používateľ | Secret iba do Vercel env (production), nikdy do repa. |
 | Onboarding Esblu internej firmy (PFS → PDS, mandát) + riadok `einvoice_organizations` + `einvoice_rollout` | používateľ / operátor | Stage 1 rolloutu. |

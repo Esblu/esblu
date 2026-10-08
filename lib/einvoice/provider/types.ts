@@ -70,6 +70,17 @@ export type SendResult = {
   providerSubmissionId: string | null;
   providerStagedId: string | null;
   rejectReason: string | null;
+  /**
+   * eFaktura.sk: `document_id` z connector/send = DEFINITÍVNY identifikátor podania
+   * (stav cez GET /v1/agent/peppol/submissions/{document_id}). Ukladá sa hneď pri odoslaní.
+   */
+  providerDocumentId?: string | null;
+};
+
+/** Dohľadanie podania podľa definitívneho document_id (z neho invoice_id pre status/evidence). */
+export type SubmissionByDocument = {
+  invoiceId: string | null;
+  state: OutboundState | null;
 };
 
 export type OutboundStatus = {
@@ -129,6 +140,8 @@ export interface EinvoiceProvider {
   getOutboundStatus(ctx: ProviderContext, submission: { providerSubmissionId: string }): Promise<OutboundStatus>;
   getDeliveryEvidence(ctx: ProviderContext, submission: { providerSubmissionId: string }): Promise<DeliveryEvidence | null>;
   findSubmissionByIdempotencyKey(ctx: ProviderContext, idempotencyKey: string): Promise<SubmissionLookup>;
+  /** GET /v1/agent/peppol/submissions/{document_id}; null = poskytovateľ podanie (zatiaľ) nevie vrátiť. */
+  getSubmissionByDocumentId?(ctx: ProviderContext, documentId: string): Promise<SubmissionByDocument | null>;
   listUnacknowledgedInbound(ctx: ProviderContext, options?: { limit?: number }): Promise<InboundSummary[]>;
   getInboundDocument(ctx: ProviderContext, providerReceivedId: string): Promise<InboundDocument>;
   acknowledgeInbound(ctx: ProviderContext, providerReceivedId: string): Promise<void>;

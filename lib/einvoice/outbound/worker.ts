@@ -69,8 +69,19 @@ async function contextFor(deps: WorkerDeps, row: OutboundRow): Promise<ProviderC
   return { environment: row.environment, providerOrgId: org.providerOrgId };
 }
 
+/** document_id → invoice_id (GET /submissions/{document_id}); chyba alebo nejasná odpoveď = null (nič sa nerozhodne). */
+async function resolveInvoiceIdByDocument(deps: WorkerDeps, ctx: ProviderContext, documentId: string): Promise<string | null> {
+  if (!deps.provider.getSubmissionByDocumentId) return null;
+  try {
+    const found = await deps.provider.getSubmissionByDocumentId(ctx, documentId);
+    return found?.invoiceId ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /** Zapíše výsledok neúspešného pokusu podľa politiky (retry / fail / reject / hold). */
-async function recordFailure(deps: WorkerDeps, row: OutboundRow, disposition: SendDisposition): Promise<WorkerItemResult> {
+async function recordFailure(deps: WorkerDeps, row: OutboundRow, disposition: SendDisposition, extra: TransitionFields = {}): Promise<WorkerItemResult> {
   const now = (deps.now ?? (() => new Date()))();
   const plan = planAfterError({
     disposition,
@@ -78,7 +89,7 @@ async function recordFailure(deps: WorkerDeps, row: OutboundRow, disposition: Se
     priorOutcomeUnknown: row.send_outcome_unknown,
     now,
   });
-  const base: TransitionFields = { send_in_flight: false, locked_until: null };
+  const base: TransitionFields = { ...extra, send_in_flight: false, locked_until: null };
   let updated: OutboundRow;
   switch (plan.action) {
     case "retry":
@@ -144,9 +155,22 @@ async function sendOne(deps: WorkerDeps, row: OutboundRow): Promise<WorkerItemRe
   }
 
   const now = (deps.now ?? (() => new Date()))();
-  if (result.state === "queued" && result.providerSubmissionId) {
+  // document_id z connector/send = definitívny identifikátor podania (eFaktura.sk); nikdy sa neprepisuje.
+  const documentId = row.document_id ?? result.providerDocumentId ?? null;
+  const documentField: TransitionFields = documentId && documentId !== row.document_id ? { document_id: documentId } : {};
+  let submissionId = result.providerSubmissionId;
+  if (result.state === "queued" && !submissionId && documentId) {
+    submissionId = await resolveInvoiceIdByDocument(deps, ctx, documentId);
+    if (!submissionId) {
+      // Poskytovateľ podanie prijal (document_id), invoice_id ešte nevieme → neistý výsledok; replay toho
+      // istého kľúča vráti uloženú odpoveď a reconciliation ho dohľadá podľa document_id. Nič nové sa neodošle.
+      return recordFailure(deps, row, { kind: "retry", code: "EINVOICE_PROVIDER_SUBMISSION_PENDING", outcomeUnknown: true }, documentField);
+    }
+  }
+  if (result.state === "queued" && submissionId) {
     const updated = await deps.store.transition(row.id, row.state, "sent", "provider", providerStatusCode(result.state), {
-      provider_submission_id: result.providerSubmissionId,
+      ...documentField,
+      provider_submission_id: submissionId,
       provider_staged_id: result.providerStagedId,
       provider_status: providerStatusCode(result.state),
       sent_at: iso(now),
@@ -226,6 +250,22 @@ async function reconcileOne(deps: WorkerDeps, row: OutboundRow): Promise<WorkerI
 
   // a) Vyčerpané pokusy bez ID poskytovateľa a neistý posledný pokus (pád workera):
   //    nič neodoslať, nič neuzatvárať — operátor / ďalšia reconciliation.
+  if (!row.provider_submission_id && row.document_id) {
+    // Podanie má definitívny document_id → invoice_id cez GET /submissions/{document_id} (nič sa neodosiela).
+    const ctxDoc = await contextFor(deps, row);
+    const invoiceId = "error" in ctxDoc ? null : await resolveInvoiceIdByDocument(deps, ctxDoc, row.document_id);
+    if (invoiceId) {
+      const updated = await deps.store.transition(row.id, row.state, row.state === "sending" ? "sent" : null, "reconcile", "RECONCILE_FOUND", {
+        ...release,
+        provider_submission_id: invoiceId,
+        sent_at: row.sent_at ?? iso(now),
+        send_in_flight: false,
+        next_retry_at: null,
+        last_error_code: null,
+      });
+      return { outboundId: row.id, from: row.state, to: updated.state, code: "RECONCILE_FOUND" };
+    }
+  }
   if (!row.provider_submission_id) {
     const updated = await deps.store.transition(row.id, row.state, null, "reconcile", "EINVOICE_RETRY_EXHAUSTED_UNKNOWN", {
       ...release,
@@ -258,7 +298,8 @@ async function reconcileOne(deps: WorkerDeps, row: OutboundRow): Promise<WorkerI
     ...release,
     provider_status: providerCode,
     receiver_identifier: status.receiverIdentifier,
-    ...(status.documentId ? { document_id: status.documentId } : {}),
+    // document_id z odoslania je definitívny — status ho iba doplní, ak chýba.
+    ...(!row.document_id && status.documentId ? { document_id: status.documentId } : {}),
   };
 
   if (target === "failed") {
@@ -308,7 +349,7 @@ async function reconcileOne(deps: WorkerDeps, row: OutboundRow): Promise<WorkerI
     const updated = await deps.store.transition(row.id, row.state, "delivered", "reconcile", providerCode, {
       ...common,
       evidence: evidence.record,
-      document_id: evidence.documentId ?? status.documentId ?? null,
+      document_id: row.document_id ?? evidence.documentId ?? status.documentId ?? null,
       delivered_at: evidence.deliveredAt ?? iso(now),
       last_error_code: null,
     });

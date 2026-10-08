@@ -15,7 +15,12 @@ import { EinvoiceProviderError, type OutboundState } from "../provider/types.ts"
 //     Neistý výsledok (timeout, sieť, 5xx, pád workera) nikdy nevedie na failed.
 // =============================================================================
 
-/** Maximálny počet odoslaní jedného pokusu (claim = 1 odoslanie). */
+/**
+ * Maximálny počet odoslaní jedného pokusu (claim = 1 odoslanie). Všetky automatické opakovania
+ * s tým istým Idempotency-Key sa zmestia do ~2 h — hlboko pod 24 h, počas ktorých ho poskytovateľ drží
+ * (overené testom). Po 24 h chráni pred druhým odoslaním trvalá deduplikácia poskytovateľa (SHA-256 UBL).
+ */
+export const PROVIDER_IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
 export const MAX_SEND_ATTEMPTS = 8;
 export const BACKOFF_BASE_MS = 60_000;
 export const BACKOFF_CAP_MS = 6 * 60 * 60 * 1000;
@@ -38,6 +43,9 @@ export type SendDisposition =
 
 const RETRY_DEFINITE = new Set(["EINVOICE_PROVIDER_RATE_LIMITED"]);
 const RETRY_UNKNOWN = new Set([
+  // 409 „Idempotency-Key sa práve spracúva" — poskytovateľ požiadavku MÁ, výsledok ešte nie je;
+  // odložený retry s tým istým kľúčom a bajtmi (nie finálne zlyhanie, nie hold).
+  "EINVOICE_PROVIDER_IDEMPOTENCY_IN_PROGRESS",
   "EINVOICE_PROVIDER_UNAVAILABLE",
   "EINVOICE_PROVIDER_TIMEOUT",
   "EINVOICE_PROVIDER_NETWORK",
@@ -61,6 +69,7 @@ const FAIL = new Set([
   "EINVOICE_KEY_ENVIRONMENT_MISMATCH",
   "EINVOICE_ENVIRONMENT_MISMATCH",
 ]);
+// Iný 409 (ten istý kľúč s iným telom, duplicita UBL / čísla dokladu u poskytovateľa) → človek, nič sa neopakuje.
 const HOLD = new Set(["EINVOICE_PROVIDER_CONFLICT", "EINVOICE_IDEMPOTENCY_CONFLICT"]);
 
 /** Strojový kód chyby (iba [A-Z0-9_], max 80 znakov — zhodné s DB CHECK last_error_code). */
