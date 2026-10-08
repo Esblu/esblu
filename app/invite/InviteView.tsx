@@ -14,6 +14,7 @@ import {
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import LanguageSwitcher from "@/app/components/LanguageSwitcher";
 import { SocialAuthButtons } from "@/app/components/auth/SocialAuthButtons";
+import { signOutOnThisDevice } from "@/lib/sign-out";
 
 // Táto stránka NIKDY nevolá ensureMyOwnerCompany() / esblu_ensure_my_owner_company().
 // Registrácia aj prihlásenie tu vždy skončí zavolaním
@@ -225,7 +226,7 @@ export default function InviteView({ token }: { token: string }) {
   }
 
   async function handleSignOutAndSwitch() {
-    await supabase.auth.signOut();
+    await signOutOnThisDevice();
     setSessionEmail(null);
     setFormError("");
   }

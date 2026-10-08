@@ -17,6 +17,7 @@ import { ESBLU_BUILD_ID } from "@/lib/build-target";
 import { pushLayer } from "@/lib/back-stack";
 import { signOutOnThisDevice } from "@/lib/sign-out";
 import { confirmAction } from "@/app/components/ui/AppDialog";
+import { isKeyboardEditable } from "@/lib/mobile/lifecycle";
 import {
   CarIcon,
   CloseIcon,
@@ -112,6 +113,19 @@ function TabButton({
 
 export default function MobileTabBar() {
   const pathname = usePathname() ?? "/";
+  // Otvorená klávesnica (fokus v textovom poli) → navigácia sa skryje, aby
+  // pri interactiveWidget=resizes-content neprekrývala formulár ani composer.
+  const [keyboardOpen, setKeyboardOpen] = useState(false);
+  useEffect(() => {
+    const update = () => setKeyboardOpen(isKeyboardEditable(document.activeElement as HTMLInputElement | null));
+    const deferred = () => window.setTimeout(update, 0);
+    document.addEventListener("focusin", update);
+    document.addEventListener("focusout", deferred);
+    return () => {
+      document.removeEventListener("focusin", update);
+      document.removeEventListener("focusout", deferred);
+    };
+  }, []);
   const { t } = useLocale();
   const router = useRouter();
   const { loading, signedIn, membership } = useActiveMembership();
@@ -235,7 +249,7 @@ export default function MobileTabBar() {
 
       <nav
         aria-label={t("nav.mainNavigation")}
-        className="fixed inset-x-0 bottom-0 z-[45] border-t border-subtle bg-surface-1/95 pb-[var(--esblu-safe-bottom)] backdrop-blur"
+        className={`fixed inset-x-0 bottom-0 z-[45] border-t border-subtle bg-surface-1/95 pb-[var(--esblu-safe-bottom)] backdrop-blur ${keyboardOpen ? "hidden" : ""}`}
       >
         <div className="mx-auto flex max-w-xl items-stretch gap-1 px-2 py-1" style={{ minHeight: TABBAR_HEIGHT_PX }}>
           {tabs.map((item) => (

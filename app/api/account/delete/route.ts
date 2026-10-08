@@ -3,6 +3,7 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getRequestLocale } from "@/lib/i18n/request-locale";
 import { translate } from "@/lib/i18n/translate";
+import { findOwnerDeletionBlocker } from "@/lib/account-deletion-retention";
 import type { Locale } from "@/lib/i18n/locales";
 
 // =============================================================================
@@ -416,6 +417,29 @@ export async function POST(req: Request) {
         return Response.json(
           { error: translate(locale, "settings.errors.confirmPhraseMismatch") },
           { status: 400 }
+        );
+      }
+
+      // PRED akýmkoľvek mazaním (Storage aj DB): firma s finalizovanými
+      // účtovnými dokladmi sa samoobslužne zrušiť nedá. Chyba overenia →
+      // fail closed (nič sa nezmaže).
+      let blocker: Awaited<ReturnType<typeof findOwnerDeletionBlocker>>;
+      try {
+        blocker = await findOwnerDeletionBlocker(admin, membership.company_id);
+      } catch (retentionError) {
+        console.error(
+          "account/delete (owner): overenie archivácie zlyhalo:",
+          retentionError instanceof Error ? retentionError.message : retentionError
+        );
+        return Response.json(
+          { error: translate(locale, "settings.errors.companyDeletionFailedRetry") },
+          { status: 500 }
+        );
+      }
+      if (blocker) {
+        return Response.json(
+          { error: translate(locale, "settings.deleteModal.ownerBlockedRetention"), blocked: blocker },
+          { status: 409 }
         );
       }
 

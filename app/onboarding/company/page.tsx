@@ -16,6 +16,7 @@ import { REQUIRED_ACCEPTANCE_DOCUMENTS } from "@/lib/legal-config";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import { takeOAuthPending } from "@/lib/auth/oauth-client";
 import { mayRecordRegistrationConsent } from "@/lib/auth/oauth-routing";
+import { signOutOnThisDevice } from "@/lib/sign-out";
 
 // Explicitná, na jeden účel vyhradená route: JEDINÉ miesto (spolu s
 // register() v app/login/page.tsx pri okamžitej session) v celej aplikácii,
@@ -132,7 +133,7 @@ export default function OnboardingCompanyPage() {
 
       if (isBetaAccessRequiredError(error)) {
         setBetaMessage(getEnsureOwnerCompanyErrorMessage(error, t));
-        await supabase.auth.signOut();
+        await signOutOnThisDevice();
         setState("beta-required");
         return;
       }

@@ -6,7 +6,7 @@ import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 import { apiUrl } from "@/lib/api-url";
-import { openExternalUrl, downloadBlob } from "@/lib/file-actions";
+import { openExternalUrl, downloadBlob, externalFileLinkProps } from "@/lib/file-actions";
 import PlanLimitNotice from "@/app/components/PlanLimitNotice";
 import { usePlanUsage } from "@/hooks/use-plan-usage";
 import {
@@ -4674,11 +4674,7 @@ function renderDocumentRegister(
     </p>
 
     {documentPhotoUrl ? (
-      <a
-        href={documentPhotoUrl}
-        target="_blank"
-        rel="noopener noreferrer"
-      >
+      <a {...externalFileLinkProps(documentPhotoUrl)}>
         <img
           src={documentPhotoUrl}
           alt={t("inbox.originalDocument")}
@@ -4813,11 +4809,7 @@ function renderDocumentRegister(
           </p>
 
           {otherDocumentPhotoUrl ? (
-            <a
-              href={otherDocumentPhotoUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-            >
+            <a {...externalFileLinkProps(otherDocumentPhotoUrl)}>
               <img
                 src={otherDocumentPhotoUrl}
                 alt={t("inbox.originalDocument")}

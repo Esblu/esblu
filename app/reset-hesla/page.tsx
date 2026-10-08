@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
+import { signOutOnThisDevice } from "@/lib/sign-out";
 
 export default function ResetHeslaPage() {
   const router = useRouter();
@@ -81,7 +82,7 @@ export default function ResetHeslaPage() {
 
     alert(t("auth.resetPassword.updatedRedirect"));
 
-    await supabase.auth.signOut();
+    await signOutOnThisDevice();
 
     router.push("/login");
     router.refresh();

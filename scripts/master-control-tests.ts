@@ -492,12 +492,13 @@ await check("OAuth: súhlas s dokumentmi sa zapíše IBA ak bol zaškrtnutý pre
   assert.ok(onboarding.includes("mayRecordRegistrationConsent(takeOAuthPending(), session.user.app_metadata?.provider ?? null)") && onboarding.includes("ensureMyOwnerCompany()"), "firma cez tú istú RPC s allowlistom");
 });
 
-await check("OAuth prostredie: Capacitor a iOS nainštalovaná PWA → tlačidlá skryté; prehliadač a Android PWA → áno", () => {
+await check("OAuth prostredie: vložený WebView a iOS PWA nikdy; Capacitor iba cez systémový prehliadač (Mobile Platform)", () => {
   assert.equal(oauth.oauthAllowedInRuntime({ isCapacitorBuild: true, isIos: false, isStandalone: false }), false);
   assert.equal(oauth.oauthAllowedInRuntime({ isCapacitorBuild: false, isIos: true, isStandalone: true }), false);
   assert.equal(oauth.oauthAllowedInRuntime({ isCapacitorBuild: false, isIos: true, isStandalone: false }), true);
   assert.equal(oauth.oauthAllowedInRuntime({ isCapacitorBuild: false, isIos: false, isStandalone: true }), true);
-  assert.ok(readFileSync("lib/auth/oauth-client.ts", "utf8").includes("if (!runtimeAllowsOAuth()) return [];"));
+  assert.ok(readFileSync("lib/auth/oauth-client.ts", "utf8").includes('if (runtimeOAuthFlow() === "none") return [];'));
+  assert.equal(oauth.oauthFlowForRuntime({ isCapacitorBuild: true, isIos: false, isStandalone: false }), "system_browser");
 });
 
 await check("OAuth: tlačidlá iba pre zapnutých poskytovateľov; beta brána a pozvánky ostávajú v DB", () => {

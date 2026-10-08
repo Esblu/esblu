@@ -57,6 +57,7 @@ import {
 import { navigateHard } from "@/lib/app-navigation";
 import { confirmAction } from "@/app/components/ui/AppDialog";
 import { ScrollTabs } from "@/app/components/ui/ScrollTabs";
+import { externalFileLinkProps } from "@/lib/file-actions";
 
 type DetailTab = "overview" | "service" | "documents" | "photos";
 
@@ -1179,9 +1180,7 @@ export default function MachineDetailView({
                   <li key={photo.id} className="group relative">
                     {photoUrl(photo.file_path) ? (
                     <a
-                      href={photoUrl(photo.file_path)}
-                      target="_blank"
-                      rel="noopener noreferrer"
+                      {...externalFileLinkProps(photoUrl(photo.file_path)!)}
                       className="block overflow-hidden rounded-doc border border-doc-border focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                     >
                       {/* eslint-disable-next-line @next/next/no-img-element */}

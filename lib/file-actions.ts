@@ -179,3 +179,22 @@ function blobToBase64(blob: Blob): Promise<string> {
     reader.readAsDataURL(blob);
   });
 }
+
+/**
+ * Props pre <a>, ktorý otvára súbor (signed URL) — Mobile Platform 2026-10-08.
+ * Web: nová karta (nezmenené). Mobile: klik sa zachytí a URL sa otvorí v
+ * in-app prehliadači (openExternalUrl) — inak by holý target=_blank vo
+ * WebView navigoval preč z appky a signed URL by ostala v histórii.
+ */
+export function externalFileLinkProps(url: string) {
+  return {
+    href: url,
+    target: "_blank",
+    rel: "noopener noreferrer",
+    onClick: (event: { preventDefault: () => void }) => {
+      if (!IS_MOBILE_BUILD) return;
+      event.preventDefault();
+      void openExternalUrl(url);
+    },
+  } as const;
+}

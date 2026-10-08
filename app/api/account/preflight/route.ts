@@ -2,6 +2,7 @@ import { verifyRequestUser } from "@/lib/server-auth";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { getRequestLocale } from "@/lib/i18n/request-locale";
 import { translate } from "@/lib/i18n/translate";
+import { findOwnerDeletionBlocker, type OwnerDeletionBlocker } from "@/lib/account-deletion-retention";
 
 // -----------------------------------------------------------------------------
 // GET /api/account/preflight
@@ -97,6 +98,7 @@ export async function GET(req: Request) {
     }
 
     let otherActiveMembersCount = 0;
+    let ownerDeletionBlocked: OwnerDeletionBlocker | null = null;
 
     if (membership.role === "owner") {
       const { count, error: countError } = await admin
@@ -124,12 +126,17 @@ export async function GET(req: Request) {
       }
 
       otherActiveMembersCount = count ?? 0;
+
+      // Firma s finalizovanými účtovnými dokladmi sa nedá zrušiť samoobslužne
+      // (archivácia) — UI to vysvetlí a zrušenie vôbec neponúkne.
+      ownerDeletionBlocked = await findOwnerDeletionBlocker(admin, membership.company_id);
     }
 
     return Response.json({
       role: membership.role,
       otherActiveMembersCount,
       orphan: false,
+      ownerDeletionBlocked,
     });
   } catch (error) {
     console.error(

@@ -12,6 +12,7 @@ import { useLocale } from "@/lib/i18n/LocaleProvider";
 import LanguageSwitcher from "./LanguageSwitcher";
 import { navigateHard } from "@/lib/app-navigation";
 import { LegalDocLink } from "@/app/components/LegalDocLink";
+import { signOutOnThisDevice } from "@/lib/sign-out";
 
 // Cesty, na ktorých sa blokujúci modal NIKDY nezobrazuje — verejné právne
 // stránky (musia byť čitateľné aj bez potvrdenia), prihlásenie/registrácia,
@@ -129,7 +130,7 @@ export default function LegalAcceptanceGate({
   }
 
   async function handleLogout() {
-    await supabase.auth.signOut();
+    await signOutOnThisDevice();
     navigateHard("/login");
   }
 

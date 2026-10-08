@@ -4,6 +4,7 @@ import sk from "./sk.ts";
 
 const en = {
   common: {
+    offline: "You are offline. Changes will not be saved until the connection is back.",
     appName: "Esblu",
     buttons: {
       save: "Save",
@@ -894,6 +895,7 @@ const en = {
       button: "Delete account",
     },
     deleteModal: {
+      ownerBlockedRetention: "The company cannot be deleted self-service because it contains finalized accounting documents (invoices) that must be retained under accounting law. Nothing was deleted. Contact info@esblu.com — we will help you export your data and close the account.",
       ownerTitle: "Are you sure you want to delete the account?",
       genericTitle: "Delete account?",
       close: "✕",

@@ -135,3 +135,51 @@ export function oauthAllowedInRuntime(input: { isCapacitorBuild: boolean; isIos:
   if (input.isIos && input.isStandalone) return false;
   return true;
 }
+
+// -----------------------------------------------------------------------------
+// Mobile Platform (2026-10-08): OAuth v natívnej appke cez SYSTÉMOVÝ prehliadač.
+//
+// Vložený WebView ostáva zakázaný (oauthAllowedInRuntime). Capacitor appka
+// otvorí URL poskytovateľa v Chrome Custom Tab / SFSafariViewController
+// (@capacitor/browser) — Google to povoľuje (nie je to embedded WebView).
+// Návrat: Supabase presmeruje na custom scheme appky → DeepLinkBridge →
+// /auth/callback.html?code=… → PKCE výmena v TOM ISTOM WebView, kde je
+// uložený code_verifier. Odchytený `code` bez verifiera je bezcenný.
+// -----------------------------------------------------------------------------
+
+export type OAuthFlow = "redirect" | "system_browser" | "none";
+
+export function oauthFlowForRuntime(input: { isCapacitorBuild: boolean; isIos: boolean; isStandalone: boolean }): OAuthFlow {
+  if (input.isCapacitorBuild) return "system_browser";
+  return oauthAllowedInRuntime(input) ? "redirect" : "none";
+}
+
+export type ClientPlatform = "web" | "android" | "ios";
+
+/**
+ * App Review Guideline 4.8: iOS appka, ktorá ponúka prihlásenie cez tretiu
+ * stranu (Google), musí ponúknuť aj rovnocennú možnosť (Sign in with Apple).
+ * Kým Apple nie je podporovaný, iOS appka Google NEPONÚKNE (iba e-mail/heslo).
+ */
+export function oauthProvidersForPlatform(platform: ClientPlatform, enabled: OAuthProvider[]): OAuthProvider[] {
+  if (platform === "ios" && enabled.includes("google") && !enabled.includes("apple")) {
+    return enabled.filter((provider) => provider !== "google");
+  }
+  return enabled;
+}
+
+/** Predvolený návrat OAuth do natívnej appky (custom scheme = applicationId / bundle id). */
+export const DEFAULT_MOBILE_OAUTH_REDIRECT = "com.esblu.app://auth/callback";
+
+/**
+ * Návratová URL pre mobilné OAuth. Povolené iba:
+ *   - com.esblu.app://auth/callback (custom scheme, PKCE),
+ *   - https://www.esblu.com/auth/callback (overený App Link / Universal Link).
+ * Čokoľvek iné (iný scheme/host/cesta, query, credentials) → predvolená hodnota.
+ */
+export function normalizeMobileOAuthRedirect(raw: string | undefined | null): string {
+  if (!raw) return DEFAULT_MOBILE_OAUTH_REDIRECT;
+  const value = raw.trim();
+  if (value === DEFAULT_MOBILE_OAUTH_REDIRECT || value === "https://www.esblu.com/auth/callback") return value;
+  return DEFAULT_MOBILE_OAUTH_REDIRECT;
+}

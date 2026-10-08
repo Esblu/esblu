@@ -29,4 +29,4 @@ public
 # local.properties, app/src/main/assets/public, capacitor.config.json a
 # ďalšie) — zdrojové súbory (build.gradle, gradle wrapper, AndroidManifest,
 # MainActivity, resources, Capacitor Android config) do gitu idú.
-ios
+# ios (Mobile Platform 2026-10-08: iOS projekt sa commituje)

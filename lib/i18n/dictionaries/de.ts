@@ -4,6 +4,7 @@ import sk from "./sk.ts";
 
 const de = {
   common: {
+    offline: "Sie sind offline. Änderungen werden erst nach Wiederherstellung der Verbindung gespeichert.",
     appName: "Esblu",
     buttons: {
       save: "Speichern",
@@ -896,6 +897,7 @@ const de = {
       button: "Konto löschen",
     },
     deleteModal: {
+      ownerBlockedRetention: "Die Firma kann nicht selbst gelöscht werden, da sie abgeschlossene Buchhaltungsbelege (Rechnungen) enthält, die gesetzlich aufbewahrt werden müssen. Es wurde nichts gelöscht. Kontaktieren Sie info@esblu.com — wir helfen beim Datenexport und bei der Kontoschließung.",
       ownerTitle: "Möchten Sie das Konto wirklich löschen?",
       genericTitle: "Konto löschen?",
       close: "✕",

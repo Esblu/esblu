@@ -138,6 +138,14 @@ export default function DeepLinkBridge() {
       const basePathForLog = target.split(/[?#]/)[0];
       console.info("[deep-link] smerujem na", basePathForLog);
 
+      // Návrat z OAuth v systémovom prehliadači: zavri Custom Tab /
+      // SFSafariViewController (na Androide no-op, ak už je zavretý).
+      if (target.startsWith("/auth/callback")) {
+        void import("@capacitor/browser")
+          .then(({ Browser }) => Browser.close())
+          .catch(() => undefined);
+      }
+
       window.location.replace(target);
     }
 

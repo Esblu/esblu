@@ -3,27 +3,46 @@
 import { supabase } from "@/lib/supabase";
 import { publicWebUrl } from "@/lib/public-url";
 import { IS_MOBILE_BUILD } from "@/lib/build-target";
-import { oauthAllowedInRuntime, parseEnabledOAuthProviders, readOAuthPending, type OAuthMode, type OAuthPending, type OAuthProvider } from "@/lib/auth/oauth-routing";
+import {
+  normalizeMobileOAuthRedirect,
+  oauthFlowForRuntime,
+  oauthProvidersForPlatform,
+  parseEnabledOAuthProviders,
+  readOAuthPending,
+  type ClientPlatform,
+  type OAuthFlow,
+  type OAuthMode,
+  type OAuthPending,
+  type OAuthProvider,
+} from "@/lib/auth/oauth-routing";
 
 // Stav pred odoslaním na Google/Apple — localStorage (nie URL), jednorazový,
 // platnosť 15 min. localStorage (nie sessionStorage), lebo návrat z
 // poskytovateľa môže na Androide skončiť v inej karte toho istého profilu.
 const KEY = "esblu.oauthPending.v1";
 
-function runtimeAllowsOAuth(): boolean {
-  if (typeof window === "undefined") return false;
-  const isIos = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+function isIosDevice(): boolean {
+  return typeof navigator !== "undefined" && /iPhone|iPad|iPod/i.test(navigator.userAgent);
+}
+
+function runtimeOAuthFlow(): OAuthFlow {
+  if (typeof window === "undefined") return "none";
   const isStandalone =
     window.matchMedia?.("(display-mode: standalone)").matches === true ||
     (navigator as Navigator & { standalone?: boolean }).standalone === true;
-  return oauthAllowedInRuntime({ isCapacitorBuild: IS_MOBILE_BUILD, isIos, isStandalone });
+  return oauthFlowForRuntime({ isCapacitorBuild: IS_MOBILE_BUILD, isIos: isIosDevice(), isStandalone });
+}
+
+function runtimePlatform(): ClientPlatform {
+  if (!IS_MOBILE_BUILD) return "web";
+  return isIosDevice() ? "ios" : "android";
 }
 
 /** Ktorí poskytovatelia sú zapnutí (ručné nastavenie v Supabase) a smú sa v tomto prostredí ponúknuť. */
 export function enabledOAuthProviders(): OAuthProvider[] {
-  if (!runtimeAllowsOAuth()) return [];
+  if (runtimeOAuthFlow() === "none") return [];
   // Literálny odkaz na premennú — Next.js ju pri builde vloží do bundlu.
-  return parseEnabledOAuthProviders(process.env.NEXT_PUBLIC_ESBLU_OAUTH_PROVIDERS);
+  return oauthProvidersForPlatform(runtimePlatform(), parseEnabledOAuthProviders(process.env.NEXT_PUBLIC_ESBLU_OAUTH_PROVIDERS));
 }
 
 export async function startOAuth(provider: OAuthProvider, options: { mode: OAuthMode; legalAccepted: boolean; inviteToken?: string }): Promise<string | null> {
@@ -35,6 +54,19 @@ export async function startOAuth(provider: OAuthProvider, options: { mode: OAuth
   } catch {
     // Bez úložiska: pozvánka sa po návrate nedá dokončiť automaticky — používateľ
     // ju otvorí znova z odkazu; nič iné sa nemení.
+  }
+  if (runtimeOAuthFlow() === "system_browser") {
+    // Natívna appka: URL poskytovateľa v systémovom prehliadači (Custom Tab /
+    // SFSafariViewController), NIKDY vo WebView. code_verifier ostáva v tomto WebView.
+    const redirect = normalizeMobileOAuthRedirect(process.env.NEXT_PUBLIC_ESBLU_MOBILE_OAUTH_REDIRECT);
+    const { data, error } = await supabase.auth.signInWithOAuth({
+      provider,
+      options: { redirectTo: `${redirect}?oauth=${provider}`, skipBrowserRedirect: true },
+    });
+    if (error || !data?.url) return error?.message ?? "oauth_url_missing";
+    const { Browser } = await import("@capacitor/browser");
+    await Browser.open({ url: data.url });
+    return null;
   }
   const { error } = await supabase.auth.signInWithOAuth({
     provider,

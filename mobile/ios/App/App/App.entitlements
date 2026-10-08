@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Mobile Platform (2026-10-08). Capabilities vyžadujú Apple Developer Team
+  (APPLE USER ACTION) — bez nich Xcode automatický signing tieto kľúče odmietne:
+    aps-environment          → Push Notifications capability (development / production pri archive)
+    associated-domains       → Universal Links pre www.esblu.com (+ apple-app-site-association na webe)
+-->
+<plist version="1.0">
+<dict>
+	<key>aps-environment</key>
+	<string>development</string>
+	<key>com.apple.developer.associated-domains</key>
+	<array>
+		<string>applinks:www.esblu.com</string>
+	</array>
+</dict>
+</plist>

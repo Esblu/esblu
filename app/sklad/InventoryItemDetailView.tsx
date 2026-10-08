@@ -19,6 +19,7 @@ import {
   StatusBadge,
 } from "@/app/components/ui/Primitives";
 import { PackageIcon } from "@/app/components/icons/AppIcons";
+import { externalFileLinkProps } from "@/lib/file-actions";
 
 type InventoryPhoto = {
   id: string;
@@ -204,9 +205,7 @@ export default function InventoryItemDetailView({ entityId }: { entityId: string
                 <li key={photo.id}>
                   {photoUrl(photo.file_path) ? (
                   <a
-                    href={photoUrl(photo.file_path)}
-                    target="_blank"
-                    rel="noopener noreferrer"
+                    {...externalFileLinkProps(photoUrl(photo.file_path)!)}
                     className="block overflow-hidden rounded-doc border border-doc-border focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   >
                     {/* eslint-disable-next-line @next/next/no-img-element */}

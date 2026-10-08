@@ -12,6 +12,7 @@ import { useLocale } from "@/lib/i18n/LocaleProvider";
 import LanguageSwitcher from "@/app/components/LanguageSwitcher";
 import { SocialAuthButtons } from "@/app/components/auth/SocialAuthButtons";
 import { LegalDocLink } from "@/app/components/LegalDocLink";
+import { signOutOnThisDevice } from "@/lib/sign-out";
 
 // Closed Beta (supabase/migrations/20260816130000_add_closed_beta_allowlist.sql):
 // verejná owner registrácia je dočasne obmedzená iba na schválených beta
@@ -240,7 +241,7 @@ export default function LoginPage() {
         // nebude mať firmu", a nechaj ho na prihlasovacej obrazovke so
         // zrozumiteľnou správou.
         console.error("Owner company bootstrap zlyhal:", bootstrapError);
-        await supabase.auth.signOut();
+        await signOutOnThisDevice();
         setLoading(false);
         alert(getEnsureOwnerCompanyErrorMessage(bootstrapError, t));
         setMode("login");

@@ -51,6 +51,8 @@ export type AccountDeletionPreflight = {
   role: "owner" | "admin" | "accountant" | "employee" | null;
   otherActiveMembersCount: number;
   orphan: boolean;
+  /** Owner: zrušenie firmy blokované archiváciou účtovných dokladov (nič sa nemaže). */
+  ownerDeletionBlocked?: "FINALIZED_ACCOUNTING_DOCUMENTS" | null;
 };
 
 async function getAccessToken(locale: Locale): Promise<string> {
@@ -78,11 +80,12 @@ export async function fetchAccountDeletionPreflight(
     },
   });
 
-  const body = await response.json();
+  // Sieťová/CORS/HTML chyba nesmie skončiť nezrozumiteľným „JSON parse".
+  const body = (await response.json().catch(() => ({}))) as Record<string, unknown> & AccountDeletionPreflight;
 
   if (!response.ok) {
     throw new Error(
-      body.error ||
+      (typeof body.error === "string" && body.error) ||
         translate(locale, "settings.errors.deletionPreflightLoadFailedGeneric")
     );
   }
@@ -108,7 +111,7 @@ export async function deleteMyAccount(
     ),
   });
 
-  const body = await response.json();
+  const body = (await response.json().catch(() => ({}))) as { success?: boolean; error?: string; partial?: boolean };
 
   if (!response.ok || !body.success) {
     const message =

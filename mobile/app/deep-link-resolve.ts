@@ -27,6 +27,16 @@ export function resolveEsbluDeepLink(rawUrl: string): string | null {
     return null;
   }
 
+  // Mobile Platform (2026-10-08): návrat OAuth do natívnej appky cez custom
+  // scheme (com.esblu.app://auth/callback?code=…). Prepúšťa sa IBA táto
+  // jedna cesta; PKCE `code` je bez code_verifiera z tohto WebView bezcenný.
+  if (url.protocol === "com.esblu.app:") {
+    if (url.hostname === "auth" && (url.pathname === "/callback" || url.pathname === "/callback/")) {
+      return buildLocalTarget("/auth/callback.html", {}, url);
+    }
+    return null;
+  }
+
   // Prísny allowlist — presne https a presne esblu.com (žiadny endsWith/
   // includes, ktorý by prepustil napr. "esblu.com.evil.example").
   if (url.protocol !== "https:") {

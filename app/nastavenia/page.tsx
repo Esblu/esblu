@@ -48,9 +48,9 @@ import {
   type CompanyBillingProfileValidationError,
 } from "@/lib/company-billing-profile";
 import { PushNotificationSettings } from "@/app/components/push/PushNotificationSettings";
-import { disablePushOnThisDevice } from "@/lib/push/client";
 import { navigateHard } from "@/lib/app-navigation";
 import { confirmAction } from "@/app/components/ui/AppDialog";
+import { signOutOnThisDevice } from "@/lib/sign-out";
 
 /**
  * Role, ktoré sa dajú pozvať. Zrkadlí DB allowlist v
@@ -793,8 +793,7 @@ export default function NastaveniaPage() {
         deletePreflight.role === "owner" ? deleteConfirmText : undefined
       );
 
-      await disablePushOnThisDevice();
-      await supabase.auth.signOut();
+      await signOutOnThisDevice();
 
       navigateHard("/login?ucet-zruseny=1");
     } catch (error) {
@@ -806,7 +805,7 @@ export default function NastaveniaPage() {
       // neexistuje). Vynútime rovnaké odhlásenie + presmerovanie ako pri
       // úspechu, iba s odlíšeným query flagom pre login stránku.
       if (isPartialAccountDeletionError(error)) {
-        await supabase.auth.signOut();
+        await signOutOnThisDevice();
         navigateHard("/login?ucet-zruseny-ciastocne=1");
         return;
       }
@@ -1499,6 +1498,18 @@ export default function NastaveniaPage() {
               <p className="mt-6 text-sm font-medium text-red-400">
                 {deletePreflightError}
               </p>
+            ) : deletePreflight?.role === "owner" && deletePreflight.ownerDeletionBlocked ? (
+              <div className="mt-6 space-y-4">
+                {/* Archivácia účtovných dokladov: zrušenie sa NEPONÚKNE (nič sa nemaže). */}
+                <p className="text-sm leading-6 text-secondary">
+                  {t("settings.deleteModal.ownerBlockedRetention")}
+                </p>
+                <div className="flex justify-end">
+                  <button type="button" onClick={closeDeleteAccountModal} className="btn-secondary px-6 py-3">
+                    {t("settings.deleteModal.cancel")}
+                  </button>
+                </div>
+              </div>
             ) : deletePreflight?.role === "owner" ? (
               <div className="mt-6 space-y-4">
                 <p className="text-sm leading-6 text-secondary">

@@ -34,11 +34,11 @@ import { IntentResultView, QuickReplies } from "@/app/components/voice/IntentRes
 import { VoiceReplyToggle } from "@/app/components/voice/VoiceReplyToggle";
 import { cancelSpeech } from "@/lib/voice/speech";
 import { spokenTextFor } from "@/lib/voice/spoken-text";
-import { disablePushOnThisDevice } from "@/lib/push/client";
 import { todayLocalDate } from "@/lib/local-date";
 import { FolderIcon } from "@/app/components/icons/AppIcons";
 import { downloadDocumentPackage, PackageDownloadError } from "@/lib/document-package-client";
 import { describePackageError, describePackageOutcome } from "@/app/components/folders/package-messages";
+import { signOutOnThisDevice } from "@/lib/sign-out";
 
 function getGreeting(t: (key: string) => string) {
   const hour = new Date().getHours();
@@ -193,9 +193,9 @@ export default function Dashboard() {
   }
 
   async function logout() {
-    // Toto zariadenie po odhlásení nesmie ďalej dostávať upozornenia.
-    await disablePushOnThisDevice();
-    await supabase.auth.signOut();
+    // Toto zariadenie po odhlásení nesmie ďalej dostávať upozornenia
+    // (signOutOnThisDevice: push odregistrácia + lokálne artefakty + signOut).
+    await signOutOnThisDevice();
     router.push("/login");
   }
 

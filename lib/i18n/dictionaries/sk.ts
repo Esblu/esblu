@@ -6,6 +6,7 @@ import type { Dictionary } from "../dictionary-types";
 
 const sk = {
   common: {
+    offline: "Ste offline. Zmeny sa neuložia, kým sa spojenie neobnoví.",
     appName: "Esblu",
     buttons: {
       save: "Uložiť",
@@ -908,6 +909,7 @@ const sk = {
       button: "Zrušiť účet",
     },
     deleteModal: {
+      ownerBlockedRetention: "Firmu nie je možné zrušiť samoobslužne, pretože obsahuje finalizované účtovné doklady (faktúry), ktoré je Esblu povinné archivovať podľa zákona o účtovníctve. Nič sa nezmazalo. Kontaktujte nás na info@esblu.com — pomôžeme s exportom údajov a ukončením používania.",
       ownerTitle: "Naozaj chcete zrušiť účet?",
       genericTitle: "Zrušiť účet?",
       close: "✕",

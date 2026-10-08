@@ -677,7 +677,9 @@ export default function ChatMessageView({
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
-                sendMessage();
+                // Rýchle dvojité Enter nesmie odoslať správu dvakrát (tlačidlo
+                // je počas odosielania vypnuté, klávesnica nie).
+                if (!sending) sendMessage();
               }
             }}
             placeholder={t("chat.composerPlaceholder")}

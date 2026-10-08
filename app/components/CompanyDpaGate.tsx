@@ -11,6 +11,7 @@ import {
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import { navigateHard } from "@/lib/app-navigation";
 import { LegalDocLink } from "@/app/components/LegalDocLink";
+import { signOutOnThisDevice } from "@/lib/sign-out";
 
 // -----------------------------------------------------------------------
 // Legal-hold kontext: kým firma nemá platné company-level DPA acceptance,
@@ -129,7 +130,7 @@ export default function CompanyDpaGate({
   }, [pathname]);
 
   async function handleLogout() {
-    await supabase.auth.signOut();
+    await signOutOnThisDevice();
     navigateHard("/login");
   }
 

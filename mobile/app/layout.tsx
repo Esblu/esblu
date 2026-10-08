@@ -1,8 +1,11 @@
-import RootLayout, { metadata, viewport } from "@/app/layout";
+import type { Viewport } from "next";
+import RootLayout, { metadata, viewport as webViewport } from "@/app/layout";
 import DeepLinkBridge from "./DeepLinkBridge";
 import BackButtonBridge from "./BackButtonBridge";
 import NativeRuntimeMarker from "./NativeRuntimeMarker";
 import PushBridge from "./PushBridge";
+import AppLifecycleBridge from "./AppLifecycleBridge";
+import OfflineBanner from "@/app/components/mobile/OfflineBanner";
 import MobileTabBar from "@/app/components/mobile/MobileTabBar";
 
 // -----------------------------------------------------------------------------
@@ -20,7 +23,12 @@ import MobileTabBar from "@/app/components/mobile/MobileTabBar";
 // app/layout.tsx neimportuje ani nespomína, takže webový bundle/build sa
 // touto zmenou vôbec nedotýka.
 // -----------------------------------------------------------------------------
-export { metadata, viewport };
+export { metadata };
+
+// Mobile Platform (2026-10-08): viewport-fit=cover IBA v natívnej appke —
+// env(safe-area-inset-*) potom vracia skutočné výrezy (iOS notch, Android
+// edge-to-edge) a --esblu-safe-* ich používa. Web ostáva nezmenený.
+export const viewport: Viewport = { ...webViewport, viewportFit: "cover" };
 
 export default function MobileRootLayout({
   children,
@@ -32,6 +40,8 @@ export default function MobileRootLayout({
       <DeepLinkBridge />
       <BackButtonBridge />
       <NativeRuntimeMarker />
+      <AppLifecycleBridge />
+      <OfflineBanner />
       {/* Kliknutie na natívnu push notifikáciu → obrazovka z allowlistu. */}
       <PushBridge />
       {children}

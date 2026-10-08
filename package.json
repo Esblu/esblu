@@ -46,6 +46,7 @@
     "test:google-oauth-db": "node --experimental-strip-types --no-warnings scripts/google-oauth-pglite-tests.ts",
     "test:storage-media": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/storage-media-tests.ts",
     "test:storage-media-db": "node --experimental-strip-types --no-warnings scripts/storage-media-privacy-pglite-tests.ts",
+    "test:mobile-platform": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/mobile-platform-tests.ts",
     "verify:mobile-bundle": "node scripts/verify-mobile-bundle.mjs"
   },
   "dependencies": {

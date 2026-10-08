@@ -526,7 +526,7 @@ function MobilePanel({
         // (app/layout.tsx) korektne zmenší panel pri otvorení soft
         // klávesnice bez JS hacku na výšku viewportu.
         className="surface-card flex h-[85vh] h-[85dvh] flex-col overflow-hidden rounded-t-2xl border-t border-subtle shadow-2xl"
-        style={{ paddingBottom: "env(safe-area-inset-bottom, 0px)" }}
+        style={{ paddingBottom: "var(--esblu-safe-bottom, env(safe-area-inset-bottom, 0px))" }}
       >
         <PanelHeader
           showBack={!!selectedConversationId}

@@ -593,7 +593,7 @@ await check("ScrollTabs neposúva dokument a nerozťahuje predkov", () => {
 await check("MobileTabBar je fixný na úrovni <body> (mimo PageShell, bez transform predka)", () => {
   const layout = read("mobile/app/layout.tsx");
   assert.match(layout, /\{children\}\s*\{\/\*[^*]*\*\/\}\s*<MobileTabBar \/>\s*<\/RootLayout>/);
-  assert.match(read("app/components/mobile/MobileTabBar.tsx"), /className="fixed inset-x-0 bottom-0 z-\[45\]/);
+  assert.match(read("app/components/mobile/MobileTabBar.tsx"), /className=\{?[`"]fixed inset-x-0 bottom-0 z-\[45\]/);
 });
 
 // -----------------------------------------------------------------------------
