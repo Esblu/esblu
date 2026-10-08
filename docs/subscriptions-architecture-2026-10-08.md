@@ -81,6 +81,9 @@ Bez webhooku nárok sám vyprší cez `valid_until` (**fail closed**).
 
 ## C. Platobná matica
 
+> **Aktualizované:** nákup je priamo v mobilnej appke — pozri `docs/subscriptions-mobile-purchase-2026-10-08.md`. Kanály určujú dáta (`billing_channel_rules`) a všetky vedú do toho istého `subscription_accounts`.
+
+
 Pozri `docs/subscriptions-store-compliance-2026-10-08.md`, sekcia 4. Implementované (`purchaseChannel`):
 
 - **web** = Stripe-hosted Checkout;
@@ -171,8 +174,8 @@ Pozri `docs/subscriptions-store-compliance-2026-10-08.md`, sekcia 4. Implementov
 
 | Sada | Výsledok |
 |---|---|
-| `npm run test:subscriptions` (unit / contract: podpisy, Stripe normalizácia + checkout params + live guard, Apple/Google stavy, provider contract, pipeline retry, config, UI model) | **16 / 16** |
-| `npm run test:subscriptions-db` (PGlite: baseline + 20260928100000 + migrácia 2×; granty, matica rolí, trial→paid, mesačne, ročne, cancel, resume, upgrade, downgrade, payment failed, grace, recovery, unpaid, expirácia bez webhooku, reactivation, duplicate, out-of-order, replay, payload mismatch, wrong company, cross-tenant, unknown/mismatch price, fake success redirect, iOS / Android / web rovnaké nároky, Apple cancel, Google linkedPurchaseToken, conflict, rollback + re-apply) | **41 / 41** |
+| `npm run test:subscriptions` (unit / contract: podpisy, Stripe normalizácia + checkout params + live guard, Apple/Google stavy, provider contract, pipeline retry, config, UI model) | **28 / 28** (vrátane mobilného nákupu: Apple JWS reťaz, Google OIDC, Play / Apple API, reporting telá, UI kanály, deep link) |
+| `npm run test:subscriptions-db` (PGlite: baseline + 20260928100000 + migrácia 2×; granty, matica rolí, trial→paid, mesačne, ročne, cancel, resume, upgrade, downgrade, payment failed, grace, recovery, unpaid, expirácia bez webhooku, reactivation, duplicate, out-of-order, replay, payload mismatch, wrong company, cross-tenant, unknown/mismatch price, fake success redirect, iOS / Android / web rovnaké nároky, Apple cancel, Google linkedPurchaseToken, conflict, rollback + re-apply) | **60 / 60** (vrátane sekcie 11: kanály podľa storefrontu, kill-switch, iOS IAP, iOS EÚ odkaz → Stripe + Apple reporting, Android billing choice → Stripe + Google reporting, Play Billing + upgrade, RTDN zrušenie, App Store notifikácie, NO_LINE_ITEM, žiadny paralelný plán) |
 | Regresia: plan-entitlements, i18n, mobile-m0, mobile-m1, closed-beta-p0, push, google-oauth, storage-media, intent-permissions | všetky prešli |
 | `tsc --noEmit` | čisté |
 | `eslint` | bez nových chýb (main má 37 existujúcich chýb, branch rovnako 37 — žiadna nová) |

@@ -93,6 +93,19 @@ export function resolveEsbluDeepLink(rawUrl: string): string | null {
     return buildLocalTarget("/auth/callback.html", {}, url);
   }
 
+  // Unified subscriptions: návrat zo Stripe Checkout (Custom Tab / Safari) do
+  // appky. Prepúšťa sa IBA checkout_id (UUID) a checkout (returned|canceled) —
+  // nie sú dôkazom platby, stránka čaká na serverové potvrdenie.
+  if (url.pathname === "/nastavenia/predplatne" || url.pathname === "/nastavenia/predplatne/") {
+    const checkoutId = url.searchParams.get("checkout_id");
+    const checkout = url.searchParams.get("checkout");
+    const params = new URLSearchParams();
+    if (checkoutId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(checkoutId)) params.set("checkout_id", checkoutId);
+    if (checkout === "returned" || checkout === "canceled") params.set("checkout", checkout);
+    const query = params.toString();
+    return `/nastavenia/predplatne.html${query ? `?${query}` : ""}`;
+  }
+
   // Čokoľvek iné na esblu.com (napr. /vozidla, /login, marketing landing) —
   // zámerne IGNOROVANÉ, nikdy sa neotvára v appke automaticky.
   return null;

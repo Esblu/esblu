@@ -25,6 +25,20 @@ import {
   purchaseChannel,
 } from "@/lib/billing/client-model";
 
+import { execFileSync } from "node:child_process";
+import { generateKeyPairSync, createPublicKey, verify as cryptoVerify, X509Certificate } from "node:crypto";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { AppleJwsVerifier, encodeOid, sha256Fingerprint } from "@/lib/billing/stores/apple-jws";
+import { appleApiToken, signJwt, verifyGoogleOidcToken } from "@/lib/billing/stores/jwt";
+import { AppleStoreServerApi, GooglePlayDeveloperApi } from "@/lib/billing/stores/store-apis";
+import { appleExternalPurchaseReport, googleExternalTransactionBody, googleRefundBody, StoreReportError, type StoreReportRow } from "@/lib/billing/stores/store-reporting";
+import { getStoreMode } from "@/lib/billing/stores/store-config";
+import { parsePurchaseOptions, plansFor, purchaseActions } from "@/lib/billing/client-model";
+import { stripeChargeFromInvoice } from "@/lib/billing/providers/stripe";
+import { resolveEsbluDeepLink } from "../mobile/app/deep-link-resolve.ts";
+
 let passed = 0;
 let failed = 0;
 async function check(label: string, fn: () => void | Promise<void>) {
@@ -231,8 +245,9 @@ await check("config: production = vždy off; default off; return origin iba http
 await check("UI: platobný kanál podľa platformy a roly", () => {
   assert.equal(purchaseChannel("web", { canManage: true }), "web_checkout");
   assert.equal(purchaseChannel("web", { canManage: false }), "none");
-  assert.equal(purchaseChannel("android", { canManage: true }), "web_info_text");
-  assert.equal(purchaseChannel("ios", { canManage: true }), "none");
+  assert.equal(purchaseChannel("android", { canManage: true }), "mobile_purchase");
+  assert.equal(purchaseChannel("ios", { canManage: true }), "mobile_purchase");
+  assert.equal(purchaseChannel("ios", { canManage: false }), "none");
 });
 await check("UI: ?checkout=success bez serverového potvrdenia nikdy nie je 'confirmed'", () => {
   assert.equal(interpretCheckoutReturn({ checkout: "success" }, { checkoutStatus: null, subscription: null }), "unknown");
@@ -249,6 +264,190 @@ await check("UI: neplatná odpoveď servera → null (fail closed); checkout iba
   assert.equal(canStartCheckout(v), false);
   assert.equal(canStartCheckout({ ...v, status: "expired" }), true);
   assert.equal(canStartCheckout({ ...v, status: "expired", canManage: false }), false);
+});
+
+// ----------------------------------------------------------------------------- MOBILE PURCHASE (unit)
+
+const b64url = (v: string | Buffer) => Buffer.from(v).toString("base64").replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
+
+/** Testovacia EC P-256 reťaz (root → intermediate → leaf) cez openssl; voliteľne s Apple OID. */
+function makeChain(withAppleOids: boolean) {
+  const dir = mkdtempSync(join(tmpdir(), "esblu-apple-"));
+  const run = (...args: string[]) => execFileSync("openssl", args, { cwd: dir, stdio: "pipe" });
+  writeFileSync(join(dir, "ext.cnf"), [
+    "[ca]", "basicConstraints=critical,CA:TRUE", "keyUsage=critical,keyCertSign",
+    ...(withAppleOids ? ["1.2.840.113635.100.6.2.1=ASN1:NULL"] : []),
+    "[leaf]", "basicConstraints=critical,CA:FALSE", "keyUsage=critical,digitalSignature",
+    ...(withAppleOids ? ["1.2.840.113635.100.6.11.1=ASN1:NULL"] : []),
+  ].join("\n"));
+  for (const n of ["root", "int", "leaf"]) run("ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", `${n}.key`);
+  run("req", "-x509", "-new", "-key", "root.key", "-subj", "/CN=Test Root", "-days", "30", "-out", "root.pem", "-addext", "basicConstraints=critical,CA:TRUE", "-addext", "keyUsage=critical,keyCertSign");
+  run("req", "-new", "-key", "int.key", "-subj", "/CN=Test Int", "-out", "int.csr");
+  run("x509", "-req", "-in", "int.csr", "-CA", "root.pem", "-CAkey", "root.key", "-CAcreateserial", "-days", "30", "-extfile", "ext.cnf", "-extensions", "ca", "-out", "int.pem");
+  run("req", "-new", "-key", "leaf.key", "-subj", "/CN=Test Leaf", "-out", "leaf.csr");
+  run("x509", "-req", "-in", "leaf.csr", "-CA", "int.pem", "-CAkey", "int.key", "-CAcreateserial", "-days", "30", "-extfile", "ext.cnf", "-extensions", "leaf", "-out", "leaf.pem");
+  const der = (f: string) => new X509Certificate(readFileSync(join(dir, f))).raw.toString("base64");
+  return { x5c: [der("leaf.pem"), der("int.pem"), der("root.pem")], leafKey: readFileSync(join(dir, "leaf.key"), "utf8"), root: new X509Certificate(readFileSync(join(dir, "root.pem"))) };
+}
+function signAppleJws(payload: Record<string, unknown>, chain: ReturnType<typeof makeChain>, alg = "ES256") {
+  return signJwt({ alg, x5c: chain.x5c }, payload, chain.leafKey);
+}
+
+await check("Apple JWS: platná reťaz + Apple OID + ES256 → payload", async () => {
+  const chain = makeChain(true);
+  const verifier = new AppleJwsVerifier({ trustedRootSha256: [sha256Fingerprint(chain.root)] });
+  const payload = await verifier.verify(signAppleJws({ transactionId: "1", bundleId: "com.esblu.app" }, chain));
+  assert.equal(payload.transactionId, "1");
+});
+await check("Apple JWS: nedôveryhodný root / zmenený payload / chýbajúce Apple OID / bez rootu → odmietnuté", async () => {
+  const chain = makeChain(false);
+  const other = makeChain(true);
+  const jws = signAppleJws({ transactionId: "1" }, chain);
+  await rejects(() => new AppleJwsVerifier({ trustedRootSha256: [sha256Fingerprint(other.root)] }).verify(jws), "INVALID_SIGNATURE");
+  await rejects(() => new AppleJwsVerifier({ trustedRootSha256: [sha256Fingerprint(chain.root)] }).verify(jws), "INVALID_SIGNATURE"); // OID chýba
+  const lax = new AppleJwsVerifier({ trustedRootSha256: [sha256Fingerprint(chain.root)], requireAppleOids: false });
+  assert.equal((await lax.verify(jws)).transactionId, "1");
+  const [h, , s] = jws.split(".");
+  await rejects(() => lax.verify(`${h}.${b64url(JSON.stringify({ transactionId: "2" }))}.${s}`), "INVALID_SIGNATURE");
+  await rejects(() => new AppleJwsVerifier({ trustedRootSha256: [] }).verify(jws), "NOT_CONFIGURED");
+  // podvrhnutá reťaz: leaf podpísaný cudzím kľúčom s pravým rootom v x5c
+  const mixed = signJwt({ alg: "ES256", x5c: [other.x5c[0], chain.x5c[1], chain.x5c[2]] }, { transactionId: "3" }, other.leafKey);
+  await rejects(() => lax.verify(mixed), "INVALID_SIGNATURE");
+  assert.equal(encodeOid("1.2.840.113635.100.6.11.1").toString("hex"), "060a2a864886f76364060b01");
+});
+
+await check("Google OIDC (Pub/Sub push): RS256 + iss/aud/email/exp", () => {
+  const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const pem = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+  const jwk = { ...(publicKey.export({ format: "jwk" }) as Record<string, string>), kid: "k1" };
+  const now = 1_800_000_000;
+  const claims = { iss: "https://accounts.google.com", aud: "https://staging/api/billing/webhooks/google", email: "rtdn@proj.iam.gserviceaccount.com", email_verified: true, exp: now + 600 };
+  const token = signJwt({ alg: "RS256", kid: "k1" }, claims, pem);
+  const expect = { audience: claims.aud, email: claims.email, jwks: { keys: [jwk] }, nowSeconds: now };
+  assert.equal(verifyGoogleOidcToken(token, expect).email, claims.email);
+  assert.throws(() => verifyGoogleOidcToken(token, { ...expect, audience: "x" }), /INVALID_SIGNATURE/);
+  assert.throws(() => verifyGoogleOidcToken(token, { ...expect, nowSeconds: now + 3600 }), /STALE_SIGNATURE/);
+  assert.throws(() => verifyGoogleOidcToken(signJwt({ alg: "RS256", kid: "k2" }, claims, pem), expect), /INVALID_SIGNATURE/);
+  assert.throws(() => verifyGoogleOidcToken(signJwt({ alg: "RS256", kid: "k1" }, { ...claims, email_verified: false }, pem), expect), /INVALID_SIGNATURE/);
+});
+
+await check("Google Play API: service-account JWT grant, subscriptionsv2 / acknowledge / externalTransactions cesty", async () => {
+  const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const calls: { url: string; init: RequestInit }[] = [];
+  const fetchImpl = (async (url: string, init: RequestInit) => {
+    calls.push({ url, init });
+    if (url.includes("oauth2")) return new Response(JSON.stringify({ access_token: "ya29.test" }));
+    return new Response(JSON.stringify({ ok: true }));
+  }) as unknown as typeof fetch;
+  const api = new GooglePlayDeveloperApi("com.esblu.app", { client_email: "sa@p.iam.gserviceaccount.com", private_key: privateKey.export({ type: "pkcs8", format: "pem" }).toString() }, fetchImpl);
+  await api.getSubscriptionV2("tok");
+  await api.acknowledge("esblu_test_pro", "tok");
+  await api.createExternalTransaction("esblu_abc", { a: 1 });
+  const grant = new URLSearchParams(String(calls[0].init.body));
+  assert.equal(grant.get("grant_type"), "urn:ietf:params:oauth:grant-type:jwt-bearer");
+  const claims = JSON.parse(Buffer.from(grant.get("assertion")!.split(".")[1], "base64url").toString());
+  assert.equal(claims.scope, "https://www.googleapis.com/auth/androidpublisher");
+  assert.ok(calls[1].url.endsWith("/applications/com.esblu.app/purchases/subscriptionsv2/tokens/tok"));
+  assert.ok(calls[2].url.endsWith("/purchases/subscriptions/esblu_test_pro/tokens/tok:acknowledge"));
+  assert.ok(calls[3].url.endsWith("/externalTransactions?externalTransactionId=esblu_abc"));
+  assert.equal((calls[1].init.headers as Record<string, string>).Authorization, "Bearer ya29.test");
+});
+await check("Apple API: ES256 token (kid, aud, bid), iba sandbox host; live zakázané", () => {
+  const { privateKey, publicKey } = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+  const pem = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+  const token = appleApiToken({ keyId: "KID123", issuerId: "iss-uuid", bundleId: "com.esblu.app", privateKeyPem: pem }, 1_800_000_000);
+  const [h, p, s] = token.split(".");
+  assert.equal(JSON.parse(Buffer.from(h, "base64url").toString()).kid, "KID123");
+  const claims = JSON.parse(Buffer.from(p, "base64url").toString());
+  assert.equal(claims.aud, "appstoreconnect-v1");
+  assert.equal(claims.bid, "com.esblu.app");
+  assert.ok(cryptoVerify("sha256", Buffer.from(`${h}.${p}`), { key: createPublicKey(publicKey.export({ type: "spki", format: "pem" })), dsaEncoding: "ieee-p1363" }, Buffer.from(s, "base64url")));
+  assert.throws(() => new AppleStoreServerApi({ keyId: "k", issuerId: "i", bundleId: "b", privateKeyPem: pem }, "live"), /LIVE_MODE_FORBIDDEN/);
+});
+
+const baseRow: StoreReportRow = {
+  id: "r1", store: "google", report_kind: "google_initial", external_transaction_id: "esblu_0123456789abcdef0123456789abcdef",
+  initial_external_transaction_id: null, store_token: "ext-token-1", amount_pre_tax_minor: 990, tax_minor: 228, currency: "EUR",
+  tax_country: "SK", transaction_at: "2026-10-08T10:00:00.000Z", period_start: "2026-10-08T10:00:00.000Z", period_end: "2026-11-08T10:00:00.000Z", product_id: "test_pro",
+};
+await check("reporting telá: Google initial/renewal/refund (priceMicros), Apple LINE_ITEM (milli, ISO-3), chýbajúce dáta = chyba", () => {
+  const initial = googleExternalTransactionBody(baseRow);
+  assert.deepEqual(initial.originalPreTaxAmount, { currency: "EUR", priceMicros: "9900000" });
+  assert.deepEqual(initial.originalTaxAmount, { currency: "EUR", priceMicros: "2280000" });
+  assert.deepEqual(initial.recurringTransaction, { externalTransactionToken: "ext-token-1", externalSubscription: { subscriptionType: "RECURRING" } });
+  assert.deepEqual(initial.userTaxAddress, { regionCode: "SK" });
+  const renewal = googleExternalTransactionBody({ ...baseRow, report_kind: "google_renewal", initial_external_transaction_id: "esblu_first" });
+  assert.equal((renewal.recurringTransaction as Record<string, unknown>).initialExternalTransactionId, "esblu_first");
+  assert.ok("partialRefund" in googleRefundBody({ ...baseRow, report_kind: "google_refund" }));
+  assert.throws(() => googleExternalTransactionBody({ ...baseRow, tax_country: null }), StoreReportError);
+  const appleToken = Buffer.from(JSON.stringify({ externalPurchaseId: "SANDBOX_1" })).toString("base64");
+  const report = appleExternalPurchaseReport({ ...baseRow, store: "apple", report_kind: "apple_subscription_start", external_transaction_id: "0123456789abcdef0123456789abcdef", store_token: appleToken });
+  assert.equal(report.requestIdentifier, "01234567-89ab-cdef-0123-456789abcdef");
+  assert.equal(report.externalPurchaseId, "SANDBOX_1");
+  const item = (report.lineItems as Record<string, unknown>[])[0];
+  assert.equal(item.amountTaxExclusive, 9900);
+  assert.equal(item.amountTaxInclusive, 12180);
+  assert.equal(item.taxCountry, "SVK");
+  assert.equal(item.subscriptionDaysOfPaidService, 31);
+  assert.throws(() => appleExternalPurchaseReport({ ...baseRow, store: "apple", report_kind: "apple_refund", store_token: appleToken }), /APPLE_REFUND_SCHEMA_UNVERIFIED/);
+  assert.throws(() => appleExternalPurchaseReport({ ...baseRow, store: "apple", report_kind: "apple_subscription_start", store_token: "not-base64-json" }), /APPLE_TOKEN_UNDECODABLE/);
+});
+
+await check("store mode: production vždy off; default off", () => {
+  assert.equal(getStoreMode({ VERCEL_ENV: "production", ESBLU_BILLING_STORE_MODE: "sandbox" }), "off");
+  assert.equal(getStoreMode({}), "off");
+  assert.equal(getStoreMode({ ESBLU_BILLING_STORE_MODE: "fake" }), "fake");
+  assert.equal(getStoreMode({ ESBLU_BILLING_STORE_MODE: "live" }), "off");
+});
+
+const optionsJson = (platform: string, methods: string[]) => ({
+  platform, storefront: "SK", can_manage: true,
+  methods: methods.map((m) => ({ method: m, provider: m.startsWith("apple_iap") ? "apple" : m === "google_play" ? "google" : "fake", reporting: "none",
+    plans: [{ plan_code: "test_pro", intervals: [{ interval: "month", store_product_id: m === "apple_iap" ? "com.esblu.test.pro.monthly" : null }], entitlements: [] }] })),
+});
+await check("mobilné UI: Android EEA = 1 tlačidlo s Google choice screen; iOS EÚ = IAP + karta (rovnocenné); view-only", () => {
+  const android = parsePurchaseOptions(optionsJson("android", ["google_play", "google_choice_developer"]))!;
+  assert.deepEqual(purchaseActions(android), [{ kind: "google", method: "google_play", billingChoice: true }]);
+  const androidUs = parsePurchaseOptions(optionsJson("android", ["google_play"]))!;
+  assert.deepEqual(purchaseActions(androidUs), [{ kind: "google", method: "google_play", billingChoice: false }]);
+  const ios = parsePurchaseOptions(optionsJson("ios", ["apple_iap", "apple_eu_link_checkout"]))!;
+  assert.deepEqual(purchaseActions(ios).map((a) => a.kind), ["apple_iap", "apple_external"]);
+  assert.equal(plansFor(ios, "apple_iap", "month")[0].storeProductId, "com.esblu.test.pro.monthly");
+  assert.equal(plansFor(ios, "apple_iap", "year").length, 0);
+  const none = parsePurchaseOptions({ platform: "ios", methods: [], can_manage: true })!;
+  assert.equal(none.viewOnly, true);
+  assert.equal(parsePurchaseOptions({ platform: "ios", methods: [{ method: "free_money" }] })!.methods.length, 0, "neznáma metóda sa ignoruje");
+});
+
+await check("Stripe: invoice.paid → platba pre reporting (bez dane / daň / krajina)", () => {
+  const charge = stripeChargeFromInvoice({ object: "invoice", id: "in_1", total: 1218, total_excluding_tax: 990, currency: "eur", customer_address: { country: "sk" }, status_transitions: { paid_at: NOW } })!;
+  assert.deepEqual(charge, { id: "in_1", kind: "purchase", amount_pre_tax_minor: 990, tax_minor: 228, currency: "EUR", at: new Date(NOW * 1000).toISOString(), tax_country: "SK" });
+  assert.equal(stripeChargeFromInvoice({ object: "charge" }), null);
+});
+await check("Stripe: refund bez charge.invoice → invoice_payments → invoice → predplatné (charge result)", async () => {
+  const stripe = stripeWithFetch({
+    "/invoice_payments": { object: "list", data: [{ invoice: "in_9" }], livemode: false },
+    "/invoices/in_9": { object: "invoice", id: "in_9", parent: { subscription_details: { subscription: "sub_9" } }, livemode: false },
+  });
+  const n = await stripe.normalizeEvent({ provider: "stripe", environment: "test", eventId: "evt_r", eventType: "charge.refunded", createdAt: "2026-10-08T00:00:00.000Z", payloadSha256: "x", data: { object: "charge", id: "ch_1", payment_intent: "pi_1", amount_refunded: 500, currency: "eur" } });
+  assert.equal(n.kind, "charge");
+  if (n.kind === "charge") {
+    assert.equal(n.providerSubscriptionId, "sub_9");
+    assert.equal(n.charge.refunded_charge_id, "in_9");
+    assert.equal(n.charge.amount_pre_tax_minor, 500);
+  }
+});
+await check("Stripe Checkout z mobilu: origin_context=mobile_app", async () => {
+  const captured: Captured[] = [];
+  const stripe = stripeWithFetch({ "/checkout/sessions": { id: "cs_test_m", url: "https://checkout.stripe.com/c/pay/cs_test_m", livemode: false } }, captured);
+  await stripe.createCheckout({ checkoutId: "chk-m", providerPriceId: "price_x", providerCustomerId: null, mobileApp: true, successUrl: "https://s/x", cancelUrl: "https://s/y" });
+  assert.equal(new URLSearchParams(String(captured[0].init.body)).get("origin_context"), "mobile_app");
+});
+await check("deep link návratu z checkoutu: iba UUID checkout_id + returned|canceled", () => {
+  const id = "11111111-1111-4111-8111-111111111111";
+  assert.equal(resolveEsbluDeepLink(`https://www.esblu.com/nastavenia/predplatne?checkout_id=${id}&checkout=returned`), `/nastavenia/predplatne.html?checkout_id=${id}&checkout=returned`);
+  assert.equal(resolveEsbluDeepLink("https://www.esblu.com/nastavenia/predplatne?checkout_id=<script>&checkout=success&x=1"), "/nastavenia/predplatne.html");
+  assert.equal(resolveEsbluDeepLink("https://evil.example/nastavenia/predplatne?checkout_id=" + id), null);
 });
 
 console.log(`\nsubscriptions: ${passed} passed, ${failed} failed`);

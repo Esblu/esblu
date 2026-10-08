@@ -142,6 +142,20 @@ export async function processWebhook(provider: BillingProvider, rawBody: string,
     return { httpStatus: 200, outcome: "ignored", code: normalized.reason };
   }
 
+  if (normalized.kind === "charge") {
+    // Platba bez zmeny stavu (refund) → iba reporting obchodu.
+    const { data, error } = await db.rpc("esblu_billing_apply_charge", {
+      p_event_id: recorded.event_id,
+      p_provider_subscription_id: normalized.providerSubscriptionId,
+      p_charge: normalized.charge,
+    });
+    if (error || !data) return { httpStatus: 500, outcome: "retry", code: "APPLY_FAILED" };
+    const result = (data as ApplyResponse).result;
+    return result === "applied" || result === "duplicate"
+      ? { httpStatus: 200, outcome: result === "applied" ? "applied" : "duplicate" }
+      : { httpStatus: 200, outcome: "failed_permanent", code: (data as ApplyResponse).error };
+  }
+
   // 5+6) kanonický stav + nároky
   return applyState(db, recorded.event_id, normalized.state);
 }
@@ -151,6 +165,31 @@ export async function processWebhook(provider: BillingProvider, rawBody: string,
  * change) — rovnaká cesta ako webhook (record → apply), syntetické event ID.
  * Neskorší webhook toho istého stavu je duplicitný alebo `stale`.
  */
+/** Overený nákup z mobilu (StoreKit / Play) — rovnaká cesta record → apply. */
+export async function applyVerifiedStorePurchase(
+  db: BillingDb,
+  provider: { id: BillingProviderId; environment: "test" },
+  eventId: string,
+  state: NormalizedSubscriptionState,
+  payloadSha256: string,
+): Promise<PipelineResult> {
+  let recorded;
+  try {
+    recorded = await recordEvent(db, {
+      provider: provider.id,
+      environment: provider.environment,
+      eventId,
+      eventType: `esblu.client_purchase.${provider.id}`,
+      createdAt: state.state_at,
+      payloadSha256,
+    });
+  } catch {
+    return { httpStatus: 500, outcome: "retry", code: "RECORD_FAILED" };
+  }
+  if (recorded.duplicate) return { httpStatus: 200, outcome: "duplicate", code: recorded.status };
+  return applyState(db, recorded.event_id, state);
+}
+
 export async function applyProviderState(
   db: BillingDb,
   provider: { id: BillingProviderId; environment: "test" },

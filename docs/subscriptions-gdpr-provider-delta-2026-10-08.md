@@ -34,6 +34,17 @@
 
 **Cez webhooky prichádza** celý objekt eventu. Spracuje sa v pamäti servera a uložia sa iba polia z bodu „V Esblu“. Stripe Checkout `customer_details` sa nečítajú ani neukladajú.
 
+## 2b. Nákup z mobilu — doplnok (8. 10. 2026)
+
+- **Apple** (IAP aj ExternalPurchaseCustomLink):
+  - Ukladáme `appAccountToken` (náhodné UUID firmy), `originalTransactionId`, `productId` a ExternalPurchase token.
+  - Apple dostáva mesačný **External Purchase report**: suma bez a s DPH, mena, krajina zdanenia (ISO-3), obdobie a produkt. Bez mena a e-mailu.
+- **Google** (Play Billing aj billing choice):
+  - Ukladáme `obfuscatedExternalAccountId` (náhodné UUID firmy), `purchaseToken` a `externalTransactionToken`.
+  - Google dostáva **External Transactions** do 24 h: suma, daň, mena, `regionCode` a ID transakcie bez osobných údajov.
+- Tieto reporty sú zmluvná povinnosť voči obchodom. Na posúdenie je právny základ čl. 6 ods. 1 písm. b/c a zmluvné podmienky obchodov (Apple DPLA Attachment 14, Google Play Payments / Billing choice terms).
+- Pri nákupe cez App Store alebo Google Play je obchod samostatný prevádzkovateľ platby. Esblu dostáva iba stav predplatného.
+
 ## 3. Účel a právny základ (návrh)
 
 | Účel | Právny základ (návrh) |

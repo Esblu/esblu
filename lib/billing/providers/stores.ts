@@ -17,6 +17,9 @@
 // Normalizačné funkcie nižšie sú čisté a otestované na fixture payloadoch.
 // =============================================================================
 
+import { sha256Hex } from "@/lib/billing/signature";
+import type { AppleSignedDataVerifier } from "@/lib/billing/stores/apple-jws";
+import type { GooglePlayApi } from "@/lib/billing/stores/store-apis";
 import {
   BillingProviderError,
   type BillingProvider,
@@ -55,9 +58,7 @@ abstract class StoreProviderBase implements BillingProvider {
   async createPortalSession(): Promise<never> {
     throw new BillingProviderError("UNSUPPORTED_OPERATION", "manage in the store");
   }
-  async verifyWebhook(): Promise<never> {
-    throw new BillingProviderError("NOT_CONFIGURED");
-  }
+  abstract verifyWebhook(rawBody?: string, headers?: Headers): Promise<VerifiedProviderEvent>;
   abstract normalizeEvent(event: VerifiedProviderEvent): Promise<NormalizationResult>;
 }
 
@@ -72,8 +73,11 @@ export type AppleDecodedNotification = {
   renewal?: Obj | null; // JWSRenewalInfoDecodedPayload
 };
 
+const APPLE_AUDIT_TYPES = new Set(["TEST", "CONSUMPTION_REQUEST", "PRICE_INCREASE", "REFUND_DECLINED", "REFUND_REVERSED", "EXTERNAL_PURCHASE_TOKEN"]);
+
 export function normalizeAppleNotification(n: AppleDecodedNotification): NormalizationResult {
-  const tx = n.transaction;
+  if (APPLE_AUDIT_TYPES.has(n.notificationType)) return { kind: "ignore", reason: "AUDIT_ONLY" };
+  const tx = n.transaction ?? {};
   const originalTransactionId = str(tx.originalTransactionId);
   const productId = str(tx.productId);
   if (!originalTransactionId || !productId) throw new BillingProviderError("MALFORMED_PAYLOAD");
@@ -128,6 +132,50 @@ export function normalizeAppleNotification(n: AppleDecodedNotification): Normali
 
 export class AppleAppStoreProvider extends StoreProviderBase {
   readonly id = "apple" as const;
+  private readonly verifier: AppleSignedDataVerifier | null;
+  private readonly bundleId: string;
+
+  constructor(verifier: AppleSignedDataVerifier | null = null, bundleId = "com.esblu.app") {
+    super();
+    this.verifier = verifier;
+    this.bundleId = bundleId;
+  }
+
+  /** App Store Server Notifications V2: { signedPayload } → overené JWS (+ vnorené transakcie). */
+  async verifyWebhook(rawBody?: string): Promise<VerifiedProviderEvent> {
+    if (!this.verifier) throw new BillingProviderError("NOT_CONFIGURED");
+    let body: unknown;
+    try {
+      body = JSON.parse(rawBody ?? "");
+    } catch {
+      throw new BillingProviderError("MALFORMED_PAYLOAD");
+    }
+    const signedPayload = isObj(body) ? str(body.signedPayload) : null;
+    if (!signedPayload) throw new BillingProviderError("MALFORMED_PAYLOAD");
+    const payload = await this.verifier.verify<Obj>(signedPayload);
+    const data = isObj(payload.data) ? payload.data : {};
+    if (data.bundleId !== undefined && data.bundleId !== this.bundleId) throw new BillingProviderError("INVALID_SIGNATURE", "bundle");
+    if (data.environment !== undefined && data.environment !== "Sandbox") throw new BillingProviderError("LIVE_MODE_FORBIDDEN");
+    const signedTx = str(data.signedTransactionInfo);
+    const signedRenewal = str(data.signedRenewalInfo);
+    const transaction = signedTx ? await this.verifier.verify<Obj>(signedTx) : {};
+    const renewal = signedRenewal ? await this.verifier.verify<Obj>(signedRenewal) : null;
+    const uuid = str(payload.notificationUUID);
+    const type = str(payload.notificationType);
+    if (!uuid || !type) throw new BillingProviderError("MALFORMED_PAYLOAD");
+    const signedDate = typeof payload.signedDate === "number" ? payload.signedDate : Date.now();
+    const decoded: AppleDecodedNotification = { notificationType: type, subtype: str(payload.subtype), notificationUUID: uuid, signedDate, transaction, renewal };
+    return {
+      provider: "apple",
+      environment: "test",
+      eventId: uuid,
+      eventType: payload.subtype ? `${type}.${String(payload.subtype)}` : type,
+      createdAt: new Date(signedDate).toISOString(),
+      payloadSha256: sha256Hex(rawBody ?? ""),
+      data: decoded,
+    };
+  }
+
   async normalizeEvent(event: VerifiedProviderEvent): Promise<NormalizationResult> {
     return normalizeAppleNotification(event.data as AppleDecodedNotification);
   }
@@ -202,9 +250,66 @@ export function normalizeGoogleSubscription(s: GoogleSubscriptionSnapshot): Norm
   };
 }
 
+export type GoogleRtdnConfig = {
+  api: GooglePlayApi;
+  packageName: string;
+  /** Overenie Pub/Sub push OIDC tokenu; null = NOT_CONFIGURED. */
+  verifyPushToken: ((bearer: string) => Promise<void>) | null;
+};
+
 export class GooglePlayProvider extends StoreProviderBase {
   readonly id = "google" as const;
+  private readonly rtdn: GoogleRtdnConfig | null;
+
+  constructor(rtdn: GoogleRtdnConfig | null = null) {
+    super();
+    this.rtdn = rtdn;
+  }
+
+  /** RTDN (Pub/Sub push): OIDC bearer → message.data (base64 DeveloperNotification). */
+  async verifyWebhook(rawBody?: string, headers?: Headers): Promise<VerifiedProviderEvent> {
+    if (!this.rtdn || !this.rtdn.verifyPushToken) throw new BillingProviderError("NOT_CONFIGURED");
+    const bearer = (headers?.get("authorization") ?? "").replace(/^Bearer\s+/i, "").trim();
+    if (!bearer) throw new BillingProviderError("INVALID_SIGNATURE");
+    await this.rtdn.verifyPushToken(bearer);
+    let body: unknown;
+    let notification: Obj;
+    try {
+      body = JSON.parse(rawBody ?? "");
+      const message = isObj(body) && isObj(body.message) ? body.message : null;
+      notification = JSON.parse(Buffer.from(String(message?.data ?? ""), "base64").toString("utf8")) as Obj;
+      if (!message || !str(message.messageId)) throw new Error("x");
+      (notification as Obj).__messageId = message.messageId;
+    } catch {
+      throw new BillingProviderError("MALFORMED_PAYLOAD");
+    }
+    if (notification.packageName !== this.rtdn.packageName) throw new BillingProviderError("INVALID_SIGNATURE", "package");
+    const sub = isObj(notification.subscriptionNotification) ? notification.subscriptionNotification : null;
+    const eventTime = Number(notification.eventTimeMillis ?? Date.now());
+    return {
+      provider: "google",
+      environment: "test",
+      eventId: `rtdn:${String(notification.__messageId)}`,
+      eventType: sub ? `subscription.${String(sub.notificationType)}` : notification.testNotification ? "test" : "other",
+      createdAt: new Date(eventTime).toISOString(),
+      payloadSha256: sha256Hex(rawBody ?? ""),
+      data: sub ? { purchaseToken: str(sub.purchaseToken), eventTimeMillis: eventTime } : null,
+    };
+  }
+
   async normalizeEvent(event: VerifiedProviderEvent): Promise<NormalizationResult> {
-    return normalizeGoogleSubscription(event.data as GoogleSubscriptionSnapshot);
+    const data = event.data as { purchaseToken?: string | null; eventTimeMillis?: number; resource?: Obj } | null;
+    if (!data?.purchaseToken) return { kind: "ignore", reason: "AUDIT_ONLY" };
+    // RTDN nesie iba „niečo sa zmenilo" → autoritatívny stav z Play Developer API.
+    const resource = data.resource ?? (this.rtdn ? await this.rtdn.api.getSubscriptionV2(data.purchaseToken) : null);
+    if (!resource) throw new BillingProviderError("NOT_CONFIGURED");
+    const result = normalizeGoogleSubscription({ purchaseToken: data.purchaseToken, eventTimeMillis: data.eventTimeMillis ?? Date.now(), resource });
+    // Acknowledge (do 3 dní, inak auto-refund) pre aktívne nákupy, ktoré klient nepotvrdil.
+    if (this.rtdn && result.kind === "state" && result.state.status === "active" && resource.acknowledgementState === "ACKNOWLEDGEMENT_STATE_PENDING") {
+      const items = Array.isArray(resource.lineItems) ? (resource.lineItems as Obj[]) : [];
+      const productId = str(items[0]?.productId);
+      if (productId) await this.rtdn.api.acknowledge(productId, data.purchaseToken);
+    }
+    return result;
   }
 }

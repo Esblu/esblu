@@ -11,6 +11,7 @@ import { getUserScopedSupabaseClient } from "@/lib/server-supabase-user-client";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { getRequestLocale } from "@/lib/i18n/request-locale";
 import { getBillingServerMode, webProviderForMode } from "@/lib/billing/config";
+import { getStoreMode } from "@/lib/billing/stores/store-config";
 import { FakeBillingProvider, type FakeStateStore } from "@/lib/billing/providers/fake";
 import { StripeTestProvider } from "@/lib/billing/providers/stripe";
 import type { BillingProvider, NormalizedSubscriptionState } from "@/lib/billing/types";
@@ -27,6 +28,11 @@ export const BILLING_ERROR_STATUS: Record<string, number> = {
   ESBLU_BILLING_ACTIVE_ON_OTHER_PROVIDER: 409,
   ESBLU_BILLING_RATE_LIMITED: 429,
   ESBLU_BILLING_CHECKOUT_STATE: 409,
+  ESBLU_BILLING_PLATFORM_INVALID: 400,
+  ESBLU_BILLING_METHOD_NOT_ALLOWED: 403,
+  ESBLU_BILLING_STORE_TOKEN_REQUIRED: 400,
+  ESBLU_BILLING_CHANGE_NOT_ALLOWED: 409,
+  ESBLU_BILLING_MODE_INVALID: 400,
 };
 
 export function billingErrorCode(error: { message?: string } | null | undefined): string {
@@ -41,7 +47,7 @@ export function billingErrorResponse(error: { message?: string } | null | undefi
 }
 
 export async function authorizeBillingCaller(req: Request): Promise<{ userId: string; db: SupabaseClient } | { response: Response }> {
-  if (getBillingServerMode() === "off") {
+  if (getBillingServerMode() === "off" && getStoreMode() === "off") {
     return { response: Response.json({ success: false, code: "ESBLU_BILLING_DISABLED" }, { status: 404 }) };
   }
   const { user, error } = await verifyRequestUser(req, getRequestLocale(req));

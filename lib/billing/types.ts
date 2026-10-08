@@ -48,6 +48,20 @@ export type NormalizedSubscriptionState = {
   state_at: string;
   /** Google linkedPurchaseToken — výslovné nahradenie predplatného tým istým providerom. */
   replaces_subscription_id?: string | null;
+  /** Platba (iba ak event nesie platbu) — vstup pre reporting obchodom (Google/Apple). */
+  charge?: NormalizedCharge | null;
+};
+
+/** Platba predplatného pre reporting obchodom. Sumy v najmenších jednotkách meny. */
+export type NormalizedCharge = {
+  id: string;
+  kind: "purchase" | "refund";
+  amount_pre_tax_minor: number | null;
+  tax_minor: number | null;
+  currency: string | null;
+  at: string;
+  tax_country: string | null;
+  refunded_charge_id?: string | null;
 };
 
 /** Overená (podpis OK) udalosť providera — ešte NEnormalizovaná. */
@@ -65,10 +79,13 @@ export type VerifiedProviderEvent = {
 /** Výsledok normalizácie: buď zmena stavu, alebo vedome ignorovaný typ. */
 export type NormalizationResult =
   | { kind: "state"; state: NormalizedSubscriptionState }
+  | { kind: "charge"; providerSubscriptionId: string; charge: NormalizedCharge }
   | { kind: "ignore"; reason: string };
 
 export type CheckoutRequest = {
   checkoutId: string;
+  /** Checkout otvorený z mobilnej appky (Stripe origin_context=mobile_app). */
+  mobileApp?: boolean;
   providerPriceId: string;
   providerCustomerId: string | null;
   successUrl: string;
@@ -94,7 +111,7 @@ export type BillingProviderErrorCode =
 export class BillingProviderError extends Error {
   readonly code: BillingProviderErrorCode;
   constructor(code: BillingProviderErrorCode, message?: string) {
-    super(message ?? code);
+    super(message ? `${code}: ${message}` : code);
     this.code = code;
     this.name = "BillingProviderError";
   }

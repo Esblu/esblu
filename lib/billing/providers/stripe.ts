@@ -21,6 +21,7 @@ import {
   type CheckoutRequest,
   type CheckoutSession,
   type NormalizationResult,
+  type NormalizedCharge,
   type NormalizedSubscriptionState,
   type ProviderSubscriptionRef,
   type VerifiedProviderEvent,
@@ -44,12 +45,33 @@ export const STRIPE_STATE_EVENTS = new Set([
 
 /** Iba audit — žiadna automatická zmena nároku (rozhoduje operátor). */
 export const STRIPE_AUDIT_EVENTS = new Set([
-  "charge.refunded",
   "charge.dispute.created",
   "checkout.session.async_payment_failed",
   "checkout.session.expired",
   "customer.subscription.trial_will_end",
 ]);
+
+/**
+ * invoice.paid → platba pre reporting obchodom (Google External Transactions /
+ * Apple External Purchase). Sumy v centoch; daň = total − total_excluding_tax.
+ */
+export function stripeChargeFromInvoice(invoice: unknown): NormalizedCharge | null {
+  if (!isObj(invoice) || invoice.object !== "invoice" || !str(invoice.id)) return null;
+  const total = typeof invoice.total === "number" ? invoice.total : null;
+  const excl = typeof invoice.total_excluding_tax === "number" ? invoice.total_excluding_tax : null;
+  const transitions = isObj(invoice.status_transitions) ? invoice.status_transitions : {};
+  const address = isObj(invoice.customer_address) ? invoice.customer_address : {};
+  const country = str(address.country);
+  return {
+    id: str(invoice.id)!,
+    kind: "purchase",
+    amount_pre_tax_minor: excl ?? total,
+    tax_minor: total !== null && excl !== null ? total - excl : null,
+    currency: str(invoice.currency)?.toUpperCase() ?? null,
+    at: isoFromUnix(transitions.paid_at) ?? isoFromUnix(invoice.created) ?? new Date().toISOString(),
+    tax_country: country && /^[A-Za-z]{2}$/.test(country) ? country.toUpperCase() : null,
+  };
+}
 
 export function assertStripeTestKey(secretKey: string | undefined): string {
   const key = (secretKey ?? "").trim();
@@ -206,6 +228,8 @@ export class StripeTestProvider implements BillingProvider {
         billing_address_collection: "required",
         "tax_id_collection[enabled]": true,
         locale: "sk",
+        // Checkout otvorený z appky (in-app browser / Safari) — docs.stripe.com/mobile/digital-goods/checkout
+        origin_context: request.mobileApp ? "mobile_app" : null,
         success_url: request.successUrl,
         cancel_url: request.cancelUrl,
       },
@@ -283,11 +307,55 @@ export class StripeTestProvider implements BillingProvider {
 
   async normalizeEvent(event: VerifiedProviderEvent): Promise<NormalizationResult> {
     if (STRIPE_AUDIT_EVENTS.has(event.eventType)) return { kind: "ignore", reason: "AUDIT_ONLY" };
+    if (event.eventType === "charge.refunded") return this.normalizeRefund(event);
     if (!STRIPE_STATE_EVENTS.has(event.eventType)) return { kind: "ignore", reason: "UNSUPPORTED_EVENT" };
     const { subscriptionId, checkoutRef } = stripeSubscriptionIdFromEvent(event.eventType, event.data);
     if (!subscriptionId) return { kind: "ignore", reason: "NO_SUBSCRIPTION" };
     // Čerstvý stav z API (nie snapshot z eventu) — ochrana pred nesprávnym poradím.
     const sub = await this.request("GET", `/subscriptions/${encodeURIComponent(subscriptionId)}`);
-    return { kind: "state", state: normalizeStripeSubscription(sub, this.now().toISOString(), checkoutRef) };
+    const state = normalizeStripeSubscription(sub, this.now().toISOString(), checkoutRef);
+    if (event.eventType === "invoice.paid") state.charge = stripeChargeFromInvoice(event.data);
+    return { kind: "state", state };
+  }
+
+  /**
+   * Refund → reporting obchodu (iba pre predplatné z kanálov s reportingom).
+   * Od API 2025-03-31 charge nemá `invoice`; cesta: payment_intent →
+   * invoice_payments → invoice → subscription. Ak sa nedá určiť → audit
+   * (REFUND_NEEDS_OPERATOR) — operátor nahlási ručne.
+   */
+  private async normalizeRefund(event: VerifiedProviderEvent): Promise<NormalizationResult> {
+    const charge = event.data;
+    if (!isObj(charge) || charge.object !== "charge") return { kind: "ignore", reason: "AUDIT_ONLY" };
+    let invoiceId = idOf(charge.invoice);
+    const paymentIntent = idOf(charge.payment_intent);
+    if (!invoiceId && paymentIntent) {
+      const payments = await this.request("GET", "/invoice_payments", {
+        "payment[type]": "payment_intent",
+        "payment[payment_intent]": paymentIntent,
+        limit: 1,
+      }).catch(() => null);
+      const first = payments && Array.isArray(payments.data) && isObj(payments.data[0]) ? (payments.data[0] as Obj) : null;
+      invoiceId = first ? idOf(first.invoice) : null;
+    }
+    if (!invoiceId) return { kind: "ignore", reason: "REFUND_NEEDS_OPERATOR" };
+    const invoice = await this.request("GET", `/invoices/${encodeURIComponent(invoiceId)}`);
+    const { subscriptionId } = stripeSubscriptionIdFromEvent("invoice.paid", invoice);
+    if (!subscriptionId) return { kind: "ignore", reason: "REFUND_NEEDS_OPERATOR" };
+    const refunded = typeof charge.amount_refunded === "number" ? charge.amount_refunded : null;
+    return {
+      kind: "charge",
+      providerSubscriptionId: subscriptionId,
+      charge: {
+        id: `refund_${str(charge.id) ?? event.eventId}_${refunded ?? 0}`,
+        kind: "refund",
+        amount_pre_tax_minor: refunded,
+        tax_minor: null,
+        currency: str(charge.currency)?.toUpperCase() ?? null,
+        at: event.createdAt,
+        tax_country: null,
+        refunded_charge_id: invoiceId,
+      },
+    };
   }
 }

@@ -109,15 +109,25 @@ export class FakeBillingProvider implements BillingProvider {
       checkout_ref: input.checkoutId,
       account_token: null,
       state_at: start.toISOString(),
+      // Fake prvá faktúra (staging) — aby vznikol aj reporting obchodom pri mobilných kanáloch.
+      charge: {
+        id: `fake_in_${input.checkoutId.replace(/-/g, "")}`,
+        kind: "purchase",
+        amount_pre_tax_minor: 990,
+        tax_minor: 228,
+        currency: "EUR",
+        at: start.toISOString(),
+        tax_country: "SK",
+      },
     };
-    await this.store.put(state);
+    await this.store.put({ ...state, charge: null });
     return state;
   }
 
   private async mutate(ref: ProviderSubscriptionRef, patch: Partial<NormalizedSubscriptionState>): Promise<NormalizedSubscriptionState> {
     const current = await this.store.get(ref.providerSubscriptionId);
     if (!current) throw new BillingProviderError("PROVIDER_ERROR", "fake subscription not found");
-    const next: NormalizedSubscriptionState = { ...current, ...patch, checkout_ref: null, state_at: this.now().toISOString() };
+    const next: NormalizedSubscriptionState = { ...current, ...patch, checkout_ref: null, charge: null, state_at: this.now().toISOString() };
     await this.store.put(next);
     return next;
   }
@@ -188,6 +198,9 @@ export class FakeBillingProvider implements BillingProvider {
       throw new BillingProviderError("MALFORMED_PAYLOAD");
     }
     if (event.eventType === "fake.audit") return { kind: "ignore", reason: "AUDIT_ONLY" };
+    if (event.eventType === "fake.charge.refunded" && state.charge && state.provider_subscription_id) {
+      return { kind: "charge", providerSubscriptionId: state.provider_subscription_id, charge: state.charge };
+    }
     // Fake nemá API na refetch → stav eventu, čas = čas eventu (ochrana poradia v DB).
     return { kind: "state", state: { ...state, state_at: state.state_at ?? event.createdAt } };
   }

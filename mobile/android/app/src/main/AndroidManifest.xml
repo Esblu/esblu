@@ -68,6 +68,7 @@
                 <data android:path="/reset-hesla" />
                 <data android:path="/onboarding/company" />
                 <data android:path="/auth/callback" />
+                <data android:path="/nastavenia/predplatne" />
             </intent-filter>
 
         </activity>

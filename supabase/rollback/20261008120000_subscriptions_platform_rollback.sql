@@ -15,6 +15,15 @@
 
 begin;
 
+drop function if exists public.esblu_billing_my_intent(uuid);
+drop function if exists public.esblu_billing_complete_store_report(uuid, boolean, text);
+drop function if exists public.esblu_billing_claim_store_reports(integer);
+drop function if exists public.esblu_billing_apply_charge(uuid, text, jsonb);
+drop function if exists public.esblu_billing_queue_store_report(uuid, jsonb);
+drop function if exists public.esblu_billing_create_purchase_intent(text, text, text, text, text, text, text);
+drop function if exists public.esblu_billing_purchase_options(text, text);
+drop function if exists public.esblu_billing_resolve_methods(text, text);
+drop function if exists public.esblu_billing_method_info(text);
 drop function if exists public.esblu_billing_issue_account_token(text);
 drop function if exists public.esblu_billing_apply_event(uuid, jsonb);
 drop function if exists public.esblu_billing_close_event(uuid, text, text, jsonb);
@@ -38,6 +47,9 @@ drop index if exists public.company_entitlements_subscription_unique_idx;
 do $rb$
 begin
   if coalesce(current_setting('esblu.rollback_drop_billing_tables', true), '') = 'yes' then
+    drop table if exists public.billing_store_reports;
+    drop table if exists public.billing_channel_rules;
+    drop table if exists public.billing_region_groups;
     drop table if exists public.billing_events;
     drop table if exists public.billing_checkout_sessions;
     drop table if exists public.billing_provider_links;

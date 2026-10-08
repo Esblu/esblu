@@ -3,6 +3,13 @@
 > Interný technický audit, **nie právne stanovisko**. Zdroje: iba oficiálne stránky Apple, Google a Stripe, overené 8. 10. 2026.
 > Položky označené **NEOVERENÉ** sa nepodarilo potvrdiť z oficiálneho zdroja — pred rozhodnutím ich treba overiť (Apple/Google kontakt, právnik).
 > Žiadny program, entitlement ani platená služba nebola aktivovaná.
+>
+> **AKTUALIZÁCIA (8. 10. 2026):** odporúčanie „mobil bez nákupu“ v sekcii 4 je **nahradené** nákupom priamo v appke. Pozri `docs/subscriptions-mobile-purchase-2026-10-08.md`:
+> - Android EEA: billing choice program;
+> - iOS EÚ: IAP + ExternalPurchaseCustomLink;
+> - inde: IAP / Play Billing.
+>
+> Guideline 3.1.3(c) sa **nepoužíva**, lebo samoobslužný predaj nespĺňa podmienku „only … organizations“.
 
 ## 0. Kľúčové zmeny posledných mesiacov
 

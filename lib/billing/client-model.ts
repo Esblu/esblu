@@ -3,16 +3,17 @@
 // ktorý vrátil server (esblu_get_my_subscription). Nič tu neudeľuje prístup:
 // nároky vynucuje DB (esblu_resolve_entitlement) pri každom zápise/akcii.
 //
-// Platobný adaptér podľa platformy (docs/subscriptions-store-compliance-2026-10-08.md):
-//   web     → Stripe-hosted Checkout (test mode na stagingu)
-//   android → bez nákupu v appke (Google Play „consumption-only"); povolený
-//             je iba text bez odkazu, že plán sa mení na webe
-//   ios     → bez nákupu a bez výzvy na nákup mimo appky (App Review 3.1.1/3.1.3)
+// Platobný adaptér podľa platformy a storefrontu určuje SERVER
+// (billing_channel_rules → /api/billing/purchase-options). Klient iba
+// zobrazí povolené kanály a spustí ich flow:
+//   web      → Stripe-hosted Checkout
+//   android  → Google Play Billing; v EEA billing choice (Play alebo Esblu/Stripe v appke)
+//   ios      → StoreKit 2 IAP; v EÚ navyše ExternalPurchaseCustomLink → Stripe Checkout
 // Stav predplatného je na všetkých platformách ten istý (jedna odpoveď servera).
 // =============================================================================
 
 export type ClientPlatform = "web" | "android" | "ios";
-export type PurchaseChannel = "web_checkout" | "web_info_text" | "none";
+export type PurchaseChannel = "web_checkout" | "mobile_purchase" | "none";
 
 export type SubscriptionStatus =
   | "none"
@@ -93,9 +94,81 @@ export function parsePlanOptions(data: unknown): PlanOption[] {
 }
 
 export function purchaseChannel(platform: ClientPlatform, view: Pick<SubscriptionView, "canManage">): PurchaseChannel {
-  if (platform === "ios") return "none";
-  if (platform === "android") return view.canManage ? "web_info_text" : "none";
-  return view.canManage ? "web_checkout" : "none";
+  if (!view.canManage) return "none";
+  return platform === "web" ? "web_checkout" : "mobile_purchase";
+}
+
+// ----------------------------------------------------------------------------- nákupné kanály
+export type PurchaseMethod =
+  | "stripe_web_checkout"
+  | "apple_iap"
+  | "apple_eu_link_checkout"
+  | "apple_eu_in_app_checkout"
+  | "apple_us_link"
+  | "google_play"
+  | "google_choice_developer";
+
+const METHODS: readonly PurchaseMethod[] = [
+  "stripe_web_checkout", "apple_iap", "apple_eu_link_checkout", "apple_eu_in_app_checkout", "apple_us_link", "google_play", "google_choice_developer",
+];
+
+export type MethodPlan = {
+  planCode: string;
+  intervals: { interval: "month" | "year"; storeProductId: string | null }[];
+  entitlements: PlanEntitlement[];
+};
+
+export type PurchaseOptionMethod = { method: PurchaseMethod; provider: string; reporting: string; plans: MethodPlan[] };
+export type PurchaseOptions = { platform: ClientPlatform; storefront: string | null; canManage: boolean; methods: PurchaseOptionMethod[]; viewOnly: boolean };
+
+export function parsePurchaseOptions(data: unknown): PurchaseOptions | null {
+  if (!isObj(data)) return null;
+  const platform = data.platform === "web" || data.platform === "android" || data.platform === "ios" ? data.platform : null;
+  if (!platform) return null;
+  const methods = (Array.isArray(data.methods) ? data.methods : []).filter(isObj).flatMap((m): PurchaseOptionMethod[] => {
+    if (!METHODS.includes(m.method as PurchaseMethod)) return [];
+    const plans = (Array.isArray(m.plans) ? m.plans : []).filter(isObj).map((p) => ({
+      planCode: String(p.plan_code ?? ""),
+      intervals: (Array.isArray(p.intervals) ? p.intervals : []).filter(isObj).flatMap((i) =>
+        i.interval === "month" || i.interval === "year" ? [{ interval: i.interval as "month" | "year", storeProductId: strOrNull(i.store_product_id) }] : []),
+      entitlements: parseEntitlements(p.entitlements),
+    })).filter((p) => p.planCode && p.intervals.length > 0);
+    return [{ method: m.method as PurchaseMethod, provider: String(m.provider ?? ""), reporting: String(m.reporting ?? "none"), plans }];
+  });
+  return { platform, storefront: strOrNull(data.storefront), canManage: data.can_manage === true, methods, viewOnly: methods.length === 0 };
+}
+
+/**
+ * Tlačidlá pre UI. Android: Play + billing choice = JEDNO tlačidlo (Google
+ * choice screen ponúkne Play aj Esblu billing). iOS EÚ: IAP a Stripe odkaz
+ * ako dve rovnocenné voľby (IAP rovnako výrazné — Apple Attachment 14).
+ */
+export type PurchaseAction =
+  | { kind: "web_checkout"; method: "stripe_web_checkout" }
+  | { kind: "apple_iap"; method: "apple_iap" }
+  | { kind: "apple_external"; method: "apple_eu_link_checkout" | "apple_eu_in_app_checkout" | "apple_us_link"; notice: "browser" | "withinApp" | null }
+  | { kind: "google"; method: "google_play"; billingChoice: boolean };
+
+export function purchaseActions(options: PurchaseOptions): PurchaseAction[] {
+  const has = (m: PurchaseMethod) => options.methods.some((x) => x.method === m);
+  const actions: PurchaseAction[] = [];
+  if (has("stripe_web_checkout")) actions.push({ kind: "web_checkout", method: "stripe_web_checkout" });
+  if (has("google_play")) actions.push({ kind: "google", method: "google_play", billingChoice: has("google_choice_developer") });
+  if (has("apple_iap")) actions.push({ kind: "apple_iap", method: "apple_iap" });
+  if (has("apple_eu_link_checkout")) actions.push({ kind: "apple_external", method: "apple_eu_link_checkout", notice: "browser" });
+  if (has("apple_eu_in_app_checkout")) actions.push({ kind: "apple_external", method: "apple_eu_in_app_checkout", notice: "withinApp" });
+  if (has("apple_us_link")) actions.push({ kind: "apple_external", method: "apple_us_link", notice: null });
+  return actions;
+}
+
+/** Plány pre daný kanál a interval (product ID obchodu, ak ide o Apple/Google). */
+export function plansFor(options: PurchaseOptions, method: PurchaseMethod, interval: "month" | "year"): { planCode: string; storeProductId: string | null; entitlements: PlanEntitlement[] }[] {
+  const m = options.methods.find((x) => x.method === method);
+  if (!m) return [];
+  return m.plans.flatMap((p) => {
+    const i = p.intervals.find((x) => x.interval === interval);
+    return i ? [{ planCode: p.planCode, storeProductId: i.storeProductId, entitlements: p.entitlements }] : [];
+  });
 }
 
 /** Má firma platený prístup z predplatného? (iba na zobrazenie — autoritou je DB). */

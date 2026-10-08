@@ -18,7 +18,20 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { applyProviderState, processWebhook, type BillingDb } from "@/lib/billing/pipeline";
+import { applyProviderState, applyVerifiedStorePurchase, processWebhook, type BillingDb } from "@/lib/billing/pipeline";
+import { AppleAppStoreProvider, GooglePlayProvider } from "@/lib/billing/providers/stores";
+import {
+  FakeAppleStoreApi,
+  FakeAppleVerifier,
+  FakeGooglePlayApi,
+  fakeApplePurchase,
+  fakeAppleSignTransaction,
+  fakeGoogleIssueToken,
+  fakeGooglePurchase,
+  fakeStoreToken,
+} from "@/lib/billing/stores/fake-stores";
+import { verifyAppleClientPurchase, verifyGoogleClientPurchase } from "@/lib/billing/stores/store-purchase";
+import { sendStoreReport, StoreReportError, type StoreReportRow } from "@/lib/billing/stores/store-reporting";
 import { FakeBillingProvider, MemoryFakeStateStore } from "@/lib/billing/providers/fake";
 import { normalizeAppleNotification, normalizeGoogleSubscription } from "@/lib/billing/providers/stores";
 import { sha256Hex, signTimestamped } from "@/lib/billing/signature";
@@ -204,7 +217,7 @@ async function subscriptionRowsA() {
 
 // ============================================================================= 1. Granty / RLS
 await check("authenticated nemá priamy prístup k žiadnej billing tabuľke", async () => {
-  for (const table of ["subscription_accounts", "billing_events", "billing_provider_prices", "billing_provider_links", "billing_checkout_sessions", "subscription_plans", "subscription_plan_entitlements", "billing_runtime_config"]) {
+  for (const table of ["subscription_accounts", "billing_events", "billing_provider_prices", "billing_provider_links", "billing_checkout_sessions", "subscription_plans", "subscription_plan_entitlements", "billing_runtime_config", "billing_region_groups", "billing_channel_rules", "billing_store_reports"]) {
     await fails(() => as(U.owner, () => db.query(`select * from public.${table}`)), /permission denied/);
     await fails(() => as(U.owner, () => db.query(`delete from public.${table}`)), /permission denied/);
   }
@@ -223,6 +236,10 @@ await check("authenticated nemôže volať service-only RPC (apply/record/sync/a
     `esblu_billing_attach_checkout_session(gen_random_uuid(), 'x')`,
     `esblu_billing_resolve_price('fake','test','test_pro','month')`,
     `esblu_billing_close_event(gen_random_uuid(),'ignored',null,'{}'::jsonb)`,
+    `esblu_billing_queue_store_report(gen_random_uuid(), '{}'::jsonb)`,
+    `esblu_billing_apply_charge(gen_random_uuid(), 'x', '{}'::jsonb)`,
+    `esblu_billing_claim_store_reports(1)`,
+    `esblu_billing_complete_store_report(gen_random_uuid(), true, null)`,
   ];
   for (const call of calls) await fails(() => as(U.owner, () => db.query(`select public.${call}`)), /permission denied/);
 });
@@ -575,6 +592,292 @@ await check("Android kúpa + upgrade s linkedPurchaseToken → applied (nie conf
   if (n3.kind !== "state") throw new Error("expected state");
   assert.equal(await deliverStore("google", "gmsg-3", n3.state), "applied");
   assert.equal((await subscriptionOf(U.ownerG)).status, "past_due");
+});
+
+// ============================================================================= 11. Nákup z mobilu
+const M = {
+  apple: "f1000000-0000-4000-8000-000000000001", // iOS EÚ — IAP
+  link: "f2000000-0000-4000-8000-000000000002", // iOS EÚ — ExternalPurchaseCustomLink → Stripe
+  choice: "f3000000-0000-4000-8000-000000000003", // Android EEA — billing choice → Esblu (Stripe)
+  play: "f4000000-0000-4000-8000-000000000004", // Android US — Play Billing
+};
+const MU = {
+  apple: "61000000-0000-4000-8000-000000000001",
+  appleEmp: "61000000-0000-4000-8000-000000000002",
+  link: "62000000-0000-4000-8000-000000000001",
+  choice: "63000000-0000-4000-8000-000000000001",
+  play: "64000000-0000-4000-8000-000000000001",
+};
+await db.exec(`
+  insert into auth.users (id, email) values ${Object.entries(MU).map(([k, id]) => `('${id}', 'm_${k}@example.invalid')`).join(", ")};
+  insert into public.companies (id, owner_id, name) values
+    ('${M.apple}', '${MU.apple}', 'M apple'), ('${M.link}', '${MU.link}', 'M link'),
+    ('${M.choice}', '${MU.choice}', 'M choice'), ('${M.play}', '${MU.play}', 'M play');
+  insert into public.company_members (company_id, user_id, role, status, permissions) values
+    ('${M.apple}', '${MU.apple}', 'owner', 'active', '{}'), ('${M.apple}', '${MU.appleEmp}', 'employee', 'active', '{}'),
+    ('${M.link}', '${MU.link}', 'owner', 'active', '{}'), ('${M.choice}', '${MU.choice}', 'owner', 'active', '{}'),
+    ('${M.play}', '${MU.play}', 'owner', 'active', '{}');
+  update public.billing_runtime_config set web_provider = 'fake',
+    enabled_methods = array['stripe_web_checkout','apple_iap','apple_eu_link_checkout','apple_eu_in_app_checkout','apple_us_link','google_play','google_choice_developer'];
+`);
+const methodsOf = async (uid: string, platform: string, storefront: string | null) =>
+  (((await rpcAs(uid, "esblu_billing_purchase_options", [platform, storefront])) as Row).methods as Row[]).map((m) => m.method);
+const intent = (uid: string, plan: string, interval: string, platform: string, method: string, storefront: string | null, mode = "new", token: string | null = null) =>
+  rpcAs(uid, "esblu_billing_create_purchase_intent", [plan, interval, platform, method, storefront, mode, token]) as Promise<Row>;
+const STORE_SECRET = "fake_store_secret_0123456789abcd";
+const appleVerifier = new FakeAppleVerifier(STORE_SECRET);
+const googleApi = new FakeGooglePlayApi(STORE_SECRET);
+const fakeAppleApi = new FakeAppleStoreApi();
+const storeProv = (id: "apple" | "google") => ({ id, environment: "test" as const });
+
+await check("kanály podľa platformy + storefrontu (dáta, nie kód)", async () => {
+  assert.deepEqual(await methodsOf(MU.choice, "android", "SK"), ["google_play", "google_choice_developer"]);
+  assert.deepEqual(await methodsOf(MU.choice, "android", "NO"), ["google_play", "google_choice_developer"], "EEA mimo EÚ");
+  assert.deepEqual(await methodsOf(MU.choice, "android", "US"), ["google_play"]);
+  assert.deepEqual(await methodsOf(MU.choice, "android", "JP"), ["google_play"]);
+  assert.deepEqual(await methodsOf(MU.apple, "ios", "SK"), ["apple_iap", "apple_eu_link_checkout"]);
+  assert.deepEqual(await methodsOf(MU.apple, "ios", "NO"), ["apple_iap"], "Nórsko nie je EÚ storefront");
+  assert.deepEqual(await methodsOf(MU.apple, "ios", "US"), ["apple_iap", "apple_us_link"]);
+  assert.deepEqual(await methodsOf(MU.apple, "ios", null), ["apple_iap"], "neznámy storefront → iba IAP");
+  assert.deepEqual(await methodsOf(MU.apple, "ios", "X1"), ["apple_iap"], "neplatný storefront → '*'");
+  assert.deepEqual(await methodsOf(MU.apple, "web", "SK"), ["stripe_web_checkout"]);
+});
+await check("ponuka obsahuje store product ID, nikdy Stripe/fake price ID", async () => {
+  const json = JSON.stringify(await rpcAs(MU.apple, "esblu_billing_purchase_options", ["ios", "SK"]));
+  assert.ok(json.includes("com.esblu.test.pro.monthly"));
+  assert.ok(!json.includes("fake_price_"));
+});
+await check("kill-switch a zmena pravidla bez zmeny kódu", async () => {
+  await db.exec(`update public.billing_runtime_config set enabled_methods = array_remove(enabled_methods, 'apple_eu_link_checkout')`);
+  assert.deepEqual(await methodsOf(MU.apple, "ios", "SK"), ["apple_iap"]);
+  await db.exec(`update public.billing_runtime_config set enabled_methods = enabled_methods || array['apple_eu_link_checkout']`);
+  await db.exec(`insert into public.billing_channel_rules (platform, region, methods) values ('ios', 'SK', array['apple_iap', 'apple_eu_in_app_checkout'])`);
+  assert.deepEqual(await methodsOf(MU.apple, "ios", "SK"), ["apple_iap", "apple_eu_in_app_checkout"], "krajina > skupina");
+  assert.deepEqual(await methodsOf(MU.apple, "ios", "CZ"), ["apple_iap", "apple_eu_link_checkout"]);
+  await db.exec(`delete from public.billing_channel_rules where platform = 'ios' and region = 'SK'`);
+  await db.exec(`update public.billing_channel_rules set methods = array['view_only'] where platform = 'android' and region = 'US'`);
+  const us = (await rpcAs(MU.play, "esblu_billing_purchase_options", ["android", "US"])) as Row;
+  assert.equal(us.view_only, true, "región iba so zobrazením");
+  await db.exec(`update public.billing_channel_rules set methods = array['google_play'] where platform = 'android' and region = 'US'`);
+});
+await check("nákupný zámer: nepovolený kanál / chýbajúci store token / employee / platforma", async () => {
+  await fails(() => intent(MU.play, "test_pro", "month", "android", "google_choice_developer", "US", "new", "fakeext_abcdefgh"), /METHOD_NOT_ALLOWED/);
+  await fails(() => intent(MU.choice, "test_pro", "month", "android", "google_choice_developer", "SK"), /STORE_TOKEN_REQUIRED/);
+  await fails(() => intent(MU.apple, "test_pro", "month", "ios", "apple_eu_link_checkout", "SK"), /STORE_TOKEN_REQUIRED/);
+  await fails(() => intent(MU.appleEmp, "test_pro", "month", "ios", "apple_iap", "SK"), /ESBLU_BILLING_FORBIDDEN/);
+  await fails(() => intent(MU.apple, "test_pro", "month", "ios", "google_play", "SK"), /METHOD_NOT_ALLOWED/);
+  await fails(() => intent(MU.apple, "test_pro", "month", "desktop", "apple_iap", "SK"), /PLATFORM_INVALID/);
+  await fails(() => intent(MU.apple, "test_pro", "month", "ios", "apple_iap", "SK", "change"), /CHANGE_NOT_ALLOWED/);
+});
+
+let mAppleToken = "";
+let appleOriginal = "";
+await check("iOS EÚ: Kúpiť cez App Store → StoreKit JWS → server overí → aktívne všade", async () => {
+  const i = await intent(MU.apple, "test_pro", "month", "ios", "apple_iap", "SK");
+  assert.equal(i.provider, "apple");
+  assert.equal(i.provider_price_id, "com.esblu.test.pro.monthly");
+  mAppleToken = String(i.account_token);
+  assert.match(mAppleToken, /^[0-9a-f-]{36}$/);
+  const device = fakeApplePurchase(STORE_SECRET, { productId: String(i.provider_price_id), appAccountToken: mAppleToken, interval: "month", now: clock });
+  appleOriginal = device.originalTransactionId;
+  const verified = await verifyAppleClientPurchase(appleVerifier, device.signedTransaction, { bundleId: "com.esblu.app", environment: "test" });
+  const r = await applyVerifiedStorePurchase(serviceDb, storeProv("apple"), verified.eventId, { ...verified.state, checkout_ref: String(i.checkout_id) }, verified.payloadSha256);
+  assert.equal(r.outcome, "applied");
+  const web = await subscriptionOf(MU.apple);
+  assert.equal(web.billingProvider, "apple");
+  assert.equal(web.planCode, "test_pro");
+  assert.deepEqual((await entitlementsOf(MU.apple)).entitlements, (await entitlementsOf(MU.appleEmp)).entitlements);
+  assert.equal(ent(await entitlementsOf(MU.appleEmp), "voice").active, true);
+  const acc = await one<Row>(`select purchase_method, purchase_platform, store_reporting from public.subscription_accounts where company_id = '${M.apple}'`);
+  assert.deepEqual(acc, { purchase_method: "apple_iap", purchase_platform: "ios", store_reporting: "none" });
+  const again = await applyVerifiedStorePurchase(serviceDb, storeProv("apple"), verified.eventId, verified.state, verified.payloadSha256);
+  assert.equal(again.outcome, "duplicate");
+});
+await check("iOS: podvrhnutá / produkčná / cudzia (bundle) transakcia → odmietnutá", async () => {
+  const device = fakeApplePurchase(STORE_SECRET, { productId: "com.esblu.test.pro.monthly", appAccountToken: mAppleToken, interval: "month" });
+  const [h, p, sig] = device.signedTransaction.split(".");
+  const tampered = JSON.parse(Buffer.from(p, "base64url").toString());
+  tampered.productId = "com.esblu.test.pro.yearly";
+  await fails(() => verifyAppleClientPurchase(appleVerifier, `${h}.${Buffer.from(JSON.stringify(tampered)).toString("base64url")}.${sig}`, { bundleId: "com.esblu.app", environment: "test" }), /INVALID_SIGNATURE/);
+  const prod = fakeAppleSignTransaction(STORE_SECRET, { ...JSON.parse(Buffer.from(p, "base64url").toString()), environment: "Production" });
+  await fails(() => verifyAppleClientPurchase(appleVerifier, prod, { bundleId: "com.esblu.app", environment: "test" }), /LIVE_MODE_FORBIDDEN/);
+  await fails(() => verifyAppleClientPurchase(appleVerifier, device.signedTransaction, { bundleId: "com.other.app", environment: "test" }), /INVALID_SIGNATURE/);
+  await fails(() => verifyAppleClientPurchase(new FakeAppleVerifier("another_secret_0123456789"), device.signedTransaction, { bundleId: "com.esblu.app", environment: "test" }), /INVALID_SIGNATURE/);
+});
+await check("iOS: zmena plánu v App Store (rovnaká originalTransactionId) → Starter všade", async () => {
+  tick(10);
+  const i = await intent(MU.apple, "test_starter", "month", "ios", "apple_iap", "SK", "change");
+  assert.equal(i.replaces_subscription_id, appleOriginal);
+  const device = fakeApplePurchase(STORE_SECRET, { productId: String(i.provider_price_id), appAccountToken: mAppleToken, interval: "month", originalTransactionId: appleOriginal, now: clock });
+  const v = await verifyAppleClientPurchase(appleVerifier, device.signedTransaction, { bundleId: "com.esblu.app", environment: "test" });
+  assert.equal((await applyVerifiedStorePurchase(serviceDb, storeProv("apple"), v.eventId, { ...v.state, checkout_ref: String(i.checkout_id) }, v.payloadSha256)).outcome, "applied");
+  assert.equal((await subscriptionOf(MU.appleEmp)).planCode, "test_starter");
+  assert.equal(ent(await entitlementsOf(MU.appleEmp), "voice").active, false);
+});
+await check("iOS: App Store notifikácia (V2, podpísaná) — zrušenie obnovy → cancel_at_period_end všade", async () => {
+  tick(10);
+  const tx = fakeAppleSignTransaction(STORE_SECRET, { originalTransactionId: appleOriginal, transactionId: "t-renew", productId: "com.esblu.test.starter.monthly", bundleId: "com.esblu.app", purchaseDate: clock.getTime(), expiresDate: clock.getTime() + 20 * 86400_000, appAccountToken: mAppleToken, environment: "Sandbox" });
+  const renewal = fakeAppleSignTransaction(STORE_SECRET, { autoRenewStatus: 0, originalTransactionId: appleOriginal });
+  const signedPayload = fakeAppleSignTransaction(STORE_SECRET, { notificationType: "DID_CHANGE_RENEWAL_STATUS", subtype: "AUTO_RENEW_DISABLED", notificationUUID: "n-apple-1", signedDate: clock.getTime(), data: { bundleId: "com.esblu.app", environment: "Sandbox", signedTransactionInfo: tx, signedRenewalInfo: renewal } });
+  const provider = new AppleAppStoreProvider(appleVerifier, "com.esblu.app");
+  const r = await processWebhook(provider, JSON.stringify({ signedPayload }), new Headers(), serviceDb);
+  assert.equal(r.outcome, "applied");
+  assert.equal((await subscriptionOf(MU.appleEmp)).cancelAtPeriodEnd, true);
+  const ext = fakeAppleSignTransaction(STORE_SECRET, { notificationType: "EXTERNAL_PURCHASE_TOKEN", subtype: "UNREPORTED", notificationUUID: "n-apple-2", signedDate: clock.getTime(), data: {} });
+  assert.equal((await processWebhook(provider, JSON.stringify({ signedPayload: ext }), new Headers(), serviceDb)).outcome, "ignored");
+  assert.equal((await processWebhook(new AppleAppStoreProvider(null), JSON.stringify({ signedPayload }), new Headers(), serviceDb)).httpStatus, 503);
+});
+
+let linkSub: NormalizedSubscriptionState;
+await check("iOS EÚ: ExternalPurchaseCustomLink → Stripe Checkout → webhook → aktívne + Apple reporting v outboxe", async () => {
+  const token = fakeStoreToken("apple");
+  const i = await intent(MU.link, "test_pro", "year", "ios", "apple_eu_link_checkout", "SK", "new", token);
+  assert.equal(i.provider, "fake");
+  assert.equal(i.reporting, "apple_external_purchase");
+  linkSub = await fake.simulateCheckoutPaid({ checkoutId: String(i.checkout_id), providerPriceId: String(i.provider_price_id), interval: "year" });
+  assert.equal((await deliver("fake.checkout.completed", linkSub)).outcome, "applied");
+  const view = await subscriptionOf(MU.link);
+  assert.equal(view.status, "active");
+  assert.equal(view.billingInterval, "year");
+  const rep = await one<Row>(`select report_kind, store, store_token, amount_pre_tax_minor::int a, due_at > now() due_future, extract(day from due_at)::int due_day from public.billing_store_reports where company_id = '${M.link}'`);
+  assert.equal(rep.report_kind, "apple_subscription_start");
+  assert.equal(rep.store_token, token);
+  assert.equal(rep.a, 990);
+  assert.equal(rep.due_day, 16, "do 15 dní po konci mesiaca");
+});
+await check("iOS EÚ: obnova (renewal) → apple_renewal s odkazom na prvý line item; duplicitná platba sa nezdvojí", async () => {
+  tick(10);
+  const renewal = { ...linkSub, checkout_ref: null, state_at: clock.toISOString(), charge: { ...linkSub.charge!, id: "fake_in_renewal_1", at: clock.toISOString() } };
+  await deliver("fake.invoice.paid", renewal);
+  await deliver("fake.invoice.paid", { ...renewal, state_at: new Date(clock.getTime() + 1000).toISOString() });
+  const rows = (await db.query<Row>(`select report_kind, initial_external_transaction_id from public.billing_store_reports where company_id = '${M.link}' order by created_at`)).rows;
+  assert.equal(rows.length, 2);
+  assert.equal(rows[1].report_kind, "apple_renewal");
+  assert.ok(rows[1].initial_external_transaction_id);
+});
+
+let choiceToken = "";
+let choiceSub: NormalizedSubscriptionState;
+await check("Android EEA: billing choice → používateľ zvolil Esblu → Stripe v appke → aktívne + Google reporting do 24 h", async () => {
+  const playIntent = await intent(MU.choice, "test_pro", "month", "android", "google_play", "SK");
+  assert.equal(playIntent.provider_price_id, "esblu_test_pro:monthly");
+  choiceToken = fakeStoreToken("google"); // DeveloperProvidedBillingDetails.externalTransactionToken
+  const i = await intent(MU.choice, "test_pro", "month", "android", "google_choice_developer", "SK", "new", choiceToken);
+  choiceSub = await fake.simulateCheckoutPaid({ checkoutId: String(i.checkout_id), providerPriceId: String(i.provider_price_id), interval: "month" });
+  assert.equal((await deliver("fake.checkout.completed", choiceSub)).outcome, "applied");
+  assert.equal((await subscriptionOf(MU.choice)).status, "active");
+  const rep = await one<Row>(`select report_kind, round(extract(epoch from (due_at - transaction_at)) / 3600)::int hours from public.billing_store_reports where company_id = '${M.choice}'`);
+  assert.deepEqual(rep, { report_kind: "google_initial", hours: 24 });
+});
+await check("Android EEA: renewal + refund → google_renewal / google_refund naviazané na prvú transakciu", async () => {
+  tick(10);
+  const renewal = { ...choiceSub, checkout_ref: null, state_at: clock.toISOString(), charge: { ...choiceSub.charge!, id: "fake_in_g_renewal", at: clock.toISOString() } };
+  await deliver("fake.invoice.paid", renewal);
+  const refund = { ...renewal, charge: { id: "fake_refund_1", kind: "refund" as const, amount_pre_tax_minor: 990, tax_minor: 0, currency: "EUR", at: clock.toISOString(), tax_country: "SK", refunded_charge_id: "fake_in_g_renewal" } };
+  assert.equal((await deliver("fake.charge.refunded", refund)).outcome, "applied");
+  const rows = (await db.query<Row>(`select report_kind, external_transaction_id, initial_external_transaction_id from public.billing_store_reports where company_id = '${M.choice}' order by created_at`)).rows;
+  assert.deepEqual(rows.map((r) => r.report_kind), ["google_initial", "google_renewal", "google_refund"]);
+  assert.equal(rows[1].initial_external_transaction_id, rows[0].external_transaction_id);
+  assert.equal(rows[2].initial_external_transaction_id, rows[1].external_transaction_id);
+});
+await check("reporting job: claim → Google External Transactions / Apple External Purchase (fake API) → sent", async () => {
+  const claimRes = await serviceDb.rpc("esblu_billing_claim_store_reports", { p_limit: 50 });
+  if (claimRes.error) throw new Error(String(claimRes.error.message));
+  const claimed = claimRes.data as StoreReportRow[];
+  assert.ok(claimed.length >= 5);
+  for (const row of claimed) {
+    let ok = true;
+    let code: string | null = null;
+    try {
+      await sendStoreReport(row, { google: googleApi, apple: fakeAppleApi });
+    } catch (e) {
+      ok = false;
+      code = e instanceof StoreReportError ? e.code : "ERR";
+    }
+    await serviceDb.rpc("esblu_billing_complete_store_report", { p_id: row.id, p_ok: ok, p_error: code });
+  }
+  const initial = googleApi.externalTransactions[0].body as Row;
+  assert.equal(((initial.recurringTransaction as Row).externalTransactionToken), choiceToken);
+  assert.deepEqual(initial.originalPreTaxAmount, { currency: "EUR", priceMicros: "9900000" });
+  assert.equal((googleApi.externalTransactions[1].body.recurringTransaction as Row).initialExternalTransactionId, googleApi.externalTransactions[0].id);
+  assert.equal(googleApi.refunds.length, 1);
+  const appleReport = fakeAppleApi.reports.find((r) => ((r.lineItems as Row[])[0] ?? {}).subscriptionEvent === "SUBSCRIPTION_START") as Row;
+  assert.ok(fakeAppleApi.reports.some((r) => ((r.lineItems as Row[])[0] ?? {}).subscriptionEvent === "RENEWAL" && (r.lineItems as Row[])[0].referenceLineItemId));
+  assert.equal(appleReport.status, "LINE_ITEM");
+  const line = (appleReport.lineItems as Row[])[0];
+  assert.equal(line.taxCountry, "SVK");
+  assert.equal(line.amountTaxExclusive, 9900);
+  assert.equal(line.subscriptionEvent, "SUBSCRIPTION_START");
+  const pending = await one<{ n: number }>(`select count(*)::int n from public.billing_store_reports where status in ('pending','sending')`);
+  assert.equal(pending.n, 0);
+});
+await check("Apple NO_LINE_ITEM: token z nedokončeného nákupu minulého mesiaca → report bez položky", async () => {
+  const token = fakeStoreToken("apple");
+  const i = await intent(MU.apple, "test_pro", "month", "ios", "apple_eu_link_checkout", "SK", "change", token).catch(() => null);
+  assert.equal(i, null, "zmena cez Stripe kanál pre Apple predplatné nie je povolená");
+  await db.exec(`insert into public.billing_checkout_sessions (company_id, created_by, provider, environment, plan_code, billing_interval, provider_price_id, platform, purchase_method, store_token, store_reporting, created_at)
+    values ('${M.link}', '${MU.link}', 'fake', 'test', 'test_pro', 'month', 'fake_price_pro_month', 'ios', 'apple_eu_link_checkout', '${token}', 'apple_external_purchase', date_trunc('month', now()) - interval '3 days')`);
+  const claimed = (await serviceDb.rpc("esblu_billing_claim_store_reports", { p_limit: 10 })).data as StoreReportRow[];
+  const row = claimed.find((r) => r.report_kind === "apple_no_line_item")!;
+  assert.ok(row);
+  await sendStoreReport(row, { google: googleApi, apple: fakeAppleApi });
+  assert.equal((fakeAppleApi.reports.at(-1) as Row).status, "NO_LINE_ITEM");
+});
+
+let playToken = "";
+await check("Android US: Play Billing → server overí cez Play API → aktívne všade + acknowledge", async () => {
+  const i = await intent(MU.play, "test_pro", "month", "android", "google_play", "US");
+  const [productId, basePlanId] = String(i.provider_price_id).split(":");
+  playToken = fakeGooglePurchase(STORE_SECRET, { productId, basePlanId, obfuscatedAccountId: String(i.account_token), now: clock }).purchaseToken;
+  const v = await verifyGoogleClientPurchase(googleApi, playToken, { environment: "test" });
+  assert.deepEqual(v.acknowledge, { productId: "esblu_test_pro", purchaseToken: playToken });
+  assert.equal((await applyVerifiedStorePurchase(serviceDb, storeProv("google"), v.eventId, { ...v.state, checkout_ref: String(i.checkout_id) }, v.payloadSha256)).outcome, "applied");
+  await googleApi.acknowledge(v.acknowledge!.productId, playToken);
+  const view = await subscriptionOf(MU.play);
+  assert.equal(view.billingProvider, "google");
+  assert.equal(ent(await entitlementsOf(MU.play), "voice").active, true);
+  const prodToken = fakeGoogleIssueToken(STORE_SECRET, { subscriptionState: "SUBSCRIPTION_STATE_ACTIVE", lineItems: [{ productId, expiryTime: "2099-01-01T00:00:00Z", offerDetails: { basePlanId } }] });
+  await fails(() => verifyGoogleClientPurchase(googleApi, prodToken, { environment: "test" }), /LIVE_MODE_FORBIDDEN/);
+  await fails(() => verifyGoogleClientPurchase(googleApi, "fakegp.bad.token", { environment: "test" }), /unknown purchase token/);
+});
+await check("Android: upgrade (SubscriptionUpdateParams, linkedPurchaseToken) → ročný plán, bez konfliktu", async () => {
+  tick(10);
+  const i = await intent(MU.play, "test_pro", "year", "android", "google_play", "US", "change");
+  assert.equal(i.replaces_subscription_id, playToken);
+  const [productId, basePlanId] = String(i.provider_price_id).split(":");
+  const next = fakeGooglePurchase(STORE_SECRET, { productId, basePlanId, obfuscatedAccountId: String(i.account_token), linkedPurchaseToken: playToken, now: clock }).purchaseToken;
+  const v = await verifyGoogleClientPurchase(googleApi, next, { environment: "test" });
+  assert.equal((await applyVerifiedStorePurchase(serviceDb, storeProv("google"), v.eventId, { ...v.state, checkout_ref: String(i.checkout_id) }, v.payloadSha256)).outcome, "applied");
+  assert.equal((await subscriptionOf(MU.play)).billingInterval, "year");
+  playToken = next;
+});
+await check("Android: zrušenie v Play (RTDN, OIDC overený) → cancel_at_period_end všade", async () => {
+  tick(10);
+  const canceledToken = fakeGoogleIssueToken(STORE_SECRET, {
+    subscriptionState: "SUBSCRIPTION_STATE_CANCELED", testPurchase: {}, startTime: clock.toISOString(),
+    externalAccountIdentifiers: { obfuscatedExternalAccountId: (await one<Row>(`select external_id from public.billing_provider_links where company_id = '${M.play}' and link_kind = 'account_token'`)).external_id },
+    lineItems: [{ productId: "esblu_test_pro", expiryTime: new Date(clock.getTime() + 300 * 86400_000).toISOString(), offerDetails: { basePlanId: "yearly" } }],
+  });
+  // RTDN nesie iný token pre ten istý stav? Nie — ten istý purchaseToken; fake API vracia stav podľa tokenu.
+  const provider = new GooglePlayProvider({ api: { ...googleApi, getSubscriptionV2: (t: string) => googleApi.getSubscriptionV2(t === playToken ? canceledToken : t), acknowledge: async () => {}, createExternalTransaction: googleApi.createExternalTransaction.bind(googleApi), refundExternalTransaction: googleApi.refundExternalTransaction.bind(googleApi) }, packageName: "com.esblu.app", verifyPushToken: async (bearer) => { if (bearer !== "valid-oidc") throw new Error("bad"); } });
+  const data = Buffer.from(JSON.stringify({ packageName: "com.esblu.app", eventTimeMillis: String(clock.getTime()), subscriptionNotification: { notificationType: 3, purchaseToken: playToken } })).toString("base64");
+  const raw = JSON.stringify({ message: { messageId: "m-1", data } });
+  assert.equal((await processWebhook(provider, raw, new Headers({ authorization: "Bearer forged" }), serviceDb)).httpStatus, 400);
+  const r = await processWebhook(provider, raw, new Headers({ authorization: "Bearer valid-oidc" }), serviceDb);
+  assert.equal(r.outcome, "applied");
+  const web = await subscriptionOf(MU.play);
+  assert.equal(web.cancelAtPeriodEnd, true);
+  assert.equal(web.status, "active");
+});
+await check("buy anywhere: firma s webovým predplatným nemôže kúpiť druhé v iOS/Android", async () => {
+  await fails(() => intent(U.owner, "test_pro", "month", "ios", "apple_iap", "SK"), /ACTIVE_ON_OTHER_PROVIDER/);
+  await fails(() => intent(U.owner, "test_pro", "month", "android", "google_choice_developer", "SK", "new", "fakeext_abcdefgh"), /ESBLU_BILLING_ALREADY_SUBSCRIBED/);
+  const options = (await rpcAs(U.owner, "esblu_billing_purchase_options", ["ios", "SK"])) as Row;
+  assert.equal(options.can_manage, true);
+});
+await check("žiadny paralelný „mobilný plán“: všetky kanály zapisujú tie isté company_entitlements(source=subscription)", async () => {
+  const sources = (await db.query<Row>(`select distinct source from public.company_entitlements where company_id in ('${M.apple}','${M.link}','${M.choice}','${M.play}')`)).rows.map((r) => r.source);
+  assert.deepEqual(sources, ["subscription"]);
 });
 
 // ============================================================================= 10. Rollback
