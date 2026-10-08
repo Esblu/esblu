@@ -385,6 +385,71 @@ export async function POST(req: Request) {
         }
       }
 
+      case "provider-probe": {
+        // 8. 10. 2026: overenie kontraktu poskytovateľa v sandboxe (IBA firma A, IBA test kľúč):
+        //   op=submission — GET /submissions/{document_id} pre už odoslané podanie (read-only);
+        //   op=race       — dve SÚBEŽNÉ connector/send s TÝM ISTÝM Idempotency-Key a bajtmi pre ešte neodoslaný
+        //                   (queued) riadok → očakáva sa 1× výsledok + replay alebo 409 „práve sa spracúva“; poskytovateľ
+        //                   garantuje jedno odoslanie (rovnaký kľúč + telo). Stav riadku sa NEMENÍ — dokončí ho worker
+        //                   tým istým kľúčom (replay uloženej odpovede).
+        // Vracia iba HTTP stavy, kódy chýb, kľúče JSON odpovede (bez hodnôt) a porovnanie ID — nikdy XML ani telá.
+        const outboundId = typeof body.outbound_id === "string" && /^[0-9a-f-]{36}$/.test(body.outbound_id) ? body.outbound_id : "";
+        const op = body.op === "race" ? "race" : body.op === "submission" ? "submission" : null;
+        if (!outboundId || !op) return json(400, { code: "INVALID_INPUT" });
+        runtimeOrThrow();
+        const { data: row, error } = await admin.from("einvoice_outbound")
+          .select("id, company_id, environment, state, idempotency_key, ubl_sha256, ubl_storage_path, receiver_participant_id, provider_submission_id, document_id")
+          .eq("id", outboundId).maybeSingle<{ id: string; company_id: string; environment: string; state: string; idempotency_key: string; ubl_sha256: string | null;
+            ubl_storage_path: string | null; receiver_participant_id: string | null; provider_submission_id: string | null; document_id: string | null }>();
+        if (error || !row || targetForCompany(row.company_id) !== "A" || row.environment !== "sandbox") return json(400, { code: "OUTBOUND_NOT_IN_E2E_COMPANY_A" });
+        const { data: org } = await admin.from("einvoice_organizations").select("provider_org_id").eq("company_id", row.company_id).eq("environment", "sandbox").maybeSingle<{ provider_org_id: string | null }>();
+        if (!org?.provider_org_id) return json(400, { code: "ORG_NOT_READY" });
+        const apiKey = process.env.ESBLU_EFAKTURA_API_KEY ?? "";
+        if (!apiKey.startsWith("efk_pk_test_")) return json(400, { code: "NOT_SANDBOX_KEY" });
+        const seen: { path: string; status: number; keys: string[]; dataKeys: string[]; errorCode: string | null; messageHint: string | null }[] = [];
+        const recording = new EfakturaSkProvider({
+          apiKey, environment: "sandbox", baseUrl: process.env.ESBLU_EFAKTURA_BASE_URL,
+          fetchImpl: async (input, init) => {
+            const res = await fetch(input, init);
+            const text = await res.clone().text();
+            let parsed: Json | null = null;
+            try { parsed = JSON.parse(text) as Json; } catch { parsed = null; }
+            const data = parsed && typeof parsed.data === "object" && parsed.data ? (parsed.data as Json) : null;
+            const err = parsed && typeof parsed.error === "object" && parsed.error ? (parsed.error as Json) : null;
+            const msg = typeof err?.message === "string" ? (err.message as string) : typeof parsed?.message === "string" ? (parsed.message as string) : "";
+            seen.push({
+              path: new URL(input).pathname.replace(/[^/]+$/, (last) => (/^[0-9a-f-]{36}$|[@#:]/.test(decodeURIComponent(last)) ? "{id}" : last)),
+              status: res.status,
+              keys: parsed ? Object.keys(parsed).sort() : [],
+              dataKeys: data ? Object.keys(data).sort() : [],
+              errorCode: typeof err?.code === "string" ? (err.code as string).slice(0, 60) : typeof parsed?.error === "string" ? (parsed.error as string).slice(0, 60) : null,
+              // iba rozpoznanie textu „práve sa spracúva“ / „different body“ — nie celý text
+              messageHint: /pr[aá]ve\s+sprac|in\s+progress|being\s+processed/i.test(msg) ? "IN_PROGRESS_TEXT" : /different/i.test(msg) ? "DIFFERENT_BODY_TEXT" : msg ? "OTHER_TEXT" : null,
+            });
+            return res;
+          },
+        });
+        const ctx = { environment: "sandbox" as const, providerOrgId: org.provider_org_id };
+        if (op === "submission") {
+          if (!row.document_id) return json(200, { code: "NO_DOCUMENT_ID", state: row.state });
+          let mapped: { invoiceId: string | null; state: string | null } | null = null;
+          let errCode: string | null = null;
+          try { mapped = await recording.getSubmissionByDocumentId(ctx, row.document_id); } catch (e) { errCode = e instanceof Error && "code" in e ? String((e as { code: string }).code) : "ERROR"; }
+          return json(200, { code: "OK", op, http: seen, mapped_state: mapped?.state ?? null, invoice_id_matches: mapped?.invoiceId ? mapped.invoiceId === row.provider_submission_id : null, error: errCode });
+        }
+        // race
+        if (row.state !== "queued" || row.provider_submission_id) return json(400, { code: "RACE_REQUIRES_FRESH_QUEUED_ROW", state: row.state });
+        if (!row.ubl_storage_path || !row.ubl_sha256 || !row.receiver_participant_id) return json(400, { code: "ROW_INCOMPLETE" });
+        const bytes = await createSupabaseOutboundStore(admin).getUbl(row.ubl_storage_path);
+        if (!bytes || createHash("sha256").update(bytes).digest("hex") !== row.ubl_sha256) return json(400, { code: "UBL_HASH_MISMATCH" });
+        const input = { ubl: bytes, ublSha256: row.ubl_sha256, idempotencyKey: row.idempotency_key, receiverParticipantId: row.receiver_participant_id };
+        const settled = await Promise.allSettled([recording.sendUbl(ctx, input), recording.sendUbl(ctx, input)]);
+        const outcome = settled.map((r) => (r.status === "fulfilled"
+          ? { result: r.value.state, has_invoice_id: !!r.value.providerSubmissionId, has_document_id: !!r.value.providerDocumentId, invoice_id_sha: r.value.providerSubmissionId ? createHash("sha256").update(r.value.providerSubmissionId).digest("hex").slice(0, 12) : null }
+          : { error: r.reason instanceof Error && "code" in r.reason ? String((r.reason as { code: string }).code) : "ERROR", retryable: r.reason instanceof Error && "retryable" in r.reason ? Boolean((r.reason as { retryable: boolean }).retryable) : null }));
+        return json(200, { code: "OK", op, http: seen, outcome });
+      }
+
       case "handoff-export": {
         // Skutočná route /api/accounting-handoff/package (hromadný export za obdobie) s JWT ownera A/B.
         // Vracia iba hlavičky, počty a zoznam ciest v ZIP-e — nie obsah dokladov.
