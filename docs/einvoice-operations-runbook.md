@@ -69,6 +69,16 @@ Vedľajšie stavy:
 - `failed`: dáta nevieme spracovať (napr. dobropis `UNSUPPORTED_PROFILE`). Vyžaduje manuálnu
   kontrolu a pôvodné XML ostáva uložené.
 
+### Typy dokladov (UBL `InvoiceTypeCode` / `CreditNoteTypeCode`)
+
+| Druh v Esblu | Odosielame | Prijímame |
+| --- | --- | --- |
+| bežná / konečná faktúra (`regular_invoice`) | 380 | 380 (iný kód → review `INVOICE_TYPE_CODE_UNUSUAL`) |
+| faktúra k prijatej platbe (`payment_received_invoice`) | **388** (SK kanonický, FS FAQ eFaktúra tech. príklad 22) | **388 + 386** (386 = spätná kompatibilita), rovnaký tok a párovanie záloh |
+| ťarchopis (`debit_note`) | 383 | 383 |
+| dobropis (`credit_note`) | 381 | 381 / 81; 83 → review |
+| proforma | nikdy (nie je daňový doklad) | — |
+
 ## 4. Incidenty
 
 ### 4.1 Odosielanie stojí (`OUTBOUND_STUCK`, queued/sending > 60 min)

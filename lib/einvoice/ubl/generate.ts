@@ -54,6 +54,9 @@ export type UblGenerationResult =
 
 type TypeInfo = { root: "Invoice" | "CreditNote"; typeCode: string } | null;
 
+/** SK kanonický InvoiceTypeCode faktúry k prijatej platbe (FS FAQ eFaktúra, tech. príklad 22). */
+export const PAYMENT_RECEIVED_TYPE_CODE = "388";
+
 function documentTypeFor(kind: string): TypeInfo {
   switch (kind) {
     case "regular_invoice":
@@ -64,8 +67,10 @@ function documentTypeFor(kind: string): TypeInfo {
       return { root: "CreditNote", typeCode: "381" };
     case "payment_received_invoice":
       // Faktúra k prijatej platbe (§ 72 ods. 1 písm. f), § 85o ods. 2 — povinná e-faktúra od 1. 1. 2027):
-      // UNCL1001 386 „Prepayment invoice“ (Peppol BIS Billing 3.0). Overiť v SK pravidlách FS (TAX REVIEW).
-      return { root: "Invoice", typeCode: "386" };
+      // SK kanonický kód = UNCL1001 388 „Tax invoice“ — FS SR, FAQ k eFaktúre (15. 9. 2026), tech. príklad 22
+      // („Daňový doklad k prijatej platbe“). 386 sa pre nový slovenský doklad NEODOSIELA (príjem ho akceptuje
+      // iba kvôli spätnej kompatibilite).
+      return { root: "Invoice", typeCode: PAYMENT_RECEIVED_TYPE_CODE };
     default:
       // proforma (výzva na úhradu) NIE JE daňový doklad → nikdy e-faktúra.
       return null;

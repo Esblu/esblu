@@ -18,10 +18,10 @@ import { buildProvisionalSnapshot } from "../lib/einvoice/provisional-snapshot.t
 import { DOMParser } from "@xmldom/xmldom";
 import {
   generateUbl, checkUblPreconditions, bankTransferAccountIssue, BANK_TRANSFER_IBAN_MISSING, BANK_TRANSFER_PAYMENT_MEANS,
-  PEPPOL_BIS3_CUSTOMIZATION_ID, PEPPOL_BIS3_PROFILE_ID,
+  PEPPOL_BIS3_CUSTOMIZATION_ID, PEPPOL_BIS3_PROFILE_ID, PAYMENT_RECEIVED_TYPE_CODE,
 } from "../lib/einvoice/ubl/generate.ts";
 import { parseInboundUbl, MAX_INBOUND_XML_BYTES } from "../lib/einvoice/ubl/parse.ts";
-import { mapInboundDraft } from "../lib/einvoice/inbound/mapping.ts";
+import { checkInboundProfile, mapInboundDraft, PAYMENT_RECEIVED_INBOUND_CODES } from "../lib/einvoice/inbound/mapping.ts";
 import { NS } from "../lib/einvoice/ubl/xml.ts";
 import type { UblInvoiceSnapshot, UblItem, UblParty, UblTaxBreakdown } from "../lib/einvoice/ubl/model.ts";
 import { buildIssuedInvoiceUblExport, ublExportFileName } from "../lib/einvoice/export.ts";
@@ -250,11 +250,13 @@ await check("dobropis/ťarchopis: dôvod opravy je BT-22 Note; bez dôvodu sa UB
   s.invoice = { ...s.invoice, correction_reason: null };
   assert.ok(issueCodes(s).includes("MISSING_CORRECTION_REASON"));
 });
-await check("faktúra k prijatej platbe: Invoice 386 (prepayment); proforma sa nikdy negeneruje", () => {
+await check("faktúra k prijatej platbe: Invoice 388 (SK, FS FAQ tech. príklad 22), nikdy 386; proforma sa nikdy negeneruje", () => {
   const s = vatPayerSnapshot();
   s.invoice = { ...s.invoice, kind: "payment_received_invoice", tax_point_date: "2026-09-30" };
   const r = ok(s);
-  assert.deepEqual(all(r.xml, NS.cbc, "InvoiceTypeCode"), ["386"]);
+  assert.equal(PAYMENT_RECEIVED_TYPE_CODE, "388");
+  assert.deepEqual(all(r.xml, NS.cbc, "InvoiceTypeCode"), ["388"]);
+  assert.doesNotMatch(r.xml, /<cbc:InvoiceTypeCode>386</);
   assert.deepEqual(all(r.xml, NS.cbc, "TaxPointDate"), ["2026-09-30"]);
   s.invoice = { ...s.invoice, kind: "proforma" };
   assert.ok(issueCodes(s).includes("KIND_UNSUPPORTED"));
@@ -325,16 +327,52 @@ await check("prijatá konečná faktúra s BT-113 + BG-3 (iný dodávateľ) → 
   const cn = ok(s);
   assert.ok(!all(cn.xml, NS.cbc, "ID").includes("FA2026001"), "dobropis nenesie odkazy na zálohy");
 });
-await check("prijatá 386: mapovanie na payment_received_invoice, BT-7; BT-113 na 386 → manuálne", () => {
+await check("ostatné druhy bez zmeny: bežná 380, ťarchopis 383, dobropis 381; žiadny nový doklad nenesie 386", () => {
+  const typeOf = (snap: ReturnType<typeof vatPayerSnapshot>, el: string) => all(ok(snap).xml, NS.cbc, el)[0];
+  const regular = vatPayerSnapshot();
+  const prepaid = vatPayerSnapshot();
+  prepaid.invoice = { ...prepaid.invoice, kind: "payment_received_invoice", tax_point_date: "2026-09-30" };
+  const debit = creditNoteSnapshot();
+  debit.invoice = { ...debit.invoice, kind: "debit_note", correction_reason: "Dodatočné zvýšenie ceny" };
+  const credit = creditNoteSnapshot();
+  const codes = [typeOf(regular, "InvoiceTypeCode"), typeOf(prepaid, "InvoiceTypeCode"), typeOf(debit, "InvoiceTypeCode"), typeOf(credit, "CreditNoteTypeCode")];
+  assert.deepEqual(codes, ["380", "388", "383", "381"]);
+  assert.ok(!codes.includes("386"));
+});
+await check("príjem: 388 (SK kanonický) aj 386 (kompatibilita) → payment_received_invoice; 380 bežná; 389/393 nie sú záloha", () => {
+  assert.deepEqual([...PAYMENT_RECEIVED_INBOUND_CODES].sort(), ["386", "388"]);
+  const base = { documentType: "Invoice", customizationId: PEPPOL_BIS3_CUSTOMIZATION_ID } as Parameters<typeof checkInboundProfile>[0];
+  const kindOf = (typeCode: string) => { const r = checkInboundProfile({ ...base, typeCode }); return r.ok ? r.kind : r.detail; };
+  assert.equal(kindOf("388"), "payment_received_invoice");
+  assert.equal(kindOf("386"), "payment_received_invoice");
+  assert.equal(kindOf("380"), "regular_invoice");
+  assert.equal(kindOf("393"), "regular_invoice");
+});
+await check("prijatá 388 aj 386: mapovanie na payment_received_invoice, BT-7, bez INVOICE_TYPE_CODE_UNUSUAL; BT-113 → manuálne", () => {
+  for (const code of ["388", "386"]) {
+    const s = vatPayerSnapshot();
+    s.invoice = { ...s.invoice, kind: "payment_received_invoice", tax_point_date: "2026-09-30", delivery_date: null };
+    const xml = ok(s).xml.replace("<cbc:InvoiceTypeCode>388</cbc:InvoiceTypeCode>", `<cbc:InvoiceTypeCode>${code}</cbc:InvoiceTypeCode>`);
+    const parsed = parseInboundUbl(new TextEncoder().encode(xml));
+    assert.ok(parsed.ok, code);
+    if (!parsed.ok) return;
+    assert.equal(parsed.document.typeCode, code);
+    const m = mapInboundDraft(parsed.document, parsed.reviewReasons, null);
+    assert.ok(m.ok && m.draft.document_kind === "payment_received_invoice" && m.draft.tax_point_date === "2026-09-30" && m.draft.advance === null, code);
+    assert.ok(m.ok && !m.reviewReasons.includes("INVOICE_TYPE_CODE_UNUSUAL"), code);
+  }
+});
+await check("prijatá 388: BT-113 na faktúre k prijatej platbe → manuálne (PREPAID_AMOUNT_UNSUPPORTED)", () => {
   const s = vatPayerSnapshot();
   s.invoice = { ...s.invoice, kind: "payment_received_invoice", tax_point_date: "2026-09-30", delivery_date: null };
-  const r = ok(s);
-  const parsed = parseInboundUbl(new TextEncoder().encode(r.xml));
+  const xml = ok(s).xml.replace(/(<cbc:PayableAmount )/, '<cbc:PrepaidAmount currencyID="EUR">1.00</cbc:PrepaidAmount>$1');
+  assert.match(xml, /<cbc:InvoiceTypeCode>388</);
+  assert.match(xml, /PrepaidAmount/);
+  const parsed = parseInboundUbl(new TextEncoder().encode(xml));
   assert.ok(parsed.ok);
   if (!parsed.ok) return;
   const m = mapInboundDraft(parsed.document, parsed.reviewReasons, null);
-  assert.ok(m.ok && m.draft.document_kind === "payment_received_invoice" && m.draft.tax_point_date === "2026-09-30" && m.draft.advance === null);
-  assert.ok(m.ok && !m.reviewReasons.includes("INVOICE_TYPE_CODE_UNUSUAL"));
+  assert.ok(!m.ok && m.detail === "PREPAID_AMOUNT_UNSUPPORTED", JSON.stringify(m.ok ? m.draft.document_kind : m));
 });
 await check("prenesenie daňovej povinnosti: AE (nie 0 % S), Note „Prenesenie daňovej povinnosti“, VATEX-EU-AE", () => {
   const s = singleCategory("AE", { vat_exemption_reason_code: "VATEX-EU-AE", vat_exemption_reason_text: "Prenesenie daňovej povinnosti" });

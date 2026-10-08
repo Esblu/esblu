@@ -184,7 +184,7 @@ výsledok → STOP podmienka → rollback**.
 
 | # | Krok | Akcia | Očakávaný výsledok | STOP | Rollback |
 | --- | --- | --- | --- | --- | --- |
-| R-0 | Brány | CLIA stanovisko, podpis zmluvy + DPA s eFaktura.sk, rozhodnutie o 386/388 (sekcia 8), súhlas s oknom `[SÚHLAS]` | všetko písomne | ktorákoľvek chýba | — |
+| R-0 | Brány | CLIA stanovisko, podpis zmluvy + DPA s eFaktura.sk, súhlas s oknom `[SÚHLAS]` | všetko písomne | ktorákoľvek chýba | — |
 | R-1 | **PRECHECK** | `scripts/sql/einvoice-prod-precheck.sql` celý (read-only) `[SÚHLAS]` | iba OK / INFO (WARN vysvetlený a zapísaný) | akékoľvek STOP | — (nič sa nezmenilo) |
 | R-2 | **Backup confirmation** | B-1 až B-3 | záloha < 24 h, dump overený, hash zapísaný | chýba záloha alebo dump | — |
 | R-2a | Uložiť definície pre rollback | `select pg_get_functiondef('public.esblu_my_finance_manage()'::regprocedure), pg_get_functiondef('public.esblu_my_finance_view()'::regprocedure);` → súbor mimo repa | 2 definície | — | — |
@@ -264,22 +264,19 @@ Overiť pri R-11: tvar odpovede `/submissions/{document_id}` (nie je vo verejnej
 
 ---
 
-## 8. Nález 8. 10. 2026: kód typu faktúry k prijatej platbe (386 vs. 388)
+## 8. Kód typu faktúry k prijatej platbe — CLOSED (opravené 8. 10. 2026)
 
-**FAQ FS k eFaktúre, technický príklad 22 (str. 42):** pre „Daňový doklad k prijatej platbe“ sa použije
+**Zdroj:** FAQ FS k eFaktúre (15. 9. 2026), technický príklad 22 (str. 42): „Daňový doklad k prijatej platbe“ =
 **UNCL1001 kód 388 – Tax invoice**.
 
-Esblu dnes:
-- **odosiela 386** („Prepayment invoice“; Peppol BIS ho povoľuje, sandbox ho doručil);
-- pri príjme rozpoznáva faktúru k prijatej platbe **iba podľa 386**;
-- prijatú 388 považuje za bežnú faktúru, takže konečná faktúra so zdanenou zálohou od takého dodávateľa ide do **review** (bezpečné, ale bez automatického rozpoznania zálohy).
+| | Pravidlo |
+| --- | --- |
+| **Outbound (kanonický SK kód)** | `payment_received_invoice` → `Invoice` s `InvoiceTypeCode` **388** (`PAYMENT_RECEIVED_TYPE_CODE`). Nový slovenský doklad **nikdy** nenesie 386. |
+| **Inbound (akceptované kódy)** | **388** (SK) **a 386** (spätná kompatibilita / iné Peppol profily) → oba `payment_received_invoice` (`PAYMENT_RECEIVED_INBOUND_CODES`), rovnaký tok: dedupe (dodávateľ + druh + číslo), supplier/company kontroly, BT-113 na zálohe → manuálne, o odpočte DPH sa nerozhoduje. |
+| Bez zmeny | proforma (nie e-faktúra), bežná faktúra 380 (aj konečná faktúra so zálohami), dobropis 381, ťarchopis 383 |
+| Párovanie záloh | konečná faktúra (BT-25) sa páruje na prijatú 388 aj staršiu 386 rovnako; kontroly sadzby / základu / DPH, dvojitý odpočet a cross-tenant bez zmeny |
+| DB migrácia | **nebola potrebná** — kód existuje iba v generovanom XML a v parseri; DB pracuje s `kind` |
 
-Toto je **jediný nový CODE bod**. V tomto balíku sa **neopravoval** (freeze, bez vývoja). Možnosti na rozhodnutie
-`[SÚHLAS]`:
-1. **Pred spustením:**
-   - odosielať 388 pre `payment_received_invoice`;
-   - pri príjme akceptovať 386 aj 388 ako kandidáta na zálohu. 388 je všeobecný daňový doklad, preto rozpoznanie zálohy iba cez review (bez automatického zaúčtovania).
-   - Malá zmena + testy + sandbox E2E.
-2. **Spustiť bez zálohových e-faktúr:** odoslanie `payment_received_invoice` ako e-faktúry zablokovať (fail-closed) do opravy. Bežné faktúry, dobropisy a ťarchopisy idú ďalej.
-
-Odporúčanie: možnosť 1 pred pilotom (R-13), najneskôr pred 1. 1. 2027.
+Kód: `lib/einvoice/ubl/generate.ts`, `lib/einvoice/inbound/mapping.ts`. Testy: `einvoice-ubl` (388 na výstupe,
+nikdy 386, ostatné druhy 380/383/381, príjem 388/386, BT-113 na 388), `invoicing-flow` (odoslaná záloha z DB = 388 a
+príjemca ju rozpozná; prijatá 388 = predvolený prípad; staršia 386 + 388 párovanie, duplicita 388↔386, cross-tenant).

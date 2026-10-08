@@ -74,9 +74,13 @@ export type InboundDraftTotals = {
 
 /**
  * Druh prijatého dokladu (20261008100005): opravy idú do review toku, nikdy sa neaplikujú automaticky.
- * 20261008100008: Invoice 386 → `payment_received_invoice` (faktúra k prijatej platbe / záloha) —
- * samostatný druh, nikdy bežná faktúra; o odpočte DPH sa automaticky nerozhoduje.
+ * 20261008100008: faktúra k prijatej platbe (záloha) → `payment_received_invoice` — samostatný druh, nikdy
+ * bežná faktúra; o odpočte DPH sa automaticky nerozhoduje. Kódy: 388 (SK kanonický — FS FAQ eFaktúra,
+ * tech. príklad 22) a 386 (Prepayment invoice — spätná kompatibilita / iné Peppol profily).
  */
+/** Prijaté kódy faktúry k prijatej platbe: 388 = SK kanonický (FS FAQ tech. príklad 22), 386 = kompatibilita. */
+export const PAYMENT_RECEIVED_INBOUND_CODES: ReadonlySet<string> = new Set(["388", "386"]);
+
 export type InboundDocumentKind = "regular_invoice" | "payment_received_invoice" | "credit_note" | "debit_note";
 
 /**
@@ -107,7 +111,7 @@ export type InboundDraftPayload = {
   correction: InboundDraftCorrection | null;
   /** Iba regular_invoice s BT-113 > 0 alebo s mínusovými riadkami záloh, inak null. */
   advance: InboundDraftAdvance | null;
-  /** BT-7 (YYYY-MM-DD) — pri 386 dátum prijatia platby; null ak chýba. */
+  /** BT-7 (YYYY-MM-DD) — pri faktúre k prijatej platbe (388/386) dátum prijatia platby; null ak chýba. */
   tax_point_date: string | null;
   supplier: InboundDraftSupplier;
   invoice_number: string;
@@ -149,7 +153,7 @@ export function mapPaymentMeansCode(code: string | null): { code: string | null;
 
 /**
  * Profil / typ dokladu, ktorý vieme prijať ako koncept.
- * Invoice 380 (aj iné, s review) → faktúra; Invoice 386 → faktúra k prijatej platbe; Invoice 383 → ťarchopis; CreditNote 381/81/83 → dobropis
+ * Invoice 380 (aj iné, s review) → faktúra; Invoice 388 (SK) a 386 (kompatibilita) → faktúra k prijatej platbe; Invoice 383 → ťarchopis; CreditNote 381/81/83 → dobropis
  * (83 = finančná úprava → type_review). CreditNote 396/532 a Invoice 384 (opravená faktúra) → manuálne.
  */
 export function checkInboundProfile(doc: ParsedInboundUbl):
@@ -166,7 +170,7 @@ export function checkInboundProfile(doc: ParsedInboundUbl):
   }
   if (code === "383") return { ok: true, kind: "debit_note", typeReview: false };
   if (code === "384") return { ok: false, detail: "CORRECTED_INVOICE_UNSUPPORTED" };
-  if (code === "386") return { ok: true, kind: "payment_received_invoice", typeReview: false };
+  if (PAYMENT_RECEIVED_INBOUND_CODES.has(code)) return { ok: true, kind: "payment_received_invoice", typeReview: false };
   return { ok: true, kind: "regular_invoice", typeReview: false };
 }
 
@@ -233,7 +237,7 @@ export function mapInboundDraft(
     return { ok: false, code: "UNSUPPORTED_PROFILE", detail: "DOCUMENT_ALLOWANCE_CHARGE_UNSUPPORTED" };
   }
   // 20261008100008: BT-113 (odpočítané zálohy) iba na konečnej (bežnej) faktúre; väzbu na prijaté
-  // faktúry k prijatej platbe rieši DB (párovanie / review). Na 386 a opravách → manuálne.
+  // faktúry k prijatej platbe rieši DB (párovanie / review). Na faktúre k prijatej platbe (388/386) a opravách → manuálne.
   const prepaid = dec(t.prepaid);
   if (prepaid.lt(0)) return { ok: false, code: "INVALID_XML", detail: "PREPAID_AMOUNT_NEGATIVE" };
   if (!prepaid.eq(0) && profile.kind !== "regular_invoice") {

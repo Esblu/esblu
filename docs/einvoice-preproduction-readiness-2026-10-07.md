@@ -33,7 +33,7 @@ aplikovaných migrácií (určenie rozsahu). Žiadny dotaz nad dátami, žiadna 
 ### Otvorené — právne / zmluvné (sekcia 10.C)
 
 Zmluva + DPA s eFaktura.sk, CLIA stanovisko k API modelu a delta (sekcia 6), retenčná politika Esblu,
-potvrdenie účtovníčky (XML ako účtovný doklad, postup záloh, profil 386 v REVIEW).
+potvrdenie účtovníčky (XML ako účtovný doklad, postup záloh). Kód typu zálohy: CLOSED 8. 10. — 388.
 
 ---
 

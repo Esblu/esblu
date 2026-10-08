@@ -1,5 +1,8 @@
 # Zdanená záloha v konečnej e-faktúre — model podľa FS SR (7. 10. 2026)
 
+> **8. 10. 2026:** faktúra k prijatej platbe sa odosiela s `InvoiceTypeCode` **388** (FS FAQ tech. príklad 22); príjem
+> akceptuje 388 aj 386. Sandbox E2E v sekcii 3 (7. 10.) prebehol ešte s kódom 386.
+
 Zdroj pravdy: Finančná správa SR, FAQ k eFaktúre (verzia 15. 9. 2026), technická séria, **príklad 38**.
 Toto je technická implementácia metodiky FS. Nejde o právne stanovisko ani o schválenie CLIA. Predkontácia
 (účtovanie mínusového riadku) je otázka pre účtovníčku a Esblu ju nerozhoduje.
@@ -8,19 +11,19 @@ Toto je technická implementácia metodiky FS. Nejde o právne stanovisko ani o 
 
 | | A) ZDANENÁ záloha | B) NEZDANENÁ záloha |
 | --- | --- | --- |
-| Podmienka | k platbe existuje faktúra k prijatej platbe (UBL 386) | faktúra k prijatej platbe (386) neexistuje |
+| Podmienka | k platbe existuje faktúra k prijatej platbe (UBL **388**; prijímame aj 386) | faktúra k prijatej platbe neexistuje |
 | V konečnej faktúre | samostatný **mínusový riadok** `InvoiceLine` | `PrepaidAmount` (BT-113) |
 | UBL riadok | `InvoicedQuantity` = **−1**, `PriceAmount` = základ zálohy (kladný, BR-27), `LineExtensionAmount` = −základ | — |
 | DPH | kategória a **sadzba zálohovej faktúry**, DPH riadka = DPH zálohy | rozpis DPH sa **nemení** |
 | Rekapitulácia DPH (BG-23) | znižuje základ aj daň v danej sadzbe | bez vplyvu |
-| Väzba | `BillingReference/InvoiceDocumentReference` (BT-25, BT-26) na 386 | voliteľný text (referencia) |
+| Väzba | `BillingReference/InvoiceDocumentReference` (BT-25, BT-26) na faktúru k prijatej platbe | voliteľný text (referencia) |
 | Suma na úhradu | `PayableAmount` = celkom s DPH (už po odpočte) − nezdanená záloha | dtto |
 | `PrepaidAmount` pre túto zálohu | **nikdy** | áno |
 
 **DB (vydané):**
 - počas konceptu sa odpočty zadávajú do `invoice_advance_deductions`;
 - validácia prebehne hneď pri zadaní:
-  - existujúca **finalizovaná vlastná 386**;
+  - existujúca **finalizovaná vlastná faktúra k prijatej platbe** (odosiela sa ako 388);
   - rovnaký odberateľ a mena;
   - rovnaká kategória a sadzba (inak `ESBLU_ADVANCE_DEDUCTION_RATE_MISMATCH`);
   - suma najviac do zostatku základu aj DPH (inak `ESBLU_ADVANCE_DEDUCTION_EXCEEDS`);
@@ -31,7 +34,7 @@ Toto je technická implementácia metodiky FS. Nejde o právne stanovisko ani o 
 
 **DB (prijaté):**
 - mínusové riadky z XML sa uložia ako riadky odpočtu;
-- párovanie prebieha po riadkoch na prijaté 386 v rámci tej istej firmy a dodávateľa podľa BT-25 (+ BT-26), sadzby a zostatku základu;
+- párovanie prebieha po riadkoch na prijaté faktúry k prijatej platbe (388 alebo staršie 386) v rámci tej istej firmy a dodávateľa podľa BT-25 (+ BT-26), sadzby a zostatku základu;
 - výsledkom je `proposed`, inak `review` s dôvodom;
 - dôvody review:
   - `ADVANCE_REFERENCE_MISSING`, `ADVANCE_NOT_FOUND`, `ADVANCE_SUPPLIER_MISMATCH`, `ADVANCE_AMBIGUOUS`;

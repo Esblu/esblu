@@ -2414,7 +2414,7 @@ const sk = {
         correction: "Opravný doklad — mení pôvodnú faktúru; pôvodný doklad sa nemení.",
         regular: "Daňový doklad (faktúra).",
         receivedRegular: "Bežná faktúra (prijatá).",
-        receivedPaymentReceived: "Faktúra k prijatej platbe (prijatá záloha, UBL 386). Esblu ju iba eviduje — nárok na odpočet DPH posúdi účtovník.",
+        receivedPaymentReceived: "Faktúra k prijatej platbe (prijatá záloha, UBL 388; prijímame aj 386). Esblu ju iba eviduje — nárok na odpočet DPH posúdi účtovník.",
         receivedFinal: "Konečná faktúra s odpočítanými zálohami (prijatá).",
       },
       review: {

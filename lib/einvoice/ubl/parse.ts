@@ -61,7 +61,7 @@ export type ParsedInboundUbl = {
   note: string | null;
   /** Všetky BG-3 BillingReference (pri konečnej faktúre odkazy na zálohové faktúry). */
   precedingInvoices: { number: string; issueDate: string | null }[];
-  /** BT-7 dátum vzniku daňovej povinnosti (pri 386 dátum prijatia platby). */
+  /** BT-7 dátum vzniku daňovej povinnosti (pri faktúre k prijatej platbe 388/386 dátum prijatia platby). */
   taxPointDate: string | null;
   deliveryDate: string | null;
   supplier: ParsedParty;

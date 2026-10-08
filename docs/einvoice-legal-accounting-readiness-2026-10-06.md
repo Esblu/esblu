@@ -58,9 +58,9 @@ sandboxu, výkonnosť pri objeme, správanie pri výpadku eFaktura.sk dlhšom ne
   účtovné polia Esblu je správne pre bežné prípady (S, Z, E, AE, K, G, O).
 - Prijaté opravné doklady (dobropis, ťarchopis) — koncept v review, prijatie až po kontrole (`20261008100005`);
   potvrdiť postup kontroly.
-- Prijaté faktúry k prijatej platbe (UBL 386) a konečné faktúry s odpočítanými zálohami (BT-113) — evidencia
+- Prijaté faktúry k prijatej platbe (UBL 388; kompatibilita 386) a konečné faktúry s odpočítanými zálohami (BT-113) — evidencia
   a párovanie záloh s kontrolou (`20261008100008`). Esblu **nerozhoduje** o nároku na odpočet DPH zo zálohy;
-  potvrdiť postup a slovenský profil 386 (stále REVIEW).
+  potvrdiť postup. Kód typu: **CLOSED 8. 10. 2026 — 388** (FS FAQ tech. príklad 22).
 - Číslovanie a nemennosť vydaných faktúr (Esblu číslovanie pri finalizácii, nemenný snapshot).
 
 ## 5. Uchovávanie, export, archivácia

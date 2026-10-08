@@ -2385,7 +2385,7 @@ const en = {
         correction: "Correction document — adjusts the original invoice; the original stays unchanged.",
         regular: "Tax document (invoice).",
         receivedRegular: "Regular invoice (received).",
-        receivedPaymentReceived: "Invoice for a received payment (received advance, UBL 386). Esblu only records it — your accountant decides on VAT deduction.",
+        receivedPaymentReceived: "Invoice for a received payment (received advance, UBL 388; 386 also accepted). Esblu only records it — your accountant decides on VAT deduction.",
         receivedFinal: "Final invoice with deducted advances (received).",
       },
       review: {

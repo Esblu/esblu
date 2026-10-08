@@ -341,7 +341,7 @@ await check("konečná faktúra: odpočet zálohy → saldo = celkom − záloha
   await pay(FIN, 123);
   assert.equal((await inv(FIN)).payment_status, "paid");
 });
-await check("e-faktúra: faktúra k prijatej platbe (386) sa smie odoslať, proforma nie (20261008100006)", async () => {
+await check("e-faktúra: faktúra k prijatej platbe (UBL 388) sa smie odoslať, proforma nie (20261008100006)", async () => {
   await h.exec(`insert into public.company_entitlements (company_id, entitlement_key, source, note) values ('${CO.A}', 'einvoice', 'manual', 'test') on conflict do nothing`);
   const req = (id: string) => errOf(svc("select * from public.esblu_einvoice_request_outbound($1, $2, 'sandbox', $3, 'p', 10, '0245:2044444444')", [U.owner, id, "a".repeat(64)]));
   assert.doesNotMatch(await req(ADV), /ESBLU_EINVOICE_KIND_UNSUPPORTED/);
@@ -402,7 +402,7 @@ async function snapshotOf(id: string) {
 const xmlAll = (xml: string, local: string) => [...xml.matchAll(new RegExp(`<cbc:${local}[^>]*>([^<]*)</cbc:${local}>`, "g"))].map((m) => m[1]);
 
 let TADV1 = "", TFIN1 = "";
-await check("zdanená záloha → mínusový riadok (základ + DPH zálohy, rovnaká sadzba, odkaz na 386); rozpis DPH a hlavička po odpočte", async () => {
+await check("zdanená záloha → mínusový riadok (základ + DPH zálohy, rovnaká sadzba, odkaz na faktúru k prijatej platbe); rozpis DPH a hlavička po odpočte", async () => {
   TADV1 = await issuedAdvance([{ price: 100 }]);
   TFIN1 = await issued("regular_invoice", { items: [{ price: 300 }] });
   await setDed(TFIN1, [{ advance_invoice_id: TADV1, vat_category_code: "S", vat_rate: 23, taxable_amount: 100, vat_amount: 23 }]);
@@ -427,6 +427,19 @@ await check("zdanená záloha NEPOUŽÍVA PrepaidAmount; UBL: InvoicedQuantity -
   assert.deepEqual(xmlAll(r.xml, "TaxableAmount"), ["200.00"]);
   assert.deepEqual(xmlAll(r.xml, "PayableAmount"), ["246.00"]);
   assert.ok(r.xml.includes(`<cac:BillingReference><cac:InvoiceDocumentReference><cbc:ID>${(await inv(TADV1)).invoice_number}</cbc:ID>`));
+  assert.deepEqual(xmlAll(r.xml, "InvoiceTypeCode"), ["380"], "konečná faktúra ostáva 380");
+  // Odoslaná faktúra k prijatej platbe z DB: SK kanonický kód 388, nikdy 386 (FS FAQ eFaktúra, tech. príklad 22).
+  const adv = NEW.generate.generateUbl(await snapshotOf(TADV1));
+  assert.ok(adv.ok, adv.ok ? "" : JSON.stringify(adv.issues));
+  if (adv.ok) {
+    assert.deepEqual(xmlAll(adv.xml, "InvoiceTypeCode"), ["388"]);
+    assert.ok(!adv.xml.includes("<cbc:InvoiceTypeCode>386<"));
+    // príjemca ju rozpozná ako faktúru k prijatej platbe (rovnaký tok ako staršia 386)
+    const p388 = parseInboundUbl(new TextEncoder().encode(adv.xml));
+    assert.ok(p388.ok && mapInboundDraft(p388.document, p388.reviewReasons, null).ok);
+    const m388 = p388.ok ? mapInboundDraft(p388.document, p388.reviewReasons, null) : null;
+    assert.equal(m388 && m388.ok ? m388.draft.document_kind : null, "payment_received_invoice");
+  }
   // EN 16931 aritmetika a pravidlá cez parser + mapovanie príjemcu (BR-CO-10/13/15/16/17, BR-27, BR-S-08).
   const parsed = parseInboundUbl(new TextEncoder().encode(r.xml));
   assert.ok(parsed.ok);
@@ -566,15 +579,16 @@ await check("PDF súčty: položky − mínusové riadky = spolu; na úhradu = s
 });
 
 // =============================================================================
-// 20261008100008 — prijatá faktúra k prijatej platbe (386) a prijatá konečná faktúra so zálohami (BT-113).
+// 20261008100008 — prijatá faktúra k prijatej platbe a prijatá konečná faktúra so zálohami.
+// InvoiceTypeCode: 388 = SK kanonický (FS FAQ eFaktúra, tech. príklad 22) — predvolený v testoch; 386 = kompatibilita.
 // SYNTETICKÉ UBL (označené) — reálny tok poskytovateľa pokrýva sandbox E2E (docs/einvoice-accounting-flow-e2e-2026-10.md).
 // =============================================================================
 const SUPPLIER2 = { name: "Iný dodávateľ s.r.o.", ico: "31411802", vat: "SK2024444440", endpoint: "2024444440" };
-const advXml = (id: string, net: number, o: { date?: string; taxPoint?: string; supplier?: typeof SUPPLIER; note?: string; customerEndpoint?: string } = {}) =>
-  ubl({ root: "Invoice", type: "386", id, date: o.date ?? "2026-09-01", taxPoint: o.taxPoint ?? "2026-08-30", lines: [{ qty: 1, price: net }], supplier: o.supplier, note: o.note, customerEndpoint: o.customerEndpoint });
+const advXml = (id: string, net: number, o: { date?: string; taxPoint?: string; supplier?: typeof SUPPLIER; note?: string; customerEndpoint?: string; type?: "388" | "386" } = {}) =>
+  ubl({ root: "Invoice", type: o.type ?? "388", id, date: o.date ?? "2026-09-01", taxPoint: o.taxPoint ?? "2026-08-30", lines: [{ qty: 1, price: net }], supplier: o.supplier, note: o.note, customerEndpoint: o.customerEndpoint });
 
 let RADV1 = "", RADV1_INBOUND = "", RADV1_SHA = "", RFIN1 = "", RFIN1_INBOUND = "", RFIN1_SHA = "";
-await check("386 prijatá: samostatný druh payment_received_invoice, dodávateľ, sumy, rozpis DPH, BT-7; XML nemenné", async () => {
+await check("388 prijatá (SK kód): samostatný druh payment_received_invoice, dodávateľ, sumy, rozpis DPH, BT-7; XML nemenné", async () => {
   const xml = advXml("ZF-ADV-1", 100);
   const parsed = parseInboundUbl(new TextEncoder().encode(xml));
   assert.ok(parsed.ok);
@@ -600,7 +614,7 @@ await check("386 prijatá: samostatný druh payment_received_invoice, dodávate�
   // Žiadne automatické rozhodnutie o odpočte DPH: záloha nemá žiadny stav odpočtu, iba evidenciu.
   assert.equal(a.advance_review_status, null);
 });
-await check("duplicitná 386 (rovnaké XML aj iné XML s rovnakým číslom) → žiadna druhá záloha", async () => {
+await check("duplicitná záloha (rovnaké XML, iné XML s rovnakým číslom, aj to isté číslo ako 386) → žiadna druhá záloha", async () => {
   const before = (await h.sql<{ n: number }>("select count(*)::int n from public.invoices where kind = 'payment_received_invoice' and direction = 'received' and company_id = $1", [CO.A])).rows[0].n;
   const same = await receive(CO.A, "org-a", advXml("ZF-ADV-1", 100));
   assert.equal(same.result?.status, "duplicate");
@@ -608,6 +622,10 @@ await check("duplicitná 386 (rovnaké XML aj iné XML s rovnakým číslom) →
   const other = await receive(CO.A, "org-a", advXml("ZF-ADV-1", 100, { note: "replay s inou poznámkou" }));
   assert.equal(other.result?.status, "duplicate");
   assert.equal(other.result?.invoiceId, RADV1);
+  // ten istý doklad dodávateľa prijatý raz ako 388 a znova ako 386 = ten istý druh → duplicita, nie druhá záloha
+  const legacy = await receive(CO.A, "org-a", advXml("ZF-ADV-1", 100, { type: "386", note: "ten istý doklad s kódom 386" }));
+  assert.equal(legacy.result?.status, "duplicate");
+  assert.equal(legacy.result?.invoiceId, RADV1);
   const after = (await h.sql<{ n: number }>("select count(*)::int n from public.invoices where kind = 'payment_received_invoice' and direction = 'received' and company_id = $1", [CO.A])).rows[0].n;
   assert.equal(after, before);
 });
@@ -657,6 +675,35 @@ await check("prijatá konečná faktúra s viacerými zálohami → každý mín
   assert.deepEqual((await rlinks(fin)).map((l) => [l.advance_invoice_id, l.t, l.v]), [[a2, 100, 23], [a3, 50, 11.5]]);
   await finalize(U.owner, fin);
   assert.equal(n((await settlement(U.owner, fin)).amount_due), 492 - 184.5);
+});
+await check("staršia prijatá 386 aj nová 388 v jednej konečnej faktúre → rovnaké párovanie, kontroly sadzby/základu/DPH, bez dvojitého odpočtu", async () => {
+  const a388 = await recvAdv("ZF-ADV-388", 100, { type: "388" });
+  const a386 = await recvAdv("ZF-ADV-386", 40, { type: "386" });
+  const kinds = (await h.sql<Row>("select kind from public.invoices where id = any($1::uuid[]) order by kind", [[a388, a386]])).rows.map((r) => r.kind);
+  assert.deepEqual(kinds, ["payment_received_invoice", "payment_received_invoice"]);
+  const types = (await h.sql<Row>("select i.supplier_invoice_number no from public.invoices i where i.id = any($1::uuid[]) order by 1", [[a388, a386]])).rows.map((r) => r.no);
+  assert.deepEqual(types, ["ZF-ADV-386", "ZF-ADV-388"]);
+  // iba 386 (legacy) — samostatná konečná faktúra
+  const finLegacy = (await receive(CO.A, "org-a", finFs("ZF-FIN-386", [{ qty: 1, price: 100 }], [{ price: 40 }], [{ id: "ZF-ADV-386" }]))).result!.invoiceId;
+  assert.equal((await inv(finLegacy)).advance_review_status, "proposed");
+  assert.deepEqual((await rlinks(finLegacy)).map((l) => [l.advance_invoice_id, l.c, l.r, l.t, l.v, l.amount]), [[a386, "S", 23, 40, 9.2, 49.2]]);
+  await finalize(U.owner, finLegacy);
+  assert.equal((await inv(finLegacy)).advance_review_status, "linked");
+  // iba 388 (SK) — konečná faktúra
+  const fin388 = (await receive(CO.A, "org-a", finFs("ZF-FIN-388", [{ qty: 1, price: 300 }], [{ price: 100 }], [{ id: "ZF-ADV-388" }]))).result!.invoiceId;
+  assert.deepEqual((await rlinks(fin388)).map((l) => [l.advance_invoice_id, l.t, l.v]), [[a388, 100, 23]]);
+  await finalize(U.owner, fin388);
+  assert.equal(n((await settlement(U.owner, fin388)).amount_due), 369 - 123);
+  // druhý odpočet tej istej 386 aj 388 → odmietnuté (bez dvojitého odpočtu)
+  const again = (await receive(CO.A, "org-a", finFs("ZF-FIN-388B", [{ qty: 1, price: 300 }], [{ price: 100 }, { price: 40 }], [{ id: "ZF-ADV-388" }, { id: "ZF-ADV-386" }]))).result!.invoiceId;
+  assert.deepEqual((await inv(again)).advance_review_reasons, ["ADVANCE_ALREADY_DEDUCTED"]);
+  assert.match(await errOf(rpc(U.owner, "select public.esblu_received_advance_link($1, $2, 1)", [again, a386])), /ESBLU_RECEIVED_ADVANCE_EXCEEDS|ESBLU_RECEIVED_ADVANCE_RATE_AMBIGUOUS/);
+  // cross-tenant: 386 aj 388 firmy B sa na faktúru A nenaviaže
+  await recvAdv("ZF-ADV-B386", 100, { type: "386", customerEndpoint: "2022222220" });
+  await recvAdv("ZF-ADV-B388", 100, { type: "388", customerEndpoint: "2022222220" });
+  const finX = (await receive(CO.A, "org-a", finFs("ZF-FIN-BX", [{ qty: 1, price: 300 }], [{ price: 100 }], [{ id: "ZF-ADV-B386" }, { id: "ZF-ADV-B388" }]))).result!.invoiceId;
+  assert.deepEqual((await inv(finX)).advance_review_reasons, ["ADVANCE_NOT_FOUND"]);
+  assert.equal((await rlinks(finX)).length, 0);
 });
 let RMISS = "";
 await check("záloha nenájdená → review ADVANCE_NOT_FOUND, finalizácia zablokovaná; po príchode zálohy sa spáruje; bez BT-25 → review", async () => {
@@ -794,7 +841,7 @@ await check("nemenné XML a väzby: hash zálohy aj konečnej faktúry sedí; v�
   assert.match(await errOf(svc("delete from public.invoice_items where invoice_id = $1 and is_advance_deduction", [RFIN1])), /ESBLU_INVOICE_ITEMS_FINALIZED_IMMUTABLE/);
   assert.match(await errOf(rpc(U.owner, "select public.esblu_received_advance_unlink($1, $2)", [RFIN1, RADV1])), /ESBLU_RECEIVED_ADVANCE_LINK_LOCKED/);
 });
-await check("DB druhá vrstva: BT-113 na 386 alebo oprave → odmietnuté; BT-113 > celkom → odmietnuté", async () => {
+await check("DB druhá vrstva: BT-113 na faktúre k prijatej platbe alebo oprave → odmietnuté; BT-113 > celkom → odmietnuté", async () => {
   const r = await receive(CO.A, "org-a", advXml("ZF-ADV-DB", 10));
   const draft = { ...(r.mapped as { ok: true; draft: Record<string, unknown> }).draft, invoice_number: "ZF-ADV-DB2" } as Record<string, unknown>;
   const totals = { ...(draft.totals as Record<string, unknown>), prepaid: "1.00", payable: "11.30" };
@@ -809,7 +856,7 @@ await check("DB druhá vrstva: BT-113 na 386 alebo oprave → odmietnuté; BT-11
   const over = { ...draft, document_kind: "regular_invoice", totals: { ...(draft.totals as Record<string, unknown>), prepaid: "20.00", payable: "-7.70" } };
   assert.match(await errOf(h.inbound.createDraft(reg.inboundId, over as never)), /ESBLU_EINVOICE_TOTALS_INCONSISTENT/);
 });
-await check("export: typ odpočtu (zdanený riadok / nezdanená BT-113 / staršie), odkaz na 386, základ a DPH; 386 ako samostatný druh; originálne XML", async () => {
+await check("export: typ odpočtu (zdanený riadok / nezdanená BT-113 / staršie), odkaz na faktúru k prijatej platbe, základ a DPH; záloha ako samostatný druh; originálne XML", async () => {
   const src = readFileSync(new URL("../app/api/accounting-handoff/package/route.ts", import.meta.url), "utf8");
   for (const re of [/"deduction_type"/, /"taxed_line"/, /"untaxed_prepaid"/, /"legacy_outside_lines"/, /received-advance-links\.csv/, /advance_invoice_number/, /"untaxed_prepaid_amount"\]/, /from\("received_advance_links"\)/]) {
     assert.match(src, re);

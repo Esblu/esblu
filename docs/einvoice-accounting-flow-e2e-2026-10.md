@@ -1,5 +1,8 @@
 # Účtovný a eFaktúra tok — dokončenie a staging E2E (6. 10. 2026)
 
+> **8. 10. 2026:** E2E v tomto dokumente prebehol s kódom 386. Od 8. 10. sa faktúra k prijatej platbe odosiela s kódom
+> **388** (FS FAQ tech. príklad 22); príjem akceptuje 388 aj 386 rovnakým tokom.
+
 > **Poznámka 7. 10. 2026 (closure):** FS FAQ k eFaktúre (15. 9. 2026, príklad 38) — zdanená záloha sa v konečnej
 > e-faktúre odpočíta mínusovým riadkom, nie BT-113. Odoslanie konečnej faktúry s odpočtom zálohy je preto
 > fail-closed (`ADVANCE_DEDUCTION_EINVOICE_UNSUPPORTED`); príjem cez BT-113 (sekcia 2b) ostáva pre dodávateľov,

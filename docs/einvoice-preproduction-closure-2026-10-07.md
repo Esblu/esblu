@@ -2,7 +2,7 @@
 
 > **Aktualizácia 8. 10. 2026:** platný balík na spustenie je `docs/einvoice-production-rollout-package-2026-10-08.md`
 > (baseline `1b53193`, 23 migrácií, precheck 36 kontrol, backup/restore, runbook R-0…R-13, alerting C1–C7).
-> **Nový CODE bod:** kód typu faktúry k prijatej platbe — FS FAQ tech. príklad 22 uvádza **388**, Esblu odosiela 386
+> Kód typu faktúry k prijatej platbe: **CLOSED** — od 8. 10. sa odosiela **388** (FS FAQ tech. príklad 22), príjem 388 + 386
 > (sekcia 8 balíka). Tento dokument je historický stav k 7. 10.
 
 Nadväzuje na `docs/einvoice-preproduction-readiness-2026-10-07.md` (runbook, crony, rollout plán).
@@ -19,7 +19,7 @@ Produkčná DB sa v tejto fáze ani nečítala. Supabase a Vercel sa čítali ib
 
 | Dimenzia | Stav | Čo chýba |
 | --- | --- | --- |
-| **CODE READY** | **ÁNO pre rozsah spustenia** (odoslanie a príjem faktúr, 386, opravy, review, úhrady, export) | Model zdanenej zálohy opravený podľa FS FAQ príklad 38 (migrácie `20261008100009` + `20261008100010`, reálny sandbox E2E 7. 10. 2026 — pozri `docs/einvoice-taxed-advance-model-2026-10-07.md`). Fail-closed ostáva iba pre staršie finalizované konečné faktúry bez mínusových riadkov (`ADVANCE_DEDUCTION_EINVOICE_UNSUPPORTED`). |
+| **CODE READY** | **ÁNO pre rozsah spustenia** (odoslanie a príjem faktúr, faktúra k prijatej platbe 388 / príjem aj 386, opravy, review, úhrady, export) | Model zdanenej zálohy opravený podľa FS FAQ príklad 38 (migrácie `20261008100009` + `20261008100010`, reálny sandbox E2E 7. 10. 2026 — pozri `docs/einvoice-taxed-advance-model-2026-10-07.md`). Fail-closed ostáva iba pre staršie finalizované konečné faktúry bez mínusových riadkov (`ADVANCE_DEDUCTION_EINVOICE_UNSUPPORTED`). |
 | **PRODUCTION CONFIG READY** | **NIE** | Migrácie, merge do `main`, prvý import kurzov ECB, produkčné env eFaktúry, alert kanál (GitHub secret + workflow), backup pred oknom. Vercel plán **Pro** crony podporuje. |
 | **LEGAL READY** | **NIE** | Delta pre CLIA pripravená, neodoslaná. Stanovisko CLIA k zrušeniu firmy s dokladmi, k retencii a k eFaktura.sk/DPA. 4 otázky pre účtovníčku (kategória C). |
 | **PROVIDER READY** | **NIE** | **Technické otázky CLOSED (8. 10.)**, implementácia zodpovedá odpovedi poskytovateľa (`docs/efaktura-provider-conformance-2026-10-08.md`). DPA = Príloha č. 2 API zmluvy; lokalita/retencia platia aj pre API. Chýba: podpis zmluvy, live kľúč, produkčný webhook (mimo kódu). |

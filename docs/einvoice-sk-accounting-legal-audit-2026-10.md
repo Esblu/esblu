@@ -1,5 +1,9 @@
 # Fakturácia a eFaktúra Esblu — právno-účtovný audit podľa SK predpisov (október 2026)
 
+> **Aktualizácia 8. 10. 2026 — 386 už nie je REVIEW:** FS FAQ k eFaktúre, tech. príklad 22: faktúra k prijatej platbe =
+> `InvoiceTypeCode` **388**. Esblu odosiela 388 (kanonický SK kód) a prijíma 388 + 386 (kompatibilita). Riadky nižšie
+> o „386 v slovenskom profile / REVIEW“ sú historické.
+
 Interný technický podklad. **Nie je to právne ani daňové stanovisko. Nič v ňom nie je schválené CLIA,
 daňovým poradcom ani účtovníčkou.** Prešlé testy dokazujú iba to, že kód robí to, čo je tu opísané.
 
@@ -93,7 +97,7 @@ neoveroval vôbec**. Kalendár, výnimky a TS nápoveda boli odstránené.
 | Platba pred dodaním → daňová povinnosť dňom prijatia platby (§ 19 ods. 4) → faktúra (§ 71, § 73 ods. 1 b)) | LAW | `payment_received_invoice` vyžaduje dátum prijatia platby | PASS |
 | Proforma (výzva na platbu) nie je daňový doklad | OFFICIAL GUIDANCE (FAQ FS) | druh `proforma`, séria PF, neodosiela sa ako e-faktúra, nejde do balíka ako daňový doklad | PASS |
 | Faktúra k prijatej platbe v UBL ako `InvoiceTypeCode` **386 (Prepayment invoice)** | PEPPOL/TECH STANDARD | **PEPPOL PASS:** 386 je v Peppol BIS Billing 3.0 (UNCL1001-inv subset, May 2026 release) | PASS |
-| 386 v slovenskom profile | PEPPOL/TECH STANDARD | **SK TDD 1.0.0:** 386 je v code liste `UNCL1001-inv`. **SK transpozícia Peppol BIS v1.11 (FS, 10. 9. 2026), prečítaná:** BT-3 je povinný (1..1), popis „Obchodné faktúry a dobropisy sú definované podľa položiek číselníka UNTDID 1001. Ostatné položky UNTDID 1001 sa môžu u konkrétnych faktúr alebo dobropisov použiť podľa potreby“; žiadne slovenské obmedzenie kódov (380/381/383/386) v hárkoch pravidiel ani termínov (UBL-CR-380 … UBL-CR-389 sú čísla pravidiel UBL, nie kódy typu faktúry). Pri BT-3 je poznámka „nebude doplnené do § 74, bude riešené v podzákonnej norme“ | **technicky PASS; SLOVAK PROFILE REVIEW** (podzákonná norma ešte nie je) |
+| 386 v slovenskom profile — **CLOSED 8. 10. 2026: SK kód 388** (FS FAQ tech. príklad 22) | PEPPOL/TECH STANDARD | **SK TDD 1.0.0:** 386 je v code liste `UNCL1001-inv`. **SK transpozícia Peppol BIS v1.11 (FS, 10. 9. 2026), prečítaná:** BT-3 je povinný (1..1), popis „Obchodné faktúry a dobropisy sú definované podľa položiek číselníka UNTDID 1001. Ostatné položky UNTDID 1001 sa môžu u konkrétnych faktúr alebo dobropisov použiť podľa potreby“; žiadne slovenské obmedzenie kódov (380/381/383/386) v hárkoch pravidiel ani termínov (UBL-CR-380 … UBL-CR-389 sú čísla pravidiel UBL, nie kódy typu faktúry). Pri BT-3 je poznámka „nebude doplnené do § 74, bude riešené v podzákonnej norme“ | **technicky PASS; SLOVAK PROFILE REVIEW** (podzákonná norma ešte nie je) |
 | Konečná faktúra odpočíta zálohy; UBL `PrepaidAmount` (BT-113) | LAW (§ 74) + PEPPOL | `invoice_advance_deductions`, `PrepaidAmount` | PASS (DB/UBL), GAP (UI) |
 
 ## 3. Účtovný doklad — originál XML, vizualizácia, koncept
@@ -300,12 +304,12 @@ Verzia 3:
 
 - FX: ručný kalendár TARGET + výnimky nahradené oficiálnymi dátami ECB (import, pokrytie, append-only); overuje sa aj hodnota kurzu; uložený rozhodný deň a referencia; oprava preberá referenciu.
 - § 73: overené znenie 2026 aj 2027 vrátane ods. 2 a § 72 ods. 2, 8; odstránené aproximácie (písm. d) cez AE, oprava cez dátum dodania); neurčiteľné prípady = REVIEW, nie termín.
-- 386: prečítaná SK transpozícia v1.11 — žiadne obmedzenie; ostáva REVIEW kvôli budúcej podzákonnej norme.
+- 386: prečítaná SK transpozícia v1.11 — žiadne obmedzenie; ~~ostáva REVIEW~~ — CLOSED 8. 10. 2026 (FS FAQ tech. príklad 22: 388).
 
 Verzia 2 (oproti 1):
 
 - § 26: 10-dňové okno nahradené presným dátumom; oprava používa pôvodný kurz aj dátum; colný kurz za rok.
-- 386: rozdelené na PEPPOL PASS a SLOVAK PROFILE REVIEW (predtým nepresne ako otázka akceptácie 386).
+- 386: rozdelené na PEPPOL PASS a SLOVAK PROFILE REVIEW — **CLOSED 8. 10. 2026: SK kód 388**.
 - Účtovný doklad: odstránené tvrdenie „pri eFaktúre je dokladom XML“; technická integrita PASS, kvalifikácia LEGAL REVIEW.
 - Vnútorný kontrolný systém: iba technický opis, nie tvrdenie o splnení.
 - § 73: z GAP na upozornenie + export.

@@ -2406,7 +2406,7 @@ const de = {
         correction: "Korrekturbeleg — ändert die ursprüngliche Rechnung; der Originalbeleg bleibt unverändert.",
         regular: "Steuerbeleg (Rechnung).",
         receivedRegular: "Reguläre Rechnung (eingegangen).",
-        receivedPaymentReceived: "Rechnung über eine erhaltene Zahlung (eingegangene Anzahlung, UBL 386). Esblu erfasst sie nur — über den Vorsteuerabzug entscheidet Ihre Buchhaltung.",
+        receivedPaymentReceived: "Rechnung über eine erhaltene Zahlung (eingegangene Anzahlung, UBL 388; 386 wird ebenfalls angenommen). Esblu erfasst sie nur — über den Vorsteuerabzug entscheidet Ihre Buchhaltung.",
         receivedFinal: "Schlussrechnung mit abgezogenen Anzahlungen (eingegangen).",
       },
       review: {
