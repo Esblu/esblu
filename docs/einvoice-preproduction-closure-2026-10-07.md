@@ -1,5 +1,10 @@
 # eFaktúra — PRE-PRODUCTION CLOSURE (7. 10. 2026)
 
+> **Aktualizácia 8. 10. 2026:** platný balík na spustenie je `docs/einvoice-production-rollout-package-2026-10-08.md`
+> (baseline `1b53193`, 23 migrácií, precheck 36 kontrol, backup/restore, runbook R-0…R-13, alerting C1–C7).
+> **Nový CODE bod:** kód typu faktúry k prijatej platbe — FS FAQ tech. príklad 22 uvádza **388**, Esblu odosiela 386
+> (sekcia 8 balíka). Tento dokument je historický stav k 7. 10.
+
 Nadväzuje na `docs/einvoice-preproduction-readiness-2026-10-07.md` (runbook, crony, rollout plán).
 Vetva `einvoice-port`.
 

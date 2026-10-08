@@ -1,22 +1,45 @@
-# NÁVRH — NEAKTÍVNE. Aktivácia (vlastník, po produkčnom spustení eFaktúry):
+# NÁVRH — NEAKTÍVNE. Súbor leží v docs/ops (nie v .github/workflows), preto ho GitHub nespúšťa.
+#
+# Aktivácia (vlastník, až po produkčnom spustení eFaktúry — runbook krok R-12):
 #   1. GitHub → Esblu/esblu → Settings → Secrets and variables → Actions → New repository secret
-#      ESBLU_CRON_SECRET = rovnaká hodnota ako Vercel Production CRON_SECRET (nikdy do repa).
+#      ESBLU_CRON_SECRET = rovnaká hodnota ako Vercel Production CRON_SECRET (nikdy do repa ani do logu).
 #   2. Skopírovať tento súbor do .github/workflows/einvoice-health.yml na vetve main.
-#   3. GitHub pošle e-mail pri zlyhanom behu osobe, ktorá naposledy upravila `schedule` v tomto súbore
-#      (Settings → Notifications → Actions: "Send notifications for failed workflows only").
-# Telo odpovede obsahuje iba počty a kódy (žiadne faktúry, firmy, IČO ani XML); workflow vypíše iba kódy.
+#   3. Notifikácie: GitHub pošle e-mail pri zlyhanom behu (Settings → Notifications → Actions:
+#      „Send notifications for failed workflows only“) osobe, ktorá naposledy upravila `schedule`.
+#
+# Zásady:
+#   - volajú sa iba existujúce interné endpointy (žiadna nová funkcia aplikácie);
+#   - odpoveď obsahuje iba počty a strojové kódy (žiadne faktúry, firmy, IČO, sumy, XML ani osobné údaje);
+#   - workflow vypíše iba kódy a čísla, telo odpovede po vyhodnotení zmaže;
+#   - beh ZLYHÁ (= alert e-mailom) pri ktorejkoľvek kritickej podmienke nižšie.
+#
+# Kritické podmienky (prahy sú konzervatívne, upraviť po pilote):
+#   C1 maintenance critical      HTTP 503 z /api/cron/einvoice-maintenance (maintenanceHttpStatus)
+#   C2 retry exhausted           health.outbound.retry_exhausted_unknown > 0
+#   C3 outbound backlog          health.outbound.stuck > 0 alebo oldest_stuck_age_seconds > 1800 pri queued+sending > 0
+#   C4 inbound backlog           health.inbound.stuck > 0 alebo ack_pending_too_long > 0
+#   C5 webhook / event failures  webhook.failures_24h + webhook.unprocessed_older_15m > 0, signature_failures_1h > 0,
+#                                eventAlerts EVENTS_EXHAUSTED / EVENT_FEED_STALE / EVENT_FEED_ERROR
+#   C6 ECB import stale          denný beh /api/cron/fx-rates (append-only, idempotentný import — duplicitný dávka
+#                                = duplicate:true, nič sa neprepíše) nevráti success:true
+#   C7 route nedostupná          iné HTTP ako 200/503 (401 = zlý secret, 000 = sieť/timeout)
 name: einvoice-health
 on:
   schedule:
-    - cron: "23 * * * *" # 1× za hodinu (GitHub cron je best-effort, oneskorenie býva niekoľko minút)
+    - cron: "23 * * * *"   # health: 1× za hodinu (GitHub cron je best-effort, oneskorenie býva niekoľko minút)
+    - cron: "45 16 * * 1-5" # ECB: po Vercel crone 16:00 UTC (kurzy ECB ~16:00 CET), iba pracovné dni
   workflow_dispatch: {}
 permissions: {}
+concurrency:
+  group: einvoice-health
+  cancel-in-progress: false
 jobs:
-  check:
+  health:
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '23 * * * *'
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
-      - name: eFaktúra maintenance health
+      - name: eFaktúra maintenance health (C1–C5, C7)
         env:
           CRON_SECRET: ${{ secrets.ESBLU_CRON_SECRET }}
         run: |
@@ -24,8 +47,43 @@ jobs:
           code=$(curl -sS -m 90 -o body.json -w '%{http_code}' \
             -H "Authorization: Bearer ${CRON_SECRET}" \
             https://www.esblu.com/api/cron/einvoice-maintenance) || code=000
-          codes=$(jq -r '[(.alerts // [])[], (.eventAlerts // [])[]] | map("\(.severity):\(.code)") | join(" ")' body.json 2>/dev/null || true)
-          echo "HTTP ${code} alerts: ${codes:-none}"
+          if [ "${code}" != "200" ] && [ "${code}" != "503" ]; then
+            rm -f body.json; echo "C7 route HTTP ${code}"; exit 1
+          fi
+          # Iba čísla a kódy — nikdy celé telo.
+          verdict=$(jq -r '
+            def n(x): (x // 0);
+            (.health.outbound) as $o | (.health.inbound) as $i | (.health.webhook) as $w |
+            [ (if n($o.retry_exhausted_unknown) > 0 then "C2:retry_exhausted_unknown=\(n($o.retry_exhausted_unknown))" else empty end),
+              (if n($o.stuck) > 0 or ((n($o.queued) + n($o.sending)) > 0 and n($o.oldest_stuck_age_seconds) > 1800)
+                 then "C3:outbound_stuck=\(n($o.stuck)),queued=\(n($o.queued)),oldest_s=\(n($o.oldest_stuck_age_seconds))" else empty end),
+              (if n($i.stuck) > 0 or n($i.ack_pending_too_long) > 0
+                 then "C4:inbound_stuck=\(n($i.stuck)),ack_pending_too_long=\(n($i.ack_pending_too_long))" else empty end),
+              (if (n($w.failures_24h) + n($w.unprocessed_older_15m)) > 0 or n($w.signature_failures_1h) > 0
+                 then "C5:webhook_failures_24h=\(n($w.failures_24h)),unprocessed_15m=\(n($w.unprocessed_older_15m)),sig_1h=\(n($w.signature_failures_1h))" else empty end),
+              ((.eventAlerts // [])[] | select(.code == "EVENTS_EXHAUSTED" or .code == "EVENT_FEED_STALE" or .code == "EVENT_FEED_ERROR") | "C5:\(.code)")
+            ] | join(" ")' body.json 2>/dev/null || echo "PARSE_ERROR")
+          alerts=$(jq -r '[(.alerts // [])[], (.eventAlerts // [])[]] | map("\(.severity):\(.code)") | join(" ")' body.json 2>/dev/null || true)
           rm -f body.json
-          # 503 = kritický alert (maintenanceHttpStatus); iné ne-200 = route/cron nedostupný.
-          test "${code}" = "200"
+          echo "HTTP ${code} alerts: ${alerts:-none}"
+          echo "conditions: ${verdict:-none}"
+          if [ "${code}" = "503" ]; then echo "C1 maintenance critical"; exit 1; fi
+          test -z "${verdict}"
+  ecb:
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '45 16 * * 1-5'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: ECB import fresh (C6)
+        env:
+          CRON_SECRET: ${{ secrets.ESBLU_CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          code=$(curl -sS -m 90 -o fx.json -w '%{http_code}' \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            https://www.esblu.com/api/cron/fx-rates) || code=000
+          ok=$(jq -r '.success == true' fx.json 2>/dev/null || echo false)
+          summary=$(jq -r '"duplicate=\(.duplicate // "-") inserted=\(.inserted // "-") code=\(.code // "-")"' fx.json 2>/dev/null || echo "unparsed")
+          rm -f fx.json
+          echo "HTTP ${code} ${summary}"
+          test "${code}" = "200" && test "${ok}" = "true"

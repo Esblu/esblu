@@ -60,6 +60,7 @@
     "test:invoicing-sk": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/invoicing-sk-compliance-tests.ts",
     "test:invoicing-flow": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/invoicing-flow-tests.ts",
     "test:einvoice-staging-guard": "node --experimental-strip-types --no-warnings scripts/einvoice-staging-e2e-guard-tests.ts",
+    "test:einvoice-prod-precheck": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/einvoice-prod-precheck-tests.ts",
     "test:einvoice-partner-e2e-selftest": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/einvoice-partner-sandbox-e2e.ts --offline-selftest",
     "verify:mobile-bundle": "node scripts/verify-mobile-bundle.mjs"
   },

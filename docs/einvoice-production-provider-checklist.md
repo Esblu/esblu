@@ -74,6 +74,8 @@ Nič v tomto dokumente nie je odhad. Čo dokumentácia neuvádza, je označené 
 > - **P2:** 409 „práve sa spracúva“ = odložený retry s tým istým kľúčom a telom.
 > - **P3:** definitívny identifikátor je `document_id` z connector/send, ďalej `GET /submissions/{document_id}` → `invoice_id`.
 > - **Deduplikácia:** poskytovateľ trvalo deduplikuje SHA-256 UBL v organizácii a pri zmenenom UBL blokuje rovnaké číslo + typ.
+> - **Replay:** ten istý Idempotency-Key + to isté telo = uložená odpoveď, žiadne druhé odoslanie; ten istý kľúč + iné telo = 409 (konflikt).
+> - **Dôkaz doručenia:** `GET /v1/agent/peppol/sent/{invoice_id}/evidence` (invoice_id z `GET /submissions/{document_id}`).
 > - **Webhooky:** `messageId` + `transactionId` (= SBDH InstanceIdentifier).
 > - **P10–P12:** API zmluva obsahuje DPA (čl. 28 GDPR) ako Prílohu č. 2; informácie o lokalite a retencii platia aj pre API model.
 >

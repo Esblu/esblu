@@ -11,6 +11,11 @@ Interný podklad. **Nie je to daňové ani účtovné stanovisko.** Zdroje:
 Overenie robil read-only výskum. Tvrdenia s dopadom na produkt (príklad 38 FAQ a lehota § 85o ods. 6) som
 dodatočne prečítal priamo z textu FAQ.
 
+> **Opätovné overenie 8. 10. 2026** (FAQ FS k eFaktúre, verzia 15. 9. 2026, prečítané **celé, strany 1–59**,
+> vrátane technickej série pre výrobcov softvéru; financnasprava.sk; nbs.sk). Slov-lex a mfsr.sk boli v čase overenia
+> nedostupné — legislatívny proces a usmernenia MF SR **nie sú overené**. Výsledok je v sekcii
+> „Opätovné overenie 8. 10. 2026“ na konci dokumentu; tabuľka nižšie je pôvodná (7. 10.).
+
 Kategórie: **A** = vyriešené primárnym zdrojom · **B** = čaká na podzákonnú normu / oficiálny výklad ·
 **C** = skutočne interpretačné (má zmysel externý názor).
 
@@ -75,3 +80,28 @@ Nedostupné / neoverené:
 - legislatívny proces MF SR k podzákonnej norme (bod 3);
 - poznámka pod čiarou 28s k § 85o ods. 4 v konsolidovanom HTML;
 - stránka ECB (fakt o dňoch publikácie je z NBS).
+
+## Opätovné overenie 8. 10. 2026
+
+Zdroj: FAQ FS k eFaktúre (`2026.09.15_eFak_FaQ.pdf`, 59 strán), technická séria = príklady pre výrobcov softvéru
+(od strany 33). Nič novšie FS do 8. 10. 2026 nezverejnila. Konferenčná prezentácia FS z 1. 10. 2026 („Návrh novely DPH“)
+typy dokladov nerieši.
+
+| # | Bod | Pôvodne | Teraz | Zdroj | Dopad na Esblu |
+| --- | --- | --- | --- | --- | --- |
+| 1b | Kurz NBS pre menu mimo ECB | C | **C** (bez zmeny) | FAQ všeob. príklad 64 opakuje § 26 ods. 1 (NBS iba ak ECB nevyhlasuje), ale neurčuje, ktorý kurz NBS pri mesačnom informatívnom lístku | žiadny — Esblu takúto menu nefinalizuje automaticky |
+| 2 | Účtovný kurz pri prijatej faktúre | C | **C** (bez zmeny) | nové usmernenie MF SR k § 24 ZoÚ sa nenašlo (mfsr.sk nedostupné) | žiadny — kurz preberá z dokladu, účtovanie je na klientovi |
+| 3 | Kód typu dokladu pre faktúru k prijatej platbe | B | **A** | **FAQ tech. príklad 22 (str. 42):** pre „Daňový doklad k prijatej platbe“ sa použije **kód 388 – Tax invoice** (UNCL1001) | **NÁLEZ (CODE):** Esblu odosiela **386** (`lib/einvoice/ubl/generate.ts`) a pri príjme rozpoznáva zálohu iba podľa 386 (`checkInboundProfile`); prijatá 388 = bežná faktúra → konečná faktúra s odpočtom ide do review (bezpečné, ale záloha nebude rozpoznaná automaticky). Rieši sa pred zapnutím zálohových e-faktúr — pozri balík rolloutu. |
+| 5 | § 71 ods. 3 písm. d) „iný spôsob“ / VKS | C | **A** | **FAQ tech. príklad 13 (str. 37):** pri doručení cez Peppol sa KEP ani kvalifikovaná pečať nevyžaduje; vierohodnosť pôvodu a neporušenosť obsahu zabezpečuje kombinácia AS4, certifikovaných poskytovateľov, UUID, MLS **a vnútorných kontrol účtovného systému**. Tech. príklad 15 (str. 38): spôsob zabezpečenia si určuje zdaniteľná osoba sama. | Esblu tvrdí iba technickú časť (nemenné XML + hash, MLS/dôkaz doručenia, audit). Internú smernicu (kto kontroluje) si určuje klient — nie je to otázka pre účtovníčku, ale súčasť dokumentácie pre klienta. |
+| 7 | Dobropis bez položiek za viac faktúr / vrátenie zálohy | C | **A čiastočne / C zvyšok** | **FAQ tech. príklad 49 (str. 54):** ak skutočnosť rozhodujúca pre opravu nastala k poslednému dňu zúčtovacieho obdobia, možno vyhotoviť **jednu opravnú faktúru k viacerým opakovaným dodaniam**; BT-25 sa **opakuje** pre každú pôvodnú faktúru (všetky čísla). Tech. príklad 30: FS odporúča dobropis + nová faktúra; kód 384 až v release jeseň 2026. | Esblu pri prijatom dobropise s viacerými BT-25 / kódom 83 → review (bez automatiky) — v súlade. **Ostáva C:** daňová kvalifikácia bonusu mimo opakovaných dodaní a oprava dane pri **vrátení zálohy**. |
+
+### Otázky pre účtovníčku / daňového poradcu po 8. 10. (iba C)
+
+1. **(1b)** Pri mene, ktorú ECB nevyhlasuje: smie sa použiť mesačný informatívny kurz NBS, a ktorého mesiaca pre
+   daňovú povinnosť vzniknutú 1. deň mesiaca?
+2. **(2)** Deň uskutočnenia účtovného prípadu pri prijatej faktúre v cudzej mene (§ 24 ods. 2 a) ZoÚ) a či sa
+   účtovný kurz smie líšiť od kurzu dodávateľa pre DPH.
+3. **(7 — zvyšok)** Oprava základu dane a DPH pri **vrátení zdanenej zálohy** (zrušená objednávka) a kvalifikácia
+   bonusu, ktorý sa netýka opakovaných dodaní v jednom zúčtovacom období.
+
+Otázky 3 (pôvodne 386) a 5 (VKS) sa účtovníčke **neposielajú** — rozhodol primárny zdroj.

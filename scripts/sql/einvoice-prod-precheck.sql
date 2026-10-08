@@ -11,7 +11,8 @@
 --   WARN  → migrácia prejde, ale je potrebný krok v runbooku / komunikácia,
 --   INFO  → iba prehľad,
 --   OK    → v poriadku.
--- Overené na stagingu (syntax a sémantika, read-only) 7. 10. 2026.
+-- Overené (read-only): staging 8. 10. 2026 (očakávané STOP — staging je už zmigrovaný) a PGlite simulácia produkcie
+-- (schéma pred reťazcom): všetky kontroly OK/INFO — scripts/einvoice-prod-precheck-tests.ts.
 -- =============================================================================
 
 begin;
@@ -57,6 +58,67 @@ new_cols(tbl, col) as (values
   ('invoices', 'advance_review_status'), ('invoice_payments', 'entry_type'),
   ('invoices', 'untaxed_prepaid_amount'), ('invoice_items', 'is_advance_deduction'), ('invoice_items', 'advance_invoice_id'),
   ('einvoice_outbound', 'sbdh_instance_identifier'), ('einvoice_outbound', 'as4_message_id')
+),
+-- 20261008100011: úplné zoznamy objektov, ktoré reťazec VYTVÁRA (generované zo súborov migrácií).
+new_tables(t) as (values
+  ('einvoice_enroll_attempts'), ('einvoice_event_cursors'), ('einvoice_events'), ('einvoice_inbound'),
+  ('einvoice_ops_audit'), ('einvoice_organizations'), ('einvoice_outbound'), ('einvoice_rollout'),
+  ('einvoice_webhook_events'), ('einvoice_webhook_rejections'), ('fx_rate_import_batches'), ('fx_rate_publication_exceptions'),
+  ('fx_reference_rates'), ('invoice_advance_deductions'), ('received_advance_links')
+),
+new_funcs(f) as (values
+  ('esblu_a_received_advance_finalize'), ('esblu_add_invoice_refund'), ('esblu_available_advances'), ('esblu_block_client_advance_item_change'),
+  ('esblu_block_client_advance_review_change'), ('esblu_block_client_correction_review_change'), ('esblu_block_finalized_advance_deductions'), ('esblu_block_payment_on_credit_note'),
+  ('esblu_block_snapshot_insert_when_finalized'), ('esblu_check_untaxed_prepaid'), ('esblu_default_breakdown_exemption'), ('esblu_easter_sunday'),
+  ('esblu_einvoice_actor_context'), ('esblu_einvoice_apply_xml_totals'), ('esblu_einvoice_claim_inbound'), ('esblu_einvoice_claim_outbound'),
+  ('esblu_einvoice_claim_outbound_by_submission'), ('esblu_einvoice_enroll_attempt_begin'), ('esblu_einvoice_enroll_attempt_finish'), ('esblu_einvoice_event_cursor_advance'),
+  ('esblu_einvoice_event_cursor_claim'), ('esblu_einvoice_event_cursor_rewind'), ('esblu_einvoice_event_ops'), ('esblu_einvoice_event_requeue'),
+  ('esblu_einvoice_event_resolve'), ('esblu_einvoice_events_guard'), ('esblu_einvoice_health'), ('esblu_einvoice_inbound_category'),
+  ('esblu_einvoice_inbound_create_correction'), ('esblu_einvoice_inbound_create_draft'), ('esblu_einvoice_inbound_guard'), ('esblu_einvoice_inbound_register'),
+  ('esblu_einvoice_inbound_transition'), ('esblu_einvoice_inbound_xml_totals_guard'), ('esblu_einvoice_log_state_change'), ('esblu_einvoice_my_rollout'),
+  ('esblu_einvoice_operator_begin'), ('esblu_einvoice_org_apply_enroll'), ('esblu_einvoice_org_company'), ('esblu_einvoice_org_participant_event'),
+  ('esblu_einvoice_org_upsert_provisioned'), ('esblu_einvoice_organization_guard'), ('esblu_einvoice_outbound_category'), ('esblu_einvoice_outbound_guard'),
+  ('esblu_einvoice_outbound_record_transport'), ('esblu_einvoice_outbound_rollout_gate'), ('esblu_einvoice_outbound_transition'), ('esblu_einvoice_outcomes_24h'),
+  ('esblu_einvoice_received_finalize_guard'), ('esblu_einvoice_request_outbound'), ('esblu_einvoice_resolve_supplier'), ('esblu_einvoice_rollout_allowed'),
+  ('esblu_einvoice_storage_consistency'), ('esblu_einvoice_touch_updated_at'), ('esblu_einvoice_webhook_complete'), ('esblu_einvoice_webhook_record'),
+  ('esblu_einvoice_webhook_rejection_record'), ('esblu_einvoice_webhook_retention'), ('esblu_einvoice_webhook_retry'), ('esblu_fx_append_only'),
+  ('esblu_fx_import_ecb_batch'), ('esblu_fx_is_publication_day'), ('esblu_fx_official_rate'), ('esblu_fx_reference_rate_date'),
+  ('esblu_invoice_correction_event'), ('esblu_invoice_correction_link_guard'), ('esblu_invoice_events_append_only'), ('esblu_invoice_finalize_compliance'),
+  ('esblu_invoice_settlement'), ('esblu_invoice_settlement_after_finalize'), ('esblu_invoice_settlement_core'), ('esblu_lock_advance_deductions'),
+  ('esblu_recalc_invoice_group_status'), ('esblu_received_advance_candidates'), ('esblu_received_advance_confirm'), ('esblu_received_advance_link'),
+  ('esblu_received_advance_link_guard'), ('esblu_received_advance_match'), ('esblu_received_advance_refresh_status'), ('esblu_received_advance_reject'),
+  ('esblu_received_advance_target'), ('esblu_received_advance_unlink'), ('esblu_received_correction_accept'), ('esblu_received_correction_link'),
+  ('esblu_received_correction_reject'), ('esblu_received_deduction_groups'), ('esblu_received_invoice_draft_core'), ('esblu_require_invoice_creation_entitlement'),
+  ('esblu_set_invoice_advance_deductions'), ('esblu_set_invoice_compliance_fields'), ('esblu_sk_vat_rates')
+),
+new_triggers(t) as (values
+  ('esblu_a_lock_advance_deductions'), ('esblu_a_received_advance_finalize'), ('esblu_block_client_advance_item_change'), ('esblu_block_client_advance_review_change'),
+  ('esblu_block_client_correction_review_change'), ('esblu_breakdown_exemption_default'), ('esblu_breakdowns_insert_guard'), ('esblu_check_untaxed_prepaid'),
+  ('esblu_einvoice_received_finalize_guard'), ('esblu_invoice_correction_event'), ('esblu_invoice_correction_link_guard'), ('esblu_invoice_events_append_only'),
+  ('esblu_invoice_finalize_compliance'), ('esblu_invoice_settlement_after_finalize'), ('esblu_parties_insert_guard'), ('esblu_payment_credit_note_guard'),
+  ('esblu_received_correction_accept')
+),
+-- Objekty, na ktoré sa reťazec SPOLIEHA (musia v produkcii existovať pred migráciami).
+req_tables(t) as (values
+  ('companies'), ('company_members'), ('business_partners'), ('company_billing_profile'),
+  ('invoices'), ('invoice_items'), ('invoice_tax_breakdowns'), ('invoice_parties'),
+  ('invoice_payments'), ('invoice_events'), ('invoice_number_sequences'), ('documents'),
+  ('document_links'), ('entitlement_catalog')
+),
+req_cols(t, c) as (values
+  ('invoices', 'direction'), ('invoices', 'kind'), ('invoices', 'document_status'), ('invoices', 'payment_status'),
+  ('invoices', 'corrects_invoice_id'), ('invoices', 'currency'), ('invoices', 'rounding_amount'),
+  ('invoices', 'supplier_invoice_number'), ('invoices', 'customer_business_partner_id'), ('invoices', 'supplier_business_partner_id'),
+  ('invoice_items', 'unit_price'), ('invoice_items', 'quantity'), ('invoice_items', 'price_mode'), ('invoice_items', 'vat_category_code'),
+  ('invoice_items', 'line_net_amount'), ('invoice_items', 'line_vat_amount'), ('invoice_items', 'line_gross_amount'),
+  ('invoice_number_sequences', 'series_key'), ('invoice_number_sequences', 'prefix'), ('invoice_number_sequences', 'next_number'),
+  ('invoice_number_sequences', 'padding'), ('invoice_number_sequences', 'suffix')
+),
+req_funcs(f) as (values
+  ('esblu_my_active_company_id'), ('esblu_my_active_role'), ('esblu_my_finance_manage'), ('esblu_my_finance_view'),
+  ('esblu_require_entitlement_capacity'), ('esblu_resolve_entitlement'), ('esblu_add_invoice_payment'), ('esblu_remove_invoice_payment'),
+  ('esblu_save_invoice_draft'), ('esblu_create_received_invoice_draft'), ('esblu_finalize_invoice'),
+  ('esblu_enforce_invoicing_entitlement'), ('esblu_block_invoice_snapshot_mutation')
 ),
 vat_mismatch as (
   select i.id
@@ -196,6 +258,90 @@ select * from (
          case when (select count(*) from pg_constraint where conrelid = 'public.invoice_items'::regclass and contype = 'c'
                     and pg_get_constraintdef(oid) ~ '^CHECK \(\(unit_price >= ') = 1 then 'OK' else 'WARN' end,
          '20261008100009 nahrádza pôvodný CHECK (unit_price >= 0) — očakávaný práve 1'
+  union all
+  select 26, 'new_tables_absent',
+         case when exists (select 1 from pg_class c join pg_namespace n on n.oid = c.relnamespace join new_tables x on x.t = c.relname
+                           where n.nspname = 'public' and c.relkind in ('r', 'p', 'v')) then 'STOP' else 'OK' end,
+         coalesce((select string_agg(c.relname, ', ') from pg_class c join pg_namespace n on n.oid = c.relnamespace join new_tables x on x.t = c.relname
+                   where n.nspname = 'public'), 'žiadna z ' || (select count(*) from new_tables)::text)
+  union all
+  select 27, 'new_functions_absent',
+         case when exists (select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace join new_funcs x on x.f = p.proname
+                           where n.nspname = 'public') then 'STOP' else 'OK' end,
+         coalesce((select string_agg(distinct p.proname, ', ') from pg_proc p join pg_namespace n on n.oid = p.pronamespace join new_funcs x on x.f = p.proname
+                   where n.nspname = 'public'), 'žiadna z ' || (select count(*) from new_funcs)::text)
+  union all
+  select 28, 'new_triggers_absent',
+         case when exists (select 1 from pg_trigger t join new_triggers x on x.t = t.tgname where not t.tgisinternal) then 'WARN' else 'OK' end,
+         'migrácie ich vytvárajú s DROP IF EXISTS (prepíšu sa) — existujúci = drift: ' ||
+         coalesce((select string_agg(t.tgname, ', ') from pg_trigger t join new_triggers x on x.t = t.tgname where not t.tgisinternal), 'žiadny')
+  union all
+  select 29, 'required_objects_present',
+         case when exists (select 1 from req_tables r where to_regclass('public.' || r.t) is null)
+                or exists (select 1 from req_cols r where not exists (select 1 from information_schema.columns c
+                            where c.table_schema = 'public' and c.table_name = r.t and c.column_name = r.c))
+                or exists (select 1 from req_funcs r where not exists (select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+                            where n.nspname = 'public' and p.proname = r.f))
+                or to_regprocedure('auth.uid()') is null
+                or to_regclass('storage.buckets') is null
+              then 'STOP' else 'OK' end,
+         coalesce(nullif(concat_ws(', ',
+           (select string_agg('tabuľka ' || r.t, ', ') from req_tables r where to_regclass('public.' || r.t) is null),
+           (select string_agg('stĺpec ' || r.t || '.' || r.c, ', ') from req_cols r where not exists (select 1 from information_schema.columns c
+              where c.table_schema = 'public' and c.table_name = r.t and c.column_name = r.c)),
+           (select string_agg('funkcia ' || r.f, ', ') from req_funcs r where not exists (select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+              where n.nspname = 'public' and p.proname = r.f)),
+           case when to_regprocedure('auth.uid()') is null then 'auth.uid()' end,
+           case when to_regclass('storage.buckets') is null then 'storage.buckets' end), ''), 'všetky závislosti prítomné')
+  union all
+  select 30, 'rls_enabled_invoicing',
+         case when exists (select 1 from pg_class c join pg_namespace n on n.oid = c.relnamespace
+                           where n.nspname = 'public' and c.relname in ('invoices', 'invoice_items', 'invoice_tax_breakdowns', 'invoice_parties',
+                                 'invoice_payments', 'invoice_events', 'business_partners', 'company_billing_profile') and not c.relrowsecurity)
+              then 'STOP' else 'OK' end,
+         'RLS musí byť zapnuté na fakturačných tabuľkách (nové politiky a RPC s tým počítajú): ' ||
+         coalesce((select string_agg(c.relname, ', ') from pg_class c join pg_namespace n on n.oid = c.relnamespace
+                   where n.nspname = 'public' and c.relname in ('invoices', 'invoice_items', 'invoice_tax_breakdowns', 'invoice_parties',
+                         'invoice_payments', 'invoice_events', 'business_partners', 'company_billing_profile') and not c.relrowsecurity), 'všetky zapnuté')
+  union all
+  select 31, 'numbering_new_series',
+         case when exists (select 1 from public.invoices where direction = 'issued' and invoice_number ~ '^PF[0-9]')
+                or exists (select 1 from public.invoice_number_sequences where series_key = 'proforma' or prefix = 'PF')
+              then 'STOP' else 'OK' end,
+         '20261008100000 zavádza sériu PF (proforma) — existujúce čísla/série PF by kolidovali: ' ||
+         (select count(*)::text from public.invoices where direction = 'issued' and invoice_number ~ '^PF[0-9]') || ' / ' ||
+         (select count(*)::text from public.invoice_number_sequences where series_key = 'proforma' or prefix = 'PF')
+  union all
+  select 32, 'numbering_prefix_per_series',
+         case when exists (select 1 from public.invoice_number_sequences
+                           where (series_key = 'regular' and coalesce(prefix, '') not in ('FA', ''))
+                              or (series_key = 'credit_note' and coalesce(prefix, '') not in ('DO', ''))
+                              or (series_key = 'debit_note' and coalesce(prefix, '') not in ('ID', ''))) then 'WARN' else 'OK' end,
+         'série s iným prefixom než FA/DO/ID (migrácia ich nemení; nové doklady pokračujú v existujúcej sérii)'
+  union all
+  select 33, 'finalized_proforma_tax_numbered',
+         case when (select count(*) from public.invoices where kind = 'proforma' and document_status = 'finalized') = 0 then 'OK' else 'WARN' end,
+         'finalizované proformy z čias pred oddelenou sériou PF (nemenné; nahlásiť účtovníčke, nie sú daňový doklad): ' ||
+         (select count(*)::text from public.invoices where kind = 'proforma' and document_status = 'finalized')
+  union all
+  select 34, 'received_invoices_overview',
+         'INFO',
+         (select format('prijaté: %s (koncepty %s, finalizované %s); bez dodávateľa %s; bez čísla dodávateľa %s',
+                        count(*), count(*) filter (where document_status = 'draft'), count(*) filter (where document_status = 'finalized'),
+                        count(*) filter (where supplier_business_partner_id is null), count(*) filter (where coalesce(btrim(supplier_invoice_number), '') = ''))
+          from public.invoices where direction = 'received')
+  union all
+  select 35, 'payment_received_invoices_overview',
+         'INFO',
+         'faktúry k prijatej platbe (kind=payment_received_invoice) — existujúce sa nemenia; odpočty záloh vznikajú iba v novom modeli: ' ||
+         (select count(*)::text from public.invoices where kind = 'payment_received_invoice')
+  union all
+  select 36, 'drafts_with_items_breaking_new_checks',
+         case when (select count(*) from public.invoice_items it join public.invoices i on i.id = it.invoice_id
+                    where i.document_status = 'draft' and it.unit_price < 0) = 0 then 'OK' else 'STOP' end,
+         'koncepty so zápornou cenou (nový CHECK unit_price_sign_check): ' ||
+         (select count(*)::text from public.invoice_items it join public.invoices i on i.id = it.invoice_id
+          where i.document_status = 'draft' and it.unit_price < 0)
 ) r
 order by ord;
 

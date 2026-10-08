@@ -1,3 +1,9 @@
+> **STAV 8. 10. 2026: CLOSED — e-mail sa už NEPOSIELA.** Poskytovateľ odpovedal na technické otázky
+> (Idempotency-Key 24 h, 409 „práve sa spracúva“ = odložený retry, trvalá SHA-256 deduplikácia + blok rovnakého čísla
+> a typu, `document_id` → `/submissions` → `invoice_id` → `/sent/{invoice_id}/evidence`, webhook `messageId` /
+> `transactionId`) a k zmluve (DPA podľa čl. 28 GDPR = Príloha č. 2 API zmluvy; lokalita a retencia platia aj pre API
+> model). Implementácia overená: `docs/efaktura-provider-conformance-2026-10-08.md`. Dokument nižšie je historický.
+
 # E-mail pre eFaktura.sk — otvorené otázky pred produkčným spustením (7. 10. 2026)
 
 **Stav:** pripravené na odoslanie, NEODOSLANÉ. Odosiela vlastník.
