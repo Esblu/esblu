@@ -34,12 +34,9 @@ const nextConfig: NextConfig = {
     // zariadení dalo jednoznačne overiť, ktorý bundle práve beží
     // (scripts/verify-mobile-bundle.mjs vypíše ten istý identifikátor).
     NEXT_PUBLIC_ESBLU_BUILD_ID: new Date().toISOString().replace(/\.\d+Z$/, "Z"),
-    // Absolútna cesta k zdieľanému legal/ priečinku (mimo mobile/) — číta ju
-    // lib/legal-content.ts namiesto process.cwd()/"legal", ktoré by v mobile
-    // builde ukazovalo na neexistujúci mobile/legal. __dirname tu funguje
-    // správne (next.config.ts beží ako obyčajný Node.js skript mimo
-    // Turbopack bundlovania), preto sa počíta priamo tu a nie v lib/.
-    ESBLU_LEGAL_CONTENT_ROOT: path.join(__dirname, "..", "legal"),
+    // ESBLU_LEGAL_CONTENT_ROOT ZÁMERNE NIE JE v `env` (Mobile Platform
+    // 2026-10-08): `env` hodnoty Next.js vkladá do bundlu, absolútna cesta
+    // build stroja by unikla do appky. lib/legal-content.ts nájde ../legal sám.
   },
 };
 

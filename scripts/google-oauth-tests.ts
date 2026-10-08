@@ -122,14 +122,15 @@ await check("legal: súhlas pri registrácii iba ak bol zaškrtnutý pred Google
   assert.equal(oauth.mayRecordRegistrationConsent(null, "email"), true);
 });
 
-// --- iba Google ------------------------------------------------------------
-await check("iba Google: Apple sa neponúkne ani pri konfigurácii „google,apple“", () => {
-  assert.deepEqual(oauth.parseEnabledOAuthProviders("google,apple"), ["google"]);
+// --- Google + Apple (Apple iba pri výslovnej konfigurácii) ----------------
+await check("Apple sa ponúkne IBA pri výslovnej konfigurácii; neznáme hodnoty sa ignorujú", () => {
+  assert.deepEqual(oauth.parseEnabledOAuthProviders("google,apple"), ["google", "apple"]);
   assert.deepEqual(oauth.parseEnabledOAuthProviders(" Google "), ["google"]);
-  assert.deepEqual(oauth.parseEnabledOAuthProviders("apple"), []);
+  assert.deepEqual(oauth.parseEnabledOAuthProviders("apple"), ["apple"]);
+  assert.deepEqual(oauth.parseEnabledOAuthProviders("facebook,apple-x"), []);
   assert.deepEqual(oauth.parseEnabledOAuthProviders(""), []);
   assert.deepEqual(oauth.parseEnabledOAuthProviders(undefined), []);
-  assert.deepEqual([...oauth.SUPPORTED_OAUTH_PROVIDERS], ["google"]);
+  assert.deepEqual([...oauth.SUPPORTED_OAUTH_PROVIDERS], ["google", "apple"]);
 });
 
 // --- R: Android / iOS PWA --------------------------------------------------

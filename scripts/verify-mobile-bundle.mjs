@@ -38,6 +38,33 @@ const chunksWith = (needle) => [...chunk.entries()].filter(([, src]) => src.incl
 const htmlScripts = (file) =>
   [...readFileSync(path.join(dir, file), "utf8").matchAll(/\/_next\/static\/chunks\/([^"']+\.js)/g)].map((m) => m[1]);
 
+// 0. Bundler (Mobile Platform 2026-10-08). Kontroly nižšie čítajú TURBOPACK
+//    výstup (`next build` v Next 16 = Turbopack; mobile/package.json "build").
+//    Bundle z `next build --webpack` má iný tvar exportov a chunkov — kontroly
+//    by hlásili falošné zlyhania. Preto sa bundler overí ako prvý a pri
+//    inom bundleri sa skončí jasnou správou, nie 23 falošnými FAIL.
+const turbopackChunks = chunksWith("globalThis.TURBOPACK");
+if (chunkFiles.length > 0 && turbopackChunks.length === 0) {
+  console.error("FAIL  bundle NIE JE z Turbopacku (pravdepodobne `next build --webpack`).");
+  console.error("      Produkčný mobilný build je `npm run build -w mobile` (Turbopack) — postav ho tak a spusti overenie znova.");
+  process.exit(3);
+}
+check("bundle je z Turbopacku (produkčný `next build`)", turbopackChunks.length > 0, `${turbopackChunks.length} chunkov`);
+
+// 0b. Žiadne absolútne cesty build stroja (napr. ESBLU_LEGAL_CONTENT_ROOT cez `env`).
+const LOCAL_PATH = /(?:\/home\/[a-z0-9._-]+\/|\/Users\/[A-Za-z0-9._-]+\/|[A-Z]:\\\\Users\\\\|\/sessions\/[a-z0-9-]+\/|\/private\/var\/folders\/)/;
+const leaking = [...chunk.entries()].filter(([, src]) => LOCAL_PATH.test(src)).map(([f]) => f);
+const htmlLeaks = [];
+(function scan(p) {
+  for (const name of readdirSync(p)) {
+    const full = path.join(p, name);
+    if (statSync(full).isDirectory()) scan(full);
+    else if (/\.(html|txt|json)$/.test(name) && LOCAL_PATH.test(readFileSync(full, "utf8"))) htmlLeaks.push(path.relative(dir, full));
+  }
+})(dir);
+check("bez lokálnych ciest build stroja v JS/HTML", leaking.length === 0 && htmlLeaks.length === 0, [...leaking, ...htmlLeaks].join(", "));
+check("bez ESBLU_LEGAL_CONTENT_ROOT v bundli", chunksWith("ESBLU_LEGAL_CONTENT_ROOT").length === 0);
+
 // 1. Natívny prepínač zapečený ako true (a nikde ako false).
 const flagTrue = chunksWith('"IS_MOBILE_BUILD",0,!0');
 const flagFalse = chunksWith('"IS_MOBILE_BUILD",0,!1');

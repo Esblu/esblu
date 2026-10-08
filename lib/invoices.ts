@@ -8,6 +8,7 @@ import {
 } from "@/lib/invoicing/vat-engine";
 import { DEFAULT_PRICE_MODE, type PriceMode } from "@/lib/invoicing/price-mode";
 import { normalizeCurrency } from "@/lib/invoices-currency";
+import { insertIdempotent, mutationKeyFor, resetMutationKey, type InsertDb, type MutationKeyRef } from "@/lib/idempotent-insert";
 
 export type { VatCategoryCode } from "@/lib/invoicing/vat-engine";
 export type { PriceMode } from "@/lib/invoicing/price-mode";
@@ -322,11 +323,10 @@ export async function createDraftInvoice(
   companyId: string,
   userId: string,
   input: DraftInvoiceHeaderInput,
-  db: SupabaseLike = supabase
+  db: SupabaseLike = supabase,
+  options: { mutationRef?: MutationKeyRef } = {}
 ): Promise<Invoice> {
-  const { data, error } = await db
-    .from("invoices")
-    .insert({
+  const row = {
       company_id: companyId,
       direction: input.direction,
       kind: input.kind,
@@ -342,12 +342,12 @@ export async function createDraftInvoice(
       corrects_invoice_id: input.corrects_invoice_id,
       created_by: userId,
       updated_by: userId,
-    })
-    .select("*")
-    .single();
-
-  if (error) throw error;
-  return data as Invoice;
+  };
+  // Idempotencia (Mobile Platform): retry toho istého obsahu nevytvorí druhý draft.
+  const mutationId = options.mutationRef ? mutationKeyFor(options.mutationRef, row) : null;
+  const { data } = await insertIdempotent<Invoice>(db as unknown as InsertDb, "invoices", row, mutationId);
+  if (options.mutationRef) resetMutationKey(options.mutationRef);
+  return data;
 }
 
 /** Iba draft sa dá zmazať (RLS invoices_delete_finance_draft) — finalizovaná

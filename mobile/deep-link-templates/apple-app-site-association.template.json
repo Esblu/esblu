@@ -1,0 +1,18 @@
+{
+  "applinks": {
+    "details": [
+      {
+        "appIDs": ["__APPLE_TEAM_ID__.com.esblu.app"],
+        "components": [
+          { "/": "/invite/*", "comment": "Pozvánka do firmy (64 hex token)" },
+          { "/": "/reset-hesla", "comment": "Reset hesla" },
+          { "/": "/onboarding/company", "comment": "Overenie e-mailu → onboarding" },
+          { "/": "/auth/callback", "comment": "E-mailové potvrdenie / OAuth (https variant)" }
+        ]
+      }
+    ]
+  },
+  "webcredentials": {
+    "apps": ["__APPLE_TEAM_ID__.com.esblu.app"]
+  }
+}

@@ -23,6 +23,10 @@ import {
 import { applyCompanyDetailToForm, findPartnerWithIco } from "@/lib/company-lookup/prefill";
 import { canonicalIco } from "@/lib/company-lookup/normalize";
 import type { CompanyDetailResponseBody } from "@/lib/company-lookup/types";
+import { type MutationKeyRef } from "@/lib/idempotent-insert";
+
+// Idempotency kľúč pre retry toho istého vytvorenia (lib/idempotent-insert.ts).
+const REGISTRY_PARTNER_MUTATION: MutationKeyRef = { current: null };
 
 // =============================================================================
 // "+ Nový partner z registra" pri vystavovaní faktúry.
@@ -101,7 +105,7 @@ export default function NewPartnerFromRegistry({
 
     setSaving(true);
     try {
-      const created = await createBusinessPartner(companyId, userId, payload);
+      const created = await createBusinessPartner(companyId, userId, payload, { mutationRef: REGISTRY_PARTNER_MUTATION });
       onCreated(created);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

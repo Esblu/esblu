@@ -69,6 +69,11 @@ import {
 } from "@/lib/vehicle-vignettes";
 import { navigateHard } from "@/lib/app-navigation";
 import { confirmAction } from "@/app/components/ui/AppDialog";
+import { insertIdempotent, mutationKeyFor, resetMutationKey, type InsertDb, type MutationKeyRef } from "@/lib/idempotent-insert";
+
+// Idempotency kľúče pre retry toho istého vytvorenia (lib/idempotent-insert.ts).
+const VEHICLE_REGISTRATION_MUTATION: MutationKeyRef = { current: null };
+const VEHICLE_CREATE_MUTATION: MutationKeyRef = { current: null };
 
 // Diaľničné známky v TP review formulári — zoznam krajín, typ a lokalizovaný
 // label sú zdieľané z lib/vehicle-vignettes.ts (rovnaký zdroj pravdy ako
@@ -713,13 +718,15 @@ export default function VozidlaPage() {
 
         vehicleId = String(updatedId);
       } else {
-        const { data: inserted, error: insertVehicleError } = await supabase
-          .from("vehicles")
-          .insert(registrationVehiclePayload(session.user.id))
-          .select("id")
-          .single();
-
-        if (insertVehicleError) throw insertVehicleError;
+        const registrationRow = registrationVehiclePayload(session.user.id);
+        const { data: inserted } = await insertIdempotent<{ id: string }>(
+          supabase as unknown as InsertDb,
+          "vehicles",
+          registrationRow,
+          mutationKeyFor(VEHICLE_REGISTRATION_MUTATION, registrationRow),
+          "id"
+        );
+        resetMutationKey(VEHICLE_REGISTRATION_MUTATION);
 
         vehicleId = inserted.id;
       }
@@ -1072,9 +1079,9 @@ export default function VozidlaPage() {
         return;
       }
 
-      const { error } = await supabase.from("vehicles").insert(vehiclePayload());
-
-      if (error) throw error;
+      const vehicleRow = vehiclePayload();
+      await insertIdempotent(supabase as unknown as InsertDb, "vehicles", vehicleRow, mutationKeyFor(VEHICLE_CREATE_MUTATION, vehicleRow), "id");
+      resetMutationKey(VEHICLE_CREATE_MUTATION);
 
       alert(t("vehicles.messages.vehicleSaved"));
       setVehicle(null);

@@ -46,6 +46,10 @@ import CompanyRegistryNotice from "@/app/components/company-lookup/CompanyRegist
 import { applyCompanyDetailToForm, findPartnerWithIco } from "@/lib/company-lookup/prefill";
 import { canonicalIco } from "@/lib/company-lookup/normalize";
 import type { CompanyDetailResponseBody } from "@/lib/company-lookup/types";
+import { type MutationKeyRef } from "@/lib/idempotent-insert";
+
+// Idempotency kľúč pre retry toho istého vytvorenia (lib/idempotent-insert.ts).
+const PARTNER_CREATE_MUTATION: MutationKeyRef = { current: null };
 
 type KindFilter = "all" | BusinessPartnerKind;
 
@@ -338,7 +342,7 @@ export default function ObchodniPartneriPage() {
           previous.map((partner) => (partner.id === editingId ? updated : partner))
         );
       } else {
-        const created = await createBusinessPartner(companyId, userId, payload);
+        const created = await createBusinessPartner(companyId, userId, payload, { mutationRef: PARTNER_CREATE_MUTATION });
         setPartners((previous) => [...previous, created]);
       }
 

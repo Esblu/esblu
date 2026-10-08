@@ -59,7 +59,7 @@ await check("OAuth: iOS bez Sign in with Apple neponúkne Google (App Review 4.8
   assert.deepEqual(oauth.oauthProvidersForPlatform("ios", ["google", "apple"]), ["google", "apple"]);
   assert.deepEqual(oauth.oauthProvidersForPlatform("android", ["google"]), ["google"]);
   assert.deepEqual(oauth.oauthProvidersForPlatform("web", ["google"]), ["google"]);
-  assert.deepEqual(oauth.parseEnabledOAuthProviders("google,apple"), ["google"], "Apple zatiaľ nie je podporovaný");
+  assert.deepEqual(oauth.parseEnabledOAuthProviders("google"), ["google"], "Apple iba pri výslovnej konfigurácii");
 });
 await check("OAuth: mobilná návratová URL iba z allowlistu", () => {
   assert.equal(oauth.normalizeMobileOAuthRedirect(undefined), "com.esblu.app://auth/callback");
@@ -261,6 +261,256 @@ await check("secrets: klientsky kód (use client / mobile) nikdy nečíta servic
     return /SUPABASE_SERVICE_ROLE_KEY|supabase-admin|process\.env\.(?!NEXT_PUBLIC_)[A-Z_]+/.test(src);
   });
   assert.deepEqual(offenders, []);
+});
+
+
+// ============================================================================= SECURE STORAGE (Keystore / Keychain adapter)
+const secureMod = await import("@/lib/mobile/secure-storage");
+function fakeSecurePlugin(opts: { failSet?: boolean } = {}) {
+  const data = new Map<string, string>();
+  return {
+    data,
+    async get({ key }: { key: string }) {
+      return { value: data.get(key) ?? null };
+    },
+    async set({ key, value }: { key: string; value: string }) {
+      if (opts.failSet) throw new Error("WRITE_FAILED");
+      data.set(key, value);
+    },
+    async remove({ key }: { key: string }) {
+      data.delete(key);
+    },
+    async clear() {
+      data.clear();
+    },
+  };
+}
+function fakeLocalStorage(init: Record<string, string> = {}) {
+  const data = new Map(Object.entries(init));
+  return {
+    data,
+    getItem: (k: string) => data.get(k) ?? null,
+    setItem: (k: string, v: string) => void data.set(k, v),
+    removeItem: (k: string) => void data.delete(k),
+    get length() {
+      return data.size;
+    },
+    key: (i: number) => [...data.keys()][i] ?? null,
+  };
+}
+const AUTH_KEY = "sb-localhost-auth-token";
+
+await check("secure storage: migrácia zo starého localStorage → Keystore/Keychain, legacy kópia zmazaná AŽ po zápise", async () => {
+  const plugin = fakeSecurePlugin();
+  const legacy = fakeLocalStorage({ [AUTH_KEY]: '{"access_token":"old"}', "esblu.locale": "sk" });
+  const storage = secureMod.createAuthStorage({ plugin: async () => plugin, legacy: () => legacy });
+  assert.equal(await storage.backend(), "secure");
+  assert.equal(await storage.getItem(AUTH_KEY), '{"access_token":"old"}');
+  assert.equal(plugin.data.get(AUTH_KEY), '{"access_token":"old"}');
+  assert.equal(legacy.data.has(AUTH_KEY), false, "čitateľná kópia nesmie ostať");
+  assert.equal(legacy.data.get("esblu.locale"), "sk", "iné kľúče sa nemenia");
+});
+await check("secure storage: zlyhaný zápis do Keystore → session ostáva (žiadne odhlásenie migráciou)", async () => {
+  const plugin = fakeSecurePlugin({ failSet: true });
+  const legacy = fakeLocalStorage({ [AUTH_KEY]: "s" });
+  const storage = secureMod.createAuthStorage({ plugin: async () => plugin, legacy: () => legacy });
+  assert.equal(await storage.getItem(AUTH_KEY), "s");
+  assert.equal(legacy.data.get(AUTH_KEY), "s");
+});
+await check("secure storage: setItem ide do Keystore a odstráni legacy; bez pluginu (web / starý build) localStorage", async () => {
+  const plugin = fakeSecurePlugin();
+  const legacy = fakeLocalStorage({ [AUTH_KEY]: "stale" });
+  const storage = secureMod.createAuthStorage({ plugin: async () => plugin, legacy: () => legacy });
+  await storage.setItem(AUTH_KEY, "fresh");
+  assert.equal(plugin.data.get(AUTH_KEY), "fresh");
+  assert.equal(legacy.data.has(AUTH_KEY), false);
+  const webLegacy = fakeLocalStorage();
+  const web = secureMod.createAuthStorage({ plugin: async () => null, legacy: () => webLegacy });
+  assert.equal(await web.backend(), "legacy");
+  await web.setItem(AUTH_KEY, "w");
+  assert.equal(webLegacy.data.get(AUTH_KEY), "w");
+});
+await check("secure logout: clearAll vyčistí Keystore/Keychain aj legacy Supabase kľúče, nič iné", async () => {
+  const plugin = fakeSecurePlugin();
+  plugin.data.set(AUTH_KEY, "x");
+  plugin.data.set(`${AUTH_KEY}-code-verifier`, "v");
+  const legacy = fakeLocalStorage({ [`${AUTH_KEY}-user`]: "u", "esblu.locale": "sk", "esblu.push.installationId": "i" });
+  await secureMod.createAuthStorage({ plugin: async () => plugin, legacy: () => legacy }).clearAll();
+  assert.equal(plugin.data.size, 0);
+  assert.deepEqual([...legacy.data.keys()].sort(), ["esblu.locale", "esblu.push.installationId"]);
+  const signOut = read("lib/sign-out.ts");
+  assert.match(signOut, /finally \{[\s\S]*mobileAuthStorage\?\.clearAll\(\)/, "Keystore sa vyčistí aj keď server signOut zlyhá");
+});
+await check("secure storage + skutočný supabase-js: cold start, expired session → refresh, logout", async () => {
+  const { createClient } = await import("@supabase/supabase-js");
+  const plugin = fakeSecurePlugin();
+  const now = Math.floor(Date.now() / 1000);
+  const user = { id: "11111111-1111-4111-8111-111111111111", aud: "authenticated", role: "authenticated", email: "a@example.invalid", app_metadata: {}, user_metadata: {}, created_at: new Date().toISOString() };
+  // Stav po „predošlom behu appky": vypršaný access token v Keystore.
+  plugin.data.set(AUTH_KEY, JSON.stringify({ access_token: "expired", refresh_token: "rt-1", token_type: "bearer", expires_in: 3600, expires_at: now - 60, user }));
+  let refreshCalls = 0;
+  const fetchMock = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.includes("/auth/v1/token?grant_type=refresh_token")) {
+      refreshCalls++;
+      assert.match(String(init?.body), /rt-1/);
+      return new Response(JSON.stringify({ access_token: "fresh", refresh_token: "rt-2", token_type: "bearer", expires_in: 3600, expires_at: now + 3600, user }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    if (url.includes("/auth/v1/logout")) return new Response(null, { status: 204 });
+    return new Response("{}", { status: 404 });
+  }) as typeof fetch;
+  const storage = secureMod.createAuthStorage({ plugin: async () => plugin, legacy: () => fakeLocalStorage() });
+  // „Cold start": nový klient, session iba v Keystore.
+  const client = createClient("http://localhost:54321", "anon", { auth: { storage, autoRefreshToken: false, persistSession: true, flowType: "pkce" }, global: { fetch: fetchMock } });
+  const { data } = await client.auth.getSession();
+  assert.equal(data.session?.access_token, "fresh", "vypršaná session sa obnoví refresh tokenom");
+  assert.equal(refreshCalls, 1);
+  assert.equal(JSON.parse(plugin.data.get(AUTH_KEY)!).refresh_token, "rt-2", "nová session uložená späť do Keystore");
+  // Resume: druhé čítanie bez ďalšieho refreshu (token platný).
+  await client.auth.getSession();
+  assert.equal(refreshCalls, 1);
+  await client.auth.signOut();
+  await storage.clearAll();
+  assert.equal(plugin.data.size, 0, "logout vyprázdni Keystore");
+  const after = await client.auth.getSession();
+  assert.equal(after.data.session, null);
+});
+await check("secure storage: natívne pluginy (Android Keystore AES-GCM, iOS Keychain ThisDeviceOnly) registrované", () => {
+  const java = read("mobile/android/app/src/main/java/com/esblu/app/EsbluSecureStoragePlugin.java");
+  assert.match(java, /AndroidKeyStore/);
+  assert.match(java, /AES\/GCM\/NoPadding/);
+  assert.match(java, /@CapacitorPlugin\(name = "EsbluSecureStorage"\)/);
+  assert.match(read("mobile/android/app/src/main/java/com/esblu/app/MainActivity.java"), /registerPlugin\(EsbluSecureStoragePlugin\.class\);\s*super\.onCreate/);
+  const swift = read("mobile/ios/App/App/EsbluSecureStoragePlugin.swift");
+  assert.match(swift, /kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly/);
+  assert.match(swift, /jsName = "EsbluSecureStorage"/);
+  assert.match(read("mobile/ios/App/App/MainViewController.swift"), /registerPluginInstance\(EsbluSecureStoragePlugin\(\)\)/);
+  assert.match(read("mobile/ios/App/App/SceneDelegate.swift"), /rootViewController = MainViewController\(\)/);
+  const pbx = read("mobile/ios/App/App.xcodeproj/project.pbxproj");
+  for (const f of ["EsbluSecureStoragePlugin.swift", "EsbluAppleSignInPlugin.swift", "MainViewController.swift"]) {
+    assert.equal((pbx.match(new RegExp(`${f.replace(".", "\\.")} in Sources \\*/,`, "g")) ?? []).length, 1, `${f} v Sources`);
+  }
+  assert.match(read("lib/supabase.ts"), /storage: mobileAuthStorage/);
+});
+
+// ============================================================================= IDEMPOTENT CREATE (unit; DB: test:idempotency-db)
+const idem = await import("@/lib/idempotent-insert");
+await check("idempotencia: rovnaký obsah = rovnaký kľúč (retry), iný obsah / po úspechu = nový kľúč", () => {
+  const ref = { current: null } as { current: { fingerprint: string; key: string } | null };
+  const k1 = idem.mutationKeyFor(ref, { b: 1, a: "x" });
+  assert.equal(idem.mutationKeyFor(ref, { a: "x", b: 1 }), k1, "poradie kľúčov nemení fingerprint");
+  assert.notEqual(idem.mutationKeyFor(ref, { a: "y", b: 1 }), k1);
+  const k3 = idem.mutationKeyFor(ref, { a: "y", b: 1 });
+  idem.resetMutationKey(ref);
+  assert.notEqual(idem.mutationKeyFor(ref, { a: "y", b: 1 }), k3);
+  assert.match(k1, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+});
+await check("idempotencia: všetkých 7 tvorných ciest posiela client_mutation_id cez insertIdempotent", () => {
+  const expectations: [string, RegExp][] = [
+    ["lib/invoices.ts", /insertIdempotent<Invoice>\(db as unknown as InsertDb, "invoices"/],
+    ["lib/business-partners.ts", /"business_partners", row, mutationId/],
+    ["app/vozidla/page.tsx", /"vehicles",\s*registrationRow/],
+    ["app/vozidla/page.tsx", /"vehicles", vehicleRow, mutationKeyFor\(VEHICLE_CREATE_MUTATION/],
+    ["app/stroje/page.tsx", /"machines",\s*payload,\s*mutationKeyFor\(MACHINE_CREATE_MUTATION/],
+    ["app/sklad/page.tsx", /"inventory_items",\s*payload,\s*mutationKeyFor\(INVENTORY_CREATE_MUTATION/],
+    ["lib/document-folders.ts", /"document_folders", row, mutationId/],
+    ["app/components/chat/ChatMessageView.tsx", /"chat_messages",\s*messageRow,\s*mutationId/],
+    ["app/faktury/new/page.tsx", /mutationRef: DRAFT_INVOICE_MUTATION/],
+    ["app/obchodni-partneri/page.tsx", /mutationRef: PARTNER_CREATE_MUTATION/],
+    ["app/priecinky/page.tsx", /mutationRef: FOLDER_CREATE_MUTATION/],
+  ];
+  for (const [file, re] of expectations) assert.match(read(file), re, file);
+  assert.match(read("app/components/chat/ChatMessageView.tsx"), /if \(!replayed\) void notifyChatMessage/, "replay neposiela push znova");
+  const migration = read("supabase/migrations/20261008130000_client_mutation_idempotency.sql");
+  assert.match(migration, /\(company_id, client_mutation_id\) where client_mutation_id is not null/);
+  assert.doesNotMatch(migration, /create policy|drop policy|grant /i, "RLS ani granty sa nemenia");
+});
+
+// ============================================================================= SIGN IN WITH APPLE (fail closed)
+await check("Apple: ponúkne sa iba pri výslovnej konfigurácii; iOS Google iba spolu s Apple (4.8)", () => {
+  assert.deepEqual(oauth.parseEnabledOAuthProviders("google"), ["google"]);
+  assert.deepEqual(oauth.parseEnabledOAuthProviders("google,apple"), ["google", "apple"]);
+  assert.deepEqual(oauth.oauthProvidersForPlatform("ios", oauth.parseEnabledOAuthProviders("google")), []);
+  assert.deepEqual(oauth.oauthProvidersForPlatform("ios", oauth.parseEnabledOAuthProviders("google,apple")), ["google", "apple"]);
+});
+await check("Apple: nonce — Apple dostane SHA-256(raw), Supabase raw (ochrana pred replay tokenu)", async () => {
+  const { createAppleNonce } = await import("@/lib/auth/apple-nonce");
+  const { createHash } = await import("node:crypto");
+  const a = await createAppleNonce();
+  const b = await createAppleNonce();
+  assert.match(a.raw, /^[0-9a-f]{64}$/);
+  assert.equal(a.hashed, createHash("sha256").update(a.raw).digest("hex"));
+  assert.notEqual(a.raw, b.raw);
+});
+await check("Apple: natívny plugin + capability pripravené; bez pluginu fallback na systémový prehliadač; callback routing", () => {
+  const client = read("lib/auth/oauth-client.ts");
+  assert.match(client, /signInWithIdToken\(\{ provider: "apple", token: identityToken, nonce: nonce\.raw \}\)/);
+  assert.match(client, /if \(native !== "unavailable"\) return native;/);
+  assert.match(client, /navigateHard\("\/auth\/callback\?oauth=apple"\)/);
+  const swift = read("mobile/ios/App/App/EsbluAppleSignInPlugin.swift");
+  assert.match(swift, /request\.nonce = hashedNonce/);
+  assert.match(swift, /\^\[0-9a-f\]\{64\}\$/);
+  assert.match(read("mobile/ios/App/App/App.entitlements"), /com\.apple\.developer\.applesignin/);
+  assert.match(read("app/components/auth/SocialAuthButtons.tsx"), /bg-black/, "Apple HIG tlačidlo");
+});
+
+// ============================================================================= BUNDLE VERIFIER + PATH LEAK
+await check("verify:mobile-bundle: webpack bundle → jasné odmietnutie (exit 3), lokálna cesta → FAIL", async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { spawnSync } = await import("node:child_process");
+  const mk = (chunk: string) => {
+    const d = mkdtempSync(path.join(tmpdir(), "esblu-bundle-"));
+    mkdirSync(path.join(d, "_next", "static", "chunks"), { recursive: true });
+    writeFileSync(path.join(d, "_next", "static", "chunks", "a.js"), chunk);
+    writeFileSync(path.join(d, "index.html"), "<html></html>");
+    mkdirSync(path.join(d, "vozidla"), { recursive: true });
+    writeFileSync(path.join(d, "vozidla", "detail.html"), '<meta name="viewport" content="width=device-width, initial-scale=1">');
+    return d;
+  };
+  const run = (d: string) => spawnSync(process.execPath, [path.join(ROOT, "scripts/verify-mobile-bundle.mjs"), d], { encoding: "utf8" });
+  const webpack = run(mk("console.log(1)"));
+  assert.equal(webpack.status, 3);
+  assert.match(webpack.stderr, /NIE JE z Turbopacku/);
+  const leak = run(mk('globalThis.TURBOPACK||[];var p="/home/builder/esblu/legal"'));
+  assert.match(leak.stdout, /FAIL  bez lokálnych ciest build stroja/);
+  const clean = run(mk("globalThis.TURBOPACK||[];"));
+  assert.match(clean.stdout, /OK    bez lokálnych ciest build stroja/);
+});
+await check("ESBLU_LEGAL_CONTENT_ROOT nie je v mobile/next.config env; legal/ sa nájde bez neho", async () => {
+  const cfg = read("mobile/next.config.ts");
+  assert.doesNotMatch(cfg, /ESBLU_LEGAL_CONTENT_ROOT:/);
+  assert.doesNotMatch(read("lib/legal-content.ts"), /process\.env\.ESBLU_LEGAL_CONTENT_ROOT/);
+});
+
+// ============================================================================= NAVIGATION
+await check("navigácia: odkazy v právnych textoch a vo výsledkoch hľadania idú cez AppLink (mobile-safe)", async () => {
+  const legal = read("app/components/LegalMarkdown.tsx");
+  assert.match(legal, /<AppLink\s/);
+  assert.doesNotMatch(legal, /from "next\/link"/);
+  assert.match(read("app/components/Dashboard.tsx"), /<AppLink\s+key=\{index\}\s+href=\{result\.href\}/);
+  const routes = await import("@/lib/app-routes");
+  assert.equal(routes.resolveAppHref("/cennik", true), null, "web-only cieľ v appke = bez odkazu");
+  assert.equal(routes.resolveAppHref("/vozidla/11111111-1111-4111-8111-111111111111", true), "/vozidla/detail?id=11111111-1111-4111-8111-111111111111");
+  assert.equal(routes.resolveAppHref("//evil.example/x", true), null);
+});
+
+// ============================================================================= AASA / ASSETLINKS
+await check("AASA / assetlinks šablóny: placeholdery, mimo public/, render fail-closed", async () => {
+  const { renderDeepLinkFiles } = await import("../scripts/render-deep-link-files.mjs");
+  assert.throws(() => renderDeepLinkFiles({ teamId: "__APPLE_TEAM_ID__", playSha256: "x" }), /Team ID/);
+  assert.throws(() => renderDeepLinkFiles({ teamId: "ABCDE12345", playSha256: "AA:BB" }), /SHA-256/);
+  const ok = renderDeepLinkFiles({ teamId: "ABCDE12345", playSha256: Array(32).fill("AB").join(":") });
+  assert.match(ok.aasa, /ABCDE12345\.com\.esblu\.app/);
+  assert.equal(existsSync(path.join(ROOT, "public/.well-known/apple-app-site-association")), false, "nič nenasadené na web");
+});
+
+// ============================================================================= ICON / SPLASH
+await check("ikona: generátor fail-closed bez 1024×1024 zdroja; splash zo schváleného brand assetu", async () => {
+  const { spawnSync } = await import("node:child_process");
+  const r = spawnSync("python3", [path.join(ROOT, "scripts/generate-mobile-assets.py"), "icon"], { encoding: "utf8" });
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr + r.stdout, /1024×1024/);
 });
 
 console.log(`\nmobile-platform: ${passed} passed, ${failed} failed`);

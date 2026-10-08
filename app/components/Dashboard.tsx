@@ -39,6 +39,7 @@ import { FolderIcon } from "@/app/components/icons/AppIcons";
 import { downloadDocumentPackage, PackageDownloadError } from "@/lib/document-package-client";
 import { describePackageError, describePackageOutcome } from "@/app/components/folders/package-messages";
 import { signOutOnThisDevice } from "@/lib/sign-out";
+import { AppLink } from "@/app/components/AppLink";
 
 function getGreeting(t: (key: string) => string) {
   const hour = new Date().getHours();
@@ -1080,7 +1081,7 @@ export default function Dashboard() {
                   </p>
                 ) : (
                   searchResults.map((result, index) => (
-                    <Link
+                    <AppLink
                       key={index}
                       href={result.href}
                       className="surface-card-hover block rounded-2xl border border-subtle bg-surface-1/60 p-4 transition"
@@ -1092,7 +1093,7 @@ export default function Dashboard() {
                         {result.title}
                       </p>
                       <p className="text-sm text-secondary">{result.subtitle}</p>
-                    </Link>
+                    </AppLink>
                   ))
                 ))}
             </div>

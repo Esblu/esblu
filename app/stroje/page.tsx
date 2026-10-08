@@ -49,6 +49,10 @@ import { MachineIcon, PlusIcon, TrashIcon } from "@/app/components/icons/AppIcon
 import { compressImage } from "@/lib/image-compress";
 import { navigateHard } from "@/lib/app-navigation";
 import { confirmAction } from "@/app/components/ui/AppDialog";
+import { insertIdempotent, mutationKeyFor, resetMutationKey, type InsertDb, type MutationKeyRef } from "@/lib/idempotent-insert";
+
+// Idempotency kľúče pre retry toho istého vytvorenia (lib/idempotent-insert.ts).
+const MACHINE_CREATE_MUTATION: MutationKeyRef = { current: null };
 
 /** Jedna šablóna stĺpcov pre hlavičku aj riadky registra. */
 const MACHINE_COLUMNS =
@@ -377,12 +381,14 @@ export default function StrojePage() {
 
       // `select().single()` potrebujeme kvôli id — bez neho by sme nemali
       // kam fotku priradiť. RLS zostáva jediná autorizácia.
-      const { data: created, error } = await supabase
-        .from("machines")
-        .insert(payload)
-        .select("id")
-        .single();
-      if (error) throw error;
+      const { data: created } = await insertIdempotent<{ id: string }>(
+        supabase as unknown as InsertDb,
+        "machines",
+        payload,
+        mutationKeyFor(MACHINE_CREATE_MUTATION, payload),
+        "id"
+      );
+      resetMutationKey(MACHINE_CREATE_MUTATION);
 
       let failedPhotos = 0;
       if (created?.id && pendingPhotos.length > 0) {

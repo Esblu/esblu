@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { PackageEntityType } from "@/lib/invoicing/document-package";
+import { insertIdempotent, mutationKeyFor, resetMutationKey, type InsertDb, type MutationKeyRef } from "@/lib/idempotent-insert";
 
 // =============================================================================
 // Priečinky dokladov — prístup k dátam (klient aj server, vždy pod RLS).
@@ -129,22 +130,24 @@ export async function createDocumentFolder(
   db: SupabaseClient,
   companyId: string,
   userId: string,
-  rawName: string
+  rawName: string,
+  options: { mutationRef?: MutationKeyRef } = {}
 ): Promise<{ ok: true; folder: { id: string; name: string } } | { ok: false; error: "DUPLICATE_NAME" | "INVALID_NAME" | "FORBIDDEN" | "FAILED" }> {
   const name = normalizeFolderName(rawName);
   if (!name) return { ok: false, error: "INVALID_NAME" };
 
-  const { data, error } = await db
-    .from("document_folders")
-    .insert({ company_id: companyId, name, created_by: userId })
-    .select("id, name")
-    .maybeSingle();
-
-  if (error || !data) {
-    const mapped = mapError(error);
+  // Idempotencia (Mobile Platform): retry po stratenej odpovedi vráti ten istý
+  // priečinok — predtým by skončil falošným „priečinok s týmto názvom už existuje".
+  const row = { company_id: companyId, name, created_by: userId };
+  const mutationId = options.mutationRef ? mutationKeyFor(options.mutationRef, row) : null;
+  try {
+    const { data } = await insertIdempotent<{ id: string; name: string }>(db as unknown as InsertDb, "document_folders", row, mutationId, "id, name");
+    if (options.mutationRef) resetMutationKey(options.mutationRef);
+    return { ok: true, folder: data };
+  } catch (error) {
+    const mapped = mapError(error as { code?: string } | null);
     return { ok: false, error: mapped.ok ? "FAILED" : (mapped.error as "DUPLICATE_NAME" | "FORBIDDEN" | "FAILED") };
   }
-  return { ok: true, folder: data as { id: string; name: string } };
 }
 
 export async function renameDocumentFolder(

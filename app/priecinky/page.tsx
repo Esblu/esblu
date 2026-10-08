@@ -24,6 +24,10 @@ import { EmptyState, LoadingRows } from "@/app/components/ui/Primitives";
 import { FolderIcon, ChevronRightIcon } from "@/app/components/icons/AppIcons";
 import { navigateHard } from "@/lib/app-navigation";
 import { folderDetailHref } from "@/lib/entity-links";
+import { type MutationKeyRef } from "@/lib/idempotent-insert";
+
+// Idempotency kľúč pre retry toho istého vytvorenia (lib/idempotent-insert.ts).
+const FOLDER_CREATE_MUTATION: MutationKeyRef = { current: null };
 
 // =============================================================================
 // /priecinky — zoznam priečinkov dokladov.
@@ -64,7 +68,7 @@ export default function FoldersPage() {
     if (!membership || busy) return;
     setBusy(true);
     setNotice(null);
-    const result = await createDocumentFolder(supabase, membership.company_id, userId, newName);
+    const result = await createDocumentFolder(supabase, membership.company_id, userId, newName, { mutationRef: FOLDER_CREATE_MUTATION });
     setBusy(false);
     if (!result.ok) {
       setNotice({

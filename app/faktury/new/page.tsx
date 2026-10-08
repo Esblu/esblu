@@ -32,6 +32,10 @@ import { listBusinessPartners, type BusinessPartner } from "@/lib/business-partn
 import { todayLocalDate } from "@/lib/local-date";
 import { navigateHard } from "@/lib/app-navigation";
 import NewPartnerFromRegistry from "@/app/components/company-lookup/NewPartnerFromRegistry";
+import { type MutationKeyRef } from "@/lib/idempotent-insert";
+
+// Idempotency kľúč pre retry toho istého vytvorenia (lib/idempotent-insert.ts).
+const DRAFT_INVOICE_MUTATION: MutationKeyRef = { current: null };
 
 // Dobropis/ťarchopis sa zakladá z detailu opravovanej faktúry
 // ("Vytvoriť dobropis" tlačidlo v InvoiceDetailView) s ?corrects=<id> —
@@ -190,7 +194,7 @@ export default function NewInvoicePage() {
         variable_symbol: variableSymbol.trim() || null,
         payment_terms_days: Number.isFinite(parsedTerms) ? parsedTerms : null,
         corrects_invoice_id: correctsInvoiceId,
-      });
+      }, undefined, { mutationRef: DRAFT_INVOICE_MUTATION });
 
       router.push(invoiceDetailHref(created.id));
     } catch (error) {

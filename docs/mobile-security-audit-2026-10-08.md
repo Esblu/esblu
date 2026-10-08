@@ -21,9 +21,9 @@
 |---|---|---|
 | Secrets v mobile bundli | OK | Iba `NEXT_PUBLIC_*` (Supabase URL + anon kľúč, voliteľné originy). `service_role` iba v `lib/supabase-admin.ts`, importovaný výlučne z `app/api/**`. Test: žiadny `"use client"` súbor nečíta server-only env |
 | Natívne secrets | OK | `google-services.json`, `GoogleService-Info.plist`, `keystore.properties`, APNs `.p8` nie sú v repe; APNs/FCM kľúče iba v server env |
-| `ESBLU_LEGAL_CONTENT_ROOT` v `mobile/next.config.ts` `env` | LOW (nález) | Absolútna cesta build stroja by sa vložila do bundlu, ak by ju čítal klientsky kód. Dnes iba serverové legal stránky. Neopravené (mimo scope), sledovať |
+| `ESBLU_LEGAL_CONTENT_ROOT` | FIXED | Odstránené z `env`; verifier kontroluje lokálne cesty v JS / HTML (prázdne na mobile-platform aj main) |
 | OAuth tokeny | OK | PKCE (`flowType: "pkce"`). Tokeny nie sú v URL ani histórii; `code` bez verifiera je bezcenný |
-| Lokálne úložisko | ACCEPTED RISK | Supabase session v localStorage WebView (app sandbox). Na rootnutom alebo jailbreaknutom zariadení čitateľná. Secure storage (Keychain/Keystore) by vyžadoval vlastný storage adapter + plugin → navrhované pre ďalšiu fázu |
+| Lokálne úložisko | FIXED | Session + PKCE verifier v Android Keystore (AES-256-GCM) / iOS Keychain (ThisDeviceOnly) cez vlastný plugin; bezpečná migrácia z localStorage; logout čistí aj pri offline signOut |
 | Deep link injection | OK | Prísny allowlist (host, `https`, presné cesty, 64-hex token, custom scheme iba `auth/callback`). Push tap iba `{screen, UUID}` |
 | WebView navigácia | OK | Žiadny `server.url` ani `allowNavigation`. Externé URL cez `@capacitor/browser` alebo systém |
 | Otváranie ľubovoľných URL | OK | `openExternalUrl` sa volá iba so signed URL zo servera alebo kanonickými stránkami Esblu |
@@ -34,11 +34,18 @@
 | Push token ownership | OK | RPC ako prihlásený používateľ, väzba na `auth_session_id`; cudzí token sa neprevezme; doručenie iba živej session + aktívnemu členstvu |
 | Ukradnuté zariadenie | OK | „Odhlásiť všade" / reset hesla odvolá sessions; refresh zlyhá → `SIGNED_OUT` → login; push zastavený (väzba na session) |
 | Push obsah na lockscreene | OK | Preferencia „náhľad správ" (`showMessagePreview`); faktúry sa v push neposielajú |
-| Duplicitné vytvorenie po stratenej odpovedi | OPEN (MED) | Idempotency kľúče iba pri AI scan. Návrh: idempotency kľúč pri insert RPC (DB migrácia so súhlasom) |
-| Dynamické cesty (static export) | OK | `resolveAppHref` / `AppLink`; 2 `next/link` bez resolvera (legal markdown, dashboard search) — LOW |
+| Duplicitné vytvorenie po stratenej odpovedi | FIXED (staging) | `client_mutation_id` (7 tabuliek), tenant-scoped unique index. PGlite: retry, odlišný obsah, tenant scope, RLS, rollback. esblu-test: skutočný súbeh (2. transakcia čakala a dostala 23505), replay čítanie cez RLS, iná firma s rovnakým kľúčom OK. Produkcia: čaká na súhlas |
+| Dynamické cesty (static export) | FIXED | aj legal markdown a výsledky hľadania cez `AppLink` |
 
 ## Odporúčané ďalšie kroky (bez zásahu do produkcie)
 
 1. Idempotency pre create RPC (faktúra draft, partner, vozidlo, stroj, sklad, priečinok, chat) — **DB migrácia → potrebný súhlas**.
 2. Secure storage adapter pre Supabase session (Keychain/Keystore) — nový natívny plugin, bez enrollmentu.
 3. Odstrániť `ESBLU_LEGAL_CONTENT_ROOT` z `env` bloku (presunúť do serverového runtime).
+
+## Zostávajúce otvorené body (po aktualizácii 2)
+
+- **Natívny kód nie je skompilovaný:** Java (Keystore plugin), Swift (Keychain, Apple Sign-In, MainViewController). Treba REAL DEVICE / Xcode / Android Studio build.
+- **Apple + beta gate:** pozvánková výnimka iba pre Google (zámerne). Relay e-maily Apple → allowlist.
+- **Root / jailbreak:** Keystore a Keychain chránia v pokoji. Na kompromitovanom zariadení ostáva riziko čítania pamäte procesu (mimo rozsahu).
+- **Idempotencia pre serverové cesty** (hlasový asistent `createDraftInvoice` / `createDocumentFolder`) zatiaľ bez kľúča. Sieťové retry tam nerobí klient. Nízke riziko.

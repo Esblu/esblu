@@ -48,8 +48,18 @@ const CONTENT_FOLDER_BY_TYPE: Record<LegalDocumentType, string> = {
 // odovzdá sa cez build-time env premennú ESBLU_LEGAL_CONTENT_ROOT. Web
 // build túto premennú nenastavuje vôbec, takže tam zostáva pôvodné
 // process.cwd() správanie bez zmeny.
-const LEGAL_CONTENT_ROOT =
-  process.env.ESBLU_LEGAL_CONTENT_ROOT ?? path.join(process.cwd(), "legal");
+//
+// Mobile Platform (2026-10-08): ESBLU_LEGAL_CONTENT_ROOT sa už NEVKLADÁ cez
+// `env` blok mobile/next.config.ts — Next.js by absolútnu cestu build stroja
+// vložil do bundlu. Namiesto toho sa legal/ nájde pri serverovom
+// prerenderingu relatívne k cwd: web (cwd = koreň) → ./legal, mobile
+// (cwd = mobile/) → ../legal. Nič z toho sa nedostane do klientskeho JS.
+function resolveLegalContentRoot(): string {
+  const candidates = [path.join(process.cwd(), "legal"), path.join(process.cwd(), "..", "legal")];
+  return candidates.find((candidate) => fs.existsSync(path.join(candidate, "terms"))) ?? candidates[0];
+}
+
+const LEGAL_CONTENT_ROOT = resolveLegalContentRoot();
 
 /**
  * Cesta k nemennému .md súboru pre danú (document_type, version) — presne

@@ -4,11 +4,12 @@
 //   1. odregistrovať push notifikácie tohto zariadenia (ak sú zapnuté),
 //   2. vyčistiť lokálne artefakty relácie (jednorazový OAuth stav,
 //      sessionStorage prefill formulárov) — nie jazyk ani installationId,
-//   3. Supabase signOut (zmaže session z localStorage WebView/prehliadača).
+//   3. Supabase signOut + v natívnej appke vyčistenie Keystore/Keychain
+//      (aj pri zlyhaní servera — lokálne odhlásenie má prednosť).
 // Žiadny krok nesmie zablokovať odhlásenie.
 // =============================================================================
 
-import { supabase } from "@/lib/supabase";
+import { mobileAuthStorage, supabase } from "@/lib/supabase";
 import { disablePushOnThisDevice } from "@/lib/push/client";
 
 /** Kľúče localStorage viazané na reláciu (nie na zariadenie). */
@@ -36,5 +37,11 @@ export async function signOutOnThisDevice(): Promise<void> {
     // Push nemusí byť zapnutý/podporovaný — odhlásenie nesmie zlyhať kvôli nemu.
   }
   clearSessionArtifacts();
-  await supabase.auth.signOut();
+  try {
+    await supabase.auth.signOut();
+  } finally {
+    // Natívna appka: Keystore/Keychain musí byť prázdny aj keď server
+    // signOut zlyhá (offline) — lokálne odhlásenie má vždy prednosť.
+    await mobileAuthStorage?.clearAll().catch(() => undefined);
+  }
 }

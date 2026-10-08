@@ -882,7 +882,7 @@ await check("DUPLICATE IČO flow: faktúra ponúkne existujúceho partnera, DB c
   assert.match(panel, /existing !== null/, "vytvorenie je pri duplicite zablokované");
   assert.match(panel, /onSelectExisting\(existing\)/);
   assert.match(panel, /BUSINESS_PARTNER_DUPLICATE_ICO_ERROR/);
-  assert.match(panel, /createBusinessPartner\(companyId, userId, payload\)/, "existujúca cesta (RLS)");
+  assert.match(panel, /createBusinessPartner\(companyId, userId, payload(, \{ mutationRef: [A-Z_]+ \})?\)/, "existujúca cesta (RLS; idempotency kľúč voliteľný)");
   assert.match(panel, /validateBusinessPartnerForm\(form\)/);
   assert.match(read("lib/business-partners.ts"), /business_partners_company_ico_unique/);
   const invoice = read("app/faktury/new/page.tsx");

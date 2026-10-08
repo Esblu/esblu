@@ -24,6 +24,10 @@ import {
 import EntityPickerModal from "./EntityPickerModal";
 import { notifyChatMessage } from "@/lib/push/client";
 import { confirmAction } from "@/app/components/ui/AppDialog";
+import { insertIdempotent, mutationKeyFor, resetMutationKey, type InsertDb, type MutationKeyRef } from "@/lib/idempotent-insert";
+
+// Idempotency kľúč pre retry tej istej správy (lib/idempotent-insert.ts).
+const CHAT_MESSAGE_MUTATION: MutationKeyRef = { current: null };
 
 const PAGE_SIZE = 50;
 
@@ -409,21 +413,25 @@ export default function ChatMessageView({
     setComposerError(null);
 
     try {
-      const { data: inserted, error: insertError } = await supabase
-        .from("chat_messages")
-        .insert({
-          conversation_id: conversationId,
-          author_id: myUserId,
-          body: trimmed,
-        })
-        .select("*")
-        .single();
+      // Idempotencia (Mobile Platform): ten istý obsah správy pri retry po
+      // stratenej odpovedi = ten istý kľúč → druhá správa nevznikne.
+      const messageRow = { conversation_id: conversationId, author_id: myUserId, body: trimmed };
+      const mutationId = mutationKeyFor(CHAT_MESSAGE_MUTATION, {
+        ...messageRow,
+        file: pendingFile ? `${pendingFile.name}:${pendingFile.size}` : null,
+        entity: pendingEntity ?? null,
+      });
+      const { data: inserted, replayed } = await insertIdempotent<ChatMessage>(
+        supabase as unknown as InsertDb,
+        "chat_messages",
+        messageRow,
+        mutationId
+      );
 
-      if (insertError) throw insertError;
-
-      const message = inserted as ChatMessage;
+      const message = inserted;
       // Push príjemcom (server overí autora, firmu a konverzáciu). Nečaká sa.
-      void notifyChatMessage(message.id);
+      // Replay (správa už existovala) push neopakuje.
+      if (!replayed) void notifyChatMessage(message.id);
       setMessages((current) =>
         messageIdsRef.current.has(message.id) ? current : [...current, message]
       );
@@ -479,6 +487,8 @@ export default function ChatMessageView({
         }));
       }
 
+      // Úspech → ďalšia (aj rovnaká) správa dostane nový kľúč.
+      resetMutationKey(CHAT_MESSAGE_MUTATION);
       setText("");
       setPendingFile(null);
       setPendingEntity(null);

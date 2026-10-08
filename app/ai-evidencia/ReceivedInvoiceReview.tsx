@@ -47,6 +47,10 @@ import {
   docField,
   docLabel,
 } from "@/app/components/document/DocumentLayout";
+import { type MutationKeyRef } from "@/lib/idempotent-insert";
+
+// Idempotency kľúč pre retry toho istého vytvorenia (lib/idempotent-insert.ts).
+const SUPPLIER_CREATE_MUTATION: MutationKeyRef = { current: null };
 
 // =============================================================================
 // Review obrazovka prijatej faktúry.
@@ -416,7 +420,7 @@ export default function ReceivedInvoiceReview({
         postal_code: candidate.supplier.postal_code,
         country_code: candidate.supplier.country_code,
         email: candidate.supplier.email,
-      });
+      }, { mutationRef: SUPPLIER_CREATE_MUTATION });
 
       setPartners((current) => [...current, created]);
       setSupplierId(created.id);

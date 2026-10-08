@@ -114,6 +114,10 @@ import {
 } from "@/app/components/icons/AppIcons";
 import { navigateHard } from "@/lib/app-navigation";
 import { confirmAction } from "@/app/components/ui/AppDialog";
+import { insertIdempotent, mutationKeyFor, resetMutationKey, type InsertDb, type MutationKeyRef } from "@/lib/idempotent-insert";
+
+// Idempotency kľúče pre retry toho istého vytvorenia (lib/idempotent-insert.ts).
+const INVENTORY_CREATE_MUTATION: MutationKeyRef = { current: null };
 
 type StockFilter = "all" | StockStatus;
 
@@ -325,13 +329,14 @@ export default function SkladPage() {
       return;
     }
 
-    const { data, error } = await supabase
-      .from("inventory_items")
-      .insert(payload)
-      .select("id")
-      .single();
-
-    if (error) throw error;
+    const { data } = await insertIdempotent<{ id: string }>(
+      supabase as unknown as InsertDb,
+      "inventory_items",
+      payload,
+      mutationKeyFor(INVENTORY_CREATE_MUTATION, payload),
+      "id"
+    );
+    resetMutationKey(INVENTORY_CREATE_MUTATION);
 
     savedItemId = data.id;
     createdNewItem = true;

@@ -42,7 +42,7 @@ READY = hotové v kóde, PARTIAL = funguje s výhradou, MISSING = chýba.
 | Push: povolenie, refresh, logout, multi-device, tap, firma | READY | PARTIAL (kód rovnaký) | REAL DEVICE TEST |
 | E-mail + heslo, reset, overenie e-mailu | READY | READY | |
 | Google Sign-In | READY (Custom Tab + PKCE, custom scheme) | **zámerne vypnutý** | 4.8: bez Sign in with Apple sa Google na iOS neponúkne. CONFIG: Supabase redirect allowlist |
-| Sign in with Apple | MISSING | MISSING | APPLE USER ACTION + CODE (rozhodnutie, sekcia 4) |
+| Sign in with Apple | READY (systémový prehliadač) | READY (natívne, fail closed) | APPLE USER ACTION: Services ID, kľúč, capability, Supabase provider |
 | Session po reštarte | READY (Supabase localStorage vo WebView, PKCE) | READY | |
 | Refresh tokenu po návrate z pozadia | READY (nové) | READY (nové) | |
 | Vypršaná / odvolaná session → login | READY (nové) | READY (nové) | |
@@ -59,7 +59,7 @@ READY = hotové v kóde, PARTIAL = funguje s výhradou, MISSING = chýba.
 | Ochrana pred dvojitým odoslaním | PARTIAL | PARTIAL | pozri sekciu 5 |
 | Zrušenie účtu v appke | READY (opravené) | READY | |
 | Hlasový asistent | READY (`RECORD_AUDIO`) | PARTIAL (usage string; WKWebView `getUserMedia`) | REAL DEVICE TEST |
-| Ikony / splash | READY (Esblu) | **MISSING** (default Capacitor ikona) | CODE/CONFIG: dodať Esblu AppIcon 1024 |
+| Ikony / splash | ikona **MISSING** (default Capacitor), splash READY | ikona **MISSING**, splash READY | jediný vstup: 1024×1024 Esblu master ikona (generátor pripravený) |
 | Nákup predplatného | — (mimo scope) | — | billing vetva |
 
 ## 3. Funkčná parita web ↔ mobile
@@ -140,3 +140,18 @@ READY = hotové v kóde, PARTIAL = funguje s výhradou, MISSING = chýba.
 - Android `assembleDebug` / `bundleRelease`: sandbox nemá Android SDK a sťahovanie je blokované (403) → **REAL DEVICE TEST** na tvojom PC (Android Studio).
 - iOS `xcodebuild`: vyžaduje macOS + Xcode → **XCODE NOT YET VERIFIED**.
 - `npm run verify:mobile-bundle`: kontroly predpokladajú Turbopack výstup. V sandboxe s `--webpack` zlyhá rovnakých 23 kontrol aj na čistom `main` (nie regresia). Treba spustiť po bežnom `npm run build -w mobile` na dev stroji.
+
+## 9. Aktualizácia 2 (2026-10-08) — autonómne dokončenie
+
+| Oblasť | Stav |
+|---|---|
+| **Secure storage** | `lib/mobile/secure-storage.ts` je Supabase auth storage adapter. Natívne pluginy: Android Keystore AES-GCM, iOS Keychain ThisDeviceOnly. Migrácia z localStorage: najprv zápis do secure úložiska, až potom zmazanie legacy kópie; zlyhaný zápis používateľa neodhlási. Logout vyčistí úložisko aj pri zlyhaní servera. Web je nezmenený. Testy: cold start, vypršaná session → refresh cez skutočný supabase-js, resume, logout |
+| **Idempotencia** | `client_mutation_id` + čiastočný unique index `(company_id, client_mutation_id)` na 7 tabuľkách (`20261008130000`, rollback). Klient: `lib/idempotent-insert.ts`. Rovnaký obsah = rovnaký kľúč; iný obsah alebo úspech = nový kľúč. Pri 23505 sa záznam s kľúčom prečíta cez RLS a vráti ako replay. Ak stĺpec v DB chýba, zapíše sa bez kľúča |
+| **Sign in with Apple** | Pripravené. Fail closed bez konfigurácie, Apple credentials a capability |
+| **Navigácia** | `LegalMarkdown` a výsledky hľadania idú cez `AppLink` / `resolveAppHref` |
+| **Legal root** | `ESBLU_LEGAL_CONTENT_ROOT` je odstránený z mobilného `env`; `lib/legal-content.ts` nájde `../legal` sám |
+| **verify:mobile-bundle** | Pôvodných 23 zlyhaní spôsobil **sandbox build `--webpack`**, nie bundling problém: produkčný Turbopack build (aj na čistom `main`) prejde. Verifier teraz najprv overí Turbopack a pri webpacku sa zastaví s jasnou správou (exit 3). Pribudla kontrola lokálnych ciest build stroja |
+| **AASA / assetlinks** | Šablóny + fail-closed render, mimo `public/` |
+| **Ikony / splash** | Splash je zo schválenej PWA ikony. App ikony (iOS aj Android sú **default Capacitor**) čakajú na jediný vstup: 1024×1024 master |
+
+**Uzavretá beta a Apple:** pozvánková výnimka Auth hooku platí iba pre Google. Apple prihlásenie prejde iba s e-mailom z beta allowlistu. Pozor: „Hide My Email" relay adresa na allowliste nebude. Rozšírenie hooku je samostatná bezpečnostná revízia (DB).

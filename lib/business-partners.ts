@@ -4,6 +4,7 @@ import {
   normalizeCurrencyCode,
   validateEmailFormat,
 } from "@/lib/company-billing-profile";
+import { insertIdempotent, mutationKeyFor, resetMutationKey, type InsertDb, type MutationKeyRef } from "@/lib/idempotent-insert";
 
 // =============================================================================
 // business_partners — company-scoped master data (zákazníci/dodávatelia).
@@ -315,24 +316,24 @@ export async function createBusinessPartner(
   payload: Omit<
     BusinessPartner,
     "id" | "company_id" | "created_at" | "updated_at" | "created_by" | "updated_by"
-  >
+  >,
+  options: { mutationRef?: MutationKeyRef } = {}
 ): Promise<BusinessPartner> {
-  const { data, error } = await supabase
-    .from("business_partners")
-    .insert({
+  const row = {
       ...payload,
       company_id: companyId,
       created_by: userId,
       updated_by: userId,
-    })
-    .select("*")
-    .single();
-
-  if (error) {
-    normalizeUpsertError(error);
+  };
+  // Idempotencia (Mobile Platform): retry toho istého obsahu nevytvorí druhého partnera.
+  const mutationId = options.mutationRef ? mutationKeyFor(options.mutationRef, row) : null;
+  try {
+    const { data } = await insertIdempotent<BusinessPartner>(supabase as unknown as InsertDb, "business_partners", row, mutationId);
+    if (options.mutationRef) resetMutationKey(options.mutationRef);
+    return data;
+  } catch (error) {
+    normalizeUpsertError(error as { code?: string; message: string });
   }
-
-  return data as BusinessPartner;
 }
 
 export async function updateBusinessPartner(
@@ -392,11 +393,10 @@ export type SupplierFromReviewInput = {
 export async function createSupplierFromReview(
   companyId: string,
   userId: string,
-  input: SupplierFromReviewInput
+  input: SupplierFromReviewInput,
+  options: { mutationRef?: MutationKeyRef } = {}
 ): Promise<BusinessPartner> {
-  const { data, error } = await supabase
-    .from("business_partners")
-    .insert({
+  const row = {
       company_id: companyId,
       kind: "supplier" as BusinessPartnerKind,
       legal_name: input.legal_name.trim(),
@@ -411,15 +411,16 @@ export async function createSupplierFromReview(
       email: emptyToNull(input.email ?? ""),
       created_by: userId,
       updated_by: userId,
-    })
-    .select("*")
-    .single();
-
-  if (error) {
-    normalizeUpsertError(error);
+  };
+  // Idempotencia (Mobile Platform): retry toho istého obsahu nevytvorí druhého partnera.
+  const mutationId = options.mutationRef ? mutationKeyFor(options.mutationRef, row) : null;
+  try {
+    const { data } = await insertIdempotent<BusinessPartner>(supabase as unknown as InsertDb, "business_partners", row, mutationId);
+    if (options.mutationRef) resetMutationKey(options.mutationRef);
+    return data;
+  } catch (error) {
+    normalizeUpsertError(error as { code?: string; message: string });
   }
-
-  return data as BusinessPartner;
 }
 
 export async function deleteBusinessPartner(id: string): Promise<void> {

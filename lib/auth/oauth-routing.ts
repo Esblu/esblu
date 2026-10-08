@@ -115,11 +115,14 @@ export function mayRecordRegistrationConsent(pending: OAuthPending | null, sessi
  *   - bežný prehliadač (Android/iOS/desktop) a Android PWA: áno.
  */
 /**
- * Poskytovatelia, ktorých appka vôbec smie ponúknuť. Apple zatiaľ NIE (chýba
- * Apple Developer Program) — ani omylom zapnutý v konfigurácii sa neukáže.
- * Pridanie poskytovateľa = vedomá zmena tohto zoznamu + bezpečnostná revízia.
+ * Poskytovatelia, ktorých appka vôbec smie ponúknuť. Apple (Mobile Platform
+ * 2026-10-08) je pripravený, ale FAIL CLOSED: ukáže sa IBA ak ho prevádzka
+ * výslovne zapne v NEXT_PUBLIC_ESBLU_OAUTH_PROVIDERS — to sa smie až po
+ * nastavení Apple providera v Supabase (Services ID, kľúč; APPLE USER ACTION).
+ * Uzavretá beta: Apple prihlásenie prejde iba e-mailom z allowlistu —
+ * pozvánková výnimka Auth hooku platí iba pre Google (zámerne, samostatná revízia).
  */
-export const SUPPORTED_OAUTH_PROVIDERS: readonly OAuthProvider[] = ["google"];
+export const SUPPORTED_OAUTH_PROVIDERS: readonly OAuthProvider[] = ["google", "apple"];
 
 /** Zapnutí poskytovatelia z konfigurácie (NEXT_PUBLIC_ESBLU_OAUTH_PROVIDERS), orezaní na podporovaných. */
 export function parseEnabledOAuthProviders(raw: string | undefined | null): OAuthProvider[] {

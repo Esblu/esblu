@@ -55,6 +55,12 @@ export async function startOAuth(provider: OAuthProvider, options: { mode: OAuth
     // Bez úložiska: pozvánka sa po návrate nedá dokončiť automaticky — používateľ
     // ju otvorí znova z odkazu; nič iné sa nemení.
   }
+  if (provider === "apple" && runtimePlatform() === "ios") {
+    // iOS: natívne Sign in with Apple (ASAuthorization) → signInWithIdToken.
+    // Plugin chýba (starší build) → rovnaký systémový prehliadač ako Google.
+    const native = await nativeAppleSignIn();
+    if (native !== "unavailable") return native;
+  }
   if (runtimeOAuthFlow() === "system_browser") {
     // Natívna appka: URL poskytovateľa v systémovom prehliadači (Custom Tab /
     // SFSafariViewController), NIKDY vo WebView. code_verifier ostáva v tomto WebView.
@@ -94,4 +100,30 @@ export function peekOAuthPending(): OAuthPending | null {
   } catch {
     return null;
   }
+}
+
+type AppleSignInPlugin = { signIn(options: { nonce: string }): Promise<{ identityToken: string }> };
+
+/**
+ * Natívne Sign in with Apple. Výsledok: null = prihlásený (presmerovanie na
+ * /auth/callback?oauth=apple, kde prebehne rovnaké smerovanie ako pri Google:
+ * členstvo / onboarding / pozvánka), "unavailable" = plugin nie je v builde,
+ * inak kód chyby. Bez capability a Apple providera v Supabase zlyhá (fail closed).
+ */
+async function nativeAppleSignIn(): Promise<string | null | "unavailable"> {
+  const { Capacitor, registerPlugin } = await import("@capacitor/core");
+  if (!Capacitor.isNativePlatform() || !Capacitor.isPluginAvailable("EsbluAppleSignIn")) return "unavailable";
+  const { createAppleNonce } = await import("@/lib/auth/apple-nonce");
+  const nonce = await createAppleNonce();
+  let identityToken: string;
+  try {
+    ({ identityToken } = await registerPlugin<AppleSignInPlugin>("EsbluAppleSignIn").signIn({ nonce: nonce.hashed }));
+  } catch (error) {
+    return /CANCELED/.test(String((error as { message?: string })?.message ?? error)) ? "cancelled" : "apple_sign_in_failed";
+  }
+  const { error } = await supabase.auth.signInWithIdToken({ provider: "apple", token: identityToken, nonce: nonce.raw });
+  if (error) return error.message;
+  const { navigateHard } = await import("@/lib/app-navigation");
+  navigateHard("/auth/callback?oauth=apple");
+  return null;
 }

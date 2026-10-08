@@ -1,6 +1,6 @@
-import Link from "next/link";
 import type { ReactNode } from "react";
 import { LegalSection } from "@/app/components/PublicLegalLayout";
+import { AppLink } from "@/app/components/AppLink";
 
 // =============================================================================
 // Minimálny, zámerne bez-závislostný renderer pre nemenný obsah v legal/
@@ -118,13 +118,13 @@ function renderInline(text: string, keyPrefix: string): ReactNode[] {
 
       if (href.startsWith("/")) {
         nodes.push(
-          <Link
+          <AppLink
             key={`${keyPrefix}-l${idx++}`}
             href={href}
             className="font-semibold text-blue-700 underline decoration-blue-300 underline-offset-4"
           >
             {linkText}
-          </Link>
+          </AppLink>
         );
       } else {
         const isMailto = href.startsWith("mailto:");

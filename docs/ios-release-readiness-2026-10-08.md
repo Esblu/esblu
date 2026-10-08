@@ -20,9 +20,9 @@ V Apple Developer **nebolo nič registrované** (žiadne App ID, certifikáty an
 | Fotoaparát / fotky / súbory | READY | `NSCameraUsageDescription`, `NSPhotoLibraryUsageDescription`, `NSPhotoLibraryAddUsageDescription` | REAL DEVICE TEST |
 | Mikrofón (hlas) | PARTIAL | `NSMicrophoneUsageDescription`; WKWebView `getUserMedia` | REAL DEVICE TEST |
 | ATS / sieť | READY | žiadne `NSAllowsArbitraryLoads`; iba HTTPS (`capacitor://localhost` origin je v CORS allowliste) | — |
-| Sign in with Apple | MISSING (zámerne) | iOS appka Google **neponúka** (App Review 4.8), iba e-mail + heslo | rozhodnutie: ponechať, alebo pridať Apple (APPLE USER ACTION + CODE) |
-| Ikony | **MISSING** | `AppIcon.appiconset` = default Capacitor ikona | CODE/CONFIG: dodať Esblu ikonu 1024×1024 bez priehľadnosti |
-| Splash | PARTIAL | default Capacitor splash | CODE/CONFIG |
+| Sign in with Apple | READY (kód), fail closed | natívne ASAuthorization (`EsbluAppleSignInPlugin.swift`, SHA-256 nonce) → `signInWithIdToken`; bez pluginu systémový prehliadač; entitlement `com.apple.developer.applesignin`. Ponúkne sa iba pri `NEXT_PUBLIC_ESBLU_OAUTH_PROVIDERS` s `apple`; Google na iOS iba spolu s Apple | APPLE USER ACTION: capability na App ID, Services ID + kľúč, Apple provider v Supabase |
+| Ikony | **MISSING (iba vstup)** | `AppIcon.appiconset` = default Capacitor ikona; generátor `scripts/generate-mobile-assets.py icon --source <1024.png>` pripravený (fail closed) | jediný vstup: 1024×1024 Esblu master ikona |
+| Splash | READY | vygenerovaný zo schválenej `public/icons/icon-512.png` | STORE REVIEW |
 | `UIRequiredDeviceCapabilities` | READY | `arm64` (pôvodné `armv7` z template opravené) | — |
 | Export compliance | PARTIAL | `ITSAppUsesNonExemptEncryption = false` (iba HTTPS z OS) | LEGAL/CLIA: potvrdiť |
 | App Store privacy labels | PARTIAL | rovnaké vstupy ako Google Data safety (`android-release-readiness`) | APPLE USER ACTION + LEGAL/CLIA |
@@ -46,3 +46,11 @@ V Xcode:
 2. Pridaj Push Notifications a Associated Domains (entitlements súbor už existuje).
 3. Spusti na simulátore a zariadení a prejdi checklist `REAL DEVICE TEST` z `mobile-architecture-2026-10-08.md`.
 4. Product → Archive → TestFlight (interné testovanie).
+
+## Aktualizácia 2 (2026-10-08)
+
+- **Keychain:** `EsbluSecureStoragePlugin.swift` (`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`, nezálohuje sa).
+  - Registrácia pluginu: `MainViewController.capacitorDidLoad`; `SceneDelegate` používa `MainViewController`.
+  - Súbory sú pridané do `project.pbxproj` (Sources).
+- **AASA:** šablóna `mobile/deep-link-templates/apple-app-site-association.template.json` s placeholderom `__APPLE_TEAM_ID__`. Render je fail-closed (`scripts/render-deep-link-files.mjs`). Nič nie je nasadené.
+- **Stále XCODE NOT YET VERIFIED:** Swift súbory nikto neskompiloval.

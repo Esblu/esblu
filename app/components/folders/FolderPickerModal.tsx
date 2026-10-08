@@ -20,6 +20,10 @@ import {
   docLabel,
 } from "@/app/components/document/DocumentLayout";
 import { FolderIcon } from "@/app/components/icons/AppIcons";
+import { type MutationKeyRef } from "@/lib/idempotent-insert";
+
+// Idempotency kľúč pre retry toho istého vytvorenia (lib/idempotent-insert.ts).
+const FOLDER_PICKER_MUTATION: MutationKeyRef = { current: null };
 
 // =============================================================================
 // Výber priečinka pre „Pridať do priečinka" / „Presunúť do priečinka".
@@ -97,7 +101,7 @@ export function FolderPickerModal({
   async function createAndApply() {
     setBusy(true);
     setError("");
-    const created = await createDocumentFolder(supabase, companyId, userId, newName);
+    const created = await createDocumentFolder(supabase, companyId, userId, newName, { mutationRef: FOLDER_PICKER_MUTATION });
     setBusy(false);
     if (!created.ok) {
       setError(errorText(created.error));

@@ -1,0 +1,13 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.esblu.app",
+      "sha256_cert_fingerprints": [
+        "D0:D0:81:55:01:54:6E:CF:F7:91:74:57:53:DB:F6:43:92:B7:D8:DA:F6:3A:DA:A5:77:0B:E0:0A:90:F6:A2:FC",
+        "__GOOGLE_PLAY_APP_SIGNING_SHA256__"
+      ]
+    }
+  }
+]
