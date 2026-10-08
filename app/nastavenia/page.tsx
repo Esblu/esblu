@@ -52,6 +52,9 @@ import { disablePushOnThisDevice } from "@/lib/push/client";
 import { navigateHard } from "@/lib/app-navigation";
 import { confirmAction } from "@/app/components/ui/AppDialog";
 
+/** Staging prepínač odkazu na Predplatné (build-time, default vypnuté). */
+const BILLING_UI_ENABLED = process.env.NEXT_PUBLIC_ESBLU_BILLING_UI === "1";
+
 /**
  * Role, ktoré sa dajú pozvať. Zrkadlí DB allowlist v
  * esblu_create_company_invite — majiteľ sa nepozýva, ten firmu zakladá.
@@ -838,6 +841,16 @@ export default function NastaveniaPage() {
       </div>
 
       <div className="mt-8 max-w-2xl space-y-6">
+        {/* Unified subscriptions (STAGING): odkaz iba ak build výslovne zapne
+            NEXT_PUBLIC_ESBLU_BILLING_UI=1. Stav aj oprávnenia rieši server. */}
+        {BILLING_UI_ENABLED && myRole && (
+          <section className="rounded-3xl border border-subtle bg-surface-1 p-5 sm:p-8 shadow-lg backdrop-blur-xl">
+            <Link href="/nastavenia/predplatne" className="text-xl sm:text-2xl font-bold text-primary underline-offset-4 hover:underline">
+              {t("subscription.title")}
+            </Link>
+          </section>
+        )}
+
         <section className="rounded-3xl border border-subtle bg-surface-1 p-5 sm:p-8 shadow-lg backdrop-blur-xl">
           <h2 className="text-xl sm:text-2xl font-bold text-primary">
             {t("settings.language.title")}
