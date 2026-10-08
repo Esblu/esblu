@@ -31,7 +31,17 @@
 | Webhook / feed: `messageId` + `transactionId` → RPC | `lib/einvoice/inbound/webhook.ts`, `store.ts`, `supabase-store.ts` |
 | DB (staging): `einvoice_outbound.sbdh_instance_identifier`, `as4_message_id`, indexy, RPC `esblu_einvoice_outbound_record_transport` (iba service_role, write-once) | `supabase/migrations/20261008100011_einvoice_outbound_transport_ids.sql` + rollback |
 
-## 2. Overiť v sandboxe (nie blocker kódu)
+## 2a. OVERENÉ v reálnom sandboxe (8. 10. 2026, driver `provider-probe`, firma A, test kľúč)
+
+| Bod | Výsledok |
+| --- | --- |
+| 409 „práve sa spracúva“ | 2 súbežné `connector/send` s tým istým kľúčom a bajtmi → 1× `409` (`error.code = CONFLICT`, text „práve sa spracúva“) → adaptér: `EINVOICE_PROVIDER_IDEMPOTENCY_IN_PROGRESS`, retryable; 1× `200 queued` (`invoice_id` + `document_id`). Následný worker send tým istým kľúčom → replay, **to isté `invoice_id`** (žiadne druhé podanie), `sent` → `delivered`. |
+| `GET /v1/agent/peppol/submissions/{document_id}` | `200`, `data` kľúče: `created_at, document_number, error_message, invoice_id, mode, provider_document_id, source, status, submission_id, updated_at`. `invoice_id` sa prečíta a **zhoduje** s uloženým `provider_submission_id`. Hodnota `status` nie je v slovníku `mapEfakturaSendState` → `state = null` (fail-closed; tok ju nepoužíva, rozhoduje `invoice_id` + `/status` + dôkaz). |
+| `document_id` zo send | uložený hneď pri odoslaní (UUID), neprepísaný statusom ani dôkazom |
+| Korelácia webhook/feed | `sbdh_instance_identifier` a `as4_message_id` vyplnené pri všetkých troch dokladoch |
+| Faktúra k prijatej platbe 388 | odoslaná, `delivered`, dôkaz s hashom = uložené UBL; u príjemcu `payment_received_invoice` (pozri E2E v balíku) |
+
+## 2. Overiť v sandboxe (nie blocker kódu) — stav pred 8. 10. 2026 (historické)
 
 - **Tvar odpovede `GET /v1/agent/peppol/submissions/{document_id}`** — endpoint nie je vo verejnej OpenAPI a z vývojového prostredia sa sandbox nedá zavolať (sieťové obmedzenie).
   - Implementácia číta iba `invoice_id`/`invoiceId` a `state`/`status`. Čokoľvek iné = `null`, takže nič sa nerozhodne a riadok ostane v neistom retry / na reconciliation. Cesta je fail-closed.

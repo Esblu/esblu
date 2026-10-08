@@ -259,8 +259,12 @@ Technické otázky sú uzavreté (odpoveď 8. 10. 2026). Implementácia je overe
 Zmluva: DPA podľa čl. 28 GDPR je **Príloha č. 2** API zmluvy. Informácie o lokalite a retencii platia aj pre API model.
 Právne posúdenie zmluvy a DPA ostáva na CLIA; nie je to schválené.
 
-Overiť pri R-11: tvar odpovede `/submissions/{document_id}` (nie je vo verejnej OpenAPI) a presné telo 409
-„práve sa spracúva“. Obe cesty sú fail-closed.
+**Overené v reálnom sandboxe 8. 10. 2026:**
+- `/submissions/{document_id}` (200, `invoice_id` sa zhoduje);
+- 409 „práve sa spracúva“ (reálne vyvolané súbežným odoslaním, retryable, bez druhého podania);
+- E2E faktúry k prijatej platbe **388** a konečnej faktúry so zdanenou zálohou (sekcia 8a).
+
+Detail: `docs/efaktura-provider-conformance-2026-10-08.md`, sekcia 2a.
 
 ---
 
@@ -280,3 +284,15 @@ Overiť pri R-11: tvar odpovede `/submissions/{document_id}` (nie je vo verejnej
 Kód: `lib/einvoice/ubl/generate.ts`, `lib/einvoice/inbound/mapping.ts`. Testy: `einvoice-ubl` (388 na výstupe,
 nikdy 386, ostatné druhy 380/383/381, príjem 388/386, BT-113 na 388), `invoicing-flow` (odoslaná záloha z DB = 388 a
 príjemca ju rozpozná; prijatá 388 = predvolený prípad; staršia 386 + 388 párovanie, duplicita 388↔386, cross-tenant).
+
+### 8a. Reálny sandbox E2E (8. 10. 2026, Preview `0b75f18`, eFaktura.sk sandbox)
+
+| Krok | Výsledok |
+| --- | --- |
+| A: FA20260017 — faktúra k prijatej platbe 200 € @ 23 %, **InvoiceTypeCode 388** | odoslaná → `sent` → **`delivered`**; dôkaz `delivered`, hash = uložené UBL; `document_id`, `invoice_id`, SBDH InstanceIdentifier, AS4 message id uložené |
+| B: príjem FA20260017 | `acknowledged`; druh **`payment_received_invoice`**; dodávateľ OK; rozpis 23 %: 200/46; žiadne review dôvody; `advance_review_status` = null (žiadne rozhodnutie o odpočte); XML identita nemenná aj pre service_role (`ESBLU_EINVOICE_INBOUND_IDENTITY_IMMUTABLE`) |
+| A: FA20260019 — konečná faktúra 500 € @ 23 % s odpočtom FA20260017 | riadky 500/115 a **−200/−46** (zdanená záloha), celkom 369; druhý odpočet tej istej zálohy → `ESBLU_ADVANCE_DEDUCTION_EXCEEDS`; odoslaná → **`delivered`** |
+| B: príjem FA20260019 | z doručeného XML: **BT-25 = FA20260017**, mínusový riadok −200/−46 @ 23 %, **bez PrepaidAmount**; rozpis 23 %: 300/69; **automatický návrh** väzby na FA20260017 (`payment_received_invoice`) 200/46/246 |
+| B: finalizácia a saldo | `linked`; položky 615 − zdanené zálohy 246 = **na úhradu 369**; záloha spotrebovaná (zostatok 0); druhé priradenie odmietnuté; firma A na faktúru B nedosiahne (`ESBLU_INVOICE_NOT_FOUND`) |
+
+Upratovanie: E2E driver vypnutý, dočasný secret zmazaný, bypass zrušený (0), rollout A/B `paused`.
