@@ -1813,6 +1813,8 @@ const sk = {
     failedTitle: "Odkaz sa nepodarilo overiť",
     failedDescription:
       "Tento odkaz je neplatný, už bol použitý, alebo vypršal. Ak si sa medzičasom v tomto prehliadači prihlásil(a) do iného účtu, over si prosím, že si prihlásený(á) do správneho účtu, a skús požiadať o nový odkaz.",
+    expiredDescription: "Odkaz vypršal alebo už bol použitý. Požiadaj o nový odkaz na prihlasovacej stránke (Zabudnuté heslo) a otvor ho v tom istom prehliadači.",
+    unsupportedLinkDescription: "Tento odkaz má formát, ktorý z bezpečnostných dôvodov neprijímame. Požiadaj o nový odkaz na prihlasovacej stránke (Zabudnuté heslo) a otvor ho v tom istom prehliadači.",
   },
 
   inventory: {

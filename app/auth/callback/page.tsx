@@ -10,6 +10,7 @@ import { useLocale } from "@/lib/i18n/LocaleProvider";
 import { peekOAuthPending, takeOAuthPending } from "@/lib/auth/oauth-client";
 import { decideOAuthDestination } from "@/lib/auth/oauth-routing";
 import { getMyActiveMembership } from "@/lib/company";
+import { decideEmailCallback, destinationAfterVerifiedLink, reasonForVerifyError } from "@/lib/auth/recovery-callback";
 
 // =============================================================================
 // Esblu — Dedikovaný Auth Callback (RELEASE BLOCKER FIX, 2026-08-31)
@@ -70,16 +71,20 @@ import { getMyActiveMembership } from "@/lib/company";
 // =============================================================================
 
 type CallbackState = "processing" | "failed";
-type SupportedCallbackType = "email" | "recovery";
-
-function isSupportedCallbackType(value: string | null): value is SupportedCallbackType {
-  return value === "email" || value === "recovery";
-}
+type FailureReason = "expired" | "invalid" | "unsupported_link";
 
 export default function AuthCallbackPage() {
   const router = useRouter();
   const { t } = useLocale();
   const [state, setState] = useState<CallbackState>("processing");
+  const [failure, setFailure] = useState<FailureReason>("invalid");
+
+  function fail(reason: FailureReason) {
+    // Token/kód/chyba sa nesmú držať v adrese ani v histórii.
+    window.history.replaceState(null, "", window.location.pathname);
+    setFailure(reason);
+    setState("failed");
+  }
 
   // Zámerne žiadny synchrónny setState pred prvým await (rovnaký vzor ako
   // runBootstrap() v app/onboarding/company/page.tsx) — funkcia je
@@ -123,16 +128,38 @@ export default function AuthCallbackPage() {
       return;
     }
 
-    const tokenHash = searchParams.get("token_hash");
-    const type = searchParams.get("type");
+    // Fix 2026-10-09: rozhodnutie podľa tvaru odkazu (lib/auth/recovery-callback.ts).
+    const decision = decideEmailCallback(window.location.search, window.location.hash);
 
-    // FAIL CLOSED — chýbajúci token_hash alebo nepodporovaný/neočakávaný
-    // `type`. Nikdy sa v tomto prípade nevolá verifyOtp()/getSession() ani
-    // sa nepokračuje na základe existujúcej session.
-    if (!tokenHash || !isSupportedCallbackType(type)) {
-      setState("failed");
+    if (decision.kind === "error") {
+      fail(decision.reason);
       return;
     }
+
+    if (decision.kind === "pkce_recovery") {
+      // Reset hesla cez vstavaný Supabase mailer: ?code= sa vymení za session
+      // IBA s code_verifierom uloženým v TOMTO prehliadači pri žiadosti o
+      // reset (supabase-js detectSessionInUrl, PKCE). Cudzí/podvrhnutý kód
+      // ani kód otvorený v inom prehliadači neprejde — fail closed.
+      const { error: initError } = await supabase.auth.initialize();
+      const { data: userData, error: userError } = initError
+        ? { data: { user: null }, error: initError }
+        : await supabase.auth.getUser();
+      if (initError || userError || !userData.user) {
+        fail("invalid");
+        return;
+      }
+      window.history.replaceState(null, "", window.location.pathname);
+      router.replace(destinationAfterVerifiedLink("recovery")!);
+      return;
+    }
+
+    if (decision.kind === "oauth") {
+      fail("invalid");
+      return;
+    }
+
+    const { tokenHash, type } = decision;
 
     const { error: verifyOtpError } = await supabase.auth.verifyOtp({
       token_hash: tokenHash,
@@ -141,7 +168,7 @@ export default function AuthCallbackPage() {
 
     if (verifyOtpError) {
       // Neplatný, už použitý alebo expirovaný token_hash — fail closed.
-      setState("failed");
+      fail(reasonForVerifyError(verifyOtpError));
       return;
     }
 
@@ -150,7 +177,7 @@ export default function AuthCallbackPage() {
     const { data: verifyData, error: getUserError } = await supabase.auth.getUser();
 
     if (getUserError || !verifyData.user) {
-      setState("failed");
+      fail("invalid");
       return;
     }
 
@@ -158,8 +185,9 @@ export default function AuthCallbackPage() {
     // prehliadača.
     window.history.replaceState(null, "", window.location.pathname);
 
-    if (type === "recovery") {
-      router.replace("/reset-hesla?verified=1");
+    const recoveryDestination = destinationAfterVerifiedLink(type);
+    if (recoveryDestination) {
+      router.replace(recoveryDestination);
       return;
     }
 
@@ -188,7 +216,11 @@ export default function AuthCallbackPage() {
           {t("authCallback.failedTitle")}
         </h1>
         <p className="mt-3 text-secondary">
-          {t("authCallback.failedDescription")}
+          {failure === "expired"
+            ? t("authCallback.expiredDescription")
+            : failure === "unsupported_link"
+              ? t("authCallback.unsupportedLinkDescription")
+              : t("authCallback.failedDescription")}
         </p>
         <Link
           href="/login"

@@ -1785,6 +1785,8 @@ const en = {
     failedTitle: "The link could not be verified",
     failedDescription:
       "This link is invalid, already used, or has expired. If you've since signed in to a different account in this browser, please make sure you're signed in to the right account, then request a new link.",
+    expiredDescription: "This link has expired or was already used. Request a new link on the sign-in page (Forgot password) and open it in the same browser.",
+    unsupportedLinkDescription: "This link uses a format we do not accept for security reasons. Request a new link on the sign-in page (Forgot password) and open it in the same browser.",
   },
 
   inventory: {

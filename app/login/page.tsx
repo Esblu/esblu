@@ -4,7 +4,9 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
-import { canonicalWebUrl } from "@/lib/app-origin";
+import { canonicalWebUrl, mobileApiOrigin } from "@/lib/app-origin";
+import { IS_MOBILE_BUILD } from "@/lib/build-target";
+import { recoveryRedirectTo } from "@/lib/auth/recovery-callback";
 import { ensureMyOwnerCompany, getEnsureOwnerCompanyErrorMessage } from "@/lib/company";
 import { acceptLegalDocumentAtRegistration } from "@/lib/legal-acceptance";
 import { REQUIRED_ACCEPTANCE_DOCUMENTS } from "@/lib/legal-config";
@@ -297,7 +299,13 @@ async function resetPassword() {
       // "INITIAL_SESSION" bežne prihláseného používateľa) — pozri fix v
       // app/reset-hesla/page.tsx. `redirectTo` tu ostáva iba ako neškodná
       // fallback hodnota.
-      redirectTo: canonicalWebUrl("/auth/callback"),
+      //
+      // Fix 2026-10-09: vstavaný Supabase mailer (staging) šablónu NEpoužije
+      // a pošle Supabase-hosted odkaz → 303 na `redirectTo`. Preto callback na
+      // TOM ISTOM origine (staging ostane na stagingu) s ?flow=recovery, kde
+      // /auth/callback vymení PKCE kód za session a otvorí /reset-hesla.
+      // Mobilná appka: webový origin backendu (staging/produkcia).
+      redirectTo: recoveryRedirectTo(IS_MOBILE_BUILD ? mobileApiOrigin() : window.location.origin),
     }
   );
 

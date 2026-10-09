@@ -1806,6 +1806,8 @@ const de = {
     failedTitle: "Der Link konnte nicht überprüft werden",
     failedDescription:
       "Dieser Link ist ungültig, wurde bereits verwendet oder ist abgelaufen. Falls Sie sich in diesem Browser zwischenzeitlich bei einem anderen Konto angemeldet haben, stellen Sie bitte sicher, dass Sie beim richtigen Konto angemeldet sind, und fordern Sie einen neuen Link an.",
+    expiredDescription: "Dieser Link ist abgelaufen oder wurde bereits verwendet. Fordere auf der Anmeldeseite (Passwort vergessen) einen neuen Link an und öffne ihn im selben Browser.",
+    unsupportedLinkDescription: "Dieser Link hat ein Format, das wir aus Sicherheitsgründen nicht akzeptieren. Fordere auf der Anmeldeseite (Passwort vergessen) einen neuen Link an und öffne ihn im selben Browser.",
   },
 
   inventory: {

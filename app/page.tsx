@@ -8,6 +8,7 @@ import { supabase } from "@/lib/supabase";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import { IS_MOBILE_BUILD } from "@/lib/build-target";
 import { resolveStartupSession } from "@/lib/startup-session";
+import { isStrayAuthLanding } from "@/lib/auth/recovery-callback";
 
 // Poznámka: táto stránka zámerne NEVOLÁ esblu_ensure_my_owner_company().
 // Owner bootstrap sa spúšťa VÝHRADNE z explicitného owner-registration/
@@ -26,6 +27,13 @@ export default function Home() {
   const [startupError, setStartupError] = useState<string | null>(null);
 
   useEffect(() => {
+    // Auth odkaz, ktorý pristál na "/" (Supabase Site URL fallback), patrí
+    // /auth/callback — inak by recovery skončilo na hlavnej stránke/dashboarde.
+    if (isStrayAuthLanding(window.location.search, window.location.hash)) {
+      window.location.replace(`/auth/callback${window.location.search}${window.location.hash}`);
+      return;
+    }
+
     let mounted = true;
 
     void resolveStartupSession(() => supabase.auth.getSession()).then((result) => {
