@@ -96,6 +96,21 @@ if (!existsSync(assets)) {
     ["lokálna cesta build stroja", /(?:[A-Z]:\\\\Users\\\\|\/home\/[a-z0-9._-]+\/|\/Users\/[A-Za-z0-9._-]+\/)/],
   ];
   for (const [label, re] of forbidden) check(`APK assets bez: ${label}`, !re.test(all));
+  // Každý Supabase JWT v bundli musí byť verejný anon kľúč cieľového projektu.
+  const jwts = [...new Set(all.match(/eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g) ?? [])];
+  const jwtInfo = jwts.map((t) => {
+    try {
+      const p = JSON.parse(Buffer.from(t.split(".")[1].replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8"));
+      return { ref: p.ref ?? null, role: p.role ?? null };
+    } catch {
+      return { ref: null, role: null };
+    }
+  }).filter((x) => x.ref);
+  check("Supabase kľúče v bundli sú iba role=anon", jwtInfo.every((x) => x.role === "anon"), jwtInfo.map((x) => `${x.ref}:${x.role}`).join(", "));
+  if (TARGET) {
+    const wantRef = TARGET === "production" ? PROD_REF : STAGING_REF;
+    check(`TARGET ${TARGET}: anon kľúč patrí cieľovému projektu`, jwtInfo.length > 0 ? jwtInfo.every((x) => x.ref === wantRef) : /sb_publishable_[A-Za-z0-9_-]{10,}/.test(all), jwtInfo.map((x) => x.ref).join(", ") || "publishable");
+  }
   const supabaseUrls = [...new Set(all.match(/https:\/\/[a-z0-9]{20}\.supabase\.co/g) ?? [])];
   const known = { fkpgvgvsmbpieduoatrt: "PRODUKCIA (assetpilot)", cjbdijbbcujvmrzezusd: "STAGING (esblu-test)" };
   for (const u of supabaseUrls) info.push(`Supabase v bundli: ${u} → ${known[u.slice(8, 28)] ?? "NEZNÁMY projekt"}`);
@@ -128,8 +143,11 @@ if (!existsSync(assets)) {
     );
     if (stagingApi) apiProbe = stagingApi;
   } else if (TARGET === "production") {
-    check("TARGET production: Supabase = produkcia", prodSupabase);
-    check("TARGET production: API = www.esblu.com", prodApi);
+    check("TARGET production: Supabase = produkcia (fkpgvgvsmbpieduoatrt)", prodSupabase && !stagingSupabase);
+    check("TARGET production: API = www.esblu.com (žiadny Preview/staging/lokálny origin)", prodApi, nonProdApi.join(", ") || "www.esblu.com");
+    check("TARGET production: v bundli nie je staging Supabase ref", !all.includes(STAGING_REF));
+    check("TARGET production: v bundli nie je staging/preview hostname", !/mobile-staging\.esblu\.com|esblu-git-[a-z0-9-]+\.vercel\.app/.test(all));
+    if (prodApi) apiProbe = "https://www.esblu.com";
   } else {
     info.push("Bez --target: device build spusti s --target staging (prvý test iba proti stagingu).");
   }
@@ -168,7 +186,7 @@ if (apiProbe) {
   } catch (e) {
     detail = `nedostupné: ${e?.cause?.code || e?.cause?.message || e?.message || "chyba"}`;
   }
-  check("TARGET staging: Preview API reálne odpovedá bez Vercel prihlásenia (/api/push/preferences → JSON 401 {success:false})", ok, detail);
+  check(`TARGET ${TARGET}: API reálne odpovedá bez Vercel prihlásenia (${apiProbe}/api/push/preferences → JSON 401 {success:false})`, ok, detail);
 }
 
 let failed = 0;

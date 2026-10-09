@@ -237,8 +237,9 @@ await check("prebuild --target staging: mixed staging/produkcia FAIL, čistý st
   };
   const run = (d: string, target: string) =>
     spawnSync(process.execPath, [path.join(ROOT, "scripts/android-prebuild-check.mjs"), "--target", target, "--assets", d], { cwd: ROOT, encoding: "utf8" });
-  const STAGING = 'var s="https://cjbdijbbcujvmrzezusd.supabase.co"';
-  const PROD = 'var s="https://fkpgvgvsmbpieduoatrt.supabase.co"';
+  const jwt = (payload: object) => `eyJhbGciOiJIUzI1NiJ9.${Buffer.from(JSON.stringify(payload)).toString("base64url")}.c2lnbmF0dXJlLXRlc3Q`;
+  const STAGING = `var s="https://cjbdijbbcujvmrzezusd.supabase.co",k="${jwt({ ref: "cjbdijbbcujvmrzezusd", role: "anon" })}"`;
+  const PROD = `var s="https://fkpgvgvsmbpieduoatrt.supabase.co",k="${jwt({ ref: "fkpgvgvsmbpieduoatrt", role: "anon" })}"`;
   const PREVIEW = 'var a="https://esblu-git-mobile-platform-esblu.vercel.app"';
   const mixed1 = run(bundle(STAGING), "staging"); // staging DB + produkčné API
   assert.equal(mixed1.status, 1);
@@ -249,9 +250,36 @@ await check("prebuild --target staging: mixed staging/produkcia FAIL, čistý st
   const prodForStaging = run(bundle(PROD), "staging");
   assert.equal(prodForStaging.status, 1);
   const ok = run(bundle(STAGING + ";" + PREVIEW), "staging");
-  assert.ok(!/FAIL  (Supabase a API|TARGET staging: (?!Preview API))/.test(ok.stdout), ok.stdout);
-  // Živá sonda Preview API vždy beží a pri nedostupnom / chránenom API zlyhá (fail closed).
-  assert.match(ok.stdout, /(OK|FAIL)  TARGET staging: Preview API reálne odpovedá bez Vercel prihlásenia/);
+  assert.ok(!/FAIL  (Supabase a API|Supabase kľúče|TARGET staging: (?!API reálne))/.test(ok.stdout), ok.stdout);
+  // Živá sonda API vždy beží a pri nedostupnom / chránenom API zlyhá (fail closed).
+  assert.match(ok.stdout, /(OK|FAIL)  TARGET staging: API reálne odpovedá bez Vercel prihlásenia/);
+});
+await check("prebuild --target production: čistý produkčný bundle OK, staging stopa / mix / service_role FAIL", async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { spawnSync } = await import("node:child_process");
+  const jwt = (payload: object) => `eyJhbGciOiJIUzI1NiJ9.${Buffer.from(JSON.stringify(payload)).toString("base64url")}.c2lnbmF0dXJlLXRlc3Q`;
+  const bundle = (js: string) => {
+    const d = mkdtempSync(path.join(tmpdir(), "esblu-apk-"));
+    mkdirSync(path.join(d, "_next"), { recursive: true });
+    writeFileSync(path.join(d, "_next", "a.js"), `var c="https://www.esblu.com";${js}`);
+    return d;
+  };
+  const run = (d: string) =>
+    spawnSync(process.execPath, [path.join(ROOT, "scripts/android-prebuild-check.mjs"), "--target", "production", "--assets", d], { cwd: ROOT, encoding: "utf8" });
+  const PROD = `var s="https://fkpgvgvsmbpieduoatrt.supabase.co",k="${jwt({ ref: "fkpgvgvsmbpieduoatrt", role: "anon" })}"`;
+  const ok = run(bundle(PROD));
+  assert.ok(!/FAIL  (Supabase|APK|TARGET production: (?!API reálne))/.test(ok.stdout), ok.stdout);
+  assert.match(ok.stdout, /(OK|FAIL)  TARGET production: API reálne odpovedá/);
+  const stagingTrace = run(bundle(PROD + ';var x="cjbdijbbcujvmrzezusd";var h="https://mobile-staging.esblu.com"'));
+  assert.equal(stagingTrace.status, 1);
+  assert.match(stagingTrace.stdout, /FAIL  TARGET production: v bundli nie je staging Supabase ref/);
+  assert.match(stagingTrace.stdout, /FAIL  TARGET production: API = www\.esblu\.com/);
+  const service = run(bundle(PROD + `;var z="${jwt({ ref: "fkpgvgvsmbpieduoatrt", role: "service_role" })}"`));
+  assert.equal(service.status, 1);
+  assert.match(service.stdout, /FAIL  Supabase kľúče v bundli sú iba role=anon/);
+  const wrongKey = run(bundle(`var s="https://fkpgvgvsmbpieduoatrt.supabase.co",k="${jwt({ ref: "cjbdijbbcujvmrzezusd", role: "anon" })}"`));
+  assert.equal(wrongKey.status, 1);
 });
 await check("push bez google-services.json: register() sa nevolá (PUSH NOT CONFIGURED), žiadny pád", () => {
   const native = read("lib/push/native.ts");
