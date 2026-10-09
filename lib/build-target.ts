@@ -25,3 +25,12 @@ export const IS_MOBILE_BUILD = process.env.NEXT_PUBLIC_ESBLU_MOBILE === "1";
  * Webový build ho nemá (prázdny reťazec).
  */
 export const ESBLU_BUILD_ID = process.env.NEXT_PUBLIC_ESBLU_BUILD_ID ?? "";
+
+/**
+ * Prostredie mobilného buildu (Mobile Platform 2026-10-09): "staging" iba pri
+ * výslovnom NEXT_PUBLIC_ESBLU_ENV=staging, inak "production". Nemení
+ * správanie appky — slúži na overenie, že staging build nesmeruje na
+ * produkčný backend (scripts/android-prebuild-check.mjs --target staging).
+ */
+export const ESBLU_APP_ENV: "staging" | "production" =
+  process.env.NEXT_PUBLIC_ESBLU_ENV === "staging" ? "staging" : "production";

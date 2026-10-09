@@ -20,6 +20,7 @@ public
 # setup.
 .env.local
 !.env.local.example
+!.env.staging.example
 
 # iOS Capacitor natívny projekt zatiaľ nepridaný — ostáva ignorovaný.
 # Android natívny projekt (mobile/android/) sa OD TOHTO BODU COMMITUJE —

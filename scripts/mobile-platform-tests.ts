@@ -225,6 +225,55 @@ await check("android-prebuild-check: statické kontroly prechádzajú (bez build
   const fails = r.stdout.split("\n").filter((l) => l.startsWith("FAIL"));
   assert.ok(fails.every((l) => /APK assets existujú/.test(l)), fails.join("\n"));
 });
+await check("prebuild --target staging: mixed staging/produkcia FAIL, čistý staging OK", async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { spawnSync } = await import("node:child_process");
+  const bundle = (js: string) => {
+    const d = mkdtempSync(path.join(tmpdir(), "esblu-apk-"));
+    mkdirSync(path.join(d, "_next"), { recursive: true });
+    writeFileSync(path.join(d, "_next", "a.js"), `var c="https://www.esblu.com";${js}`);
+    return d;
+  };
+  const run = (d: string, target: string) =>
+    spawnSync(process.execPath, [path.join(ROOT, "scripts/android-prebuild-check.mjs"), "--target", target, "--assets", d], { cwd: ROOT, encoding: "utf8" });
+  const STAGING = 'var s="https://cjbdijbbcujvmrzezusd.supabase.co"';
+  const PROD = 'var s="https://fkpgvgvsmbpieduoatrt.supabase.co"';
+  const PREVIEW = 'var a="https://esblu-git-mobile-platform-esblu.vercel.app"';
+  const mixed1 = run(bundle(STAGING), "staging"); // staging DB + produkčné API
+  assert.equal(mixed1.status, 1);
+  assert.match(mixed1.stdout, /FAIL  Supabase a API origin sú z rovnakého prostredia/);
+  const mixed2 = run(bundle(PROD + ";" + PREVIEW), "staging"); // produkčná DB + preview API
+  assert.equal(mixed2.status, 1);
+  assert.match(mixed2.stdout, /FAIL  TARGET staging: Supabase = esblu-test/);
+  const prodForStaging = run(bundle(PROD), "staging");
+  assert.equal(prodForStaging.status, 1);
+  const ok = run(bundle(STAGING + ";" + PREVIEW), "staging");
+  assert.ok(!/FAIL  (Supabase a API|TARGET)/.test(ok.stdout), ok.stdout);
+});
+await check("push bez google-services.json: register() sa nevolá (PUSH NOT CONFIGURED), žiadny pád", () => {
+  const native = read("lib/push/native.ts");
+  assert.match(native, /if \(!\(await nativePushConfigured\(\)\)\) return "not_configured";/);
+  assert.match(native, /if \(!\(await nativePushEnabled\(\)\) \|\| !\(await nativePushConfigured\(\)\)\) return;/);
+  assert.match(read("mobile/android/app/src/main/java/com/esblu/app/EsbluAppConfigPlugin.java"), /getIdentifier\("google_app_id", "string"/);
+  assert.match(read("app/components/push/PushNotificationSettings.tsx"), /settings\.push\.notConfigured/);
+});
+await check("notifikačná ikona: monochrómny symbol zapojený (manifest + drawable-*), bez textu", async () => {
+  const manifest = read("mobile/android/app/src/main/AndroidManifest.xml");
+  assert.match(manifest, /default_notification_icon"\s+android:resource="@drawable\/ic_stat_esblu"/);
+  const { spawnSync } = await import("node:child_process");
+  const py = `
+from PIL import Image
+for d, s in {"mdpi": 24, "hdpi": 36, "xhdpi": 48, "xxhdpi": 72, "xxxhdpi": 96}.items():
+    im = Image.open("mobile/android/app/src/main/res/drawable-" + d + "/ic_stat_esblu.png").convert("RGBA")
+    assert im.size == (s, s)
+    px = [p for p in im.getdata() if p[3] > 0]
+    assert all(p[0] > 240 and p[1] > 240 and p[2] > 240 for p in px), "iba biela silueta"
+print("ok")
+`;
+  const r = spawnSync("python3", ["-c", py], { cwd: ROOT, encoding: "utf8" });
+  assert.equal(r.status, 0, r.stderr);
+});
 await check("Capacitor: appId com.esblu.app, žiadny server.url (lokálne assets), iOS + Android bundle id zhodné", () => {
   const cfg = read("mobile/capacitor.config.ts");
   assert.match(cfg, /appId: "com\.esblu\.app"/);
@@ -386,7 +435,7 @@ await check("secure storage: natívne pluginy (Android Keystore AES-GCM, iOS Key
   assert.match(java, /AndroidKeyStore/);
   assert.match(java, /AES\/GCM\/NoPadding/);
   assert.match(java, /@CapacitorPlugin\(name = "EsbluSecureStorage"\)/);
-  assert.match(read("mobile/android/app/src/main/java/com/esblu/app/MainActivity.java"), /registerPlugin\(EsbluSecureStoragePlugin\.class\);\s*super\.onCreate/);
+  assert.match(read("mobile/android/app/src/main/java/com/esblu/app/MainActivity.java"), /registerPlugin\(EsbluSecureStoragePlugin\.class\);[\s\S]*registerPlugin\(EsbluAppConfigPlugin\.class\);\s*super\.onCreate/);
   const swift = read("mobile/ios/App/App/EsbluSecureStoragePlugin.swift");
   assert.match(swift, /kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly/);
   assert.match(swift, /jsName = "EsbluSecureStorage"/);
@@ -527,14 +576,19 @@ for d, (s, f) in sizes.items():
     assert Image.open(base + "ic_launcher_round.png").size == (s, s)
     fg = Image.open(base + "ic_launcher_foreground.png").convert("RGB")
     assert fg.size == (f, f)
-    # obsah (modrý symbol) mimo 66dp safe kruhu nesmie byť
-    import math
-    px = fg.load(); c = f / 2; lim = f * 0.3056
-    for y in range(0, f, 2):
-        for x in range(0, f, 2):
-            rr, g, b = px[x, y]
-            if b > 180 and rr < 160 and math.hypot(x - c, y - c) > lim:
-                sys.exit("obsah mimo safe zóny " + d)
+# biely symbol + text mastra musí po zmenšení ležať v 66dp safe kruhu
+import importlib.util, math
+spec = importlib.util.spec_from_file_location("gen", "scripts/generate-mobile-assets.py")
+gen = importlib.util.module_from_spec(spec); spec.loader.exec_module(gen)
+m_rgb = Image.open(r + "icon-source/esblu-master-icon.png").convert("RGB")
+(xa, xb), sym, text = gen._mark_bands(m_rgb)
+W = m_rgb.size[0]; mp = m_rgb.load(); rmax = 0
+for y in range(sym[0], (text or sym)[1] + 1, 2):
+    for x in range(xa, xb + 1, 2):
+        if gen._is_mark(mp[x, y]):
+            rmax = max(rmax, math.hypot(x - W / 2, y - W / 2) / W)
+if rmax * gen.ADAPTIVE_SCALE > 0.3056:
+    sys.exit("obsah mimo safe zóny: %.3f" % (rmax * gen.ADAPTIVE_SCALE))
 # master sa porovná s iOS výstupom (bez úprav artworku)
 m = Image.open(r + "icon-source/esblu-master-icon.png").convert("RGB").resize((64, 64))
 o = ios.resize((64, 64))
@@ -544,8 +598,7 @@ print("ok")
 `;
   const r = spawnSync("python3", ["-c", py], { cwd: ROOT, encoding: "utf8" });
   assert.equal(r.status, 0, r.stderr + r.stdout);
-  const res = read("mobile/android/app/src/main/AndroidManifest.xml");
-  assert.doesNotMatch(res, /ic_stat_esblu/, "symbol-only notifikačná ikona je iba návrh");
+
 });
 await check("ikona: generátor fail-closed bez 1024×1024 zdroja; splash zo schváleného brand assetu", async () => {
   const { spawnSync } = await import("node:child_process");

@@ -837,6 +837,7 @@ const sk = {
       changed: "Heslo bolo úspešne zmenené.",
     },
     push: {
+      notConfigured: "Push notifikácie nie sú v tejto zostave aplikácie nakonfigurované. Ostatné funkcie fungujú normálne.",
       title: "Upozornenia v telefóne",
       description: "Esblu vás upozorní na novú správu v chate a (vlastníka a administrátora) na blížiace sa termíny — STK, EK, diaľničnú známku a servis — aj keď je aplikácia zatvorená.",
       enableButton: "Zapnúť upozornenia v tomto zariadení",

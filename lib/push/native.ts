@@ -1,6 +1,6 @@
 "use client";
 
-import { Capacitor } from "@capacitor/core";
+import { Capacitor, registerPlugin } from "@capacitor/core";
 import { PushNotifications, type ActionPerformed, type Token } from "@capacitor/push-notifications";
 import { supabase } from "@/lib/supabase";
 import { apiUrl } from "@/lib/api-url";
@@ -153,6 +153,24 @@ function ensureListeners(): Promise<void> {
   return listenersReady;
 }
 
+/**
+ * Je push v tomto natívnom builde nakonfigurovaný? Android: iba s
+ * google-services.json (EsbluAppConfig.fcmConfigured) — bez neho by
+ * register() zhodil appku. iOS: APNs (bez Firebase) → áno.
+ */
+export async function nativePushConfigured(): Promise<boolean> {
+  const platform = nativePlatform();
+  if (platform === "ios") return true;
+  if (platform !== "android") return false;
+  try {
+    if (!Capacitor.isPluginAvailable("EsbluAppConfig")) return false;
+    const config = registerPlugin<{ get(): Promise<{ fcmConfigured: boolean }> }>("EsbluAppConfig");
+    return (await config.get()).fcmConfigured === true;
+  } catch {
+    return false;
+  }
+}
+
 async function requestToken(): Promise<string | null> {
   await ensureListeners();
   const token = new Promise<string | null>((resolve) => {
@@ -187,8 +205,10 @@ export async function nativePushEnabled(): Promise<boolean> {
 }
 
 /** Zapne push (vyžiada povolenie — iba z kliknutia). */
-export async function enableNativePush(): Promise<"enabled" | "denied" | "failed"> {
+export async function enableNativePush(): Promise<"enabled" | "denied" | "failed" | "not_configured"> {
   if (!nativePlatform()) return "failed";
+  // PUSH NOT CONFIGURED (chýba google-services.json) → žiadny register(), žiadny pád.
+  if (!(await nativePushConfigured())) return "not_configured";
   try {
     let permission = await PushNotifications.checkPermissions();
     if (permission.receive !== "granted") permission = await PushNotifications.requestPermissions();
@@ -233,7 +253,7 @@ export async function disableNativePush(): Promise<void> {
  * obnoví token a jeho väzbu na aktuálnu session (bez dialógu).
  */
 export async function refreshNativePush(): Promise<void> {
-  if (!(await nativePushEnabled())) return;
+  if (!(await nativePushEnabled()) || !(await nativePushConfigured())) return;
   try {
     await ensureListeners();
     await ensureChannel();

@@ -71,7 +71,7 @@ export async function isThisDeviceSubscribed(): Promise<boolean> {
 }
 
 /** Zapne push pre toto zariadenie (vyžiada povolenie — iba z kliknutia). */
-export async function enablePushOnThisDevice(): Promise<"enabled" | "denied" | "failed"> {
+export async function enablePushOnThisDevice(): Promise<"enabled" | "denied" | "failed" | "not_configured"> {
   if (IS_MOBILE_BUILD) {
     const native = await import("@/lib/push/native");
     return native.enableNativePush();

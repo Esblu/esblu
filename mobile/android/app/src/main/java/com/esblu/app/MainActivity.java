@@ -9,6 +9,7 @@ public class MainActivity extends BridgeActivity {
         // Lokálne (app) Capacitor pluginy sa registrujú PRED super.onCreate
         // (Capacitor docs: Custom Native Android Code). Mobile Platform 2026-10-08.
         registerPlugin(EsbluSecureStoragePlugin.class);
+        registerPlugin(EsbluAppConfigPlugin.class);
         super.onCreate(savedInstanceState);
     }
 }

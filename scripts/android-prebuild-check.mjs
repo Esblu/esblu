@@ -2,7 +2,7 @@
 // =============================================================================
 // Kontrola pred prvým Android buildom na zariadení (Mobile Platform 2026-10-09).
 //
-//   node scripts/android-prebuild-check.mjs            (po `npm run build -w mobile` + `npx cap sync android`)
+//   node scripts/android-prebuild-check.mjs --target staging   (po `npm run build -w mobile` + `npx cap sync android`)
 //
 // Statická kontrola repa + skopírovaného bundlu (mobile/android/app/src/main/assets/public):
 //   package id, build varianty, signing bez secrets v repe, google-services.json
@@ -16,6 +16,15 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+// --target staging | production (povinné pre device build; bez neho iba konzistencia)
+const targetArg = process.argv.indexOf("--target");
+const TARGET = targetArg >= 0 ? process.argv[targetArg + 1] : null;
+if (TARGET && TARGET !== "staging" && TARGET !== "production") {
+  console.error("--target musí byť staging alebo production");
+  process.exit(2);
+}
+const STAGING_REF = "cjbdijbbcujvmrzezusd";
+const PROD_REF = "fkpgvgvsmbpieduoatrt";
 const read = (p) => readFileSync(path.join(ROOT, p), "utf8");
 const results = [];
 const check = (label, ok, detail = "") => results.push({ label, ok: Boolean(ok), detail });
@@ -55,13 +64,14 @@ check("OAuth deep link com.esblu.app://auth/callback", /android:scheme="com\.esb
 check("App Links (autoVerify) www.esblu.com", /android:autoVerify="true"/.test(manifest) && /android:host="www\.esblu\.com"/.test(manifest));
 check("bez cleartext HTTP", !/usesCleartextTraffic="true"/.test(manifest));
 const main = read("mobile/android/app/src/main/java/com/esblu/app/MainActivity.java");
-check("EsbluSecureStoragePlugin registrovaný pred super.onCreate", /registerPlugin\(EsbluSecureStoragePlugin\.class\);\s*super\.onCreate/.test(main));
+check("EsbluSecureStoragePlugin registrovaný pred super.onCreate", /registerPlugin\(EsbluSecureStoragePlugin\.class\);[\s\S]*registerPlugin\(EsbluAppConfigPlugin\.class\);\s*super\.onCreate/.test(main));
 check("EsbluSecureStoragePlugin.java existuje", existsSync(path.join(ROOT, "mobile/android/app/src/main/java/com/esblu/app/EsbluSecureStoragePlugin.java")));
 const cap = read("mobile/capacitor.config.ts");
 check("capacitor appId com.esblu.app, bez server.url (lokálne assets)", /appId: "com\.esblu\.app"/.test(cap) && !/server:\s*\{[^}]*url:/.test(cap));
 
 // Bundle skopírovaný do APK (po cap sync).
-const assets = path.join(ROOT, "mobile/android/app/src/main/assets/public");
+const assetsArg = process.argv.indexOf("--assets");
+const assets = assetsArg >= 0 ? path.resolve(process.argv[assetsArg + 1]) : path.join(ROOT, "mobile/android/app/src/main/assets/public");
 if (!existsSync(assets)) {
   check("APK assets existujú (npm run build -w mobile && npx cap sync android)", false, assets);
 } else {
@@ -89,9 +99,29 @@ if (!existsSync(assets)) {
   check("bundle smeruje na práve jeden Supabase projekt", supabaseUrls.length === 1, supabaseUrls.join(", "));
   const apiOrigins = [...new Set(all.match(/https:\/\/www\.esblu\.com|http:\/\/10\.0\.2\.2:\d+|https:\/\/[a-z0-9-]+\.vercel\.app/g) ?? [])];
   info.push(`API origin(y) v bundli: ${apiOrigins.join(", ") || "(žiadny)"}`);
-  const prodSupabase = supabaseUrls.some((u) => u.includes("fkpgvgvsmbpieduoatrt"));
-  const prodApi = apiOrigins.includes("https://www.esblu.com") && !apiOrigins.some((o) => o.includes("vercel.app") || o.includes("10.0.2.2"));
-  check("Supabase a API origin sú z rovnakého prostredia (prod+prod alebo staging+staging)", supabaseUrls.length !== 1 || prodSupabase === prodApi, `prodSupabase=${prodSupabase} prodApi=${prodApi}`);
+  // API origin: mobilný build ho má IBA v apiUrl() (mobileApiOrigin) — prod = www.esblu.com bez overridu.
+  const nonProdApi = apiOrigins.filter((o) => o !== "https://www.esblu.com");
+  const prodSupabase = supabaseUrls.some((u) => u.includes(PROD_REF));
+  const stagingSupabase = supabaseUrls.some((u) => u.includes(STAGING_REF));
+  const prodApi = nonProdApi.length === 0;
+  check(
+    "Supabase a API origin sú z rovnakého prostredia (mixed staging/produkcia = FAIL)",
+    supabaseUrls.length === 1 && ((prodSupabase && prodApi) || (stagingSupabase && !prodApi)),
+    `supabase=${prodSupabase ? "PROD" : stagingSupabase ? "STAGING" : "?"} api=${prodApi ? "PROD www.esblu.com" : nonProdApi.join(", ")}`
+  );
+  const envMarker = all.match(/esbluEnv\s*=\s*"(staging|production)"/)?.[1] ?? (/"staging"===|NEXT_PUBLIC_ESBLU_ENV/.test(all) ? "?" : null);
+  const bakedEnv = /esbluEnv=\S{0,4}"staging"|"staging"/.test(all) && stagingSupabase ? "staging" : prodSupabase ? "production" : envMarker;
+  info.push(`Prostredie buildu: ${bakedEnv ?? "neznáme"}`);
+  if (TARGET === "staging") {
+    check("TARGET staging: Supabase = esblu-test (cjbdijbbcujvmrzezusd)", stagingSupabase && !prodSupabase);
+    check("TARGET staging: API origin NIE JE produkcia (www.esblu.com)", !prodApi, nonProdApi.join(", ") || "www.esblu.com");
+    check("TARGET staging: v bundli nie je produkčný Supabase", !all.includes(PROD_REF));
+  } else if (TARGET === "production") {
+    check("TARGET production: Supabase = produkcia", prodSupabase);
+    check("TARGET production: API = www.esblu.com", prodApi);
+  } else {
+    info.push("Bez --target: device build spusti s --target staging (prvý test iba proti stagingu).");
+  }
 }
 
 let failed = 0;

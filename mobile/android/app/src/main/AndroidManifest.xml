@@ -91,6 +91,18 @@
             android:name="com.google.firebase.messaging.default_notification_channel_id"
             android:value="esblu_default" />
 
+        <!--
+          Notifikačná ikona (2026-10-09): monochrómny symbol Esblu bez textu
+          (status bar vyžaduje bielu siluetu, inak Android ukáže sivý štvorec).
+          Generuje scripts/generate-mobile-assets.py z finálnej master ikony.
+        -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_icon"
+            android:resource="@drawable/ic_stat_esblu" />
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_color"
+            android:resource="@color/esblu_notification_accent" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

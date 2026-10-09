@@ -1,5 +1,7 @@
 # Prvý Android build na reálnom telefóne (Windows), 2026-10-09
 
+> **Prostredie prvého testu: STAGING** — pozri `android-staging-device-build-2026-10-09.md`. Sekcie 1–3 nižšie (produkčný backend) pre prvý test neplatia. Test plán (sekcia 6) platí.
+
 - **Branch:** `mobile-platform`.
 - **Výsledok:** debug APK nainštalované cez USB. Žiadna publikácia v Google Play.
 - **Zakázané:** produkčný deploy a zmeny produkčnej DB.

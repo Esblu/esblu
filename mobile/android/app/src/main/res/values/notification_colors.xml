@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Akcent notifikácie = modrá z finálnej master ikony Esblu. -->
+    <color name="esblu_notification_accent">#0181FD</color>
+</resources>

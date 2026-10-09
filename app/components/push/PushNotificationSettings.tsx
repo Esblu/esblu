@@ -37,7 +37,17 @@ export function PushNotificationSettings() {
     } else {
       const outcome = await enablePushOnThisDevice();
       setSubscribed(outcome === "enabled");
-      setMessage(t(outcome === "enabled" ? "settings.push.enabled" : outcome === "denied" ? "settings.push.denied" : "settings.push.failed"));
+      setMessage(
+        t(
+          outcome === "enabled"
+            ? "settings.push.enabled"
+            : outcome === "denied"
+              ? "settings.push.denied"
+              : outcome === "not_configured"
+                ? "settings.push.notConfigured"
+                : "settings.push.failed"
+        )
+      );
     }
     setBusy(false);
   }

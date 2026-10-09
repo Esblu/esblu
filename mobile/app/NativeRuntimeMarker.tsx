@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
-import { ESBLU_BUILD_ID, IS_MOBILE_BUILD } from "@/lib/build-target";
+import { ESBLU_APP_ENV, ESBLU_BUILD_ID, IS_MOBILE_BUILD } from "@/lib/build-target";
 
 // -----------------------------------------------------------------------------
 // Overiteľná značka natívneho runtime (Mobile M1, 2026-09-28) — iba mobilný build.
@@ -18,6 +18,9 @@ export default function NativeRuntimeMarker() {
     const root = document.documentElement;
     root.dataset.esbluRuntime = IS_MOBILE_BUILD ? "native-app" : "web";
     if (ESBLU_BUILD_ID) root.dataset.esbluBuild = ESBLU_BUILD_ID;
+    // Prostredie buildu (staging / production) — overuje ho aj
+    // scripts/android-prebuild-check.mjs v APK assets.
+    root.dataset.esbluEnv = ESBLU_APP_ENV;
   }, []);
   return null;
 }

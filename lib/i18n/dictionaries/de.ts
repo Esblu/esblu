@@ -825,6 +825,7 @@ const de = {
       changed: "Das Passwort wurde erfolgreich geändert.",
     },
     push: {
+      notConfigured: "Push-Benachrichtigungen sind in diesem App-Build nicht konfiguriert. Alles andere funktioniert normal.",
       title: "Benachrichtigungen auf dem Telefon",
       description: "Esblu benachrichtigt Sie über neue Chatnachrichten und (Inhaber und Administrator) über anstehende Fristen — HU, AU, Vignette und Service — auch wenn die App geschlossen ist.",
       enableButton: "Benachrichtigungen auf diesem Gerät aktivieren",

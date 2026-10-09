@@ -823,6 +823,7 @@ const en = {
       changed: "The password was changed successfully.",
     },
     push: {
+      notConfigured: "Push notifications are not configured in this app build. Everything else works normally.",
       title: "Phone notifications",
       description: "Esblu notifies you about new chat messages and (owner and administrator) about upcoming deadlines — inspection, emissions check, vignette and service — even when the app is closed.",
       enableButton: "Turn on notifications on this device",
