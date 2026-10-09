@@ -44,6 +44,9 @@ const de = {
       notFilled: "nicht angegeben",
       loadingPage: "Wird geladen...",
       loadingEsblu: "Esblu wird geladen...",
+      startupFailedTitle: "Esblu konnte nicht gestartet werden",
+      startupFailedBody: "Die sicher gespeicherte Anmeldung konnte nicht geladen werden. Es wurde nichts gesendet oder geändert. Bitte versuche es erneut; besteht das Problem weiter, starte die App neu.",
+      startupRetry: "Erneut versuchen",
     },
     legalLinks: {
       privacy: "Datenschutz",

@@ -44,6 +44,9 @@ const en = {
       notFilled: "not filled in",
       loadingPage: "Loading...",
       loadingEsblu: "Loading Esblu...",
+      startupFailedTitle: "Esblu could not start",
+      startupFailedBody: "The securely stored sign-in could not be loaded. Nothing was sent or changed. Please try again; if the problem persists, restart the app.",
+      startupRetry: "Try again",
     },
     legalLinks: {
       privacy: "Privacy Policy",

@@ -46,6 +46,9 @@ const sk = {
       notFilled: "nedoplnené",
       loadingPage: "Načítavam...",
       loadingEsblu: "Načítavam Esblu...",
+      startupFailedTitle: "Esblu sa nepodarilo spustiť",
+      startupFailedBody: "Nepodarilo sa načítať bezpečne uložené prihlásenie. Nič sa neodoslalo ani nezmenilo. Skús to znova; ak chyba pretrváva, reštartuj appku.",
+      startupRetry: "Skúsiť znova",
     },
     legalLinks: {
       privacy: "Ochrana osobných údajov",

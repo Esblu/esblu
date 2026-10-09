@@ -12,6 +12,18 @@
 // setItem / removeItem vždy odstránia aj legacy kópiu (žiadna stará session
 // v čitateľnom úložisku).
 // Web a appka bez pluginu (starý natívny build): pôvodné localStorage.
+//
+// CAPACITOR PROXY (fix 2026-10-09, prvý real-device beh na Androide):
+//   registerPlugin() vracia Proxy, ktorá pre KAŽDÚ vlastnosť vráti funkciu
+//   volajúcu natívnu metódu — aj pre `then`. Keď sa proxy vráti z async
+//   funkcie / Promise.resolve() / await, JS ju „asimiluje" ako thenable,
+//   zavolá proxy.then() → natívne "EsbluSecureStorage.then() is not
+//   implemented on android" → rejected promise → getSession() nikdy
+//   nedobehol a appka visela na „Načítavam Esblu…".
+//   Pravidlo: proxy NIKDY neopúšťa synchrónny kód ako hodnota promise.
+//   loadSecureStoragePlugin() vracia obyčajný adaptér (bez `then`), ktorý
+//   volá iba get/set/remove/clear. Natívne volania majú timeout, aby zaseknutý
+//   bridge nezablokoval štart (chyba → explicitný startup error state).
 // =============================================================================
 
 export type SecureStoragePlugin = {
@@ -33,6 +45,30 @@ export type AuthStorage = {
   backend(): Promise<"secure" | "legacy">;
 };
 
+/** Chyba bezpečného úložiska (natívny plugin zlyhal alebo neodpovedal). */
+export class SecureStorageError extends Error {
+  /** code: "<operácia>_failed" | "<operácia>_timeout" */
+  constructor(code: string, cause?: unknown) {
+    super(`secure_storage_${code}`);
+    this.name = "SecureStorageError";
+    (this as { cause?: unknown }).cause = cause;
+  }
+}
+
+export const SECURE_STORAGE_TIMEOUT_MS = 8000;
+
+function withTimeout<T>(operation: string, promise: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new SecureStorageError(`${operation}_timeout`)), ms);
+  });
+  return Promise.race([promise, timeout])
+    .catch((error) => {
+      throw error instanceof SecureStorageError ? error : new SecureStorageError(`${operation}_failed`, error);
+    })
+    .finally(() => clearTimeout(timer));
+}
+
 const SAFE_KEY = /^[A-Za-z0-9._-]{1,128}$/;
 
 function legacyTry<T>(fn: () => T, fallback: T): T {
@@ -51,9 +87,28 @@ export function isSupabaseAuthKey(key: string): boolean {
 export function createAuthStorage(input: {
   plugin: () => Promise<SecureStoragePlugin | null>;
   legacy: () => (LegacyStorage & { length?: number; key?(index: number): string | null }) | null;
+  timeoutMs?: number;
 }): AuthStorage {
-  let resolved: Promise<SecureStoragePlugin | null> | null = null;
-  const plugin = () => (resolved ??= input.plugin().catch(() => null));
+  const ms = input.timeoutMs ?? SECURE_STORAGE_TIMEOUT_MS;
+  // Plugin držíme v „krabici" { p } — promise nikdy neresolvuje priamo na
+  // plugin objekt (ochrana proti thenable asimilácii aj pri inom loaderi).
+  let resolved: Promise<{ p: SecureStoragePlugin | null }> | null = null;
+  const box = () =>
+    (resolved ??= input
+      .plugin()
+      .then((p) => ({ p: p ? toAdapter(p) : null }))
+      .catch(() => ({ p: null })));
+  const plugin = async (): Promise<SecureStoragePlugin | null> => {
+    const { p } = await box();
+    if (!p) return null;
+    // Vrátiť adaptér z async funkcie je bezpečné: je to obyčajný objekt bez `then`.
+    return {
+      get: (o) => withTimeout("get", p.get(o), ms),
+      set: (o) => withTimeout("set", p.set(o), ms),
+      remove: (o) => withTimeout("remove", p.remove(o), ms),
+      clear: () => withTimeout("clear", p.clear(), ms),
+    };
+  };
   const legacy = () => legacyTry(input.legacy, null);
 
   return {
@@ -106,12 +161,33 @@ export function createAuthStorage(input: {
   };
 }
 
-/** Natívny plugin iba v Capacitor natívnom behu; inak null (web / plugin chýba v builde). */
-export async function loadSecureStoragePlugin(): Promise<SecureStoragePlugin | null> {
-  const { Capacitor, registerPlugin } = await import("@capacitor/core");
+/**
+ * Obyčajný objekt s presne štyrmi metódami — NIKDY nie Capacitor proxy.
+ * Prístup k vlastnostiam proxy prebehne iba pri volaní metódy (synchrónne).
+ */
+export function toAdapter(source: SecureStoragePlugin): SecureStoragePlugin {
+  return {
+    get: (o) => source.get(o),
+    set: (o) => source.set(o),
+    remove: (o) => source.remove(o),
+    clear: () => source.clear(),
+  };
+}
+
+type CapacitorCore = Pick<typeof import("@capacitor/core"), "Capacitor" | "registerPlugin">;
+
+/**
+ * Natívny plugin iba v Capacitor natívnom behu; inak null (web / plugin chýba v builde).
+ * Vracia ADAPTÉR, nie proxy z registerPlugin() — pozri hlavičku súboru.
+ */
+export async function loadSecureStoragePlugin(
+  loadCore: () => Promise<CapacitorCore> = () => import("@capacitor/core")
+): Promise<SecureStoragePlugin | null> {
+  const { Capacitor, registerPlugin } = await loadCore();
   if (!Capacitor.isNativePlatform() || !Capacitor.isPluginAvailable("EsbluSecureStorage")) {
     if (Capacitor.isNativePlatform()) console.warn("[secure-storage] plugin EsbluSecureStorage chýba v natívnom builde — používa sa localStorage");
     return null;
   }
-  return registerPlugin<SecureStoragePlugin>("EsbluSecureStorage");
+  const proxy = registerPlugin<SecureStoragePlugin>("EsbluSecureStorage");
+  return toAdapter(proxy);
 }

@@ -249,7 +249,9 @@ await check("prebuild --target staging: mixed staging/produkcia FAIL, čistý st
   const prodForStaging = run(bundle(PROD), "staging");
   assert.equal(prodForStaging.status, 1);
   const ok = run(bundle(STAGING + ";" + PREVIEW), "staging");
-  assert.ok(!/FAIL  (Supabase a API|TARGET)/.test(ok.stdout), ok.stdout);
+  assert.ok(!/FAIL  (Supabase a API|TARGET staging: (?!Preview API))/.test(ok.stdout), ok.stdout);
+  // Živá sonda Preview API vždy beží a pri nedostupnom / chránenom API zlyhá (fail closed).
+  assert.match(ok.stdout, /(OK|FAIL)  TARGET staging: Preview API reálne odpovedá bez Vercel prihlásenia/);
 });
 await check("push bez google-services.json: register() sa nevolá (PUSH NOT CONFIGURED), žiadny pád", () => {
   const native = read("lib/push/native.ts");

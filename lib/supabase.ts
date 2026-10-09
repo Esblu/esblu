@@ -22,7 +22,7 @@ const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 // localStorage. Web build: nezmenené (predvolené localStorage).
 export const mobileAuthStorage: AuthStorage | null = IS_MOBILE_BUILD
   ? createAuthStorage({
-      plugin: loadSecureStoragePlugin,
+      plugin: () => loadSecureStoragePlugin(),
       legacy: () => (typeof window !== "undefined" ? window.localStorage : null),
     })
   : null;
