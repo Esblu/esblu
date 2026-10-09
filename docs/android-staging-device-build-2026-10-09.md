@@ -43,15 +43,22 @@ Prebuild check zlyhá (exit 1) pri:
 
 - **mixed prostredí:** staging Supabase + produkčné API, alebo produkčný Supabase + Preview API;
 - **produkčnom Supabase** v staging builde;
-- **server secrets** alebo lokálnych cestách v APK.
+- **server secrets** alebo lokálnych cestách v APK;
+- **API hostname**, ktorý nie je staging (`esblu-*.vercel.app` alebo `*staging*.esblu.com`), alebo viac ako jednom API origine;
+- **živej sonde Preview API**: `GET <API>/api/push/preferences` bez session musí vrátiť odpoveď samotnej appky (`401 {"success":false}`). Vercel Deployment Protection (302 na `vercel.com/sso-api` alebo JSON 401 „Protected deployment“), HTML, timeout či sieťová chyba = **FAIL** (fail closed).
 
-## Stav stagingu
+## Stav stagingu (precheck 2026-10-09)
 
 | Oblasť | Stav |
 |---|---|
-| Účet | `info@esblu.com` je na beta allowliste **esblu-test** → registrácia v appke e-mailom a heslom (staging). Či staging pošle potvrdzovací e-mail, závisí od Auth nastavení esblu-test |
-| Ochrana proti duplicitám | migrácia `client_mutation_id` je na esblu-test → plne testovateľná (W2–W4) |
-| Preview API | **chránené Vercel Authentication (SSO)** → volania appky na `/api/*` (push registrácia, AI scan, zrušenie účtu, lookup firmy, PDF) dostanú presmerovanie a zlyhajú. Prihlásenie, čítanie a zápis dát idú priamo do Supabase a fungujú. Nie je overené, či Preview env smeruje na esblu-test |
-| Google login | vypnutý (`NEXT_PUBLIC_ESBLU_OAUTH_PROVIDERS` prázdne): nie je overený Google provider ani redirect `com.esblu.app://auth/callback` v esblu-test |
-| Push | **PUSH NOT CONFIGURED** (chýba `google-services.json`). Appka nevolá FCM `register()` (žiadny pád) a v Nastaveniach zobrazí „Push notifikácie nie sú v tejto zostave nakonfigurované" |
+| Preview | `https://esblu-git-mobile-platform-esblu.vercel.app` (READY, commit `f0b4e12`) |
+| Preview env | `NEXT_PUBLIC_SUPABASE_URL` aj anon kľúč = esblu-test; nič neukazuje na produkčný Supabase. `SUPABASE_SERVICE_ROLE_KEY` a OpenAI kľúč sú *sensitive* → hodnotu nemožno prečítať ani overiť |
+| Preview API | **BLOKOVANÉ** Vercel Authentication (`all_except_custom_domains`). Bez prihlásenia: 302 na `vercel.com/sso-api`, resp. JSON 401 „Protected deployment“. Prebuild check preto **zlyhá** (zámerne) |
+| Riešenie (čaká na schválenie) | custom doména `mobile-staging.esblu.com` priradená iba vetve `mobile-platform`. Custom domény ochrana `all_except_custom_domains` nechráni, produkcia a ostatné Preview ostávajú chránené. DNS je v Namecheap → vyžaduje CNAME. Bypass secret do APK sa **nedáva** |
+| Auth esblu-test | e-mail/heslo zapnuté, registrácia povolená, **potvrdenie e-mailom povinné** (`mailer_autoconfirm=false`). Účet `info@esblu.com` zatiaľ neexistuje (je na beta allowliste) |
+| Redirect URL | `com.esblu.app://auth/callback` v esblu-test **nie je overený ani pridaný**: Auth URL Configuration nie je dostupná cez dostupné nástroje (bez Supabase Management tokenu) |
+| Google login | esblu-test: provider **vypnutý** (NOT CONFIGURED); v appke `NEXT_PUBLIC_ESBLU_OAUTH_PROVIDERS` prázdne |
+| Ochrana proti duplicitám | migrácia `client_mutation_id` je na esblu-test |
+| Push | **PUSH NOT CONFIGURED** (bez `google-services.json`) — akceptované; appka nevolá FCM `register()` |
+| App Links (debug) | **NOT VERIFIED UNTIL RELEASE SIGNING** (`assetlinks.json` má release fingerprint) |
 | Ikony | finálna master ikona: launcher, adaptive, round, iOS, splash + monochrómna notifikačná ikona |

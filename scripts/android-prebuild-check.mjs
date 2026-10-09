@@ -9,6 +9,8 @@
 //   necommitnutý, secure storage plugin registrovaný, OAuth custom scheme,
 //   allowBackup=false, žiadne server secrets v APK assets a do akého backendu
 //   bundle smeruje (Supabase projekt + API origin). Nič nemení. Exit 1 pri chybe.
+//   --target staging navyše živo overí, že Preview API odpovedá bez Vercel
+//   prihlásenia (fail closed: SSO redirect / HTML / sieťová chyba = FAIL).
 // =============================================================================
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
@@ -29,6 +31,7 @@ const read = (p) => readFileSync(path.join(ROOT, p), "utf8");
 const results = [];
 const check = (label, ok, detail = "") => results.push({ label, ok: Boolean(ok), detail });
 const info = [];
+let apiProbe = null;
 
 const gradle = read("mobile/android/app/build.gradle");
 check("applicationId com.esblu.app", /applicationId "com\.esblu\.app"/.test(gradle));
@@ -97,10 +100,10 @@ if (!existsSync(assets)) {
   const known = { fkpgvgvsmbpieduoatrt: "PRODUKCIA (assetpilot)", cjbdijbbcujvmrzezusd: "STAGING (esblu-test)" };
   for (const u of supabaseUrls) info.push(`Supabase v bundli: ${u} → ${known[u.slice(8, 28)] ?? "NEZNÁMY projekt"}`);
   check("bundle smeruje na práve jeden Supabase projekt", supabaseUrls.length === 1, supabaseUrls.join(", "));
-  const apiOrigins = [...new Set(all.match(/https:\/\/www\.esblu\.com|http:\/\/10\.0\.2\.2:\d+|https:\/\/[a-z0-9-]+\.vercel\.app/g) ?? [])];
+  const apiOrigins = [...new Set(all.match(/https:\/\/[a-z0-9-]+\.esblu\.com|http:\/\/10\.0\.2\.2:\d+|https:\/\/[a-z0-9-]+\.vercel\.app/g) ?? [])];
   info.push(`API origin(y) v bundli: ${apiOrigins.join(", ") || "(žiadny)"}`);
   // API origin: mobilný build ho má IBA v apiUrl() (mobileApiOrigin) — prod = www.esblu.com bez overridu.
-  const nonProdApi = apiOrigins.filter((o) => o !== "https://www.esblu.com");
+  const nonProdApi = apiOrigins.filter((o) => o !== "https://www.esblu.com" && o !== "https://esblu.com");
   const prodSupabase = supabaseUrls.some((u) => u.includes(PROD_REF));
   const stagingSupabase = supabaseUrls.some((u) => u.includes(STAGING_REF));
   const prodApi = nonProdApi.length === 0;
@@ -116,12 +119,56 @@ if (!existsSync(assets)) {
     check("TARGET staging: Supabase = esblu-test (cjbdijbbcujvmrzezusd)", stagingSupabase && !prodSupabase);
     check("TARGET staging: API origin NIE JE produkcia (www.esblu.com)", !prodApi, nonProdApi.join(", ") || "www.esblu.com");
     check("TARGET staging: v bundli nie je produkčný Supabase", !all.includes(PROD_REF));
+    check("TARGET staging: práve jeden staging API origin", nonProdApi.length === 1, nonProdApi.join(", ") || "(žiadny)");
+    const stagingApi = nonProdApi.length === 1 ? nonProdApi[0] : null;
+    check(
+      "TARGET staging: API hostname je staging (Vercel Preview esblu-*.vercel.app alebo *staging*.esblu.com)",
+      stagingApi && (/^https:\/\/esblu-[a-z0-9-]+\.vercel\.app$/.test(stagingApi) || /^https:\/\/[a-z0-9-]*staging[a-z0-9-]*\.esblu\.com$/.test(stagingApi)),
+      stagingApi ?? ""
+    );
+    if (stagingApi) apiProbe = stagingApi;
   } else if (TARGET === "production") {
     check("TARGET production: Supabase = produkcia", prodSupabase);
     check("TARGET production: API = www.esblu.com", prodApi);
   } else {
     info.push("Bez --target: device build spusti s --target staging (prvý test iba proti stagingu).");
   }
+}
+
+// Živá sonda: Preview API musí odpovedať samotná appka (JSON 401 bez session),
+// nie Vercel Deployment Protection (302 → vercel.com/sso-api / HTML login).
+// FAIL CLOSED: sieťová chyba, timeout, redirect, HTML alebo 5xx = FAIL.
+if (apiProbe) {
+  const url = `${apiProbe}/api/push/preferences`;
+  let ok = false;
+  let detail = "";
+  try {
+    const res = await fetch(url, { redirect: "manual", signal: AbortSignal.timeout(15000), headers: { accept: "application/json" } });
+    const ct = res.headers.get("content-type") ?? "";
+    const loc = res.headers.get("location") ?? "";
+    const body = await res.text();
+    const redirected = res.status >= 300 && res.status < 400;
+    // Vercel Authentication odpovedá aj JSON 401 ("Protected deployment") — preto
+    // vyžadujeme presne odpoveď appky ({"success":false} z lib/push/request.ts).
+    const protectedByVercel =
+      (redirected && /vercel\.com\/(sso|login)/.test(loc)) ||
+      /_vercel_sso_nonce/.test(res.headers.get("set-cookie") ?? "") ||
+      /Protected by Vercel Authentication|"protection"\s*:|Protected deployment/.test(body);
+    let appBody = false;
+    try {
+      const j = JSON.parse(body);
+      appBody = j && j.success === false && Object.keys(j).length === 1;
+    } catch {
+      appBody = false;
+    }
+    const sso = protectedByVercel;
+    ok = !redirected && !protectedByVercel && ct.includes("application/json") && appBody && res.status === 401;
+    detail = `HTTP ${res.status}${loc ? ` → ${new URL(loc, url).host}` : ""} ${ct.split(";")[0] || "?"}${appBody ? " (odpoveď appky)" : ""}`;
+    if (sso) detail += " — Vercel Deployment Protection blokuje API";
+  } catch (e) {
+    detail = `nedostupné: ${e?.cause?.code ?? e?.name ?? "chyba"}`;
+  }
+  check("TARGET staging: Preview API reálne odpovedá bez Vercel prihlásenia (/api/push/preferences → JSON 401 {success:false})", ok, detail);
 }
 
 let failed = 0;
