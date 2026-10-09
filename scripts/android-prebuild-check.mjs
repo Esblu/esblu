@@ -166,7 +166,7 @@ if (apiProbe) {
     detail = `HTTP ${res.status}${loc ? ` → ${new URL(loc, url).host}` : ""} ${ct.split(";")[0] || "?"}${appBody ? " (odpoveď appky)" : ""}`;
     if (sso) detail += " — Vercel Deployment Protection blokuje API";
   } catch (e) {
-    detail = `nedostupné: ${e?.cause?.code ?? e?.name ?? "chyba"}`;
+    detail = `nedostupné: ${e?.cause?.code || e?.cause?.message || e?.message || "chyba"}`;
   }
   check("TARGET staging: Preview API reálne odpovedá bez Vercel prihlásenia (/api/push/preferences → JSON 401 {success:false})", ok, detail);
 }

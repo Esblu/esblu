@@ -5,7 +5,7 @@ Prvý test na fyzickom zariadení beží **iba proti stagingu**:
 | | Hodnota |
 |---|---|
 | Supabase | `esblu-test` (`cjbdijbbcujvmrzezusd`) |
-| API | Vercel Preview vetvy `mobile-platform`: `https://esblu-git-mobile-platform-esblu.vercel.app` |
+| API | `https://mobile-staging.esblu.com` — custom doména priradená iba vetve `mobile-platform` (Preview env → esblu-test) |
 | Produkcia | nepoužíva sa a nemení sa |
 | Variant | debug (Android debug kľúč), žiadna publikácia |
 
@@ -51,10 +51,10 @@ Prebuild check zlyhá (exit 1) pri:
 
 | Oblasť | Stav |
 |---|---|
-| Preview | `https://esblu-git-mobile-platform-esblu.vercel.app` (READY, commit `f0b4e12`) |
+| Preview | `https://mobile-staging.esblu.com` (DNS CNAME v Namecheap, Vercel doména s `gitBranch=mobile-platform`, SSL platný); záložne `https://esblu-git-mobile-platform-esblu.vercel.app` |
 | Preview env | `NEXT_PUBLIC_SUPABASE_URL` aj anon kľúč = esblu-test; nič neukazuje na produkčný Supabase. `SUPABASE_SERVICE_ROLE_KEY` a OpenAI kľúč sú *sensitive* → hodnotu nemožno prečítať ani overiť |
-| Preview API | **BLOKOVANÉ** Vercel Authentication (`all_except_custom_domains`). Bez prihlásenia: 302 na `vercel.com/sso-api`, resp. JSON 401 „Protected deployment“. Prebuild check preto **zlyhá** (zámerne) |
-| Riešenie (čaká na schválenie) | custom doména `mobile-staging.esblu.com` priradená iba vetve `mobile-platform`. Custom domény ochrana `all_except_custom_domains` nechráni, produkcia a ostatné Preview ostávajú chránené. DNS je v Namecheap → vyžaduje CNAME. Bypass secret do APK sa **nedáva** |
+| Preview API | **BLOKOVANÉ** Vercel Authentication (Standard Protection chráni aj Preview custom domény). Bez prihlásenia: presmerovanie na `vercel.com/login`, resp. JSON 401 „Protected deployment“. Prebuild check preto **zlyhá** (zámerne) |
+| Riešenie (čaká na tvoje potvrdenie) | Vercel → projekt esblu → Settings → Deployment Protection → **Deployment Protection Exceptions** → Add Domain `mobile-staging.esblu.com` (potvrdenie „unprotect my domain“). Odomkne iba túto Preview doménu, bez poplatku; produkcia a ostatné Preview ostávajú chránené. Bypass secret do APK sa **nedáva** |
 | Auth esblu-test | e-mail/heslo zapnuté, registrácia povolená, **potvrdenie e-mailom povinné** (`mailer_autoconfirm=false`). Účet `info@esblu.com` zatiaľ neexistuje (je na beta allowliste) |
 | Redirect URL | `com.esblu.app://auth/callback` v esblu-test **nie je overený ani pridaný**: Auth URL Configuration nie je dostupná cez dostupné nástroje (bez Supabase Management tokenu) |
 | Google login | esblu-test: provider **vypnutý** (NOT CONFIGURED); v appke `NEXT_PUBLIC_ESBLU_OAUTH_PROVIDERS` prázdne |
