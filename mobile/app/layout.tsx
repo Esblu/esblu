@@ -7,6 +7,7 @@ import PushBridge from "./PushBridge";
 import AppLifecycleBridge from "./AppLifecycleBridge";
 import OfflineBanner from "@/app/components/mobile/OfflineBanner";
 import MobileTabBar from "@/app/components/mobile/MobileTabBar";
+import MobileChatFab from "@/app/components/mobile/MobileChatFab";
 
 // -----------------------------------------------------------------------------
 // MOBILE root layout — kompozícia, NIE duplikácia. Celá vizuálna/business
@@ -47,6 +48,8 @@ export default function MobileRootLayout({
       {children}
       {/* Mobile M1: spodná navigácia (iba mobilný build). */}
       <MobileTabBar />
+      {/* Rýchly vstup do chatu na dashboarde (nad spodnou lištou). */}
+      <MobileChatFab />
     </RootLayout>
   );
 }

@@ -2031,6 +2031,7 @@ const en = {
     loadOlderMessages: "Load older messages",
     backToList: "Back to list",
     openPanel: "Open chat",
+    openChatUnread: "Open chat, unread: {{count}}",
     closePanel: "Close chat",
     you: "You",
     formerMember: "Former member",

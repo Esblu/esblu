@@ -2056,6 +2056,7 @@ const sk = {
     loadOlderMessages: "Načítať staršie správy",
     backToList: "Späť na zoznam",
     openPanel: "Otvoriť chat",
+    openChatUnread: "Otvoriť chat, neprečítané: {{count}}",
     closePanel: "Zavrieť chat",
     you: "Vy",
     formerMember: "Bývalý člen",

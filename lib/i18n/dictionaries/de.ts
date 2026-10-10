@@ -2052,6 +2052,7 @@ const de = {
     loadOlderMessages: "Ältere Nachrichten laden",
     backToList: "Zurück zur Liste",
     openPanel: "Chat öffnen",
+    openChatUnread: "Chat öffnen, ungelesen: {{count}}",
     closePanel: "Chat schließen",
     you: "Sie",
     formerMember: "Ehemaliges Mitglied",

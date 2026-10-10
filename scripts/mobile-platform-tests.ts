@@ -641,5 +641,55 @@ await check("ikona: generátor fail-closed bez 1024×1024 zdroja; splash zo schv
   assert.match(r.stderr + r.stdout, /1024×1024/);
 });
 
+
+// ----------------------------------------------------------------------------- CHAT QUICK ACCESS (dashboard FAB)
+const fab = await import("@/lib/mobile/chat-fab");
+const nav = await import("@/lib/mobile-nav");
+const fabBase = { pathname: "/", loading: false, signedIn: true, humanChat: true, keyboardOpen: false, overlayOpen: false };
+await check("chat FAB: viditeľný iba na mobilnom dashboarde (/, /index.html)", () => {
+  assert.equal(fab.shouldShowChatFab(fabBase), true);
+  assert.equal(fab.shouldShowChatFab({ ...fabBase, pathname: "/index.html" }), true);
+  for (const pathname of ["/chat", "/chat.html", "/chat/abc", "/vozidla", "/nastavenia.html", "/login"]) {
+    assert.equal(fab.shouldShowChatFab({ ...fabBase, pathname }), false, pathname);
+  }
+});
+await check("chat FAB: owner aj employee (human chat), bez roly / neprihlásený nie", () => {
+  for (const role of ["owner", "admin", "accountant", "employee"] as const) {
+    const model = nav.mobileNavModel({ role, permissions: {} });
+    assert.equal(model.humanChat, true, role);
+    assert.equal(fab.shouldShowChatFab({ ...fabBase, humanChat: model.humanChat }), true, role);
+  }
+  assert.equal(fab.shouldShowChatFab({ ...fabBase, humanChat: nav.mobileNavModel(null).humanChat }), false);
+  assert.equal(fab.shouldShowChatFab({ ...fabBase, signedIn: false }), false);
+  assert.equal(fab.shouldShowChatFab({ ...fabBase, loading: true }), false);
+});
+await check("chat FAB: klávesnica alebo otvorený panel/dialóg → skryté", () => {
+  assert.equal(fab.shouldShowChatFab({ ...fabBase, keyboardOpen: true }), false);
+  assert.equal(fab.shouldShowChatFab({ ...fabBase, overlayOpen: true }), false);
+});
+await check("chat FAB: badge iba zo spoľahlivého počtu (RPC), 0/chyba → žiadny badge", () => {
+  assert.equal(fab.totalUnread([{ unread_count: 2 }, { unread_count: "3" }]), 5);
+  assert.equal(fab.unreadBadgeText(fab.totalUnread([{ unread_count: 2 }, { unread_count: "3" }])), "5");
+  assert.equal(fab.unreadBadgeText(fab.totalUnread([])), null);
+  assert.equal(fab.unreadBadgeText(fab.totalUnread([{ unread_count: 0 }])), null);
+  assert.equal(fab.totalUnread(null), null);
+  assert.equal(fab.totalUnread([{ unread_count: "x" }]), null);
+  assert.equal(fab.totalUnread([{ unread_count: -1 }]), null);
+  assert.equal(fab.unreadBadgeText(null), null);
+  assert.equal(fab.unreadBadgeText(150), "99+");
+});
+await check("chat FAB: mobilný layout, nad spodnou lištou, Link na /chat, web nezmenený", () => {
+  const comp = read("app/components/mobile/MobileChatFab.tsx");
+  assert.match(comp, /bottom: "calc\(var\(--mobile-tabbar-space, 0px\) \+ 16px\)"/);
+  assert.match(comp, /<Link\s+href=\{chatHref\}/);
+  assert.match(comp, /getMyUnreadCounts\(\)/);
+  assert.doesNotMatch(comp, /setUnread\(\(?current/, "realtime nič nepripočítava, iba znova načíta");
+  assert.match(comp, /z-\[44\]/); // pod spodnou lištou (z-45) a panelom „Viac" (z-46)
+  const layout = read("mobile/app/layout.tsx");
+  assert.match(layout, /<MobileChatFab \/>/);
+  assert.doesNotMatch(read("app/layout.tsx"), /MobileChatFab/);
+  assert.match(read("app/components/chat/FloatingChatWidget.tsx"), /if \(IS_MOBILE_BUILD\) return null;/);
+});
+
 console.log(`\nmobile-platform: ${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
