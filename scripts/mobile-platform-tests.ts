@@ -691,5 +691,67 @@ await check("chat FAB: mobilný layout, nad spodnou lištou, Link na /chat, web 
   assert.match(read("app/components/chat/FloatingChatWidget.tsx"), /if \(IS_MOBILE_BUILD\) return null;/);
 });
 
+// ----------------------------------------------------------------------------- CHAT FAB drag & snap
+const phone = { width: 360, height: 740, safeTop: 24, safeLeft: 0, safeRight: 0, bottomReserve: 60 + 16 };
+await check("chat FAB drag: povolená plocha na 360 px (pod headerom, nad spodnou lištou, safe area)", () => {
+  const b = fab.fabBounds(phone);
+  assert.deepEqual(b, { minX: 16, maxX: 360 - 16 - 56, minY: 24 + 72, maxY: 740 - 76 - 16 - 56 });
+  const notch = fab.fabBounds({ ...phone, safeLeft: 30, safeRight: 20 });
+  assert.equal(notch.minX, 46);
+  assert.equal(notch.maxX, 360 - 20 - 16 - 56);
+  // Tlačidlo nikdy neprekryje lištu: spodná hrana <= výška - lišta - okraj.
+  assert.ok(b.maxY + 56 <= phone.height - phone.bottomReserve - 16);
+  assert.ok(b.minY >= phone.safeTop + fab.CHAT_FAB_HEADER_RESERVE);
+});
+await check("chat FAB drag: ťuknutie (< 8 px) nie je ťahanie, väčší posun áno", () => {
+  assert.equal(fab.isDragGesture(3, 4), false);
+  assert.equal(fab.isDragGesture(0, 7.9), false);
+  assert.equal(fab.isDragGesture(6, 6), true);
+  assert.equal(fab.isDragGesture(-40, 0), true);
+});
+await check("chat FAB drag: pustenie sa prichytí k bližšiemu okraju, y orezané", () => {
+  const b = fab.fabBounds(phone);
+  assert.deepEqual(fab.snapToEdge(40, 300, b), { x: b.minX, y: 300, side: "left" });
+  assert.deepEqual(fab.snapToEdge(250, 300, b), { x: b.maxX, y: 300, side: "right" });
+  assert.equal(fab.snapToEdge(100, -50, b).y, b.minY, "nie pod header");
+  assert.equal(fab.snapToEdge(100, 5000, b).y, b.maxY, "nie na spodnú lištu");
+  assert.deepEqual(fab.clampToBounds(-100, 9999, b), { x: b.minX, y: b.maxY });
+});
+await check("chat FAB drag: poloha relatívne (strana + pomer) → rotácia/zmena viewportu ju bezpečne prepočíta", () => {
+  const portrait = fab.fabBounds(phone);
+  const stored = fab.toStored({ side: "left", y: (portrait.minY + portrait.maxY) / 2 }, portrait);
+  assert.equal(stored.side, "left");
+  assert.ok(Math.abs(stored.yRatio - 0.5) < 1e-9);
+  const landscape = fab.fabBounds({ width: 740, height: 360, safeTop: 0, safeLeft: 24, safeRight: 24, bottomReserve: 76 });
+  const p = fab.fromStored(stored, landscape);
+  assert.equal(p.x, landscape.minX);
+  assert.ok(p.y >= landscape.minY && p.y <= landscape.maxY);
+  // Extrémne malá výška: pásmo sa zúži, poloha ostáva v povolenom priestore.
+  const tiny = fab.fabBounds({ width: 320, height: 200, safeTop: 0, safeLeft: 0, safeRight: 0, bottomReserve: 76 });
+  const q = fab.fromStored({ side: "right", yRatio: 1 }, tiny);
+  assert.ok(q.y >= tiny.minY && q.y <= tiny.maxY && q.x === tiny.maxX);
+  assert.deepEqual(fab.fromStored(null, portrait), { x: portrait.maxX, y: portrait.maxY, side: "right" }, "predvolene vpravo dole");
+});
+await check("chat FAB drag: uložená hodnota iba lokálne, poškodená/cudzia → predvolená poloha", () => {
+  assert.equal(fab.CHAT_FAB_STORAGE_KEY, "esblu.mobile.chatFab.position.v1");
+  assert.deepEqual(fab.parseStoredPosition('{"side":"left","yRatio":0.25}'), { side: "left", yRatio: 0.25 });
+  assert.deepEqual(fab.parseStoredPosition('{"side":"right","yRatio":7}'), { side: "right", yRatio: 1 });
+  for (const raw of [null, "", "x", '{"side":"top","yRatio":0.5}', '{"side":"left"}', '{"side":"left","yRatio":"0.5"}']) {
+    assert.equal(fab.parseStoredPosition(raw), null, String(raw));
+  }
+  const comp = read("app/components/mobile/MobileChatFab.tsx");
+  assert.match(comp, /window\.localStorage\.setItem\(CHAT_FAB_STORAGE_KEY/);
+  assert.doesNotMatch(comp, /supabase\.from\(|\.rpc\("esblu_(?!get_my_unread)/, "žiadna DB perzistencia polohy");
+});
+await check("chat FAB drag: ťahanie neotvorí Chat (click potlačený), ťuknutie áno; gesto nescrolluje stránku", () => {
+  const comp = read("app/components/mobile/MobileChatFab.tsx");
+  assert.match(comp, /suppressClick\.current = true; \/\/ ťahanie nesmie otvoriť Chat/);
+  assert.match(comp, /if \(suppressClick\.current\) \{\s*event\.preventDefault\(\);/);
+  assert.match(comp, /if \(!d\.moved\) return; \/\/ ťuknutie → onClick otvorí Chat/);
+  assert.match(comp, /touchAction: "none"/);
+  assert.match(comp, /onPointerCancel=\{finishDrag\}/);
+  assert.match(comp, /addEventListener\("orientationchange", relayout\)/);
+});
+
 console.log(`\nmobile-platform: ${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
