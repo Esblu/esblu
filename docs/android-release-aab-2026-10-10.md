@@ -2,16 +2,15 @@
 
 Nič sa nenahráva do Play Console. Heslá ani privátny kľúč nie sú v Gite, v docs ani v logoch.
 
-## Upload keystore
+## Upload keystore (aktualizované 2026-10-11)
 
 | | |
 |---|---|
-| Súbor | `C:\Users\roiaj\Documents\Esblu-keys\esblu-upload-key.jks` (mimo repa) |
-| Typ / alias | PKCS12 / `esblu` (PrivateKeyEntry) |
-| Očakávaný SHA-256 (assetlinks candidate) | `D0:D0:81:55:01:54:6E:CF:F7:91:74:57:53:DB:F6:43:92:B7:D8:DA:F6:3A:DA:A5:77:0B:E0:0A:90:F6:A2:FC` |
+| **Aktuálny upload key** | `C:\Users\roiaj\Documents\Esblu-keys\esblu-upload-key-2026.jks` — PKCS12, alias `esblu`, RSA 4096, SHA256withRSA, platnosť 30 rokov. Vytvára ho lokálne `release\create-upload-keystore.ps1`; heslo zadáva iba používateľ (skrytý vstup), skript ho nikam neukladá. Verejné fingerprinty: `release\upload-key.sha256` / `.sha1` |
+| Legacy | `esblu-upload-key.jks` (2026-09-02) — **heslo neznáme**, nepoužíva sa, nikdy nebol zaregistrovaný v Play Console; nemazať bez rozhodnutia (poznámka `*.LEGACY-UNKNOWN-PASSWORD.txt`). Jeho SHA-256 `D0:D0:81:…:A2:FC` v starom `assetlinks.json` treba nahradiť |
 | Debug keystore (iba lokálne testy) | SHA-256 `C3:C2:D1:5C:6D:3A:C1:7A:FF:2D:BD:3B:FC:52:D7:6D:F8:43:A2:44:55:CA:EF:E2:69:66:3A:27:F7:46:65:E0`, SHA-1 `76:0C:E2:79:81:D6:B0:6A:10:CE:99:6B:F3:43:94:AC:CD:9C:1B:26` |
 
-PKCS12 má aj certifikát šifrovaný heslom → fingerprint sa dá overiť až po zadaní hesla (robí to skript nižšie, ešte pred buildom).
+Poradie: `create-upload-keystore.ps1` (raz) → záloha .jks + hesla → `build-release-aab.ps1`.
 
 ## Signing config
 
@@ -25,7 +24,7 @@ PKCS12 má aj certifikát šifrovaný heslom → fingerprint sa dá overiť až 
 cd "C:\Users\roiaj\assetpilot\Claude outputs\esblu-mobile-production-beta\release"
 powershell -ExecutionPolicy Bypass -File .\build-release-aab.ps1
 ```
-Skript: JDK 21 (Android Studio JBR) → kontrola `google-services.json` (com.esblu.app) → skrytý vstup hesiel (iba env procesu) → **overenie SHA-256 keystore = očakávaný, inak STOP** → `gradlew bundleRelease -PesbluVersionCode=1 -PesbluVersionName=1.0.0` → `release\esblu-1.0.0-vc1.aab` → `jarsigner -verify` + `keytool -printcert -jarfile` (nie debug, SHA-256 = očakávaný) → `release\esblu-1.0.0-vc1.signing.txt` (iba verejné fingerprinty).
+Skript: JDK 21 (Android Studio JBR) → kontrola `google-services.json` (com.esblu.app) → skrytý vstup hesiel (iba env procesu) → **overenie SHA-256 keystore = `release\\upload-key.sha256`, inak STOP** → `gradlew bundleRelease -PesbluVersionCode=1 -PesbluVersionName=1.0.0` → `release\esblu-1.0.0-vc1.aab` → `jarsigner -verify` + `keytool -printcert -jarfile` (nie debug, SHA-256 = očakávaný) → `release\esblu-1.0.0-vc1.signing.txt` (iba verejné fingerprinty).
 
 Statická validácia hotového AAB (bez hesiel):
 ```
@@ -51,7 +50,7 @@ package, versionCode/Name, min/target SDK, podpis (nie debug, očakávaný kľú
       "namespace": "android_app",
       "package_name": "com.esblu.app",
       "sha256_cert_fingerprints": [
-        "D0:D0:81:55:01:54:6E:CF:F7:91:74:57:53:DB:F6:43:92:B7:D8:DA:F6:3A:DA:A5:77:0B:E0:0A:90:F6:A2:FC",
+        "__NEW_UPLOAD_KEY_SHA256__ (release\\upload-key.sha256)",
         "__PLAY_APP_SIGNING_SHA256__"
       ]
     }
