@@ -24,11 +24,11 @@ Poradie: `create-upload-keystore.ps1` (raz) → záloha .jks + hesla → `build-
 cd "C:\Users\roiaj\assetpilot\Claude outputs\esblu-mobile-production-beta\release"
 powershell -ExecutionPolicy Bypass -File .\build-release-aab.ps1
 ```
-Skript: JDK 21 (Android Studio JBR) → kontrola `google-services.json` (com.esblu.app) → skrytý vstup hesiel (iba env procesu) → **overenie SHA-256 keystore = `release\\upload-key.sha256`, inak STOP** → `gradlew bundleRelease -PesbluVersionCode=1 -PesbluVersionName=1.0.0` → `release\esblu-1.0.0-vc1.aab` → `jarsigner -verify` + `keytool -printcert -jarfile` (nie debug, SHA-256 = očakávaný) → `release\esblu-1.0.0-vc1.signing.txt` (iba verejné fingerprinty).
+Skript: JDK 21 (Android Studio JBR) → kontrola `google-services.json` (com.esblu.app) → skrytý vstup hesiel (iba env procesu) → **overenie SHA-256 keystore = `release\upload-key.sha256`, inak STOP** → `gradlew bundleRelease -PesbluVersionCode=1 -PesbluVersionName=1.0.0` → `release\esblu-1.0.0-vc1.aab` → `jarsigner -verify` + `keytool -printcert -jarfile` (nie debug, SHA-256 = očakávaný) → `release\esblu-1.0.0-vc1.signing.txt` (iba verejné fingerprinty).
 
 Statická validácia hotového AAB (bez hesiel):
 ```
-python3 scripts/verify-release-aab.py release/esblu-1.0.0-vc1.aab --expected-sha256 D0:D0:81:...:A2:FC
+python3 scripts/verify-release-aab.py release/esblu-1.0.0-vc1.aab --expected-sha256 "$(cat release/upload-key.sha256)"
 ```
 package, versionCode/Name, min/target SDK, podpis (nie debug, očakávaný kľúč), ABI, FCM zdroje, a web assets cez `android-prebuild-check --target production`.
 
