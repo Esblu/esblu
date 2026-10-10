@@ -363,13 +363,13 @@ function FloatingChatWidgetInner() {
           touchAction: "none",
           zIndex: 70,
         }}
-        className="flex items-center justify-center rounded-full bg-accent-cyan text-[#051221] shadow-2xl transition active:scale-95"
+        className="flex items-center justify-center rounded-full bg-accent-esblu text-on-accent shadow-lg transition hover:bg-brand-700 active:scale-95"
       >
         <ChatBubbleIcon />
         {unreadTotal > 0 && (
           <span
             aria-hidden="true"
-            className="badge-danger absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full px-1 text-[11px] font-bold"
+            className="badge-danger absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full px-1 text-[11px] font-semibold tabular-nums"
           >
             {unreadTotal > 99 ? "99+" : unreadTotal}
           </span>
@@ -461,7 +461,7 @@ function DesktopPanel({
   return (
     <div
       style={style}
-      className="surface-card flex flex-col overflow-hidden rounded-2xl border border-subtle shadow-2xl"
+      className="surface-card flex flex-col overflow-hidden rounded-doc border border-subtle shadow-2xl"
     >
       <PanelHeader
         showBack={!!selectedConversationId}
@@ -498,7 +498,7 @@ function MobilePanel({
 }) {
   return (
     <div
-      className="fixed inset-0 z-[70] flex flex-col justify-end bg-slate-950/60 backdrop-blur-sm"
+      className="fixed inset-0 z-[70] flex flex-col justify-end bg-black/60 backdrop-blur-sm"
       onClick={(event) => {
         // Zatvorí panel iba pri kliku priamo na backdrop (target ===
         // currentTarget), nie pri kliku na čokoľvek v podstrome panelu.
@@ -526,7 +526,7 @@ function MobilePanel({
         // statického `vh`) spolu s `interactiveWidget: "resizes-content"`
         // (app/layout.tsx) korektne zmenší panel pri otvorení soft
         // klávesnice bez JS hacku na výšku viewportu.
-        className="surface-card flex h-[85vh] h-[85dvh] flex-col overflow-hidden rounded-t-2xl border-t border-subtle shadow-2xl"
+        className="surface-card flex h-[85vh] h-[85dvh] flex-col overflow-hidden rounded-t-doc border-t border-subtle shadow-2xl"
         style={{ paddingBottom: "var(--esblu-safe-bottom, env(safe-area-inset-bottom, 0px))" }}
       >
         <PanelHeader
@@ -592,13 +592,13 @@ function PanelHeader({
   t: (key: string) => string;
 }) {
   return (
-    <div className="flex items-center justify-between gap-2 border-b border-subtle px-2 py-2">
+    <div className="flex items-center justify-between gap-2 border-b border-subtle px-1.5 py-1">
       {showBack ? (
         <button
           type="button"
           onClick={onBack}
           aria-label={t("chat.backToList")}
-          className="flex h-8 w-8 items-center justify-center rounded-full text-secondary transition hover:bg-surface-hover hover:text-primary"
+          className="flex h-8 w-8 items-center justify-center rounded-doc-sm text-sm text-secondary transition hover:bg-surface-hover hover:text-primary"
         >
           ←
         </button>
@@ -610,7 +610,7 @@ function PanelHeader({
         type="button"
         onClick={onClose}
         aria-label={t("chat.closePanel")}
-        className="flex h-8 w-8 items-center justify-center rounded-full text-secondary transition hover:bg-surface-hover hover:text-primary"
+        className="flex h-8 w-8 items-center justify-center rounded-doc-sm text-sm text-secondary transition hover:bg-surface-hover hover:text-primary"
       >
         ✕
       </button>
@@ -632,7 +632,7 @@ function PanelBody({
   onClose: () => void;
 }) {
   return (
-    <div className="min-h-0 flex-1 overflow-hidden p-3">
+    <div className="min-h-0 flex-1 overflow-hidden p-2.5">
       {selectedConversationId ? (
         <ChatMessageView
           conversationId={selectedConversationId}

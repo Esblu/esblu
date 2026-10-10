@@ -98,7 +98,7 @@ export default function InventoryItemDetailView({ entityId }: { entityId: string
   if (loadError || !item) {
     return (
       <PageShell moduleContext="inventory" uiContext={{ module: "inventory", entityType: "inventory_item", entityId }}>
-        <BackLink href="/sklad" label={t("nav.inventory")} className="mb-3 sm:mb-6" />
+        <BackLink href="/sklad" label={t("nav.inventory")} className="mb-1 sm:mb-3" />
         <Notice tone="critical">{loadError || t("inventory.errors.notFound")}</Notice>
       </PageShell>
     );
@@ -121,7 +121,7 @@ export default function InventoryItemDetailView({ entityId }: { entityId: string
 
   return (
     <PageShell moduleContext="inventory" uiContext={{ module: "inventory", entityType: "inventory_item", entityId }}>
-      <BackLink href="/sklad" label={t("nav.inventory")} className="mb-3 sm:mb-6" />
+      <BackLink href="/sklad" label={t("nav.inventory")} className="mb-1 sm:mb-3" />
 
       <PageHeader
         eyebrow={

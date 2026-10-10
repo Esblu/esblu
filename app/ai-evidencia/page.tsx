@@ -55,6 +55,7 @@ import {
   docButtonPrimary,
   docButtonSecondary,
   docButtonDanger,
+  docField,
   docLabel,
 } from "@/app/components/ui/Primitives";
 import {
@@ -669,14 +670,14 @@ function FolderTile({
     <button
       type="button"
       onClick={onClick}
-      className="flex items-center gap-3 rounded-doc border border-doc-border bg-doc-surface p-4 text-left transition hover:border-border-strong hover:bg-doc-surface-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+      className="flex items-center gap-3 rounded-doc border border-doc-border bg-doc-surface px-3 py-2.5 text-left transition hover:border-border-strong hover:bg-doc-surface-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
     >
-      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-doc-sm border border-doc-border bg-surface-2 text-secondary">
+      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-doc-sm border border-doc-border bg-surface-2 text-secondary">
         {icon}
       </span>
       <span className="min-w-0">
-        <span className="block truncate text-base font-semibold text-primary">{title}</span>
-        <span className="mt-0.5 block text-sm text-muted-esblu">{subtitle}</span>
+        <span className="block truncate text-sm font-semibold text-primary">{title}</span>
+        <span className="mt-0.5 block text-[13px] text-muted-esblu">{subtitle}</span>
       </span>
     </button>
   );
@@ -3392,7 +3393,7 @@ function renderDocumentRegister(
 }
 
   return (
-    <main className="app-shell-bg relative min-h-dvh px-4 pb-28 pt-4 sm:px-6 sm:pt-6 lg:px-10 lg:pt-10">
+    <main className="app-shell-bg relative min-h-dvh px-4 pb-28 pt-3 sm:px-6 sm:pt-5 lg:px-8 lg:pt-6">
       <Suspense fallback={null}>
         {/* Hlasový launcher. Kontext nesie IBA typ a identifikátor práve
             otvoreného dokladu — vďaka tomu „spracuj tento dokument" vie, o
@@ -3421,16 +3422,16 @@ function renderDocumentRegister(
         />
       </Suspense>
       <div className="mx-auto max-w-5xl">
-        <BackLink href="/" label={t("inbox.backToMenu")} className="mb-4" />
+        <BackLink href="/" label={t("inbox.backToMenu")} className="mb-3" />
 
-        <div className="flex items-center gap-3 border-b border-doc-border pb-5">
+        <div className="flex items-center gap-2.5 border-b border-doc-border pb-3">
           <span
             aria-hidden="true"
-            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-doc-sm border border-doc-border bg-surface-2 text-secondary"
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-doc-sm border border-doc-border bg-surface-2 text-secondary"
           >
-            <InboxDocumentIcon size={22} />
+            <InboxDocumentIcon size={18} />
           </span>
-          <h1 className="text-2xl font-semibold text-primary">{t("inbox.title")}</h1>
+          <h1 className="text-xl font-semibold text-primary sm:text-[1.375rem]">{t("inbox.title")}</h1>
         </div>
 
         {!planUsageLoading && isPlanLimited && (
@@ -3438,12 +3439,12 @@ function renderDocumentRegister(
             resource="ai_evidence"
             usage={planUsage}
             limit={planLimit}
-            className="mt-6"
+            className="mt-4"
           />
         )}
 
         {legalHold && (
-          <div className="mt-6">
+          <div className="mt-4">
             <Notice tone="warning">{t("common.legalHoldMessage")}</Notice>
           </div>
         )}
@@ -3452,7 +3453,7 @@ function renderDocumentRegister(
             zadania). Inbox od tejto zmeny nemá žiadnu "Technické preukazy"
             sekciu ani CTA "pridať vozidlo z TP". */}
 
-        <div className="mt-8">
+        <div className="mt-4">
           <UploadHero
             title={t("inbox.addDocument.title")}
             description={t("inbox.addDocument.description")}
@@ -3468,20 +3469,20 @@ function renderDocumentRegister(
         </div>
 
         {previewUrl && pendingImageFile && (
-          <section className="mt-8 rounded-doc border border-doc-border bg-doc-surface p-4 sm:p-5">
+          <section className="mt-4 rounded-doc border border-doc-border bg-doc-surface p-3 sm:p-4">
             <div className="text-center">
-              <h2 className="text-base font-semibold text-primary">
+              <h2 className="text-[15px] font-semibold text-primary">
                 {t("inbox.reviewOrientation.title")}
               </h2>
-              <p className="mt-2 text-sm text-secondary">
+              <p className="mt-1 text-[13px] text-secondary">
                 {t("inbox.reviewOrientation.description")}
               </p>
-              <p className="mt-2 text-sm text-secondary">
+              <p className="mt-0.5 text-xs text-muted-esblu">
                 {t("inbox.reviewOrientation.rotation", { degrees: rotation })}
               </p>
             </div>
 
-            <div className="mx-auto mt-5 flex aspect-square w-full max-w-xl items-center justify-center overflow-hidden rounded-doc border border-doc-border bg-surface-2 p-3">
+            <div className="mx-auto mt-3 flex aspect-square w-full max-w-md items-center justify-center overflow-hidden rounded-doc border border-doc-border bg-surface-2 p-3">
               <img
                 src={previewUrl}
                 alt={t("inbox.reviewOrientation.previewAlt")}
@@ -3490,7 +3491,7 @@ function renderDocumentRegister(
               />
             </div>
 
-            <div className="mt-5 grid grid-cols-2 gap-3">
+            <div className="mt-3 grid grid-cols-2 gap-2">
               <button
                 type="button"
                 onClick={() =>
@@ -3513,7 +3514,7 @@ function renderDocumentRegister(
               </button>
             </div>
 
-            <div className="mt-4 flex flex-col gap-3 sm:flex-row">
+            <div className="mt-2 flex flex-col gap-2 sm:flex-row">
               <button
                 type="button"
                 onClick={processPendingDocument}
@@ -3537,29 +3538,29 @@ function renderDocumentRegister(
         )}
 
         {fileName && (
-          <div className="mt-8 rounded-doc border border-doc-border bg-surface-2 p-4">
-            <p className="font-bold text-primary">{t("inbox.selectedDocument")}</p>
-            <p className="mt-1 text-secondary">{fileName}</p>
+          <div className="mt-4 rounded-doc border border-doc-border bg-surface-2 p-3">
+            <p className="text-sm font-semibold text-primary">{t("inbox.selectedDocument")}</p>
+            <p className="mt-0.5 break-words text-[13px] text-secondary">{fileName}</p>
 
             {isProcessing && (
-              <p className="mt-4 text-sm font-medium text-secondary">
+              <p className="mt-2 text-[13px] font-medium text-secondary">
                 {t("inbox.aiProcessing")}
               </p>
             )}
 
             {error && (
-              <p className="mt-4 font-semibold text-red-400">{t("inbox.errorPrefix", { message: error })}</p>
+              <p className="mt-2 text-sm font-medium text-danger">{t("inbox.errorPrefix", { message: error })}</p>
             )}
           </div>
         )}
 
         {myIntakeReviews.length > 0 && !intakeOnly && (
-          <div className="mt-6 rounded-doc border border-doc-border bg-doc-surface p-4">
-            <h2 className="text-base font-semibold text-primary">{t("inbox.intakeResume.title")}</h2>
-            <ul className="mt-3 space-y-2">
+          <div className="mt-4 rounded-doc border border-doc-border bg-doc-surface p-3 sm:p-4">
+            <h2 className="text-[15px] font-semibold text-primary">{t("inbox.intakeResume.title")}</h2>
+            <ul className="mt-2 space-y-2">
               {myIntakeReviews.map((item) => (
                 <li key={`${item.target}-${item.id}`} className="flex flex-wrap items-center justify-between gap-2">
-                  <span className="text-sm text-secondary">
+                  <span className="text-[13px] text-secondary">
                     {documentTypeLabels[item.kind as ScanDocumentType] ?? item.kind}
                     {" · "}
                     {item.status === "extracted"
@@ -3582,26 +3583,26 @@ function renderDocumentRegister(
         )}
 
         {intakeOnly?.originalUrl && (
-          <div className="mt-6">
+          <div className="mt-4">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src={intakeOnly.originalUrl} alt="" className="max-h-96 w-auto rounded-doc border border-doc-border" />
           </div>
         )}
 
         {intakeNotice && (
-          <div className="mt-6">
+          <div className="mt-4">
             <Notice>{intakeNotice}</Notice>
           </div>
         )}
 
         {result && (
-          <div className="mt-8 space-y-4 rounded-doc border border-doc-border bg-doc-surface p-4 sm:p-5">
-            <h2 className="text-lg font-semibold text-primary">
+          <div className="mt-4 space-y-3 rounded-doc border border-doc-border bg-doc-surface p-3 sm:p-4">
+            <h2 className="text-[15px] font-semibold text-primary">
               {t("inbox.loadedData", { type: documentTypeLabels[scanDocumentType ?? "weigh_ticket"] })}
             </h2>
 
             {result.reviewStatus === "needs_review" && (
-              <p className="rounded-doc-sm border border-warning/30 bg-warning-soft px-4 py-3 text-sm font-medium text-warning">
+              <p className="rounded-doc-sm border border-warning/30 bg-warning-soft px-3 py-2 text-[13px] font-medium text-warning">
                 {t("inbox.aiUnsureWarning")}
               </p>
             )}
@@ -3630,23 +3631,23 @@ function renderDocumentRegister(
                 <input
                   value={result[field] ?? ""}
                   onChange={(e) => updateResult(field, e.target.value)}
-                  className="mt-1 w-full rounded-xl border border-subtle bg-surface-1 px-4 py-3 outline-none"
+                  className={docField}
                 />
               </div>
             ))}
 
             {currentWeightValidation?.invalidFields.length ? (
-              <p className="rounded-xl bg-danger-soft px-4 py-3 text-sm font-semibold text-red-700">
+              <p className="rounded-doc-sm bg-danger-soft px-3 py-2 text-[13px] font-medium text-danger">
                 {t("inbox.invalidNumberFields", {
                   fields: currentWeightValidation.invalidFields.join(", "),
                 })}
               </p>
             ) : currentWeightValidation?.hasMathMismatch ? (
-              <p className="rounded-xl bg-warning-soft px-4 py-3 text-sm font-semibold text-amber-400">
+              <p className="rounded-doc-sm bg-warning-soft px-3 py-2 text-[13px] font-medium text-warning">
                 {t("inbox.weightMismatchWarning")}
               </p>
             ) : currentWeightValidation?.isUnitMissing ? (
-              <p className="rounded-xl bg-warning-soft px-4 py-3 text-sm font-semibold text-amber-400">
+              <p className="rounded-doc-sm bg-warning-soft px-3 py-2 text-[13px] font-medium text-warning">
                 {t("inbox.weightUnitMissingWarning")}
               </p>
             ) : null}
@@ -3661,7 +3662,7 @@ function renderDocumentRegister(
                 isCreationBlocked ||
                 Boolean(currentWeightValidation?.invalidFields.length)
               }
-              className={`mt-4 w-full ${docButtonPrimary}`}
+              className={`mt-1 w-full ${docButtonPrimary}`}
             >
               {isSaving ? t("common.buttons.saving") : t("inbox.saveToEvidence")}
             </button>
@@ -3672,13 +3673,13 @@ function renderDocumentRegister(
           scanDocumentType &&
           scanDocumentType !== "weigh_ticket" &&
           scanDocumentType !== "delivery_note" && (
-          <div className="mt-8 space-y-4 rounded-doc border border-doc-border bg-doc-surface p-4 sm:p-5">
-            <h2 className="text-lg font-semibold text-primary">
+          <div className="mt-4 space-y-3 rounded-doc border border-doc-border bg-doc-surface p-3 sm:p-4">
+            <h2 className="text-[15px] font-semibold text-primary">
               {t("inbox.loadedData", { type: documentTypeLabels[scanDocumentType] })}
             </h2>
 
             {otherResult.reviewStatus === "needs_review" && (
-              <p className="rounded-doc-sm border border-warning/30 bg-warning-soft px-4 py-3 text-sm font-medium text-warning">
+              <p className="rounded-doc-sm border border-warning/30 bg-warning-soft px-3 py-2 text-[13px] font-medium text-warning">
                 {t("inbox.aiUnsureWarningGeneric")}
               </p>
             )}
@@ -3692,7 +3693,7 @@ function renderDocumentRegister(
                   <input
                     value={otherResult.fields[field] ?? ""}
                     onChange={(e) => updateOtherResult(field, e.target.value)}
-                    className="mt-1 w-full rounded-xl border border-subtle bg-surface-1 px-4 py-3 outline-none"
+                    className={docField}
                   />
                 </div>
               )
@@ -3710,7 +3711,7 @@ function renderDocumentRegister(
                   onChange={(e) => setDocumentNote(e.target.value)}
                   rows={3}
                   placeholder={t("inbox.notePlaceholder")}
-                  className="mt-1 w-full rounded-xl border border-subtle bg-surface-1 px-4 py-3 outline-none"
+                  className={docField}
                 />
               </div>
             )}
@@ -3721,7 +3722,7 @@ function renderDocumentRegister(
                 Bez tohto vysvetlenia by to vyzeralo, že sa uloženie nepodarilo. */}
             {(scanDocumentType === "invoice" || scanDocumentType === "receipt") &&
               !canViewFinance && (
-                <p className="rounded-xl bg-amber-500/10 px-4 py-3 text-sm font-semibold text-amber-400">
+                <p className="rounded-doc-sm bg-warning-soft px-3 py-2 text-[13px] font-medium text-warning">
                   {t("inbox.errors.financeDocumentHidden")}
                 </p>
               )}
@@ -3732,11 +3733,11 @@ function renderDocumentRegister(
                 jej náhrada: kto chce doklad iba odložiť k vozidlu/stroju,
                 pokračuje priradením nižšie. */}
             {scanDocumentType === "invoice" && canManageFinance && (
-              <div className="space-y-3 rounded-doc border border-doc-border bg-surface-2 p-4">
+              <div className="space-y-2 rounded-doc border border-doc-border bg-surface-2 p-3">
                 <h3 className="text-sm font-semibold text-primary">
                   {t("inbox.receivedInvoice.cta.title")}
                 </h3>
-                <p className="text-sm text-muted-esblu">
+                <p className="text-[13px] text-muted-esblu">
                   {t("inbox.receivedInvoice.cta.description")}
                 </p>
                 <button
@@ -3754,7 +3755,7 @@ function renderDocumentRegister(
             {/* Priradenie MUSÍ byť pred tlačidlom Uložiť — rovnaká zásada
                 ako pri vážnom lístku, aby sa nedalo uložiť skôr, než sa
                 používateľ k priradeniu vôbec dostane. */}
-            <div className="space-y-4 rounded-doc border border-doc-border bg-surface-2 p-4">
+            <div className="space-y-3 rounded-doc border border-doc-border bg-surface-2 p-3">
               <h3 className="text-sm font-semibold text-primary">
                 {scanDocumentType === "insurance"
                   ? t("inbox.assignmentQuestionPzp")
@@ -3762,7 +3763,7 @@ function renderDocumentRegister(
               </h3>
 
               {scanDocumentType === "insurance" && insuranceMatchAmbiguous && (
-                <p className="rounded-xl bg-amber-500/10 p-3 text-sm font-semibold text-amber-400">
+                <p className="rounded-doc-sm bg-warning-soft px-3 py-2 text-[13px] font-medium text-warning">
                   {t("inbox.pzpAmbiguousWarning")}
                 </p>
               )}
@@ -3770,7 +3771,7 @@ function renderDocumentRegister(
               {scanDocumentType === "insurance" &&
                 !insuranceMatchAmbiguous &&
                 assignmentTarget === null && (
-                  <p className="rounded-xl bg-surface-2 p-3 text-sm text-muted-esblu">
+                  <p className="rounded-doc-sm bg-surface-1 px-3 py-2 text-[13px] text-muted-esblu">
                     {t("inbox.pzpNoMatchHint")}
                   </p>
                 )}
@@ -3785,10 +3786,10 @@ function renderDocumentRegister(
                 <button
                   type="button"
                   onClick={() => setAssignmentTarget("vehicle")}
-                  className={`rounded-doc-sm border px-3 py-3 text-sm font-medium transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
+                  className={`min-h-[var(--control-h)] rounded-doc-sm border px-2.5 py-1.5 text-[13px] font-medium transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
                     assignmentTarget === "vehicle"
                       ? "border-transparent bg-accent-esblu text-on-accent"
-                      : "bg-surface-2 text-secondary"
+                      : "border-doc-border bg-surface-1 text-secondary hover:text-primary"
                   }`}
                 >
                   {t("inbox.assignVehicle")}
@@ -3796,10 +3797,10 @@ function renderDocumentRegister(
                 <button
                   type="button"
                   onClick={() => setAssignmentTarget("machine")}
-                  className={`rounded-doc-sm border px-3 py-3 text-sm font-medium transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
+                  className={`min-h-[var(--control-h)] rounded-doc-sm border px-2.5 py-1.5 text-[13px] font-medium transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
                     assignmentTarget === "machine"
                       ? "border-transparent bg-accent-esblu text-on-accent"
-                      : "bg-surface-2 text-secondary"
+                      : "border-doc-border bg-surface-1 text-secondary hover:text-primary"
                   }`}
                 >
                   {t("inbox.assignMachine")}
@@ -3808,10 +3809,10 @@ function renderDocumentRegister(
                   <button
                     type="button"
                     onClick={() => setAssignmentTarget("none")}
-                    className={`rounded-doc-sm border px-3 py-3 text-sm font-medium transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
+                    className={`min-h-[var(--control-h)] rounded-doc-sm border px-2.5 py-1.5 text-[13px] font-medium transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
                       assignmentTarget === "none"
                         ? "border-transparent bg-accent-esblu text-on-accent"
-                        : "bg-surface-2 text-secondary"
+                        : "border-doc-border bg-surface-1 text-secondary hover:text-primary"
                     }`}
                   >
                     {t("inbox.assignNone")}
@@ -3827,7 +3828,7 @@ function renderDocumentRegister(
                   <select
                     value={selectedVehicleId}
                     onChange={(e) => setSelectedVehicleId(e.target.value)}
-                    className="mt-1 w-full rounded-xl border border-subtle bg-surface-1 px-4 py-3 outline-none"
+                    className={docField}
                   >
                     <option value="">{t("inbox.chooseVehiclePlaceholder")}</option>
                     {vehicleOptions.map((vehicle) => (
@@ -3852,7 +3853,7 @@ function renderDocumentRegister(
                   <select
                     value={selectedMachineId}
                     onChange={(e) => setSelectedMachineId(e.target.value)}
-                    className="mt-1 w-full rounded-xl border border-subtle bg-surface-1 px-4 py-3 outline-none"
+                    className={docField}
                   >
                     <option value="">{t("inbox.chooseMachinePlaceholder")}</option>
                     {machineOptions.map((machine) => (
@@ -3881,7 +3882,7 @@ function renderDocumentRegister(
                 (assignmentTarget === "vehicle" && !selectedVehicleId) ||
                 (assignmentTarget === "machine" && !selectedMachineId)
               }
-              className={`mt-4 w-full ${docButtonPrimary}`}
+              className={`mt-1 w-full ${docButtonPrimary}`}
             >
               {isSavingOtherDocument
                 ? t("common.buttons.saving")
@@ -3923,12 +3924,12 @@ function renderDocumentRegister(
       "Prehľad podľa ŠPZ" nižšie ostáva jediný, kompletný pohľad na rovnaké
       dáta (bod 3 zadania). */}
   {records.length > 0 && (
-  <div className="mt-10">
-    <h2 className="mb-4 text-lg font-semibold text-primary">
+  <div className="mt-6">
+    <h2 className="mb-2.5 text-[15px] font-semibold text-primary">
       {t("inbox.spzOverviewTitle")}
     </h2>
 
-    <div className="space-y-3">
+    <div className="space-y-2">
       {Object.entries(summaryBySpz).map(
         ([spz, vehicleSummary]: any) => (
           <SectionPanel
@@ -3961,7 +3962,7 @@ function renderDocumentRegister(
               )}
             </MetricGrid>
 
-            <div className="mt-4 grid gap-4 md:grid-cols-2">
+            <div className="mt-3 grid gap-2 md:grid-cols-2">
               <MaterialBreakdown
                 title={t("inbox.importLabel")}
                 rows={vehicleSummary.importByMaterial}
@@ -3987,29 +3988,29 @@ function renderDocumentRegister(
   </div>
 )}
     {records.length > 0 && (
-      <div className="mt-10">
-    <h2 className="mb-4 text-lg font-semibold text-primary">
+      <div className="mt-6">
+    <h2 className="mb-2.5 text-[15px] font-semibold text-primary">
       {t("inbox.savedDocumentsTitle")}
     </h2>
 
-    <div className="mt-5 space-y-3">
+    <div className="space-y-2">
       {!selectedSpz &&
   Object.entries(groupedRecords).map(([spz, items]: any) => (
     <div
       key={spz}
-      className="rounded-doc border border-doc-border bg-doc-surface p-4"
+      className="rounded-doc border border-doc-border bg-doc-surface px-3 py-2.5 sm:px-4"
     >
-      <div className="flex items-center justify-between gap-4">
+      <div className="flex items-center justify-between gap-3">
         <div>
           <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-esblu">
             {t("inbox.assignVehicle")}
           </p>
 
-          <h3 className="mt-1 text-base font-semibold text-primary">
+          <h3 className="mt-0.5 text-sm font-semibold text-primary">
             {spz}
           </h3>
 
-          <p className="mt-1 text-sm text-secondary">
+          <p className="mt-0.5 text-[13px] text-secondary">
             {items.length} {tCount("inbox.documentsCountSuffix", items.length)}
           </p>
         </div>
@@ -4028,12 +4029,12 @@ function renderDocumentRegister(
   <>
     <button
       onClick={() => setSelectedSpz(null)}
-      className={`mb-4 ${docButtonSecondary}`}
+      className={`mb-3 ${docButtonSecondary}`}
     >
       {t("inbox.backToAllPlates")}
     </button>
 
-    <h3 className="mb-4 text-lg font-semibold text-primary">{selectedSpz}</h3>
+    <h3 className="mb-2.5 text-[15px] font-semibold text-primary">{selectedSpz}</h3>
 
     <RegisterHeader columns={EVIDENCE_COLUMNS}>
       <span>{t("inbox.register.colDocument")}</span>
@@ -4084,13 +4085,13 @@ function renderDocumentRegister(
   </div>
 )}
     {isOwnerOrAdmin(role) && (
-    <div className="mt-10 rounded-doc border border-doc-border bg-doc-surface p-4 sm:p-5">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+    <div className="mt-6 rounded-doc border border-doc-border bg-doc-surface p-3 sm:p-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h2 className="text-lg font-semibold text-primary">
+          <h2 className="text-[15px] font-semibold text-primary">
             {t("inbox.exportDocumentsTitle")}
           </h2>
-          <p className="mt-1 text-sm text-secondary">
+          <p className="mt-0.5 text-[13px] text-secondary">
             {t("inbox.exportDocumentsDescription")}
           </p>
         </div>
@@ -4120,14 +4121,14 @@ function renderDocumentRegister(
       </div>
 
       {visibleDocuments.length === 0 && (
-        <p className="mt-4 rounded-xl bg-warning-soft px-4 py-3 text-sm font-semibold text-amber-400">
+        <p className="mt-3 rounded-doc-sm bg-warning-soft px-3 py-2 text-[13px] font-medium text-warning">
           {t("inbox.errors.noDocumentsToExport")}
         </p>
       )}
 
       {exportFeedback && (
         <p
-          className={`mt-4 rounded-xl px-4 py-3 text-sm font-semibold ${
+          className={`mt-3 rounded-doc-sm px-3 py-2 text-[13px] font-medium ${
             exportFeedback.type === "success"
               ? "badge-success"
               : "badge-danger"
@@ -4143,25 +4144,25 @@ function renderDocumentRegister(
         Sekcia zmizne, keď je prázdna: Inbox nemá byť miestom, kde faktúra
         býva, ale miestom, cez ktoré prejde do modulu Faktúry. */}
     {!openFolder && !openCustomCategoryId && pendingInvoiceDocuments.length > 0 && (
-      <div className="mt-10">
-        <h2 className="text-lg font-semibold text-primary">
+      <div className="mt-6">
+        <h2 className="text-[15px] font-semibold text-primary">
           {t("inbox.pendingInvoicesTitle")}
         </h2>
-        <p className="mt-1 text-sm text-muted-esblu">
+        <p className="mt-0.5 text-[13px] text-muted-esblu">
           {t("inbox.pendingInvoicesHint")}
         </p>
 
-        <ul className="mt-4 space-y-2">
+        <ul className="mt-2.5 space-y-1.5">
           {pendingInvoiceDocuments.map((doc) => (
             <li
               key={doc.id}
-              className="flex flex-wrap items-center justify-between gap-3 rounded-doc border border-doc-border bg-surface-2 px-4 py-3"
+              className="flex flex-wrap items-center justify-between gap-3 rounded-doc border border-doc-border bg-surface-2 px-3 py-2.5"
             >
               <div className="min-w-0">
                 <p className="truncate text-sm font-medium text-primary">
                   {doc.original_filename || t("inbox.noName")}
                 </p>
-                <p className="mt-0.5 text-sm text-muted-esblu">
+                <p className="mt-0.5 text-[13px] text-muted-esblu">
                   {doc.created_at ? formatDate(doc.created_at, locale) : "—"}
                 </p>
               </div>
@@ -4176,9 +4177,9 @@ function renderDocumentRegister(
 
     {/* Zložka "Bločky" — nepriradené dokumenty. */}
     {!openFolder && !openCustomCategoryId && (
-      <div className="mt-10">
+      <div className="mt-6">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="text-lg font-semibold text-primary">
+          <h2 className="text-[15px] font-semibold text-primary">
             {t("inbox.foldersTitle")}
           </h2>
           {canManageFinance && (
@@ -4189,7 +4190,7 @@ function renderDocumentRegister(
           )}
         </div>
 
-        <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div className="mt-2.5 grid grid-cols-1 gap-2 sm:grid-cols-2">
           <FolderTile
             icon={<ReceiptIcon size={20} />}
             title={t("inbox.receiptsFolderTitle")}
@@ -4207,12 +4208,12 @@ function renderDocumentRegister(
         zámerne vôbec nezobrazí, kým firma nemá žiadnu vlastnú kategóriu —
         žiadny prázdny "0 zložiek" blok. */}
     {!openFolder && !openCustomCategoryId && customCategories.length > 0 && (
-      <div className="mt-10">
-        <h2 className="text-lg font-semibold text-primary">
+      <div className="mt-6">
+        <h2 className="text-[15px] font-semibold text-primary">
           {t("inbox.customCategoriesTitle")}
         </h2>
 
-        <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div className="mt-2.5 grid grid-cols-1 gap-2 sm:grid-cols-2">
           {customCategories.map((category) => {
             const count = customCategoryDocumentCounts.get(category.id) || 0;
             return (
@@ -4230,20 +4231,20 @@ function renderDocumentRegister(
     )}
 
     {openCustomCategory && (
-      <div className="mt-10">
+      <div className="mt-6">
         <button
           onClick={handleBackToFolders}
-          className={`mb-4 ${docButtonSecondary}`}
+          className={`mb-3 ${docButtonSecondary}`}
         >
           {t("inbox.backToFolders")}
         </button>
 
-        <div className="flex flex-col gap-4 rounded-doc border border-doc-border bg-doc-surface p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
+        <div className="flex flex-col gap-3 rounded-doc border border-doc-border bg-doc-surface p-3 sm:flex-row sm:items-center sm:justify-between sm:p-4">
           <div className="min-w-0">
-            <h2 className="text-lg font-semibold text-primary">
+            <h2 className="text-[15px] font-semibold text-primary">
               {openCustomCategory.name}
             </h2>
-            <p className="mt-1 text-sm text-secondary">
+            <p className="mt-0.5 text-[13px] text-secondary">
               {openCustomCategoryDocuments.length}{" "}
               {tCount("inbox.customCategoryDocumentsCount", openCustomCategoryDocuments.length)}
             </p>
@@ -4350,7 +4351,7 @@ function renderDocumentRegister(
             </div>
 
             {moveTargetOpen && (
-              <div className="mt-3 flex flex-wrap gap-1.5 border-t border-doc-border pt-3">
+              <div className="mt-2.5 flex flex-wrap gap-1.5 border-t border-doc-border pt-2.5">
                 {customCategories
                   .filter((category) => category.id !== openCustomCategory.id)
                   .map((category) => (
@@ -4391,22 +4392,22 @@ function renderDocumentRegister(
       </div>
     )}
     {openFolder && (
-      <div className="mt-10">
+      <div className="mt-6">
         <button
           onClick={handleBackToFolders}
-          className={`mb-4 ${docButtonSecondary}`}
+          className={`mb-3 ${docButtonSecondary}`}
         >
           {t("inbox.backToFolders")}
         </button>
 
-        <div className="flex flex-col gap-4 rounded-doc border border-doc-border bg-doc-surface p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
+        <div className="flex flex-col gap-3 rounded-doc border border-doc-border bg-doc-surface p-3 sm:flex-row sm:items-center sm:justify-between sm:p-4">
           <div>
-            <h2 className="text-lg font-semibold text-primary">
+            <h2 className="text-[15px] font-semibold text-primary">
               {openFolder === "receipt"
                 ? t("inbox.receiptsFolderTitle")
                 : t("inbox.invoicesFolderTitle")}
             </h2>
-            <p className="mt-1 text-sm text-secondary">
+            <p className="mt-0.5 text-[13px] text-secondary">
               {openFolderDocuments.length}{" "}
               {tCount("inbox.unassignedDocumentsCount", openFolderDocuments.length)}
             </p>
@@ -4449,7 +4450,7 @@ function renderDocumentRegister(
         </div>
 
         {canManageFinance && (
-          <p className="mt-3 text-sm text-muted-esblu">{t("folders.inbox.originalsHint")}</p>
+          <p className="mt-2 text-xs text-muted-esblu">{t("folders.inbox.originalsHint")}</p>
         )}
 
         {canViewFinance && openFolderAllDocuments.length > 0 && (
@@ -4502,7 +4503,7 @@ function renderDocumentRegister(
 
         {folderExportFeedback && (
           <p
-            className={`mt-4 rounded-doc-sm px-4 py-3 text-sm font-medium ${
+            className={`mt-3 rounded-doc-sm px-3 py-2 text-[13px] font-medium ${
               folderExportFeedback.type === "success"
                 ? "badge-success"
                 : folderExportFeedback.type === "warning"
@@ -4606,11 +4607,11 @@ function renderDocumentRegister(
       </div>
     )}
 
-    <div className="mt-10">
-      <h2 className="text-lg font-semibold text-primary">
+    <div className="mt-6">
+      <h2 className="text-[15px] font-semibold text-primary">
         {t("inbox.otherDocumentsTitle")}
       </h2>
-      <p className="mt-1 text-sm text-secondary">
+      <p className="mt-0.5 text-[13px] text-secondary">
         {t("inbox.otherDocumentsDescription")}
       </p>
 
@@ -4632,7 +4633,7 @@ function renderDocumentRegister(
     closeLabel={t("common.buttons.close")}
   >
 
-      <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
 
         <Info title={t("inbox.typeLabel")} value={selectedRecord.document_type} />
         <Info title={t("inbox.movementLabel")} value={selectedRecord.movement_type} />
@@ -4668,8 +4669,8 @@ function renderDocumentRegister(
 
       </div>
       {selectedRecord.photo_url && (
-  <div className="mt-5">
-    <p className="mb-2 text-sm font-bold text-secondary">
+  <div className="mt-4">
+    <p className="mb-1.5 text-xs font-medium text-secondary">
       {t("inbox.originalDocument")}
     </p>
 
@@ -4678,7 +4679,7 @@ function renderDocumentRegister(
         <img
           src={documentPhotoUrl}
           alt={t("inbox.originalDocument")}
-          className="max-h-[500px] w-full rounded-doc border border-doc-border object-contain"
+          className="max-h-[420px] w-full rounded-doc border border-doc-border object-contain"
         />
       </a>
     ) : (
@@ -4690,14 +4691,14 @@ function renderDocumentRegister(
 )}
       <button
         onClick={() => setSelectedRecord(null)}
-        className={`mt-8 w-full ${docButtonPrimary}`}
+        className={`mt-5 w-full ${docButtonPrimary}`}
       > 
         {t("inbox.close")}
       </button>
 {isOwnerOrAdmin(role) && (
 <button
   onClick={() => deleteRecord(selectedRecord.id)}
-  className={`mt-3 w-full ${docButtonDanger}`}
+  className={`mt-2 w-full ${docButtonDanger}`}
 >
   {t("inbox.deleteRecord")}
 </button>
@@ -4711,7 +4712,7 @@ function renderDocumentRegister(
     closeLabel={t("common.buttons.close")}
   >
 
-      <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
 
         <Info
           title={t("inbox.typeLabel")}
@@ -4753,21 +4754,21 @@ function renderDocumentRegister(
           Inboxe slepá ulička: faktúra z neho už existovala, ale nedalo sa
           k nej odtiaľto dostať — ani sa nedalo zistiť, že vôbec vznikla. */}
       {documentInvoiceId(selectedOtherDocument) ? (
-        <div className="mt-5 rounded-doc border border-doc-border bg-surface-2 p-4">
+        <div className="mt-4 rounded-doc border border-doc-border bg-surface-2 p-3">
           <p className="text-sm text-secondary">{t("inbox.invoiceAlreadyCreated")}</p>
           <a
             href={hardNavigationTarget(invoiceDetailHref(documentInvoiceId(selectedOtherDocument) as string))}
-            className={`mt-3 inline-flex ${docButtonPrimary}`}
+            className={`mt-2 inline-flex ${docButtonPrimary}`}
           >
             {t("inbox.receivedInvoice.created.openInvoice")}
           </a>
         </div>
       ) : selectedOtherDocument.document_type === "invoice" ? (
-        <div className="mt-5 rounded-doc border border-doc-border bg-surface-2 p-4">
+        <div className="mt-4 rounded-doc border border-doc-border bg-surface-2 p-3">
           <p className="text-sm text-secondary">{t("inbox.pendingInvoicesHint")}</p>
           <a
             href={hardNavigationTarget(receivedInvoiceRoute(selectedOtherDocument.id))}
-            className={`mt-3 inline-flex ${docButtonPrimary}`}
+            className={`mt-2 inline-flex ${docButtonPrimary}`}
           >
             {t("inbox.processAsReceivedInvoice")}
           </a>
@@ -4775,7 +4776,7 @@ function renderDocumentRegister(
       ) : null}
 
       {canManageFinance && isFolderDocumentType(selectedOtherDocument.document_type) && (
-        <div className="mt-5 flex flex-wrap items-center gap-3">
+        <div className="mt-4 flex flex-wrap items-center gap-2">
           <button
             type="button"
             onClick={() =>
@@ -4794,7 +4795,7 @@ function renderDocumentRegister(
       )}
 
       {selectedOtherDocument.note && (
-        <div className="mt-5 rounded-doc border border-warning/30 bg-warning-soft p-4">
+        <div className="mt-4 rounded-doc border border-warning/30 bg-warning-soft p-3">
           <p className="text-sm font-semibold text-warning">{t("inbox.noteLabel")}</p>
           <p className="mt-1 whitespace-pre-wrap text-sm text-warning">
             {selectedOtherDocument.note}
@@ -4803,8 +4804,8 @@ function renderDocumentRegister(
       )}
 
       {selectedOtherDocument.storage_path && (
-        <div className="mt-5">
-          <p className="mb-2 text-sm font-bold text-secondary">
+        <div className="mt-4">
+          <p className="mb-1.5 text-xs font-medium text-secondary">
             {t("inbox.originalDocument")}
           </p>
 
@@ -4813,7 +4814,7 @@ function renderDocumentRegister(
               <img
                 src={otherDocumentPhotoUrl}
                 alt={t("inbox.originalDocument")}
-                className="max-h-[500px] w-full rounded-doc border border-doc-border object-contain"
+                className="max-h-[420px] w-full rounded-doc border border-doc-border object-contain"
               />
             </a>
           ) : (
@@ -4822,18 +4823,18 @@ function renderDocumentRegister(
             </p>
           )}
 
-          <div className="mt-3 grid grid-cols-2 gap-3">
+          <div className="mt-2 grid grid-cols-2 gap-2">
             <button
               type="button"
               onClick={() => downloadOriginal(selectedOtherDocument)}
-              className="rounded-2xl bg-surface-2 px-4 py-3 font-bold text-primary"
+              className={docButtonSecondary}
             >
               {t("inbox.download")}
             </button>
             <button
               type="button"
               onClick={() => printOriginal(selectedOtherDocument)}
-              className="rounded-2xl bg-surface-2 px-4 py-3 font-bold text-primary"
+              className={docButtonSecondary}
             >
               {t("inbox.print")}
             </button>
@@ -4842,27 +4843,27 @@ function renderDocumentRegister(
       )}
 
       {selectedOtherDocument.document_type === "insurance" && (
-        <div className="mt-6 rounded-2xl border border-subtle p-4">
+        <div className="mt-4 rounded-doc border border-doc-border p-3">
           <p className="text-sm font-semibold text-primary">{t("inbox.attachmentsTitle")}</p>
           <p className="mt-1 text-xs text-muted-esblu">
             {t("inbox.attachmentsDescription")}
           </p>
 
           {attachmentsLoading ? (
-            <p className="mt-3 text-sm text-muted-esblu">{t("inbox.loadingAttachments")}</p>
+            <p className="mt-2 text-[13px] text-muted-esblu">{t("inbox.loadingAttachments")}</p>
           ) : attachments.length === 0 ? (
-            <p className="mt-3 text-sm text-muted-esblu">
+            <p className="mt-2 text-[13px] text-muted-esblu">
               {t("inbox.noAttachmentsYet")}
             </p>
           ) : (
-            <div className="mt-3 space-y-2">
+            <div className="mt-2 space-y-1.5">
               {attachments.map((attachment) => (
                 <div
                   key={attachment.id}
-                  className="flex items-center justify-between gap-3 rounded-xl bg-surface-2 px-4 py-3"
+                  className="flex items-center justify-between gap-3 rounded-doc-sm bg-surface-2 px-3 py-2"
                 >
                   <div className="min-w-0">
-                    <p className="truncate text-sm font-bold text-primary">
+                    <p className="truncate text-sm font-medium text-primary">
                       {attachmentTypeLabels[attachment.attachment_type] ||
                         t("inbox.attachmentTypes.other")}
                     </p>
@@ -4884,7 +4885,7 @@ function renderDocumentRegister(
                         type="button"
                         onClick={() => deleteAttachment(attachment)}
                         disabled={deletingAttachmentId === attachment.id}
-                        className="rounded-xl bg-danger-soft px-3 py-2 text-xs font-bold text-red-700 disabled:opacity-50"
+                        className={`${docButtonDanger} px-2.5 text-xs`}
                       >
                         {deletingAttachmentId === attachment.id
                           ? t("inbox.deleting")
@@ -4897,11 +4898,11 @@ function renderDocumentRegister(
             </div>
           )}
 
-          <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+          <div className="mt-3 flex flex-col gap-2 sm:flex-row">
             <select
               value={newAttachmentType}
               onChange={(e) => setNewAttachmentType(e.target.value)}
-              className="rounded-xl border border-subtle bg-surface-1 px-3 py-3 text-sm outline-none sm:flex-1"
+              className={`${docField} sm:flex-1`}
             >
               {Object.entries(attachmentTypeLabels).map(([value, label]) => (
                 <option key={value} value={value}>
@@ -4930,7 +4931,7 @@ function renderDocumentRegister(
 
       <button
         onClick={() => setSelectedOtherDocument(null)}
-        className={`mt-8 w-full ${docButtonPrimary}`}
+        className={`mt-5 w-full ${docButtonPrimary}`}
       >
         {t("inbox.close")}
       </button>
@@ -4939,7 +4940,7 @@ function renderDocumentRegister(
       <button
         onClick={() => deleteOtherDocument(selectedOtherDocument)}
         disabled={deletingDocumentId === selectedOtherDocument.id}
-        className={`mt-3 w-full ${docButtonDanger}`}
+        className={`mt-2 w-full ${docButtonDanger}`}
       >
         {deletingDocumentId === selectedOtherDocument.id
           ? t("inbox.deleting")

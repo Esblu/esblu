@@ -29,7 +29,8 @@ import { REQUEST_LOCALE_HEADER } from "@/lib/i18n/request-locale";
 import type { IntentResult } from "@/lib/intents/types";
 import { useVoiceSession } from "@/hooks/use-voice-session";
 import { VoiceSessionControl, voiceSessionStatusText } from "@/app/components/voice/VoiceSessionControl";
-import { decideVoiceConfirmation } from "@/lib/voice/voice-session";
+import { decideVoiceReplyForPreview } from "@/lib/voice/command-safety";
+import { ASSISTANT_TIMEOUTS, failureMessageKey, fetchJsonWithTimeout } from "@/lib/voice/assistant-http";
 import { IntentResultView, QuickReplies } from "@/app/components/voice/IntentResultView";
 import { VoiceReplyToggle } from "@/app/components/voice/VoiceReplyToggle";
 import { cancelSpeech } from "@/lib/voice/speech";
@@ -110,6 +111,7 @@ export default function Dashboard() {
   const currentIntentResult = intentResult;
   // Náhľad čakajúci na potvrdenie — pre hlasové „Áno" (ref: číta ho callback nahrávania).
   const pendingPreviewRef = useRef<IntentResult | null>(null);
+  const confirmInFlightRef = useRef(false);
   // Posledný výsledok pre kontext prepisu reči (čítané v callbacku nahrávania).
   const intentResultRef = useRef<IntentResult | null>(null);
   // Veta už vybavená hlasovou reláciou — debounced efekt hľadania ju
@@ -474,34 +476,55 @@ export default function Dashboard() {
         data: { session },
       } = await supabase.auth.getSession();
       if (!session) return { spoken: t("search.voice.states.denied"), endSession: true };
-      const response = await fetch(apiUrl("/api/assistant/intent"), {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${session.access_token}`,
-          [REQUEST_LOCALE_HEADER]: locale,
+      const http = await fetchJsonWithTimeout<{
+        success?: boolean;
+        recognized?: boolean;
+        result?: IntentResult;
+        error?: string;
+        pendingClarification?: string;
+      }>(
+        apiUrl("/api/assistant/intent"),
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${session.access_token}`,
+            [REQUEST_LOCALE_HEADER]: locale,
+          },
+          body: JSON.stringify({
+            text: trimmed,
+            localDate: todayLocalDate(),
+            moduleContext: "dashboard",
+            conversationId: invoiceConversationIdRef.current,
+            ...(recentFolderId ? { folderContext: { folderId: recentFolderId } } : {}),
+            ...(pendingClarificationRef.current ? { pendingClarification: pendingClarificationRef.current } : {}),
+          }),
         },
-        body: JSON.stringify({
-          text: trimmed,
-          localDate: todayLocalDate(),
-          moduleContext: "dashboard",
-          conversationId: invoiceConversationIdRef.current,
-          ...(recentFolderId ? { folderContext: { folderId: recentFolderId } } : {}),
-          ...(pendingClarificationRef.current ? { pendingClarification: pendingClarificationRef.current } : {}),
-        }),
-      });
-      const data = await response.json().catch(() => null);
+        { timeoutMs: ASSISTANT_TIMEOUTS.intentMs }
+      );
+      // Sieť / limit / offline / 5xx nie sú odpoveď — relácia povie „Spojenie
+      // zlyhalo" a nič sa automaticky neopakuje.
+      if (!http.ok && ["offline", "timeout", "network", "server", "invalid_response", "rate_limited", "cancelled"].includes(http.kind)) {
+        throw new Error(`intent_${http.kind}`);
+      }
+      const data = (http.data ?? null) as {
+        success?: boolean;
+        recognized?: boolean;
+        result?: IntentResult;
+        error?: string;
+        pendingClarification?: string;
+      } | null;
       pendingClarificationRef.current = typeof data?.pendingClarification === "string" ? data.pendingClarification : null;
-      if (response.status === 401) return { spoken: t("search.voice.states.denied"), endSession: true };
+      if (!http.ok && http.kind === "unauthenticated") return { spoken: t("search.voice.errors.sessionExpired"), endSession: true };
       let result: IntentResult;
-      if (response.ok && data?.success && data.result) {
-        result = data.result as IntentResult;
+      if (http.ok && data?.success && data.result) {
+        result = data.result;
         if (data.recognized && result.kind === "navigate" && result.entity.type === "folder") setRecentFolderId(result.entity.id);
-      } else if (response.status === 400 && typeof data?.error === "string" && data.error) {
+      } else if (!http.ok && http.kind === "forbidden") {
+        // OPRAVA: 403 predtým padalo do „nerozumel som".
+        result = { kind: "error", text: t("search.voice.states.denied") };
+      } else if (!http.ok && http.kind === "bad_request" && typeof data?.error === "string" && data.error) {
         result = { kind: "error", text: data.error };
-      } else if (!response.ok && response.status >= 500) {
-        // Serverová chyba nie je odpoveď — relácia povie „Spojenie zlyhalo".
-        throw new Error(`intent ${response.status}`);
       } else {
         result = { kind: "error", text: t("search.errors.commandNotUnderstood") };
       }
@@ -523,7 +546,12 @@ export default function Dashboard() {
     // znova, nikdy tichý súhlas (lib/voice/voice-session.ts).
     const pending = pendingPreviewRef.current;
     if (pending && pending.kind === "action_preview") {
-      const decision = decideVoiceConfirmation(text);
+      const decision = decideVoiceReplyForPreview(text, pending);
+      // Nevratná akcia: iba ťuknutím (lib/voice/command-safety.ts).
+      if (decision === "tap_required") {
+        setVoiceTranscript(text);
+        return { spoken: t("search.voice.session.tapToConfirm") };
+      }
       if (decision === "confirm") {
         pendingPreviewRef.current = null;
         setVoiceTranscript(text);
@@ -589,7 +617,7 @@ export default function Dashboard() {
       title: t("nav.inbox"),
       subtitle: t("dashboard.moduleInboxSubtitle"),
       href: "/ai-evidencia",
-      icon: <InboxDocumentIcon size={56} className="h-11 w-11 sm:h-14 sm:w-14" />,
+      icon: <InboxDocumentIcon size={40} className="h-8 w-8 sm:h-9 sm:w-9" />,
       accent: "cyan",
     },
     {
@@ -623,14 +651,14 @@ export default function Dashboard() {
       title: t("nav.businessPartners"),
       subtitle: t("dashboard.moduleBusinessPartnersSubtitle"),
       href: "/obchodni-partneri",
-      icon: <BusinessPartnersIcon size={56} className="h-11 w-11 sm:h-14 sm:w-14" />,
+      icon: <BusinessPartnersIcon size={40} className="h-8 w-8 sm:h-9 sm:w-9" />,
       accent: "blue",
     },
     {
       title: t("nav.invoices"),
       subtitle: t("dashboard.moduleInvoicesSubtitle"),
       href: "/faktury",
-      icon: <InvoicesIcon size={56} className="h-11 w-11 sm:h-14 sm:w-14" />,
+      icon: <InvoicesIcon size={40} className="h-8 w-8 sm:h-9 sm:w-9" />,
       accent: "teal",
     },
     {
@@ -639,7 +667,7 @@ export default function Dashboard() {
       href: "/nastavenia",
       // Vektorová ikona namiesto /images/settings.png — rovnaký vizuálny
       // jazyk ako Inbox, Partneri a Faktúry, bez rastrového assetu.
-      icon: <SettingsIcon size={56} className="h-11 w-11 sm:h-14 sm:w-14" />,
+      icon: <SettingsIcon size={40} className="h-8 w-8 sm:h-9 sm:w-9" />,
       accent: "blue",
     },
   ];
@@ -709,6 +737,9 @@ export default function Dashboard() {
   async function handleActionConfirm(target?: IntentResult): Promise<IntentResult | null> {
     const intentResult = target ?? currentIntentResult;
     if (!intentResult || intentResult.kind !== "action_preview") return null;
+    // Dvojité potvrdenie (ťuknutie + hlasové „áno") → iba jedno odoslanie.
+    if (confirmInFlightRef.current) return null;
+    confirmInFlightRef.current = true;
     setActionSubmitting(true);
     // Výsledok sa vráti aj volajúcemu — hlasová relácia ho povie nahlas.
     let final: IntentResult | null = null;
@@ -788,31 +819,37 @@ export default function Dashboard() {
         return final;
       }
 
-      const response = await fetch(apiUrl("/api/assistant/action/execute"), {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${session.access_token}`,
-          [REQUEST_LOCALE_HEADER]: locale,
+      const http = await fetchJsonWithTimeout<{ success?: boolean; result?: IntentResult }>(
+        apiUrl("/api/assistant/action/execute"),
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${session.access_token}`,
+            [REQUEST_LOCALE_HEADER]: locale,
+          },
+          body: JSON.stringify({ confirmationId: intentResult.confirmationId }),
         },
-        body: JSON.stringify({ confirmationId: intentResult.confirmationId }),
-      });
+        { timeoutMs: ASSISTANT_TIMEOUTS.executeMs }
+      );
 
-      const data = await response.json();
-
-      if (response.ok && data?.success && data?.result) {
-        const executed = data.result as IntentResult;
+      if (http.ok && http.data?.success && http.data.result) {
+        const executed = http.data.result;
         settle(executed);
         if (executed.kind === "action_result" && executed.folder) setRecentFolderId(executed.folder.id);
       } else {
-        settle({ kind: "action_result", success: false, text: t("search.errors.generic") });
+        // Konkrétna príčina (vypršané potvrdenie, bez oprávnenia, nejasný
+        // výsledok po výpadku spojenia) — nikdy predstieraný úspech.
+        const key = http.ok ? "search.errors.generic" : failureMessageKey(http.kind, "execute");
+        settle({ kind: "action_result", success: false, text: t(key) });
       }
     } catch (error) {
       // Rovnaký fail-closed princíp ako pri Intent Engine dopyte vyššie —
       // appka pri sieťovej/neočakávanej chybe NIKDY nepredstiera úspech.
-      console.error("Action Engine potvrdenie zlyhalo:", error);
+      console.error("Action Engine potvrdenie zlyhalo:", error instanceof Error ? error.message : "unknown");
       settle({ kind: "action_result", success: false, text: t("search.errors.generic") });
     } finally {
+      confirmInFlightRef.current = false;
       setActionSubmitting(false);
     }
     return final;
@@ -831,7 +868,7 @@ export default function Dashboard() {
         {/* Desktop sidebar — KOREKCIA (dashboard v2): užší, plochý a tmavší
             (bez glass/blur efektu), aby nedominoval obrazovke a nepôsobil
             ako klasický enterprise admin panel. */}
-        <aside className="sticky top-0 hidden h-screen w-60 shrink-0 flex-col border-r border-subtle bg-page-bg-elevated px-5 py-6 lg:flex">
+        <aside className="sticky top-0 hidden h-screen w-56 shrink-0 flex-col border-r border-subtle bg-page-bg-elevated px-3 py-5 lg:flex">
           <div className="flex items-center gap-2.5">
             {companyLogoUrl ? (
               <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-subtle bg-surface-1">
@@ -857,7 +894,7 @@ export default function Dashboard() {
             </div>
           </div>
 
-          <nav className="mt-8 flex-1 space-y-1">
+          <nav className="mt-6 flex-1 space-y-0.5">
             <SideLink active href="/" label={t("nav.overview")} icon={<MenuIcon />} />
             {navItems.map((item) => (
               <SideLink
@@ -873,7 +910,7 @@ export default function Dashboard() {
 
           <button
             onClick={logout}
-            className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-secondary transition hover:bg-surface-hover hover:text-primary"
+            className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-left text-[13px] font-medium text-secondary transition hover:bg-surface-hover hover:text-primary"
           >
             <LogoutIcon />
             {t("common.buttons.logout")}
@@ -929,7 +966,7 @@ export default function Dashboard() {
 
               <button
                 onClick={logout}
-                className="btn-secondary flex items-center justify-center gap-2 py-3 text-sm"
+                className="ui-btn ui-btn-secondary w-full"
               >
                 <LogoutIcon />
                 {t("common.buttons.logout")}
@@ -938,7 +975,7 @@ export default function Dashboard() {
           </div>
         )}
 
-        <section className="w-full flex-1 px-4 pb-10 pt-5 sm:px-6 lg:px-10 lg:py-12">
+        <section className="w-full flex-1 px-4 pb-10 pt-3 sm:px-6 lg:px-8 lg:py-8">
           {/* Mobilný horný pruh — brand + hamburger (nahrádza predchádzajúci
               priamy odkaz na Nastavenia). */}
           <div className="flex items-center justify-between gap-4 lg:hidden">
@@ -967,21 +1004,21 @@ export default function Dashboard() {
                 type="button"
                 aria-label={t("dashboard.openMenu")}
                 onClick={() => setMenuOpen(true)}
-                className="surface-card surface-card-hover flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl text-secondary transition"
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-doc border border-subtle bg-surface-1 text-secondary transition hover:bg-surface-hover hover:text-primary"
               >
                 <HamburgerIcon />
               </button>
             )}
           </div>
 
-          <h2 className="mt-5 text-3xl font-black tracking-tight text-primary lg:mt-0 lg:text-[2.75rem]">
+          <h2 className="mt-3 text-xl font-semibold tracking-tight text-primary sm:text-2xl lg:mt-0 lg:text-[1.75rem]">
             {greeting}
           </h2>
 
           {/* Search — KOREKCIA v3: jednoduchá tmavá pilulka priamo na pozadí
               namiesto ďalšej "surface-card" krabice, menej rámov na
               obrazovke. */}
-          <div className="mt-6 flex items-center gap-3 rounded-2xl border border-subtle bg-surface-1/60 px-4 py-3.5 lg:mt-9">
+          <div className="mt-3 flex items-center gap-2.5 rounded-doc border border-subtle bg-surface-1 py-1.5 pl-3 pr-1.5 transition focus-within:border-brand-400 lg:mt-5">
             <SearchIcon />
             <input
               value={search}
@@ -1000,6 +1037,8 @@ export default function Dashboard() {
               session={voice.session}
               onTap={voice.tap}
               onStop={() => voice.stop("user")}
+              canOpenSettings={voice.canOpenSettings}
+              onOpenSettings={voice.openSettings}
             />
           </div>
 
@@ -1030,7 +1069,7 @@ export default function Dashboard() {
               {hasUsableIntentResult && intentResult?.kind === "clarify" ? (
                 // Otázka dialógu faktúry. Odpovedá sa hlasom (mikrofón vyššie);
                 // kandidáti sú iba na prečítanie — výber vyhodnocuje server.
-                <div className="rounded-2xl border border-subtle bg-surface-1/60 p-4 text-sm text-primary">
+                <div className="rounded-doc border border-subtle bg-surface-1 p-3 text-sm text-primary">
                   <p className="font-medium">{intentResult.question}</p>
                   {intentResult.choices && intentResult.choices.length > 0 && (
                     <ul className="mt-2 list-disc space-y-1 pl-5 text-secondary">
@@ -1065,13 +1104,13 @@ export default function Dashboard() {
               {!hasUsableIntentResult && isVoiceQuery ? (
                 // Hlas: iba veta asistenta (alebo počas spracovania nič).
                 intentResult && (intentResult.kind === "not_found" || intentResult.kind === "error") ? (
-                  <p className="rounded-2xl border border-subtle bg-surface-1/60 p-4 text-sm text-secondary">
+                  <p className="rounded-doc border border-subtle bg-surface-1 p-3 text-sm text-secondary">
                     {intentResult.text}
                   </p>
                 ) : null
               ) : !hasUsableIntentResult &&
                 (searchResults.length === 0 ? (
-                  <p className="rounded-2xl border border-subtle bg-surface-1/60 p-4 text-sm text-secondary">
+                  <p className="rounded-doc border border-subtle bg-surface-1 p-3 text-sm text-secondary">
                     {/* Konkrétna veta asistenta („Stroj „Aman“ sa nenašiel.",
                         odmietnutie) má prednosť pred všeobecným „Nič sa
                         nenašlo." — inak používateľ nevie, čo sa stalo. */}
@@ -1084,12 +1123,12 @@ export default function Dashboard() {
                     <AppLink
                       key={index}
                       href={result.href}
-                      className="surface-card-hover block rounded-2xl border border-subtle bg-surface-1/60 p-4 transition"
+                      className="surface-card-hover block rounded-doc border border-subtle bg-surface-1 px-3.5 py-2.5 transition"
                     >
-                      <p className="text-xs font-bold uppercase tracking-wide text-accent-cyan">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-brand-300">
                         {result.type}
                       </p>
-                      <p className="mt-1 text-base font-bold text-primary">
+                      <p className="mt-0.5 text-sm font-semibold text-primary">
                         {result.title}
                       </p>
                       <p className="text-sm text-secondary">{result.subtitle}</p>
@@ -1099,7 +1138,7 @@ export default function Dashboard() {
             </div>
           )}
 
-          <div className="mt-9 grid grid-cols-2 gap-3 lg:mt-12 lg:grid-cols-4 lg:gap-4">
+          <div className="mt-4 grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:mt-6 lg:grid-cols-4 lg:gap-3">
             {modules
               .filter((module) => module.title !== t("nav.settings"))
               .map((module) => (
@@ -1125,10 +1164,10 @@ export default function Dashboard() {
               renderuje IBA keď existuje aspoň 1 aktívne upozornenie;
               predtým sa vždy zobrazoval aj s "0"/"žiadne upozornenia". */}
           {alerts.length > 0 && (
-            <div className="surface-card mt-6 p-5 sm:p-6 lg:mt-8 lg:p-8">
+            <div className="surface-card mt-4 p-3.5 sm:p-4 lg:mt-6">
               <div className="flex items-center justify-between gap-4">
                 <div>
-                  <h3 className="text-lg font-bold text-primary sm:text-xl">
+                  <h3 className="text-[15px] font-semibold text-primary">
                     {t("dashboard.stkEkTitle")}
                   </h3>
                   <p className="mt-1 text-xs text-muted-esblu">
@@ -1141,7 +1180,7 @@ export default function Dashboard() {
                 </span>
               </div>
 
-              <div className="mt-4 divide-y divide-[color:var(--color-border-subtle)]">
+              <div className="mt-2 divide-y divide-[color:var(--color-divider)]">
                 {alerts.map((alert, index) => {
                   const isOverdue = alert.level === "red";
 
@@ -1149,7 +1188,7 @@ export default function Dashboard() {
                     <Link
                       key={index}
                       href={vehicleDetailHref(alert.vehicleId)}
-                      className="flex items-center gap-3 rounded-lg py-3 -mx-2 px-2 transition cursor-pointer hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-cyan"
+                      className="flex items-center gap-3 rounded-lg py-2.5 -mx-2 px-2 transition cursor-pointer hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-cyan"
                     >
                       <span
                         className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
@@ -1208,14 +1247,14 @@ function SideLink({
     <Link
       href={href}
       onClick={onNavigate}
-      className={`flex items-center gap-3 rounded-lg border-l-2 py-2.5 pr-3 text-sm font-semibold transition ${
+      className={`flex items-center gap-2.5 rounded-lg border-l-2 py-1.5 pr-3 text-[13px] font-medium transition ${
         active
           ? "border-accent-cyan pl-[10px] text-accent-cyan"
           : "border-transparent pl-[10px] text-secondary hover:border-border-strong hover:text-primary"
       }`}
     >
       <div
-        className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${
+        className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md ${
           active ? "bg-accent-cyan/12" : "bg-surface-2"
         }`}
       >
@@ -1226,7 +1265,7 @@ function SideLink({
               src={image}
               alt=""
               aria-hidden="true"
-              className="h-6 w-6 object-contain"
+              className="h-5 w-5 object-contain"
             />
           ) : null)}
       </div>
@@ -1289,7 +1328,7 @@ function LogoutIcon() {
 
 function SearchIcon() {
   return (
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 text-secondary">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 text-muted-esblu" aria-hidden="true">
       <circle cx="11" cy="11" r="7" />
       <path d="M21 21l-4.3-4.3" />
     </svg>

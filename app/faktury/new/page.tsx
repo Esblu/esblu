@@ -208,43 +208,43 @@ export default function NewInvoicePage() {
   const createDisabled = !canEdit || legalHold || saving;
 
   return (
-    <div className="mx-auto w-full min-w-0 max-w-3xl px-4 pb-24 pt-6 sm:px-6">
+    <div className="mx-auto w-full min-w-0 max-w-3xl px-4 pb-24 pt-3 sm:px-6 sm:pt-5">
       <Suspense fallback={null}>
         <CorrectsFromQueryParam onCorrectsId={handleCorrectsId} />
       </Suspense>
 
-      <BackLink href="/faktury" label={t("invoices.backToList")} className="mb-3 sm:mb-6" />
+      <BackLink href="/faktury" label={t("invoices.backToList")} className="mb-1 sm:mb-3" />
 
-      <h1 className="text-2xl font-bold text-primary">{t("invoices.newInvoice.title")}</h1>
+      <h1 className="text-xl font-semibold tracking-tight text-primary sm:text-[1.375rem]">{t("invoices.newInvoice.title")}</h1>
 
       {membershipLoaded && !canEdit && (
-        <p className="mt-3 rounded-2xl border border-subtle bg-surface-1 p-6 text-center text-secondary">
+        <p className="mt-3 rounded-doc border border-subtle bg-surface-1 p-4 text-center text-sm text-secondary">
           {t("invoices.noFinanceAccess")}
         </p>
       )}
 
       {legalHold && canEdit && (
-        <p className="mt-3 text-sm font-semibold text-amber-600">
+        <p className="mt-2 text-[13px] font-medium text-warning">
           {t("invoices.legalHoldNotice")}
         </p>
       )}
 
       {canEdit && (
-        <div className="mt-6 space-y-4 rounded-doc border border-doc-border bg-doc-surface p-4 sm:p-5">
+        <div className="mt-4 space-y-3 rounded-doc border border-doc-border bg-doc-surface p-3 sm:p-4">
           {submitError && (
-            <p className="mb-4 rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
+            <p className="mb-3 rounded-doc-sm bg-danger-soft px-3 py-2 text-[13px] font-medium text-danger">
               {submitError}
             </p>
           )}
 
           {correctsInvoiceId && (
-            <p className="mb-4 rounded-xl bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
+            <p className="mb-3 rounded-doc-sm bg-warning-soft px-3 py-2 text-[13px] font-medium text-warning">
               {t("invoices.newInvoice.correctsInvoiceLabel")}:{" "}
               {correctsInvoiceNumber ?? correctsInvoiceId}
             </p>
           )}
 
-          <div className="grid gap-4 sm:grid-cols-2">
+          <div className="grid gap-3 sm:grid-cols-2">
             {!correctsInvoiceId && (
               <div>
                 <label className={docLabel}>
@@ -268,7 +268,7 @@ export default function NewInvoicePage() {
                 {t("invoices.newInvoice.businessPartnerLabel")}
               </label>
               {partners.length === 0 ? (
-                <p className="text-sm text-secondary">
+                <p className="text-[13px] text-secondary">
                   {t("invoices.newInvoice.businessPartnerEmptyNotice")}
                 </p>
               ) : (
@@ -378,7 +378,7 @@ export default function NewInvoicePage() {
             </div>
           </div>
 
-          <div className="mt-6 flex gap-3">
+          <div className="mt-4 flex gap-2">
             <button
               type="button"
               onClick={handleSubmit}

@@ -136,7 +136,7 @@ export function PartnerDetailView({ partnerId }: { partnerId: string }) {
 
   return (
     <DocumentPageShell uiContext={{ module: "partner", entityType: "partner", entityId: partnerId }}>
-      <BackLink href="/obchodni-partneri" label={t("businessPartners.title")} className="mb-3 sm:mb-6" />
+      <BackLink href="/obchodni-partneri" label={t("businessPartners.title")} className="mb-1 sm:mb-3" />
 
       {loading ? (
         <p className="text-sm text-secondary">{t("businessPartners.loading")}</p>
@@ -159,7 +159,7 @@ export function PartnerDetailView({ partnerId }: { partnerId: string }) {
             }
             aside={
               canEdit ? (
-                <div className="flex gap-2">
+                <div className="flex gap-1.5">
                   <Link
                     href={`/obchodni-partneri?edit=${partner.id}`}
                     className={docButtonSecondary}
@@ -178,7 +178,7 @@ export function PartnerDetailView({ partnerId }: { partnerId: string }) {
               údaj na tom istom mieste, kde ho zadával. DocumentMetadataGrid
               si prázdne hodnoty odfiltruje sám, takže partner bez IBAN-u
               nedostane prázdnu sekciu s pomlčkami. */}
-          <div className="mt-6 space-y-4">
+          <div className="mt-4 space-y-3">
             <DocumentSection title={t("businessPartners.section.identity")}>
               <DocumentMetadataGrid
                 items={[
@@ -263,7 +263,7 @@ export function PartnerDetailView({ partnerId }: { partnerId: string }) {
                 ]}
               />
               {!partner.electronic_address && !partner.peppol_identifier && (
-                <p className="text-sm text-muted-esblu">
+                <p className="text-[13px] text-muted-esblu">
                   {t("businessPartners.section.einvoiceEmpty")}
                 </p>
               )}

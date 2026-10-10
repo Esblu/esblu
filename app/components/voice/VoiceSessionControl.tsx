@@ -29,9 +29,9 @@ export function voiceSessionStatusText(t: (key: string) => string, session: Voic
     case "stopped":
       return session.noticeKey ? t(`search.voice.session.${session.noticeKey}`) : "";
     case "error":
-      return session.noticeKey === "micDenied"
-        ? t("search.voice.session.micDenied")
-        : t("search.voice.errors.notSupported");
+      // Konkrétna príčina (zakázaný / zablokovaný / obsadený / žiadny
+      // mikrofón / časový limit), nie jedna všeobecná veta.
+      return session.noticeKey ? t(`search.voice.session.${session.noticeKey}`) : t("search.voice.errors.notSupported");
     default:
       return "";
   }
@@ -42,12 +42,17 @@ export function VoiceSessionControl({
   onTap,
   onStop,
   variant = "button",
+  canOpenSettings = false,
+  onOpenSettings,
 }: {
   session: VoiceSessionState;
   onTap: () => void;
   onStop: () => void;
   /** "icon" = kruhové tlačidlo v poli hľadania (Nástenka). */
   variant?: "button" | "icon";
+  /** Mikrofón je trvalo zablokovaný a platforma vie otvoriť nastavenia appky. */
+  canOpenSettings?: boolean;
+  onOpenSettings?: () => void;
 }) {
   const { t } = useLocale();
   const entitlements = useCompanyEntitlements();
@@ -61,6 +66,7 @@ export function VoiceSessionControl({
       ? t("search.voice.session.interrupt")
       : t("search.voice.session.stop");
 
+  const processing = session.status === "transcribing" || session.status === "waiting_server";
   const tone = listening
     ? "border-danger/50 text-danger"
     : active
@@ -86,23 +92,32 @@ export function VoiceSessionControl({
         title={label}
         className={
           variant === "icon"
-            ? `relative inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border bg-doc-surface ${tone || "border-doc-border text-secondary"}`
-            : `inline-flex min-h-11 items-center gap-2 rounded-doc border bg-doc-surface px-3 text-sm font-medium ${tone || "border-doc-border text-primary"}`
+            ? `relative inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border bg-doc-surface transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring ${tone || "border-doc-border text-secondary hover:text-primary"}`
+            : `inline-flex min-h-[var(--control-h)] items-center gap-1.5 rounded-doc-sm border bg-doc-surface px-3 text-[13px] font-medium transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring ${tone || "border-doc-border text-primary hover:bg-surface-hover"}`
         }
       >
         {listening && variant === "icon" && (
           <span aria-hidden="true" className="absolute inset-0 animate-ping rounded-full border border-danger/40 motion-reduce:hidden" />
         )}
-        <MicGlyph />
+        {processing ? <SpinnerGlyph /> : <MicGlyph />}
         {variant === "button" && <span>{label}</span>}
       </button>
       {active && (
         <button
           type="button"
           onClick={onStop}
-          className="inline-flex min-h-11 items-center rounded-doc border border-doc-border bg-doc-surface px-3 text-sm text-secondary"
+          className="inline-flex min-h-[var(--control-h-sm)] items-center rounded-doc-sm border border-doc-border bg-doc-surface px-2.5 text-xs font-medium text-secondary transition hover:text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring"
         >
           {t("search.voice.session.stop")}
+        </button>
+      )}
+      {!active && canOpenSettings && onOpenSettings && (
+        <button
+          type="button"
+          onClick={onOpenSettings}
+          className="inline-flex min-h-[var(--control-h-sm)] items-center rounded-doc-sm border border-doc-border bg-doc-surface px-2.5 text-xs font-medium text-brand-300 transition hover:bg-surface-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring"
+        >
+          {t("search.voice.session.openSettings")}
         </button>
       )}
     </span>
@@ -115,6 +130,14 @@ function MicGlyph() {
       <rect x="9" y="3" width="6" height="11" rx="3" />
       <path d="M5 11a7 7 0 0 0 14 0" />
       <path d="M12 18v3" />
+    </svg>
+  );
+}
+
+function SpinnerGlyph() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true" focusable="false" className="animate-spin motion-reduce:animate-none">
+      <path d="M12 3a9 9 0 1 0 9 9" />
     </svg>
   );
 }

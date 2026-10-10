@@ -826,7 +826,11 @@ await check("A+F+I: Tester1 → „Výkopové práce, 10 hodín po 35 eur.“ �
   assert.equal(slotsOf(env).partnerId, P_T1);
 
   const t4 = await runTurn(env, "23 percent", null, { conversationId: CONV });
-  assert.equal(t4.result.kind, "draft_created", JSON.stringify(t4.result));
+  // Voice safety 2026-10-11: najprv súhrn a otázka „Mám ho vytvoriť?".
+  assert.equal(t4.result.kind, "clarify", JSON.stringify(t4.result));
+  assert.equal(env.state.tables.invoices.length, 0, "bez „áno“ žiadny doklad");
+  const t5 = await runTurn(env, "Áno", null, { conversationId: CONV });
+  assert.equal(t5.result.kind, "draft_created", JSON.stringify(t5.result));
   // Iba DRAFT: žiadne číslo, finalizácia, platba ani odovzdanie.
   assert.equal(env.state.tables.invoices.length, 1);
   const invoice = env.state.tables.invoices[0];
@@ -853,7 +857,9 @@ await check("G: „… po 35 eur s DPH“ → režim s DPH (existujúci detektor
   assert.equal(slotsOf(env).priceMode, "gross");
   assert.equal((t2.result as { question: string }).question, translate("sk", "search.voice.invoice.askVatAfterGross"));
   const t3 = await runTurn(env, "23 percent", null, { conversationId: CONV });
-  assert.equal(t3.result.kind, "draft_created", JSON.stringify(t3.result));
+  assert.equal(t3.result.kind, "clarify", JSON.stringify(t3.result));
+  const t4 = await runTurn(env, "Áno", null, { conversationId: CONV });
+  assert.equal(t4.result.kind, "draft_created", JSON.stringify(t4.result));
   const line = env.state.tables.invoice_items[0];
   assert.equal(line.price_mode, "gross");
   assert.equal(line.unit_price, 35);

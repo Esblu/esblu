@@ -183,27 +183,27 @@ export default function CompanyDpaGate({
           className="fixed inset-0 flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm"
           style={{ zIndex: Z_INDEX }}
         >
-          <div className="w-full max-w-lg rounded-2xl bg-surface-1 p-6 shadow-2xl sm:p-8">
-            <h2 className="text-2xl font-bold text-primary">
+          <div className="max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-y-auto rounded-doc border border-doc-border bg-surface-1 p-4 shadow-2xl sm:p-6">
+            <h2 className="text-lg font-semibold tracking-tight text-primary sm:text-xl">
               {t("companyDpaGate.title")}
             </h2>
 
-            <p className="mt-3 text-sm leading-6 text-secondary">
+            <p className="mt-2 text-sm leading-6 text-secondary">
               {t("companyDpaGate.description")}
             </p>
 
-            <p className="mt-3 text-sm">
-              <LegalDocLink path="/dpa" className="font-semibold text-blue-700 hover:underline">
+            <p className="mt-2 text-[13px]">
+              <LegalDocLink path="/dpa" className="font-medium text-brand-300 hover:underline">
                 {t("companyDpaGate.readCurrentDpa", {
                   version: status.current_dpa_version,
                 })}
               </LegalDocLink>
             </p>
 
-            <label className="mt-6 flex items-start gap-3 rounded-xl border border-subtle p-4 text-sm">
+            <label className="mt-4 flex items-start gap-2.5 rounded-doc-sm border border-subtle bg-surface-2 p-3 text-[13px] leading-5 text-secondary">
               <input
                 type="checkbox"
-                className="mt-1 h-4 w-4"
+                className="mt-0.5 h-4 w-4 shrink-0"
                 checked={confirmedAuthority}
                 onChange={(event) =>
                   setConfirmedAuthority(event.target.checked)
@@ -218,7 +218,7 @@ export default function CompanyDpaGate({
             </label>
 
             {submitError && (
-              <p className="mt-4 text-sm font-medium text-red-700">
+              <p className="ui-error-text mt-3 text-[13px]">
                 {submitError}
               </p>
             )}
@@ -227,7 +227,7 @@ export default function CompanyDpaGate({
               type="button"
               onClick={handleConfirm}
               disabled={!confirmedAuthority || submitting}
-              className="mt-6 w-full rounded-xl bg-blue-600 px-6 py-3 font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-gray-400"
+              className="ui-btn ui-btn-primary mt-4 w-full"
             >
               {submitting
                 ? t("legalGate.saving")
@@ -238,7 +238,7 @@ export default function CompanyDpaGate({
               type="button"
               onClick={handleLogout}
               disabled={submitting}
-              className="mt-3 w-full text-center text-sm font-semibold text-muted-esblu hover:underline"
+              className="ui-btn ui-btn-ghost mt-2 w-full"
             >
               {t("legalGate.logout")}
             </button>
@@ -251,22 +251,22 @@ export default function CompanyDpaGate({
           className="fixed inset-x-0 bottom-0 flex justify-center p-4"
           style={{ zIndex: Z_INDEX }}
         >
-          <div className="w-full max-w-lg rounded-2xl border border-amber-200/30 bg-warning-soft p-5 shadow-2xl">
+          <div className="w-full max-w-md rounded-doc border border-amber-300/30 bg-warning-soft p-3 shadow-2xl backdrop-blur-sm sm:p-4">
             <p className="text-sm font-semibold text-amber-300">
               {t("companyDpaGate.employeeNoticeTitle")}
             </p>
-            <p className="mt-2 text-sm leading-6 text-amber-400">
+            <p className="mt-1 text-[13px] leading-5 text-amber-400">
               {t("companyDpaGate.employeeNoticeDescription")}
             </p>
-            <div className="mt-4 flex flex-wrap gap-3">
+            <div className="mt-3 flex flex-wrap gap-2">
               <button
                 type="button"
                 onClick={() => setEmployeeNoticeDismissed(true)}
-                className="rounded-xl bg-amber-900 px-5 py-2.5 text-sm font-semibold text-white hover:bg-amber-800"
+                className="ui-btn ui-btn-sm bg-amber-900 text-white hover:bg-amber-800"
               >
                 {t("companyDpaGate.employeeNoticeDismiss")}
               </button>
-              <LegalDocLink path="/dpa" className="rounded-xl border border-amber-300/40 bg-surface-1 px-5 py-2.5 text-sm font-semibold text-amber-400 hover:bg-surface-hover">
+              <LegalDocLink path="/dpa" className="ui-btn ui-btn-sm border-amber-300/40 bg-surface-1 text-amber-400 hover:bg-surface-hover">
                 {t("companyDpaGate.viewDpa")}
               </LegalDocLink>
             </div>

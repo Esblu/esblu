@@ -448,6 +448,26 @@ export function buildUnderstoodSummary(locale: Locale, slots: InvoiceDraftSlots)
     : translate(locale, "search.voice.invoice.understoodItems", { count: items.length, items: names });
 }
 
+/**
+ * Otázka pred vytvorením draftu (voice safety 2026-10-11): „Pripravil som
+ * návrh faktúry — Tester1: kopanie a doprava, spolu 400 € s DPH. Mám ho
+ * vytvoriť?" Hlasový príkaz na zápis NIKDY nevytvorí doklad bez výslovného
+ * „áno" — prepis môže skomoliť sumu, meno odberateľa aj položku, a toto je
+ * posledná chvíľa, keď to používateľ počuje celé pokope.
+ */
+export function buildDraftConfirmQuestion(locale: Locale, slots: InvoiceDraftSlots, partnerLabel: string | null): string {
+  const items = slots.items ?? [];
+  if (items.length === 0) return translate(locale, "search.voice.invoice.confirmDraftShort");
+  const sumCents = items.reduce((sum, item) => sum + Math.round((item.quantity ?? 1) * (item.unitPrice ?? 0) * 100), 0);
+  let total = formatMoneyForSpeech(locale, sumCents / 100);
+  if (slots.currency && slots.currency !== "EUR") total = total.replace("€", slots.currency);
+  return translate(locale, "search.voice.invoice.confirmDraft", {
+    partner: partnerLabel ? ` — ${partnerLabel}` : "",
+    items: joinNames(locale, items.map((item) => item.description)),
+    total: `${total}${priceModeSuffix(locale, slots)}`,
+  });
+}
+
 /** „kopanie, odvoz materiálu a pracovníci". */
 function joinNames(locale: Locale, names: string[]): string {
   if (names.length <= 1) return names.join("");

@@ -513,7 +513,7 @@ await check("systémové späť zatvára najvrchnejšiu vrstvu (dialóg/panel) p
 // -----------------------------------------------------------------------------
 await check("detail vozidla: kompaktná hlavička, 2 akčné metriky na telefóne, kompaktné upozornenia, posúvateľné záložky", () => {
   const src = read("app/vozidla/VehicleDetailView.tsx");
-  assert.match(src, /<BackLink href="\/vozidla"[^>]*className="mb-3 sm:mb-6"/);
+  assert.match(src, /<BackLink href="\/vozidla"[^>]*className="mb-1 sm:mb-3"/);
   assert.match(src, /<div className="hidden sm:block">\s*<Metric\s+label=\{t\("inbox\.fields\.vykon"\)\}/);
   assert.match(src, /vehicles\.detail\.deadlineOverdue/);
   assert.doesNotMatch(src, /dashboard\.alertOverdue/);

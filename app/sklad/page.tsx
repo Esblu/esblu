@@ -535,7 +535,7 @@ export default function SkladPage() {
 
   return (
     <PageShell wide moduleContext="inventory">
-      <BackLink href="/" label={t("inbox.backToMenu")} className="mb-3 sm:mb-6" />
+      <BackLink href="/" label={t("inbox.backToMenu")} className="mb-1 sm:mb-3" />
 
       <PageHeader
         eyebrow={

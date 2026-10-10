@@ -234,7 +234,7 @@ export default function InviteView({ token }: { token: string }) {
   if (state === "loading") {
     return (
       <Centered>
-        <p className="text-secondary">{t("invite.loading")}</p>
+        <p className="text-sm text-secondary">{t("invite.loading")}</p>
       </Centered>
     );
   }
@@ -242,18 +242,18 @@ export default function InviteView({ token }: { token: string }) {
   if (state === "invalid") {
     return (
       <Centered>
-        <div className="flex items-start justify-between gap-4">
-          <h1 className="text-2xl font-bold text-primary">
+        <div className="flex items-start justify-between gap-3">
+          <h1 className="text-xl font-semibold tracking-tight text-primary sm:text-[22px]">
             {t("invite.invalidTitle")}
           </h1>
           <LanguageSwitcher />
         </div>
-        <p className="mt-3 text-secondary">
+        <p className="mt-2 text-sm leading-6 text-secondary">
           {t("invite.invalidDescription")}
         </p>
         <Link
           href="/login"
-          className="mt-6 inline-block rounded-xl bg-blue-600 px-6 py-3 font-semibold text-white hover:bg-blue-700"
+          className="ui-btn ui-btn-primary mt-4"
         >
           {t("invite.goToLogin")}
         </Link>
@@ -264,10 +264,10 @@ export default function InviteView({ token }: { token: string }) {
   if (state === "accepted") {
     return (
       <Centered>
-        <h1 className="text-2xl font-bold text-primary">
+        <h1 className="text-xl font-semibold tracking-tight text-primary sm:text-[22px]">
           {t("invite.acceptedTitle")}
         </h1>
-        <p className="mt-3 text-secondary">
+        <p className="mt-2 text-sm leading-6 text-secondary">
           {t("invite.acceptedRedirecting")}
         </p>
       </Centered>
@@ -287,14 +287,14 @@ export default function InviteView({ token }: { token: string }) {
 
   return (
     <Centered>
-      <div className="flex items-start justify-between gap-4">
-        <h1 className="text-2xl font-bold text-primary">
+      <div className="flex items-start justify-between gap-3">
+        <h1 className="text-xl font-semibold tracking-tight text-primary sm:text-[22px]">
           {t("invite.title")}
         </h1>
         <LanguageSwitcher />
       </div>
 
-      <p className="mt-3 text-secondary">
+      <p className="mt-2 text-sm leading-6 text-secondary">
         {t("invite.invitedWithRole")}{" "}
         <span className="font-semibold">{roleLabel}</span>.{" "}
         {t("invite.forEmail")}{" "}
@@ -302,14 +302,14 @@ export default function InviteView({ token }: { token: string }) {
       </p>
 
       {formError && (
-        <p className="mt-4 rounded-xl bg-danger-soft p-3 text-sm font-medium text-red-700">
+        <p className="ui-notice mt-3" data-tone="error">
           {formError}
         </p>
       )}
 
       {sessionEmail ? (
-        <div className="mt-6">
-          <p className="text-sm text-secondary">
+        <div className="mt-4">
+          <p className="text-[13px] text-secondary">
             {t("invite.loggedInAs")}{" "}
             <span className="font-semibold">{sessionEmail}</span>.
           </p>
@@ -318,7 +318,7 @@ export default function InviteView({ token }: { token: string }) {
             type="button"
             onClick={handleAccept}
             disabled={state === "accepting"}
-            className="mt-4 w-full rounded-xl bg-blue-600 px-6 py-3 font-semibold text-white hover:bg-blue-700 disabled:bg-gray-400"
+            className="ui-btn ui-btn-primary mt-3 w-full"
           >
             {state === "accepting"
               ? t("invite.acceptingButton")
@@ -329,28 +329,28 @@ export default function InviteView({ token }: { token: string }) {
             type="button"
             onClick={handleSignOutAndSwitch}
             disabled={state === "accepting"}
-            className="mt-3 w-full rounded-xl border border-subtle px-6 py-3 font-semibold text-secondary hover:bg-surface-2"
+            className="ui-btn ui-btn-secondary mt-2 w-full"
           >
             {t("invite.signOutAndSwitch")}
           </button>
         </div>
       ) : awaitingEmailConfirmation ? (
-        <p className="mt-6 rounded-xl bg-info-soft p-3 text-sm text-blue-800">
+        <p className="ui-notice mt-4 border-brand-500/30 bg-info-soft text-brand-300">
           {t("invite.awaitingEmailConfirmation")}
         </p>
       ) : (
-        <div className="mt-6">
-          <div className="flex rounded-xl border border-subtle p-1">
+        <div className="mt-4">
+          <div className="flex gap-0.5 rounded-doc-sm border border-subtle bg-surface-2 p-0.5">
             <button
               type="button"
               onClick={() => {
                 setMode("register");
                 setFormError("");
               }}
-              className={`flex-1 rounded-lg px-4 py-2 text-sm font-semibold ${
+              className={`min-h-8 flex-1 rounded-md px-3 py-1 text-[13px] font-semibold transition-colors ${
                 mode === "register"
-                  ? "bg-blue-600 text-white"
-                  : "text-secondary"
+                  ? "bg-accent-esblu text-on-accent"
+                  : "text-secondary hover:text-primary"
               }`}
             >
               {t("invite.tabRegister")}
@@ -361,20 +361,20 @@ export default function InviteView({ token }: { token: string }) {
                 setMode("login");
                 setFormError("");
               }}
-              className={`flex-1 rounded-lg px-4 py-2 text-sm font-semibold ${
-                mode === "login" ? "bg-blue-600 text-white" : "text-secondary"
+              className={`min-h-8 flex-1 rounded-md px-3 py-1 text-[13px] font-semibold transition-colors ${
+                mode === "login" ? "bg-accent-esblu text-on-accent" : "text-secondary hover:text-primary"
               }`}
             >
               {t("invite.tabLogin")}
             </button>
           </div>
 
-          <div className="mt-4 space-y-3">
+          <div className="mt-3 space-y-3">
             <input
               type="email"
               placeholder={t("invite.emailPlaceholder")}
               autoComplete="email"
-              className="w-full rounded-xl border p-3"
+              className="ui-input"
               value={formEmail}
               onChange={(event) => setFormEmail(event.target.value)}
               disabled={submitting}
@@ -386,7 +386,7 @@ export default function InviteView({ token }: { token: string }) {
               autoComplete={
                 mode === "register" ? "new-password" : "current-password"
               }
-              className="w-full rounded-xl border p-3"
+              className="ui-input"
               value={password}
               onChange={(event) => setPassword(event.target.value)}
               disabled={submitting}
@@ -397,7 +397,7 @@ export default function InviteView({ token }: { token: string }) {
                 type="password"
                 placeholder={t("invite.confirmPasswordPlaceholder")}
                 autoComplete="new-password"
-                className="w-full rounded-xl border p-3"
+                className="ui-input"
                 value={confirmPassword}
                 onChange={(event) => setConfirmPassword(event.target.value)}
                 disabled={submitting}
@@ -409,7 +409,7 @@ export default function InviteView({ token }: { token: string }) {
             type="button"
             onClick={mode === "register" ? handleRegister : handleLogin}
             disabled={submitting}
-            className="mt-4 w-full rounded-xl bg-blue-600 px-6 py-3 font-semibold text-white hover:bg-blue-700 disabled:bg-gray-400"
+            className="ui-btn ui-btn-primary mt-3 w-full"
           >
             {submitting
               ? t("invite.working")
@@ -429,8 +429,8 @@ export default function InviteView({ token }: { token: string }) {
 
 function Centered({ children }: { children: React.ReactNode }) {
   return (
-    <main className="app-shell-bg flex min-h-screen items-center justify-center p-6">
-      <div className="w-full max-w-md rounded-2xl bg-surface-1 p-8 shadow">
+    <main className="app-shell-bg flex min-h-screen items-center justify-center px-4 py-6">
+      <div className="w-full max-w-sm rounded-doc border border-doc-border bg-surface-1 p-4 sm:p-6">
         {children}
       </div>
     </main>

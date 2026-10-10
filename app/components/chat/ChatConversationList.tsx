@@ -220,24 +220,24 @@ export default function ChatConversationList({
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center justify-between gap-3 px-1 pb-3">
-        <h2 className="text-lg font-bold text-primary">{t("chat.title")}</h2>
+      <div className="flex items-center justify-between gap-3 px-1 pb-2">
+        <h2 className="text-[15px] font-semibold text-primary">{t("chat.title")}</h2>
         {totalUnread > 0 && (
-          <span className="badge-danger shrink-0 rounded-full px-2.5 py-1 text-xs font-bold">
+          <span className="badge-danger shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold tabular-nums">
             {totalUnread}
           </span>
         )}
       </div>
 
       {loadError && (
-        <p className="mb-2 rounded-xl border border-subtle bg-surface-1/60 p-3 text-xs text-secondary">
+        <p className="mb-2 rounded-doc-sm border border-subtle bg-surface-1/60 px-3 py-2 text-xs text-secondary">
           {loadError}
         </p>
       )}
 
-      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pb-2">
+      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pb-2">
         <div>
-          <p className="mb-1.5 px-1 text-[11px] font-bold uppercase tracking-wide text-muted-esblu">
+          <p className="mb-1 px-1 text-[11px] font-semibold uppercase tracking-wide text-muted-esblu">
             {t("chat.companyChannel")}
           </p>
 
@@ -258,14 +258,14 @@ export default function ChatConversationList({
         </div>
 
         <div>
-          <div className="mb-1.5 flex items-center justify-between px-1">
-            <p className="text-[11px] font-bold uppercase tracking-wide text-muted-esblu">
+          <div className="mb-1 flex items-center justify-between px-1">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-esblu">
               {t("chat.directMessages")}
             </p>
             <button
               type="button"
               onClick={() => setShowNewConversation(true)}
-              className="text-xs font-bold text-accent-cyan hover:underline"
+              className="inline-flex min-h-8 items-center text-xs font-semibold text-brand-300 hover:underline"
             >
               + {t("chat.newConversation")}
             </button>
@@ -280,7 +280,7 @@ export default function ChatConversationList({
               {t("chat.noConversationSelected")}
             </p>
           ) : (
-            <div className="space-y-1">
+            <div className="space-y-0.5">
               {directRows.map((row) => (
                 <ConversationRow
                   key={row.conversation.id}
@@ -302,23 +302,23 @@ export default function ChatConversationList({
       </div>
 
       {showNewConversation && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/70 backdrop-blur-sm sm:items-center">
-          <div className="surface-card w-full max-w-sm p-5 sm:rounded-2xl">
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 backdrop-blur-sm sm:items-center">
+          <div className="surface-card w-full max-w-sm p-4 sm:rounded-doc">
             <div className="mb-3 flex items-center justify-between">
-              <h3 className="text-base font-bold text-primary">
+              <h3 className="text-[15px] font-semibold text-primary">
                 {t("chat.selectMember")}
               </h3>
               <button
                 type="button"
                 onClick={() => setShowNewConversation(false)}
                 aria-label={t("common.buttons.close")}
-                className="flex h-8 w-8 items-center justify-center rounded-full bg-surface-2 text-secondary"
+                className="flex h-8 w-8 items-center justify-center rounded-doc-sm border border-doc-border text-sm text-secondary transition hover:bg-surface-hover hover:text-primary"
               >
                 ✕
               </button>
             </div>
 
-            <div className="max-h-80 space-y-1 overflow-y-auto">
+            <div className="max-h-80 space-y-0.5 overflow-y-auto">
               {members
                 .filter((m) => m.user_id !== myUserId)
                 .map((member) => (
@@ -327,7 +327,7 @@ export default function ChatConversationList({
                     type="button"
                     disabled={creatingWith === member.user_id}
                     onClick={() => startConversationWith(member.user_id)}
-                    className="surface-card-hover flex w-full items-center justify-between gap-3 rounded-xl border border-subtle bg-surface-1/60 px-3.5 py-3 text-left text-sm font-medium text-primary transition disabled:opacity-60"
+                    className="surface-card-hover flex w-full items-center justify-between gap-3 rounded-doc-sm border border-subtle bg-surface-1/60 px-3 py-2 text-left text-sm font-medium text-primary transition disabled:opacity-60"
                   >
                     <span className="min-w-0 truncate">{member.email}</span>
                     <span className="shrink-0 text-xs text-muted-esblu">
@@ -360,20 +360,20 @@ function ConversationRow({
   unread: number;
   icon: string;
 }) {
-  const className = `flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2.5 text-left text-sm font-semibold transition ${
+  const className = `flex min-h-10 w-full items-center gap-2 rounded-doc-sm px-2.5 py-1.5 text-left text-sm font-medium transition ${
     active
-      ? "bg-accent-cyan/12 text-accent-cyan"
+      ? "bg-brand-500/15 text-brand-300"
       : "text-secondary hover:bg-surface-hover hover:text-primary"
   }`;
 
   const content = (
     <>
-      <span aria-hidden="true" className="text-base leading-none">
+      <span aria-hidden="true" className="text-sm leading-none">
         {icon}
       </span>
       <span className="min-w-0 flex-1 truncate">{title}</span>
       {unread > 0 && (
-        <span className="badge-danger shrink-0 rounded-full px-2 py-0.5 text-[11px] font-bold">
+        <span className="badge-danger shrink-0 rounded-full px-1.5 py-0.5 text-[11px] font-semibold tabular-nums">
           {unread}
         </span>
       )}

@@ -78,27 +78,27 @@ export function AppDialogHost() {
         aria-modal="true"
         aria-labelledby={title ? titleId : undefined}
         aria-describedby={messageId}
-        className="relative w-full max-w-md rounded-t-3xl border border-subtle bg-surface-1 px-5 pb-[calc(var(--esblu-safe-bottom)+20px)] pt-5 shadow-2xl sm:rounded-3xl sm:pb-5"
+        className="relative w-full max-w-sm rounded-t-doc border border-subtle bg-surface-1 px-4 pb-[calc(var(--esblu-safe-bottom)+16px)] pt-4 shadow-2xl sm:rounded-doc sm:pb-4"
       >
         {title && (
-          <h2 id={titleId} className="text-lg font-bold text-primary">
+          <h2 id={titleId} className="text-[15px] font-semibold text-primary">
             {title}
           </h2>
         )}
         <p
           id={messageId}
-          className={`whitespace-pre-line break-words text-base leading-relaxed ${title ? "mt-2" : ""} ${
+          className={`whitespace-pre-line break-words text-sm leading-relaxed ${title ? "mt-1.5" : ""} ${
             current.kind === "notify" && current.options.tone === "error" ? "text-danger" : "text-secondary"
           }`}
         >
           {current.options.message}
         </p>
-        <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+        <div className="mt-4 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
           {isConfirm && (
             <button
               type="button"
               onClick={() => finish(false)}
-              className="btn-secondary min-h-11 px-5 py-2.5 text-base font-semibold"
+              className="ui-btn ui-btn-secondary"
             >
               {current.options.cancelLabel ?? t("common.buttons.cancel")}
             </button>
@@ -107,8 +107,8 @@ export function AppDialogHost() {
             ref={primaryRef}
             type="button"
             onClick={() => finish(true)}
-            className={`min-h-11 rounded-xl px-5 py-2.5 text-base font-bold ${
-              destructive ? "bg-danger text-white hover:opacity-90" : "btn-primary"
+            className={`ui-btn ${
+              destructive ? "bg-danger text-white hover:opacity-90" : "ui-btn-primary"
             }`}
           >
             {isConfirm

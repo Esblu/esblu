@@ -11,7 +11,8 @@ import type { UiContext } from "@/lib/intents/ui-context";
 import { IntentResultView, QuickReplies } from "@/app/components/voice/IntentResultView";
 import { VoiceReplyToggle } from "@/app/components/voice/VoiceReplyToggle";
 import { cancelSpeech } from "@/lib/voice/speech";
-import { decideVoiceConfirmation } from "@/lib/voice/voice-session";
+import { decideVoiceReplyForPreview } from "@/lib/voice/command-safety";
+import { ASSISTANT_TIMEOUTS, failureMessageKey, fetchJsonWithTimeout } from "@/lib/voice/assistant-http";
 import { VoiceSessionControl, voiceSessionStatusText } from "@/app/components/voice/VoiceSessionControl";
 import { spokenTextFor } from "@/lib/voice/spoken-text";
 import {
@@ -110,6 +111,15 @@ type Phase =
   | "denied"
   | "failed";
 
+type IntentResponseBody = {
+  success?: boolean;
+  recognized?: boolean;
+  result?: IntentResult;
+  error?: string;
+  intent?: string;
+  pendingClarification?: string;
+};
+
 type RunOutcome = {
   result: IntentResult | null;
   message: string | null;
@@ -166,6 +176,10 @@ export function VoiceLauncher({
   // Náhľad, ktorý práve čaká na potvrdenie. V ref, aby ho hlasová veta
   // videla aj z callbacku relácie (bez zastaraného uzáveru).
   const pendingPreviewRef = useRef<IntentResult | null>(null);
+  // Prebiehajúce potvrdenie: hlasové „áno" počas ťuknutia (alebo dvojité
+  // ťuknutie) nesmie odoslať druhé potvrdenie. Server by druhé aj tak
+  // odmietol (jednorazový confirmationId), ale UI by ukázalo chybu.
+  const confirmInFlightRef = useRef(false);
   useEffect(() => {
     pendingPreviewRef.current = phase === "awaitingConfirmation" ? intentResult : null;
   }, [phase, intentResult]);
@@ -183,7 +197,10 @@ export function VoiceLauncher({
     setTranscript(text);
     const pending = pendingPreviewRef.current;
     if (pending && pending.kind === "action_preview") {
-      const decision = decideVoiceConfirmation(text);
+      const decision = decideVoiceReplyForPreview(text, pending);
+      // Nevratná akcia (mazanie): vyslovené „áno" nestačí — potvrdiť sa dá
+      // iba ťuknutím na tlačidlo v náhľade (lib/voice/command-safety.ts).
+      if (decision === "tap_required") return { spoken: t("search.voice.session.tapToConfirm") };
       if (decision === "confirm") {
         pendingPreviewRef.current = null; // žiadne dvojité odoslanie
         const executed = await handleConfirm(pending);
@@ -232,7 +249,7 @@ export function VoiceLauncher({
     }
 
     try {
-      const response = await fetch(apiUrl("/api/assistant/intent"), {
+      const http = await fetchJsonWithTimeout<IntentResponseBody>(apiUrl("/api/assistant/intent"), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -264,9 +281,19 @@ export function VoiceLauncher({
             ? { folderContext: { folderId: recentFolderIdRef.current ?? folderContextId } }
             : {}),
         }),
-      });
+      }, { timeoutMs: ASSISTANT_TIMEOUTS.intentMs });
 
-      const data = await response.json();
+      // Sieť / časový limit / offline / 5xx nie sú odpoveď: relácia povie
+      // „Spojenie zlyhalo" (alebo „vypršal čas") a text chyby sa NIKDY
+      // nepošle ako nový príkaz. Nič sa automaticky neopakuje.
+      if (!http.ok && (http.kind === "offline" || http.kind === "timeout" || http.kind === "network" || http.kind === "server" || http.kind === "invalid_response" || http.kind === "rate_limited")) {
+        setPhase("failed");
+        setMessage(t(failureMessageKey(http.kind)));
+        throw new Error(`intent_${http.kind}`);
+      }
+      if (!http.ok && http.kind === "cancelled") return { result: null, message: null };
+      const response = { ok: http.ok, status: http.status ?? 0 };
+      const data = (http.data ?? {}) as IntentResponseBody;
       // Každá odpoveď nahradí rozpracovanú otázku: nová otázka = nový token,
       // inak (vykonaný nový príkaz, zrušenie, chyba) sa zahodí.
       pendingClarificationRef.current = typeof data?.pendingClarification === "string" ? data.pendingClarification : null;
@@ -309,10 +336,10 @@ export function VoiceLauncher({
       setMessage(t("search.errors.commandNotUnderstood"));
       return { result: null, message: t("search.errors.commandNotUnderstood") };
     } catch (error) {
-      // Nikdy nevypisujeme technický detail do rozhrania.
-      console.error("VoiceLauncher: rozpoznanie príkazu zlyhalo:", error);
+      // Nikdy nevypisujeme technický detail do rozhrania ani obsah vety do logu.
+      console.error("VoiceLauncher: rozpoznanie príkazu zlyhalo:", error instanceof Error ? error.message : "unknown");
       setPhase("failed");
-      setMessage(t("search.errors.generic"));
+      setMessage((current) => current || t("search.errors.generic"));
       // Sieťová chyba NIE JE odpoveď — relácia povie „Spojenie zlyhalo" a
       // text chyby sa nikdy nepošle ako nový príkaz.
       throw error;
@@ -372,6 +399,8 @@ export function VoiceLauncher({
     }
 
     if (!intentResult.confirmationId) return null;
+    if (confirmInFlightRef.current) return null;
+    confirmInFlightRef.current = true;
 
     setActionSubmitting(true);
 
@@ -380,6 +409,7 @@ export function VoiceLauncher({
     } = await supabase.auth.getSession();
 
     if (!session) {
+      confirmInFlightRef.current = false;
       setActionSubmitting(false);
       setPhase("denied");
       setMessage(t("search.voice.states.denied"));
@@ -387,28 +417,44 @@ export function VoiceLauncher({
     }
 
     try {
-      const response = await fetch(apiUrl("/api/assistant/action/execute"), {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${session.access_token}`,
-          [REQUEST_LOCALE_HEADER]: locale,
+      const http = await fetchJsonWithTimeout<{ success?: boolean; result?: IntentResult }>(
+        apiUrl("/api/assistant/action/execute"),
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${session.access_token}`,
+            [REQUEST_LOCALE_HEADER]: locale,
+          },
+          body: JSON.stringify({ confirmationId: intentResult.confirmationId }),
         },
-        body: JSON.stringify({ confirmationId: intentResult.confirmationId }),
-      });
+        { timeoutMs: ASSISTANT_TIMEOUTS.executeMs }
+      );
 
-      const data = await response.json();
-      const executed = (data?.result as IntentResult) ?? null;
+      // OPRAVA: predtým sa stav odpovede nekontroloval — 400 (vypršané
+      // potvrdenie), 403 alebo 500 skončili ako „Hotovo". Úspech je IBA
+      // 2xx + success + result.
+      if (!http.ok || !http.data?.success || !http.data.result) {
+        const key = http.ok ? "search.errors.generic" : failureMessageKey(http.kind, "execute");
+        const failed: IntentResult = { kind: "error", text: t(key) };
+        setIntentResult(failed);
+        setPhase(!http.ok && (http.kind === "forbidden" || http.kind === "unauthenticated") ? "denied" : "failed");
+        setMessage(t(key));
+        return failed;
+      }
+
+      const executed = http.data.result;
       setIntentResult(executed);
-      if (executed?.kind === "action_result" && executed.folder) recentFolderIdRef.current = executed.folder.id;
+      if (executed.kind === "action_result" && executed.folder) recentFolderIdRef.current = executed.folder.id;
       setPhase("complete");
       return executed;
     } catch (error) {
-      console.error("VoiceLauncher: vykonanie akcie zlyhalo:", error);
+      console.error("VoiceLauncher: vykonanie akcie zlyhalo:", error instanceof Error ? error.message : "unknown");
       setPhase("failed");
       setMessage(t("search.errors.generic"));
       return { kind: "error", text: t("search.errors.generic") };
     } finally {
+      confirmInFlightRef.current = false;
       setActionSubmitting(false);
     }
   }
@@ -479,7 +525,7 @@ export function VoiceLauncher({
         onClick={() => setOpen(true)}
         aria-label={t("nav.assistant")}
         title={t("nav.assistant")}
-        className={`${docButtonSecondary} h-11 w-11 justify-center px-0`}
+        className={`${docButtonSecondary} h-[var(--control-h)] w-[var(--control-h)] justify-center px-0`}
       >
         <AssistantGlyph />
       </button>
@@ -504,7 +550,13 @@ export function VoiceLauncher({
       className="rounded-doc border border-doc-border bg-doc-surface p-3 sm:p-4"
     >
       <div className="flex flex-wrap items-center gap-2">
-        <VoiceSessionControl session={voice.session} onTap={voice.tap} onStop={() => voice.stop("user")} />
+        <VoiceSessionControl
+          session={voice.session}
+          onTap={voice.tap}
+          onStop={() => voice.stop("user")}
+          canOpenSettings={voice.canOpenSettings}
+          onOpenSettings={voice.openSettings}
+        />
 
         <span aria-live="polite" className={`min-w-0 flex-1 ${VOICE_TEXT} text-secondary`}>
           {statusText || t("search.voice.hint")}
@@ -516,7 +568,7 @@ export function VoiceLauncher({
           type="button"
           onClick={closePanel}
           aria-label={t("common.buttons.close")}
-          className={`${docButtonSecondary} px-2.5`}
+          className={`${docButtonSecondary} w-[var(--control-h)] justify-center px-0`}
         >
           <CloseIcon size={16} />
         </button>
@@ -542,7 +594,7 @@ export function VoiceLauncher({
           písmom — meno partnera je presne to, čo prepis reči najčastejšie
           skomolí. */}
       {clarify && (
-        <div className="mt-3 rounded-doc border border-doc-border bg-surface-2 p-3">
+        <div className="mt-2.5 rounded-doc border border-doc-border bg-surface-2 p-3">
           <p className={`break-words ${VOICE_TEXT} font-medium text-primary`}>{clarify.question}</p>
 
           {clarify.choices && clarify.choices.length > 0 && (
@@ -557,7 +609,7 @@ export function VoiceLauncher({
                       partnerId: choice.value,
                     })
                   }
-                  className={`${docButtonSecondary} ${VOICE_TEXT} min-h-11 max-w-full whitespace-normal text-left`}
+                  className={`${docButtonSecondary} ${VOICE_TEXT} max-w-full whitespace-normal text-left`}
                 >
                   {choice.label}
                 </button>
@@ -571,7 +623,7 @@ export function VoiceLauncher({
           />
 
           <form
-            className="mt-3 flex flex-wrap items-end gap-2"
+            className="mt-2.5 flex flex-wrap items-end gap-2"
             onSubmit={(event) => {
               event.preventDefault();
               submitClarifyAnswer(clarifyAnswer);
@@ -583,7 +635,7 @@ export function VoiceLauncher({
               </label>
               <input
                 id="esblu-voice-answer"
-                className={`${docField} ${VOICE_TEXT} min-h-11`}
+                className={`${docField} ${VOICE_TEXT}`}
                 value={clarifyAnswer}
                 onChange={(event) => setClarifyAnswer(event.target.value)}
                 placeholder={t("search.voice.answerPlaceholder")}
@@ -592,7 +644,7 @@ export function VoiceLauncher({
             </div>
             <button
               type="submit"
-              className={`${docButtonPrimary} ${VOICE_TEXT} min-h-11`}
+              className={`${docButtonPrimary} ${VOICE_TEXT}`}
               disabled={!clarifyAnswer.trim()}
             >
               {t("search.voice.answerSend")}
@@ -600,7 +652,7 @@ export function VoiceLauncher({
             <button
               type="button"
               onClick={handleCancel}
-              className={`${docButtonSecondary} ${VOICE_TEXT} min-h-11`}
+              className={`${docButtonSecondary} ${VOICE_TEXT}`}
             >
               {t("common.buttons.cancel")}
             </button>

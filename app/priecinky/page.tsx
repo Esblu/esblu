@@ -90,12 +90,12 @@ export default function FoldersPage() {
 
   return (
     <DocumentPageShell wide moduleContext="folders">
-      <BackLink href="/" label={t("nav.dashboard")} className="mb-3 sm:mb-6" />
+      <BackLink href="/" label={t("nav.dashboard")} className="mb-1 sm:mb-3" />
 
       <DocumentHeader
         eyebrow={
           <span className="inline-flex items-center gap-2">
-            <FolderIcon size={18} />
+            <FolderIcon size={16} />
             {t("folders.navLabel")}
           </span>
         }
@@ -104,14 +104,14 @@ export default function FoldersPage() {
       />
 
       {loaded && !canManage && (
-        <div className="mt-6">
+        <div className="mt-3">
           <DocumentNotice>{t("folders.noAccess")}</DocumentNotice>
         </div>
       )}
 
       {canManage && (
         <form
-          className="mt-6 rounded-doc border border-doc-border bg-doc-surface p-4 sm:p-5"
+          className="mt-4 rounded-doc border border-doc-border bg-doc-surface p-3 sm:p-4"
           onSubmit={(event) => {
             event.preventDefault();
             void handleCreate();
@@ -137,31 +137,31 @@ export default function FoldersPage() {
       )}
 
       {notice && (
-        <div className="mt-4">
+        <div className="mt-3">
           <DocumentNotice tone={notice.tone}>{notice.text}</DocumentNotice>
         </div>
       )}
 
       {canManage && (
-        <div className="mt-6">
+        <div className="mt-4">
           {!loaded ? (
             <LoadingRows label={t("folders.loading")} />
           ) : folders.length === 0 ? (
             <EmptyState title={t("folders.empty")} />
           ) : (
-            <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <ul className="grid grid-cols-1 gap-1.5 sm:grid-cols-2 sm:gap-2">
               {folders.map((folder) => (
                 <li key={folder.id}>
                   <Link
                     href={folderDetailHref(folder.id)}
-                    className="flex min-h-16 items-center gap-3 rounded-doc border border-doc-border bg-doc-surface px-4 py-3 transition hover:bg-surface-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    className="flex min-h-[var(--row-min-h)] items-center gap-2.5 rounded-doc border border-doc-border bg-doc-surface px-3 py-2 transition hover:bg-surface-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   >
-                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-doc-sm border border-doc-border bg-surface-2 text-secondary">
-                      <FolderIcon size={20} />
+                    <span aria-hidden="true" className="flex h-8 w-8 shrink-0 items-center justify-center rounded-doc-sm border border-doc-border bg-surface-2 text-secondary">
+                      <FolderIcon size={16} />
                     </span>
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate text-base font-semibold text-primary">{folder.name}</span>
-                      <span className="block text-sm text-muted-esblu">
+                      <span className="block truncate text-sm font-semibold text-primary">{folder.name}</span>
+                      <span className="block text-xs tabular-nums text-muted-esblu">
                         {t("folders.itemCount", { count: folder.itemCount })} · {formatDate(folder.created_at, locale)}
                       </span>
                     </span>

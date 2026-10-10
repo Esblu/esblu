@@ -107,7 +107,7 @@ function renderInline(text: string, keyPrefix: string): ReactNode[] {
       nodes.push(
         <code
           key={`${keyPrefix}-c${idx++}`}
-          className="rounded bg-surface-2 px-1.5 py-0.5 text-sm"
+          className="rounded bg-surface-2 px-1 py-0.5 text-[13px]"
         >
           {match[4]}
         </code>
@@ -121,7 +121,7 @@ function renderInline(text: string, keyPrefix: string): ReactNode[] {
           <AppLink
             key={`${keyPrefix}-l${idx++}`}
             href={href}
-            className="font-semibold text-blue-700 underline decoration-blue-300 underline-offset-4"
+            className="font-medium text-brand-300 underline decoration-brand-300/40 underline-offset-4"
           >
             {linkText}
           </AppLink>
@@ -134,7 +134,7 @@ function renderInline(text: string, keyPrefix: string): ReactNode[] {
             href={href}
             target={isMailto ? undefined : "_blank"}
             rel={isMailto ? undefined : "noopener noreferrer"}
-            className="break-all font-semibold text-blue-700 underline decoration-blue-300 underline-offset-4"
+            className="break-all font-medium text-brand-300 underline decoration-brand-300/40 underline-offset-4"
           >
             {linkText}
           </a>
@@ -187,7 +187,7 @@ export function LegalMarkdown({ markdown }: { markdown: string }) {
       rendered = <p key={key}>{renderInline(block.text, key)}</p>;
     } else if (block.type === "list") {
       rendered = (
-        <ul key={key} className="list-disc space-y-2 pl-6">
+        <ul key={key} className="list-disc space-y-1.5 pl-5">
           {block.items.map((item, itemIdx) => (
             <li key={`${key}-${itemIdx}`}>
               {renderInline(item, `${key}-${itemIdx}`)}
@@ -199,7 +199,7 @@ export function LegalMarkdown({ markdown }: { markdown: string }) {
       rendered = (
         <aside
           key={key}
-          className="rounded-2xl border border-amber-200 bg-amber-50 p-5 font-semibold text-amber-950"
+          className="rounded-doc-sm border border-amber-300/30 bg-warning-soft p-3 font-medium text-amber-300"
         >
           {renderInline(block.text, key)}
         </aside>

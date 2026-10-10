@@ -12,11 +12,15 @@ import {
   INITIAL_VOICE_SESSION,
   isSessionActive,
   voiceSessionReducer,
+  watchdogMsFor,
   type StopReason,
+  type TranscribeFailureKind,
   type VoiceEffect,
   type VoiceEvent,
   type VoiceSessionState,
 } from "@/lib/voice/voice-session";
+import { ASSISTANT_TIMEOUTS, fetchJsonWithTimeout } from "@/lib/voice/assistant-http";
+import { canOpenMicSettings, haptic, openMicSettings } from "@/lib/voice/device-feedback";
 import type { TranscriptionContext } from "@/hooks/use-voice-capture";
 
 // =============================================================================
@@ -34,6 +38,16 @@ import type { TranscriptionContext } from "@/hooks/use-voice-capture";
 // zamknutý telefón, výpadok siete, odobraté povolenie, odchod zo stránky →
 // relácia sa ZASTAVÍ a mikrofón sa uvoľní (nikdy nepočúva potichu ďalej).
 // =============================================================================
+
+/** Dve ťuknutia rýchlejšie než toto = jedno (dvojklik nesmie štart hneď zastaviť). */
+export const TAP_DEBOUNCE_MS = 450;
+
+/**
+ * Udalosť, ktorou natívny most (mobile/app/AppLifecycleBridge.tsx) hlási
+ * prechod appky do pozadia/popredia. Capacitor appStateChange je na Androide
+ * spoľahlivejší než visibilitychange vo WebView.
+ */
+export const APP_STATE_EVENT = "esblu:app-state";
 
 export type VoiceTurnReply = {
   /** Čo Esblu povie (null = nič, hneď počúvať znova). */
@@ -59,6 +73,10 @@ export function useVoiceSession({
   const micRef = useRef<MicSession | null>(null);
   const blobRef = useRef<{ blob: Blob; mimeType: string } | null>(null);
   const speechAbortRef = useRef<AbortController | null>(null);
+  const transcribeAbortRef = useRef<AbortController | null>(null);
+  const watchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastTapRef = useRef(0);
+  const [settingsAvailable, setSettingsAvailable] = useState(false);
   // Najnovšie callbacky bez znovuvytvárania dispatchu.
   const latest = useRef({ onUtterance, getTranscriptionContext, onTranscript, t, locale });
   useEffect(() => {
@@ -112,13 +130,19 @@ export function useVoiceSession({
           dispatch({ type: "TRANSCRIBE_FAILED", gen });
           return;
         }
-        void transcribe(captured, latest.current.locale, latest.current.getTranscriptionContext?.() ?? null).then((text) => {
-          recordVoiceDiagnostic({ kind: "transcript", name: text === null ? "failed" : "ok", gen });
-          if (text === null) dispatch({ type: "TRANSCRIBE_FAILED", gen });
-          else {
-            latest.current.onTranscript?.(text);
-            dispatch({ type: "TRANSCRIPT", text, gen });
+        transcribeAbortRef.current?.abort();
+        const controller = new AbortController();
+        transcribeAbortRef.current = controller;
+        void transcribe(captured, latest.current.locale, latest.current.getTranscriptionContext?.() ?? null, controller.signal).then((outcome) => {
+          if (transcribeAbortRef.current === controller) transcribeAbortRef.current = null;
+          if (!outcome.ok) {
+            if (outcome.kind !== "cancelled") dispatch({ type: "TRANSCRIBE_FAILED", kind: outcome.kind, gen });
+            return;
           }
+          const text = outcome.text;
+          recordVoiceDiagnostic({ kind: "transcript", name: "ok", gen });
+          latest.current.onTranscript?.(text);
+          dispatch({ type: "TRANSCRIPT", text, gen });
         });
         return;
       }
@@ -158,11 +182,36 @@ export function useVoiceSession({
 
   useEffect(() => {
     dispatchRef.current = (event: VoiceEvent) => {
-      const { state, effects } = voiceSessionReducer(stateRef.current, event);
-      if (state === stateRef.current && effects.length === 0) return; // ignorované (oneskorené) dokončenie
+      const previous = stateRef.current;
+      const { state, effects } = voiceSessionReducer(previous, event);
+      if (state === previous && effects.length === 0) return; // ignorované (oneskorené) dokončenie
       stateRef.current = state;
       setSession(state);
       recordVoiceDiagnostic({ kind: "state", name: state.status, gen: state.gen });
+
+      // Strážny časovač: každý prechod ho zruší; stavy, ktoré čakajú na
+      // mikrofón/prepis/server, dostanú nový. Nesie generáciu → neskorý
+      // časovač staršieho kola automat ignoruje.
+      if (watchdogRef.current) clearTimeout(watchdogRef.current);
+      watchdogRef.current = null;
+      const limit = watchdogMsFor(state.status);
+      if (limit !== null) {
+        const gen = state.gen;
+        watchdogRef.current = setTimeout(() => dispatchRef.current({ type: "WATCHDOG", gen }), limit);
+      }
+
+      // Opustený prepis (stop, timeout, pozadie) → zrušiť upload, nech
+      // zbytočne nebeží a jeho výsledok nič nespustí.
+      if (state.status !== "transcribing" && transcribeAbortRef.current) {
+        transcribeAbortRef.current.abort();
+        transcribeAbortRef.current = null;
+      }
+
+      // Haptika: mikrofón začal počúvať (prvé kolo), relácia skončila, chyba.
+      if (state.status === "listening" && previous.status === "starting" && state.turn === 0) haptic("start");
+      else if (state.status === "stopped" && isSessionActive(previous.status)) haptic("stop");
+      else if (state.status === "error" && previous.status !== "error") haptic("error");
+
       effects.forEach((effect) => runEffect(effect, state.gen));
       if (!isSessionActive(state.status)) {
         // Koniec relácie: AudioContext preč až po efektoch (reč oznámenia smie dobehnúť).
@@ -174,6 +223,11 @@ export function useVoiceSession({
 
   /** Ťuknutie na mikrofón (štart / ukončenie / prerušenie Esblu). */
   const tap = useCallback(() => {
+    // Dvojité ťuknutie (alebo „ghost click" po touchend) nesmie reláciu
+    // spustiť a hneď zastaviť, ani spustiť dve nahrávania.
+    const now = Date.now();
+    if (now - lastTapRef.current < TAP_DEBOUNCE_MS) return;
+    lastTapRef.current = now;
     const status = stateRef.current.status;
     if (!isSessionActive(status)) {
       // V GESTE: odomknúť zvuk a reč pre celú reláciu (iOS/Android).
@@ -208,16 +262,32 @@ export function useVoiceSession({
     };
     const onPageHide = () => dispatchRef.current({ type: "STOP", reason: "navigation" });
     const onOffline = () => dispatchRef.current({ type: "STOP", reason: "offline" });
+    // Natívna appka do pozadia / zamknutie obrazovky / prerušenie systémom
+    // (hovor). visibilitychange vo WebView nemusí prísť vždy.
+    const onAppState = (event: Event) => {
+      const active = (event as CustomEvent<{ isActive?: boolean }>).detail?.isActive;
+      if (active === false) dispatchRef.current({ type: "STOP", reason: "hidden" });
+    };
+    // Page Lifecycle API: zmrazená stránka (Chrome/Android) = pozadie.
+    const onFreeze = () => dispatchRef.current({ type: "STOP", reason: "hidden" });
     document.addEventListener("visibilitychange", onHidden);
+    document.addEventListener("freeze", onFreeze);
     window.addEventListener("pagehide", onPageHide);
     window.addEventListener("offline", onOffline);
+    window.addEventListener(APP_STATE_EVENT, onAppState);
     const { data: auth } = supabase.auth.onAuthStateChange((event) => {
       if (event === "SIGNED_OUT") dispatchRef.current({ type: "STOP", reason: "session_end" });
     });
     return () => {
       document.removeEventListener("visibilitychange", onHidden);
+      document.removeEventListener("freeze", onFreeze);
       window.removeEventListener("pagehide", onPageHide);
       window.removeEventListener("offline", onOffline);
+      window.removeEventListener(APP_STATE_EVENT, onAppState);
+      if (watchdogRef.current) clearTimeout(watchdogRef.current);
+      watchdogRef.current = null;
+      transcribeAbortRef.current?.abort();
+      transcribeAbortRef.current = null;
       auth.subscription.unsubscribe();
       // Odmontovanie (navigácia v appke) = koniec relácie a uvoľnený mikrofón.
       dispatchRef.current({ type: "STOP", reason: "navigation" });
@@ -227,36 +297,87 @@ export function useVoiceSession({
     };
   }, []);
 
-  return { session, active: isSessionActive(session.status), tap, stop, manualTurn };
+  // „Otvoriť nastavenia" má zmysel iba pri trvalom zablokovaní mikrofónu
+  // a iba tam, kde to platforma vie (natívna appka).
+  const micBlocked = session.status === "error" && session.micFailure === "blocked";
+  useEffect(() => {
+    if (!micBlocked) return;
+    let cancelled = false;
+    void canOpenMicSettings().then((value) => {
+      if (!cancelled) setSettingsAvailable(value);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [micBlocked]);
+
+  const openSettings = useCallback(() => {
+    void openMicSettings();
+  }, []);
+
+  return {
+    session,
+    active: isSessionActive(session.status),
+    tap,
+    stop,
+    manualTurn,
+    /** Mikrofón je trvalo zablokovaný a dá sa otvoriť systémové nastavenie. */
+    canOpenSettings: micBlocked && settingsAvailable,
+    openSettings,
+  };
 }
 
-/** Prepis jednej vety — ten istý endpoint a limity ako jednorazový mikrofón. */
+/** Výsledok prepisu — chyba nesie typ, aby relácia vedela, čo povedať. */
+type TranscribeOutcome = { ok: true; text: string } | { ok: false; kind: TranscribeFailureKind | "cancelled" };
+
+/**
+ * Prepis jednej vety — ten istý endpoint a limity ako jednorazový mikrofón.
+ * Časový limit + zrušenie (stop relácie) cez AbortSignal. Zvuk ani prepis sa
+ * nikdy nelogujú; blob žije iba v pamäti do odoslania (žiadny súbor, žiadna
+ * object URL).
+ */
 async function transcribe(
   captured: { blob: Blob; mimeType: string },
   locale: string,
-  context: TranscriptionContext | null
-): Promise<string | null> {
-  try {
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-    if (!session) return null;
-    const mime = captured.mimeType;
-    const extension = mime.includes("mp4") ? "mp4" : mime.includes("ogg") ? "ogg" : mime.includes("wav") ? "wav" : "webm";
-    const form = new FormData();
-    form.append("audio", captured.blob, `voice-command.${extension}`);
-    if (context) form.append("context", context);
-    const response = await fetch(apiUrl("/api/assistant/transcribe"), {
+  context: TranscriptionContext | null,
+  signal: AbortSignal
+): Promise<TranscribeOutcome> {
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  if (!session) return { ok: false, kind: "unauthenticated" };
+  const mime = captured.mimeType;
+  const extension = mime.includes("mp4") ? "mp4" : mime.includes("ogg") ? "ogg" : mime.includes("wav") ? "wav" : "webm";
+  const form = new FormData();
+  form.append("audio", captured.blob, `voice-command.${extension}`);
+  if (context) form.append("context", context);
+  const result = await fetchJsonWithTimeout<{ success?: boolean; text?: unknown }>(
+    apiUrl("/api/assistant/transcribe"),
+    {
       method: "POST",
       headers: { Authorization: `Bearer ${session.access_token}`, [REQUEST_LOCALE_HEADER]: locale },
       body: form,
-    });
-    const data = await response.json().catch(() => null);
-    if (!response.ok || !data?.success || typeof data.text !== "string" || !data.text.trim()) return null;
-    return data.text as string;
-  } catch (error) {
-    // Nikdy obsah zvuku ani prepisu v logu.
-    console.error("Prepis hlasu zlyhal:", error instanceof Error ? error.message : error);
-    return null;
+    },
+    { timeoutMs: ASSISTANT_TIMEOUTS.transcribeMs, signal }
+  );
+  if (!result.ok) {
+    switch (result.kind) {
+      case "cancelled":
+      case "offline":
+      case "timeout":
+      case "unauthenticated":
+      case "forbidden":
+      case "too_large":
+        return { ok: false, kind: result.kind };
+      case "server":
+      case "rate_limited":
+        return { ok: false, kind: "server" };
+      case "bad_request":
+        return { ok: false, kind: "empty" };
+      default:
+        return { ok: false, kind: "network" };
+    }
   }
+  const text = result.data?.success && typeof result.data.text === "string" ? result.data.text.trim() : "";
+  return text ? { ok: true, text } : { ok: false, kind: "empty" };
 }

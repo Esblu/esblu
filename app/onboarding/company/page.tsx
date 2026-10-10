@@ -156,7 +156,7 @@ export default function OnboardingCompanyPage() {
   if (state === "checking" || state === "bootstrapping") {
     return (
       <Centered>
-        <p className="text-secondary">
+        <p className="text-sm text-secondary">
           {state === "checking"
             ? t("onboarding.checkingEmailConfirmation")
             : t("onboarding.bootstrappingCompany")}
@@ -168,11 +168,11 @@ export default function OnboardingCompanyPage() {
   if (state === "beta-required") {
     return (
       <Centered>
-        <h1 className="text-2xl font-bold text-primary">{t("onboarding.betaRequiredTitle")}</h1>
-        <p className="mt-3 text-secondary">{betaMessage}</p>
+        <h1 className="text-xl font-semibold tracking-tight text-primary sm:text-[22px]">{t("onboarding.betaRequiredTitle")}</h1>
+        <p className="mt-2 text-sm leading-6 text-secondary">{betaMessage}</p>
         <Link
           href="/login"
-          className="mt-6 inline-block rounded-xl bg-blue-600 px-6 py-3 font-semibold text-white hover:bg-blue-700"
+          className="ui-btn ui-btn-primary mt-4"
         >
           {t("invite.goToLogin")}
         </Link>
@@ -183,8 +183,8 @@ export default function OnboardingCompanyPage() {
   if (state === "pending-invite") {
     return (
       <Centered>
-        <h1 className="text-2xl font-bold text-primary">{t("onboarding.pendingInviteTitle")}</h1>
-        <p className="mt-3 text-secondary">{t("onboarding.pendingInviteDescription")}</p>
+        <h1 className="text-xl font-semibold tracking-tight text-primary sm:text-[22px]">{t("onboarding.pendingInviteTitle")}</h1>
+        <p className="mt-2 text-sm leading-6 text-secondary">{t("onboarding.pendingInviteDescription")}</p>
       </Centered>
     );
   }
@@ -192,15 +192,15 @@ export default function OnboardingCompanyPage() {
   if (state === "no-session") {
     return (
       <Centered>
-        <h1 className="text-2xl font-bold text-primary">
+        <h1 className="text-xl font-semibold tracking-tight text-primary sm:text-[22px]">
           {t("onboarding.invalidLinkTitle")}
         </h1>
-        <p className="mt-3 text-secondary">
+        <p className="mt-2 text-sm leading-6 text-secondary">
           {t("onboarding.invalidLinkDescription")}
         </p>
         <Link
           href="/login"
-          className="mt-6 inline-block rounded-xl bg-blue-600 px-6 py-3 font-semibold text-white hover:bg-blue-700"
+          className="ui-btn ui-btn-primary mt-4"
         >
           {t("invite.goToLogin")}
         </Link>
@@ -210,15 +210,15 @@ export default function OnboardingCompanyPage() {
 
   return (
     <Centered>
-      <h1 className="text-2xl font-bold text-primary">
+      <h1 className="text-xl font-semibold tracking-tight text-primary sm:text-[22px]">
         {t("onboarding.genericErrorTitle")}
       </h1>
-      <p className="mt-3 text-secondary">
+      <p className="mt-2 text-sm leading-6 text-secondary">
         {t("onboarding.genericErrorDescription")}
       </p>
       <Link
         href="/login"
-        className="mt-6 inline-block rounded-xl bg-blue-600 px-6 py-3 font-semibold text-white hover:bg-blue-700"
+        className="ui-btn ui-btn-primary mt-4"
       >
         {t("invite.goToLogin")}
       </Link>
@@ -228,8 +228,8 @@ export default function OnboardingCompanyPage() {
 
 function Centered({ children }: { children: React.ReactNode }) {
   return (
-    <main className="app-shell-bg flex min-h-screen items-center justify-center p-6">
-      <div className="w-full max-w-md rounded-2xl bg-surface-1 p-8 text-center shadow">
+    <main className="app-shell-bg flex min-h-screen items-center justify-center px-4 py-6">
+      <div className="w-full max-w-sm rounded-doc border border-doc-border bg-surface-1 p-4 text-center sm:p-6">
         {children}
       </div>
     </main>

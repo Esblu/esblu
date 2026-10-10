@@ -637,17 +637,17 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
   }
 
   if (loading) {
-    return <div className="p-10 text-secondary">{t("invoices.loading")}</div>;
+    return <div className="p-6 text-sm text-secondary">{t("invoices.loading")}</div>;
   }
 
   if (!membershipLoaded) {
-    return <div className="p-10 text-secondary">{t("invoices.loading")}</div>;
+    return <div className="p-6 text-sm text-secondary">{t("invoices.loading")}</div>;
   }
 
   if (!canView || notFound || !invoice) {
     return (
       <DocumentPageShell uiContext={{ module: "invoice", entityType: "invoice", entityId: entityId }}>
-        <BackLink href="/faktury" label={t("invoices.backToList")} className="mb-3 sm:mb-6" />
+        <BackLink href="/faktury" label={t("invoices.backToList")} className="mb-1 sm:mb-3" />
         <DocumentNotice>
           {!canView ? t("invoices.noFinanceAccess") : t("invoices.errors.notFound")}
         </DocumentNotice>
@@ -672,7 +672,7 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
 
   return (
     <DocumentPageShell uiContext={{ module: "invoice", entityType: "invoice", entityId: entityId }}>
-      <BackLink href="/faktury" label={t("invoices.backToList")} className="mb-3 sm:mb-6" />
+      <BackLink href="/faktury" label={t("invoices.backToList")} className="mb-1 sm:mb-3" />
 
       <DocumentHeader
         eyebrow={t(`invoices.kind.${invoice.kind}`)}
@@ -690,7 +690,7 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
             {invoice.document_status === "draft" ? (
               <DocumentStatusBadge kind="draft" />
             ) : creditNote ? null : fullyCredited ? (
-              <span className="rounded-doc-sm bg-surface-2 px-2 py-0.5 text-xs font-medium text-secondary">
+              <span className="rounded-doc-sm bg-surface-2 px-1.5 py-0.5 text-[11px] font-medium text-secondary">
                 {t("invoices.creditNote.fullyCredited")}
               </span>
             ) : (
@@ -701,7 +701,7 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
           </>
         }
         aside={
-          <p className="text-2xl font-semibold tabular-nums text-primary">
+          <p className="text-xl font-semibold tabular-nums tracking-tight text-primary">
             {/* Dobropis znižuje sumu — zobrazí sa so znamienkom mínus
                 (uložené hodnoty ostávajú kladné, znamienko dáva druh dokladu). */}
             {invoice.document_status === "draft"
@@ -713,15 +713,15 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
 
       {/* Väzba opravného dokladu a zostatok po dobropisoch. */}
       {creditNote && invoice.corrects_invoice_id && (
-        <p className="mt-3 text-sm text-secondary">
+        <p className="mt-2 text-[13px] text-secondary">
           {t("invoices.creditNote.correctsLabel", { number: correctedInvoiceNumber ?? t("invoices.numberFallback") })}{" "}
-          <Link href={invoiceDetailHref(invoice.corrects_invoice_id)} className="underline">
+          <Link href={invoiceDetailHref(invoice.corrects_invoice_id)} className="text-brand-300 underline">
             {t("invoices.creditNote.openCorrected")}
           </Link>
         </p>
       )}
       {!creditNote && creditedAmount > 0 && (
-        <div className="mt-3 rounded-doc border border-doc-border bg-surface-2 p-3 text-sm text-secondary">
+        <div className="mt-2 rounded-doc border border-doc-border bg-surface-2 px-3 py-2 text-[13px] text-secondary">
           <p>
             {t("invoices.creditNote.creditedLabel")}: {formatMoney(-creditedAmount, invoice.currency)}
           </p>
@@ -731,7 +731,7 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
           <ul className="mt-1 list-disc pl-4">
             {creditNotes.map((note) => (
               <li key={note.id}>
-                <Link href={invoiceDetailHref(note.id)} className="underline">
+                <Link href={invoiceDetailHref(note.id)} className="text-brand-300 underline">
                   {note.invoice_number ?? t("invoices.numberFallback")}
                 </Link>{" "}
                 ({formatMoney(-note.total_amount, invoice.currency)})
@@ -750,7 +750,7 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
           )}
 
           {!canEdit && (
-            <p className="mt-4 text-sm text-muted-esblu">{t("invoices.readOnlyNotice")}</p>
+            <p className="mt-3 text-[13px] text-muted-esblu">{t("invoices.readOnlyNotice")}</p>
           )}
 
           {draftErrors.length > 0 && (
@@ -771,8 +771,8 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
             </div>
           )}
 
-          <div className="mt-6 space-y-4 rounded-doc border border-doc-border bg-doc-surface p-4 sm:p-5">
-            <div className="grid gap-4 sm:grid-cols-2">
+          <div className="mt-4 space-y-3 rounded-doc border border-doc-border bg-doc-surface p-3 sm:p-4">
+            <div className="grid gap-3 sm:grid-cols-2">
               {isReceived && (
                 <div className="sm:col-span-2">
                   <label className={docLabel}>
@@ -876,18 +876,18 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
               </div>
             </div>
 
-            <h2 className="mt-8 text-lg font-semibold text-primary">
+            <h2 className="mt-5 text-[15px] font-semibold text-primary">
               {t("invoices.newInvoice.itemsTitle")}
             </h2>
 
-            <div className="mt-4 space-y-3">
+            <div className="mt-2 space-y-2">
               {draftItems.map((item, index) => (
                 <div
                   key={index}
-                  className="grid gap-2 rounded-doc-sm border border-doc-border bg-surface-2 p-3 sm:grid-cols-12"
+                  className="grid gap-2 rounded-doc-sm border border-doc-border bg-surface-2 p-2.5 sm:grid-cols-12"
                 >
                   <input
-                    className="rounded-doc-sm border border-doc-border bg-surface-2 p-2 text-sm text-primary outline-none focus:border-accent-cyan sm:col-span-4"
+                    className="min-h-[var(--control-h)] rounded-doc-sm border border-doc-border bg-surface-2 px-2.5 py-1.5 text-sm text-primary outline-none focus:border-brand-400 sm:col-span-4"
                     placeholder={t("invoices.newInvoice.itemDescriptionLabel")}
                     value={item.description}
                     disabled={!canEdit}
@@ -896,7 +896,7 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
                   <input
                     type="number"
                     step="any"
-                    className="rounded-doc-sm border border-doc-border bg-surface-2 p-2 text-sm text-primary outline-none focus:border-accent-cyan sm:col-span-1"
+                    className="min-h-[var(--control-h)] rounded-doc-sm border border-doc-border bg-surface-2 px-2.5 py-1.5 text-sm text-primary outline-none focus:border-brand-400 sm:col-span-1"
                     placeholder={t("invoices.newInvoice.itemQuantityLabel")}
                     value={item.quantity}
                     disabled={!canEdit}
@@ -905,7 +905,7 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
                     }
                   />
                   <input
-                    className="rounded-doc-sm border border-doc-border bg-surface-2 p-2 text-sm text-primary outline-none focus:border-accent-cyan sm:col-span-1"
+                    className="min-h-[var(--control-h)] rounded-doc-sm border border-doc-border bg-surface-2 px-2.5 py-1.5 text-sm text-primary outline-none focus:border-brand-400 sm:col-span-1"
                     placeholder={t("invoices.newInvoice.itemUnitLabel")}
                     value={item.unit}
                     disabled={!canEdit}
@@ -914,7 +914,7 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
                   <input
                     type="number"
                     step="any"
-                    className="rounded-doc-sm border border-doc-border bg-surface-2 p-2 text-sm text-primary outline-none focus:border-accent-cyan sm:col-span-2"
+                    className="min-h-[var(--control-h)] rounded-doc-sm border border-doc-border bg-surface-2 px-2.5 py-1.5 text-sm text-primary outline-none focus:border-brand-400 sm:col-span-2"
                     placeholder={t(unitPriceLabelKey(item.price_mode ?? DEFAULT_PRICE_MODE))}
                     value={item.unit_price}
                     disabled={!canEdit}
@@ -923,7 +923,7 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
                     }
                   />
                   <select
-                    className="rounded-doc-sm border border-doc-border bg-surface-2 p-2 text-sm text-primary outline-none focus:border-accent-cyan sm:col-span-2"
+                    className="min-h-[var(--control-h)] rounded-doc-sm border border-doc-border bg-surface-2 px-2.5 py-1.5 text-sm text-primary outline-none focus:border-brand-400 sm:col-span-2"
                     value={item.vat_category_code}
                     disabled={!canEdit}
                     onChange={(event) =>
@@ -939,7 +939,7 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
                   <input
                     type="number"
                     step="any"
-                    className="rounded-doc-sm border border-doc-border bg-surface-2 p-2 text-sm text-primary outline-none focus:border-accent-cyan sm:col-span-1"
+                    className="min-h-[var(--control-h)] rounded-doc-sm border border-doc-border bg-surface-2 px-2.5 py-1.5 text-sm text-primary outline-none focus:border-brand-400 sm:col-span-1"
                     placeholder={
                       item.vat_category_code === "S"
                         ? t("invoices.newInvoice.itemVatRateLabel")
@@ -964,7 +964,7 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
                     <button
                       type="button"
                       onClick={() => removeDraftItem(index)}
-                      className="rounded-lg border px-2 text-xs font-semibold text-red-600 sm:col-span-1"
+                      className="inline-flex min-h-[var(--control-h)] items-center justify-center rounded-doc-sm border border-danger/30 px-2 text-xs font-medium text-danger transition hover:bg-danger-soft sm:col-span-1"
                     >
                       {t("invoices.newInvoice.removeItemButton")}
                     </button>
@@ -977,34 +977,34 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
               <button
                 type="button"
                 onClick={addDraftItem}
-                className="mt-3 rounded-xl border px-4 py-2 text-sm font-semibold"
+                className={`${docButtonSecondary} mt-2`}
               >
                 {t("invoices.newInvoice.addItemButton")}
               </button>
             )}
 
-            <div className="mt-4 rounded-doc border border-doc-border bg-surface-2 p-4">
+            <div className="mt-3 space-y-1 rounded-doc border border-doc-border bg-surface-2 px-3 py-2.5 text-[13px] text-secondary">
               <p className="flex justify-between">
                 <span>{t("invoices.newInvoice.subtotalLabel")}</span>
-                <span className="font-semibold">{formatMoney(Number(preview.subtotalAmount), currency)}</span>
+                <span className="font-semibold tabular-nums text-primary">{formatMoney(Number(preview.subtotalAmount), currency)}</span>
               </p>
               <p className="flex justify-between">
                 <span>{t("invoices.newInvoice.vatTotalLabel")}</span>
-                <span className="font-semibold">{formatMoney(Number(preview.vatTotalAmount), currency)}</span>
+                <span className="font-semibold tabular-nums text-primary">{formatMoney(Number(preview.vatTotalAmount), currency)}</span>
               </p>
-              <p className="flex justify-between text-base font-bold text-primary">
+              <p className="flex justify-between border-t border-doc-border pt-1.5 text-[15px] font-semibold tabular-nums text-primary">
                 <span>{t("invoices.newInvoice.totalLabel")}</span>
                 <span>{formatMoney(Number(preview.totalAmount), currency)}</span>
               </p>
             </div>
 
             {canEdit && (
-              <div className="mt-6 flex flex-wrap items-center gap-3">
+              <div className="mt-4 flex flex-wrap items-center gap-2">
                 <button
                   type="button"
                   onClick={handleSaveDraft}
                   disabled={savingDraft || finalizing}
-                  className="rounded-xl border px-6 py-3 font-semibold"
+                  className={docButtonSecondary}
                 >
                   {savingDraft ? t("invoices.newInvoice.saving") : t("common.buttons.save")}
                 </button>
@@ -1023,7 +1023,7 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
                 <button
                   type="button"
                   onClick={handleDeleteDraft}
-                  className="rounded-xl bg-red-600 px-6 py-3 font-semibold text-white hover:bg-red-700"
+                  className={docButtonDanger}
                 >
                   {t("invoices.detail.deleteDraftButton")}
                 </button>
@@ -1044,9 +1044,9 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
           {/* Dvojstĺpcový doklad na desktope: vľavo obsah, vpravo metadáta a
               akcie. Na mobile sa poskladá pod seba a akcie idú navrch, aby
               "otvoriť originál" nebolo až na konci dlhého dokladu. */}
-          <div className="mt-6 grid gap-4 lg:grid-cols-[minmax(0,1fr)_20rem] lg:items-start">
-            <div className="order-2 space-y-4 lg:order-1">
-              <div className="grid gap-4 sm:grid-cols-2">
+          <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_20rem] lg:items-start">
+            <div className="order-2 space-y-3 lg:order-1">
+              <div className="grid gap-3 sm:grid-cols-2">
                 {seller && (
                   <DocumentPartyBlock
                     role={t("invoices.detail.sellerTitle")}
@@ -1082,30 +1082,30 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
                   />
                 )}
               </div>
-          <h2 className="mt-8 text-lg font-semibold text-primary">{t("invoices.detail.itemsTitle")}</h2>
-          <div className="mt-3 space-y-2">
+          <h2 className="mt-5 text-[15px] font-semibold text-primary">{t("invoices.detail.itemsTitle")}</h2>
+          <div className="mt-2 space-y-2">
             <ItemsTableLoader invoiceId={invoice.id} currency={invoice.currency} locale={locale} />
           </div>
 
-          <h2 className="mt-8 text-lg font-semibold text-primary">{t("invoices.detail.taxBreakdownTitle")}</h2>
+          <h2 className="mt-5 text-[15px] font-semibold text-primary">{t("invoices.detail.taxBreakdownTitle")}</h2>
 
           {/* Desktop/tablet — klasická tabuľka, nezmenené. */}
-          <table className="mt-3 hidden w-full text-sm sm:table">
+          <table className="mt-2 hidden w-full text-[13px] sm:table">
             <thead>
-              <tr className="text-left text-secondary">
-                <th className="pb-2">{t("invoices.newInvoice.itemVatCategoryLabel")}</th>
-                <th className="pb-2 text-right">{t("invoices.detail.taxBreakdownTaxable")}</th>
-                <th className="pb-2 text-right">{t("invoices.detail.taxBreakdownVat")}</th>
+              <tr className="text-left text-[11px] font-semibold uppercase tracking-wide text-muted-esblu">
+                <th className="pb-1.5">{t("invoices.newInvoice.itemVatCategoryLabel")}</th>
+                <th className="pb-1.5 text-right">{t("invoices.detail.taxBreakdownTaxable")}</th>
+                <th className="pb-1.5 text-right">{t("invoices.detail.taxBreakdownVat")}</th>
               </tr>
             </thead>
             <tbody>
               {taxBreakdowns.map((row) => (
                 <tr key={row.id} className="border-t border-doc-border">
-                  <td className="py-2">
+                  <td className="py-1.5">
                     {row.vat_category_code} ({formatNumber(row.vat_rate, locale)}%)
                   </td>
-                  <td className="py-2 text-right">{formatMoney(row.taxable_amount, invoice.currency)}</td>
-                  <td className="py-2 text-right">{formatMoney(row.vat_amount, invoice.currency)}</td>
+                  <td className="py-1.5 text-right tabular-nums">{formatMoney(row.taxable_amount, invoice.currency)}</td>
+                  <td className="py-1.5 text-right tabular-nums">{formatMoney(row.vat_amount, invoice.currency)}</td>
                 </tr>
               ))}
             </tbody>
@@ -1113,9 +1113,9 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
 
           {/* Mobile (< sm) — card/stack layout, rovnaký pattern ako pri
               riadkových položkách vyššie. */}
-          <div className="mt-3 space-y-3 sm:hidden">
+          <div className="mt-2 space-y-2 sm:hidden">
             {taxBreakdowns.map((row) => (
-              <div key={row.id} className="rounded-doc border border-doc-border bg-surface-2 p-4">
+              <div key={row.id} className="rounded-doc border border-doc-border bg-surface-2 p-3">
                 <p className="text-xs font-semibold text-secondary">
                   {t("invoices.newInvoice.itemVatCategoryLabel")}
                 </p>
@@ -1123,7 +1123,7 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
                   {row.vat_category_code} ({formatNumber(row.vat_rate, locale)}%)
                 </p>
 
-                <div className="mt-3 grid grid-cols-2 gap-3">
+                <div className="mt-2 grid grid-cols-2 gap-2">
                   <div>
                     <p className="text-xs font-semibold text-secondary">
                       {t("invoices.detail.taxBreakdownTaxable")}
@@ -1148,7 +1148,7 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
             </div>
 
             {/* Metadáta + akcie. Na mobile navrchu (order-1). */}
-            <aside className="order-1 space-y-4 lg:order-2 lg:sticky lg:top-4">
+            <aside className="order-1 space-y-3 lg:order-2 lg:sticky lg:top-4">
               <DocumentSection title={t("invoices.detail.actionsTitle")}>
                 <div className="flex flex-col gap-2">
                   {/* PDF generuje Esblu iba pre VLASTNÉ vydané doklady. Prijatá
@@ -1173,7 +1173,7 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
                       {t("invoices.detail.openSourceDocumentButton")}
                     </Link>
                   ) : (
-                    <p className="text-sm text-muted-esblu">
+                    <p className="text-[13px] text-muted-esblu">
                       {t("invoices.detail.noSourceDocument")}
                     </p>
                   )}
@@ -1212,13 +1212,13 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
                     trigger v databáze a používateľ doň nemá zápis, takže
                     dôkaz o zmene nevyrába ten, koho sa týka. */}
                 {accountingLog.length > 0 && (
-                  <div className="mt-4 rounded-doc border border-doc-border bg-surface-2 p-4">
-                    <p className="text-sm font-medium text-secondary">
+                  <div className="mt-3 rounded-doc border border-doc-border bg-surface-2 px-3 py-2.5">
+                    <p className="text-xs font-medium text-secondary">
                       {t("invoices.detail.accountingHistoryTitle")}
                     </p>
-                    <ul className="mt-2 space-y-1">
+                    <ul className="mt-1.5 space-y-0.5">
                       {accountingLog.map((entry) => (
-                        <li key={entry.id} className="text-sm text-muted-esblu">
+                        <li key={entry.id} className="text-xs tabular-nums text-muted-esblu">
                           {formatDate(entry.changed_at, locale)} ·{" "}
                           {t(`handoff.accountingStatus.${entry.accounting_status}`)}
                         </li>
@@ -1267,21 +1267,21 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
           </div>
 
           {creditNote ? (
-            <p className="mt-8 text-sm text-secondary">{t("invoices.creditNote.noPaymentsNotice")}</p>
+            <p className="mt-5 text-[13px] text-secondary">{t("invoices.creditNote.noPaymentsNotice")}</p>
           ) : (
           <>
-          <h2 className="mt-8 text-lg font-semibold text-primary">{t("invoices.detail.paymentsTitle")}</h2>
+          <h2 className="mt-5 text-[15px] font-semibold text-primary">{t("invoices.detail.paymentsTitle")}</h2>
 
           {/* Platobný model je pre oba smery ten istý (RPC, payment_status).
               Mení sa len formulácia: vydaná faktúra je pohľadávka voči
               zákazníkovi, prijatá je záväzok voči dodávateľovi. */}
-          <p className="mt-1 text-xs text-secondary">
+          <p className="mt-0.5 text-xs text-muted-esblu">
             {isReceived
               ? t("invoices.detail.paymentsReceivedHint")
               : t("invoices.detail.paymentsIssuedHint")}
           </p>
 
-          <p className="mt-2 text-sm text-secondary">
+          <p className="mt-2 text-[13px] tabular-nums text-secondary">
             {(isReceived
               ? t("invoices.detail.totalPaidToSupplierLabel")
               : t("invoices.detail.totalPaidLabel"))}
@@ -1289,16 +1289,16 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
           </p>
 
           {payments.length === 0 ? (
-            <p className="mt-2 text-sm text-secondary">{t("invoices.detail.noPayments")}</p>
+            <p className="mt-2 text-[13px] text-muted-esblu">{t("invoices.detail.noPayments")}</p>
           ) : (
-            <ul className="mt-3 space-y-2">
+            <ul className="mt-2 space-y-1.5">
               {payments.map((payment) => (
                 <li
                   key={payment.id}
-                  className="flex items-center justify-between gap-3 rounded-doc-sm border border-doc-border bg-surface-2 px-3 py-2.5 text-sm"
+                  className="flex items-center justify-between gap-3 rounded-doc-sm border border-doc-border bg-surface-2 px-3 py-2 text-sm"
                 >
                   <div>
-                    <p className="font-semibold text-primary">
+                    <p className="font-semibold tabular-nums text-primary">
                       {formatMoney(payment.paid_amount, invoice.currency)}
                     </p>
                     <p className="text-xs text-secondary">
@@ -1311,7 +1311,7 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
                     <button
                       type="button"
                       onClick={() => handleRemovePayment(payment)}
-                      className="rounded-lg border px-3 py-1.5 text-xs font-semibold text-red-600"
+                      className="inline-flex min-h-[var(--control-h-sm)] items-center rounded-doc-sm border border-danger/30 px-2.5 text-xs font-medium text-danger transition hover:bg-danger-soft"
                     >
                       {t("invoices.detail.removePaymentButton")}
                     </button>
@@ -1322,36 +1322,36 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
           )}
 
           {canEdit && (
-            <div className="mt-4 rounded-doc border border-doc-border bg-surface-2 p-4">
-              <h3 className="text-sm font-bold text-primary">{t("invoices.detail.addPaymentButton")}</h3>
+            <div className="mt-3 rounded-doc border border-doc-border bg-surface-2 p-3">
+              <h3 className="text-sm font-semibold text-primary">{t("invoices.detail.addPaymentButton")}</h3>
 
               {paymentError && (
-                <p className="mt-2 text-sm font-semibold text-red-600">{paymentError}</p>
+                <p className="mt-2 text-[13px] font-medium text-danger">{paymentError}</p>
               )}
 
-              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              <div className="mt-2 grid gap-2 sm:grid-cols-2">
                 <input
                   type="number"
                   step="0.01"
-                  className="rounded-doc-sm border border-doc-border bg-surface-2 p-2 text-sm text-primary outline-none focus:border-accent-cyan"
+                  className="min-h-[var(--control-h)] rounded-doc-sm border border-doc-border bg-surface-2 px-2.5 py-1.5 text-sm text-primary outline-none focus:border-brand-400"
                   placeholder={t("invoices.detail.paymentAmountLabel")}
                   value={paymentAmount}
                   onChange={(event) => setPaymentAmount(event.target.value)}
                 />
                 <input
                   type="date"
-                  className="rounded-doc-sm border border-doc-border bg-surface-2 p-2 text-sm text-primary outline-none focus:border-accent-cyan"
+                  className="min-h-[var(--control-h)] rounded-doc-sm border border-doc-border bg-surface-2 px-2.5 py-1.5 text-sm text-primary outline-none focus:border-brand-400"
                   value={paymentDate}
                   onChange={(event) => setPaymentDate(event.target.value)}
                 />
                 <input
-                  className="rounded-doc-sm border border-doc-border bg-surface-2 p-2 text-sm text-primary outline-none focus:border-accent-cyan"
+                  className="min-h-[var(--control-h)] rounded-doc-sm border border-doc-border bg-surface-2 px-2.5 py-1.5 text-sm text-primary outline-none focus:border-brand-400"
                   placeholder={t("invoices.detail.paymentMethodLabel")}
                   value={paymentMethod}
                   onChange={(event) => setPaymentMethod(event.target.value)}
                 />
                 <input
-                  className="rounded-doc-sm border border-doc-border bg-surface-2 p-2 text-sm text-primary outline-none focus:border-accent-cyan"
+                  className="min-h-[var(--control-h)] rounded-doc-sm border border-doc-border bg-surface-2 px-2.5 py-1.5 text-sm text-primary outline-none focus:border-brand-400"
                   placeholder={t("invoices.detail.paymentNoteLabel")}
                   value={paymentNote}
                   onChange={(event) => setPaymentNote(event.target.value)}
@@ -1362,7 +1362,7 @@ export default function InvoiceDetailView({ entityId }: { entityId: string }) {
                 type="button"
                 onClick={handleAddPayment}
                 disabled={savingPayment}
-                className={docButtonPrimary}
+                className={`${docButtonPrimary} mt-3`}
               >
                 {savingPayment ? t("invoices.detail.savingPayment") : t("invoices.detail.addPaymentButton")}
               </button>
@@ -1407,26 +1407,26 @@ function ItemsTableLoader({
   return (
     <>
       {/* Desktop/tablet — klasická tabuľka, nezmenené. */}
-      <table className="hidden w-full text-sm sm:table">
+      <table className="hidden w-full text-[13px] sm:table">
         <thead>
-          <tr className="text-left text-secondary">
-            <th className="pb-2">{t("invoices.newInvoice.itemDescriptionLabel")}</th>
-            <th className="pb-2 text-right">{t("invoices.newInvoice.itemQuantityLabel")}</th>
-            <th className="pb-2 text-right">{t(unitPriceLabelKey(invoicePriceMode(items)))}</th>
-            <th className="pb-2 text-right">{t("invoices.newInvoice.totalLabel")}</th>
+          <tr className="text-left text-[11px] font-semibold uppercase tracking-wide text-muted-esblu">
+            <th className="pb-1.5">{t("invoices.newInvoice.itemDescriptionLabel")}</th>
+            <th className="pb-1.5 text-right">{t("invoices.newInvoice.itemQuantityLabel")}</th>
+            <th className="pb-1.5 text-right">{t(unitPriceLabelKey(invoicePriceMode(items)))}</th>
+            <th className="pb-1.5 text-right">{t("invoices.newInvoice.totalLabel")}</th>
           </tr>
         </thead>
         <tbody>
           {items.map((item) => (
             <tr key={item.id} className="border-t border-doc-border">
-              <td className="py-2">{item.description}</td>
-              <td className="py-2 text-right">
+              <td className="py-1.5">{item.description}</td>
+              <td className="py-1.5 text-right">
                 {formatNumber(item.quantity, locale)} {item.unit}
               </td>
-              <td className="py-2 text-right">
+              <td className="py-1.5 text-right">
                 {formatMoneyIntl(item.unit_price, currency, locale)}
               </td>
-              <td className="py-2 text-right">
+              <td className="py-1.5 text-right">
                 {formatMoneyIntl(item.line_gross_amount, currency, locale)}
               </td>
             </tr>
@@ -1436,15 +1436,15 @@ function ItemsTableLoader({
 
       {/* Mobile (< sm) — card/stack layout namiesto 4 stĺpcov vedľa seba,
           ktoré sa na cca 360–430 px zobrazovali prekryté/zlepené. */}
-      <div className="space-y-3 sm:hidden">
+      <div className="space-y-2 sm:hidden">
         {items.map((item) => (
-          <div key={item.id} className="rounded-doc border border-doc-border bg-surface-2 p-4">
+          <div key={item.id} className="rounded-doc border border-doc-border bg-surface-2 p-3">
             <p className="text-xs font-semibold text-secondary">
               {t("invoices.newInvoice.itemDescriptionLabel")}
             </p>
             <p className="text-sm font-semibold text-primary">{item.description}</p>
 
-            <div className="mt-3 grid grid-cols-2 gap-3">
+            <div className="mt-2 grid grid-cols-2 gap-2">
               <div>
                 <p className="text-xs font-semibold text-secondary">
                   {t("invoices.newInvoice.itemQuantityLabel")}

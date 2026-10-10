@@ -212,10 +212,10 @@ export default function AuthCallbackPage() {
   if (state === "failed") {
     return (
       <Centered>
-        <h1 className="text-2xl font-bold text-primary">
+        <h1 className="text-xl font-semibold tracking-tight text-primary sm:text-[22px]">
           {t("authCallback.failedTitle")}
         </h1>
-        <p className="mt-3 text-secondary">
+        <p className="mt-2 text-sm leading-6 text-secondary">
           {failure === "expired"
             ? t("authCallback.expiredDescription")
             : failure === "unsupported_link"
@@ -224,7 +224,7 @@ export default function AuthCallbackPage() {
         </p>
         <Link
           href="/login"
-          className="mt-6 inline-block rounded-xl bg-blue-600 px-6 py-3 font-semibold text-white hover:bg-blue-700"
+          className="ui-btn ui-btn-primary mt-4"
         >
           {t("invite.goToLogin")}
         </Link>
@@ -234,15 +234,15 @@ export default function AuthCallbackPage() {
 
   return (
     <Centered>
-      <p className="text-secondary">{t("authCallback.processing")}</p>
+      <p className="text-sm text-secondary">{t("authCallback.processing")}</p>
     </Centered>
   );
 }
 
 function Centered({ children }: { children: React.ReactNode }) {
   return (
-    <main className="app-shell-bg flex min-h-screen items-center justify-center p-6">
-      <div className="w-full max-w-md rounded-2xl bg-surface-1 p-8 text-center shadow">
+    <main className="app-shell-bg flex min-h-screen items-center justify-center px-4 py-6">
+      <div className="w-full max-w-sm rounded-doc border border-doc-border bg-surface-1 p-4 text-center sm:p-6">
         {children}
       </div>
     </main>

@@ -25,6 +25,8 @@ import {
   docButtonPrimary,
   docButtonSecondary,
   docButtonDanger,
+  docField,
+  docLabel,
 } from "@/app/components/ui/Primitives";
 import { AlertIcon, CarIcon, WrenchIcon } from "@/app/components/icons/AppIcons";
 import { ScrollTabs } from "@/app/components/ui/ScrollTabs";
@@ -927,7 +929,7 @@ export default function VehicleDetailView({
   if (!vehicle) {
     return (
       <PageShell moduleContext="vehicles" uiContext={{ module: "vehicle", entityType: "vehicle", entityId }}>
-        <p className="py-10 text-sm text-secondary">{t("common.buttons.loading")}</p>
+        <p className="py-6 text-sm text-secondary">{t("common.buttons.loading")}</p>
       </PageShell>
     );
   }
@@ -968,7 +970,7 @@ export default function VehicleDetailView({
       <Suspense fallback={null}>
         <OpenLinkedDocumentFromQueryParam onOpenDocument={setPendingOpenDocumentId} />
       </Suspense>
-      <BackLink href="/vozidla" label={t("nav.vehicles")} className="mb-3 sm:mb-6" />
+      <BackLink href="/vozidla" label={t("nav.vehicles")} className="mb-1 sm:mb-3" />
 
       <PageHeader
         eyebrow={
@@ -978,18 +980,18 @@ export default function VehicleDetailView({
           </span>
         }
         title={
-          <span className="flex items-center gap-3">
+          <span className="flex items-center gap-2.5">
             {coverPhoto ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img
                 src={coverPhoto}
                 alt=""
-                className="h-11 w-11 shrink-0 rounded-doc-sm border border-doc-border object-cover"
+                className="h-10 w-10 shrink-0 rounded-doc-sm border border-doc-border object-cover"
               />
             ) : (
               <span
                 aria-hidden="true"
-                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-doc-sm border border-doc-border bg-surface-2 text-muted-esblu"
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-doc-sm border border-doc-border bg-surface-2 text-muted-esblu"
               >
                 <CarIcon size={22} />
               </span>
@@ -1023,10 +1025,10 @@ export default function VehicleDetailView({
             // VIN je 17 znakov bez medzier — neproporcionálne písmo a
             // zalomenie kdekoľvek, aby na úzkom telefóne nevytlačil stránku do šírky.
             <span className="inline-flex max-w-full flex-wrap items-baseline gap-x-2">
-              <span className="text-xs font-medium uppercase tracking-wide text-muted-esblu">
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-esblu">
                 {t("inbox.fields.vin")}
               </span>
-              <span className="break-all font-mono text-[15px] tracking-wide text-primary sm:text-sm">
+              <span className="break-all font-mono text-sm tracking-wide text-primary">
                 {vehicle.vin}
               </span>
             </span>
@@ -1036,7 +1038,7 @@ export default function VehicleDetailView({
 
       {/* Mobile M1: na telefóne kompaktne iba akčné termíny (STK/EK);
           výkon a rok výroby ostávajú v záložke Prehľad a na širšej obrazovke. */}
-      <div className="mt-3 sm:mt-6">
+      <div className="mt-3 sm:mt-4">
         <MetricGrid>
           <Metric
             label={t("vehicles.fields.stk")}
@@ -1066,20 +1068,20 @@ export default function VehicleDetailView({
       {/* Mobile M1: kompaktné upozornenia — typ + stav na jednom riadku
           (meno a ŠPZ sú už v hlavičke), dlhý text sa zalamuje. */}
       {activeDeadlines.length > 0 && (
-        <ul className="mt-3 space-y-1.5" aria-label={t("vehicles.detail.deadlinesLabel")}>
+        <ul className="mt-3 space-y-1" aria-label={t("vehicles.detail.deadlinesLabel")}>
           {activeDeadlines.map((item, index) => {
             const isOverdue = item.severity === "overdue";
             const label = deadlineTypeLabel(item.deadlineType, locale, item.vignetteCountryCode);
             return (
               <li
                 key={`${item.deadlineType}-${index}`}
-                className={`flex items-start gap-2 rounded-doc-sm border px-3 py-2 text-sm leading-snug ${
+                className={`flex items-start gap-2 rounded-doc-sm border px-3 py-1.5 text-[13px] leading-snug ${
                   isOverdue
                     ? "border-danger/30 bg-danger-soft text-danger"
                     : "border-warning/30 bg-warning/10 text-warning"
                 }`}
               >
-                <AlertIcon size={16} className="mt-0.5 shrink-0" />
+                <AlertIcon size={14} className="mt-0.5 shrink-0" />
                 <span className="min-w-0 break-words">
                   {isOverdue
                     ? t("vehicles.detail.deadlineOverdue", { type: label })
@@ -1131,11 +1133,11 @@ export default function VehicleDetailView({
           známok pre rôzne krajiny naraz. owner/admin vidia formulár a
           tlačidlá upraviť/odstrániť, employee iba zoznam. */}
       {tab === "vignettes" && (
-      <div className="mt-4 rounded-doc border border-doc-border bg-doc-surface p-4 sm:p-5">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+      <div className="mt-4 rounded-doc border border-doc-border bg-doc-surface p-3 sm:p-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h2 className="text-base font-semibold text-primary">{t("vehicles.vignettes.title")}</h2>
-            <p className="mt-1 text-sm text-muted-esblu">
+            <h2 className="text-[15px] font-semibold text-primary">{t("vehicles.vignettes.title")}</h2>
+            <p className="mt-0.5 text-[13px] text-muted-esblu">
               {t("vehicles.vignettes.description")}
             </p>
           </div>
@@ -1166,20 +1168,20 @@ export default function VehicleDetailView({
         )}
 
         {isOwnerOrAdmin(role) && showVignetteForm && (
-          <div className="mt-4 rounded-doc border border-doc-border bg-surface-2 p-4">
-            <h3 className="mb-4 text-xl font-bold">
+          <div className="mt-3 rounded-doc border border-doc-border bg-surface-2 p-3 sm:p-4">
+            <h3 className="mb-3 text-[15px] font-semibold text-primary">
               {editingVignetteId
                 ? t("vehicles.vignettes.editTitle")
                 : t("vehicles.vignettes.addTitle")}
             </h3>
 
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
               <label className="block">
-                <span className="text-sm font-medium text-secondary">
+                <span className={docLabel}>
                   {t("vehicles.vignettes.country")}
                 </span>
                 <select
-                  className="mt-1 w-full rounded-xl border p-3"
+                  className={docField}
                   value={
                     vignetteCountryIsCustom
                       ? VIGNETTE_OTHER_COUNTRY_OPTION
@@ -1204,7 +1206,7 @@ export default function VehicleDetailView({
                     prakticky obmedzená na VIGNETTE_COUNTRIES zoznam. */}
                 {vignetteCountryIsCustom && (
                   <input
-                    className="mt-2 w-full rounded-xl border p-3 uppercase"
+                    className={`mt-2 uppercase ${docField}`}
                     maxLength={2}
                     placeholder={t(
                       "vehicles.vignettes.otherCountryCodePlaceholder"
@@ -1218,12 +1220,12 @@ export default function VehicleDetailView({
               </label>
 
               <label className="block">
-                <span className="text-sm font-medium text-secondary">
+                <span className={docLabel}>
                   {t("vehicles.vignettes.validUntil")}
                 </span>
                 <input
                   type="date"
-                  className="mt-1 w-full rounded-xl border p-3"
+                  className={docField}
                   value={vignette.valid_until}
                   onChange={(e) =>
                     updateVignetteField("valid_until", e.target.value)
@@ -1232,7 +1234,7 @@ export default function VehicleDetailView({
               </label>
             </div>
 
-            <div className="mt-4 flex gap-3">
+            <div className="mt-3 flex gap-2">
               <button
                 onClick={saveVignette}
                 disabled={isSavingVignette}
@@ -1247,7 +1249,7 @@ export default function VehicleDetailView({
 
               <button
                 onClick={cancelVignetteEdit}
-                className="rounded-xl bg-surface-2 px-5 py-3 text-primary hover:bg-surface-hover"
+                className={docButtonSecondary}
               >
                 {t("vehicles.vignettes.cancelEdit")}
               </button>
@@ -1256,19 +1258,19 @@ export default function VehicleDetailView({
         )}
 
         {vignettesLoading ? (
-          <p className="mt-4 text-sm text-muted-esblu">{t("common.buttons.loading")}</p>
+          <p className="mt-3 text-[13px] text-muted-esblu">{t("common.buttons.loading")}</p>
         ) : vignettes.length === 0 ? (
-          <p className="mt-4 text-sm text-muted-esblu">
+          <p className="mt-3 text-[13px] text-muted-esblu">
             {t("vehicles.vignettes.noneYet")}
           </p>
         ) : (
-          <ul className="mt-6 space-y-3">
+          <ul className="mt-3 space-y-1.5">
             {vignettes.map((item) => (
               <li
                 key={item.id}
-                className="flex flex-wrap items-center justify-between gap-3 rounded-doc border border-doc-border bg-surface-2 p-3"
+                className="flex flex-wrap items-center justify-between gap-2 rounded-doc border border-doc-border bg-surface-2 px-3 py-2"
               >
-                <p className="font-medium text-primary">
+                <p className="text-sm font-medium text-primary">
                   {t("vehicles.vignettes.validUntilLine", {
                     country: vignetteCountryLabel(item.country_code, locale),
                     date: formatDate(item.valid_until, locale),
@@ -1276,7 +1278,7 @@ export default function VehicleDetailView({
                 </p>
 
                 {isOwnerOrAdmin(role) && (
-                  <div className="flex gap-2">
+                  <div className="flex gap-1.5">
                     <button
                       onClick={() => startEditVignette(item)}
                       className={`${docButtonSecondary} px-2.5 text-sm sm:text-xs`}
@@ -1302,26 +1304,26 @@ export default function VehicleDetailView({
       )}
 
       {tab === "documents" && (
-      <div className="mt-4 rounded-doc border border-doc-border bg-doc-surface p-4 sm:p-5">
-        <h2 className="text-base font-semibold text-primary">{t("vehicles.detail.documentsTitle")}</h2>
-        <p className="mt-1 text-sm text-muted-esblu">
+      <div className="mt-4 rounded-doc border border-doc-border bg-doc-surface p-3 sm:p-4">
+        <h2 className="text-[15px] font-semibold text-primary">{t("vehicles.detail.documentsTitle")}</h2>
+        <p className="mt-0.5 text-[13px] text-muted-esblu">
           {t("vehicles.detail.documentsDescription")}
         </p>
 
         {linkedDocumentsLoading ? (
-          <p className="mt-4 text-sm text-muted-esblu">{t("vehicles.detail.loadingDocuments")}</p>
+          <p className="mt-3 text-[13px] text-muted-esblu">{t("vehicles.detail.loadingDocuments")}</p>
         ) : linkedDocuments.length === 0 ? (
-          <p className="mt-4 text-sm text-muted-esblu">
+          <p className="mt-3 text-[13px] text-muted-esblu">
             {t("vehicles.detail.noDocumentsYet")}
           </p>
         ) : (
-          <div className="mt-6 space-y-4">
+          <div className="mt-3 space-y-2">
             {linkedDocuments.map((doc) => (
               <div
                 key={doc.id}
-                className="rounded-doc border border-doc-border bg-surface-2 p-4"
+                className="rounded-doc border border-doc-border bg-surface-2 p-3"
               >
-                <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="flex flex-wrap items-start justify-between gap-2">
                   <div>
                     <h3 className="text-sm font-semibold text-primary">
                       {linkedDocumentTypeLabels[doc.document_type || ""] ||
@@ -1329,14 +1331,14 @@ export default function VehicleDetailView({
                     </h3>
 
                     {doc.document_type === "insurance" && (
-                      <p className="mt-1 text-sm text-muted-esblu">
+                      <p className="mt-0.5 text-[13px] text-muted-esblu">
                         {describeInsuranceSummary(doc.extracted_fields, t) ||
                           t("vehicles.detail.noFurtherDetails")}
                       </p>
                     )}
 
                     {doc.created_at && (
-                      <p className="mt-1 text-sm text-muted-esblu sm:text-xs">
+                      <p className="mt-0.5 text-xs text-muted-esblu">
                         {t("vehicles.detail.uploadedOn", {
                           date: formatDate(doc.created_at, locale),
                         })}
@@ -1381,7 +1383,7 @@ export default function VehicleDetailView({
                 </div>
 
                 {doc.attachments.length > 0 && (
-                  <div className="mt-4 flex flex-wrap gap-2">
+                  <div className="mt-2.5 flex flex-wrap gap-1.5">
                     {doc.attachments.map((attachment) => {
                       const attachmentUrl = attachment.signedUrl;
                       if (!attachmentUrl) return null;
@@ -1391,7 +1393,7 @@ export default function VehicleDetailView({
                           key={attachment.id}
                           type="button"
                           onClick={() => openExternalUrl(attachmentUrl)}
-                          className="min-h-11 rounded-lg border border-subtle bg-surface-1 px-3 py-2 text-sm font-semibold text-secondary hover:bg-surface-hover sm:min-h-0 sm:text-xs"
+                          className="inline-flex min-h-[var(--control-h-sm)] items-center rounded-doc-sm border border-subtle bg-surface-1 px-2.5 text-xs font-medium text-secondary transition hover:bg-surface-hover hover:text-primary"
                         >
                           {linkedAttachmentTypeLabels[
                             attachment.attachment_type
@@ -1409,9 +1411,9 @@ export default function VehicleDetailView({
       )}
 
       {tab === "photos" && (
-      <div className="mt-4 rounded-doc border border-doc-border bg-doc-surface p-4 sm:p-5">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <h2 className="text-base font-semibold text-primary">{t("vehicles.gallery.title")}</h2>
+      <div className="mt-4 rounded-doc border border-doc-border bg-doc-surface p-3 sm:p-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <h2 className="text-[15px] font-semibold text-primary">{t("vehicles.gallery.title")}</h2>
 
           {/* Pridávanie fotografií smie aj employee (rovnaké oprávnenie ako
               SELECT/INSERT na vehicle_photos) — vymazanie fotografie ostáva
@@ -1432,7 +1434,7 @@ export default function VehicleDetailView({
         )}
 
         {isUploadingPhotos && (
-          <p className="mt-3 text-sm text-secondary">{t("inbox.uploading")}</p>
+          <p className="mt-2 text-[13px] text-secondary">{t("inbox.uploading")}</p>
         )}
 
         {photos.length === 0 ? (
@@ -1471,9 +1473,9 @@ export default function VehicleDetailView({
       )}
 
       {tab === "service" && (
-      <div className="mt-4 rounded-doc border border-doc-border bg-doc-surface p-4 sm:p-5">
+      <div className="mt-4 rounded-doc border border-doc-border bg-doc-surface p-3 sm:p-4">
         <div className="flex items-center justify-between">
-          <h2 className="text-base font-semibold text-primary">{t("vehicles.services.title")}</h2>
+          <h2 className="text-[15px] font-semibold text-primary">{t("vehicles.services.title")}</h2>
 
           <button
             onClick={() => {
@@ -1497,17 +1499,17 @@ export default function VehicleDetailView({
         )}
 
         {showForm && (
-          <div className="mt-4 rounded-doc border border-doc-border bg-surface-2 p-4">
-            <h3 className="mb-4 text-xl font-bold">
+          <div className="mt-3 rounded-doc border border-doc-border bg-surface-2 p-3 sm:p-4">
+            <h3 className="mb-3 text-[15px] font-semibold text-primary">
               {editingServiceId
                 ? t("vehicles.services.editServiceTitle")
                 : t("vehicles.services.addServiceTitle")}
             </h3>
 
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
               <input
                 type="date"
-                className="rounded-xl border p-3"
+                className={docField}
                 value={service.service_date}
                 onChange={(e) => updateService("service_date", e.target.value)}
               />
@@ -1515,14 +1517,14 @@ export default function VehicleDetailView({
               <input
                 type="number"
                 placeholder={t("vehicles.services.mileage")}
-                className="rounded-xl border p-3"
+                className={docField}
                 value={service.mileage}
                 onChange={(e) => updateService("mileage", e.target.value)}
               />
 
               <input
                 placeholder={t("vehicles.services.titlePlaceholder")}
-                className="rounded-xl border p-3"
+                className={docField}
                 value={service.title}
                 onChange={(e) => updateService("title", e.target.value)}
               />
@@ -1530,21 +1532,21 @@ export default function VehicleDetailView({
               <input
                 type="number"
                 placeholder={t("vehicles.services.costPlaceholder")}
-                className="rounded-xl border p-3"
+                className={docField}
                 value={service.cost}
                 onChange={(e) => updateService("cost", e.target.value)}
               />
 
               <input
                 placeholder={t("vehicles.services.technician")}
-                className="rounded-xl border p-3"
+                className={docField}
                 value={service.technician}
                 onChange={(e) => updateService("technician", e.target.value)}
               />
 
               <input
                 type="date"
-                className="rounded-xl border p-3"
+                className={docField}
                 value={service.next_service_date}
                 onChange={(e) =>
                   updateService("next_service_date", e.target.value)
@@ -1554,12 +1556,12 @@ export default function VehicleDetailView({
 
             <textarea
               placeholder={t("vehicles.services.descriptionPlaceholder")}
-              className="mt-4 w-full rounded-xl border p-3"
+              className={`mt-3 ${docField}`}
               value={service.description}
               onChange={(e) => updateService("description", e.target.value)}
             />
 
-            <div className="mt-4 flex gap-3">
+            <div className="mt-3 flex gap-2">
               <button
                 onClick={saveService}
                 disabled={isSaving}
@@ -1575,7 +1577,7 @@ export default function VehicleDetailView({
               {editingServiceId && (
                 <button
                   onClick={cancelServiceEdit}
-                  className="rounded-xl bg-surface-2 px-5 py-3 text-primary hover:bg-surface-hover"
+                  className={docButtonSecondary}
                 >
                   {t("vehicles.forms.cancelEdit")}
                 </button>

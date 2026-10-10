@@ -49,7 +49,7 @@ export function DocumentPageShell({
   // min-content ≈ súčet všetkých záložiek, takže celá stránka narástla na
   // ~2× šírku telefónu (M1 real-device bug 2026-09-28, detail vozidla).
   return (
-    <div className={`relative mx-auto w-full min-w-0 ${wide ? "max-w-6xl" : "max-w-5xl"} px-4 pb-28 pt-4 sm:px-6 sm:pt-6`}>
+    <div className={`relative mx-auto w-full min-w-0 ${wide ? "max-w-6xl" : "max-w-5xl"} px-4 pb-24 pt-3 sm:px-6 sm:pt-5`}>
       {/* Hlasový launcher je v TOKU stránky, nie plávajúci — appka už má
           jeden plávajúci prvok (bublinku chatu), ktorý si používateľ môže
           pretiahnuť kamkoľvek, takže druhý by sa s ním skôr či neskôr
@@ -89,16 +89,16 @@ export function DocumentHeader({
   aside?: ReactNode;
 }) {
   return (
-    <header className="flex flex-col gap-3 border-b border-doc-border pb-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4 sm:pb-5">
+    <header className="flex flex-col gap-2.5 border-b border-doc-border pb-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4 sm:pb-4">
       <div className="min-w-0">
         {eyebrow && (
-          <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-esblu sm:text-[11px]">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-esblu">
             {eyebrow}
           </p>
         )}
-        <h1 className="mt-1 break-words text-xl font-semibold text-primary sm:text-2xl">{title}</h1>
+        <h1 className="mt-0.5 break-words text-lg font-semibold leading-snug text-primary sm:text-xl">{title}</h1>
         {badges && <div className="mt-2 flex flex-wrap items-center gap-2">{badges}</div>}
-        {meta && <div className="mt-2 text-[15px] text-secondary sm:text-sm">{meta}</div>}
+        {meta && <div className="mt-1.5 text-sm text-secondary">{meta}</div>}
       </div>
       {aside && <div className="shrink-0 sm:text-right">{aside}</div>}
     </header>
@@ -121,13 +121,13 @@ export function DocumentSection({
 }) {
   return (
     <section
-      className={`rounded-doc border border-doc-border bg-doc-surface p-4 sm:p-5 ${className}`}
+      className={`rounded-doc border border-doc-border bg-doc-surface p-3.5 sm:p-4 ${className}`}
     >
       {(title || actions) && (
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
           <div className="min-w-0">
-            {title && <h2 className="text-base font-semibold text-primary sm:text-sm">{title}</h2>}
-            {description && <p className="mt-0.5 text-sm text-muted-esblu sm:text-xs">{description}</p>}
+            {title && <h2 className="text-[15px] font-semibold text-primary sm:text-sm">{title}</h2>}
+            {description && <p className="mt-0.5 text-xs text-muted-esblu">{description}</p>}
           </div>
           {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
         </div>
@@ -153,18 +153,18 @@ export function DocumentMetadataGrid({
 
   return (
     <dl
-      className={`grid grid-cols-1 gap-x-6 gap-y-3 ${
+      className={`grid grid-cols-2 gap-x-4 gap-y-2.5 sm:gap-x-6 ${
         columns === 3 ? "sm:grid-cols-3" : "sm:grid-cols-2"
       }`}
     >
       {visible.map((item, index) => (
-        <div key={index} className={item.full ? "sm:col-span-full" : undefined}>
+        <div key={index} className={item.full ? "col-span-full" : "min-w-0"}>
           {/* Mobil: 12 px štítok s vyšším kontrastom a 16 px hodnota —
               čitateľné bez priblíženia. Desktop ostáva kompaktný. */}
-          <dt className="text-xs font-medium uppercase tracking-wide text-secondary sm:text-[11px] sm:text-muted-esblu">
+          <dt className="text-[11px] font-medium uppercase tracking-wide text-muted-esblu">
             {item.label}
           </dt>
-          <dd className="mt-0.5 break-words text-base text-primary sm:text-sm">{item.value}</dd>
+          <dd className="mt-0.5 break-words text-sm text-primary">{item.value}</dd>
         </div>
       ))}
     </dl>
@@ -184,7 +184,7 @@ export function DocumentPartyBlock({
   lines: Array<ReactNode | null | undefined>;
 }) {
   return (
-    <div className="rounded-doc border border-doc-border bg-surface-2 p-4">
+    <div className="rounded-doc border border-doc-border bg-surface-2 p-3">
       <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-esblu">
         {role}
         {note ? <span className="ml-1 font-normal normal-case">· {note}</span> : null}
@@ -245,7 +245,7 @@ export function DocumentActionBar({
     <div
       className={
         sticky
-          ? "sticky bottom-[var(--mobile-tabbar-space,0px)] z-10 -mx-4 border-t border-doc-border bg-page-bg/95 px-4 py-3 backdrop-blur sm:mx-0 sm:rounded-doc sm:border sm:px-4"
+          ? "sticky bottom-[var(--mobile-tabbar-space,0px)] z-10 -mx-4 border-t border-doc-border bg-page-bg/95 px-4 py-2.5 backdrop-blur sm:mx-0 sm:rounded-doc sm:border sm:px-3"
           : ""
       }
     >
@@ -291,7 +291,7 @@ export function DocumentRow({
   );
 
   const shared =
-    "flex w-full items-center gap-3 rounded-doc border border-doc-border bg-doc-surface px-4 py-3 text-left transition hover:border-border-strong hover:bg-doc-surface-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring";
+    "flex w-full items-center gap-3 rounded-doc border border-doc-border bg-doc-surface px-3.5 py-2.5 text-left transition hover:border-border-strong hover:bg-doc-surface-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring";
 
   if (href) {
     return (
@@ -343,27 +343,27 @@ export function DocumentModal({
       <div
         className={`max-h-[92vh] w-full ${width} overflow-y-auto rounded-doc border border-doc-border bg-surface-1`}
       >
-        <div className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-doc-border bg-surface-1/95 px-5 py-4 backdrop-blur">
+        <div className="sticky top-0 z-10 flex items-start justify-between gap-3 border-b border-doc-border bg-surface-1/95 px-4 py-3 backdrop-blur">
           <div className="min-w-0">
             {eyebrow && (
               <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-esblu">
                 {eyebrow}
               </p>
             )}
-            <h2 className="mt-0.5 break-words text-lg font-semibold text-primary">{title}</h2>
+            <h2 className="mt-0.5 break-words text-base font-semibold text-primary">{title}</h2>
           </div>
           <button
             type="button"
             onClick={onClose}
             aria-label={closeLabel}
-            className="shrink-0 rounded-doc-sm border border-doc-border px-2.5 py-1.5 text-sm text-secondary transition hover:bg-surface-hover hover:text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-doc-sm border border-doc-border text-sm text-secondary transition hover:bg-surface-hover hover:text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
           >
             ✕
           </button>
         </div>
-        <div className="space-y-4 px-5 py-5">{children}</div>
+        <div className="space-y-3 px-4 py-4">{children}</div>
         {footer && (
-          <div className="sticky bottom-0 border-t border-doc-border bg-surface-1/95 px-5 py-4 backdrop-blur">
+          <div className="sticky bottom-0 border-t border-doc-border bg-surface-1/95 px-4 py-3 backdrop-blur">
             {footer}
           </div>
         )}
@@ -390,7 +390,7 @@ export function DocumentNotice({
         : "border-doc-border bg-surface-2 text-secondary";
 
   return (
-    <div className={`rounded-doc border px-4 py-3 text-[15px] leading-snug sm:text-sm ${toneClass}`}>
+    <div role={tone === "critical" ? "alert" : undefined} className={`rounded-doc border px-3 py-2.5 text-sm leading-snug ${toneClass}`}>
       {title && <p className="font-semibold">{title}</p>}
       <div className={title ? "mt-1" : undefined}>{children}</div>
     </div>
@@ -413,7 +413,7 @@ export function DocumentAttachmentList({
       {items.map((item) => (
         <li
           key={item.id}
-          className="flex flex-wrap items-center justify-between gap-3 rounded-doc-sm border border-doc-border bg-surface-2 px-3 py-2.5"
+          className="flex flex-wrap items-center justify-between gap-2 rounded-doc-sm border border-doc-border bg-surface-2 px-3 py-2"
         >
           <div className="min-w-0">
             <p className="truncate text-sm text-primary">{item.label}</p>
@@ -431,15 +431,15 @@ export function DocumentAttachmentList({
 // -----------------------------------------------------------------------------
 
 export const docButtonPrimary =
-  "inline-flex min-h-11 items-center justify-center rounded-doc-sm bg-accent-esblu px-4 py-2 text-sm font-semibold text-on-accent transition hover:opacity-90 disabled:opacity-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring";
+  "inline-flex min-h-[var(--control-h)] items-center justify-center gap-1.5 rounded-doc-sm bg-accent-esblu px-3.5 py-1.5 text-[13px] font-semibold text-on-accent transition hover:bg-brand-700 disabled:opacity-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring";
 
 export const docButtonSecondary =
-  "inline-flex min-h-11 items-center justify-center rounded-doc-sm border border-doc-border px-4 py-2 text-sm font-medium text-secondary transition hover:bg-surface-hover hover:text-primary disabled:opacity-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring";
+  "inline-flex min-h-[var(--control-h)] items-center justify-center gap-1.5 rounded-doc-sm border border-doc-border px-3.5 py-1.5 text-[13px] font-medium text-secondary transition hover:bg-surface-hover hover:text-primary disabled:opacity-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring";
 
 export const docButtonDanger =
-  "inline-flex min-h-11 items-center justify-center rounded-doc-sm border border-danger/30 px-4 py-2 text-sm font-medium text-danger transition hover:bg-danger-soft disabled:opacity-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring";
+  "inline-flex min-h-[var(--control-h)] items-center justify-center gap-1.5 rounded-doc-sm border border-danger/30 px-3.5 py-1.5 text-[13px] font-medium text-danger transition hover:bg-danger-soft disabled:opacity-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring";
 
 export const docField =
-  "w-full rounded-doc-sm border border-doc-border bg-surface-2 px-3 py-2.5 text-sm text-primary outline-none transition focus:border-accent-cyan focus:ring-2 focus:ring-accent-cyan/20";
+  "w-full min-h-[var(--control-h)] rounded-doc-sm border border-doc-border bg-surface-2 px-3 py-1.5 text-sm text-primary outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-400/25";
 
-export const docLabel = "mb-1.5 block text-xs font-medium text-secondary";
+export const docLabel = "mb-1 block text-xs font-medium text-secondary";

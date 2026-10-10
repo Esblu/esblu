@@ -29,18 +29,18 @@ export default function PlanLimitNotice({
   return (
     <aside
       role="status"
-      className={`badge-warning rounded-2xl border border-amber-400/25 p-4 shadow-sm sm:p-5 ${className}`.trim()}
+      className={`badge-warning rounded-doc border border-amber-400/25 p-3 sm:p-4 ${className}`.trim()}
     >
-      <div className="flex items-start gap-3">
+      <div className="flex items-start gap-2.5">
         <span
           aria-hidden="true"
-          className="badge-warning flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-lg font-black"
+          className="badge-warning flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[13px] font-bold"
         >
           !
         </span>
 
         <div className="min-w-0">
-          <p className="font-bold">
+          <p className="text-sm font-semibold">
             {resource
               ? t("common.planLimitNotice.moduleLimit", {
                   module: resourceLabels[resource],
@@ -48,11 +48,11 @@ export default function PlanLimitNotice({
               : t("common.planLimitNotice.planLimit")}
           </p>
           {hasUsage && (
-            <p className="mt-1 text-sm font-semibold">
+            <p className="mt-0.5 text-[13px] font-medium">
               {t("common.planLimitNotice.usage", { usage, limit })}
             </p>
           )}
-          <p className="mt-2 text-sm leading-6 text-secondary sm:text-base">
+          <p className="mt-1 text-[13px] leading-5 text-secondary">
             {t("common.planLimitMessage")}
           </p>
         </div>

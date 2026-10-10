@@ -22,6 +22,9 @@ export default function AppLifecycleBridge() {
     void supabase.auth.startAutoRefresh();
 
     const stateHandle = App.addListener("appStateChange", ({ isActive }) => {
+      // Hlasový režim (hooks/use-voice-session.ts) počúva túto udalosť:
+      // appka na pozadí / zamknutá = mikrofón sa okamžite uvoľní.
+      window.dispatchEvent(new CustomEvent("esblu:app-state", { detail: { isActive } }));
       if (isActive) {
         void supabase.auth.startAutoRefresh();
         void supabase.auth.getSession();

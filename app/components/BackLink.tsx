@@ -1,5 +1,8 @@
 import Link from "next/link";
 
+// UI refresh 2026-10-11: kompaktný „späť" odkaz (ako v natívnych appkách) —
+// predtým veľká pilulka s tieňom (44 px, tučné písmo), ktorá vizuálne
+// súperila s nadpisom stránky. Dotyková plocha ostáva ≥ 40 px (padding).
 export default function BackLink({
   href,
   label,
@@ -13,11 +16,11 @@ export default function BackLink({
     <div className={className} style={{ paddingTop: "var(--esblu-safe-top, env(safe-area-inset-top, 0px))" }}>
       <Link
         href={href}
-        className="surface-card-hover inline-flex min-h-[44px] items-center gap-2 rounded-full border border-subtle bg-surface-1/90 px-4 py-2.5 text-sm font-bold text-primary shadow-lg backdrop-blur-sm transition active:scale-95"
+        className="-ml-2 inline-flex min-h-10 items-center gap-1 rounded-doc-sm px-2 text-[13px] font-medium text-secondary transition hover:bg-surface-hover hover:text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring active:opacity-70"
       >
-        <span aria-hidden="true" className="text-base leading-none text-secondary">
-          ←
-        </span>
+        <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M15 18l-6-6 6-6" />
+        </svg>
         {label}
       </Link>
     </div>

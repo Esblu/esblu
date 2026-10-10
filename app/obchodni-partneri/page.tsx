@@ -381,21 +381,21 @@ export default function ObchodniPartneriPage() {
   const createDisabled = !canEdit || legalHold;
 
   return (
-    <div className="mx-auto w-full min-w-0 max-w-5xl px-4 pb-24 pt-6 sm:px-6">
+    <div className="mx-auto w-full min-w-0 max-w-5xl px-4 pb-24 pt-3 sm:px-6 sm:pt-5">
       <Suspense fallback={null}>
         <EditFromQueryParam onEditId={setPendingEditId} onNewPrefill={openPrefilledCreateForm} />
       </Suspense>
 
-      <BackLink href="/" label={t("nav.dashboard")} className="mb-3 sm:mb-6" />
+      <BackLink href="/" label={t("nav.dashboard")} className="mb-1 sm:mb-3" />
 
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <BusinessPartnersIcon size={32} />
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <BusinessPartnersIcon size={24} />
           <div>
-            <h1 className="text-2xl font-bold text-primary">
+            <h1 className="text-xl font-semibold tracking-tight text-primary sm:text-[1.375rem]">
               {t("businessPartners.title")}
             </h1>
-            <p className="text-sm text-secondary">{t("businessPartners.subtitle")}</p>
+            <p className="text-[13px] text-muted-esblu">{t("businessPartners.subtitle")}</p>
           </div>
         </div>
 
@@ -412,25 +412,25 @@ export default function ObchodniPartneriPage() {
       </div>
 
       {!canView && membershipLoaded && (
-        <p className="mt-3 rounded-doc border border-doc-border bg-surface-2 p-6 text-center text-sm text-secondary">
+        <p className="mt-3 rounded-doc border border-doc-border bg-surface-2 p-4 text-center text-sm text-secondary">
           {t("businessPartners.noFinanceAccess")}
         </p>
       )}
 
       {canView && !canEdit && (
-        <p className="mt-3 text-sm text-secondary">{t("businessPartners.readOnlyNotice")}</p>
+        <p className="mt-3 text-[13px] text-muted-esblu">{t("businessPartners.readOnlyNotice")}</p>
       )}
 
       {canView && legalHold && canEdit && (
-        <p className="mt-3 text-sm font-medium text-warning">
+        <p className="mt-3 text-[13px] font-medium text-warning">
           {t("businessPartners.legalHoldNotice")}
         </p>
       )}
 
       {canView && (
-      <div className="mt-6 flex flex-wrap gap-3">
+      <div className="mt-4 flex flex-wrap gap-2">
         <input
-          className={`min-w-[240px] flex-1 ${docField}`}
+          className={`min-w-[200px] flex-1 ${docField}`}
           placeholder={t("businessPartners.searchPlaceholder")}
           value={search}
           onChange={(event) => setSearch(event.target.value)}
@@ -450,8 +450,8 @@ export default function ObchodniPartneriPage() {
       )}
 
       {canView && showForm && canEdit && (
-        <div className="mt-6">
-          <h2 className="text-lg font-semibold text-primary">
+        <div className="mt-4">
+          <h2 className="text-[15px] font-semibold text-primary">
             {editingId
               ? t("businessPartners.editFormTitle")
               : t("businessPartners.createFormTitle")}
@@ -468,7 +468,7 @@ export default function ObchodniPartneriPage() {
               pole“. Poradie sleduje, ako doklad vzniká: kto to je →
               kde sídli → daňové údaje → ako sa platí → ako sa doručuje
               elektronicky. */}
-          <div className="mt-5 space-y-4">
+          <div className="mt-3 space-y-3">
             {/* Vyhľadanie v registri (RPO + RÚZ DIČ) iba predvyplní polia
                 nižšie. Ručné zadanie ostáva vždy možné a nič sa neuloží
                 bez kliknutia na Uložiť. */}
@@ -498,7 +498,7 @@ export default function ObchodniPartneriPage() {
             </DocumentSection>
 
             <DocumentSection title={t("businessPartners.section.identity")}>
-              <div className="grid gap-4 sm:grid-cols-2">
+              <div className="grid gap-3 sm:grid-cols-2">
                 <PartnerField label={t("businessPartners.form.kindLabel")}>
                   <select
                     className={docField}
@@ -542,7 +542,7 @@ export default function ObchodniPartneriPage() {
             </DocumentSection>
 
             <DocumentSection title={t("businessPartners.section.address")}>
-              <div className="grid gap-4 sm:grid-cols-2">
+              <div className="grid gap-3 sm:grid-cols-2">
                 <PartnerField label={t("businessPartners.form.addressLine1Label")} full>
                   <input
                     className={docField}
@@ -600,7 +600,7 @@ export default function ObchodniPartneriPage() {
               title={t("businessPartners.section.tax")}
               description={t("businessPartners.section.taxHint")}
             >
-              <div className="grid gap-4 sm:grid-cols-2">
+              <div className="grid gap-3 sm:grid-cols-2">
                 <PartnerField label={t("businessPartners.form.icoLabel")}>
                   <input
                     className={docField}
@@ -670,7 +670,7 @@ export default function ObchodniPartneriPage() {
               title={t("businessPartners.section.payment")}
               description={t("businessPartners.section.paymentHint")}
             >
-              <div className="grid gap-4 sm:grid-cols-2">
+              <div className="grid gap-3 sm:grid-cols-2">
                 <PartnerField
                   label={t("businessPartners.form.ibanLabel")}
                   error={fieldError("iban")}
@@ -731,7 +731,7 @@ export default function ObchodniPartneriPage() {
               title={t("businessPartners.section.einvoice")}
               description={t("businessPartners.section.einvoiceHint")}
             >
-              <div className="grid gap-4 sm:grid-cols-2">
+              <div className="grid gap-3 sm:grid-cols-2">
                 <PartnerField
                   label={t("businessPartners.form.electronicAddressLabel")}
                   error={fieldError("electronic_address")}
@@ -777,7 +777,7 @@ export default function ObchodniPartneriPage() {
             </DocumentSection>
           </div>
 
-          <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:justify-end">
+          <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:justify-end">
             <button
               type="button"
               onClick={closeForm}
@@ -802,28 +802,28 @@ export default function ObchodniPartneriPage() {
       )}
 
       {canView && (
-      <div className="mt-6">
+      <div className="mt-3">
         {loading ? (
           <p className="text-sm text-secondary">{t("businessPartners.loading")}</p>
         ) : loadError ? (
           <p className="text-sm font-medium text-danger">{loadError}</p>
         ) : filteredPartners.length === 0 ? (
-          <p className="rounded-doc border border-dashed border-doc-border bg-surface-2 p-6 text-center text-sm text-secondary">
+          <p className="rounded-doc border border-dashed border-doc-border bg-surface-2 p-4 text-center text-sm text-secondary">
             {t("businessPartners.empty")}
           </p>
         ) : (
-          <ul className="space-y-3">
+          <ul className="space-y-1">
             {filteredPartners.map((partner) => (
               <li
                 key={partner.id}
-                className="flex flex-wrap items-center justify-between gap-3 rounded-doc border border-doc-border bg-doc-surface p-4 transition hover:bg-doc-surface-hover"
+                className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 rounded-doc border border-doc-border bg-doc-surface px-3 py-2 transition hover:bg-doc-surface-hover sm:px-3.5"
               >
                 <Link
                   href={partnerDetailHref(partner.id)}
                   className="min-w-0 flex-1"
                 >
-                  <p className="truncate font-semibold text-primary">{partner.legal_name}</p>
-                  <p className="mt-0.5 text-xs text-muted-esblu">
+                  <p className="truncate text-sm font-semibold text-primary">{partner.legal_name}</p>
+                  <p className="mt-0.5 truncate text-xs text-muted-esblu">
                     {kindLabel(partner.kind)}
                     {partner.ico ? ` · IČO ${partner.ico}` : ""}
                     {partner.city ? ` · ${partner.city}` : ""}
@@ -831,7 +831,7 @@ export default function ObchodniPartneriPage() {
                 </Link>
 
                 {canEdit && (
-                  <div className="flex gap-2">
+                  <div className="flex gap-1.5">
                     <button
                       type="button"
                       onClick={() => openEditForm(partner)}

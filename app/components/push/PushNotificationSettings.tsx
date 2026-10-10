@@ -3,8 +3,11 @@
 import { useEffect, useState } from "react";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import { disablePushOnThisDevice, enablePushOnThisDevice, isThisDeviceSubscribed, pushSupport, type PushSupport } from "@/lib/push/client";
+import { SettingsSection } from "@/app/components/ui/SettingsList";
 
 // Nastavenie „Upozornenia v telefóne". Povolenie sa žiada IBA po ťuknutí.
+// UI refresh 2026-10-11: jeden riadok s prepínačom (role="switch") v
+// skupine nastavení namiesto veľkej karty s plným tlačidlom.
 export function PushNotificationSettings() {
   const { t } = useLocale();
   const [support, setSupport] = useState<PushSupport>("unsupported");
@@ -28,6 +31,7 @@ export function PushNotificationSettings() {
   if (support === "not_configured") return null;
 
   async function toggle() {
+    if (busy) return;
     setBusy(true);
     setMessage("");
     if (subscribed) {
@@ -52,27 +56,39 @@ export function PushNotificationSettings() {
     setBusy(false);
   }
 
+  const switchLabel = subscribed ? t("settings.push.disableButton") : t("settings.push.enableButton");
+
   return (
-    <section className="rounded-3xl border border-subtle bg-surface-1 p-8 shadow-lg backdrop-blur-xl">
-      <h2 className="text-2xl font-bold text-primary">{t("settings.push.title")}</h2>
-      <p className="mt-2 leading-7 text-secondary">{t("settings.push.description")}</p>
-      {support === "supported" ? (
-        <button
-          type="button"
-          onClick={() => void toggle()}
-          disabled={busy}
-          aria-pressed={subscribed}
-          className="mt-6 inline-flex min-h-12 w-full items-center justify-center rounded-xl bg-blue-600 px-6 py-3 text-center font-semibold text-white transition hover:bg-blue-700 disabled:opacity-60 sm:w-auto"
-        >
-          {subscribed ? t("settings.push.disableButton") : t("settings.push.enableButton")}
-        </button>
-      ) : (
-        <p className="mt-4 text-sm leading-6 text-secondary">
-          {t(support === "ios_needs_install" ? "settings.push.iosHint" : "settings.push.unsupported")}
-        </p>
+    <SettingsSection title={t("settings.push.title")} footer={t("settings.push.privacyHint")}>
+      <div className="ui-row">
+        <span className="min-w-0 flex-1">
+          <span className="ui-row-title block">{t("settings.push.title")}</span>
+          <span className="ui-row-sub mt-0.5 block">
+            {support === "supported"
+              ? t("settings.push.description")
+              : t(support === "ios_needs_install" ? "settings.push.iosHint" : "settings.push.unsupported")}
+          </span>
+        </span>
+        {support === "supported" && (
+          <button
+            type="button"
+            role="switch"
+            aria-checked={subscribed}
+            aria-label={switchLabel}
+            title={switchLabel}
+            onClick={() => void toggle()}
+            disabled={busy}
+            className="ui-switch"
+          />
+        )}
+      </div>
+      {message && (
+        <div className="ui-row">
+          <span className="ui-row-sub" role="status">
+            {message}
+          </span>
+        </div>
       )}
-      {message && <p className="mt-3 text-sm leading-6 text-secondary">{message}</p>}
-      <p className="mt-3 text-sm leading-6 text-secondary">{t("settings.push.privacyHint")}</p>
-    </section>
+    </SettingsSection>
   );
 }

@@ -157,24 +157,24 @@ export default function LegalAcceptanceGate({
 
       {mustBlock && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-lg rounded-2xl bg-surface-1 p-6 shadow-2xl sm:p-8">
-            <div className="flex items-start justify-between gap-4">
-              <h2 className="text-2xl font-bold text-primary">
+          <div className="max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-y-auto rounded-doc border border-doc-border bg-surface-1 p-4 shadow-2xl sm:p-6">
+            <div className="flex items-start justify-between gap-3">
+              <h2 className="text-lg font-semibold tracking-tight text-primary sm:text-xl">
                 {t("legalGate.title")}
               </h2>
               <LanguageSwitcher />
             </div>
 
-            <p className="mt-3 text-sm leading-6 text-secondary">
+            <p className="mt-2 text-sm leading-6 text-secondary">
               {t("legalGate.description")}
             </p>
 
-            <div className="mt-6 space-y-4">
+            <div className="mt-4 space-y-2">
               {termsDoc && (
-                <label className="flex items-start gap-3 rounded-xl border border-subtle p-4 text-sm">
+                <label className="flex items-start gap-2.5 rounded-doc-sm border border-subtle bg-surface-2 p-3 text-[13px] leading-5 text-secondary">
                   <input
                     type="checkbox"
-                    className="mt-1 h-4 w-4"
+                    className="mt-0.5 h-4 w-4 shrink-0"
                     checked={confirmedTerms}
                     onChange={(event) =>
                       setConfirmedTerms(event.target.checked)
@@ -183,7 +183,7 @@ export default function LegalAcceptanceGate({
                   />
                   <span>
                     {t("legalGate.agreeTermsPrefix")}{" "}
-                    <LegalDocLink path="/podmienky-pouzivania" className="font-semibold text-blue-700 hover:underline">
+                    <LegalDocLink path="/podmienky-pouzivania" className="font-medium text-brand-300 hover:underline">
                       {t("legalGate.agreeTermsLink")}
                     </LegalDocLink>{" "}
                     {t("legalGate.termsVersionSuffix", {
@@ -194,10 +194,10 @@ export default function LegalAcceptanceGate({
               )}
 
               {privacyDoc && (
-                <label className="flex items-start gap-3 rounded-xl border border-subtle p-4 text-sm">
+                <label className="flex items-start gap-2.5 rounded-doc-sm border border-subtle bg-surface-2 p-3 text-[13px] leading-5 text-secondary">
                   <input
                     type="checkbox"
-                    className="mt-1 h-4 w-4"
+                    className="mt-0.5 h-4 w-4 shrink-0"
                     checked={confirmedPrivacy}
                     onChange={(event) =>
                       setConfirmedPrivacy(event.target.checked)
@@ -206,7 +206,7 @@ export default function LegalAcceptanceGate({
                   />
                   <span>
                     {t("legalGate.agreePrivacyPrefix")}{" "}
-                    <LegalDocLink path="/ochrana-osobnych-udajov" className="font-semibold text-blue-700 hover:underline">
+                    <LegalDocLink path="/ochrana-osobnych-udajov" className="font-medium text-brand-300 hover:underline">
                       {t("legalGate.agreePrivacyLink")}
                     </LegalDocLink>{" "}
                     {t("legalGate.privacyVersionSuffix", {
@@ -218,7 +218,7 @@ export default function LegalAcceptanceGate({
             </div>
 
             {submitError && (
-              <p className="mt-4 text-sm font-medium text-red-700">
+              <p className="ui-error-text mt-3 text-[13px]">
                 {submitError}
               </p>
             )}
@@ -227,7 +227,7 @@ export default function LegalAcceptanceGate({
               type="button"
               onClick={handleConfirm}
               disabled={!canSubmit || submitting}
-              className="mt-6 w-full rounded-xl bg-blue-600 px-6 py-3 font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-gray-400"
+              className="ui-btn ui-btn-primary mt-4 w-full"
             >
               {submitting ? t("legalGate.saving") : t("legalGate.confirmButton")}
             </button>
@@ -236,7 +236,7 @@ export default function LegalAcceptanceGate({
               type="button"
               onClick={handleLogout}
               disabled={submitting}
-              className="mt-3 w-full text-center text-sm font-semibold text-muted-esblu hover:underline"
+              className="ui-btn ui-btn-ghost mt-2 w-full"
             >
               {t("legalGate.logout")}
             </button>

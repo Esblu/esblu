@@ -2,6 +2,8 @@
 
 import { MAX_RECORDING_SECONDS } from "@/lib/voice-config";
 import { createVad, DEFAULT_VAD } from "@/lib/voice/vad";
+import { classifyMicError, queryMicPermission } from "@/lib/voice/mic-errors";
+import type { MicFailureReason } from "@/lib/voice/voice-session";
 
 // =============================================================================
 // Mikrofón pre súvislý hlasový režim — jedna veta na jedno počúvanie.
@@ -54,10 +56,11 @@ export class MicSession {
   /** Zvýši ho každé release() — oneskorené getUserMedia potom mikrofón hneď pustí. */
   private openToken = 0;
 
-  async open(): Promise<"ready" | "denied" | "unsupported" | "cancelled"> {
+  async open(): Promise<"ready" | "cancelled" | MicFailureReason> {
     if (!voiceSessionSupported()) return "unsupported";
     this.release();
     const token = this.openToken;
+    const startedAt = performance.now();
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
@@ -75,8 +78,17 @@ export class MicSession {
       }
       if (this.context?.state === "suspended") await this.context.resume().catch(() => undefined);
       return "ready";
-    } catch {
-      return "denied";
+    } catch (error) {
+      if (token !== this.openToken || this.closed) return "cancelled";
+      // Rozlíšiť „zakázané" / „trvalo zablokované" / „obsadené" / „žiadny
+      // mikrofón" — každé vyžaduje inú radu používateľovi.
+      const elapsedMs = performance.now() - startedAt;
+      const permission = await queryMicPermission();
+      return classifyMicError(error, {
+        permission,
+        elapsedMs,
+        secureContext: typeof window !== "undefined" ? window.isSecureContext : undefined,
+      });
     }
   }
 

@@ -205,7 +205,7 @@ export default function FolderDetailView({ folderId }: { folderId: string }) {
   if (loaded && (!canManage || notFound)) {
     return (
       <DocumentPageShell wide>
-        <BackLink href="/priecinky" label={t("folders.back")} className="mb-3 sm:mb-6" />
+        <BackLink href="/priecinky" label={t("folders.back")} className="mb-1 sm:mb-3" />
         <DocumentNotice>{!canManage ? t("folders.noAccess") : t("folders.errors.notFound")}</DocumentNotice>
       </DocumentPageShell>
     );
@@ -220,12 +220,12 @@ export default function FolderDetailView({ folderId }: { folderId: string }) {
       folderContextId={folderId}
       voiceSelection={selectedRefs.length > 0 ? { items: selectedRefs, folderId } : null}
     >
-      <BackLink href="/priecinky" label={t("folders.back")} className="mb-3 sm:mb-6" />
+      <BackLink href="/priecinky" label={t("folders.back")} className="mb-1 sm:mb-3" />
 
       <DocumentHeader
         eyebrow={
           <span className="inline-flex items-center gap-2">
-            <FolderIcon size={18} />
+            <FolderIcon size={16} />
             {t("folders.navLabel")}
           </span>
         }
@@ -298,7 +298,7 @@ export default function FolderDetailView({ folderId }: { folderId: string }) {
         </div>
       )}
 
-      <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <FilterChips
           label={t("folders.filter.label")}
           active={filter}
@@ -317,9 +317,9 @@ export default function FolderDetailView({ folderId }: { folderId: string }) {
       </div>
 
       {selectionMode && selected.length > 0 && (
-        <div className="sticky bottom-[calc(var(--mobile-tabbar-space,0px)+1rem)] z-10 mt-3 rounded-doc border border-doc-border bg-surface-1/95 p-3 backdrop-blur">
+        <div className="sticky bottom-[calc(var(--mobile-tabbar-space,0px)+1rem)] z-10 mt-3 rounded-doc border border-doc-border bg-surface-1/95 px-3 py-2 backdrop-blur">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className="text-sm font-medium text-primary">{t("folders.selectedCount", { count: selected.length })}</p>
+            <p className="text-[13px] font-medium tabular-nums text-primary">{t("folders.selectedCount", { count: selected.length })}</p>
             <div className="flex flex-wrap gap-2">
               <button type="button" disabled={busy} onClick={() => void handleDownload(true)} className={docButtonPrimary}>
                 {t("folders.downloadSelected")}
@@ -341,13 +341,13 @@ export default function FolderDetailView({ folderId }: { folderId: string }) {
         </div>
       )}
 
-      <div className="mt-4">
+      <div className="mt-3">
         {!loaded ? (
           <LoadingRows label={t("folders.loading")} />
         ) : items.length === 0 ? (
           <EmptyState title={t("folders.emptyFolder")} />
         ) : (
-          <ul className="space-y-1.5">
+          <ul className="space-y-1">
             {visible.map((item) => {
               const original = originalLabel(item);
               const isSelected = selected.includes(key(item));
@@ -365,24 +365,24 @@ export default function FolderDetailView({ folderId }: { folderId: string }) {
                       </span>
                     )}
                     <div className="min-w-0">
-                      <p className="truncate text-base font-medium text-primary sm:text-sm">
+                      <p className="truncate text-sm font-semibold text-primary">
                         {item.label || t(`folders.kind.${item.kind}`)}
                       </p>
-                      <p className="mt-0.5 truncate text-sm text-muted-esblu">
+                      <p className="mt-0.5 truncate text-xs tabular-nums text-muted-esblu">
                         {t(`folders.kind.${item.kind}`)}
                         {item.date ? ` · ${formatDate(item.date, locale)}` : ""}
                       </p>
                     </div>
                   </div>
-                  <p className="mt-1 truncate text-sm text-secondary sm:mt-0">{item.partner || "—"}</p>
-                  <p className="mt-1 text-base font-semibold tabular-nums text-primary sm:mt-0 sm:text-right sm:text-sm">
+                  <p className="mt-0.5 truncate text-[13px] text-secondary sm:mt-0">{item.partner || "—"}</p>
+                  <p className="mt-0.5 text-[15px] font-semibold tabular-nums text-primary sm:mt-0 sm:text-right sm:text-sm">
                     {item.amount !== null && Number.isFinite(item.amount)
                       ? formatMoney(item.amount, item.currency, locale)
                       : "—"}
                   </p>
-                  <div className="mt-2 flex flex-wrap items-center gap-1.5 sm:mt-0 sm:justify-end">
+                  <div className="mt-1.5 flex flex-wrap items-center gap-1 sm:mt-0 sm:justify-end">
                     <span
-                      className={`rounded-doc-sm px-2 py-0.5 text-xs font-medium ${
+                      className={`rounded-doc-sm px-1.5 py-0.5 text-[11px] font-medium ${
                         original.tone === "ok"
                           ? "bg-surface-2 text-secondary"
                           : original.tone === "warn"
@@ -396,7 +396,7 @@ export default function FolderDetailView({ folderId }: { folderId: string }) {
                   </div>
                 </>
               );
-              const rowClass = `block w-full rounded-doc border border-doc-border bg-doc-surface px-4 py-3 text-left transition hover:bg-surface-hover sm:grid sm:items-center sm:gap-4 ${COLUMNS}`;
+              const rowClass = `block w-full rounded-doc border border-doc-border bg-doc-surface px-3 py-2 text-left transition hover:bg-surface-hover sm:grid sm:items-center sm:gap-3 sm:px-3.5 ${COLUMNS}`;
               return (
                 <li key={key(item)}>
                   {selectionMode ? (
@@ -417,7 +417,7 @@ export default function FolderDetailView({ folderId }: { folderId: string }) {
         )}
       </div>
 
-      <p className="mt-6 text-sm text-muted-esblu">{t("folders.semantics")}</p>
+      <p className="mt-4 text-xs text-muted-esblu">{t("folders.semantics")}</p>
 
       {picker && membership && (
         <FolderPickerModal

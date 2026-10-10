@@ -609,12 +609,12 @@ export default function FakturyPage() {
           : null
       }
     >
-      <BackLink href="/" label={t("nav.dashboard")} className="mb-3 sm:mb-6" />
+      <BackLink href="/" label={t("nav.dashboard")} className="mb-1 sm:mb-3" />
 
       <DocumentHeader
         eyebrow={
           <span className="inline-flex items-center gap-2">
-            <InvoicesIcon size={18} />
+            <InvoicesIcon size={16} />
             {t("invoices.title")}
           </span>
         }
@@ -649,7 +649,7 @@ export default function FakturyPage() {
                 {packageBusy ? t("handoff.packageBusy") : t("handoff.packageButton")}
               </button>
               <Link href="/priecinky" className={`${docButtonSecondary} gap-2`}>
-                <FolderIcon size={16} />
+                <FolderIcon size={15} />
                 {t("folders.navLabel")}
               </Link>
               <Link
@@ -684,13 +684,13 @@ export default function FakturyPage() {
       )}
 
       {!canView && membershipLoaded && (
-        <div className="mt-6">
+        <div className="mt-4">
           <DocumentNotice>{t("invoices.noFinanceAccess")}</DocumentNotice>
         </div>
       )}
 
       {canView && !canEdit && (
-        <p className="mt-4 text-sm text-muted-esblu">{t("invoices.readOnlyNotice")}</p>
+        <p className="mt-3 text-[13px] text-muted-esblu">{t("invoices.readOnlyNotice")}</p>
       )}
 
       {canView && legalHold && canEdit && (
@@ -700,7 +700,7 @@ export default function FakturyPage() {
       )}
 
       {canView && (
-        <div className="mt-6">
+        <div className="mt-4">
           <RegisterToolbar
             filtersLabel={t("common.register.filters")}
             filtersCloseLabel={t("common.register.filtersClose")}
@@ -711,7 +711,7 @@ export default function FakturyPage() {
               <div
                 role="tablist"
                 aria-label={t("invoices.register.directionFilterLabel")}
-                className="inline-flex w-full gap-1 rounded-doc-sm border border-doc-border bg-surface-2 p-1 sm:w-auto"
+                className="inline-flex w-full gap-0.5 rounded-doc-sm border border-doc-border bg-surface-2 p-0.5 sm:w-auto"
               >
                 {DIRECTION_ORDER.map((key) => (
                   <button
@@ -720,14 +720,14 @@ export default function FakturyPage() {
                     aria-selected={directionFilter === key}
                     type="button"
                     onClick={() => setDirectionFilter(key)}
-                    className={`flex-1 whitespace-nowrap rounded-doc-sm px-3 py-2 text-sm font-medium transition sm:flex-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
+                    className={`inline-flex min-h-[var(--control-h-sm)] flex-1 items-center justify-center whitespace-nowrap rounded-[6px] px-3 text-[13px] font-medium transition sm:flex-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
                       directionFilter === key
                         ? "bg-accent-esblu text-on-accent"
                         : "text-secondary hover:text-primary"
                     }`}
                   >
                     {t(`invoices.direction.${key}`)}
-                    <span className="ml-1.5 tabular-nums opacity-70">{directionCounts[key]}</span>
+                    <span className="ml-1.5 text-xs tabular-nums opacity-70">{directionCounts[key]}</span>
                   </button>
                 ))}
               </div>
@@ -764,7 +764,7 @@ export default function FakturyPage() {
       )}
 
       {canView && canEdit && filteredInvoices.length > 0 && (
-        <div className="mt-4 flex justify-end">
+        <div className="mt-3 flex justify-end">
           <button
             type="button"
             onClick={() => (selectionMode ? exitSelection() : setSelectionMode(true))}
@@ -776,16 +776,16 @@ export default function FakturyPage() {
       )}
 
       {selectionMode && (
-        <div className="sticky bottom-[calc(var(--mobile-tabbar-space,0px)+1rem)] z-10 mt-3 rounded-doc border border-doc-border bg-surface-1/95 p-3 backdrop-blur">
+        <div className="sticky bottom-[calc(var(--mobile-tabbar-space,0px)+1rem)] z-10 mt-3 rounded-doc border border-doc-border bg-surface-1/95 px-3 py-2 backdrop-blur">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex flex-wrap items-center gap-3">
-              <p className="text-sm font-medium text-primary">
+              <p className="text-[13px] font-medium tabular-nums text-primary">
                 {t("folders.selectedCount", { count: selectedIds.length })}
               </p>
               <button
                 type="button"
                 onClick={() => setSelectedIds(filteredInvoices.map((invoice) => invoice.id))}
-                className="min-h-11 text-sm font-medium text-accent-cyan"
+                className="min-h-[var(--control-h-sm)] text-[13px] font-medium text-brand-300 hover:underline"
               >
                 {t("folders.selectAll")}
               </button>
@@ -832,7 +832,7 @@ export default function FakturyPage() {
       )}
 
       {canView && (
-        <div className="mt-4">
+        <div className="mt-3">
           {loading ? (
             <LoadingRows label={t("invoices.loading")} />
           ) : loadError ? (
@@ -848,7 +848,7 @@ export default function FakturyPage() {
                 <span className="text-right">{t("invoices.register.colStatus")}</span>
               </RegisterHeader>
 
-              <ul className="mt-2 space-y-1.5">
+              <ul className="mt-1.5 space-y-1">
                 {filteredInvoices.map((invoice) => {
                   const creditNote = invoice.kind === "credit_note";
                   const fullyCredited = isFullyCreditedInvoice(invoice);
@@ -871,7 +871,7 @@ export default function FakturyPage() {
                     >
                       {/* 1 číslo + smer */}
                       <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-2">
+                        <div className="flex flex-wrap items-center gap-1.5">
                           {selectionMode && (
                             <span
                               aria-hidden="true"
@@ -884,7 +884,7 @@ export default function FakturyPage() {
                               {selectedIds.includes(invoice.id) && <CheckIcon size={12} />}
                             </span>
                           )}
-                          <span className="truncate font-medium text-primary">
+                          <span className="truncate text-sm font-semibold text-primary">
                             {invoiceNumberLabel(invoice)}
                           </span>
                           <DocumentStatusBadge
@@ -893,7 +893,7 @@ export default function FakturyPage() {
                         </div>
                         {/* 4 dátum / splatnosť — na mobile čitateľných 14px,
                             na desktope tichšie, lebo tam je viac kontextu. */}
-                        <p className="mt-0.5 truncate text-sm text-muted-esblu sm:text-xs">
+                        <p className="mt-0.5 truncate text-xs tabular-nums text-muted-esblu">
                           {t(`invoices.kind.${invoice.kind}`)} ·{" "}
                           {formatDate(invoice.issue_date, locale)}
                           {invoice.due_date
@@ -903,8 +903,8 @@ export default function FakturyPage() {
                       </div>
 
                       {/* 2 protistrana + 6 pôvod */}
-                      <div className="mt-1 min-w-0 sm:mt-0">
-                        <p className="truncate text-sm text-secondary">
+                      <div className="mt-0.5 min-w-0 sm:mt-0">
+                        <p className="truncate text-[13px] text-secondary">
                           {counterpartyName(invoice) || "—"}
                         </p>
                         {invoice.source !== "manual" && (
@@ -916,21 +916,21 @@ export default function FakturyPage() {
 
                       {/* 3 suma + 5 stav — na mobile v jednom riadku vedľa
                           seba, aby doklad zabral tri riadky, nie šesť. */}
-                      <div className="mt-2 flex items-center justify-between gap-3 sm:contents">
-                        <p className="text-base font-semibold tabular-nums text-primary sm:text-sm sm:text-right">
+                      <div className="mt-1.5 flex items-center justify-between gap-3 sm:contents">
+                        <p className="text-[15px] font-semibold tabular-nums text-primary sm:text-sm sm:text-right">
                           {/* Dobropis znižuje sumu — zobrazí sa so znamienkom mínus. */}
                           {formatMoney(signedAmount(invoice.kind, invoice.total_amount), invoice.currency)}
                         </p>
 
-                        <div className="flex flex-wrap items-center justify-end gap-1.5">
+                        <div className="flex flex-wrap items-center justify-end gap-1">
                           {invoice.document_status === "draft" ? (
                             <DocumentStatusBadge kind="draft" />
                           ) : creditNote ? (
-                            <span className="rounded-doc-sm bg-surface-2 px-2 py-0.5 text-xs font-medium text-secondary">
+                            <span className="rounded-doc-sm bg-surface-2 px-1.5 py-0.5 text-[11px] font-medium text-secondary">
                               {t("invoices.kind.credit_note")}
                             </span>
                           ) : fullyCredited ? (
-                            <span className="rounded-doc-sm bg-surface-2 px-2 py-0.5 text-xs font-medium text-secondary">
+                            <span className="rounded-doc-sm bg-surface-2 px-1.5 py-0.5 text-[11px] font-medium text-secondary">
                               {t("invoices.creditNote.fullyCredited")}
                             </span>
                           ) : (
@@ -942,12 +942,12 @@ export default function FakturyPage() {
                               veci. Preto tri samostatné označenia a žiadne
                               sa neodvodzuje z iného. */}
                           {accountingStatusOf(invoice) === "accounted" && (
-                            <span className="rounded-doc-sm bg-surface-2 px-2 py-0.5 text-xs font-medium text-secondary">
+                            <span className="rounded-doc-sm bg-surface-2 px-1.5 py-0.5 text-[11px] font-medium text-secondary">
                               {t("handoff.accountingStatus.accounted")}
                             </span>
                           )}
                           {handoffStatus !== "none" && (
-                            <span className="rounded-doc-sm bg-surface-2 px-2 py-0.5 text-xs font-medium text-secondary">
+                            <span className="rounded-doc-sm bg-surface-2 px-1.5 py-0.5 text-[11px] font-medium text-secondary">
                               {t(`handoff.handoffStatus.${handoffStatus}`)}
                             </span>
                           )}
@@ -956,7 +956,7 @@ export default function FakturyPage() {
                           />
                           {retention.state !== "active" && (
                             <span
-                              className={`rounded-doc-sm px-2 py-0.5 text-xs font-medium ${
+                              className={`rounded-doc-sm px-1.5 py-0.5 text-[11px] font-medium ${
                                 retention.state === "retention_exceeded"
                                   ? "badge-danger"
                                   : "bg-warning-soft text-warning"

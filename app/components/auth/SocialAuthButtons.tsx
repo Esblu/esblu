@@ -79,8 +79,8 @@ export function SocialAuthButtons({
   }
 
   return (
-    <div className="mt-4 space-y-2">
-      <p className="text-center text-xs font-semibold uppercase tracking-wide text-muted-esblu">{t("auth.oauth.or")}</p>
+    <div className="mt-3 space-y-2">
+      <p className="text-center text-[11px] font-semibold uppercase tracking-wide text-muted-esblu">{t("auth.oauth.or")}</p>
       {providers.map((provider) => (
         <button
           key={provider}
@@ -91,8 +91,8 @@ export function SocialAuthButtons({
           className={
             provider === "apple"
               ? // Apple HIG: čierne tlačidlo s logom Apple, rovnako výrazné ako ostatné voľby.
-                "flex w-full items-center justify-center gap-2 rounded-xl bg-black px-6 py-3 font-semibold text-white hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-60"
-              : "w-full rounded-xl border border-subtle px-6 py-3 font-semibold text-primary hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-60"
+                "flex min-h-10 w-full items-center justify-center gap-2 rounded-doc-sm bg-black px-4 py-2 text-sm font-semibold text-white hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-60"
+              : "flex min-h-10 w-full items-center justify-center gap-2 rounded-doc-sm border border-subtle bg-surface-2 px-4 py-2 text-sm font-semibold text-primary hover:bg-surface-hover disabled:cursor-not-allowed disabled:opacity-60"
           }
         >
           {provider === "apple" && (
@@ -105,7 +105,7 @@ export function SocialAuthButtons({
             : t(provider === "google" ? "auth.oauth.google" : "auth.oauth.apple")}
         </button>
       ))}
-      {error && <p className="text-center text-sm text-danger">{error}</p>}
+      {error && <p className="ui-error-text text-center">{error}</p>}
     </div>
   );
 }

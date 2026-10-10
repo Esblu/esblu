@@ -37,7 +37,7 @@ import type { FolderRef } from "@/lib/document-folders";
 import { clearConversationContext, loadConversationContext } from "@/lib/intents/conversation";
 import { resolveUiEntity, moduleMatchesEntity, type UiContext, type UiContextEntityType } from "@/lib/intents/ui-context";
 import { handleProcessCurrentDocumentAsReceivedInvoice } from "@/lib/intents/handlers-context";
-import { startInvoiceDraftFlow, continueInvoiceDraftFlow } from "@/lib/intents/invoice-draft-flow";
+import { startInvoiceDraftFlow, continueInvoiceDraftFlow, CONFIRM_DRAFT_FIELD } from "@/lib/intents/invoice-draft-flow";
 import { readSlots, type InvoiceDraftField } from "@/lib/intents/invoice-slots";
 import { decideInvoiceTurn, invoiceTaskFrom, isTaskCancel } from "@/lib/intents/conversation-state";
 import { handlePartnerCreate } from "@/lib/intents/partner-intents";
@@ -275,8 +275,11 @@ export async function runAssistantTurnDetailed(
   if (flowCtx && financeManage && !input.entitlementGate?.("CREATE_INVOICE_DRAFT")) {
     const stored = await loadConversationContext(db, flowCtx.conversationId);
     const field = stored?.pendingIntent === "CREATE_INVOICE_DRAFT" ? stored.missingFields[0] : undefined;
-    if (stored && field && (INVOICE_FIELDS as readonly string[]).includes(field)) {
-      const task = invoiceTaskFrom(field as InvoiceDraftField, readSlots(stored.slots));
+    // Krok „Mám návrh vytvoriť?" (voice safety 2026-10-11) je tiež rozpracovaná
+    // faktúra: „áno"/„nie"/oprava pokračuje v dialógu, nový príkaz ho zruší.
+    const confirmStep = field === CONFIRM_DRAFT_FIELD;
+    if (stored && field && (confirmStep || (INVOICE_FIELDS as readonly string[]).includes(field))) {
+      const task = invoiceTaskFrom((confirmStep ? "items" : field) as InvoiceDraftField, readSlots(stored.slots));
       const decision = input.structuredPartnerId ? "answer" : decideInvoiceTurn(rawText, task);
       if (decision !== "new_command") intent = { name: "CREATE_INVOICE_DRAFT", args: {}, source: "deterministic" };
       if (decision === "cancel") {

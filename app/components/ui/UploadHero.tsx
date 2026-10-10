@@ -47,14 +47,14 @@ export function UploadHero({
         }}
       />
 
-      <div className="relative flex flex-col gap-5 p-5 sm:flex-row sm:items-center sm:gap-6 sm:p-6">
+      <div className="relative flex flex-row items-center gap-3 p-3 sm:gap-4 sm:p-4">
         <PaperStack />
 
         <div className="min-w-0 flex-1">
-          <h2 className="text-lg font-semibold text-primary">{title}</h2>
-          <p className="mt-1 text-sm text-secondary">{description}</p>
-          {note && <p className="mt-2 text-xs text-muted-esblu">{note}</p>}
-          <div className="mt-4">{actions}</div>
+          <h2 className="text-[15px] font-semibold text-primary">{title}</h2>
+          <p className="mt-0.5 text-[13px] text-secondary">{description}</p>
+          {note && <p className="mt-1 text-xs text-muted-esblu">{note}</p>}
+          <div className="mt-3">{actions}</div>
         </div>
       </div>
     </section>
@@ -67,14 +67,14 @@ export function UploadHero({
  */
 function PaperStack() {
   return (
-    <div aria-hidden="true" className="mx-auto shrink-0 sm:mx-0">
+    <div aria-hidden="true" className="shrink-0 self-start sm:self-center">
       <svg
         width="96"
         height="96"
         viewBox="0 0 96 96"
         fill="none"
         xmlns="http://www.w3.org/2000/svg"
-        className="h-20 w-20 sm:h-24 sm:w-24"
+        className="h-12 w-12 sm:h-16 sm:w-16"
       >
         <defs>
           <linearGradient id="esblu-sheet-front" x1="0" y1="0" x2="1" y2="1">

@@ -88,8 +88,8 @@ function TabButton({
   onClick?: () => void;
   expanded?: boolean;
 }) {
-  const className = `flex min-h-[52px] min-w-0 flex-1 flex-col items-center justify-center gap-0.5 rounded-xl px-1 text-[11px] font-semibold leading-tight transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring ${
-    active ? "text-accent-cyan" : "text-muted-esblu hover:text-primary"
+  const className = `flex min-h-[52px] min-w-0 flex-1 flex-col items-center justify-center gap-0.5 rounded-doc-sm px-1 text-[11px] font-medium leading-tight transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring ${
+    active ? "text-brand-400" : "text-muted-esblu hover:text-primary"
   }`;
   const content = (
     <>
@@ -200,15 +200,15 @@ export default function MobileTabBar() {
             aria-label={t("common.buttons.close")}
             onClick={() => setMoreOpen(false)}
           />
-          <div className="relative w-full rounded-t-3xl border-t border-subtle bg-surface-1 px-4 pb-[calc(var(--mobile-tabbar-space,0px)+12px)] pt-3 shadow-2xl">
+          <div className="relative w-full rounded-t-2xl border-t border-subtle bg-surface-1 px-4 pb-[calc(var(--mobile-tabbar-space,0px)+12px)] pt-3 shadow-2xl">
             <div className="flex items-center justify-between">
-              <p className="text-base font-bold text-primary">{t("nav.moreTitle")}</p>
+              <p className="text-sm font-semibold text-primary">{t("nav.moreTitle")}</p>
               <button
                 ref={closeRef}
                 type="button"
                 onClick={() => setMoreOpen(false)}
                 aria-label={t("common.buttons.close")}
-                className="flex h-11 w-11 items-center justify-center rounded-xl text-secondary hover:bg-surface-hover"
+                className="flex h-10 w-10 items-center justify-center rounded-doc-sm text-secondary hover:bg-surface-hover"
               >
                 <CloseIcon size={20} />
               </button>
@@ -218,7 +218,7 @@ export default function MobileTabBar() {
                 <li key={item.key}>
                   <Link
                     href={item.href}
-                    className={`flex min-h-[76px] flex-col items-center justify-center gap-1.5 rounded-2xl border px-2 text-center text-xs font-semibold transition ${
+                    className={`flex min-h-[64px] flex-col items-center justify-center gap-1 rounded-doc border px-2 text-center text-xs font-medium transition ${
                       activeKey === item.key
                         ? "border-accent-cyan/60 bg-accent-cyan/10 text-accent-cyan"
                         : "border-subtle bg-surface-2 text-primary hover:bg-surface-hover"
@@ -234,7 +234,7 @@ export default function MobileTabBar() {
             <button
               type="button"
               onClick={() => void handleLogout()}
-              className="mt-3 flex min-h-11 w-full items-center justify-center rounded-2xl border border-subtle px-4 text-sm font-semibold text-secondary hover:bg-surface-hover"
+              className="mt-3 flex min-h-10 w-full items-center justify-center rounded-doc-sm border border-subtle px-4 text-[13px] font-medium text-secondary hover:bg-surface-hover"
             >
               {t("nav.logout")}
             </button>

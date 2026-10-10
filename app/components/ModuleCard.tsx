@@ -107,7 +107,7 @@ export default function ModuleCard({
   return (
     <Link
       href={href}
-      className={`surface-card surface-card-hover group relative flex min-w-0 flex-col overflow-hidden p-3.5 transition sm:p-4 ${styles.ring} ${className}`}
+      className={`surface-card surface-card-hover group relative flex min-w-0 flex-col overflow-hidden p-3 transition sm:p-3.5 ${styles.ring} ${className}`}
     >
       <span
         aria-hidden="true"
@@ -121,24 +121,24 @@ export default function ModuleCard({
               {title}
             </p>
           ) : (
-            <h3 className="text-base font-bold text-primary sm:text-lg">
+            <h3 className="text-sm font-semibold text-primary sm:text-[15px]">
               {title}
             </h3>
           )}
         </div>
 
         <div
-          className={`flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-2xl sm:h-20 sm:w-20 ${styles.icon} ${styles.iconGlow}`}
+          className={`flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-xl sm:h-12 sm:w-12 ${styles.icon} ${styles.iconGlow}`}
         >
           {icon ??
             (image ? (
               <Image
                 src={image}
-                width={56}
-                height={56}
+                width={40}
+                height={40}
                 alt=""
                 aria-hidden="true"
-                className="h-11 w-11 object-contain sm:h-14 sm:w-14"
+                className="h-8 w-8 object-contain sm:h-9 sm:w-9"
                 style={imageZoom !== 1 ? { transform: `scale(${imageZoom})` } : undefined}
               />
             ) : null)}
@@ -147,15 +147,15 @@ export default function ModuleCard({
 
       {stat ? (
         <>
-          <p className={`mt-3 text-3xl font-black leading-none tracking-tight sm:text-4xl ${styles.stat}`}>
+          <p className={`mt-2 text-2xl font-bold leading-none tracking-tight tabular-nums sm:text-[1.75rem] ${styles.stat}`}>
             {stat}
           </p>
           <p className="mt-1 text-xs leading-snug text-muted-esblu">{subtitle}</p>
         </>
       ) : (
         <>
-          <p className="mt-2 text-xs leading-snug text-muted-esblu">{subtitle}</p>
-          <span className="mt-2 inline-flex items-center gap-1 text-sm font-semibold text-accent-cyan opacity-0 transition group-hover:opacity-100">
+          <p className="mt-1.5 line-clamp-2 text-xs leading-snug text-muted-esblu">{subtitle}</p>
+          <span className="mt-1.5 hidden items-center gap-1 text-xs font-semibold text-brand-300 opacity-0 transition group-hover:opacity-100 sm:inline-flex">
             {t("inbox.open")}
             <span aria-hidden="true">→</span>
           </span>

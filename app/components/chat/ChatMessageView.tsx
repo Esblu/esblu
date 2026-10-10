@@ -566,18 +566,18 @@ export default function ChatMessageView({
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center gap-2.5 border-b border-subtle px-4 py-3.5 sm:px-5">
-        <span aria-hidden="true" className="text-lg leading-none">
+      <div className="flex items-center gap-2 border-b border-subtle px-3 py-2.5 sm:px-4">
+        <span aria-hidden="true" className="text-base leading-none">
           {conversation.type === "company" ? "🏢" : "👤"}
         </span>
-        <h2 className="min-w-0 truncate text-base font-bold text-primary">
+        <h2 className="min-w-0 truncate text-[15px] font-semibold text-primary">
           {title}
         </h2>
       </div>
 
       <div
         ref={messagesScrollRef}
-        className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4 sm:px-5"
+        className="min-h-0 flex-1 space-y-2 overflow-y-auto px-3 py-3 sm:px-4"
       >
         {hasMore && (
           <div className="flex justify-center">
@@ -585,7 +585,7 @@ export default function ChatMessageView({
               type="button"
               onClick={loadOlderMessages}
               disabled={loadingOlder}
-              className="btn-secondary rounded-full px-4 py-2 text-xs"
+              className="btn-secondary min-h-8 rounded-full px-3 py-1 text-xs"
             >
               {loadingOlder ? t("common.buttons.loading") : t("chat.loadOlderMessages")}
             </button>
@@ -593,7 +593,7 @@ export default function ChatMessageView({
         )}
 
         {messages.length === 0 && (
-          <p className="py-8 text-center text-sm text-muted-esblu">
+          <p className="py-6 text-center text-[13px] text-muted-esblu">
             {t("chat.noMessagesYet")}
           </p>
         )}
@@ -619,18 +619,18 @@ export default function ChatMessageView({
         ))}
       </div>
 
-      <div className="border-t border-subtle px-4 py-3 sm:px-5">
+      <div className="border-t border-subtle px-3 py-2.5 sm:px-4">
         {composerError && (
-          <p className="mb-2 text-xs font-semibold text-red-400">{composerError}</p>
+          <p className="mb-2 text-xs font-medium text-danger">{composerError}</p>
         )}
 
         {pendingFile && (
-          <div className="mb-2 flex items-center gap-2 rounded-lg bg-surface-2 px-3 py-1.5 text-xs text-secondary">
+          <div className="mb-2 flex items-center gap-2 rounded-doc-sm bg-surface-2 px-2.5 py-1.5 text-xs text-secondary">
             <span className="min-w-0 flex-1 truncate">{pendingFile.name}</span>
             <button
               type="button"
               onClick={() => handleFilePick(null)}
-              className="font-bold text-red-400"
+              className="font-semibold text-danger"
             >
               ✕
             </button>
@@ -638,13 +638,13 @@ export default function ChatMessageView({
         )}
 
         {pendingEntity && (
-          <div className="mb-2 flex items-center gap-2 rounded-lg bg-surface-2 px-3 py-1.5 text-xs text-secondary">
+          <div className="mb-2 flex items-center gap-2 rounded-doc-sm bg-surface-2 px-2.5 py-1.5 text-xs text-secondary">
             <span className="min-w-0 flex-1 truncate">📎 {pendingEntity.label}</span>
             <button
               type="button"
               onClick={() => setPendingEntity(null)}
               aria-label={t("chat.entityPicker.remove")}
-              className="font-bold text-red-400"
+              className="font-semibold text-danger"
             >
               ✕
             </button>
@@ -665,7 +665,7 @@ export default function ChatMessageView({
             onClick={() => fileInputRef.current?.click()}
             aria-label={t("chat.attachFile")}
             title={t("chat.attachFile")}
-            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-surface-2 text-secondary transition hover:text-primary"
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-doc-sm border border-subtle bg-surface-2 text-sm text-secondary transition hover:bg-surface-hover hover:text-primary"
           >
             📎
           </button>
@@ -675,7 +675,7 @@ export default function ChatMessageView({
             onClick={() => setShowEntityPicker(true)}
             aria-label={t("chat.attachFromEsblu")}
             title={t("chat.attachFromEsblu")}
-            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-surface-2 text-secondary transition hover:text-primary"
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-doc-sm border border-subtle bg-surface-2 text-sm text-secondary transition hover:bg-surface-hover hover:text-primary"
           >
             🔗
           </button>
@@ -701,14 +701,14 @@ export default function ChatMessageView({
             // overflow-x-hidden vylučuje horizontálny scroll aj pri veľmi
             // dlhom jednom "slove" bez medzery (wrap už rieši resize-none
             // textarea samo, toto je len istota).
-            className="min-h-[72px] flex-1 resize-none overflow-x-hidden rounded-xl border border-subtle bg-surface-1/60 px-3.5 py-2.5 text-sm text-primary outline-none placeholder:text-muted-esblu"
+            className="min-h-[72px] flex-1 resize-none overflow-x-hidden rounded-doc-sm border border-subtle bg-surface-1/60 px-3 py-2 text-sm text-primary outline-none transition placeholder:text-muted-esblu focus:border-brand-400"
           />
 
           <button
             type="button"
             onClick={sendMessage}
             disabled={sending || (!text.trim() && !pendingFile && !pendingEntity)}
-            className="flex h-11 shrink-0 items-center justify-center rounded-xl bg-accent-cyan px-4 text-sm font-bold text-[#051221] transition disabled:cursor-not-allowed disabled:opacity-50"
+            className="flex h-9 shrink-0 items-center justify-center rounded-doc-sm bg-accent-esblu px-3.5 text-[13px] font-semibold text-on-accent transition hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {t("chat.send")}
           </button>
@@ -769,9 +769,9 @@ function MessageBubble({
   return (
     <div className={`flex ${isMine ? "justify-end" : "justify-start"}`}>
       <div
-        className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 sm:max-w-[70%] ${
+        className={`max-w-[85%] rounded-doc px-3 py-2 sm:max-w-[70%] ${
           isMine
-            ? "bg-accent-cyan/16 text-primary"
+            ? "bg-brand-500/15 text-primary"
             : "surface-card-2 text-primary"
         }`}
       >
@@ -783,7 +783,7 @@ function MessageBubble({
               value={editText}
               onChange={(e) => onEditTextChange(e.target.value)}
               rows={2}
-              className="w-full resize-none rounded-lg border border-subtle bg-surface-1/70 px-2.5 py-2 text-sm text-primary outline-none"
+              className="w-full resize-none rounded-doc-sm border border-subtle bg-surface-1/70 px-2.5 py-1.5 text-sm text-primary outline-none focus:border-brand-400"
             />
             <div className="flex justify-end gap-2">
               <button
@@ -796,7 +796,7 @@ function MessageBubble({
               <button
                 type="button"
                 onClick={onSaveEdit}
-                className="text-xs font-bold text-accent-cyan"
+                className="text-xs font-semibold text-brand-300"
               >
                 {t("common.buttons.save")}
               </button>
@@ -823,7 +823,7 @@ function MessageBubble({
           </>
         )}
 
-        <div className="mt-1 flex items-center gap-2 text-[11px] text-muted-esblu">
+        <div className="mt-0.5 flex items-center gap-2 text-[11px] tabular-nums text-muted-esblu">
           <span>{time}</span>
           {message.edited_at && !isDeleted && <span>· {t("chat.editedLabel")}</span>}
           {isMine && !isDeleted && !editing && (
@@ -831,7 +831,7 @@ function MessageBubble({
               <button type="button" onClick={onStartEdit} className="font-semibold hover:text-primary">
                 {t("chat.edit")}
               </button>
-              <button type="button" onClick={onDelete} className="font-semibold hover:text-red-400">
+              <button type="button" onClick={onDelete} className="font-semibold hover:text-danger">
                 {t("chat.delete")}
               </button>
             </>
@@ -889,7 +889,7 @@ function ChatAttachmentChip({
     <button
       type="button"
       onClick={openAttachment}
-      className="mt-2 flex items-center gap-2 rounded-lg bg-surface-1/70 px-2.5 py-1.5 text-xs font-semibold text-secondary transition hover:text-primary"
+      className="mt-1.5 flex items-center gap-2 rounded-doc-sm bg-surface-1/70 px-2.5 py-1.5 text-xs font-medium text-secondary transition hover:text-primary"
     >
       <span aria-hidden="true">{isImage ? "🖼️" : "📄"}</span>
       <span className="min-w-0 max-w-[180px] truncate">
@@ -977,7 +977,7 @@ function ChatEntityReferenceCard({
 
   if (card === "loading") {
     return (
-      <div className="mt-2 rounded-xl border border-subtle bg-surface-1/70 px-3 py-2 text-xs text-muted-esblu">
+      <div className="mt-1.5 rounded-doc-sm border border-subtle bg-surface-1/70 px-2.5 py-1.5 text-xs text-muted-esblu">
         {t("common.buttons.loading")}
       </div>
     );
@@ -985,7 +985,7 @@ function ChatEntityReferenceCard({
 
   if (!card) {
     return (
-      <div className="mt-2 rounded-xl border border-subtle bg-surface-1/70 px-3 py-2 text-xs text-muted-esblu">
+      <div className="mt-1.5 rounded-doc-sm border border-subtle bg-surface-1/70 px-2.5 py-1.5 text-xs text-muted-esblu">
         {t("chat.entityCard.unavailable")}
       </div>
     );
@@ -995,9 +995,9 @@ function ChatEntityReferenceCard({
     <button
       type="button"
       onClick={handleClick}
-      className="surface-card-hover mt-2 flex w-full flex-col items-start gap-0.5 rounded-xl border border-subtle bg-surface-1/70 px-3 py-2 text-left transition"
+      className="surface-card-hover mt-1.5 flex w-full flex-col items-start gap-0.5 rounded-doc-sm border border-subtle bg-surface-1/70 px-2.5 py-1.5 text-left transition"
     >
-      <span className="text-sm font-bold text-primary">{card.title}</span>
+      <span className="text-sm font-semibold text-primary">{card.title}</span>
       {card.subtitle && (
         <span className="text-xs text-muted-esblu">{card.subtitle}</span>
       )}

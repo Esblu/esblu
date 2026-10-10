@@ -1238,7 +1238,7 @@ export default function VozidlaPage() {
 
     if (!date) {
       return (
-        <span className="inline-flex items-center gap-1 rounded-doc-sm border border-dashed border-doc-border px-2 py-0.5 text-xs text-muted-esblu">
+        <span className="inline-flex items-center gap-1 rounded-doc-sm border border-dashed border-doc-border px-1.5 py-0.5 text-[11px] text-muted-esblu">
           {label}: {t("common.misc.notFilled")}
         </span>
       );
@@ -1251,7 +1251,7 @@ export default function VozidlaPage() {
       return <StatusBadge kind="needs_review" label={`${label} ${formatDate(date, locale)}`} />;
     }
     return (
-      <span className="inline-flex items-center gap-1 rounded-doc-sm border border-doc-border px-2 py-0.5 text-xs tabular-nums text-secondary">
+      <span className="inline-flex items-center gap-1 rounded-doc-sm border border-doc-border px-1.5 py-0.5 text-[11px] font-medium tabular-nums text-secondary">
         {label}: {formatDate(date, locale)}
       </span>
     );
@@ -1259,12 +1259,12 @@ export default function VozidlaPage() {
 
   return (
     <PageShell wide moduleContext="vehicles">
-      <BackLink href="/" label={t("inbox.backToMenu")} className="mb-3 sm:mb-6" />
+      <BackLink href="/" label={t("inbox.backToMenu")} className="mb-1 sm:mb-3" />
 
       <PageHeader
         eyebrow={
           <span className="inline-flex items-center gap-2">
-            <CarIcon size={18} />
+            <CarIcon size={16} />
             {t("nav.vehicles")}
           </span>
         }
@@ -1316,13 +1316,13 @@ export default function VozidlaPage() {
           v Inbox, iba UI vstupný bod je teraz tu na hlavnej obrazovke
           Vozidlá namiesto samostatnej sekcie v Inboxe. */}
       {canOperate(role) && showRegistrationFlow && (
-        <div className="mt-6 rounded-doc border border-doc-border bg-doc-surface p-4 sm:p-5">
-          <div className="flex items-start justify-between gap-4">
+        <div className="mt-4 rounded-doc border border-doc-border bg-doc-surface p-3 sm:p-4">
+          <div className="flex items-start justify-between gap-3">
             <div>
-              <h2 className="text-base font-semibold text-primary">
+              <h2 className="text-[15px] font-semibold text-primary">
                 {t("inbox.registration.sectionTitle")}
               </h2>
-              <p className="mt-2 text-sm text-secondary">
+              <p className="mt-0.5 text-[13px] text-secondary">
                 {t("inbox.registration.sectionDescription")}
               </p>
             </div>
@@ -1332,21 +1332,21 @@ export default function VozidlaPage() {
                 setShowRegistrationFlow(false);
                 clearRegistrationImages();
               }}
-              className="shrink-0 rounded-xl bg-surface-2 px-4 py-2 text-sm font-semibold text-secondary hover:bg-surface-hover"
+              className={`${docButtonSecondary} shrink-0`}
             >
               {t("common.buttons.cancel")}
             </button>
           </div>
 
-          <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
-            <section className="rounded-doc border border-doc-border bg-surface-2 p-4">
-              <h3 className="text-sm font-semibold">{t("inbox.registration.frontTitle")}</h3>
-              <p className="mt-1 text-sm text-secondary">
+          <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-2">
+            <section className="rounded-doc border border-doc-border bg-surface-2 p-3">
+              <h3 className="text-sm font-semibold text-primary">{t("inbox.registration.frontTitle")}</h3>
+              <p className="mt-0.5 text-xs text-muted-esblu">
                 {t("inbox.registration.frontRequired")}
               </p>
 
               <UploadActions
-                className="mt-4"
+                className="mt-3"
                 cameraLabel={isPreparingRegFront ? t("inbox.registration.preparing") : t("inbox.registration.takePhoto")}
                 galleryLabel={t("inbox.registration.chooseFromGallery")}
                 disabled={isProcessingRegistration || isPreparingRegFront || legalHold}
@@ -1354,13 +1354,13 @@ export default function VozidlaPage() {
               />
 
               {regFrontPreview ? (
-                <div className="mt-4">
+                <div className="mt-3">
                   <img
                     src={regFrontPreview}
                     alt={t("inbox.registration.frontAlt")}
-                    className="h-64 w-full rounded-doc border border-doc-border bg-doc-surface object-contain"
+                    className="h-48 w-full rounded-doc border border-doc-border bg-doc-surface object-contain sm:h-56"
                   />
-                  <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+                  <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
                     <p className="text-xs text-muted-esblu">
                       {t("inbox.registration.replaceHint")}
                     </p>
@@ -1375,20 +1375,20 @@ export default function VozidlaPage() {
                   </div>
                 </div>
               ) : (
-                <div className="mt-4 rounded-doc border border-dashed border-doc-border p-8 text-center text-sm text-muted-esblu">
+                <div className="mt-3 rounded-doc border border-dashed border-doc-border p-5 text-center text-[13px] text-muted-esblu">
                   {t("inbox.registration.frontNotSelected")}
                 </div>
               )}
             </section>
 
-            <section className="rounded-doc border border-doc-border bg-surface-2 p-4">
-              <h3 className="text-sm font-semibold">{t("inbox.registration.backTitle")}</h3>
-              <p className="mt-1 text-sm text-secondary">
+            <section className="rounded-doc border border-doc-border bg-surface-2 p-3">
+              <h3 className="text-sm font-semibold text-primary">{t("inbox.registration.backTitle")}</h3>
+              <p className="mt-0.5 text-xs text-muted-esblu">
                 {t("inbox.registration.backOptional")}
               </p>
 
               <UploadActions
-                className="mt-4"
+                className="mt-3"
                 cameraLabel={isPreparingRegBack ? t("inbox.registration.preparing") : t("inbox.registration.takePhoto")}
                 galleryLabel={t("inbox.registration.chooseFromGallery")}
                 disabled={isProcessingRegistration || isPreparingRegBack || legalHold}
@@ -1396,13 +1396,13 @@ export default function VozidlaPage() {
               />
 
               {regBackPreview ? (
-                <div className="mt-4">
+                <div className="mt-3">
                   <img
                     src={regBackPreview}
                     alt={t("inbox.registration.backAlt")}
-                    className="h-64 w-full rounded-doc border border-doc-border bg-doc-surface object-contain"
+                    className="h-48 w-full rounded-doc border border-doc-border bg-doc-surface object-contain sm:h-56"
                   />
-                  <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+                  <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
                     <p className="text-xs text-muted-esblu">
                       {t("inbox.registration.replaceHint")}
                     </p>
@@ -1417,7 +1417,7 @@ export default function VozidlaPage() {
                   </div>
                 </div>
               ) : (
-                <div className="mt-4 rounded-doc border border-dashed border-doc-border p-8 text-center text-sm text-muted-esblu">
+                <div className="mt-3 rounded-doc border border-dashed border-doc-border p-5 text-center text-[13px] text-muted-esblu">
                   {t("inbox.registration.backNotSelected")}
                 </div>
               )}
@@ -1434,7 +1434,7 @@ export default function VozidlaPage() {
               isPreparingRegBack ||
               legalHold
             }
-            className={`mt-5 ${docButtonPrimary}`}
+            className={`mt-4 ${docButtonPrimary}`}
           >
             {isProcessingRegistration
               ? t("inbox.registration.loadingData")
@@ -1442,21 +1442,21 @@ export default function VozidlaPage() {
           </button>
 
           {registrationError && (
-            <p className="mt-4 rounded-doc border border-danger/30 bg-danger-soft p-4 text-sm font-medium text-danger">
+            <p className="mt-3 rounded-doc border border-danger/30 bg-danger-soft px-3 py-2 text-[13px] font-medium text-danger">
               {registrationError}
             </p>
           )}
 
           {registrationFields && (
-            <div className="mt-5 space-y-4 rounded-doc border border-doc-border bg-surface-2 p-4">
+            <div className="mt-4 space-y-3 rounded-doc border border-doc-border bg-surface-2 p-3 sm:p-4">
               {registrationDuplicateVehicle ? (
-                <p className="rounded-doc-sm border border-warning/30 bg-warning-soft px-4 py-3 text-sm font-medium text-warning">
+                <p className="rounded-doc-sm border border-warning/30 bg-warning-soft px-3 py-2 text-[13px] font-medium text-warning">
                   {t("inbox.registration.duplicateFoundPrefix")}
                   {registrationDuplicateVehicle.spz || t("inbox.noPlate")}
                   {t("inbox.registration.duplicateFoundSuffix")}
                 </p>
               ) : (
-                <p className="badge-success rounded-xl p-3 text-sm font-medium">
+                <p className="badge-success rounded-doc-sm px-3 py-2 text-[13px] font-medium">
                   {t("inbox.registration.noDuplicateFound")}
                 </p>
               )}
@@ -1465,7 +1465,7 @@ export default function VozidlaPage() {
                 {t("inbox.registration.reviewTitle")}
               </h3>
 
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                 {[
                   ["spz", t("inbox.fields.spz")],
                   ["vin", t("inbox.fields.vin")],
@@ -1492,7 +1492,7 @@ export default function VozidlaPage() {
                       {label}
                     </span>
                     <input
-                      className="mt-1 w-full rounded-xl border border-subtle bg-surface-1 p-3 outline-none"
+                      className={docField}
                       value={registrationFields[key] ?? ""}
                       onChange={(e) =>
                         updateRegistrationField(key, e.target.value)
@@ -1508,8 +1508,8 @@ export default function VozidlaPage() {
                   krajinu) — presne rovnaký country/valid_until model ako
                   sekcia "Diaľničné známky" v detaile vozidla, uložený AŽ pri
                   potvrdení vytvorenia/aktualizácie vozidla nižšie. */}
-              <div className="mt-2 rounded-doc border border-doc-border bg-doc-surface p-4">
-                <h4 className="text-sm font-bold text-primary">
+              <div className="mt-2 rounded-doc border border-doc-border bg-doc-surface p-3">
+                <h4 className="text-sm font-semibold text-primary">
                   {t("inbox.registration.vignettesSectionTitle")}
                 </h4>
                 <p className="mt-1 text-xs text-muted-esblu">
@@ -1517,18 +1517,18 @@ export default function VozidlaPage() {
                 </p>
 
                 {registrationVignettes.length > 0 && (
-                  <div className="mt-4 space-y-3">
+                  <div className="mt-3 space-y-2">
                     {registrationVignettes.map((row, index) => (
                       <div
                         key={index}
-                        className="grid grid-cols-1 gap-3 rounded-doc-sm border border-doc-border bg-doc-surface p-3 md:grid-cols-[1fr_1fr_auto]"
+                        className="grid grid-cols-1 gap-2 rounded-doc-sm border border-doc-border bg-doc-surface p-2.5 md:grid-cols-[1fr_1fr_auto]"
                       >
                         <label className="block">
-                          <span className="text-xs font-medium text-secondary">
+                          <span className={docLabel}>
                             {t("vehicles.vignettes.country")}
                           </span>
                           <select
-                            className="mt-1 w-full rounded-xl border border-subtle bg-surface-1 p-3 outline-none"
+                            className={docField}
                             value={
                               row.countryMode === "custom"
                                 ? VIGNETTE_OTHER_COUNTRY_OPTION
@@ -1556,7 +1556,7 @@ export default function VozidlaPage() {
 
                           {row.countryMode === "custom" && (
                             <input
-                              className="mt-2 w-full rounded-xl border border-subtle bg-surface-1 p-3 uppercase outline-none"
+                              className={`mt-2 uppercase ${docField}`}
                               maxLength={2}
                               placeholder={t(
                                 "vehicles.vignettes.otherCountryCodePlaceholder"
@@ -1573,12 +1573,12 @@ export default function VozidlaPage() {
                         </label>
 
                         <label className="block">
-                          <span className="text-xs font-medium text-secondary">
+                          <span className={docLabel}>
                             {t("vehicles.vignettes.validUntil")}
                           </span>
                           <input
                             type="date"
-                            className="mt-1 w-full rounded-xl border border-subtle bg-surface-1 p-3 outline-none"
+                            className={docField}
                             value={row.valid_until}
                             onChange={(e) =>
                               updateRegistrationVignetteRow(
@@ -1593,7 +1593,7 @@ export default function VozidlaPage() {
                         <button
                           type="button"
                           onClick={() => removeRegistrationVignetteRow(index)}
-                          className="self-end rounded-xl bg-surface-1 px-4 py-3 text-xs font-bold text-secondary hover:bg-surface-hover md:self-center"
+                          className={`${docButtonSecondary} self-end md:self-center`}
                         >
                           {t("vehicles.vignettes.remove")}
                         </button>
@@ -1605,7 +1605,7 @@ export default function VozidlaPage() {
                 <button
                   type="button"
                   onClick={addRegistrationVignetteRow}
-                  className="mt-4 rounded-xl border border-subtle bg-surface-2 px-4 py-2 text-sm font-semibold text-secondary hover:bg-surface-hover"
+                  className={`${docButtonSecondary} mt-3`}
                 >
                   {t("vehicles.vignettes.addAnother")}
                 </button>
@@ -1632,7 +1632,7 @@ export default function VozidlaPage() {
               {!registrationDuplicateVehicle &&
                 !planUsageLoading &&
                 isPlanLimited && (
-                  <p className="rounded-doc-sm border border-danger/30 bg-danger-soft p-3 text-sm font-medium text-danger">
+                  <p className="rounded-doc-sm border border-danger/30 bg-danger-soft px-3 py-2 text-[13px] font-medium text-danger">
                     {t("common.planLimitMessage")}
                   </p>
                 )}
@@ -1646,7 +1646,7 @@ export default function VozidlaPage() {
           úprava/mazanie v tomto module) ostávajú employeeovi naďalej
           nedostupné, toto sa ich netýka. */}
       {role && (
-        <div className="mt-6">
+        <div className="mt-4">
           <SectionPanel
             title={t("vehicles.gallery.addPhotosTitle")}
             description={t("vehicles.gallery.addPhotosDescription")}
@@ -1683,11 +1683,11 @@ export default function VozidlaPage() {
             </div>
 
             {isUploadingVehiclePhotos && (
-              <p className="mt-3 text-sm text-secondary">{t("inbox.uploading")}</p>
+              <p className="mt-2 text-[13px] text-secondary">{t("inbox.uploading")}</p>
             )}
 
             {vehicles.length === 0 && (
-              <p className="mt-3 text-sm text-muted-esblu">
+              <p className="mt-2 text-[13px] text-muted-esblu">
                 {t("vehicles.list.noneYetShort")}
               </p>
             )}
@@ -1704,7 +1704,7 @@ export default function VozidlaPage() {
       )}
 
       {canOperate(role) && vehicle && (
-        <div className="mt-6 space-y-4">
+        <div className="mt-4 space-y-3">
           <SectionPanel
             title={
               editingId
@@ -1716,7 +1716,7 @@ export default function VozidlaPage() {
                 čím sa identifikuje -> aké má parametre -> kedy mu končia
                 kontroly. Plochá mriežka 14 polí nedávala poradie zmysel. */}
             <p className={docLabel}>{t("vehicles.forms.groupIdentification")}</p>
-            <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid gap-3 sm:grid-cols-2">
               {(
                 [
                   [t("inbox.fields.spz"), "spz"],
@@ -1742,7 +1742,7 @@ export default function VozidlaPage() {
             </div>
 
             <p className={`${docLabel} mt-5`}>{t("vehicles.forms.groupTechnical")}</p>
-            <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid gap-3 sm:grid-cols-2">
               {(
                 [
                   [t("inbox.fields.palivo"), "palivo"],
@@ -1768,7 +1768,7 @@ export default function VozidlaPage() {
             </div>
 
             <p className={`${docLabel} mt-5`}>{t("vehicles.forms.groupInspections")}</p>
-            <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid gap-3 sm:grid-cols-2">
               <div>
                 <label className={docLabel} htmlFor="vehicle-stk">
                   {t("vehicles.fields.stkValidUntil")}
@@ -1796,7 +1796,7 @@ export default function VozidlaPage() {
               </div>
             </div>
 
-            <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:justify-end">
+            <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:justify-end">
               <button type="button" onClick={cancelEdit} className={docButtonSecondary}>
                 {t("vehicles.forms.cancelEdit")}
               </button>
@@ -1817,8 +1817,8 @@ export default function VozidlaPage() {
         </div>
       )}
 
-      <div className="mt-8">
-        <h2 className="mb-3 text-lg font-semibold text-primary">
+      <div className="mt-5">
+        <h2 className="mb-2 text-[15px] font-semibold text-primary">
           {t("vehicles.list.savedVehiclesTitle")}
         </h2>
 
@@ -1871,7 +1871,7 @@ export default function VozidlaPage() {
           }
         />
 
-        <div className="mt-4">
+        <div className="mt-3">
           {loading ? (
             <LoadingRows label={t("common.buttons.loading")} />
           ) : loadError ? (
@@ -1904,7 +1904,7 @@ export default function VozidlaPage() {
                 <span>{t("vehicles.register.colInspections")}</span>
               </RegisterHeader>
 
-              <ul className="mt-2 space-y-1.5">
+              <ul className="mt-1.5 space-y-1">
                 {visibleVehicles.map((car) => (
                   <DataRow
                     key={car.id}
@@ -1936,25 +1936,25 @@ export default function VozidlaPage() {
                   >
                     {/* 1 ŠPZ + značka/model — ŠPZ je to, čím vodič vozidlo
                         pomenúva, preto vedie riadok. */}
-                    <div className="flex min-w-0 items-center gap-3">
+                    <div className="flex min-w-0 items-center gap-2.5">
                       {photosByVehicle[car.id] ? (
                         // eslint-disable-next-line @next/next/no-img-element
                         <img
                           src={photosByVehicle[car.id]}
                           alt=""
-                          className="h-10 w-10 shrink-0 rounded-doc-sm border border-doc-border object-cover"
+                          className="h-9 w-9 shrink-0 rounded-doc-sm border border-doc-border object-cover"
                         />
                       ) : (
                         <span
                           aria-hidden="true"
-                          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-doc-sm border border-doc-border bg-surface-2 text-muted-esblu"
+                          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-doc-sm border border-doc-border bg-surface-2 text-muted-esblu"
                         >
-                          <CarIcon size={18} />
+                          <CarIcon size={16} />
                         </span>
                       )}
                       <div className="min-w-0">
                         <PlateBadge plate={car.spz || t("inbox.noPlate")} size="sm" />
-                        <p className="mt-1 truncate text-sm text-secondary">
+                        <p className="mt-0.5 truncate text-[13px] text-secondary">
                           {[car.znacka, car.model].filter(Boolean).join(" ") || "—"}
                           {car.rok_vyroby ? ` · ${car.rok_vyroby}` : ""}
                         </p>
@@ -1962,22 +1962,22 @@ export default function VozidlaPage() {
                     </div>
 
                     {/* 2 VIN */}
-                    <p className="mt-1.5 truncate font-mono text-sm text-muted-esblu sm:mt-0">
+                    <p className="mt-1 truncate font-mono text-xs text-muted-esblu sm:mt-0">
                       {car.vin || "—"}
                     </p>
 
                     {/* 3 palivo + výkon */}
-                    <div className="mt-1.5 min-w-0 sm:mt-0">
-                      <p className="truncate text-sm text-secondary">{car.palivo || "—"}</p>
+                    <div className="mt-0.5 min-w-0 sm:mt-0">
+                      <p className="truncate text-[13px] text-secondary">{car.palivo || "—"}</p>
                       {car.vykon && (
-                        <p className="mt-0.5 text-sm tabular-nums text-muted-esblu">
+                        <p className="mt-0.5 text-xs tabular-nums text-muted-esblu">
                           {car.vykon} kW
                         </p>
                       )}
                     </div>
 
                     {/* 4 STK + EK — stav nesie text aj farba, nikdy len farba */}
-                    <div className="mt-2 flex flex-wrap items-center gap-1.5 sm:mt-0">
+                    <div className="mt-1.5 flex flex-wrap items-center gap-1 sm:mt-0">
                       {inspectionCell(t("vehicles.fields.stk"), car.stk)}
                       {inspectionCell(t("vehicles.fields.ek"), car.ek)}
                     </div>

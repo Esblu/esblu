@@ -1,7 +1,6 @@
 "use client";
 
 import { ChangeEvent, useEffect, useState } from "react";
-import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 import { flushMediaDeletions } from "@/lib/storage/media-deletion";
 import { signMediaUrl } from "@/lib/storage/signed-media";
@@ -37,6 +36,7 @@ import {
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import { formatDateTime } from "@/lib/i18n/format";
 import LanguageSwitcher from "@/app/components/LanguageSwitcher";
+import { LOCALE_LABELS } from "@/lib/i18n/locales";
 import {
   EMPTY_COMPANY_BILLING_PROFILE_FORM,
   billingProfileToForm,
@@ -51,6 +51,17 @@ import { PushNotificationSettings } from "@/app/components/push/PushNotification
 import { navigateHard } from "@/lib/app-navigation";
 import { confirmAction } from "@/app/components/ui/AppDialog";
 import { signOutOnThisDevice } from "@/lib/sign-out";
+import {
+  FormField,
+  InlineNotice,
+  SettingsDisclosure,
+  SettingsLinkRow,
+  SettingsRow,
+  SettingsSection,
+} from "@/app/components/ui/SettingsList";
+import { ImageIcon, TrashIcon, UserIcon } from "@/app/components/icons/AppIcons";
+
+type SectionNotice = { tone: "success" | "error"; text: string } | null;
 
 /**
  * Role, ktoré sa dajú pozvať. Zrkadlí DB allowlist v
@@ -213,6 +224,15 @@ export default function NastaveniaPage() {
   const [deleteConfirmText, setDeleteConfirmText] = useState("");
   const [deleteSubmitting, setDeleteSubmitting] = useState(false);
   const [deleteError, setDeleteError] = useState("");
+
+  // UI refresh 2026-10-11: rozbaľovacie skupiny a inline správy namiesto
+  // window.alert() (alert blokuje celé WebView a pôsobí ako chyba appky).
+  const [companyOpen, setCompanyOpen] = useState(false);
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [passwordOpen, setPasswordOpen] = useState(false);
+  const [companyNotice, setCompanyNotice] = useState<SectionNotice>(null);
+  const [logoNotice, setLogoNotice] = useState<SectionNotice>(null);
+  const [passwordNotice, setPasswordNotice] = useState<SectionNotice>(null);
 
   useEffect(() => {
     checkUser();
@@ -391,6 +411,8 @@ export default function NastaveniaPage() {
       const profile = await getCompanyBillingProfile(activeCompanyId);
 
       setBillingProfile(billingProfileToForm(profile));
+      // Nevyplnený profil → formulár otvorený (prvé nastavenie firmy).
+      if (!profile?.legal_name) setCompanyOpen(true);
 
       const savedLogoPath = profile?.logo_path || "";
       setLogoPath(savedLogoPath);
@@ -426,8 +448,9 @@ export default function NastaveniaPage() {
   }
 
   async function saveSettings() {
+    setCompanyNotice(null);
     if (!userId || !companyId) {
-      alert(t("settings.errors.notLoggedIn"));
+      setCompanyNotice({ tone: "error", text: t("settings.errors.notLoggedIn") });
       return;
     }
 
@@ -435,7 +458,8 @@ export default function NastaveniaPage() {
     setBillingProfileErrors(errors);
 
     if (errors.length > 0 || !payload) {
-      alert(t("settings.errors.settingsSaveFailedPrefix", { message: t("settings.company.validationFailed") }));
+      setCompanyOpen(true);
+      setCompanyNotice({ tone: "error", text: t("settings.errors.settingsSaveFailedPrefix", { message: t("settings.company.validationFailed") }) });
       return;
     }
 
@@ -453,15 +477,16 @@ export default function NastaveniaPage() {
       void _bic;
       await upsertCompanyBillingProfile(companyId, userId, myRole === "owner" ? payload : withoutBank);
       setSettingsLoading(false);
-      alert(t("settings.errors.settingsSaved"));
+      setCompanyNotice({ tone: "success", text: t("settings.errors.settingsSaved") });
     } catch (error) {
       setSettingsLoading(false);
       const message = error instanceof Error ? error.message : String(error);
-      alert(
-        message.includes("ESBLU_BANK_DETAILS_OWNER_ONLY")
+      setCompanyNotice({
+        tone: "error",
+        text: message.includes("ESBLU_BANK_DETAILS_OWNER_ONLY")
           ? t("settings.company.bankDetailsOwnerOnly")
-          : t("settings.errors.settingsSaveFailedPrefix", { message })
-      );
+          : t("settings.errors.settingsSaveFailedPrefix", { message }),
+      });
     }
   }
 
@@ -543,14 +568,15 @@ export default function NastaveniaPage() {
     }
 
     event.target.value = "";
+    setLogoNotice(null);
 
     if (!userId) {
-      alert(t("settings.errors.notLoggedIn"));
+      setLogoNotice({ tone: "error", text: t("settings.errors.notLoggedIn") });
       return;
     }
 
     if (!selectedFile.type.startsWith("image/")) {
-      alert(t("settings.errors.chooseValidImage"));
+      setLogoNotice({ tone: "error", text: t("settings.errors.chooseValidImage") });
       return;
     }
 
@@ -599,7 +625,7 @@ export default function NastaveniaPage() {
         }
       }
 
-      alert(t("settings.errors.logoSaved"));
+      setLogoNotice({ tone: "success", text: t("settings.errors.logoSaved") });
     } catch (error) {
       if (uploadedPath) {
         await supabase.storage
@@ -612,7 +638,7 @@ export default function NastaveniaPage() {
           ? error.message
           : t("settings.errors.logoSaveFailedGeneric");
 
-      alert(t("settings.errors.logoSaveFailedPrefix", { message }));
+      setLogoNotice({ tone: "error", text: t("settings.errors.logoSaveFailedPrefix", { message }) });
     } finally {
       setLogoLoading(false);
     }
@@ -664,6 +690,7 @@ export default function NastaveniaPage() {
     }
 
     setLogoLoading(true);
+    setLogoNotice(null);
 
     const { error: storageError } = await supabase.storage
       .from("company-logos")
@@ -671,11 +698,12 @@ export default function NastaveniaPage() {
 
     if (storageError) {
       setLogoLoading(false);
-      alert(
-        t("settings.errors.logoStorageDeleteFailedPrefix", {
+      setLogoNotice({
+        tone: "error",
+        text: t("settings.errors.logoStorageDeleteFailedPrefix", {
           message: storageError.message,
-        })
-      );
+        }),
+      });
       return;
     }
 
@@ -688,7 +716,7 @@ export default function NastaveniaPage() {
       setLogoPath("");
       setLogoUrl("");
 
-      alert(t("settings.errors.logoDeleted"));
+      setLogoNotice({ tone: "success", text: t("settings.errors.logoDeleted") });
     } catch (error) {
       // Storage objekt je už nenávratne preč (DELETE vyššie uspel), ale
       // databázový logo_path sa napriek retry nepodarilo vynulovať — DB by
@@ -704,20 +732,21 @@ export default function NastaveniaPage() {
           ? error.message
           : t("settings.errors.logoDbUpdateFailed");
 
-      alert(t("settings.errors.logoDeletedButErrorPrefix", { message }));
+      setLogoNotice({ tone: "error", text: t("settings.errors.logoDeletedButErrorPrefix", { message }) });
     } finally {
       setLogoLoading(false);
     }
   }
 
   async function changePassword() {
+    setPasswordNotice(null);
     if (newPassword.length < 8) {
-      alert(t("settings.password.tooShort"));
+      setPasswordNotice({ tone: "error", text: t("settings.password.tooShort") });
       return;
     }
 
     if (newPassword !== confirmNewPassword) {
-      alert(t("settings.password.mismatch"));
+      setPasswordNotice({ tone: "error", text: t("settings.password.mismatch") });
       return;
     }
 
@@ -730,14 +759,14 @@ export default function NastaveniaPage() {
     setPasswordLoading(false);
 
     if (error) {
-      alert(t("settings.password.changeFailedPrefix", { message: error.message }));
+      setPasswordNotice({ tone: "error", text: t("settings.password.changeFailedPrefix", { message: error.message }) });
       return;
     }
 
     setNewPassword("");
     setConfirmNewPassword("");
 
-    alert(t("settings.password.changed"));
+    setPasswordNotice({ tone: "success", text: t("settings.password.changed") });
   }
 
   async function openDeleteAccountModal() {
@@ -820,810 +849,581 @@ export default function NastaveniaPage() {
     }
   }
 
-  return (
-    <main className="app-shell-bg min-h-screen p-4 sm:p-6 lg:p-10">
-      <BackLink href="/" label={t("inbox.backToMenu")} className="mb-4" />
+  const canEditCompany = financeManage;
+  const roleBadge = (role: string) => (
+    <span className={role === "owner" ? "ui-badge ui-badge-brand" : "ui-badge"}>{MEMBER_ROLE_LABELS[role] || role}</span>
+  );
+  const selectedInviteRole = INVITE_ROLE_OPTIONS.find((option) => option.value === inviteRole);
+  const companySummary = [billingProfile.ico && `${t("settings.company.icoLabel")} ${billingProfile.ico}`, billingProfile.city]
+    .filter(Boolean)
+    .join(" · ");
 
-      <div className="flex items-center gap-4">
-        <img
-          src="/images/settings.png"
-          alt={t("settings.pageTitle")}
-          className="h-20 w-20 object-contain"
-        />
+  function field(
+    fieldKey: keyof CompanyBillingProfileForm,
+    labelKey: string,
+    options?: { placeholder?: string; type?: string; ownerOnly?: boolean; className?: string; inputMode?: "numeric" | "decimal" | "email" | "text"; autoComplete?: string }
+  ) {
+    const errorText = billingProfileFieldError(fieldKey);
+    const disabled = !canEditCompany || settingsLoading || (options?.ownerOnly === true && myRole !== "owner");
 
-        <h1 className="text-2xl sm:text-4xl font-bold text-primary">
-          {t("settings.pageTitle")}
-        </h1>
-      </div>
-
-      <div className="mt-8 max-w-2xl space-y-6">
-        <section className="rounded-3xl border border-subtle bg-surface-1 p-5 sm:p-8 shadow-lg backdrop-blur-xl">
-          <h2 className="text-xl sm:text-2xl font-bold text-primary">
-            {t("settings.language.title")}
-          </h2>
-
-          <p className="mt-2 text-sm text-muted-esblu">
-            {t("settings.language.description")}
-          </p>
-
-          <div className="mt-5">
-            <LanguageSwitcher />
-          </div>
-        </section>
-
-        {/* Finance Access Hardening — plná sekcia "Firma" (vrátane billing
-            polí IČO/DIČ/IBAN/...) sa vykresľuje iba pre finance view/manage
-            (owner vždy). Bez finance prístupu appka o pár riadkov nižšie
-            zobrazí samostatnú branding-only sekciu (iba názov+logo). */}
-        {myRole && financeView && (() => {
-          const canEditCompany = financeManage;
-
-          function field(
-            fieldKey: keyof CompanyBillingProfileForm,
-            labelKey: string,
-            options?: { placeholder?: string; type?: string; ownerOnly?: boolean }
-          ) {
-            const errorText = billingProfileFieldError(fieldKey);
-
-            return (
-              <div>
-                <label className="mb-2 block text-sm font-semibold">
-                  {t(labelKey)}
-                </label>
-
-                <input
-                  className={`w-full rounded-xl border p-3 ${errorText ? "border-red-500" : ""}`}
-                  type={options?.type ?? "text"}
-                  placeholder={options?.placeholder}
-                  value={billingProfile[fieldKey]}
-                  onChange={(event) =>
-                    updateBillingProfileField(fieldKey, event.target.value)
-                  }
-                  disabled={!canEditCompany || settingsLoading || (options?.ownerOnly === true && myRole !== "owner")}
-                />
-
-                {errorText && (
-                  <p className="mt-1 text-xs font-semibold text-red-600">{errorText}</p>
-                )}
-              </div>
-            );
-          }
-
-          return (
-        <section className="rounded-3xl border border-subtle bg-surface-1 p-5 sm:p-8 shadow-lg backdrop-blur-xl">
-          <h2 className="text-xl sm:text-2xl font-bold text-primary">
-            {t("settings.company.title")}
-          </h2>
-
-          {!canEditCompany && (
-            <p className="mt-2 text-sm text-secondary">
-              {t("settings.company.readOnlyNotice")}
-            </p>
-          )}
-
-          <div className="mt-6">
-            {field("legal_name", "settings.company.nameLabel", {
-              placeholder: t("settings.company.namePlaceholder"),
-            })}
-          </div>
-
-          <div className="mt-6 grid gap-4 sm:grid-cols-3">
-            {field("ico", "settings.company.icoLabel")}
-            {field("dic", "settings.company.dicLabel")}
-            {field("ic_dph", "settings.company.icDphLabel")}
-          </div>
-
-          <p className="mt-2 text-xs text-secondary">
-            {t("settings.company.icDphHint")}
-          </p>
-
-          <div className="mt-6 grid gap-4 sm:grid-cols-2">
-            {field("address_line1", "settings.company.addressLine1Label")}
-            {field("address_line2", "settings.company.addressLine2Label")}
-          </div>
-
-          <div className="mt-6 grid gap-4 sm:grid-cols-3">
-            {field("city", "settings.company.cityLabel")}
-            {field("postal_code", "settings.company.postalCodeLabel")}
-            {field("country_code", "settings.company.countryCodeLabel", {
-              placeholder: "SK",
-            })}
-          </div>
-
-          <div className="mt-6 grid gap-4 sm:grid-cols-2">
-            {field("iban", "settings.company.ibanLabel", { ownerOnly: true })}
-            {field("bic", "settings.company.bicLabel", { ownerOnly: true })}
-          </div>
-          {canEditCompany && myRole !== "owner" && (
-            <p className="mt-2 text-xs text-secondary">{t("settings.company.bankDetailsOwnerOnly")}</p>
-          )}
-
-          <div className="mt-6">
-            {field("contact_email", "settings.company.contactEmailLabel", {
-              type: "email",
-            })}
-          </div>
-
-          <div className="mt-6 grid gap-4 sm:grid-cols-3">
-            {field("default_due_days", "settings.company.defaultDueDaysLabel", {
-              placeholder: "14",
-            })}
-            {field("default_currency", "settings.company.defaultCurrencyLabel", {
-              placeholder: "EUR",
-            })}
-            {field("default_vat_rate", "settings.company.defaultVatRateLabel", {
-              placeholder: "20",
-            })}
-          </div>
-
-          <div className="mt-6">
-            {field(
-              "invoice_numbering_prefix",
-              "settings.company.invoiceNumberingPrefixLabel"
-            )}
-          </div>
-
-          <div className="mt-6">
-            <label className="mb-2 block font-semibold">
-              {t("settings.company.logoLabel")}
-            </label>
-
-            {logoUrl ? (
-              <div className="mb-4 flex min-h-40 items-center justify-center rounded-2xl border border-subtle bg-surface-2 p-4">
-                <img
-                  src={logoUrl}
-                  alt={t("settings.company.logoAlt")}
-                  className="max-h-36 max-w-full object-contain"
-                />
-              </div>
-            ) : (
-              <div className="mb-4 flex min-h-40 items-center justify-center rounded-2xl border border-dashed border-slate-400 bg-surface-1 p-4 text-center text-secondary">
-                {t("settings.company.noLogo")}
-              </div>
-            )}
-
-            {canEditCompany && (
-              <>
-                <label className="btn-secondary inline-flex cursor-pointer px-6 py-3 font-semibold">
-                  {logoLoading
-                    ? t("settings.company.processingLogo")
-                    : logoPath
-                      ? t("settings.company.changeLogo")
-                      : t("settings.company.addLogo")}
-
-                  <input
-                    type="file"
-                    accept="image/jpeg,image/png,image/webp"
-                    onChange={handleLogoChange}
-                    disabled={logoLoading}
-                    className="hidden"
-                  />
-                </label>
-
-                {logoPath && (
-                  <button
-                    type="button"
-                    onClick={deleteLogo}
-                    disabled={logoLoading}
-                    className="ml-3 rounded-xl bg-red-600 px-6 py-3 font-semibold text-white hover:bg-red-700 disabled:bg-gray-400"
-                  >
-                    {t("settings.company.deleteLogo")}
-                  </button>
-                )}
-
-                <p className="mt-3 text-sm text-secondary">
-                  {t("settings.company.logoHint")}
-                </p>
-              </>
-            )}
-          </div>
-
-          {canEditCompany && (
-            <button
-              type="button"
-              onClick={saveSettings}
-              disabled={settingsLoading || logoLoading}
-              className="mt-8 rounded-xl bg-blue-600 px-6 py-3 text-white hover:bg-blue-700 disabled:bg-gray-400"
-            >
-              {settingsLoading ? t("settings.company.saving") : t("settings.company.save")}
-            </button>
-          )}
-        </section>
-          );
-        })()}
-
-        {/* Finance Access Hardening — bez finance view (napr. bežný admin
-            alebo employee) appka NIKDY nenačítava/nezobrazuje billing polia
-            (IČO/DIČ/IBAN/...); táto sekcia ukazuje iba branding (názov+logo)
-            cez bezpečnú esblu_get_company_profile() RPC, čisto na čítanie.
-            Dashboard branding tým zostáva funkčný pre všetkých — pozri
-            loadBrandingOnly()/getCompanyProfile() vyššie. */}
-        {myRole && !financeView && (
-          <section className="rounded-3xl border border-subtle bg-surface-1 p-5 sm:p-8 shadow-lg backdrop-blur-xl">
-            <h2 className="text-xl sm:text-2xl font-bold text-primary">
-              {t("settings.company.title")}
-            </h2>
-
-            <p className="mt-2 text-sm text-secondary">
-              {t("settings.company.noFinanceAccessNotice")}
-            </p>
-
-            <div className="mt-6">
-              <label className="mb-2 block text-sm font-semibold">
-                {t("settings.company.nameLabel")}
-              </label>
-              <p className="text-primary">
-                {brandingOnlyName || t("settings.company.namePlaceholder")}
-              </p>
-            </div>
-
-            <div className="mt-6">
-              <label className="mb-2 block font-semibold">
-                {t("settings.company.logoLabel")}
-              </label>
-
-              {brandingOnlyLogoUrl ? (
-                <div className="flex min-h-40 items-center justify-center rounded-2xl border border-subtle bg-surface-2 p-4">
-                  <img
-                    src={brandingOnlyLogoUrl}
-                    alt={t("settings.company.logoAlt")}
-                    className="max-h-36 max-w-full object-contain"
-                  />
-                </div>
-              ) : (
-                <div className="flex min-h-40 items-center justify-center rounded-2xl border border-dashed border-slate-400 bg-surface-1 p-4 text-center text-secondary">
-                  {t("settings.company.noLogo")}
-                </div>
-              )}
-            </div>
-          </section>
+    return (
+      <FormField label={t(labelKey)} error={errorText || undefined} className={options?.className}>
+        {(aria) => (
+          <input
+            {...aria}
+            className="ui-input"
+            type={options?.type ?? "text"}
+            inputMode={options?.inputMode}
+            autoComplete={options?.autoComplete ?? "off"}
+            placeholder={options?.placeholder}
+            value={billingProfile[fieldKey]}
+            onChange={(event) => updateBillingProfileField(fieldKey, event.target.value)}
+            disabled={disabled}
+          />
         )}
+      </FormField>
+    );
+  }
 
-        {myRole && (
-          <section className="rounded-3xl border border-subtle bg-surface-1 p-5 sm:p-8 shadow-lg backdrop-blur-xl">
-            <h2 className="text-xl sm:text-2xl font-bold text-primary">
-              {t("settings.users.title")}
-            </h2>
+  const logoThumb = (url: string) => (
+    <span className="flex h-12 w-12 items-center justify-center overflow-hidden rounded-doc-sm border border-doc-border bg-surface-2">
+      {url ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={url} alt={t("settings.company.logoAlt")} className="h-full w-full object-contain" />
+      ) : (
+        <ImageIcon size={18} className="text-muted-esblu" aria-hidden="true" />
+      )}
+    </span>
+  );
 
-            <p className="mt-2 text-sm text-secondary">
-              {t("settings.users.yourMembership")}{" "}
-              <span className="font-semibold">
-                {MEMBER_ROLE_LABELS[myRole] || myRole}
-              </span>
-            </p>
+  return (
+    <main className="app-shell-bg min-h-screen">
+      <div className="ui-page max-w-2xl">
+        <BackLink href="/" label={t("inbox.backToMenu")} />
 
-            {usersLoading ? (
-              <p className="mt-4 text-sm text-secondary">{t("settings.users.loading")}</p>
-            ) : (
-              <>
-                {members.length > 0 && (
-                  <div className="mt-6">
-                    <h3 className="font-semibold text-primary">{t("settings.users.membersTitle")}</h3>
+        <h1 className="ui-page-title mb-4 mt-1">{t("settings.pageTitle")}</h1>
 
-                    <ul className="mt-3 space-y-2">
-                      {members.map((member) => (
-                        <li
-                          key={member.member_id}
-                          className="flex items-center justify-between rounded-xl bg-surface-2 px-4 py-3"
-                        >
-                          <span className="text-sm text-primary">
-                            {member.email}
-                          </span>
-                          <span className="text-xs font-semibold text-secondary">
-                            {MEMBER_ROLE_LABELS[member.role] || member.role}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
+        <div className="space-y-5">
+          {/* ---------------- Jazyk ---------------- */}
+          <SettingsSection title={t("settings.language.title")} footer={t("settings.language.description")}>
+            <SettingsRow title={LOCALE_LABELS[locale]} trailing={<LanguageSwitcher />} />
+          </SettingsSection>
 
-                {(myRole === "owner" || myRole === "admin") && (
-                  <>
-                    {invites.length > 0 && (
-                      <div className="mt-6">
-                        <h3 className="font-semibold text-primary">
-                          {t("settings.users.invitesTitle")}
-                        </h3>
+          {/* ---------------- Firma (finance view) ----------------
+              Finance Access Hardening — plná sekcia "Firma" (vrátane billing
+              polí IČO/DIČ/IBAN/...) sa vykresľuje iba pre finance view/manage
+              (owner vždy). Bez finance prístupu sa nižšie zobrazí samostatná
+              branding-only sekcia (iba názov+logo). */}
+          {myRole && financeView && (
+            <SettingsSection
+              title={t("settings.company.title")}
+              footer={!canEditCompany ? t("settings.company.readOnlyNotice") : undefined}
+            >
+              <SettingsRow
+                title={billingProfile.legal_name || t("settings.ui.notSet")}
+                subtitle={companySummary || undefined}
+              />
+              <SettingsDisclosure
+                title={t("settings.ui.companyDetails")}
+                subtitle={`${t("settings.ui.sectionIdentity")} · ${t("settings.ui.sectionAddress")} · ${t("settings.ui.sectionBank")} · ${t("settings.ui.sectionInvoicing")}`}
+                open={companyOpen}
+                onOpenChange={setCompanyOpen}
+              >
+                <div className="space-y-4">
+                  <fieldset className="space-y-3">
+                    <legend className="ui-eyebrow mb-2">{t("settings.ui.sectionIdentity")}</legend>
+                    {field("legal_name", "settings.company.nameLabel", {
+                      placeholder: t("settings.company.namePlaceholder"),
+                      autoComplete: "organization",
+                    })}
+                    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                      {field("ico", "settings.company.icoLabel", { inputMode: "numeric" })}
+                      {field("dic", "settings.company.dicLabel", { inputMode: "numeric" })}
+                      {field("ic_dph", "settings.company.icDphLabel", { className: "col-span-2 sm:col-span-1" })}
+                    </div>
+                    <p className="ui-help">{t("settings.company.icDphHint")}</p>
+                  </fieldset>
 
-                        <ul className="mt-3 space-y-2">
-                          {invites.map((invite) => (
-                            <li
-                              key={invite.invite_id}
-                              className="flex items-center justify-between rounded-xl bg-surface-2 px-4 py-3"
-                            >
-                              <span className="text-sm text-primary">
-                                {invite.email}{" "}
-                                <span className="text-xs text-muted-esblu">
-                                  (
-                                  {MEMBER_ROLE_LABELS[invite.role] ||
-                                    invite.role}
-                                  )
-                                </span>
-                              </span>
-                              <span className="text-xs font-semibold text-secondary">
-                                {INVITE_STATUS_LABELS[invite.status] ||
-                                  invite.status}
-                              </span>
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
+                  <fieldset className="space-y-3">
+                    <legend className="ui-eyebrow mb-2">{t("settings.ui.sectionAddress")}</legend>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      {field("address_line1", "settings.company.addressLine1Label", { autoComplete: "address-line1" })}
+                      {field("address_line2", "settings.company.addressLine2Label", { autoComplete: "address-line2" })}
+                    </div>
+                    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                      {field("city", "settings.company.cityLabel", { autoComplete: "address-level2", className: "col-span-2 sm:col-span-1" })}
+                      {field("postal_code", "settings.company.postalCodeLabel", { autoComplete: "postal-code" })}
+                      {field("country_code", "settings.company.countryCodeLabel", { placeholder: "SK" })}
+                    </div>
+                  </fieldset>
+
+                  <fieldset className="space-y-3">
+                    <legend className="ui-eyebrow mb-2">{t("settings.ui.sectionBank")}</legend>
+                    <div className="grid gap-3 sm:grid-cols-[2fr_1fr]">
+                      {field("iban", "settings.company.ibanLabel", { ownerOnly: true })}
+                      {field("bic", "settings.company.bicLabel", { ownerOnly: true })}
+                    </div>
+                    {canEditCompany && myRole !== "owner" && (
+                      <p className="ui-help">{t("settings.company.bankDetailsOwnerOnly")}</p>
                     )}
+                  </fieldset>
 
-                    <div className="mt-6 rounded-2xl border border-dashed border-subtle p-5">
-                      <h3 className="font-semibold text-primary">
-                        {t("settings.users.inviteUserTitle")}
-                      </h3>
+                  <fieldset className="space-y-3">
+                    <legend className="ui-eyebrow mb-2">{t("settings.ui.sectionInvoicing")}</legend>
+                    {field("contact_email", "settings.company.contactEmailLabel", { type: "email", inputMode: "email", autoComplete: "email" })}
+                    <div className="grid grid-cols-3 gap-3">
+                      {field("default_due_days", "settings.company.defaultDueDaysLabel", { placeholder: "14", inputMode: "numeric" })}
+                      {field("default_currency", "settings.company.defaultCurrencyLabel", { placeholder: "EUR" })}
+                      {field("default_vat_rate", "settings.company.defaultVatRateLabel", { placeholder: "20", inputMode: "decimal" })}
+                    </div>
+                    {field("invoice_numbering_prefix", "settings.company.invoiceNumberingPrefixLabel")}
+                  </fieldset>
 
-                      <div className="mt-4 space-y-3">
-                        <input
-                          type="email"
-                          placeholder={t("settings.users.emailPlaceholder")}
-                          className="w-full rounded-xl border p-3"
-                          value={inviteEmail}
-                          onChange={(event) =>
-                            setInviteEmail(event.target.value)
-                          }
-                          disabled={inviteSubmitting}
-                        />
-
-                        <div className="flex flex-col gap-2 sm:flex-row">
-                          {/* Rola účtovníka nesie finančný prístup — pozvať ju
-                              smie iba majiteľ (server to vynucuje). */}
-                          {INVITE_ROLE_OPTIONS.filter((option) => option.value !== "accountant" || myRole === "owner").map((option) => (
-                            <label
-                              key={option.value}
-                              className="flex flex-1 items-start gap-2 rounded-xl border border-subtle p-3 text-sm"
-                            >
-                              <input
-                                type="radio"
-                                name="inviteRole"
-                                className="mt-0.5"
-                                checked={inviteRole === option.value}
-                                onChange={() => setInviteRole(option.value)}
-                                disabled={inviteSubmitting}
-                              />
-                              <span>
-                                <span className="block">{t(option.labelKey)}</span>
-                                <span className="mt-0.5 block text-xs text-muted-esblu">
-                                  {t(option.hintKey)}
-                                </span>
-                              </span>
-                            </label>
-                          ))}
-                        </div>
-                      </div>
-
-                      {inviteError && (
-                        <p className="mt-3 text-sm font-medium text-red-700">
-                          {inviteError}
-                        </p>
-                      )}
-
+                  {canEditCompany && (
+                    <div className="flex flex-wrap items-center justify-end gap-2 border-t border-divider pt-3">
                       <button
                         type="button"
-                        onClick={handleCreateInvite}
-                        disabled={inviteSubmitting}
-                        className="mt-4 rounded-xl bg-blue-600 px-6 py-3 font-semibold text-white hover:bg-blue-700 disabled:bg-gray-400"
+                        onClick={saveSettings}
+                        disabled={settingsLoading || logoLoading}
+                        className="ui-btn ui-btn-primary"
                       >
-                        {inviteSubmitting
-                          ? t("settings.users.creating")
-                          : t("settings.users.inviteUser")}
+                        {settingsLoading ? t("settings.company.saving") : t("settings.company.save")}
                       </button>
+                    </div>
+                  )}
+                  <InlineNotice notice={companyNotice} />
+                </div>
+              </SettingsDisclosure>
+            </SettingsSection>
+          )}
 
-                      {lastInviteLink && (
-                        <div className="mt-4 rounded-xl bg-surface-2 p-4">
-                          <p className="text-sm font-semibold text-primary">
-                            {t("settings.users.inviteCreated")}
-                          </p>
-                          <p className="mt-2 break-all text-xs text-secondary">
-                            {lastInviteLink}
-                          </p>
+          {/* ---------------- Logo (finance view) ---------------- */}
+          {myRole && financeView && (
+            <SettingsSection title={t("settings.company.logoLabel")} footer={canEditCompany ? t("settings.company.logoHint") : undefined}>
+              <div className="ui-row flex-wrap">
+                {logoThumb(logoUrl)}
+                <span className="min-w-0 flex-1">
+                  <span className="ui-row-title block">
+                    {logoUrl ? t("settings.company.logoLabel") : t("settings.company.noLogo")}
+                  </span>
+                </span>
+                {canEditCompany && (
+                  <span className="flex shrink-0 items-center gap-2">
+                    <label className={`ui-btn ui-btn-secondary ui-btn-sm cursor-pointer ${logoLoading ? "pointer-events-none opacity-50" : ""}`}>
+                      {logoLoading
+                        ? t("settings.company.processingLogo")
+                        : logoPath
+                          ? t("settings.company.changeLogo")
+                          : t("settings.company.addLogo")}
+                      <input
+                        type="file"
+                        accept="image/jpeg,image/png,image/webp"
+                        onChange={handleLogoChange}
+                        disabled={logoLoading}
+                        className="sr-only"
+                      />
+                    </label>
+                    {logoPath && (
+                      <button
+                        type="button"
+                        onClick={deleteLogo}
+                        disabled={logoLoading}
+                        aria-label={t("settings.company.deleteLogo")}
+                        title={t("settings.company.deleteLogo")}
+                        className="ui-btn ui-btn-danger ui-btn-sm ui-btn-icon"
+                      >
+                        <TrashIcon size={15} aria-hidden="true" />
+                      </button>
+                    )}
+                  </span>
+                )}
+              </div>
+              {logoNotice && (
+                <div className="ui-group-body">
+                  <InlineNotice notice={logoNotice} />
+                </div>
+              )}
+            </SettingsSection>
+          )}
+
+          {/* ---------------- Firma (bez finance prístupu) ----------------
+              Finance Access Hardening — bez finance view appka NIKDY
+              nenačítava/nezobrazuje billing polia (IČO/DIČ/IBAN/...); iba
+              branding (názov+logo) cez esblu_get_company_profile() RPC. */}
+          {myRole && !financeView && (
+            <SettingsSection title={t("settings.company.title")} footer={t("settings.company.noFinanceAccessNotice")}>
+              <SettingsRow
+                leading={logoThumb(brandingOnlyLogoUrl)}
+                title={brandingOnlyName || t("settings.company.namePlaceholder")}
+                subtitle={brandingOnlyLogoUrl ? undefined : t("settings.company.noLogo")}
+              />
+            </SettingsSection>
+          )}
+
+          {/* ---------------- Používatelia ---------------- */}
+          {myRole && (
+            <SettingsSection title={t("settings.users.title")}>
+              <SettingsRow title={t("settings.users.yourMembership").replace(/:\s*$/, "")} trailing={roleBadge(myRole)} />
+
+              {usersLoading ? (
+                <SettingsRow title={<span className="text-secondary">{t("settings.users.loading")}</span>} />
+              ) : (
+                <>
+                  {members.map((member) => (
+                    <SettingsRow
+                      key={member.member_id}
+                      leading={<UserIcon size={16} className="text-muted-esblu" aria-hidden="true" />}
+                      title={<span className="break-all">{member.email}</span>}
+                      trailing={roleBadge(member.role)}
+                    />
+                  ))}
+
+                  {(myRole === "owner" || myRole === "admin") &&
+                    invites.map((invite) => (
+                      <SettingsRow
+                        key={invite.invite_id}
+                        title={<span className="break-all text-secondary">{invite.email}</span>}
+                        subtitle={`${t("settings.users.invitesTitle")} · ${MEMBER_ROLE_LABELS[invite.role] || invite.role}`}
+                        trailing={<span className="ui-badge">{INVITE_STATUS_LABELS[invite.status] || invite.status}</span>}
+                      />
+                    ))}
+
+                  {(myRole === "owner" || myRole === "admin") && (
+                    <SettingsDisclosure title={t("settings.users.inviteUserTitle")} open={inviteOpen} onOpenChange={setInviteOpen}>
+                      <div className="space-y-3">
+                        <div className="grid gap-3 sm:grid-cols-[1fr_12rem]">
+                          <FormField label={t("settings.users.emailPlaceholder")} error={inviteError || undefined}>
+                            {(aria) => (
+                              <input
+                                {...aria}
+                                type="email"
+                                inputMode="email"
+                                autoComplete="off"
+                                placeholder={t("settings.users.emailPlaceholder")}
+                                className="ui-input"
+                                value={inviteEmail}
+                                onChange={(event) => setInviteEmail(event.target.value)}
+                                disabled={inviteSubmitting}
+                              />
+                            )}
+                          </FormField>
+                          {/* Rola účtovníka nesie finančný prístup — pozvať ju
+                              smie iba majiteľ (server to vynucuje). */}
+                          <FormField label={t("settings.ui.role")}>
+                            {(aria) => (
+                              <select
+                                {...aria}
+                                className="ui-input"
+                                value={inviteRole}
+                                onChange={(event) => setInviteRole(event.target.value as CompanyInviteRole)}
+                                disabled={inviteSubmitting}
+                              >
+                                {INVITE_ROLE_OPTIONS.filter((option) => option.value !== "accountant" || myRole === "owner").map((option) => (
+                                  <option key={option.value} value={option.value}>
+                                    {t(option.labelKey)}
+                                  </option>
+                                ))}
+                              </select>
+                            )}
+                          </FormField>
+                        </div>
+                        {selectedInviteRole && <p className="ui-help">{t(selectedInviteRole.hintKey)}</p>}
+
+                        <div className="flex justify-end">
                           <button
                             type="button"
-                            onClick={copyInviteLink}
-                            className="mt-3 rounded-xl border border-subtle px-4 py-2 text-sm font-semibold text-secondary hover:bg-surface-1"
+                            onClick={handleCreateInvite}
+                            disabled={inviteSubmitting}
+                            className="ui-btn ui-btn-primary"
                           >
-                            {linkCopied ? t("settings.users.linkCopied") : t("settings.users.copyLink")}
+                            {inviteSubmitting ? t("settings.users.creating") : t("settings.users.inviteUser")}
                           </button>
                         </div>
-                      )}
-                    </div>
-                  </>
-                )}
+
+                        {lastInviteLink && (
+                          <div className="ui-notice" data-tone="success" role="status">
+                            <p className="font-semibold">{t("settings.users.inviteCreated")}</p>
+                            <p className="mt-1 break-all text-xs opacity-90">{lastInviteLink}</p>
+                            <button type="button" onClick={copyInviteLink} className="ui-btn ui-btn-secondary ui-btn-sm mt-2">
+                              {linkCopied ? t("settings.users.linkCopied") : t("settings.users.copyLink")}
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </SettingsDisclosure>
+                  )}
+                </>
+              )}
+            </SettingsSection>
+          )}
+
+          {/* ---------------- Heslo ---------------- */}
+          <SettingsSection title={t("settings.password.title")}>
+            <SettingsDisclosure
+              title={t("settings.password.changeButton")}
+              subtitle={t("settings.password.minLengthHint")}
+              open={passwordOpen}
+              onOpenChange={setPasswordOpen}
+            >
+              <div className="space-y-3">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <FormField label={t("settings.password.newPasswordLabel")}>
+                    {(aria) => (
+                      <input
+                        {...aria}
+                        type="password"
+                        autoComplete="new-password"
+                        className="ui-input"
+                        placeholder={t("settings.password.newPasswordPlaceholder")}
+                        value={newPassword}
+                        onChange={(event) => setNewPassword(event.target.value)}
+                        disabled={passwordLoading}
+                      />
+                    )}
+                  </FormField>
+                  <FormField label={t("settings.password.confirmPasswordLabel")}>
+                    {(aria) => (
+                      <input
+                        {...aria}
+                        type="password"
+                        autoComplete="new-password"
+                        className="ui-input"
+                        placeholder={t("settings.password.confirmPasswordPlaceholder")}
+                        value={confirmNewPassword}
+                        onChange={(event) => setConfirmNewPassword(event.target.value)}
+                        disabled={passwordLoading}
+                      />
+                    )}
+                  </FormField>
+                </div>
+                <div className="flex justify-end">
+                  <button type="button" onClick={changePassword} disabled={passwordLoading} className="ui-btn ui-btn-secondary">
+                    {passwordLoading ? t("settings.password.changing") : t("settings.password.changeButton")}
+                  </button>
+                </div>
+                <InlineNotice notice={passwordNotice} />
+              </div>
+            </SettingsDisclosure>
+          </SettingsSection>
+
+          {/* ---------------- Upozornenia ---------------- */}
+          <PushNotificationSettings />
+
+          {/* ---------------- Spätná väzba ---------------- */}
+          <SettingsSection title={t("settings.feedback.title")} footer={t("settings.feedback.privacyHint")}>
+            <SettingsLinkRow href={feedbackMailto} title={t("settings.feedback.sendButton")} subtitle={t("settings.feedback.description")} />
+          </SettingsSection>
+
+          {/* ---------------- Právne informácie ---------------- */}
+          <SettingsSection title={t("settings.legal.title")} footer={t("settings.legal.description")}>
+            <nav aria-label={t("settings.legal.navAriaLabel")} className="contents ui-divided">
+              <SettingsLinkRow href="/ochrana-osobnych-udajov" title={t("settings.legal.privacyLink")} />
+              <SettingsLinkRow href="/podmienky-pouzivania" title={t("settings.legal.termsLink")} />
+              <SettingsLinkRow href="/cookies" title={t("settings.legal.cookiesLink")} />
+              <SettingsLinkRow href="/dpa" title={t("settings.legal.dpaLink")} />
+              <SettingsLinkRow href="/subprocessors" title={t("settings.legal.subprocessorsLink")} />
+              <SettingsLinkRow href="/kontakt" title={t("settings.legal.contactLink")} />
+            </nav>
+          </SettingsSection>
+
+          {/* ---------------- Súkromie a dáta ---------------- */}
+          <SettingsSection
+            title={t("settings.privacy.title")}
+            footer={
+              <>
+                {t("settings.privacy.description")}{" "}
+                {t("settings.privacy.currentVersions", {
+                  terms: legalConfig.termsVersion,
+                  privacy: legalConfig.privacyPolicyVersion,
+                })}
               </>
-            )}
-          </section>
-        )}
-
-        <section className="rounded-3xl border border-subtle bg-surface-1 p-5 sm:p-8 shadow-lg backdrop-blur-xl">
-          <h2 className="text-xl sm:text-2xl font-bold text-primary">
-            {t("settings.password.title")}
-          </h2>
-
-          <p className="mt-2 text-sm text-secondary">
-            {t("settings.password.minLengthHint")}
-          </p>
-
-          <div className="mt-6 space-y-4">
-            <div>
-              <label className="mb-2 block font-semibold">
-                {t("settings.password.newPasswordLabel")}
-              </label>
-
-              <input
-                type="password"
-                autoComplete="new-password"
-                className="w-full rounded-xl border p-3"
-                placeholder={t("settings.password.newPasswordPlaceholder")}
-                value={newPassword}
-                onChange={(event) =>
-                  setNewPassword(event.target.value)
-                }
-                disabled={passwordLoading}
-              />
+            }
+          >
+            <div className="ui-row">
+              <span className="ui-eyebrow">{t("settings.privacy.confirmedDocsTitle")}</span>
             </div>
-
-            <div>
-              <label className="mb-2 block font-semibold">
-                {t("settings.password.confirmPasswordLabel")}
-              </label>
-
-              <input
-                type="password"
-                autoComplete="new-password"
-                className="w-full rounded-xl border p-3"
-                placeholder={t("settings.password.confirmPasswordPlaceholder")}
-                value={confirmNewPassword}
-                onChange={(event) =>
-                  setConfirmNewPassword(event.target.value)
-                }
-                disabled={passwordLoading}
-              />
-            </div>
-          </div>
-
-          <button
-            type="button"
-            onClick={changePassword}
-            disabled={passwordLoading}
-            className="btn-secondary mt-8 px-6 py-3 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {passwordLoading
-              ? t("settings.password.changing")
-              : t("settings.password.changeButton")}
-          </button>
-        </section>
-
-        <PushNotificationSettings />
-
-        <section className="rounded-3xl border border-subtle bg-surface-1 p-5 sm:p-8 shadow-lg backdrop-blur-xl">
-          <h2 className="text-xl sm:text-2xl font-bold text-primary">
-            {t("settings.feedback.title")}
-          </h2>
-
-          <p className="mt-2 leading-7 text-secondary">
-            {t("settings.feedback.description")}
-          </p>
-
-          <a
-            href={feedbackMailto}
-            className="mt-6 inline-flex min-h-12 w-full items-center justify-center rounded-xl bg-blue-600 px-6 py-3 text-center font-semibold text-white transition hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 sm:w-auto"
-          >
-            {t("settings.feedback.sendButton")}
-          </a>
-
-          <p className="mt-3 text-sm leading-6 text-secondary">
-            {t("settings.feedback.privacyHint")}
-          </p>
-        </section>
-
-        <section className="rounded-3xl border border-subtle bg-surface-1 p-5 sm:p-8 shadow-lg backdrop-blur-xl">
-          <h2 className="text-xl sm:text-2xl font-bold text-primary">
-            {t("settings.legal.title")}
-          </h2>
-
-          <p className="mt-2 text-sm text-secondary">
-            {t("settings.legal.description")}
-          </p>
-
-          <nav
-            aria-label={t("settings.legal.navAriaLabel")}
-            className="mt-6 grid gap-3"
-          >
-            <Link
-              href="/ochrana-osobnych-udajov"
-              className="rounded-xl border border-subtle bg-surface-2 px-5 py-3 font-semibold text-blue-700 transition hover:bg-surface-1"
-            >
-              {t("settings.legal.privacyLink")}
-            </Link>
-            <Link
-              href="/podmienky-pouzivania"
-              className="rounded-xl border border-subtle bg-surface-2 px-5 py-3 font-semibold text-blue-700 transition hover:bg-surface-1"
-            >
-              {t("settings.legal.termsLink")}
-            </Link>
-            <Link
-              href="/cookies"
-              className="rounded-xl border border-subtle bg-surface-2 px-5 py-3 font-semibold text-blue-700 transition hover:bg-surface-1"
-            >
-              {t("settings.legal.cookiesLink")}
-            </Link>
-            <Link
-              href="/dpa"
-              className="rounded-xl border border-subtle bg-surface-2 px-5 py-3 font-semibold text-blue-700 transition hover:bg-surface-1"
-            >
-              {t("settings.legal.dpaLink")}
-            </Link>
-            <Link
-              href="/subprocessors"
-              className="rounded-xl border border-subtle bg-surface-2 px-5 py-3 font-semibold text-blue-700 transition hover:bg-surface-1"
-            >
-              {t("settings.legal.subprocessorsLink")}
-            </Link>
-            <Link
-              href="/kontakt"
-              className="rounded-xl border border-subtle bg-surface-2 px-5 py-3 font-semibold text-blue-700 transition hover:bg-surface-1"
-            >
-              {t("settings.legal.contactLink")}
-            </Link>
-          </nav>
-        </section>
-
-        <section className="rounded-3xl border border-subtle bg-surface-1 p-5 sm:p-8 shadow-lg backdrop-blur-xl">
-          <h2 className="text-xl sm:text-2xl font-bold text-primary">
-            {t("settings.privacy.title")}
-          </h2>
-
-          <p className="mt-2 text-sm text-secondary">
-            {t("settings.privacy.description")}
-          </p>
-
-          <div className="mt-6">
-            <h3 className="font-semibold text-primary">
-              {t("settings.privacy.confirmedDocsTitle")}
-            </h3>
-
             {acceptancesLoading ? (
-              <p className="mt-3 text-sm text-secondary">{t("settings.privacy.loading")}</p>
+              <SettingsRow title={<span className="text-secondary">{t("settings.privacy.loading")}</span>} />
             ) : acceptances.length > 0 ? (
-              <ul className="mt-3 space-y-2">
-                {acceptances.map((row) => (
-                  <li
-                    key={`${row.document_type}-${row.version}`}
-                    className="flex flex-col gap-1 rounded-xl bg-surface-2 px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between"
-                  >
-                    <span className="font-semibold text-primary">
-                      {DOC_TYPE_LABELS[row.document_type] || row.document_type}{" "}
-                      <span className="font-normal text-muted-esblu">
-                        {t("settings.privacy.versionLabel", { version: row.version })}
-                      </span>
-                    </span>
-                    <span className="text-xs text-muted-esblu">
-                      {t("settings.privacy.confirmedAt", {
-                        date: formatDateTime(row.accepted_at, locale),
-                      })}
-                    </span>
-                  </li>
-                ))}
-              </ul>
+              acceptances.map((row) => (
+                <SettingsRow
+                  key={`${row.document_type}-${row.version}`}
+                  title={DOC_TYPE_LABELS[row.document_type] || row.document_type}
+                  subtitle={t("settings.privacy.confirmedAt", { date: formatDateTime(row.accepted_at, locale) })}
+                  trailing={<span className="ui-badge">{t("settings.privacy.versionLabel", { version: row.version })}</span>}
+                />
+              ))
             ) : (
-              <p className="mt-3 text-sm text-secondary">
-                {t("settings.privacy.noAcceptancesYet")}
-              </p>
+              <SettingsRow title={<span className="text-secondary">{t("settings.privacy.noAcceptancesYet")}</span>} />
             )}
+            <SettingsLinkRow href={exportRequestMailto} title={t("settings.privacy.requestExport")} />
+            <SettingsLinkRow href={correctionRequestMailto} title={t("settings.privacy.requestCorrection")} />
+          </SettingsSection>
 
-            <p className="mt-3 text-xs text-muted-esblu">
-              {t("settings.privacy.currentVersions", {
-                terms: legalConfig.termsVersion,
-                privacy: legalConfig.privacyPolicyVersion,
-              })}
-            </p>
-          </div>
-
-          <div className="mt-8 grid gap-3 sm:grid-cols-2">
-            <a
-              href={exportRequestMailto}
-              className="rounded-xl border border-subtle bg-surface-2 px-5 py-3 text-center font-semibold text-blue-700 transition hover:bg-surface-1"
-            >
-              {t("settings.privacy.requestExport")}
-            </a>
-            <a
-              href={correctionRequestMailto}
-              className="rounded-xl border border-subtle bg-surface-2 px-5 py-3 text-center font-semibold text-blue-700 transition hover:bg-surface-1"
-            >
-              {t("settings.privacy.requestCorrection")}
-            </a>
-          </div>
-
-        </section>
-
-        {(myRole || isOrphanAccount) && (
-          <section className="rounded-2xl border border-subtle/60 bg-surface-1/60 p-6">
-            <h2 className="text-sm font-semibold text-secondary">
-              {t("settings.deleteAccount.title")}
-            </h2>
-
-            {myRole === "owner" ? (
-              <p className="mt-2 text-sm text-muted-esblu">
-                {t("settings.deleteAccount.ownerDescription")}
-              </p>
-            ) : myRole ? (
-              <p className="mt-2 text-sm text-muted-esblu">
-                {t("settings.deleteAccount.memberDescription")}
-              </p>
-            ) : (
-              <p className="mt-2 text-sm text-muted-esblu">
-                {t("settings.deleteAccount.orphanDescription")}
-              </p>
-            )}
-
-            <button
-              type="button"
-              onClick={openDeleteAccountModal}
-              className="mt-4 rounded-xl border border-red-900/50 px-5 py-2.5 text-sm font-semibold text-red-400/90 transition hover:border-red-700 hover:bg-red-950/30 hover:text-red-300"
-            >
-              {t("settings.deleteAccount.button")}
-            </button>
-          </section>
-        )}
+          {/* ---------------- Zrušiť účet ---------------- */}
+          {(myRole || isOrphanAccount) && (
+            <SettingsSection title={t("settings.deleteAccount.title")}>
+              <SettingsRow
+                title={
+                  <span className="text-secondary">
+                    {myRole === "owner"
+                      ? t("settings.deleteAccount.ownerDescription")
+                      : myRole
+                        ? t("settings.deleteAccount.memberDescription")
+                        : t("settings.deleteAccount.orphanDescription")}
+                  </span>
+                }
+              />
+              <div className="ui-row justify-end">
+                <button type="button" onClick={openDeleteAccountModal} className="ui-btn ui-btn-danger ui-btn-sm">
+                  {t("settings.deleteAccount.button")}
+                </button>
+              </div>
+            </SettingsSection>
+          )}
+        </div>
       </div>
 
       {showDeleteAccountModal && (
-        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/50 p-3 sm:items-center sm:p-4">
-          <div className="max-h-[90dvh] w-full max-w-xl overflow-y-auto rounded-3xl bg-surface-1 p-5 shadow-2xl sm:p-8">
-            <div className="flex items-center justify-between">
-              <h2 className="text-xl sm:text-2xl font-bold text-primary">
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="delete-account-title"
+          className="fixed inset-0 z-[80] flex items-start justify-center overflow-y-auto bg-black/60 p-3 sm:items-center sm:p-4"
+        >
+          <div className="max-h-[90dvh] w-full max-w-lg overflow-y-auto rounded-doc border border-doc-border bg-surface-1 shadow-2xl">
+            <div className="flex items-center justify-between gap-3 border-b border-doc-border px-4 py-3">
+              <h2 id="delete-account-title" className="ui-section-title">
                 {deletePreflight?.role === "owner"
                   ? t("settings.deleteModal.ownerTitle")
                   : t("settings.deleteModal.genericTitle")}
               </h2>
-
               <button
                 type="button"
                 onClick={closeDeleteAccountModal}
                 disabled={deleteSubmitting}
-                className="rounded-xl bg-surface-2 px-4 py-2 disabled:opacity-50"
+                className="ui-btn ui-btn-ghost ui-btn-sm"
               >
                 {t("settings.deleteModal.close")}
               </button>
             </div>
 
-            {deletePreflightLoading ? (
-              <p className="mt-6 text-sm text-secondary">
-                {t("settings.deleteModal.loading")}
-              </p>
-            ) : deletePreflightError ? (
-              <p className="mt-6 text-sm font-medium text-red-400">
-                {deletePreflightError}
-              </p>
-            ) : deletePreflight?.role === "owner" && deletePreflight.ownerDeletionBlocked ? (
-              <div className="mt-6 space-y-4">
-                {/* Archivácia účtovných dokladov: zrušenie sa NEPONÚKNE (nič sa nemaže). */}
-                <p className="text-sm leading-6 text-secondary">
-                  {t("settings.deleteModal.ownerBlockedRetention")}
+            <div className="px-4 py-4">
+              {deletePreflightLoading ? (
+                <p className="ui-body">{t("settings.deleteModal.loading")}</p>
+              ) : deletePreflightError ? (
+                <p className="ui-notice" data-tone="error" role="alert">
+                  {deletePreflightError}
                 </p>
-                <div className="flex justify-end">
-                  <button type="button" onClick={closeDeleteAccountModal} className="btn-secondary px-6 py-3">
-                    {t("settings.deleteModal.cancel")}
-                  </button>
+              ) : deletePreflight?.role === "owner" && deletePreflight.ownerDeletionBlocked ? (
+                <div className="space-y-3">
+                  {/* Archivácia účtovných dokladov: zrušenie sa NEPONÚKNE (nič sa nemaže). */}
+                  <p className="ui-body">{t("settings.deleteModal.ownerBlockedRetention")}</p>
+                  <div className="flex justify-end">
+                    <button type="button" onClick={closeDeleteAccountModal} className="ui-btn ui-btn-secondary">
+                      {t("settings.deleteModal.cancel")}
+                    </button>
+                  </div>
                 </div>
-              </div>
-            ) : deletePreflight?.role === "owner" ? (
-              <div className="mt-6 space-y-4">
-                <p className="text-sm leading-6 text-secondary">
-                  {t("settings.deleteModal.irreversibleIntro")}
-                </p>
+              ) : deletePreflight?.role === "owner" ? (
+                <div className="space-y-3">
+                  <p className="ui-body">{t("settings.deleteModal.irreversibleIntro")}</p>
 
-                <ul className="list-disc space-y-1 pl-5 text-sm text-secondary">
-                  <li>{t("settings.deleteModal.deleteItemCompany")}</li>
-                  <li>{t("settings.deleteModal.deleteItemAiEvidence")}</li>
-                  <li>{t("settings.deleteModal.deleteItemVehicles")}</li>
-                  <li>{t("settings.deleteModal.deleteItemMachines")}</li>
-                  <li>{t("settings.deleteModal.deleteItemInventory")}</li>
-                  <li>{t("settings.deleteModal.deleteItemPhotos")}</li>
-                  <li>{t("settings.deleteModal.deleteItemInvites")}</li>
-                  <li>{t("settings.deleteModal.deleteItemMemberships")}</li>
-                </ul>
+                  <ul className="ui-body list-disc space-y-0.5 pl-5">
+                    <li>{t("settings.deleteModal.deleteItemCompany")}</li>
+                    <li>{t("settings.deleteModal.deleteItemAiEvidence")}</li>
+                    <li>{t("settings.deleteModal.deleteItemVehicles")}</li>
+                    <li>{t("settings.deleteModal.deleteItemMachines")}</li>
+                    <li>{t("settings.deleteModal.deleteItemInventory")}</li>
+                    <li>{t("settings.deleteModal.deleteItemPhotos")}</li>
+                    <li>{t("settings.deleteModal.deleteItemInvites")}</li>
+                    <li>{t("settings.deleteModal.deleteItemMemberships")}</li>
+                  </ul>
 
-                <p className="text-sm leading-6 text-secondary">
-                  {deletePreflight.otherActiveMembersCount > 0
-                    ? tCount("settings.deleteModal.otherMembersWarning", deletePreflight.otherActiveMembersCount, {
-                        count: deletePreflight.otherActiveMembersCount,
-                      })
-                    : t("settings.deleteModal.noOtherMembers")}
-                </p>
+                  <p className="ui-body">
+                    {deletePreflight.otherActiveMembersCount > 0
+                      ? tCount("settings.deleteModal.otherMembersWarning", deletePreflight.otherActiveMembersCount, {
+                          count: deletePreflight.otherActiveMembersCount,
+                        })
+                      : t("settings.deleteModal.noOtherMembers")}
+                  </p>
 
-                <div>
-                  <label className="mb-2 block text-sm font-semibold text-primary">
-                    {t("settings.deleteModal.confirmPhraseLabel", {
-                      phrase: ACCOUNT_DELETION_CONFIRM_PHRASE,
-                    })}
-                  </label>
+                  <FormField label={t("settings.deleteModal.confirmPhraseLabel", { phrase: ACCOUNT_DELETION_CONFIRM_PHRASE })}>
+                    {(aria) => (
+                      <input
+                        {...aria}
+                        type="text"
+                        className="ui-input"
+                        value={deleteConfirmText}
+                        onChange={(event) => setDeleteConfirmText(event.target.value)}
+                        disabled={deleteSubmitting}
+                        autoComplete="off"
+                      />
+                    )}
+                  </FormField>
 
-                  <input
-                    type="text"
-                    className="w-full rounded-xl border p-3"
-                    value={deleteConfirmText}
-                    onChange={(event) =>
-                      setDeleteConfirmText(event.target.value)
-                    }
-                    disabled={deleteSubmitting}
-                    autoComplete="off"
-                  />
+                  {deleteError && (
+                    <p className="ui-notice" data-tone="error" role="alert">
+                      {deleteError}
+                    </p>
+                  )}
+
+                  <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                    <button
+                      type="button"
+                      onClick={closeDeleteAccountModal}
+                      disabled={deleteSubmitting}
+                      className="ui-btn ui-btn-secondary"
+                    >
+                      {t("settings.deleteModal.cancel")}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={confirmDeleteAccount}
+                      disabled={deleteSubmitting || deleteConfirmText !== ACCOUNT_DELETION_CONFIRM_PHRASE}
+                      className="ui-btn bg-red-600 text-white hover:bg-red-700"
+                    >
+                      {deleteSubmitting
+                        ? t("settings.deleteModal.deletingAccount")
+                        : t("settings.deleteModal.deletePermanently")}
+                    </button>
+                  </div>
                 </div>
-
-                {deleteError && (
-                  <p className="text-sm font-medium text-red-400">
-                    {deleteError}
+              ) : (
+                <div className="space-y-3">
+                  <p className="ui-body">
+                    {deletePreflight?.orphan
+                      ? t("settings.deleteModal.orphanIrreversible")
+                      : t("settings.deleteModal.memberIrreversible")}
                   </p>
-                )}
 
-                <div className="flex flex-col gap-3 sm:flex-row sm:justify-end">
-                  <button
-                    type="button"
-                    onClick={closeDeleteAccountModal}
-                    disabled={deleteSubmitting}
-                    className="btn-secondary px-6 py-3 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {t("settings.deleteModal.cancel")}
-                  </button>
+                  {deleteError && (
+                    <p className="ui-notice" data-tone="error" role="alert">
+                      {deleteError}
+                    </p>
+                  )}
 
-                  <button
-                    type="button"
-                    onClick={confirmDeleteAccount}
-                    disabled={
-                      deleteSubmitting ||
-                      deleteConfirmText !== ACCOUNT_DELETION_CONFIRM_PHRASE
-                    }
-                    className="rounded-xl bg-red-600 px-6 py-3 font-semibold text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-gray-500 disabled:opacity-60"
-                  >
-                    {deleteSubmitting
-                      ? t("settings.deleteModal.deletingAccount")
-                      : t("settings.deleteModal.deletePermanently")}
-                  </button>
+                  <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                    <button
+                      type="button"
+                      onClick={closeDeleteAccountModal}
+                      disabled={deleteSubmitting}
+                      className="ui-btn ui-btn-secondary"
+                    >
+                      {t("settings.deleteModal.cancel")}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={confirmDeleteAccount}
+                      disabled={deleteSubmitting}
+                      className="ui-btn bg-red-600 text-white hover:bg-red-700"
+                    >
+                      {deleteSubmitting ? t("settings.deleteModal.deletingAccount") : t("settings.deleteModal.confirmDelete")}
+                    </button>
+                  </div>
                 </div>
-              </div>
-            ) : (
-              <div className="mt-6 space-y-4">
-                {deletePreflight?.orphan ? (
-                  <p className="text-sm leading-6 text-secondary">
-                    {t("settings.deleteModal.orphanIrreversible")}
-                  </p>
-                ) : (
-                  <p className="text-sm leading-6 text-secondary">
-                    {t("settings.deleteModal.memberIrreversible")}
-                  </p>
-                )}
-
-                {deleteError && (
-                  <p className="text-sm font-medium text-red-400">
-                    {deleteError}
-                  </p>
-                )}
-
-                <div className="flex flex-col gap-3 sm:flex-row sm:justify-end">
-                  <button
-                    type="button"
-                    onClick={closeDeleteAccountModal}
-                    disabled={deleteSubmitting}
-                    className="btn-secondary px-6 py-3 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {t("settings.deleteModal.cancel")}
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={confirmDeleteAccount}
-                    disabled={deleteSubmitting}
-                    className="rounded-xl bg-red-600 px-6 py-3 font-semibold text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {deleteSubmitting ? t("settings.deleteModal.deletingAccount") : t("settings.deleteModal.confirmDelete")}
-                  </button>
-                </div>
-              </div>
-            )}
+              )}
+            </div>
           </div>
         </div>
       )}

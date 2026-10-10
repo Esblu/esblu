@@ -678,7 +678,7 @@ export default function MachineDetailView({
 
   return (
     <PageShell moduleContext="machines" uiContext={{ module: "machine", entityType: "machine", entityId }}>
-      <BackLink href="/stroje" label={t("nav.machines")} className="mb-3 sm:mb-6" />
+      <BackLink href="/stroje" label={t("nav.machines")} className="mb-1 sm:mb-3" />
 
       <PageHeader
         eyebrow={

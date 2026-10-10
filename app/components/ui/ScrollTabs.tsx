@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from "react";
 // Horizontálne posúvateľné záložky (Mobile M1, 2026-09-28).
 //
 // Jedna implementácia pre detail vozidla aj stroja (predtým dve rôzne):
-//   - 44 px vysoké položky (dotyk), skrytý posuvník, fade vpravo naznačuje
+//   - výška z tokenu --control-h (36 px / 40 px dotyk), skrytý posuvník, fade vpravo naznačuje
 //     ďalšie záložky (zmizne na konci — .scroll-tabs v globals.css),
 //   - aktívna záložka sa po zmene posunie do viditeľnej oblasti,
 //   - ARIA tablist/tab + šípky vľavo/vpravo na klávesnici.
@@ -87,7 +87,7 @@ export function ScrollTabs<K extends string>({
             aria-selected={selected}
             tabIndex={selected ? 0 : -1}
             onClick={() => onChange(item.key)}
-            className={`min-h-11 shrink-0 snap-start whitespace-nowrap rounded-doc-sm border px-3.5 py-2 text-sm font-medium transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
+            className={`min-h-[var(--control-h)] shrink-0 snap-start whitespace-nowrap rounded-doc-sm border px-3 py-1.5 text-[13px] font-medium transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
               selected
                 ? "border-border-strong bg-surface-hover text-primary"
                 : "border-doc-border text-secondary hover:text-primary"

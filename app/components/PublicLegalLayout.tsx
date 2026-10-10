@@ -29,69 +29,69 @@ export function PublicLegalLayout({
   const title = t(titleKey);
 
   return (
-    <main className="app-shell-bg min-h-screen px-4 py-6 sm:px-6 sm:py-10 lg:py-12">
-      <article className="surface-card mx-auto max-w-4xl p-5 shadow-2xl sm:p-8 lg:p-10">
-        <header className="border-b border-subtle pb-6">
-          <div className="flex flex-wrap items-center justify-between gap-4">
+    <main className="app-shell-bg min-h-screen px-4 py-4 sm:px-6 sm:py-8">
+      <article className="mx-auto max-w-3xl rounded-doc border border-doc-border bg-surface-1 p-4 sm:p-6">
+        <header className="border-b border-subtle pb-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
             <Link
               href="/login"
-              className="inline-flex rounded-full bg-accent-cyan/12 px-4 py-2 text-sm font-bold tracking-wide text-accent-cyan transition hover:bg-accent-cyan/20"
+              className="inline-flex min-h-8 items-center rounded-full bg-brand-500/12 px-3 py-1 text-xs font-semibold tracking-wide text-brand-300 transition hover:bg-brand-500/20"
             >
               ESBLU
             </Link>
             <LanguageSwitcher />
           </div>
 
-          <h1 className="mt-5 text-3xl font-bold tracking-tight text-primary sm:text-4xl">
+          <h1 className="mt-4 text-xl font-semibold tracking-tight text-primary sm:text-2xl">
             {title}
           </h1>
 
           {updatedAt && (
-            <p className="mt-3 text-sm text-muted-esblu">
+            <p className="mt-1 text-xs text-muted-esblu">
               {t("legal.updatedAtPrefix")} {updatedAt}
             </p>
           )}
         </header>
 
-        <div className="mt-8 space-y-8 text-base leading-7 text-secondary">
+        <div className="mt-5 space-y-6 text-sm leading-6 text-secondary">
           {children}
         </div>
 
-        <footer className="mt-10 border-t border-subtle pt-6">
+        <footer className="mt-8 border-t border-subtle pt-4">
           <nav
             aria-label={t("settings.legal.navAriaLabel")}
-            className="flex flex-col gap-3 text-sm font-semibold sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-5"
+            className="flex flex-col gap-2 text-[13px] font-medium sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-4"
           >
             <Link
               href="/ochrana-osobnych-udajov"
-              className="text-accent-cyan hover:underline"
+              className="text-brand-300 hover:underline"
             >
               {t("common.legalLinks.privacy")}
             </Link>
             <Link
               href="/podmienky-pouzivania"
-              className="text-accent-cyan hover:underline"
+              className="text-brand-300 hover:underline"
             >
               {t("common.legalLinks.terms")}
             </Link>
-            <Link href="/cookies" className="text-accent-cyan hover:underline">
+            <Link href="/cookies" className="text-brand-300 hover:underline">
               {t("common.legalLinks.cookies")}
             </Link>
-            <Link href="/dpa" className="text-accent-cyan hover:underline">
+            <Link href="/dpa" className="text-brand-300 hover:underline">
               {t("common.legalLinks.dpa")}
             </Link>
             <Link
               href="/subprocessors"
-              className="text-accent-cyan hover:underline"
+              className="text-brand-300 hover:underline"
             >
               {t("common.legalLinks.subprocessors")}
             </Link>
-            <Link href="/kontakt" className="text-accent-cyan hover:underline">
+            <Link href="/kontakt" className="text-brand-300 hover:underline">
               {t("common.legalLinks.contact")}
             </Link>
           </nav>
 
-          <Link href="/login" className="btn-secondary mt-6 inline-flex px-5 py-3">
+          <Link href="/login" className="ui-btn ui-btn-secondary mt-4">
             {t("legal.backToLogin")}
           </Link>
         </footer>
@@ -108,8 +108,8 @@ type LegalSectionProps = {
 export function LegalSection({ title, children }: LegalSectionProps) {
   return (
     <section>
-      <h2 className="text-xl font-bold text-primary sm:text-2xl">{title}</h2>
-      <div className="mt-3 space-y-3">{children}</div>
+      <h2 className="text-base font-semibold text-primary sm:text-lg">{title}</h2>
+      <div className="mt-2 space-y-3">{children}</div>
     </section>
   );
 }

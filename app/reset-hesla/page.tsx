@@ -89,22 +89,22 @@ export default function ResetHeslaPage() {
   }
 
   return (
-    <main className="app-shell-bg flex min-h-screen items-center justify-center p-6">
-      <div className="surface-card w-full max-w-md p-8 shadow-xl">
-        <h1 className="text-3xl font-bold text-primary">
+    <main className="app-shell-bg flex min-h-screen items-center justify-center px-4 py-6">
+      <div className="w-full max-w-sm rounded-doc border border-doc-border bg-surface-1 p-4 sm:p-6">
+        <h1 className="text-xl font-semibold tracking-tight text-primary sm:text-[22px]">
           {t("auth.resetPassword.pageTitle")}
         </h1>
 
-        <p className="mt-2 text-secondary">
+        <p className="mt-1 text-[13px] leading-5 text-secondary">
           {t("auth.resetPassword.pageSubtitle")}
         </p>
 
-        <div className="mt-6 space-y-4">
+        <div className="mt-4 space-y-3">
           <input
             type="password"
             autoComplete="new-password"
             placeholder={t("auth.resetPassword.newPassword")}
-            className="input-dark w-full p-3"
+            className="ui-input"
             value={newPassword}
             onChange={(event) =>
               setNewPassword(event.target.value)
@@ -116,7 +116,7 @@ export default function ResetHeslaPage() {
             type="password"
             autoComplete="new-password"
             placeholder={t("auth.resetPassword.confirmPassword")}
-            className="input-dark w-full p-3"
+            className="ui-input"
             value={confirmNewPassword}
             onChange={(event) =>
               setConfirmNewPassword(event.target.value)
@@ -129,7 +129,7 @@ export default function ResetHeslaPage() {
           type="button"
           onClick={updatePassword}
           disabled={loading || !recoveryReady}
-          className="btn-primary mt-6 w-full px-6 py-3"
+          className="ui-btn ui-btn-primary mt-4 w-full"
         >
           {loading
             ? t("settings.password.changing")
@@ -137,7 +137,7 @@ export default function ResetHeslaPage() {
         </button>
 
         {!recoveryReady && (
-          <p className="mt-4 text-center text-sm text-muted-esblu">
+          <p className="ui-help mt-3 text-center">
             {t("auth.resetPassword.waitingForLink")}
           </p>
         )}

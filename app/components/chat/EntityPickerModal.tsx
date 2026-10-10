@@ -70,32 +70,32 @@ export default function EntityPickerModal({
   }, [tab, query]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/70 backdrop-blur-sm sm:items-center">
-      <div className="surface-card flex max-h-[80vh] w-full max-w-lg flex-col p-5 sm:rounded-2xl">
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 backdrop-blur-sm sm:items-center">
+      <div className="surface-card flex max-h-[80vh] w-full max-w-lg flex-col p-4 sm:rounded-doc">
         <div className="mb-3 flex items-center justify-between">
-          <h3 className="text-base font-bold text-primary">
+          <h3 className="text-[15px] font-semibold text-primary">
             {t("chat.entityPicker.title")}
           </h3>
           <button
             type="button"
             onClick={onClose}
             aria-label={t("common.buttons.close")}
-            className="flex h-8 w-8 items-center justify-center rounded-full bg-surface-2 text-secondary"
+            className="flex h-8 w-8 items-center justify-center rounded-doc-sm border border-doc-border text-sm text-secondary transition hover:bg-surface-hover hover:text-primary"
           >
             ✕
           </button>
         </div>
 
-        <div className="mb-3 flex gap-1.5 overflow-x-auto pb-1">
+        <div className="mb-2.5 flex gap-1 overflow-x-auto pb-1">
           {TABS.map((entityType) => (
             <button
               key={entityType}
               type="button"
               onClick={() => setTab(entityType)}
-              className={`shrink-0 rounded-full px-3 py-1.5 text-xs font-bold transition ${
+              className={`inline-flex min-h-8 shrink-0 items-center rounded-doc-sm border px-2.5 text-xs font-medium transition ${
                 tab === entityType
-                  ? "bg-accent-cyan/16 text-accent-cyan"
-                  : "bg-surface-2 text-secondary hover:text-primary"
+                  ? "border-transparent bg-accent-esblu text-on-accent"
+                  : "border-doc-border bg-surface-2 text-secondary hover:text-primary"
               }`}
             >
               {tabLabels[entityType]}
@@ -107,10 +107,10 @@ export default function EntityPickerModal({
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder={t("chat.entityPicker.searchPlaceholder")}
-          className="mb-3 w-full rounded-xl border border-subtle bg-surface-1/60 px-3.5 py-2.5 text-sm text-primary outline-none placeholder:text-muted-esblu"
+          className="mb-2.5 w-full min-h-[var(--control-h)] rounded-doc-sm border border-doc-border bg-surface-2 px-3 py-1.5 text-sm text-primary outline-none transition placeholder:text-muted-esblu focus:border-brand-400 focus:ring-2 focus:ring-brand-400/25"
         />
 
-        <div className="min-h-0 flex-1 space-y-1 overflow-y-auto">
+        <div className="min-h-0 flex-1 space-y-0.5 overflow-y-auto">
           {loading ? (
             <p className="px-1 text-xs text-muted-esblu">
               {t("common.buttons.loading")}
@@ -125,7 +125,7 @@ export default function EntityPickerModal({
                 key={row.entityId}
                 type="button"
                 onClick={() => onSelect(tab, row.entityId, row.title)}
-                className="surface-card-hover flex w-full flex-col items-start gap-0.5 rounded-xl border border-subtle bg-surface-1/60 px-3.5 py-2.5 text-left transition"
+                className="surface-card-hover flex w-full flex-col items-start gap-0.5 rounded-doc-sm border border-subtle bg-surface-1/60 px-3 py-2 text-left transition"
               >
                 <span className="truncate text-sm font-semibold text-primary">
                   {row.title}

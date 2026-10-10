@@ -7,6 +7,11 @@ import { SUPPORTED_LOCALES, LOCALE_SHORT_LABELS, LOCALE_LABELS } from "@/lib/i18
 // všetkých miestach, kde ho zadanie vyžaduje (landing, login/registrácia,
 // invite flow, právny gate, aj vo vnútri appky). Žiadna zmena URL/routingu
 // — iba LocaleProvider.setLocale() (cookie + best-effort settings.locale).
+//
+// UI refresh 2026-10-11: kompaktný segmented control (.ui-segmented z
+// app/globals.css) v brand farbe; `variant` ostáva kvôli spätnej
+// kompatibilite volaní (oba varianty dnes vyzerajú rovnako — appka aj web
+// sú tmavé).
 export default function LanguageSwitcher({
   variant = "light",
   className = "",
@@ -15,26 +20,10 @@ export default function LanguageSwitcher({
   className?: string;
 }) {
   const { locale, setLocale } = useLocale();
-
-  const baseBtn =
-    variant === "dark"
-      ? "rounded-lg px-2.5 py-1.5 text-xs font-bold transition"
-      : "rounded-lg px-2.5 py-1.5 text-xs font-bold transition";
-  const active =
-    variant === "dark"
-      ? "bg-accent-cyan text-[#051221]"
-      : "bg-blue-600 text-white";
-  const inactive =
-    variant === "dark"
-      ? "text-slate-300 hover:text-white"
-      : "text-secondary hover:text-primary";
+  void variant;
 
   return (
-    <div
-      role="group"
-      aria-label={LOCALE_LABELS[locale]}
-      className={`inline-flex items-center gap-1 rounded-xl border border-subtle bg-surface-1/60 p-1 ${className}`}
-    >
+    <div role="group" aria-label={LOCALE_LABELS[locale]} className={`ui-segmented ${className}`}>
       {SUPPORTED_LOCALES.map((code) => (
         <button
           key={code}
@@ -42,7 +31,6 @@ export default function LanguageSwitcher({
           onClick={() => setLocale(code)}
           aria-pressed={locale === code}
           aria-label={LOCALE_LABELS[code]}
-          className={`${baseBtn} ${locale === code ? active : inactive}`}
         >
           {LOCALE_SHORT_LABELS[code]}
         </button>

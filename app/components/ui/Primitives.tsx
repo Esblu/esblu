@@ -109,7 +109,7 @@ export function DataRow({
   // Rám a povrch nesie <li>, nie odkaz — akcie riadku tak môžu bývať v tej
   // istej karte, ale MIMO odkazu (odkaz v odkaze je neplatné HTML a
   // klávesnicou sa nedá ovládať).
-  const shared = `relative block w-full px-4 py-3 text-left focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring sm:grid sm:items-center sm:gap-4 ${
+  const shared = `relative block w-full px-3.5 py-2.5 text-left focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring sm:grid sm:items-center sm:gap-4 ${
     trailing ? "sm:pr-32" : "sm:pr-9"
   } ${columns}`;
 
@@ -209,7 +209,7 @@ export function FilterChips({
           type="button"
           aria-pressed={active === option.key}
           onClick={() => onSelect(option.key)}
-          className={`whitespace-nowrap rounded-doc-sm border px-3 py-1.5 text-sm font-medium transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
+          className={`min-h-8 whitespace-nowrap rounded-doc-sm border px-2.5 py-1 text-[13px] font-medium transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
             active === option.key
               ? "border-border-strong bg-surface-hover text-primary"
               : "border-doc-border text-secondary hover:text-primary"
@@ -265,7 +265,7 @@ export function RegisterToolbar({
   const panelId = useId();
 
   return (
-    <div className="space-y-3 rounded-doc border border-doc-border bg-doc-surface p-3 sm:p-4">
+    <div className="space-y-2.5 rounded-doc border border-doc-border bg-doc-surface p-2.5 sm:p-3">
       {(search || (filters && true)) && (
         <div className="flex gap-2">
           {search}
@@ -324,11 +324,11 @@ export function Metric({
 
   return (
     <div className="rounded-doc-sm border border-doc-border bg-surface-2 px-3 py-2 sm:py-2.5">
-      <p className="text-xs font-medium uppercase tracking-wide text-secondary sm:text-[11px] sm:text-muted-esblu">
+      <p className="text-[11px] font-medium uppercase tracking-wide text-muted-esblu">
         {label}
       </p>
       <p className={`mt-0.5 break-words text-base font-semibold tabular-nums sm:mt-1 sm:text-lg ${valueTone}`}>{value}</p>
-      {hint && <p className="mt-0.5 text-sm text-muted-esblu sm:text-xs">{hint}</p>}
+      {hint && <p className="mt-0.5 text-xs text-muted-esblu">{hint}</p>}
     </div>
   );
 }
@@ -348,9 +348,9 @@ export function MetricGrid({ children }: { children: ReactNode }) {
  */
 export function EmptyState({ title, action }: { title: ReactNode; action?: ReactNode }) {
   return (
-    <div className="rounded-doc border border-dashed border-doc-border px-6 py-10 text-center">
+    <div className="rounded-doc border border-dashed border-doc-border px-4 py-7 text-center">
       <p className="text-sm text-muted-esblu">{title}</p>
-      {action && <div className="mt-4 flex justify-center">{action}</div>}
+      {action && <div className="mt-3 flex justify-center">{action}</div>}
     </div>
   );
 }
@@ -364,7 +364,7 @@ export function LoadingRows({ rows = 3, label }: { rows?: number; label: string 
         <div
           key={index}
           aria-hidden="true"
-          className="h-16 animate-pulse rounded-doc border border-doc-border bg-doc-surface"
+          className="h-14 animate-pulse rounded-doc border border-doc-border bg-doc-surface"
         />
       ))}
     </div>
@@ -411,7 +411,7 @@ export function TimelineItem({
       <div className="min-w-0 flex-1 rounded-doc border border-doc-border bg-doc-surface px-3 py-2.5">
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div className="min-w-0">
-            <p className="break-words text-base font-semibold text-primary sm:text-sm">{title}</p>
+            <p className="break-words text-sm font-semibold text-primary">{title}</p>
             {meta && <div className="mt-0.5 text-sm text-secondary">{meta}</div>}
           </div>
           {actions && <div className="flex shrink-0 items-center gap-1">{actions}</div>}
@@ -511,7 +511,7 @@ export function PhotoGrid({
   deletingId?: string | null;
 }) {
   return (
-    <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+    <ul className="grid grid-cols-2 gap-2 sm:grid-cols-3 sm:gap-3 lg:grid-cols-4">
       {photos.map((photo) => (
         <li key={photo.id} className="relative">
           {onOpen ? (

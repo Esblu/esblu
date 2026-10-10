@@ -123,24 +123,24 @@ export function FolderPickerModal({
       <div>
         <p className={docLabel}>{t("folders.chooseFolder")}</p>
         {folders === null ? (
-          <p className="text-sm text-muted-esblu">{t("folders.loading")}</p>
+          <p className="text-[13px] text-muted-esblu">{t("folders.loading")}</p>
         ) : candidates.length === 0 ? (
-          <p className="text-sm text-muted-esblu">
+          <p className="text-[13px] text-muted-esblu">
             {mode === "move" ? t("folders.noOtherFolders") : t("folders.empty")}
           </p>
         ) : (
-          <ul className="max-h-72 space-y-1.5 overflow-y-auto">
+          <ul className="max-h-72 space-y-1 overflow-y-auto">
             {candidates.map((folder) => (
               <li key={folder.id}>
                 <button
                   type="button"
                   disabled={busy}
                   onClick={() => void apply(folder)}
-                  className="flex min-h-11 w-full items-center gap-3 rounded-doc-sm border border-doc-border px-3 py-2 text-left text-sm transition hover:bg-surface-hover disabled:opacity-40"
+                  className="flex min-h-10 w-full items-center gap-2.5 rounded-doc-sm border border-doc-border px-3 py-1.5 text-left text-sm transition hover:bg-surface-hover disabled:opacity-40"
                 >
-                  <FolderIcon size={18} className="shrink-0 text-muted-esblu" />
+                  <FolderIcon size={16} className="shrink-0 text-muted-esblu" />
                   <span className="min-w-0 flex-1 truncate font-medium text-primary">{folder.name}</span>
-                  <span className="shrink-0 text-xs text-muted-esblu">
+                  <span className="shrink-0 text-xs tabular-nums text-muted-esblu">
                     {t("folders.itemCount", { count: folder.itemCount })}
                   </span>
                 </button>
@@ -151,7 +151,7 @@ export function FolderPickerModal({
       </div>
 
       <form
-        className="border-t border-doc-border pt-4"
+        className="border-t border-doc-border pt-3"
         onSubmit={(event) => {
           event.preventDefault();
           if (!busy && newName.trim()) void createAndApply();

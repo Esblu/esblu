@@ -24,7 +24,7 @@ export function VoiceReplyToggle({ className = "" }: { className?: string }) {
         setVoiceRepliesEnabled(!enabled);
         listeners.forEach((listener) => listener());
       }}
-      className={`min-h-11 rounded-full border border-subtle px-3 py-1.5 text-xs font-bold text-secondary ${className}`}
+      className={`inline-flex min-h-[var(--control-h-sm)] items-center rounded-full border border-subtle px-2.5 py-1 text-xs font-medium text-secondary transition hover:bg-surface-hover hover:text-primary aria-pressed:border-brand-500/40 aria-pressed:text-primary ${className}`}
     >
       {enabled ? t("search.voice.replies.on") : t("search.voice.replies.off")}
     </button>

@@ -328,10 +328,10 @@ async function resetPassword() {
   }
 
   return (
-    <main className="app-shell-bg flex min-h-screen items-center justify-center p-6">
-      <div className="w-full max-w-md rounded-2xl bg-surface-1 p-8 shadow">
-        <div className="flex items-start justify-between gap-4">
-          <h1 className="text-3xl font-bold text-primary">
+    <main className="app-shell-bg flex min-h-screen items-center justify-center px-4 py-6">
+      <div className="w-full max-w-sm rounded-doc border border-doc-border bg-surface-1 p-4 sm:p-6">
+        <div className="flex items-start justify-between gap-3">
+          <h1 className="text-xl font-semibold tracking-tight text-primary sm:text-[22px]">
             {mode === "login"
               ? t("auth.login.title")
               : t("auth.login.registerTitle")}
@@ -339,42 +339,42 @@ async function resetPassword() {
           <LanguageSwitcher />
         </div>
 
-        <p className="mt-2 text-muted-esblu">
+        <p className="mt-1 text-[13px] leading-5 text-muted-esblu">
           {mode === "login"
             ? t("auth.login.subtitleLogin")
             : t("auth.login.subtitleRegister")}
         </p>
 
         {oauthNotice && (
-          <p className="mt-4 rounded-xl border border-subtle bg-surface-2 px-4 py-3 text-sm text-secondary">
+          <p className="ui-notice mt-3">
             {t(oauthNotice === "cancelled" ? "auth.oauth.cancelled" : oauthNotice === "beta" ? "auth.oauth.betaRequired" : "auth.oauth.failed")}
           </p>
         )}
 
         {accountDeletedNotice && (
-          <p className="mt-4 rounded-xl border border-subtle bg-surface-2 px-4 py-3 text-sm text-secondary">
+          <p className="ui-notice mt-3">
             {t("auth.login.accountDeletedShort")}
           </p>
         )}
 
         {accountDeletionPartialNotice && (
-          <p className="mt-4 rounded-xl bg-warning-soft px-4 py-3 text-sm leading-6 text-amber-400">
+          <p className="ui-notice mt-3" data-tone="warning">
             {t("auth.login.accountDeletedPartialNotice")}
           </p>
         )}
 
         {mode === "register" && (
-          <p className="mt-4 rounded-xl bg-info-soft px-4 py-3 text-sm leading-6 text-blue-800">
+          <p className="ui-notice mt-3 border-brand-500/30 bg-info-soft text-brand-300">
             {t("auth.closedBeta.registerNotice")}
           </p>
         )}
 
-        <div className="mt-6 space-y-4">
+        <div className="mt-4 space-y-3">
           <input
             type="email"
             placeholder={t("auth.login.email")}
             autoComplete="email"
-            className="w-full rounded-xl border p-3"
+            className="ui-input"
             value={email}
             onChange={(event) => setEmail(event.target.value)}
             disabled={loading}
@@ -386,7 +386,7 @@ async function resetPassword() {
             autoComplete={
               mode === "login" ? "current-password" : "new-password"
             }
-            className="w-full rounded-xl border p-3"
+            className="ui-input"
             value={password}
             onChange={(event) => setPassword(event.target.value)}
             disabled={loading}
@@ -397,7 +397,7 @@ async function resetPassword() {
               type="password"
               placeholder={t("auth.login.confirmPasswordPlaceholder")}
               autoComplete="new-password"
-              className="w-full rounded-xl border p-3"
+              className="ui-input"
               value={confirmPassword}
               onChange={(event) =>
                 setConfirmPassword(event.target.value)
@@ -408,35 +408,35 @@ async function resetPassword() {
         </div>
 
         {mode === "register" && (
-          <div className="mt-4 space-y-3">
-            <label className="flex items-start gap-3 text-sm leading-6 text-secondary">
+          <div className="mt-3 space-y-2">
+            <label className="flex items-start gap-2.5 text-[13px] leading-5 text-secondary">
               <input
                 type="checkbox"
-                className="mt-1 h-4 w-4"
+                className="mt-0.5 h-4 w-4 shrink-0"
                 checked={agreedTerms}
                 onChange={(event) => setAgreedTerms(event.target.checked)}
                 disabled={loading}
               />
               <span>
                 {t("auth.login.agreeTermsPrefix")}{" "}
-                <LegalDocLink path="/podmienky-pouzivania" className="font-semibold text-blue-700 hover:underline">
+                <LegalDocLink path="/podmienky-pouzivania" className="font-medium text-brand-300 hover:underline">
                   {t("auth.login.agreeTermsLink")}
                 </LegalDocLink>
                 .
               </span>
             </label>
 
-            <label className="flex items-start gap-3 text-sm leading-6 text-secondary">
+            <label className="flex items-start gap-2.5 text-[13px] leading-5 text-secondary">
               <input
                 type="checkbox"
-                className="mt-1 h-4 w-4"
+                className="mt-0.5 h-4 w-4 shrink-0"
                 checked={agreedPrivacy}
                 onChange={(event) => setAgreedPrivacy(event.target.checked)}
                 disabled={loading}
               />
               <span>
                 {t("auth.login.agreePrivacyPrefix")}{" "}
-                <LegalDocLink path="/ochrana-osobnych-udajov" className="font-semibold text-blue-700 hover:underline">
+                <LegalDocLink path="/ochrana-osobnych-udajov" className="font-medium text-brand-300 hover:underline">
                   {t("auth.login.agreePrivacyLink")}
                 </LegalDocLink>
                 .
@@ -452,7 +452,7 @@ async function resetPassword() {
     loading ||
     (mode === "register" && (!agreedTerms || !agreedPrivacy))
   }
-  className="btn-primary mt-6 w-full px-6 py-3 text-center"
+  className="ui-btn ui-btn-primary mt-4 w-full"
 >
   {loading
     ? t("auth.login.working")
@@ -474,7 +474,7 @@ async function resetPassword() {
     type="button"
     onClick={resetPassword}
     disabled={loading || resetLoading}
-    className="mt-3 w-full text-center text-sm font-semibold text-blue-700 hover:underline disabled:text-gray-400"
+    className="mt-2 min-h-8 w-full text-center text-[13px] font-medium text-brand-300 hover:underline disabled:text-muted-esblu"
   >
     {resetLoading
       ? t("auth.login.sendingResetLink")
@@ -486,7 +486,7 @@ async function resetPassword() {
           type="button"
           onClick={switchMode}
           disabled={loading}
-          className="mt-3 w-full rounded-xl border border-subtle px-6 py-3 font-semibold text-secondary hover:bg-surface-2 disabled:cursor-not-allowed disabled:text-gray-400"
+          className="ui-btn ui-btn-secondary mt-2 w-full"
         >
           {mode === "login"
             ? t("auth.login.switchToRegister")
@@ -495,18 +495,18 @@ async function resetPassword() {
 
         <nav
           aria-label={t("settings.legal.navAriaLabel")}
-          className="mt-6 flex flex-wrap justify-center gap-x-4 gap-y-2 border-t border-subtle pt-5 text-center text-xs font-medium text-secondary"
+          className="mt-4 flex flex-wrap justify-center gap-x-4 gap-y-1.5 border-t border-subtle pt-3 text-center text-xs font-medium text-muted-esblu"
         >
-          <Link href="/ochrana-osobnych-udajov" className="hover:text-blue-700 hover:underline">
+          <Link href="/ochrana-osobnych-udajov" className="hover:text-brand-300 hover:underline">
             {t("common.legalLinks.privacy")}
           </Link>
-          <Link href="/podmienky-pouzivania" className="hover:text-blue-700 hover:underline">
+          <Link href="/podmienky-pouzivania" className="hover:text-brand-300 hover:underline">
             {t("common.legalLinks.terms")}
           </Link>
-          <Link href="/cookies" className="hover:text-blue-700 hover:underline">
+          <Link href="/cookies" className="hover:text-brand-300 hover:underline">
             {t("common.legalLinks.cookies")}
           </Link>
-          <Link href="/kontakt" className="hover:text-blue-700 hover:underline">
+          <Link href="/kontakt" className="hover:text-brand-300 hover:underline">
             {t("common.legalLinks.contact")}
           </Link>
         </nav>

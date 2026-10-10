@@ -7,7 +7,7 @@ import {
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 
 const emailLinkClass =
-  "break-all font-semibold text-blue-700 underline decoration-blue-300 underline-offset-4";
+  "break-all font-medium text-brand-300 underline decoration-brand-300/40 underline-offset-4";
 
 // Klientská časť /kontakt — appka nepoužíva cookie na server-side výber
 // jazyka (pozri lib/i18n/locales.ts), preto sa celý obsah tejto stránky
@@ -42,7 +42,7 @@ export function ContactPageClient() {
         </p>
       </LegalSection>
 
-      <p className="rounded-2xl bg-surface-2 p-5 text-sm text-secondary">
+      <p className="rounded-doc-sm border border-subtle bg-surface-2 p-3 text-[13px] leading-5 text-secondary">
         {t("legal.contactPage.supportNote")}
       </p>
     </PublicLegalLayout>

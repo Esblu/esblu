@@ -242,7 +242,7 @@ export default function MobileChatFab() {
       onPointerCancel={finishDrag}
       onClick={onClick}
       onContextMenu={(event) => event.preventDefault()}
-      className={`fixed z-[44] flex h-14 w-14 select-none items-center justify-center rounded-full bg-accent-cyan text-[#051221] shadow-2xl focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring ${
+      className={`fixed z-[44] flex h-14 w-14 select-none items-center justify-center rounded-full border border-white/10 bg-brand-600 text-white shadow-[0_8px_24px_-8px_rgba(1,129,253,0.6)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring ${
         dragging ? "scale-105" : "transition-[left,top,transform] duration-200 ease-out active:scale-95"
       }`}
       style={

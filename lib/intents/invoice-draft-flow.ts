@@ -26,6 +26,7 @@ import {
   describeItemParse,
   buildTotalMismatchQuestion,
   buildUnderstoodSummary,
+  buildDraftConfirmQuestion,
   type InvoiceDraftField,
   type InvoiceDraftSlots,
   type PartnerCandidate,
@@ -68,6 +69,14 @@ import { classifyConfirmationReply } from "@/lib/intents/confirmation-reply";
 // =============================================================================
 
 const PENDING_INTENT = "CREATE_INVOICE_DRAFT";
+
+/**
+ * Pseudo-pole „čaká sa na potvrdenie" (voice safety 2026-10-11). Uloží sa
+ * ako prvé chýbajúce pole, keď sú všetky údaje zozbierané — doklad vznikne
+ * až po výslovnom „áno". Nie je to InvoiceDraftField: nemá otázku ani
+ * hodnotu, iba blokuje vytvorenie.
+ */
+export const CONFIRM_DRAFT_FIELD = "confirm";
 
 export type InvoiceDraftFlowContext = {
   companyId: string;
@@ -230,10 +239,45 @@ export async function continueInvoiceDraftFlow(
 
   const slots = readSlots(stored.slots);
 
+  // ------------------------------------------------------------------
+  // ČAKÁ SA NA POTVRDENIE VYTVORENIA DRAFTU.
+  //
+  // „Áno" → doklad vznikne (tá istá cesta s atomickým claimom nižšie).
+  // „Nie" → dialóg sa zruší, nič sa nezapíše.
+  // Oprava („zmeň kopanie na 350", „ešte doprava 50 eur", „zmeň
+  // odberateľa na …") → spracuje sa ako pri položkách a potvrdenie sa
+  // vypýta znova s novým súhrnom. Čokoľvek iné → otázka znova; nejasná
+  // veta NIKDY nie je súhlas.
+  // ------------------------------------------------------------------
+  let field: InvoiceDraftField | null;
+  if (stored.missingFields[0] === CONFIRM_DRAFT_FIELD) {
+    const reply = rawAnswer.includes("?") ? null : classifyConfirmationReply(rawAnswer);
+    if (reply === "confirm") return continueFlow(supabase, locale, ctx, slots, undefined, true);
+    if (reply === "cancel") {
+      await clearConversationContext(supabase, ctx.conversationId);
+      return { kind: "answer", text: translate(locale, "search.voice.invoice.draftCancelled") };
+    }
+    const isEdit =
+      readPartnerChange(rawAnswer) !== null ||
+      readItemCorrection(slots, rawAnswer) !== null ||
+      looksLikeItemAppend(rawAnswer);
+    if (!isEdit) {
+      await saveConversationContext(supabase, ctx.conversationId, PENDING_INTENT, serializeSlots(slots), [CONFIRM_DRAFT_FIELD]);
+      return {
+        kind: "clarify",
+        question: translate(locale, "search.voice.invoice.confirmDraftAgain"),
+        conversationId: ctx.conversationId,
+        quickReplies: yesNoQuickReplies(locale),
+      };
+    }
+    field = "items";
+  } else {
+    field = readField(stored.missingFields[0]);
+  }
+
   // Na čo sa práve pýtalo. Berie sa z ULOŽENÉHO stavu, nie z tela
   // požiadavky — inak by klient mohol tvrdiť, že odpovedá na inú otázku,
   // než aká zaznela, a podsunúť tak hodnotu do iného poľa.
-  const field = readField(stored.missingFields[0]);
   if (!field) {
     await clearConversationContext(supabase, ctx.conversationId);
     return null;
@@ -453,9 +497,37 @@ async function continueFlow(
   ctx: InvoiceDraftFlowContext,
   slots: InvoiceDraftSlots,
   /** Krátke potvrdenie pred ďalšou otázkou („Odstránil som položku doprava."). */
-  lead?: string
+  lead?: string,
+  /** Používateľ výslovne potvrdil vytvorenie („áno"). */
+  confirmed = false
 ): Promise<IntentResult> {
   const missing = missingInvoiceFields(slots);
+
+  if (missing.length === 0 && !confirmed) {
+    // VŠETKO JE ZOZBIERANÉ → NÁVRH, NIE DOKLAD. Zápis až po „áno".
+    const saved = await saveConversationContext(
+      supabase,
+      ctx.conversationId,
+      PENDING_INTENT,
+      serializeSlots(slots),
+      [CONFIRM_DRAFT_FIELD]
+    );
+    if (saved === null) return { kind: "error", text: translate(locale, "search.errors.generic") };
+    if (saved >= MAX_CONVERSATION_TURNS) {
+      await clearConversationContext(supabase, ctx.conversationId);
+      return { kind: "error", text: translate(locale, "search.voice.invoice.tooManyTurns") };
+    }
+    const partnerLabel = slots.partnerId
+      ? (await readPartnerLabels(supabase, [slots.partnerId]))[0]?.label ?? null
+      : null;
+    const question = buildDraftConfirmQuestion(locale, slots, partnerLabel);
+    return {
+      kind: "clarify",
+      question: lead ? `${lead} ${question}` : question,
+      conversationId: ctx.conversationId,
+      quickReplies: yesNoQuickReplies(locale),
+    };
+  }
 
   if (missing.length === 0) {
     // FAIL CLOSED NA DÁTUME.
@@ -654,6 +726,13 @@ const FIELDS: InvoiceDraftField[] = [
   "total",
   "vat",
 ];
+
+function yesNoQuickReplies(locale: Locale) {
+  return [
+    { label: translate(locale, "assistant.quick.yes"), text: translate(locale, "assistant.quick.yes") },
+    { label: translate(locale, "assistant.quick.no"), text: translate(locale, "assistant.quick.no") },
+  ];
+}
 
 function readField(value: unknown): InvoiceDraftField | null {
   return typeof value === "string" && (FIELDS as string[]).includes(value)
