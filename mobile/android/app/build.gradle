@@ -28,8 +28,11 @@ android {
         applicationId "com.esblu.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        // Google Play: versionCode musí pri KAŽDOM nahratí do Play Console
+        // rásť (aj naprieč tracks). Prepísateľné bez úpravy súboru:
+        //   gradlew bundleRelease -PesbluVersionCode=2 -PesbluVersionName=1.0.1
+        versionCode((project.findProperty("esbluVersionCode") ?: "1") as Integer)
+        versionName((project.findProperty("esbluVersionName") ?: "1.0") as String)
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -51,7 +54,12 @@ android {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
-            signingConfig signingConfigs.release
+            // Iba s app/keystore.properties (upload key mimo Gitu). Bez neho
+            // vznikne NEPODPÍSANÝ bundle (iba lokálna validácia — Play ho
+            // odmietne); nikdy sa ticho nepoužije debug kľúč.
+            if (keystorePropertiesFile.exists()) {
+                signingConfig signingConfigs.release
+            }
         }
     }
 }

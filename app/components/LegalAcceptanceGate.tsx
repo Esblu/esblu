@@ -32,6 +32,7 @@ const SKIP_PATH_PREFIXES = [
   "/dpa",
   "/subprocessors",
   "/kontakt",
+  "/zrusenie-uctu",
   "/cennik",
 ];
 

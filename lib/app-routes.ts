@@ -43,6 +43,7 @@ export const MOBILE_STATIC_ROUTES: ReadonlySet<string> = new Set([
   "/cookies",
   "/dpa",
   "/kontakt",
+  "/zrusenie-uctu",
   "/ochrana-osobnych-udajov",
   "/podmienky-pouzivania",
   "/subprocessors",

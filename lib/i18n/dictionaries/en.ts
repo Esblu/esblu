@@ -1869,6 +1869,7 @@ const en = {
       dpa: "DPA",
       subprocessors: "Subprocessors",
       contact: "Contact",
+      accountDeletion: "Account deletion",
     },
     subprocessors: {
       introPart1:
@@ -1914,6 +1915,16 @@ const en = {
       sectionChangesTitle: "Changes to this list",
       changesText:
         "The current version of this list has been in effect since {{date}}. We may update the list when the technical infrastructure of Esblu changes.",
+    },
+    accountDeletionPage: {
+      intro: "You can permanently delete your Esblu account at any time directly in the app (web and Android app). If you cannot access the app, you can request account deletion by email.",
+      inAppTitle: "Delete your account in the app",
+      inAppStep1: "Sign in to Esblu (www.esblu.com or the Esblu Android app).",
+      inAppStep2: "Open Settings and go to the “Delete account” section.",
+      inAppStep3: "Click “Delete account” and confirm by following the on-screen instructions.",
+      scopeTitle: "What gets deleted",
+      emailTitle: "Request without the app",
+      emailText: "If you cannot sign in, send an account deletion request from the email address you sign in with to",
     },
     contactPage: {
       intro:

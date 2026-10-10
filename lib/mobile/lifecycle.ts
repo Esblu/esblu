@@ -13,6 +13,7 @@ const PUBLIC_PATH_PREFIXES = [
   "/cookies",
   "/dpa",
   "/kontakt",
+  "/zrusenie-uctu",
   "/ochrana-osobnych-udajov",
   "/podmienky-pouzivania",
   "/subprocessors",

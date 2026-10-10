@@ -1890,6 +1890,7 @@ const de = {
       dpa: "AVV",
       subprocessors: "Unterauftragsverarbeiter",
       contact: "Kontakt",
+      accountDeletion: "Konto löschen",
     },
     subprocessors: {
       introPart1:
@@ -1935,6 +1936,16 @@ const de = {
       sectionChangesTitle: "Änderungen der Liste",
       changesText:
         "Die aktuelle Version dieser Liste gilt seit dem {{date}}. Wir können die Liste bei Änderungen der technischen Infrastruktur von Esblu aktualisieren.",
+    },
+    accountDeletionPage: {
+      intro: "Sie können Ihr Esblu-Konto jederzeit direkt in der App (Web und Android-App) dauerhaft löschen. Wenn Sie keinen Zugriff auf die App haben, können Sie die Löschung per E-Mail beantragen.",
+      inAppTitle: "Konto in der App löschen",
+      inAppStep1: "Melden Sie sich bei Esblu an (www.esblu.com oder die Esblu-Android-App).",
+      inAppStep2: "Öffnen Sie die Einstellungen und gehen Sie zum Abschnitt „Konto löschen“.",
+      inAppStep3: "Klicken Sie auf „Konto löschen“ und bestätigen Sie gemäß den Anweisungen auf dem Bildschirm.",
+      scopeTitle: "Was gelöscht wird",
+      emailTitle: "Antrag ohne App",
+      emailText: "Wenn Sie sich nicht anmelden können, senden Sie einen Löschantrag von der E-Mail-Adresse, mit der Sie sich anmelden, an",
     },
     contactPage: {
       intro:

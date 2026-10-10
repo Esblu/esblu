@@ -188,6 +188,7 @@ const CHROMELESS_PREFIXES = [
   "/dpa",
   "/subprocessors",
   "/kontakt",
+  "/zrusenie-uctu",
 ];
 
 export function isChromelessPath(pathname: string): boolean {

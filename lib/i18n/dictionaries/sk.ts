@@ -1897,6 +1897,7 @@ const sk = {
       dpa: "DPA",
       subprocessors: "Sprostredkovatelia",
       contact: "Kontakt",
+      accountDeletion: "Zrušenie účtu",
     },
     subprocessors: {
       introPart1:
@@ -1940,6 +1941,16 @@ const sk = {
       sectionChangesTitle: "Zmeny zoznamu",
       changesText:
         "Aktuálna verzia tohto zoznamu platí od {{date}}. Zoznam môžeme aktualizovať pri zmene technickej infraštruktúry Esblu.",
+    },
+    accountDeletionPage: {
+      intro: "Účet Esblu môžete kedykoľvek natrvalo zrušiť priamo v aplikácii (web aj Android appka). Ak k aplikácii nemáte prístup, môžete o zrušenie účtu požiadať e-mailom.",
+      inAppTitle: "Zrušenie účtu v aplikácii",
+      inAppStep1: "Prihláste sa do Esblu (www.esblu.com alebo Android appka Esblu).",
+      inAppStep2: "Otvorte Nastavenia a prejdite do sekcie „Zrušiť účet“.",
+      inAppStep3: "Kliknite na „Zrušiť účet“ a potvrďte zrušenie podľa pokynov na obrazovke.",
+      scopeTitle: "Čo sa zmaže",
+      emailTitle: "Žiadosť bez aplikácie",
+      emailText: "Ak sa do aplikácie nemôžete prihlásiť, pošlite žiadosť o zrušenie účtu z e-mailovej adresy, ktorou sa prihlasujete, na",
     },
     contactPage: {
       intro:
