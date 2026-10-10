@@ -36,14 +36,20 @@ node scripts\android-prebuild-check.mjs --target production
 | Oblasť | Stav |
 |---|---|
 | Auth | e-mail/heslo zapnuté, potvrdenie e-mailom povinné, Google provider zapnutý |
-| Redirect URLs | `https://www.esblu.com/**`, `https://esblu.com/**`, localhost — **chýba `com.esblu.app://auth/callback`** |
+| Redirect URLs | `https://www.esblu.com/**`, `https://esblu.com/**`, localhost + **`com.esblu.app://auth/callback`** (pridané 2026-10-10 so súhlasom vlastníka; nič iné sa nemenilo) |
 | API + CORS | `www.esblu.com/api/*` odpovedá appkou (401 JSON bez session), preflight povoľuje `https://localhost` |
 | DB | bez `client_mutation_id` (migrácia je iba na esblu-test) → appka zapisuje bez idempotency kľúča (fallback) |
 | App Links | `assetlinks.json` existuje pre `com.esblu.app`; debug kľúč sa s ním nezhoduje → **NOT VERIFIED UNTIL RELEASE SIGNING** |
 
 ## Čo v tomto builde nefunguje (fail closed)
 
-- **Google login:** vypnutý (`NEXT_PUBLIC_ESBLU_OAUTH_PROVIDERS` prázdne), kým v produkčnom Supabase nie je redirect `com.esblu.app://auth/callback`.
 - **Push:** PUSH NOT CONFIGURED (bez `google-services.json`); appka nevolá FCM a nepadá.
 - **App Links** z e-mailov (`https://www.esblu.com/...`): otvoria sa v prehliadači (web), nie v appke.
 - **Ochrana proti duplicitám** (`client_mutation_id`): na produkcii neaktívna, kým sa migrácia neschváli a nenasadí.
+
+## Google login (zapnutý v production beta builde, 2026-10-10)
+
+- `mobile\.env.local`: `NEXT_PUBLIC_ESBLU_OAUTH_PROVIDERS=google` (iba mobilný build; web používa vlastnú konfiguráciu, nezmenené).
+- Existujúci produkčný Google provider (Supabase-hosted OAuth, web client ID + secret) — credentials sa nemenili.
+- Tok: tlačidlo Google → `signInWithOAuth({ skipBrowserRedirect: true, redirectTo: "com.esblu.app://auth/callback" })` → **Chrome Custom Tab** (`@capacitor/browser`, nie WebView) → Google → Supabase → `com.esblu.app://auth/callback?code=…` → intent-filter otvorí appku → DeepLinkBridge zavrie Custom Tab a otvorí lokálny `/auth/callback.html?code=…&oauth=native` → PKCE výmena s code_verifierom z Keystore → session v Keystore.
+- `redirectTo` je presne allowlistovaný reťazec bez query (Supabase glob porovnáva celé URL vrátane query).

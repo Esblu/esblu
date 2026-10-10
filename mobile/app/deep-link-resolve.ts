@@ -32,7 +32,9 @@ export function resolveEsbluDeepLink(rawUrl: string): string | null {
   // jedna cesta; PKCE `code` je bez code_verifiera z tohto WebView bezcenný.
   if (url.protocol === "com.esblu.app:") {
     if (url.hostname === "auth" && (url.pathname === "/callback" || url.pathname === "/callback/")) {
-      return buildLocalTarget("/auth/callback.html", {}, url);
+      // Supabase vracia na presný allowlistovaný redirect bez `?oauth=` —
+      // značku OAuth návratu doplníme (hodnota sa nikde neinterpretuje ako cieľ).
+      return buildLocalTarget("/auth/callback.html", url.searchParams.has("oauth") ? {} : { oauth: "native" }, url);
     }
     return null;
   }

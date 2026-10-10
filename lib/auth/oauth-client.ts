@@ -4,6 +4,7 @@ import { supabase } from "@/lib/supabase";
 import { publicWebUrl } from "@/lib/public-url";
 import { IS_MOBILE_BUILD } from "@/lib/build-target";
 import {
+  DEFAULT_MOBILE_OAUTH_REDIRECT,
   normalizeMobileOAuthRedirect,
   oauthFlowForRuntime,
   oauthProvidersForPlatform,
@@ -67,7 +68,10 @@ export async function startOAuth(provider: OAuthProvider, options: { mode: OAuth
     const redirect = normalizeMobileOAuthRedirect(process.env.NEXT_PUBLIC_ESBLU_MOBILE_OAUTH_REDIRECT);
     const { data, error } = await supabase.auth.signInWithOAuth({
       provider,
-      options: { redirectTo: `${redirect}?oauth=${provider}`, skipBrowserRedirect: true },
+      // Custom scheme presne podľa Supabase allowlistu (glob porovnáva aj
+      // query → `?oauth=…` by neprešlo a Supabase by spadol na Site URL web).
+      // Značku `oauth` doplní deep-link resolver (mobile/app/deep-link-resolve.ts).
+      options: { redirectTo: redirect === DEFAULT_MOBILE_OAUTH_REDIRECT ? redirect : `${redirect}?oauth=${provider}`, skipBrowserRedirect: true },
     });
     if (error || !data?.url) return error?.message ?? "oauth_url_missing";
     const { Browser } = await import("@capacitor/browser");

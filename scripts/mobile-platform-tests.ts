@@ -71,6 +71,8 @@ await check("OAuth klient: mobile = skipBrowserRedirect + @capacitor/browser; we
   const src = read("lib/auth/oauth-client.ts");
   assert.match(src, /skipBrowserRedirect: true/);
   assert.match(src, /import\("@capacitor\/browser"\)/);
+  // Natívny redirect presne = allowlist (bez query), inak Supabase spadne na Site URL.
+  assert.match(src, /redirectTo: redirect === DEFAULT_MOBILE_OAUTH_REDIRECT \? redirect : `\$\{redirect\}\?oauth=\$\{provider\}`/);
   assert.match(src, /redirectTo: `\$\{publicWebUrl\("\/auth\/callback"\)\}\?oauth=\$\{provider\}`/);
   assert.match(read("lib/supabase.ts"), /flowType: "pkce"/);
 });
@@ -78,7 +80,9 @@ await check("OAuth klient: mobile = skipBrowserRedirect + @capacitor/browser; we
 // ----------------------------------------------------------------------------- DEEP LINKS
 await check("deep link: OAuth callback cez custom scheme → lokálny callback (query zachované)", () => {
   assert.equal(resolveEsbluDeepLink("com.esblu.app://auth/callback?oauth=google&code=abc"), "/auth/callback.html?oauth=google&code=abc");
-  assert.equal(resolveEsbluDeepLink("com.esblu.app://auth/callback/?code=x"), "/auth/callback.html?code=x");
+  assert.equal(resolveEsbluDeepLink("com.esblu.app://auth/callback/?code=x"), "/auth/callback.html?code=x&oauth=native");
+  assert.equal(resolveEsbluDeepLink("com.esblu.app://auth/callback?code=abc"), "/auth/callback.html?code=abc&oauth=native");
+  assert.equal(resolveEsbluDeepLink("com.esblu.app://auth/callback?error=access_denied&error_description=x"), "/auth/callback.html?error=access_denied&error_description=x&oauth=native");
 });
 await check("deep link: iné custom scheme cesty, cudzie schémy a hosty → ignorované (žiadny open redirect)", () => {
   for (const url of [
