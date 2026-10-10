@@ -92,7 +92,8 @@ def main():
 
     abis = sorted({n.split("/")[2] for n in names if re.match(r"base/lib/[^/]+/.+\.so$", n)})
     check("native ABIs 64-bit capable", not abis or any(a in ("arm64-v8a", "x86_64") for a in abis), ", ".join(abis) or "no native libs")
-    check("google-services processed (google_app_id resource)", any("values" in n for n in names) and b"google_app_id" in z.read("base/resources.pb"))
+    res = z.read("base/resources.pb")
+    check("google-services processed (google_app_id resource)", b"google_app_id" in res and b"gcm_defaultSenderId" in res)
 
     cert = subprocess.run(["keytool", "-printcert", "-jarfile", aab], capture_output=True, text=True).stdout
     sha256 = (re.search(r"SHA256:\s*([0-9A-F:]+)", cert) or [None, None])[1]

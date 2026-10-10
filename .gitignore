@@ -49,3 +49,11 @@ next-env.d.ts
 Claude outputs/
 
 marketing/
+
+# Android release tooling outputs (release/*.ps1 are tracked; artifacts are local only)
+release/*.aab
+release/*.apk
+release/*.signing.txt
+release/upload-key.sha*
+release/*.jks
+release/*.keystore
