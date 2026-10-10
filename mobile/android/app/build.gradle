@@ -44,9 +44,12 @@ android {
         release {
             if (keystorePropertiesFile.exists()) {
                 storeFile file(keystoreProperties['storeFile'])
-                storePassword keystoreProperties['storePassword']
+                // Heslá NEMUSIA byť na disku: ak v keystore.properties chýbajú,
+                // čítajú sa z premenných prostredia procesu (nastaví ich
+                // release/build-release-aab.ps1 po bezpečnom zadaní).
+                storePassword keystoreProperties['storePassword'] ?: System.getenv('ESBLU_UPLOAD_STORE_PASSWORD')
                 keyAlias keystoreProperties['keyAlias']
-                keyPassword keystoreProperties['keyPassword']
+                keyPassword keystoreProperties['keyPassword'] ?: System.getenv('ESBLU_UPLOAD_KEY_PASSWORD') ?: System.getenv('ESBLU_UPLOAD_STORE_PASSWORD')
             }
         }
     }
