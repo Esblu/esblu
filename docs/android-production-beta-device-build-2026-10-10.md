@@ -53,3 +53,23 @@ node scripts\android-prebuild-check.mjs --target production
 - Existujúci produkčný Google provider (Supabase-hosted OAuth, web client ID + secret) — credentials sa nemenili.
 - Tok: tlačidlo Google → `signInWithOAuth({ skipBrowserRedirect: true, redirectTo: "com.esblu.app://auth/callback" })` → **Chrome Custom Tab** (`@capacitor/browser`, nie WebView) → Google → Supabase → `com.esblu.app://auth/callback?code=…` → intent-filter otvorí appku → DeepLinkBridge zavrie Custom Tab a otvorí lokálny `/auth/callback.html?code=…&oauth=native` → PKCE výmena s code_verifierom z Keystore → session v Keystore.
 - `redirectTo` je presne allowlistovaný reťazec bez query (Supabase glob porovnáva celé URL vrátane query).
+
+## Push / FCM (production beta, 2026-10-10)
+
+| Vrstva | Stav |
+|---|---|
+| Firebase | projekt `esblu-c0652`, Android app `com.esblu.app` (existujúci `google-services.json`, lokálny, gitignored) |
+| Server | Vercel Production má `FCM_PROJECT_ID` (= `esblu-c0652`), `FCM_CLIENT_EMAIL`, `FCM_PRIVATE_KEY`; push tabuľky + RPC sú v produkčnej DB; `/api/push/*` je na `main` totožné s `mobile-platform` |
+| Ownership | registrácia cez RPC ako prihlásený používateľ (`user_id = auth.uid()`, `company_id = aktívna firma`, väzba na auth session); cudzí aktívny token → 409; doručenie iba živej session + aktívnemu členstvu v tej istej firme; neplatný token → revoke |
+| Klient | povolenie (Android 13+ `POST_NOTIFICATIONS`) iba z kliknutia v Nastaveniach; kanál `esblu_default`; refresh tokenu (onNewToken) iba pre používateľa, ktorý push zapol; tap → allowlist obrazoviek (`screen` + UUID), nikdy URL; odhlásenie → `DELETE /api/push/devices` + `unregister()`; bez `google-services.json` žiadny `register()` |
+| Ikona | monochrómna `@drawable/ic_stat_esblu`, farba `#0181FD` |
+
+### Real-device test
+1. Login (e-mail/heslo alebo Google).
+2. Nastavenia → Notifikácie → Zapnúť → systémový dialóg **Povoliť**.
+3. Registrácia: zariadenie sa zobrazí ako aktívne; server-side overenie `push_devices` (read-only).
+4. Test push (bezpečný text, bez dát firmy): Firebase Console → projekt `esblu-c0652` → Messaging → New campaign → Notifications → názov `Esblu test`, text `Testovacia notifikácia` → Target: App `com.esblu.app` → Additional options → Custom data `screen` = `settings` → Publish.
+5. Foreground (appka otvorená) aj background (appka na pozadí / zamknutý telefón): notifikácia s Esblu ikonou.
+6. Ťuknutie → Esblu → Nastavenia.
+7. Odhlásenie → zariadenie odregistrované (`revoked_at`).
+8. Zopakovať krok 4 → nesmie doraziť.
