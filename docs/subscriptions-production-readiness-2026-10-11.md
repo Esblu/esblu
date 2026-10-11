@@ -145,9 +145,9 @@ Plán sa určuje **iba** server-side mapou `billing_provider_prices` (price/prod
 |---|---|---|
 | subscriptions (unit, existujúce) | 28 | `npm run test:subscriptions` |
 | subscriptions-db (PGlite, existujúce) | 60 | `npm run test:subscriptions-db` |
-| subscriptions-lifecycle (unit) | 34 | `npm run test:subscriptions-lifecycle` |
-| subscriptions-lifecycle-db (PGlite) | 47 | `npm run test:subscriptions-lifecycle-db` |
-| native-billing-contract (integračná vetva) | 9 | `npm run test:native-billing-contract` |
+| subscriptions-lifecycle (unit) | 43 | `npm run test:subscriptions-lifecycle` |
+| subscriptions-lifecycle-db (PGlite) | 49 | `npm run test:subscriptions-lifecycle-db` |
+| native-billing-contract (integračná vetva) | 11 | `npm run test:native-billing-contract` |
 
 Pomenované suity (`npm run test:<meno>`): subscription-domain, entitlement-resolution, cross-provider,
 stripe-adapter, google-play-adapter, apple-adapter, webhook-idempotency, purchase-idempotency, reconciliation,
@@ -188,18 +188,18 @@ Tento dokument **nerobí** právne tvrdenia. Pred akýmkoľvek live predajom mus
 |---|---|
 | Kanonický model + migrácie (PGlite) | READY |
 | Entitlement engine + explain + dashboard kontrakt | READY |
-| Idempotencia / poradie / konflikty | READY (multi-connection stres test → staging) |
+| Idempotencia / poradie / konflikty | READY — vrátane multi-connection testu na stagingu (15.3) |
 | Refund / dispute / revoke | READY |
 | Reconciliation (kód + RPC + route) | READY · scheduling NOT STARTED (zámerne) |
 | Fake provider end-to-end | READY |
 | Stripe test adapter | READY (mock) · reálny test účet BLOCKED EXTERNAL |
 | Google server (RTDN, subscriptionsv2, acknowledge) | READY (fake API) · service account + produkty BLOCKED EXTERNAL |
-| Google client plugin (Java) | PARTIAL — kontrakt testovaný, natívna kompilácia na PC, billing choice nezapojený |
+| Google client plugin (Java) | PARTIAL — kontrakt testovaný (11), build kit + matrix skript hotové, kompilácia čaká na PC, billing choice nezapojený |
 | Apple server (JWS, ASN V2, Server API) | READY (fake) · kľúče + produkty BLOCKED EXTERNAL |
 | Apple client (StoreKit 2) | PARTIAL — iba referenčný Swift, bez Macu |
 | Web UI predplatného | READY (za flagom) |
 | Mobile UI (managed via, pending, already owned, restore) | READY |
-| Staging DB aplikácia migrácií | NOT STARTED (vyžaduje súhlas) |
+| Staging DB aplikácia migrácií | READY — 4 migrácie na esblu-test, RLS/RBAC, concurrency, reconciliation, E2E overené (sekcia 15) |
 | Ceny / DPH / doklady / VOP | BLOCKED LEGAL |
 | Produkčná aktivácia | BLOCKED — explicitný súhlas vlastníka |
 
@@ -223,3 +223,122 @@ Každý krok s „súhlas" vyžaduje explicitné schválenie vlastníka v chate.
 14. Nová migrácia povoľujúca `environment='live'` + kód live režimu + review — súhlas.
 15. Produkčný deploy + produkčné secrets + produkčná migrácia — súhlas (každé zvlášť).
 16. Live aktivácia po kanáloch (najprv web, potom Android, potom iOS), postupne, s plánom rollbacku (kill-switch `web_provider='none'` / `enabled_methods`).
+
+---
+
+## 15. STAGING VALIDATION (2026-10-11)
+
+Cieľ: **esblu-test** (`cjbdijbbcujvmrzezusd`, ACTIVE_HEALTHY, Postgres 17.6). Produkcia (`fkpgvgvsmbpieduoatrt`) sa **nepoužila**.
+
+### 15.1 Migrácie (staging only, po jednej, s overením)
+
+| Poradie | Migrácia | Stav |
+|---|---|---|
+| 1 | `20261008120000_subscriptions_platform` | aplikovaná |
+| 2 | `20261011120000_subscriptions_lifecycle_hardening` | aplikovaná |
+| 3 | `20261012090000_subscriptions_event_token_redaction` (nová — nález 15.6) | aplikovaná |
+| 4 | `20261012091000_subscriptions_purchase_options_owned_methods` (nová — regresia zmeny plánu) | aplikovaná |
+
+Pred aplikovaním: snapshot metadát (migration history, 74 tabuliek / 200 funkcií, počty riadkov, 4 manuálne granty,
+RLS/indexy `company_entitlements`, md5 resolvera). Plný `pg_dump` z tohto prostredia nebol možný (iba SQL cez MCP) —
+platformová záloha Supabase je fallback. Závislosti overené: `esblu_resolve_entitlement` a
+`esblu_get_my_company_entitlements` sú na stagingu **bajtovo zhodné** s testovanou verziou.
+
+Ekvivalencia s repom: odtlačok katalógu (funkcie + konfigurácia, stĺpce/defaulty/RLS, 84 constraintov, indexy, granty)
+po migrácii 2 je **identický** s PGlite referenciou z repa; migrácie 3 a 4: md5 zdroja funkcie = repo.
+
+### 15.2 Schéma / RLS / RBAC (reálne `authenticated` sessions na stagingu)
+
+| Rola | Stav predplatného | Nákup / správa | Provider detaily | Tabuľky / service RPC |
+|---|---|---|---|---|
+| owner | áno | povolené | áno | permission denied |
+| admin + `billing.manage` | áno | povolené | áno | permission denied |
+| admin bez `billing.manage` (finance view) | áno | FORBIDDEN | áno (view) | permission denied |
+| accountant | áno | FORBIDDEN | áno (view) | permission denied |
+| employee | áno (bez provider polí) | FORBIDDEN | nie | permission denied |
+| iná firma | — | `found:false` (bez oracle) | — | permission denied |
+| anon | permission denied na všetky billing RPC a tabuľky | | | |
+
+Nikto z klientov nevie zapísať `company_entitlements` (self-unlock). Advisors: žiadny ERROR; INFO „RLS bez policy“
+(zámerne deny-all) a WARN „security definer executable“ iba pre zamýšľané klientske RPC s rolovou bránou.
+
+### 15.3 Multi-connection concurrency (skutočné paralelné Postgres backendy)
+
+Metóda: dblink fan-out na N samostatných backendov (dočasná staging rola s heslom cez TLS, zdieľaná bariéra
+`pg_sleep_until`); každý backend = `record_event` tx → commit → `apply_event` tx → commit (rovnako ako server).
+
+| Test | Backendy | Rozptyl | Výsledok |
+|---|---|---|---|
+| A rovnaký event 10× | 10 | record 46 ms / apply 24 ms | 1× applied, 9× duplicate, 1 event, 1 účet, 7 nárokov |
+| B rovnaký Google token 10× | 10 | 32 ms / 24 ms | 1× applied, 9× duplicate, 1 účet |
+| C dve súbežné aktivácie (2 manažéri, web + Google) | 2 | 6 ms | oba zámery vzniknú (zámer ≠ predplatné); dokončenie: 1 applied, 1 `conflict` |
+| D dve predplatné toho istého providera | 2 | 0 ms | 1 applied, 1 `conflict/SECOND_ACTIVE_SUBSCRIPTION` |
+| E cross-provider (web + Google) | 2 | 0 ms | 1 applied, 1 `conflict` |
+| F cancel + renew race | 2 | — | finálny stav = najnovší snapshot providera |
+| G stale po novšom | 2 + 1 | — | neskorší starší snapshot = `stale`; finál = najnovší |
+
+### 15.4 Reconciliation (fake provider snapshot, bez live API, cron nenasadený)
+
+Drift (`revoked`) → opravené tou istou pipeline, 7 nárokov odvolaných, 1 riadok/kľúč; neskorý `active` →
+`stale/TERMINAL_STATE` (žiadne oživenie); in_sync/corrected → ďalšia kontrola o 24 h; backoff
+15→30→60→120→240→480→960→1440 min, dead-letter po 8, requeue vráti do fronty; podvrhnutý kód chyby → `INVALID_ERROR_CODE`.
+
+### 15.5 Entitlement E2E (dashboard RPC `esblu_get_my_company_entitlements`)
+
+pred nákupom (voice OFF, ai_documents trial 5) → fake web nákup (voice ON zo subscription, ai_documents 200; Android:
+„spravujete cez web“, žiadny nákup) → cancel na konci obdobia (stále ON) → expirácia (voice OFF, ai_documents späť trial 5)
+→ Google nákup (spravuje sa na Androide) → store revoke (RTDN 12) (voice OFF, explain `not_entitled`).
+Employee vidí v každom kroku identické nároky ako owner.
+
+### 15.6 Bezpečnosť
+
+- Klient nevidí provider identifikátory, tokeny ani surové eventy (subscription / explain / options / ops overené).
+- Žiadne `console.*` v billing kóde; žiadny billing secret v `NEXT_PUBLIC_*`; `service_role` iba v `lib/supabase-admin.ts`.
+- **Nález + oprava:** `billing_events.summary.subscription` obsahoval celý Google purchaseToken → migrácia
+  `20261012090000` (trigger: `sha256:<24 hex>`), 5 riadkov redigovaných, overené aj na novom evente. Token ostáva iba
+  v `billing_provider_links` (potrebný na overenie u Google).
+- **Nález + oprava (fail closed):** server mohol ponúknuť Play/StoreKit kanál, aj keď obchody na serveri nie sú zapojené
+  (`ESBLU_BILLING_STORE_MODE=off`) → `lib/billing/server-gates.ts` filtruje `purchase-options` a odmietne
+  `purchase-intent` (`ESBLU_BILLING_PROVIDER_NOT_CONFIGURED`) ešte pred zápisom do DB.
+- **Regresia + oprava:** pri otvorenom predplatnom `purchase_options` nevracal žiadne kanály → UI neponúklo zmenu plánu.
+  Migrácia `20261012091000`: iba kanály providera-vlastníka a iba na jeho platforme; druhý nákup stále blokovaný.
+
+### 15.7 Cleanup
+
+QA dáta (12 firiem `QA-SUBS *`, 18 používateľov `qa-subs-*@example.invalid`, ich eventy/účty/väzby/zámery/nároky),
+QA schéma `qa_subs`, dočasná rola `qa_subs_runner` a rozšírenie `dblink` **odstránené**. `billing_runtime_config` vrátený na
+`web_provider='none'`, `enabled_methods={stripe_web_checkout}`. Stav po cleanup = baseline: 7 firiem, 9 členstiev,
+4 pôvodné manuálne granty (ID overené), billing tabuľky prázdne. Ostali iba seed dáta migrácií (2 test plány, 12 test cien,
+7 pravidiel kanálov, regióny EU27/EEA) — sú súčasťou migrácie, `test_fixture`, bez live cien.
+
+### 15.8 Android native billing
+
+Integračná vetva `subscriptions-mobile-integration`: Java plugin `EsbluBilling` (Play Billing 9.1.0) za `-PesbluBilling=true`.
+Kit: `C:\Users\roiaj\assetpilot\Claude outputs\esblu-subscriptions-integration` (čerstvý web bundle + `cap sync android`,
+staging backend, iba anon kľúč, `android-prebuild-check --target staging` všetko OK vrátane živej sondy cez prehliadač).
+Kompilácia: `release\build-billing-matrix.ps1` (JDK 21) — build A bez billingu, build B s billingom, overenie závislosti,
+triedy pluginu a diffu manifestu (očakávané: B pridá iba `com.android.vending.BILLING`, žiadny nový exportovaný komponent).
+**Kompilácia beží na PC používateľa** (sandbox nemá Android SDK ani prístup na Maven/Gradle).
+
+### 15.9 Rollback / bezpečné vypnutie (bez deštruktívneho DB rollbacku)
+
+| Situácia | Postup |
+|---|---|
+| Vypnúť billing okamžite | server: `ESBLU_BILLING_MODE` / `ESBLU_BILLING_STORE_MODE` zmazať (= `off`, routy vrátia 404); DB: `update billing_runtime_config set web_provider='none', enabled_methods=array['stripe_web_checkout']` |
+| Zastaviť príjem provider eventov | webhook routy pri `off` vracajú 404 (Stripe/Apple/Google eventy sa neprijmú; provider ich doručí znova neskôr); RTDN subscription v Pub/Sub pozastaviť |
+| Odvolať testovacie granty | `update company_entitlements set status='revoked' where source in ('manual','beta_compat') and note like 'QA%'` (riadky sa nemažú) |
+| Rollback kódu | revert commitu na vetve / redeploy predchádzajúceho Preview; produkcia sa netýka (billing je v produkcii vypnutý kódom) |
+| DB migrácie | **nevraciať deštruktívne**; preferovať forward-fix. Rollback skripty v `supabase/rollback/` iba na staging a iba ak treba — nikdy nemažú `billing_events`, účty ani store reporty |
+
+### 15.10 Ďalšie externé požiadavky (presne)
+
+1. Spustiť `release\build-billing-matrix.ps1` na PC → poslať `billing-matrix\report.txt` (bez APK).
+2. Pre test UI s fake nákupmi na zariadení: Preview backend s billing routami (vetva `subscriptions-mobile-integration`),
+   `ESBLU_BILLING_MODE=fake` + `ESBLU_FAKE_BILLING_SECRET` v **Preview** env a doména/prístup pre appku
+   (napr. ako `mobile-staging.esblu.com`) — vyžaduje súhlas (Vercel konfigurácia).
+3. Play Console: test subscription produkt `esblu_test_pro` (base plany `monthly`/`yearly`), license testers,
+   app nahraná aspoň do internal testing (Play Billing nefunguje pre sideload s iným package/podpisom) — súhlas.
+4. Google service account (Play Developer API, read + acknowledge) + RTDN Pub/Sub topic/subscription — súhlas.
+5. Stripe **test** kľúč + webhook secret (iba Preview/staging env, zadáva vlastník) — súhlas.
+6. Apple: In-App Purchase key, App Store Connect subscription group, Mac na StoreKit — súhlas.
+7. CLIA / účtovník: bod 12.
