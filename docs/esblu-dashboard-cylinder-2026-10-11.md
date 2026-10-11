@@ -393,3 +393,46 @@ Keď sa výška neskôr opraví (rotácia, klávesnica), valec sa sám vráti.
 12. Veľkosť písma 130 % (Nastavenia Androidu): karty vyššie, text neprekypuje.
 13. „Odstrániť animácie" → zoznam kariet, všetko funguje.
 14. Rotácia na landscape a späť → zoznam, potom valec na tom istom module.
+
+## 16. Regresia: Viac a Chat presvitajú cez nástenku (build 2026-10-11T16:22:12Z)
+
+### Príčina
+
+**Viac:**
+- Panel „Viac" bol priesvitný bottom sheet (`fixed inset-0 z-[46]`, backdrop `bg-black/60`, `rounded-t-2xl`) nad **živou** nástenkou. Nástenka ostala namontovaná, viditeľná a interaktívna (klávesnica, koliesko, ťah, klik, `aria-live`).
+- Plocha valca nemala vlastný stacking context. Karty majú inline `z-index` až 100 a prechodové gradienty `z-[200]`, takže tieto hodnoty súperili v **koreňovom** stacking contexte s fixnými vrstvami (Viac `z-[46]`, lišta `z-[45]`). Karty sa preto kreslili cez prekrytie aj cez backdrop.
+
+**Chat:**
+- `/chat` je samostatná routa, ale nástenka nemala žiadnu ochranu, keď ostala v DOM (prechod routy, pending navigácia, modálna vrstva).
+- Obrazovka chatu nemala explicitné nepriehľadné pozadie (`bg-page-bg`) ani izoláciu.
+- Spodná lišta bola polopriesvitná (`bg-surface-1/95` + blur), takže obsah pod ňou presvital.
+
+### Oprava (príčina, nie vyšší z-index)
+
+- **Viac** je samostatná nepriehľadná obrazovka (`bg-page-bg`). Zaberá celú obsahovú plochu medzi safe-area hore a lištou dole (`bottom: var(--mobile-tabbar-space)`), má `role="dialog"` a `aria-modal`. Backdrop ani sheet už neexistujú. Android Back a Esc ju zavrú (`pushLayer`).
+- **Lišta** je nepriehľadná (`bg-surface-1`, bez blur).
+- **Nástenka:**
+  - `useModalLayerOpen()` (`lib/mobile/screen-overlay.ts`) sleduje `[aria-modal="true"]`;
+  - `dashboardActive = (routa je /) && !modalLayerOpen`;
+  - `<main>` je `hidden` mimo `/` a `inert` + `aria-hidden`, keď nie je aktívna;
+  - `isolate` uzatvára všetky z-indexy nástenky.
+- **Valec:**
+  - `paused={!dashboardActive}` → `motion = cylinder && !paused`, takže rAF, ťah, koliesko aj klávesnica sú vypnuté;
+  - efekt pauzy zastaví rAF, zruší ťah a dotiahne pozíciu na celú kartu, takže po návrate nie je skok;
+  - žiadne FAB pásy, žiadny `aria-live`, klik ignorovaný, sekcia `inert`;
+  - stage aj zoznam majú `isolate`.
+- **Chat:** `ChatShell` má `bg-page-bg isolate` a výšku `100dvh − lišta`. Otvorená klávesnica zmenší viewport, ale pod chatom nie je nič, čo by sa odhalilo.
+- **FAB:** iba na `/` (`shouldShowChatFab`). Skryje sa pri každej `aria-modal` vrstve (Viac, dialógy).
+- **Návrat:** fokusovaný modul sa obnoví zo `sessionStorage` (`esblu.dashboard.focus.v1`). ResizeObserver po odkrytí prepočíta geometriu.
+
+### Testy
+
+`npm run test:mobile-layering` — 23 testov (Viac/Chat neviditeľnosť a neinteraktívnosť nástenky, FAB, pauza valca, klávesnica, Android Back, obnova fokusu, nepriehľadné pozadia, klávesnica v chate).
+
+### Checklist na zariadení
+
+1. Dashboard → Viac: nie je vidieť karty, hľadanie, počítadlo, ▲/▼ ani FAB. Vidieť je iba Viac a spodnú lištu.
+2. Viac → Back: späť na dashboard, rovnaký modul vo fokuse, bez prázdneho frame.
+3. Dashboard → Chat: čisté pozadie, bez FAB. Pri otvorení klávesnice nepresvitá nástenka.
+4. Chat → Back: dashboard, rovnaký modul vo fokuse.
+5. Počas Viac nefunguje ťah ani šípky na valci (nič sa nepohne).

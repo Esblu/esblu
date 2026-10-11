@@ -82,6 +82,12 @@ type Props = {
   onFocusChange?: (key: DashboardModuleKey) => void;
   /** Valec je skrytý (napr. výsledky hľadania) — neohlasuje zóny pre FAB. */
   hidden?: boolean;
+  /**
+   * Nástenka nie je aktívna obrazovka (panel „Viac", dialóg, iná routa):
+   * žiadna animácia, gestá, koliesko, klávesnica, haptika ani oznámenia;
+   * obsah je `inert` a skrytý pre čítačky.
+   */
+  paused?: boolean;
 };
 
 /** Pomer písma používateľa voči 16 px (Android „Veľkosť písma", zoom). */
@@ -104,6 +110,7 @@ export function ModuleCylinder({
   initialFocusKey = null,
   onFocusChange,
   hidden = false,
+  paused = false,
 }: Props) {
   const reducedMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
   const n = modules.length;
@@ -147,7 +154,9 @@ export function ModuleCylinder({
   }, []);
 
   const mode = cylinderMode({ n, reducedMotion, geometryOk: fallbackReason === null });
-  const motion = mode === "cylinder";
+  const isCylinder = mode === "cylinder";
+  // Interakcia valca beží IBA keď je nástenka aktívna obrazovka.
+  const motion = isCylinder && !paused;
 
   // --- zápis transformácií (bez React renderu) -------------------------------
   const paint = useCallback(() => {
@@ -183,7 +192,7 @@ export function ModuleCylinder({
 
   // Zóny pre plávajúci chat: fokusovaná karta + ovládanie (FAB ich obíde).
   const publishFabBands = useCallback(() => {
-    if (hidden || !motion) {
+    if (hidden || paused || !motion) {
       setFabAvoidBands([]);
       return;
     }
@@ -193,7 +202,7 @@ export function ModuleCylinder({
     if (card && card.height > 0) bands.push({ top: card.top, bottom: card.bottom });
     if (controls && controls.height > 0) bands.push({ top: controls.top, bottom: controls.bottom });
     setFabAvoidBands(bands);
-  }, [hidden, motion]);
+  }, [hidden, paused, motion]);
 
   const animateTo = useCallback(
     (target: number) => {
@@ -260,7 +269,7 @@ export function ModuleCylinder({
   // --- výška karty + kontrola geometrie (ResizeObserver) ---------------------
   useLayoutEffect(() => {
     const stage = stageRef.current;
-    if (!stage || typeof ResizeObserver === "undefined" || !motion) return;
+    if (!stage || typeof ResizeObserver === "undefined" || !isCylinder) return;
     let frame = 0;
     const observer = new ResizeObserver(([entry]) => {
       const height = entry.contentRect.height;
@@ -296,7 +305,7 @@ export function ModuleCylinder({
       cancelAnimationFrame(frame);
       observer.disconnect();
     };
-  }, [paint, large, n, config, enterFallback, exitFallback, motion, publishFabBands]);
+  }, [paint, large, n, config, enterFallback, exitFallback, isCylinder, publishFabBands]);
 
   // Záložný zoznam sa skúsi vrátiť na valec iba po zmene viewportu (zatvorenie
   // klávesnice, rotácia, resize okna) — nikdy v slučke bez zmeny rozmerov.
@@ -320,6 +329,22 @@ export function ModuleCylinder({
   }, [publishFabBands]);
 
   useEffect(() => () => stopLoop(), []);
+
+  // Pozastavenie (iná vrstva/obrazovka nad nástenkou): zastaviť rAF, zrušiť
+  // prebiehajúci ťah, dotiahnuť pozíciu na celú kartu (žiadny „skok" po
+  // návrate) a nespúšťať haptiku.
+  useEffect(() => {
+    if (!paused) return;
+    stopLoop();
+    dragRef.current = null;
+    touchSnapRef.current = false;
+    keyboardFocusRef.current = false;
+    const settled = Math.round(targetRef.current);
+    positionRef.current = settled;
+    targetRef.current = settled;
+    velocityRef.current = 0;
+    paint();
+  }, [paused, paint]);
 
   // --- koliesko / trackpad ---------------------------------------------------
   useEffect(() => {
@@ -399,7 +424,7 @@ export function ModuleCylinder({
   }, [animateTo, paint, motion]);
 
   const handleCardClick = (index: number) => {
-    if (suppressClickRef.current) return;
+    if (paused || suppressClickRef.current) return;
     const item = modules[index];
     if (!item) return;
     const action = cardAction(item, index, motion ? activeRef.current : index);
@@ -423,7 +448,7 @@ export function ModuleCylinder({
   if (mode === "empty") return null;
 
   // --- 1 modul / 2 moduly / reduced motion / fallback: plnohodnotný zoznam ---
-  if (!motion) {
+  if (!isCylinder) {
     const listHeight = large ? 148 : 120;
     return (
       <section
@@ -431,7 +456,9 @@ export function ModuleCylinder({
           stageRef.current = el;
         }}
         aria-label={labels.region}
-        className="min-h-[240px] flex-1 overflow-y-auto pb-4 lg:max-w-3xl"
+        aria-hidden={paused || undefined}
+        inert={paused}
+        className="relative isolate min-h-[240px] flex-1 overflow-y-auto pb-4 lg:max-w-3xl"
         data-cylinder={reducedMotion ? "reduced" : mode === "single" ? "single" : n === 2 ? "pair" : "fallback"}
         data-fallback-reason={fallbackReason ?? undefined}
       >
@@ -454,7 +481,10 @@ export function ModuleCylinder({
     <section
       aria-roledescription="carousel"
       aria-label={labels.region}
-      className="flex min-h-0 flex-1 flex-col lg:max-w-3xl"
+      aria-hidden={paused || undefined}
+      inert={paused}
+      data-paused={paused || undefined}
+      className="relative isolate flex min-h-0 flex-1 flex-col lg:max-w-3xl"
       data-cylinder={variant}
       onKeyDown={onKeyDown}
     >
@@ -488,7 +518,9 @@ export function ModuleCylinder({
         ref={(el) => {
           stageRef.current = el;
         }}
-        className="relative min-h-[180px] flex-1 select-none overflow-hidden"
+        // `isolate`: z-index kariet (až 100) a prechodov (200) ostáva VNÚTRI
+        // valca — nikdy neprerazí nad panel „Viac", dialógy ani spodnú lištu.
+        className="relative isolate min-h-[180px] flex-1 select-none overflow-hidden"
         style={stageStyle}
         onPointerDown={onPointerDown}
         onClickCapture={(event) => {
@@ -525,11 +557,14 @@ export function ModuleCylinder({
         </div>
       </div>
 
-      {/* Jediné živé oznámenie: modul vo fokuse (vrátane zamknutého stavu). */}
-      <p className="sr-only" aria-live="polite">
-        {labels.slide(active.title, activeIndex + 1, n)}
-        {active.statusText ? `. ${active.statusText}` : ""}
-      </p>
+      {/* Jediné živé oznámenie: modul vo fokuse (vrátane zamknutého stavu).
+          Pri pozastavení sa nevykresľuje — žiadne oznámenia spod inej vrstvy. */}
+      {!paused && (
+        <p className="sr-only" aria-live="polite">
+          {labels.slide(active.title, activeIndex + 1, n)}
+          {active.statusText ? `. ${active.statusText}` : ""}
+        </p>
+      )}
     </section>
   );
 }

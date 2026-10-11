@@ -268,8 +268,9 @@ const component = read("app/components/dashboard/ModuleCylinder.tsx");
 check("reduced-motion fallback: statický zoznam bez 3D, bez kolieska a bez ťahu", () => {
   assert.ok(component.includes('useMediaQuery("(prefers-reduced-motion: reduce)")'));
   assert.equal(cyl.cylinderMode({ n: 6, reducedMotion: true, geometryOk: true }), "list");
-  assert.ok(component.includes("const motion = mode === \"cylinder\";"));
-  assert.ok(component.includes("if (!motion) {"), "zoznam namiesto valca");
+  assert.ok(component.includes("const isCylinder = mode === \"cylinder\";"));
+  assert.ok(component.includes("const motion = isCylinder && !paused;"));
+  assert.ok(component.includes("if (!isCylinder) {"), "zoznam namiesto valca");
   assert.ok(component.includes('data-cylinder={reducedMotion ? "reduced" : mode === "single" ? "single" : n === 2 ? "pair" : "fallback"}'));
   assert.match(component, /if \(!stage \|\| !motion\) return;\s*const onWheel/, "koliesko vypnuté");
   assert.match(component, /if \(!motion\) return;\s*const onMove/, "ťah vypnutý");
@@ -344,7 +345,7 @@ check("no horizontal overflow na mobile: fokusovaná karta (aj s liftom variantu
   }
   const dash = read("app/components/Dashboard.tsx");
   assert.ok(dash.includes("overflow-hidden px-4"), "sekcia nástenky orezáva obsah");
-  assert.ok(component.includes('className="relative min-h-[180px] flex-1 select-none overflow-hidden"'));
+  assert.ok(component.includes('className="relative isolate min-h-[180px] flex-1 select-none overflow-hidden"'));
 });
 
 check("dashboard vypĺňa výšku medzi hlavičkou a spodnou lištou (žiadny prázdny spodok, žiadny scroll stránky)", () => {
@@ -429,7 +430,7 @@ check("fallback pri neplatnej geometrii: 0 px / NaN / príliš nízka plocha / k
   assert.ok(component.includes("const check = validateCylinderGeometry({ stageHeight: height, cardHeight: next, n, variant: config });"));
   assert.ok(component.includes('enterFallback("non_finite")'));
   assert.ok(component.includes("if (ratio < 0.6 || !(opacity > 0.5)) {"));
-  assert.ok(component.includes('className="min-h-[240px] flex-1 overflow-y-auto pb-4 lg:max-w-3xl"'), "zoznam má vlastnú min. výšku");
+  assert.ok(component.includes('className="relative isolate min-h-[240px] flex-1 overflow-y-auto pb-4 lg:max-w-3xl"'), "zoznam má vlastnú min. výšku");
 });
 
 // =============================================================================

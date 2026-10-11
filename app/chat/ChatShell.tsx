@@ -26,7 +26,7 @@ export function ChatShell({
   const { t } = useLocale();
   const hasSelectedConversation = Boolean(activeConversationId);
   return (
-    <main className="app-shell-bg relative min-h-[calc(100dvh-var(--mobile-tabbar-space,0px))] w-full min-w-0">
+    <main className="app-shell-bg relative isolate min-h-[calc(100dvh-var(--mobile-tabbar-space,0px))] w-full min-w-0 bg-page-bg" data-screen="chat">
       <div className="mx-auto flex h-[calc(100dvh-var(--mobile-tabbar-space,0px))] max-w-6xl flex-col px-4 pb-3 pt-3 sm:px-6 sm:pt-5">
         <div
           className={`shrink-0 ${hasSelectedConversation ? "hidden lg:block" : "block"}`}

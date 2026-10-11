@@ -3,7 +3,9 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+import { isMobileDashboardPath } from "@/lib/mobile/chat-fab";
+import { useModalLayerOpen } from "@/lib/mobile/screen-overlay";
 import { supabase } from "@/lib/supabase";
 import { flushMediaDeletions } from "@/lib/storage/media-deletion";
 import { signMediaUrl } from "@/lib/storage/signed-media";
@@ -609,6 +611,14 @@ export default function Dashboard() {
   // nevymýšľa; pri nenačítaných nárokoch sa zámok nezobrazí (lib/dashboard/modules.ts).
   // ---------------------------------------------------------------------------
   const entitlements = useCompanyEntitlements();
+  // NAVIGAČNÁ/VRSTVOVÁ OPRAVA 2026-10-11: nástenka je aktívna obrazovka IBA
+  // na „/" a bez modálnej vrstvy nad ňou (panel „Viac", dialóg). Inak je
+  // valec pozastavený a obsah `inert`; na inej route sa nástenka nevykreslí
+  // vôbec (obrana pre prípad, že by ostala namontovaná pod novou routou).
+  const pathname = usePathname();
+  const modalLayerOpen = useModalLayerOpen();
+  const onDashboardRoute = pathname === null || pathname === "" || isMobileDashboardPath(pathname);
+  const dashboardActive = onDashboardRoute && !modalLayerOpen;
   // Experiment B: ?cylinder=spatial (iba vizuálny token, žiadna iná logika).
   const cylinderVariant: CylinderVariantName = parseCylinderVariant(useSearchParamValue("cylinder"));
   const largeDashboard = useMediaQuery("(min-width: 1024px)");
@@ -862,7 +872,13 @@ export default function Dashboard() {
   // plain-substring searchResults panel bezo zmeny.
 
   return (
-    <main className="app-shell-bg relative">
+    <main
+      className="app-shell-bg relative isolate"
+      hidden={!onDashboardRoute}
+      aria-hidden={!dashboardActive || undefined}
+      inert={!dashboardActive}
+      data-dashboard-active={dashboardActive ? "true" : "false"}
+    >
       <div className="relative flex flex-col lg:min-h-screen lg:flex-row">
         {/* Desktop sidebar — KOREKCIA (dashboard v2): užší, plochý a tmavší
             (bez glass/blur efektu), aby nedominoval obrazovke a nepôsobil
@@ -1280,6 +1296,7 @@ export default function Dashboard() {
                     variant={cylinderVariant}
                     large={largeDashboard}
                     initialFocusKey={focusKey}
+                    paused={!dashboardActive}
                     onFocusChange={rememberFocus}
                     onNavigate={(href) => router.push(href)}
                     onLockedAction={() => router.push("/kontakt")}

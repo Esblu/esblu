@@ -200,35 +200,41 @@ export default function MobileTabBar() {
   return (
     <>
       {moreOpen && (
-        <div className="fixed inset-0 z-[46] flex items-end" role="dialog" aria-modal="true" aria-label={t("nav.moreTitle")}>
-          <button
-            type="button"
-            className="absolute inset-0 bg-black/60"
-            aria-label={t("common.buttons.close")}
-            onClick={() => setMoreOpen(false)}
-          />
-          <div className="relative w-full rounded-t-2xl border-t border-subtle bg-surface-1 px-4 pb-[calc(var(--mobile-tabbar-space,0px)+12px)] pt-3 shadow-2xl">
+        // NAVIGAČNÁ OPRAVA 2026-10-11: „Viac" je samostatná NEPRIEHĽADNÁ
+        // obrazovka nad obsahovou plochou (od safe-area hore po spodnú lištu),
+        // nie priesvitný bottom sheet nad živou nástenkou. Spodná lišta ostáva
+        // viditeľná; obsah pod panelom je pozastavený a `inert`
+        // (lib/mobile/screen-overlay.ts). Android „späť" / Esc panel zavrie.
+        <div
+          className="fixed inset-x-0 top-0 z-[46] flex flex-col overflow-y-auto bg-page-bg"
+          style={{ bottom: "var(--mobile-tabbar-space, 0px)", paddingTop: "var(--esblu-safe-top, 0px)" }}
+          role="dialog"
+          aria-modal="true"
+          aria-label={t("nav.moreTitle")}
+          data-testid="mobile-more-screen"
+        >
+          <div className="mx-auto w-full max-w-xl px-4 pb-4 pt-3">
             <div className="flex items-center justify-between">
-              <p className="text-sm font-semibold text-primary">{t("nav.moreTitle")}</p>
+              <h2 className="ui-page-title">{t("nav.moreTitle")}</h2>
               <button
                 ref={closeRef}
                 type="button"
                 onClick={() => setMoreOpen(false)}
                 aria-label={t("common.buttons.close")}
-                className="flex h-10 w-10 items-center justify-center rounded-doc-sm text-secondary hover:bg-surface-hover"
+                className="flex h-10 w-10 items-center justify-center rounded-doc-sm text-secondary hover:bg-surface-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring"
               >
                 <CloseIcon size={20} />
               </button>
             </div>
-            <ul className="mt-2 grid grid-cols-3 gap-2">
+            <ul className="mt-3 grid grid-cols-3 gap-2">
               {more.map((item) => (
                 <li key={item.key}>
                   <Link
                     href={item.href}
-                    className={`flex min-h-[64px] flex-col items-center justify-center gap-1 rounded-doc border px-2 text-center text-xs font-medium transition ${
+                    className={`flex min-h-[72px] flex-col items-center justify-center gap-1.5 rounded-doc border px-2 text-center text-xs font-medium transition ${
                       activeKey === item.key
-                        ? "border-accent-cyan/60 bg-accent-cyan/10 text-accent-cyan"
-                        : "border-subtle bg-surface-2 text-primary hover:bg-surface-hover"
+                        ? "border-brand-400/60 bg-brand-500/10 text-brand-300"
+                        : "border-subtle bg-surface-1 text-primary hover:bg-surface-hover"
                     }`}
                     aria-current={activeKey === item.key ? "page" : undefined}
                   >
@@ -241,12 +247,12 @@ export default function MobileTabBar() {
             <button
               type="button"
               onClick={() => void handleLogout()}
-              className="mt-3 flex min-h-10 w-full items-center justify-center rounded-doc-sm border border-subtle px-4 text-[13px] font-medium text-secondary hover:bg-surface-hover"
+              className="mt-4 flex min-h-10 w-full items-center justify-center rounded-doc-sm border border-subtle bg-surface-1 px-4 text-[13px] font-medium text-secondary hover:bg-surface-hover"
             >
               {t("nav.logout")}
             </button>
             {ESBLU_BUILD_ID && (
-              <p className="mt-2 text-center text-xs text-muted-esblu">
+              <p className="mt-3 text-center text-xs text-muted-esblu">
                 {t("nav.appBuild", { build: ESBLU_BUILD_ID })}
               </p>
             )}
@@ -256,7 +262,7 @@ export default function MobileTabBar() {
 
       <nav
         aria-label={t("nav.mainNavigation")}
-        className={`fixed inset-x-0 bottom-0 z-[45] border-t border-subtle bg-surface-1/95 pb-[var(--esblu-safe-bottom)] backdrop-blur ${keyboardOpen ? "hidden" : ""}`}
+        className={`fixed inset-x-0 bottom-0 z-[45] border-t border-subtle bg-surface-1 pb-[var(--esblu-safe-bottom)] ${keyboardOpen ? "hidden" : ""}`}
       >
         <div className="mx-auto flex max-w-xl items-stretch gap-0.5 px-1.5 py-1" style={{ minHeight: TABBAR_HEIGHT_PX }}>
           {tabs.map((item) => (
