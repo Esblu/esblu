@@ -41,7 +41,9 @@ import type { NormalizedSubscriptionState } from "@/lib/billing/types";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (p: string) => readFileSync(path.join(ROOT, p), "utf8");
 const MIGRATION = "supabase/migrations/20261008120000_subscriptions_platform.sql";
+const LIFECYCLE = "supabase/migrations/20261011120000_subscriptions_lifecycle_hardening.sql";
 const ROLLBACK = "supabase/rollback/20261008120000_subscriptions_platform_rollback.sql";
+const LIFECYCLE_ROLLBACK = "supabase/rollback/20261011120000_subscriptions_lifecycle_hardening_rollback.sql";
 
 type Row = Record<string, unknown>;
 type Db = {
@@ -85,8 +87,10 @@ await db.exec(`
 `);
 await db.exec(read("supabase/migrations/20260928100000_company_entitlements_trial.sql"));
 await db.exec(read(MIGRATION));
-await check("migrácia je idempotentná (druhé spustenie)", async () => {
+await db.exec(read(LIFECYCLE));
+await check("migrácie sú idempotentné (druhé spustenie oboch)", async () => {
   await db.exec(read(MIGRATION));
+  await db.exec(read(LIFECYCLE));
 });
 
 // ----------------------------------------------------------------------------- dáta
@@ -591,7 +595,8 @@ await check("Android kúpa + upgrade s linkedPurchaseToken → applied (nie conf
   });
   if (n3.kind !== "state") throw new Error("expected state");
   assert.equal(await deliverStore("google", "gmsg-3", n3.state), "applied");
-  assert.equal((await subscriptionOf(U.ownerG)).status, "past_due");
+  // 2026-10-11: Play IN_GRACE_PERIOD → kanonický grace_period (prístup do konca grace).
+  assert.equal((await subscriptionOf(U.ownerG)).status, "grace_period");
 });
 
 // ============================================================================= 11. Nákup z mobilu
@@ -883,18 +888,23 @@ await check("žiadny paralelný „mobilný plán“: všetky kanály zapisujú 
 // ============================================================================= 10. Rollback
 await check("rollback: RPC zmiznú, tabuľky (default) ostanú, nároky sa nemažú; opätovné nasadenie OK", async () => {
   const before = await subscriptionRowsA();
+  // Poradie: najprv rollback novšej migrácie (2026-10-11), potom pôvodnej.
+  await db.exec(read(LIFECYCLE_ROLLBACK));
   await db.exec(read(ROLLBACK));
   const fn = await one<{ n: number }>(`select count(*)::int n from pg_proc where proname like 'esblu_billing_%' or proname in ('esblu_get_my_subscription','esblu_get_my_checkout_status')`);
   assert.equal(fn.n, 0);
   assert.ok(await one(`select to_regclass('public.subscription_accounts') t`).then((r) => (r as Row).t));
   assert.equal(await subscriptionRowsA(), before);
   await db.exec(read(MIGRATION));
+  await db.exec(read(LIFECYCLE));
   assert.equal((await subscriptionOf(U.owner)).planCode, "test_pro");
+  await db.exec(read(LIFECYCLE_ROLLBACK));
   await db.exec(`set esblu.rollback_drop_billing_tables = 'yes'`);
   await db.exec(read(ROLLBACK));
   await db.exec(`reset esblu.rollback_drop_billing_tables`);
   assert.equal(((await one(`select to_regclass('public.subscription_accounts') t`)) as Row).t, null);
   await db.exec(read(MIGRATION));
+  await db.exec(read(LIFECYCLE));
 });
 
 console.log(`\nsubscriptions-pglite: ${passed} passed, ${failed} failed`);

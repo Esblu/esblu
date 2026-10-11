@@ -20,10 +20,12 @@ import { confirmAction } from "@/lib/app-dialog";
 
 export type Storefront = { platform: "android" | "ios"; country: string | null; osVersion?: string | null };
 
-export type GooglePurchaseResult =
-  | { kind: "play"; purchaseToken: string }
-  | { kind: "developer_billing"; externalTransactionToken: string }
-  | { kind: "canceled" };
+export type { GooglePurchaseResult } from "@/lib/billing/native-bridge-contract";
+export { normalizeGooglePluginResult } from "@/lib/billing/native-bridge-contract";
+import { normalizeGooglePluginResult, type GooglePurchaseResult } from "@/lib/billing/native-bridge-contract";
+
+/** Produkt z Play (iba na zobrazenie ceny obchodu; o nároku rozhoduje server). */
+export type GoogleProductInfo = { productId: string; basePlans: { basePlanId: string; formattedPrice: string | null }[] };
 
 export type AppleNoticeResult = { proceed: boolean; token: string | null };
 
@@ -51,6 +53,10 @@ export interface NativeBillingBridge {
     oldPurchaseToken?: string | null;
     billingChoice: boolean;
   }): Promise<GooglePurchaseResult>;
+  /** Play: queryProductDetailsAsync (SUBS) — ceny podľa obchodu, iba zobrazenie. */
+  queryGoogleProducts(productIds: string[]): Promise<GoogleProductInfo[]>;
+  /** Play: queryPurchasesAsync(SUBS) → purchaseTokeny na overenie serverom (obnova / reconnect). */
+  restoreGoogle(): Promise<string[]>;
   /** Stripe Checkout v appke: Custom Tab / SFSafariViewController alebo Safari (Apple .browser). */
   openCheckout(url: string, mode: "in_app" | "browser"): Promise<void>;
   /** Správa predplatného v obchode (AppStore.showManageSubscriptions / Play subscriptions). */
@@ -96,6 +102,14 @@ export class FakeBillingBridge implements NativeBillingBridge {
   }
 
   async restoreApple(): Promise<string[]> {
+    return [];
+  }
+
+  async queryGoogleProducts(productIds: string[]): Promise<GoogleProductInfo[]> {
+    return productIds.map((productId) => ({ productId, basePlans: [] }));
+  }
+
+  async restoreGoogle(): Promise<string[]> {
     return [];
   }
 
@@ -158,7 +172,14 @@ type EsbluBillingPlugin = {
   purchaseApple(o: { productId: string; appAccountToken: string }): Promise<{ signedTransaction?: string; canceled?: boolean }>;
   restoreApple(): Promise<{ signedTransactions: string[] }>;
   appleExternalPurchaseNotice(o: { type: "browser" | "withinApp" }): Promise<{ proceed: boolean; token: string | null }>;
-  purchaseGoogle(o: Record<string, unknown>): Promise<{ kind: "play" | "developer_billing" | "canceled"; purchaseToken?: string; externalTransactionToken?: string }>;
+  purchaseGoogle(o: Record<string, unknown>): Promise<{
+    kind: "play" | "developer_billing" | "canceled" | "pending" | "already_owned" | "billing_unavailable" | "error";
+    purchaseToken?: string;
+    externalTransactionToken?: string;
+    code?: string;
+  }>;
+  queryGoogleProducts(o: { productIds: string[] }): Promise<{ products: GoogleProductInfo[] }>;
+  restoreGoogle(): Promise<{ purchaseTokens: string[] }>;
   manageSubscriptions(o: { provider: string; productId?: string | null }): Promise<void>;
 };
 
@@ -191,10 +212,20 @@ export class CapacitorBillingBridge implements NativeBillingBridge {
     return this.plugin.appleExternalPurchaseNotice({ type });
   }
   async purchaseGoogle(input: { productId: string; basePlanId: string; obfuscatedAccountId: string; oldPurchaseToken?: string | null; billingChoice: boolean }): Promise<GooglePurchaseResult> {
-    const r = await this.plugin.purchaseGoogle(input);
-    if (r.kind === "play" && r.purchaseToken) return { kind: "play", purchaseToken: r.purchaseToken };
-    if (r.kind === "developer_billing" && r.externalTransactionToken) return { kind: "developer_billing", externalTransactionToken: r.externalTransactionToken };
-    return { kind: "canceled" };
+    try {
+      return normalizeGooglePluginResult(await this.plugin.purchaseGoogle(input));
+    } catch {
+      return { kind: "billing_unavailable" };
+    }
+  }
+  async queryGoogleProducts(productIds: string[]) {
+    if (!this.available) return [];
+    return (await this.plugin.queryGoogleProducts({ productIds }).catch(() => ({ products: [] }))).products ?? [];
+  }
+  async restoreGoogle() {
+    if (!this.available) return [];
+    const r = await this.plugin.restoreGoogle().catch(() => ({ purchaseTokens: [] as string[] }));
+    return (r.purchaseTokens ?? []).filter((t) => typeof t === "string" && t.length >= 10);
   }
   async openCheckout(url: string, mode: "in_app" | "browser") {
     if (mode === "browser") window.open(url, "_system");

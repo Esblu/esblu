@@ -10,16 +10,21 @@ export type BillingProviderId = "stripe" | "apple" | "google" | "fake";
 export type BillingEnvironment = "test";
 export type BillingInterval = "month" | "year";
 
-/** Kanonické stavy — rovnaké pre všetkých providerov (DB check constraint). */
+/** Kanonické stavy — rovnaké pre všetkých providerov (DB check constraint). Mapa: lib/billing/canonical-state.ts. */
 export const CANONICAL_STATUSES = [
+  "pending",
   "incomplete",
   "trialing",
   "active",
+  "grace_period",
   "past_due",
+  "account_hold",
   "unpaid",
   "paused",
   "canceled",
   "expired",
+  "refunded",
+  "revoked",
 ] as const;
 export type CanonicalStatus = (typeof CANONICAL_STATUSES)[number];
 
@@ -46,6 +51,10 @@ export type NormalizedSubscriptionState = {
   account_token: string | null;
   /** Čas stavu u providera (ISO) — ochrana poradia. */
   state_at: string;
+  /** Koniec grace podľa providera (Apple gracePeriodExpiresDate / Google expiryTime počas grace). */
+  grace_until?: string | null;
+  /** Rizikový príznak pre operátora (spor / čiastočný refund); null = vyčistiť. Nemení nároky. */
+  review_flag?: "dispute_open" | "refund_partial" | "refund_reversed" | null;
   /** Google linkedPurchaseToken — výslovné nahradenie predplatného tým istým providerom. */
   replaces_subscription_id?: string | null;
   /** Platba (iba ak event nesie platbu) — vstup pre reporting obchodom (Google/Apple). */

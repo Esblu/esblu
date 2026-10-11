@@ -12,19 +12,19 @@
 // Stav predplatného je na všetkých platformách ten istý (jedna odpoveď servera).
 // =============================================================================
 
+import {
+  CANONICAL_STATUSES,
+  isEntitlingStatus,
+  isOpenStatus,
+  manageHere,
+  type CanonicalSubscriptionStatus,
+  type ManagedVia,
+} from "@/lib/billing/canonical-state";
+
 export type ClientPlatform = "web" | "android" | "ios";
 export type PurchaseChannel = "web_checkout" | "mobile_purchase" | "none";
 
-export type SubscriptionStatus =
-  | "none"
-  | "incomplete"
-  | "trialing"
-  | "active"
-  | "past_due"
-  | "unpaid"
-  | "paused"
-  | "canceled"
-  | "expired";
+export type SubscriptionStatus = CanonicalSubscriptionStatus;
 
 export type PlanEntitlement = { key: string; limit: number | null; limit_period: string | null };
 
@@ -42,11 +42,17 @@ export type SubscriptionView = {
   currentPeriodEnd: string | null;
   graceUntil: string | null;
   version: number | null;
+  /** Kde sa predplatné spravuje (web / Google Play / App Store) — zo servera. */
+  managedVia: ManagedVia | null;
+  /** Server: oprávňuje aktuálny stav na nároky? (zobrazenie; autoritou ostáva resolver). */
+  entitles: boolean;
+  reviewFlag: string | null;
 };
 
 export type PlanOption = { planCode: string; intervals: ("month" | "year")[]; entitlements: PlanEntitlement[] };
 
-const STATUSES: readonly SubscriptionStatus[] = ["none", "incomplete", "trialing", "active", "past_due", "unpaid", "paused", "canceled", "expired"];
+const STATUSES: readonly SubscriptionStatus[] = CANONICAL_STATUSES;
+const MANAGED_VIA: readonly ManagedVia[] = ["web", "google_play", "app_store", "esblu_support"];
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => typeof v === "object" && v !== null && !Array.isArray(v);
 const strOrNull = (v: unknown) => (typeof v === "string" && v ? v : null);
@@ -81,6 +87,9 @@ export function parseSubscriptionView(data: unknown): SubscriptionView | null {
     currentPeriodEnd: strOrNull(data.current_period_end),
     graceUntil: strOrNull(data.grace_until),
     version: typeof data.version === "number" ? data.version : null,
+    managedVia: MANAGED_VIA.includes(data.managed_via as ManagedVia) ? (data.managed_via as ManagedVia) : null,
+    entitles: typeof data.entitles === "boolean" ? data.entitles : isEntitlingStatus(status),
+    reviewFlag: strOrNull(data.review_flag),
   };
 }
 
@@ -172,13 +181,21 @@ export function plansFor(options: PurchaseOptions, method: PurchaseMethod, inter
 }
 
 /** Má firma platený prístup z predplatného? (iba na zobrazenie — autoritou je DB). */
-export function hasPaidAccess(view: Pick<SubscriptionView, "status">): boolean {
-  return view.status === "active" || view.status === "trialing" || view.status === "past_due";
+export function hasPaidAccess(view: Pick<SubscriptionView, "status"> & Partial<Pick<SubscriptionView, "entitles">>): boolean {
+  return typeof view.entitles === "boolean" ? view.entitles && isEntitlingStatus(view.status) : isEntitlingStatus(view.status);
+}
+
+/**
+ * Môže táto platforma spravovať predplatné? Ak nie, UI ukáže iba
+ * „Predplatné spravujete cez …" a NIKDY neotvorí cancel flow iného obchodu.
+ */
+export function canManageOnPlatform(view: Pick<SubscriptionView, "billingProvider" | "canManage">, platform: ClientPlatform): boolean {
+  return view.canManage && manageHere(view.billingProvider, platform);
 }
 
 /** Je povolený nový checkout? (DB to aj tak overí — ESBLU_BILLING_ALREADY_SUBSCRIBED). */
 export function canStartCheckout(view: Pick<SubscriptionView, "status" | "canManage">): boolean {
-  return view.canManage && (view.status === "none" || view.status === "canceled" || view.status === "expired");
+  return view.canManage && !isOpenStatus(view.status);
 }
 
 export type CheckoutReturnState = "confirmed" | "pending" | "failed" | "unknown";

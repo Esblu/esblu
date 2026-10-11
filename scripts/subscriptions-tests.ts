@@ -177,16 +177,19 @@ await check("Apple: stavy notifikácií", () => {
   };
   assert.equal(status("SUBSCRIBED"), "active");
   assert.equal(status("DID_RENEW"), "active");
-  assert.equal(status("DID_FAIL_TO_RENEW"), "past_due");
+  // 2026-10-11 kanonický model: billing retry bez grace = account_hold, refund/revoke samostatné stavy.
+  assert.equal(status("DID_FAIL_TO_RENEW"), "account_hold");
   assert.equal(status("EXPIRED"), "expired");
-  assert.equal(status("REFUND"), "canceled");
+  assert.equal(status("REFUND"), "refunded");
+  assert.equal(status("REVOKE"), "revoked");
   assert.equal(status("TEST"), "AUDIT_ONLY");
 });
 await check("Google: stavy subscriptionsv2", () => {
   const future = "2099-01-01T00:00:00.000Z";
   assert.deepEqual(mapGoogleState("SUBSCRIPTION_STATE_CANCELED", future, "2026-10-08T00:00:00Z"), { status: "active", cancelAtPeriodEnd: true });
-  assert.equal(mapGoogleState("SUBSCRIPTION_STATE_ON_HOLD", future, "x")?.status, "unpaid");
-  assert.equal(mapGoogleState("SUBSCRIPTION_STATE_IN_GRACE_PERIOD", future, "x")?.status, "past_due");
+  assert.equal(mapGoogleState("SUBSCRIPTION_STATE_ON_HOLD", future, "x")?.status, "account_hold");
+  assert.equal(mapGoogleState("SUBSCRIPTION_STATE_IN_GRACE_PERIOD", future, "x")?.status, "grace_period");
+  assert.equal(mapGoogleState("SUBSCRIPTION_STATE_PENDING", future, "x")?.status, "pending");
   assert.equal(mapGoogleState("SUBSCRIPTION_STATE_UNKNOWN", future, "x"), null);
 });
 

@@ -23,9 +23,11 @@ import { useLocale } from "@/lib/i18n/LocaleProvider";
 import { formatDate } from "@/lib/i18n/format";
 import { confirmAction } from "@/app/components/ui/AppDialog";
 import type { NativeBillingBridge } from "@/lib/billing/native-bridge";
+import { managedViaMessageKey } from "@/lib/billing/canonical-state";
 import {
   CHECKOUT_POLL_INTERVAL_MS,
   CHECKOUT_POLL_MAX_ATTEMPTS,
+  canManageOnPlatform,
   canStartCheckout,
   hasPaidAccess,
   interpretCheckoutReturn,
@@ -40,7 +42,11 @@ import {
 } from "@/lib/billing/client-model";
 
 type LoadState = "loading" | "ready" | "disabled" | "error";
-type Banner = "pending" | "confirmed" | "failed" | "canceled" | "timeout" | "purchasePending" | "purchaseConfirmed" | "purchaseCanceled" | null;
+type Banner =
+  | "pending" | "confirmed" | "failed" | "canceled" | "timeout"
+  | "purchasePending" | "purchaseConfirmed" | "purchaseCanceled"
+  | "storePending" | "storeUnavailable" | "alreadyOwned" | "restoreDone" | "restoreNone"
+  | null;
 
 const ERROR_KEYS: Record<string, string> = {
   ESBLU_BILLING_FORBIDDEN: "subscription.errors.forbidden",
@@ -58,6 +64,11 @@ const BANNER_KEYS: Record<Exclude<Banner, null>, string> = {
   purchasePending: "subscription.purchasePending",
   purchaseConfirmed: "subscription.purchaseConfirmed",
   purchaseCanceled: "subscription.purchaseCanceled",
+  storePending: "subscription.storePending",
+  storeUnavailable: "subscription.storeUnavailableNow",
+  alreadyOwned: "subscription.alreadyOwned",
+  restoreDone: "subscription.restoreDone",
+  restoreNone: "subscription.restoreNone",
 };
 
 async function authHeaders(): Promise<Record<string, string> | null> {
@@ -254,6 +265,21 @@ export default function SubscriptionPage() {
         setBanner("purchaseCanceled");
         return;
       }
+      if (result.kind === "pending") {
+        // Odložená platba: nárok vznikne až keď Play potvrdí (RTDN / reconciliation).
+        setBanner("storePending");
+        return;
+      }
+      if (result.kind === "already_owned") {
+        // Nikdy druhá platba — obnova existujúceho nákupu cez server.
+        setBanner("alreadyOwned");
+        await restoreGoogle();
+        return;
+      }
+      if (result.kind === "billing_unavailable" || result.kind === "error") {
+        setBanner("storeUnavailable");
+        return;
+      }
       if (result.kind === "play") {
         await confirmStorePurchase("google", intent.checkoutId, { purchaseToken: result.purchaseToken }, planCode);
         return;
@@ -282,6 +308,22 @@ export default function SubscriptionPage() {
       return;
     }
     if (result) await loadSubscription();
+  }
+
+  /** Play obnova / reconnect: každý token overí SERVER (nikdy nie klient). */
+  async function restoreGoogle() {
+    if (!bridge?.available) return;
+    setBusy(true);
+    try {
+      const tokens = await bridge.restoreGoogle();
+      for (const purchaseToken of tokens) {
+        await post("/api/billing/mobile/confirm", { provider: "google", checkoutId: null, purchaseToken });
+      }
+      setBanner(tokens.length > 0 ? "restoreDone" : "restoreNone");
+      await loadSubscription();
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function restoreApple() {
@@ -374,7 +416,11 @@ export default function SubscriptionPage() {
                 </>
               )}
 
-              {view.canManage && paid && (
+              {view.canManage && paid && !canManageOnPlatform(view, platform) && managedViaMessageKey(view.managedVia) && (
+                // Buy anywhere, use everywhere: správa iba tam, kde predplatné vzniklo.
+                <p className="mt-5 text-sm text-muted-esblu">{t(managedViaMessageKey(view.managedVia)!)}</p>
+              )}
+              {view.canManage && paid && canManageOnPlatform(view, platform) && (
                 <div className="mt-5 flex flex-wrap gap-3">
                   {storeProvider ? (
                     <>
@@ -398,6 +444,9 @@ export default function SubscriptionPage() {
                     </>
                   )}
                 </div>
+              )}
+              {platform === "android" && view.canManage && bridge?.available && (
+                <button type="button" disabled={busy} onClick={restoreGoogle} className={`mt-4 ${secondary}`}>{t("subscription.restore")}</button>
               )}
               {platform === "ios" && view.canManage && bridge?.available && (
                 <button type="button" disabled={busy} onClick={restoreApple} className={`mt-4 ${secondary}`}>{t("subscription.restore")}</button>
@@ -445,7 +494,7 @@ export default function SubscriptionPage() {
                           {!isCurrent && paid && change && (
                             <button type="button" disabled={busy} onClick={() => runAction(change, plan.planCode, "change")} className={secondary}>{t("subscription.changePlan")}</button>
                           )}
-                          {!isCurrent && paid && !storeProvider && (
+                          {!isCurrent && paid && !storeProvider && canManageOnPlatform(view, platform) && (
                             <button type="button" disabled={busy} onClick={() => manageStripe("change", plan.planCode)} className={secondary}>{t("subscription.changePlan")}</button>
                           )}
                         </div>

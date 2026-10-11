@@ -27,6 +27,8 @@ import {
   type VerifiedProviderEvent,
 } from "@/lib/billing/types";
 
+import { STRIPE_STATUS_MAP } from "@/lib/billing/canonical-state";
+
 const STRIPE_API = "https://api.stripe.com/v1";
 
 /** Eventy, ktoré menia kanonický stav (overené v docs.stripe.com/billing/subscriptions/webhooks). */
@@ -45,7 +47,6 @@ export const STRIPE_STATE_EVENTS = new Set([
 
 /** Iba audit — žiadna automatická zmena nároku (rozhoduje operátor). */
 export const STRIPE_AUDIT_EVENTS = new Set([
-  "charge.dispute.created",
   "checkout.session.async_payment_failed",
   "checkout.session.expired",
   "customer.subscription.trial_will_end",
@@ -81,20 +82,10 @@ export function assertStripeTestKey(secretKey: string | undefined): string {
 }
 
 export function mapStripeStatus(status: unknown): CanonicalStatus | null {
-  switch (status) {
-    case "active":
-    case "trialing":
-    case "past_due":
-    case "unpaid":
-    case "paused":
-    case "canceled":
-    case "incomplete":
-      return status;
-    case "incomplete_expired":
-      return "expired";
-    default:
-      return null;
-  }
+  // Jediná mapa: lib/billing/canonical-state.ts (incomplete → pending, unpaid → account_hold).
+  if (typeof status !== "string" || !Object.prototype.hasOwnProperty.call(STRIPE_STATUS_MAP, status)) return null;
+  const mapped = STRIPE_STATUS_MAP[status];
+  return mapped === "none" ? null : (mapped as CanonicalStatus);
 }
 
 type Obj = Record<string, unknown>;
@@ -308,6 +299,7 @@ export class StripeTestProvider implements BillingProvider {
   async normalizeEvent(event: VerifiedProviderEvent): Promise<NormalizationResult> {
     if (STRIPE_AUDIT_EVENTS.has(event.eventType)) return { kind: "ignore", reason: "AUDIT_ONLY" };
     if (event.eventType === "charge.refunded") return this.normalizeRefund(event);
+    if (event.eventType === "charge.dispute.created" || event.eventType === "charge.dispute.closed") return this.normalizeDispute(event);
     if (!STRIPE_STATE_EVENTS.has(event.eventType)) return { kind: "ignore", reason: "UNSUPPORTED_EVENT" };
     const { subscriptionId, checkoutRef } = stripeSubscriptionIdFromEvent(event.eventType, event.data);
     if (!subscriptionId) return { kind: "ignore", reason: "NO_SUBSCRIPTION" };
@@ -324,9 +316,8 @@ export class StripeTestProvider implements BillingProvider {
    * invoice_payments → invoice → subscription. Ak sa nedá určiť → audit
    * (REFUND_NEEDS_OPERATOR) — operátor nahlási ručne.
    */
-  private async normalizeRefund(event: VerifiedProviderEvent): Promise<NormalizationResult> {
-    const charge = event.data;
-    if (!isObj(charge) || charge.object !== "charge") return { kind: "ignore", reason: "AUDIT_ONLY" };
+  /** charge → (payment_intent → invoice_payments →) invoice → subscription. */
+  private async subscriptionIdForCharge(charge: Obj): Promise<{ subscriptionId: string | null; invoiceId: string | null }> {
     let invoiceId = idOf(charge.invoice);
     const paymentIntent = idOf(charge.payment_intent);
     if (!invoiceId && paymentIntent) {
@@ -338,24 +329,65 @@ export class StripeTestProvider implements BillingProvider {
       const first = payments && Array.isArray(payments.data) && isObj(payments.data[0]) ? (payments.data[0] as Obj) : null;
       invoiceId = first ? idOf(first.invoice) : null;
     }
-    if (!invoiceId) return { kind: "ignore", reason: "REFUND_NEEDS_OPERATOR" };
+    if (!invoiceId) return { subscriptionId: null, invoiceId: null };
     const invoice = await this.request("GET", `/invoices/${encodeURIComponent(invoiceId)}`);
-    const { subscriptionId } = stripeSubscriptionIdFromEvent("invoice.paid", invoice);
+    return { subscriptionId: stripeSubscriptionIdFromEvent("invoice.paid", invoice).subscriptionId, invoiceId };
+  }
+
+  /**
+   * Refund. Od API 2025-03-31 charge nemá `invoice`; cesta: payment_intent →
+   * invoice_payments → invoice → subscription. Ak sa nedá určiť → audit
+   * (REFUND_NEEDS_OPERATOR).
+   *  - ÚPLNÝ refund → kanonický stav `refunded` (nároky okamžite odvolané,
+   *    dáta ostávajú) + refund charge pre reporting obchodu.
+   *  - ČIASTOČNÝ refund → iba charge (reporting) bez zmeny nároku; operátor.
+   * Politika „úplný refund = koniec prístupu" je PRODUKTOVÉ/CLIA rozhodnutie
+   * (docs/subscriptions-production-readiness-2026-10-11.md).
+   */
+  private async normalizeRefund(event: VerifiedProviderEvent): Promise<NormalizationResult> {
+    const charge = event.data;
+    if (!isObj(charge) || charge.object !== "charge") return { kind: "ignore", reason: "AUDIT_ONLY" };
+    const { subscriptionId, invoiceId } = await this.subscriptionIdForCharge(charge);
     if (!subscriptionId) return { kind: "ignore", reason: "REFUND_NEEDS_OPERATOR" };
     const refunded = typeof charge.amount_refunded === "number" ? charge.amount_refunded : null;
-    return {
-      kind: "charge",
-      providerSubscriptionId: subscriptionId,
-      charge: {
-        id: `refund_${str(charge.id) ?? event.eventId}_${refunded ?? 0}`,
-        kind: "refund",
-        amount_pre_tax_minor: refunded,
-        tax_minor: null,
-        currency: str(charge.currency)?.toUpperCase() ?? null,
-        at: event.createdAt,
-        tax_country: null,
-        refunded_charge_id: invoiceId,
-      },
+    const amount = typeof charge.amount === "number" ? charge.amount : null;
+    const refundCharge: NormalizedCharge = {
+      id: `refund_${str(charge.id) ?? event.eventId}_${refunded ?? 0}`,
+      kind: "refund",
+      amount_pre_tax_minor: refunded,
+      tax_minor: null,
+      currency: str(charge.currency)?.toUpperCase() ?? null,
+      at: event.createdAt,
+      tax_country: null,
+      refunded_charge_id: invoiceId,
     };
+    const full = charge.refunded === true || (refunded !== null && amount !== null && refunded >= amount);
+    if (!full) return { kind: "charge", providerSubscriptionId: subscriptionId, charge: refundCharge };
+    const sub = await this.request("GET", `/subscriptions/${encodeURIComponent(subscriptionId)}`);
+    const state = normalizeStripeSubscription(sub, this.now().toISOString()); // čas načítania = ochrana poradia
+    return {
+      kind: "state",
+      state: { ...state, status: "refunded", ended_at: event.createdAt, review_flag: null, charge: refundCharge },
+    };
+  }
+
+  /**
+   * Chargeback: dispute.created → príznak `dispute_open` (prístup sa NEMENÍ —
+   * rozhoduje výsledok); dispute.closed: lost → `revoked`, won → príznak zmazaný.
+   */
+  private async normalizeDispute(event: VerifiedProviderEvent): Promise<NormalizationResult> {
+    const dispute = event.data;
+    if (!isObj(dispute) || dispute.object !== "dispute") return { kind: "ignore", reason: "AUDIT_ONLY" };
+    const chargeId = idOf(dispute.charge);
+    if (!chargeId) return { kind: "ignore", reason: "DISPUTE_NEEDS_OPERATOR" };
+    const charge = await this.request("GET", `/charges/${encodeURIComponent(chargeId)}`);
+    const { subscriptionId } = await this.subscriptionIdForCharge(charge);
+    if (!subscriptionId) return { kind: "ignore", reason: "DISPUTE_NEEDS_OPERATOR" };
+    const sub = await this.request("GET", `/subscriptions/${encodeURIComponent(subscriptionId)}`);
+    const state = normalizeStripeSubscription(sub, this.now().toISOString()); // čas načítania = ochrana poradia
+    if (event.eventType === "charge.dispute.created") return { kind: "state", state: { ...state, review_flag: "dispute_open" } };
+    if (dispute.status === "lost") return { kind: "state", state: { ...state, status: "revoked", ended_at: event.createdAt, review_flag: null } };
+    if (dispute.status === "won") return { kind: "state", state: { ...state, review_flag: null } };
+    return { kind: "ignore", reason: "DISPUTE_PENDING" };
   }
 }

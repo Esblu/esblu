@@ -17,6 +17,7 @@
 // Normalizačné funkcie nižšie sú čisté a otestované na fixture payloadoch.
 // =============================================================================
 
+import { appleNotificationStatus, GOOGLE_RTDN_OVERRIDES, GOOGLE_STATE_MAP } from "@/lib/billing/canonical-state";
 import { sha256Hex } from "@/lib/billing/signature";
 import type { AppleSignedDataVerifier } from "@/lib/billing/stores/apple-jws";
 import type { GooglePlayApi } from "@/lib/billing/stores/store-apis";
@@ -73,10 +74,8 @@ export type AppleDecodedNotification = {
   renewal?: Obj | null; // JWSRenewalInfoDecodedPayload
 };
 
-const APPLE_AUDIT_TYPES = new Set(["TEST", "CONSUMPTION_REQUEST", "PRICE_INCREASE", "REFUND_DECLINED", "REFUND_REVERSED", "EXTERNAL_PURCHASE_TOKEN"]);
-
 export function normalizeAppleNotification(n: AppleDecodedNotification): NormalizationResult {
-  if (APPLE_AUDIT_TYPES.has(n.notificationType)) return { kind: "ignore", reason: "AUDIT_ONLY" };
+  if (appleNotificationStatus(n.notificationType, n.subtype, null, "") === "ignore") return { kind: "ignore", reason: "AUDIT_ONLY" };
   const tx = n.transaction ?? {};
   const originalTransactionId = str(tx.originalTransactionId);
   const productId = str(tx.productId);
@@ -85,29 +84,12 @@ export function normalizeAppleNotification(n: AppleDecodedNotification): Normali
   const expiresAt = isoFromMillis(tx.expiresDate);
   const autoRenewOff = isObj(n.renewal) && n.renewal.autoRenewStatus === 0;
 
-  let status: CanonicalStatus;
-  switch (n.notificationType) {
-    case "EXPIRED":
-    case "GRACE_PERIOD_EXPIRED":
-      status = "expired";
-      break;
-    case "REFUND":
-    case "REVOKE":
-      status = "canceled";
-      break;
-    case "DID_FAIL_TO_RENEW":
-      status = "past_due";
-      break;
-    case "TEST":
-    case "CONSUMPTION_REQUEST":
-    case "PRICE_INCREASE":
-    case "REFUND_DECLINED":
-    case "REFUND_REVERSED":
-    case "EXTERNAL_PURCHASE_TOKEN":
-      return { kind: "ignore", reason: "AUDIT_ONLY" };
-    default:
-      status = expiresAt && expiresAt > signedAt ? "active" : "expired";
-  }
+  // Jediná mapa: lib/billing/canonical-state.ts (appleNotificationStatus).
+  const mapped = appleNotificationStatus(n.notificationType, n.subtype, expiresAt, signedAt);
+  if (mapped === "ignore") return { kind: "ignore", reason: "AUDIT_ONLY" };
+  const status = mapped as CanonicalStatus;
+  const ended = status === "canceled" || status === "expired" || status === "refunded" || status === "revoked";
+  const graceUntil = status === "grace_period" && isObj(n.renewal) ? isoFromMillis(n.renewal.gracePeriodExpiresDate) : null;
 
   return {
     kind: "state",
@@ -119,8 +101,9 @@ export function normalizeAppleNotification(n: AppleDecodedNotification): Normali
       current_period_start: isoFromMillis(tx.purchaseDate),
       current_period_end: expiresAt,
       cancel_at_period_end: autoRenewOff,
-      canceled_at: status === "canceled" ? isoFromMillis(tx.revocationDate) ?? signedAt : null,
-      ended_at: status === "canceled" || status === "expired" ? signedAt : null,
+      canceled_at: status === "refunded" || status === "revoked" ? isoFromMillis(tx.revocationDate) ?? signedAt : null,
+      ended_at: ended ? isoFromMillis(tx.revocationDate) ?? signedAt : null,
+      grace_until: graceUntil,
       trial_start: null,
       trial_end: null,
       checkout_ref: null,
@@ -187,32 +170,21 @@ export type GoogleSubscriptionSnapshot = {
   purchaseToken: string;
   eventTimeMillis: number | string;
   notificationType?: number;
+  /** Voided Purchases RTDN (refund / chargeback) pre tento token. */
+  voided?: boolean;
   resource: Obj;
 };
 
 export function mapGoogleState(state: unknown, expiryIso: string | null, nowIso: string): { status: CanonicalStatus; cancelAtPeriodEnd: boolean } | null {
-  switch (state) {
-    case "SUBSCRIPTION_STATE_ACTIVE":
-      return { status: "active", cancelAtPeriodEnd: false };
-    case "SUBSCRIPTION_STATE_CANCELED":
-      // Zrušené obnovovanie, prístup do konca obdobia.
-      return expiryIso && expiryIso > nowIso
-        ? { status: "active", cancelAtPeriodEnd: true }
-        : { status: "expired", cancelAtPeriodEnd: true };
-    case "SUBSCRIPTION_STATE_IN_GRACE_PERIOD":
-      return { status: "past_due", cancelAtPeriodEnd: false };
-    case "SUBSCRIPTION_STATE_ON_HOLD":
-      return { status: "unpaid", cancelAtPeriodEnd: false };
-    case "SUBSCRIPTION_STATE_PAUSED":
-      return { status: "paused", cancelAtPeriodEnd: false };
-    case "SUBSCRIPTION_STATE_EXPIRED":
-    case "SUBSCRIPTION_STATE_PENDING_PURCHASE_CANCELED":
-      return { status: "expired", cancelAtPeriodEnd: false };
-    case "SUBSCRIPTION_STATE_PENDING":
-      return { status: "incomplete", cancelAtPeriodEnd: false };
-    default:
-      return null;
+  // Jediná mapa: lib/billing/canonical-state.ts (GOOGLE_STATE_MAP).
+  if (typeof state !== "string" || !Object.prototype.hasOwnProperty.call(GOOGLE_STATE_MAP, state)) return null;
+  const mapped = GOOGLE_STATE_MAP[state];
+  if (mapped === "active_or_expired") {
+    // Zrušené obnovovanie, prístup do konca obdobia.
+    return expiryIso && expiryIso > nowIso ? { status: "active", cancelAtPeriodEnd: true } : { status: "expired", cancelAtPeriodEnd: true };
   }
+  if (mapped === "none") return null;
+  return { status: mapped as CanonicalStatus, cancelAtPeriodEnd: false };
 }
 
 export function normalizeGoogleSubscription(s: GoogleSubscriptionSnapshot): NormalizationResult {
@@ -225,6 +197,10 @@ export function normalizeGoogleSubscription(s: GoogleSubscriptionSnapshot): Norm
   const stateAt = isoFromMillis(s.eventTimeMillis) ?? new Date().toISOString();
   const mapped = mapGoogleState(r.subscriptionState, expiry, stateAt);
   if (!mapped || !s.purchaseToken) throw new BillingProviderError("MALFORMED_PAYLOAD");
+  // RTDN SUBSCRIPTION_REVOKED / voided purchase (refund) prepisujú stav z API.
+  const override = s.voided ? "refunded" : typeof s.notificationType === "number" ? GOOGLE_RTDN_OVERRIDES[s.notificationType] : undefined;
+  if (override) mapped.status = override as CanonicalStatus;
+  const ended = mapped.status === "expired" || mapped.status === "refunded" || mapped.status === "revoked";
   const account = isObj(r.externalAccountIdentifiers) ? str(r.externalAccountIdentifiers.obfuscatedExternalAccountId) : null;
   const started = isoFromMillis(Date.parse(String(r.startTime ?? "")));
   return {
@@ -239,7 +215,9 @@ export function normalizeGoogleSubscription(s: GoogleSubscriptionSnapshot): Norm
       current_period_end: expiry,
       cancel_at_period_end: mapped.cancelAtPeriodEnd,
       canceled_at: mapped.cancelAtPeriodEnd ? stateAt : null,
-      ended_at: mapped.status === "expired" ? stateAt : null,
+      ended_at: ended ? stateAt : null,
+      // Počas IN_GRACE_PERIOD Play posúva expiryTime na koniec grace.
+      grace_until: mapped.status === "grace_period" ? expiry : null,
       trial_start: null,
       trial_end: null,
       checkout_ref: null,
@@ -285,25 +263,38 @@ export class GooglePlayProvider extends StoreProviderBase {
     }
     if (notification.packageName !== this.rtdn.packageName) throw new BillingProviderError("INVALID_SIGNATURE", "package");
     const sub = isObj(notification.subscriptionNotification) ? notification.subscriptionNotification : null;
+    // Voided Purchases RTDN: productType 1 = subscription (refund / chargeback / revoke).
+    const voided = isObj(notification.voidedPurchaseNotification) && Number(notification.voidedPurchaseNotification.productType) === 1
+      ? notification.voidedPurchaseNotification : null;
     const eventTime = Number(notification.eventTimeMillis ?? Date.now());
     return {
       provider: "google",
       environment: "test",
       eventId: `rtdn:${String(notification.__messageId)}`,
-      eventType: sub ? `subscription.${String(sub.notificationType)}` : notification.testNotification ? "test" : "other",
+      eventType: sub ? `subscription.${String(sub.notificationType)}` : voided ? "voided_purchase" : notification.testNotification ? "test" : "other",
       createdAt: new Date(eventTime).toISOString(),
       payloadSha256: sha256Hex(rawBody ?? ""),
-      data: sub ? { purchaseToken: str(sub.purchaseToken), eventTimeMillis: eventTime } : null,
+      data: sub
+        ? { purchaseToken: str(sub.purchaseToken), eventTimeMillis: eventTime, notificationType: Number(sub.notificationType) }
+        : voided
+          ? { purchaseToken: str(voided.purchaseToken), eventTimeMillis: eventTime, voided: true }
+          : null,
     };
   }
 
   async normalizeEvent(event: VerifiedProviderEvent): Promise<NormalizationResult> {
-    const data = event.data as { purchaseToken?: string | null; eventTimeMillis?: number; resource?: Obj } | null;
+    const data = event.data as { purchaseToken?: string | null; eventTimeMillis?: number; notificationType?: number; voided?: boolean; resource?: Obj } | null;
     if (!data?.purchaseToken) return { kind: "ignore", reason: "AUDIT_ONLY" };
     // RTDN nesie iba „niečo sa zmenilo" → autoritatívny stav z Play Developer API.
     const resource = data.resource ?? (this.rtdn ? await this.rtdn.api.getSubscriptionV2(data.purchaseToken) : null);
     if (!resource) throw new BillingProviderError("NOT_CONFIGURED");
-    const result = normalizeGoogleSubscription({ purchaseToken: data.purchaseToken, eventTimeMillis: data.eventTimeMillis ?? Date.now(), resource });
+    const result = normalizeGoogleSubscription({
+      purchaseToken: data.purchaseToken,
+      eventTimeMillis: data.eventTimeMillis ?? Date.now(),
+      notificationType: data.notificationType,
+      voided: data.voided === true,
+      resource,
+    });
     // Acknowledge (do 3 dní, inak auto-refund) pre aktívne nákupy, ktoré klient nepotvrdil.
     if (this.rtdn && result.kind === "state" && result.state.status === "active" && resource.acknowledgementState === "ACKNOWLEDGEMENT_STATE_PENDING") {
       const items = Array.isArray(resource.lineItems) ? (resource.lineItems as Obj[]) : [];
