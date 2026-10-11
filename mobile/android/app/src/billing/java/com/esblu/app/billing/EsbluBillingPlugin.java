@@ -139,19 +139,27 @@ public class EsbluBillingPlugin extends Plugin {
             call.reject("INVALID_ARGUMENTS");
             return;
         }
-        if (ids.isEmpty()) { call.resolve(productsResult(Collections.emptyList())); return; }
+        if (ids.isEmpty()) { call.resolve(productsResult(Collections.emptyList(), ids, "ok")); return; }
         List<QueryProductDetailsParams.Product> products = new ArrayList<>();
         for (String id : ids) {
             products.add(QueryProductDetailsParams.Product.newBuilder().setProductId(id).setProductType(BillingClient.ProductType.SUBS).build());
         }
         withConnection(() -> client.queryProductDetailsAsync(
             QueryProductDetailsParams.newBuilder().setProductList(products).build(),
-            (result, details) -> call.resolve(productsResult(
-                result.getResponseCode() == BillingClient.BillingResponseCode.OK ? details.getProductDetailsList() : Collections.emptyList()))
-        ), code -> call.resolve(productsResult(Collections.emptyList())));
+            (result, details) -> {
+                if (result.getResponseCode() != BillingClient.BillingResponseCode.OK) {
+                    call.resolve(productsResult(Collections.emptyList(), ids, "unavailable"));
+                    return;
+                }
+                List<ProductDetails> found = details.getProductDetailsList();
+                // Produkt nie je v Play Console (alebo nie je pre tohto používateľa) = "unconfigured", nie pád.
+                call.resolve(productsResult(found, ids, found.size() < ids.size() ? "unconfigured" : "ok"));
+            }
+        ), code -> call.resolve(productsResult(Collections.emptyList(), ids, "unavailable")));
     }
 
-    private static JSObject productsResult(List<ProductDetails> list) {
+    /** status: ok | unconfigured (chýbajúce produkty v Play) | unavailable (Play Billing nedostupný). */
+    private static JSObject productsResult(List<ProductDetails> list, List<String> requested, String status) {
         JSArray products = new JSArray();
         for (ProductDetails d : list) {
             JSArray plans = new JSArray();
@@ -171,8 +179,16 @@ public class EsbluBillingPlugin extends Plugin {
             item.put("basePlans", plans);
             products.put(item);
         }
+        JSArray missing = new JSArray();
+        for (String id : requested) {
+            boolean seen = false;
+            for (ProductDetails d : list) { if (d.getProductId().equals(id)) { seen = true; break; } }
+            if (!seen) missing.put(id);
+        }
         JSObject r = new JSObject();
         r.put("products", products);
+        r.put("missing", missing);
+        r.put("status", status);
         return r;
     }
 

@@ -59,6 +59,21 @@ check("billing choice nie je zapojený → bezpečná chyba, žiadny launch", ()
   assert.match(JAVA, /BILLING_CHOICE_NOT_WIRED/);
   assert.doesNotMatch(JAVA, /enableBillingProgram|enableDeveloperBillingOption/);
 });
+check("queryProducts bez Play produktu = jasný stav unconfigured/unavailable (nie pád)", () => {
+  assert.match(JAVA, /"unconfigured"/);
+  assert.match(JAVA, /"unavailable"/);
+  assert.match(JAVA, /r\.put\("missing", missing\)/);
+  assert.match(BRIDGE, /status\?: "ok" \| "unconfigured" \| "unavailable"/);
+});
+check("build-billing-matrix.ps1: iba debug + JDK 21 + opt-in billing, bez uploadu / release / secrets", () => {
+  const ps = read("release/build-billing-matrix.ps1");
+  assert.match(ps, /Use-Jdk21OrFail/);
+  assert.match(ps, /:app:assembleDebug/);
+  assert.match(ps, /-PesbluBilling=true/);
+  assert.match(ps, /com\.android\.vending\.BILLING/);
+  assert.match(ps, /com\.android\.billingclient:billing:9\.1\.0/);
+  assert.doesNotMatch(ps, /bundleRelease|assembleRelease|publish|upload|storePassword|keystore\.properties/i);
+});
 check("restore posiela iba PURCHASED tokeny (pending nie)", () => {
   assert.match(JAVA, /queryPurchasesAsync\([\s\S]*PurchaseState\.PURCHASED/);
 });

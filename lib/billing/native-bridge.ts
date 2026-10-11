@@ -178,7 +178,7 @@ type EsbluBillingPlugin = {
     externalTransactionToken?: string;
     code?: string;
   }>;
-  queryGoogleProducts(o: { productIds: string[] }): Promise<{ products: GoogleProductInfo[] }>;
+  queryGoogleProducts(o: { productIds: string[] }): Promise<{ products: GoogleProductInfo[]; missing?: string[]; status?: "ok" | "unconfigured" | "unavailable" }>;
   restoreGoogle(): Promise<{ purchaseTokens: string[] }>;
   manageSubscriptions(o: { provider: string; productId?: string | null }): Promise<void>;
 };
