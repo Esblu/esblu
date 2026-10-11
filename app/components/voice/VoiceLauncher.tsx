@@ -286,7 +286,7 @@ export function VoiceLauncher({
       // Sieť / časový limit / offline / 5xx nie sú odpoveď: relácia povie
       // „Spojenie zlyhalo" (alebo „vypršal čas") a text chyby sa NIKDY
       // nepošle ako nový príkaz. Nič sa automaticky neopakuje.
-      if (!http.ok && (http.kind === "offline" || http.kind === "timeout" || http.kind === "network" || http.kind === "server" || http.kind === "invalid_response" || http.kind === "rate_limited")) {
+      if (!http.ok && (http.kind === "offline" || http.kind === "timeout" || http.kind === "network" || http.kind === "server" || http.kind === "invalid_response" || http.kind === "rate_limited" || http.kind === "unavailable")) {
         setPhase("failed");
         setMessage(t(failureMessageKey(http.kind)));
         throw new Error(`intent_${http.kind}`);

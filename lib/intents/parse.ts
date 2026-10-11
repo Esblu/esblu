@@ -319,6 +319,24 @@ const WHAT_DO_WE_HAVE_PHRASES = [
 function matchesWhatDoWeHavePattern(text: string): boolean {
   return WHAT_DO_WE_HAVE_REGEX.test(text) || containsAny(text, WHAT_DO_WE_HAVE_PHRASES);
 }
+
+// „Koľko mám vozidiel?", „Koľko máme strojov?" (voice E2E 2026-10-11) —
+// holá otázka na POČET celej entity = rovnaký read-only ZOZNAM ako „Ukáž
+// všetky vozidlá" (počet je dĺžka zoznamu, spoken-text ho vysloví). Iba celá
+// krátka veta bez ďalšieho obsahu: „Koľko máme spreja?" ostáva stavom
+// skladovej položky a „koľko stojí servis Octavie" sem nepatrí.
+const BARE_COUNT_REGEX =
+  /^(?:kolko|how many|wie viele|wieviele)\s+(?:(?:mam|mame|mate|mas|ma firma|evidujem|evidujeme)\s+)?(?:(?:spolu|celkom|aktualne)\s+)?(vozidiel|vozidla|aut|strojov|stroje|bagrov|skladovych poloziek|poloziek na sklade|poloziek v sklade|vehicles|machines|fahrzeuge|maschinen)(?:\s+(?:mam|mame|mate|evidujem|evidujeme|v evidencii|vo firme|v firme|spolu|celkom|do we have|have we|haben wir|habe ich))*$/;
+
+/** Entita holej otázky na počet, inak null. Rozhoduje podstatné meno z vety. */
+export function bareCountEntity(text: string): "vehicle" | "machine" | "inventory" | null {
+  const cleaned = text.replace(/[?!.,;:]+/g, " ").replace(/\s+/g, " ").trim();
+  const noun = BARE_COUNT_REGEX.exec(cleaned)?.[1];
+  if (!noun) return null;
+  if (/^(vozid|aut|vehicle|fahrzeug)/.test(noun)) return "vehicle";
+  if (/^(stroj|bagr|machine|maschin)/.test(noun)) return "machine";
+  return "inventory";
+}
 const THIS_MONTH_WORDS = ["tento mesiac", "this month", "diesen monat"];
 const THIS_YEAR_WORDS = ["tento rok", "tohto roku", "this year", "dieses jahr"];
 
@@ -2095,6 +2113,12 @@ function parseIntentDeterministicInner(rawText: string, hints: ParseHints = {}):
   //     KTORÝ JEDEN kontextový slovník sa vo vete našiel — ak je viac než
   //     jeden, alebo žiadny, táto vetva zámerne nič nevráti (fail-closed,
   //     zadanie bod 6 — radšej padne na AI fallback/otázku, než aby hádala).
+  // Holá otázka na počet: entitu určuje podstatné meno vety (nie kontextové
+  // slovníky — „koľko" by inak zapol aj skladový kontext a vetva by mlčala).
+  const countEntity = bareCountEntity(text);
+  if (countEntity === "vehicle") return build("SEARCH_VEHICLE", { listAll: true });
+  if (countEntity === "machine") return build("SEARCH_MACHINE", { listAll: true });
+  if (countEntity === "inventory") return build("SEARCH_INVENTORY_ITEM", { listAll: true });
   const isListQuantified = containsAny(text, LIST_ALL_QUANTIFIER_WORDS) || matchesWhatDoWeHavePattern(text);
   if (isListQuantified) {
     const matchedContexts = [hasVehicleContext && !plate, hasMachineContext, hasInventoryContext].filter(

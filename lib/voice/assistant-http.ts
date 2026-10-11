@@ -28,6 +28,7 @@ export type HttpFailureKind =
   | "bad_request"
   | "too_large"
   | "rate_limited"
+  | "unavailable"
   | "server"
   | "invalid_response";
 
@@ -53,6 +54,13 @@ export function classifyHttpStatus(status: number): HttpFailureKind | null {
 }
 
 type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
+
+/** Kód odpovede, ktorým server hlási vypnutú AI (app/api/assistant/transcribe). */
+export const AI_UNAVAILABLE_CODE = "AI_UNAVAILABLE";
+
+function isAiUnavailableBody(data: unknown): boolean {
+  return !!data && typeof data === "object" && (data as { code?: unknown }).code === AI_UNAVAILABLE_CODE;
+}
 
 export async function fetchJsonWithTimeout<T = unknown>(
   url: string,
@@ -89,6 +97,12 @@ export async function fetchJsonWithTimeout<T = unknown>(
       parsed = false;
     }
     const failure = classifyHttpStatus(response.status);
+    // 503 + AI_UNAVAILABLE = AI na serveri zámerne vypnutá (napr. staging bez
+    // kľúča). Opakovanie nepomôže → volajúci reláciu ukončí s jasným
+    // oznámením. Iná 503 (výpadok infraštruktúry) ostáva „server".
+    if (failure === "server" && response.status === 503 && isAiUnavailableBody(data)) {
+      return { ok: false, kind: "unavailable", status: response.status, data };
+    }
     if (failure) return { ok: false, kind: failure, status: response.status, data };
     if (!parsed) return { ok: false, kind: "invalid_response", status: response.status };
     return { ok: true, status: response.status, data: data as T };
@@ -127,6 +141,8 @@ export function failureMessageKey(kind: HttpFailureKind, phase: "intent" | "exec
       return "search.voice.errors.tooLong";
     case "rate_limited":
       return "search.voice.errors.rateLimited";
+    case "unavailable":
+      return "search.voice.errors.aiUnavailable";
     case "bad_request":
       return phase === "execute" ? "search.voice.errors.confirmationExpired" : "search.errors.commandNotUnderstood";
     case "cancelled":

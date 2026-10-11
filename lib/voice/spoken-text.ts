@@ -45,6 +45,9 @@ export function spokenTextFor(result: IntentResult | null | undefined, options: 
     case "navigate":
       return options.found ? clip(options.found.replace("{{name}}", result.entity.label)) : null;
     case "list":
+      // Nadpis + počet („Vozidlá: 3") — odpoveď aj na „Koľko mám vozidiel?".
+      // Položky sa nečítajú (sú na obrazovke).
+      return clip(Array.isArray(result.items) ? `${result.title}: ${result.items.length}` : result.title);
     case "deadline_list":
     case "document_list":
       return clip(result.title);

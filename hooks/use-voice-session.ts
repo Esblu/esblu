@@ -109,10 +109,14 @@ export function useVoiceSession({
         void mic.listen().then((outcome) => {
           recordVoiceDiagnostic({ kind: "capture", name: outcome.kind, gen });
           if (outcome.kind === "speech") {
+            // Neskoro dokončená nahrávka zastaveného/staršieho kola sa
+            // neuloží — audio nesmie ostať visieť v pamäti bez použitia.
+            if (stateRef.current.gen !== gen || stateRef.current.status !== "listening") return;
             blobRef.current = { blob: outcome.blob, mimeType: outcome.mimeType };
             dispatch({ type: "UTTERANCE_CAPTURED", gen });
           } else if (outcome.kind === "no_speech") dispatch({ type: "NO_SPEECH", gen });
-          else if (outcome.kind === "too_long" || outcome.kind === "error") dispatch({ type: "CAPTURE_FAILED", gen });
+          else if (outcome.kind === "too_long") dispatch({ type: "CAPTURE_FAILED", tooLong: true, gen });
+          else if (outcome.kind === "error") dispatch({ type: "CAPTURE_FAILED", gen });
           // aborted = zámerné zastavenie; automat už je v inom stave.
         });
         return;
@@ -153,9 +157,12 @@ export function useVoiceSession({
             recordVoiceDiagnostic({ kind: "turn", name: reply.spoken ? "spoken" : "silent", gen });
             dispatch({ type: "TURN_RESULT", spoken: reply.spoken, endSession: reply.endSession, gen });
           })
-          .catch(() => {
+          .catch((error: unknown) => {
             recordVoiceDiagnostic({ kind: "turn", name: "failed", gen });
-            dispatch({ type: "TURN_FAILED", gen });
+            // Volajúci hádže Error("intent_<kind>") (VoiceLauncher) — iba typ, nikdy text.
+            const message = error instanceof Error ? error.message : "";
+            const kind = message === "intent_offline" ? "offline" : message === "intent_unavailable" ? "unavailable" : undefined;
+            dispatch({ type: "TURN_FAILED", kind, gen });
           });
         return;
       case "speak":
@@ -217,6 +224,8 @@ export function useVoiceSession({
         // Koniec relácie: AudioContext preč až po efektoch (reč oznámenia smie dobehnúť).
         micRef.current?.close();
         micRef.current = null;
+        // Žiadne audio nesmie prežiť reláciu (ani neodoslaný blob).
+        blobRef.current = null;
       }
     };
   }, [runEffect]);
@@ -267,6 +276,7 @@ export function useVoiceSession({
     const onAppState = (event: Event) => {
       const active = (event as CustomEvent<{ isActive?: boolean }>).detail?.isActive;
       if (active === false) dispatchRef.current({ type: "STOP", reason: "hidden" });
+      else if (active === true) dispatchRef.current({ type: "CLEAR_MIC_ERROR" });
     };
     // Page Lifecycle API: zmrazená stránka (Chrome/Android) = pozadie.
     const onFreeze = () => dispatchRef.current({ type: "STOP", reason: "hidden" });
@@ -297,9 +307,11 @@ export function useVoiceSession({
     };
   }, []);
 
-  // „Otvoriť nastavenia" má zmysel iba pri trvalom zablokovaní mikrofónu
-  // a iba tam, kde to platforma vie (natívna appka).
-  const micBlocked = session.status === "error" && session.micFailure === "blocked";
+  // „Otvoriť nastavenia" pri odmietnutom/zablokovanom mikrofóne, iba tam,
+  // kde to platforma vie (natívna appka). Android po 2. odmietnutí výzvu už
+  // nezobrazí a WebView trvalé zablokovanie spoľahlivo nehlási (časová
+  // heuristika v mic-errors.ts) → aj pri „denied" ponúknuť cestu do Settings.
+  const micBlocked = session.status === "error" && (session.micFailure === "blocked" || session.micFailure === "denied");
   useEffect(() => {
     if (!micBlocked) return;
     let cancelled = false;
@@ -369,8 +381,10 @@ async function transcribe(
       case "forbidden":
       case "too_large":
         return { ok: false, kind: result.kind };
-      case "server":
       case "rate_limited":
+      case "unavailable":
+        return { ok: false, kind: result.kind };
+      case "server":
         return { ok: false, kind: "server" };
       case "bad_request":
         return { ok: false, kind: "empty" };

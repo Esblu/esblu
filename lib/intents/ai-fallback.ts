@@ -1,4 +1,5 @@
 import OpenAI from "openai";
+import { lazyAiClient, safeAiErrorMeta } from "@/lib/ai/openai-runtime";
 import {
   DEADLINE_TYPE_FILTERS,
   DOCUMENT_TYPE_FILTERS,
@@ -32,7 +33,9 @@ import {
 // neexistujúci model ani nemeň model bez dôvodu".
 // =============================================================================
 
-const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
+// Lenivo (lib/ai/openai-runtime.ts): bez OPENAI_API_KEY sa modul načíta
+// a klasifikátor vráti null — deterministický parser funguje ďalej.
+const getClient = lazyAiClient(() => new OpenAI({ apiKey: process.env.OPENAI_API_KEY }));
 
 const INTENT_CLASSIFICATION_SCHEMA = {
   type: "object",
@@ -313,6 +316,8 @@ ${INVOICE_STATUS_FILTERS.map((s) => `  - ${s}`).join("\n")}
 export async function classifyIntentWithAi(
   rawText: string
 ): Promise<ParsedIntent | null> {
+  const client = getClient();
+  if (!client) return null;
   try {
     const response = await client.responses.create({
       model: "gpt-5.6-terra",
@@ -446,7 +451,7 @@ export async function classifyIntentWithAi(
     // nerozpoznala (route.ts to zobrazí ako "Tomuto príkazu som
     // nerozumel.", bod 14 zadania) — NIKDY nepadne, NIKDY nevykoná
     // neoverenú akciu.
-    console.error("classifyIntentWithAi zlyhalo:", error instanceof Error ? error.message : error);
+    console.error("classifyIntentWithAi zlyhalo:", safeAiErrorMeta(error));
     return null;
   }
 }

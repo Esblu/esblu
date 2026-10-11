@@ -461,10 +461,17 @@ export function buildDraftConfirmQuestion(locale: Locale, slots: InvoiceDraftSlo
   const sumCents = items.reduce((sum, item) => sum + Math.round((item.quantity ?? 1) * (item.unitPrice ?? 0) * 100), 0);
   let total = formatMoneyForSpeech(locale, sumCents / 100);
   if (slots.currency && slots.currency !== "EUR") total = total.replace("€", slots.currency);
+  // Sadzba DPH sa vysloví vždy, keď je známa (voice E2E 2026-10-11) —
+  // prepis môže skomoliť percentá („dvadsať tri" vs. „dvadsať"), a toto je
+  // posledná chvíľa, keď to používateľ počuje.
+  const vat =
+    typeof slots.vatRate === "number"
+      ? translate(locale, "search.voice.invoice.vatSuffix", { rate: formatRateForSpeech(locale, slots.vatRate) })
+      : "";
   return translate(locale, "search.voice.invoice.confirmDraft", {
     partner: partnerLabel ? ` — ${partnerLabel}` : "",
     items: joinNames(locale, items.map((item) => item.description)),
-    total: `${total}${priceModeSuffix(locale, slots)}`,
+    total: `${total}${priceModeSuffix(locale, slots)}${vat}`,
   });
 }
 
@@ -473,6 +480,12 @@ function joinNames(locale: Locale, names: string[]): string {
   if (names.length <= 1) return names.join("");
   const and = translate(locale, "search.voice.invoice.and");
   return `${names.slice(0, -1).join(", ")} ${and} ${names[names.length - 1]}`;
+}
+
+/** „23" / „20,5" — sadzba DPH na vyslovenie. */
+function formatRateForSpeech(locale: Locale, rate: number): string {
+  const tag = locale === "de" ? "de-DE" : locale === "en" ? "en-GB" : "sk-SK";
+  return new Intl.NumberFormat(tag, { maximumFractionDigits: 2 }).format(rate);
 }
 
 /** „1 832 €" — rovnaký tvar ako v súhrne, bez zaokrúhľovania. */

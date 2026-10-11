@@ -287,9 +287,13 @@ function extractItemsSection(
 
   // Koniec: pred najskoršou zmienkou o DPH.
   let end = rawText.length;
+  let endPhrase = "";
   for (const phrase of VAT_TAIL_PHRASES) {
     const index = folded.indexOf(fold(phrase));
-    if (index !== -1 && index < end) end = index;
+    if (index !== -1 && index < end) {
+      end = index;
+      endPhrase = phrase;
+    }
   }
 
   let start = 0;
@@ -303,7 +307,31 @@ function extractItemsSection(
     }
   }
 
-  return { section: rawText.slice(start, end).trim(), partnerRemoved };
+  let section = rawText.slice(start, end).trim();
+  // Číslo tesne pred „percent" je sadzba, nikdy suma (rovnako ho vidí
+  // moneyTokens). Číslicový tvar („23") zahodí isCutRemnant; hovorený tvar
+  // („dvadsaťtri", „dvadsať celých päť") by inak ostal ako popis bez ceny
+  // a celá veta by skončila otázkou (voice E2E 2026-10-11).
+  if (/percent|prozent|%/.test(endPhrase)) section = dropTrailingRate(section);
+  return { section, partnerRemoved };
+}
+
+function dropTrailingRate(section: string): string {
+  const tokens = tokenize(section);
+  if (tokens.length === 0) return section;
+  let from = 0;
+  for (let guard = 0; guard < 64 && from < tokens.length; guard++) {
+    const found = findNumber(section, from);
+    if (!found) break;
+    if (found.endToken === tokens.length - 1) {
+      const words = section.split(/\s+/);
+      // tokenize a delenie podľa medzier sa zhodujú pre bežnú vetu; ak nie, nič sa nemení.
+      if (words.length !== tokens.length) return section;
+      return words.slice(0, found.startToken).join(" ").replace(/[,;:\s]+$/, "").trim();
+    }
+    from = found.endToken + 1;
+  }
+  return section;
 }
 
 /**
@@ -549,6 +577,13 @@ const PRICE_NOISE = /\b(eur|euro|eura|eurov|euros|czk|usd|dolar\w*|dollars?|kc|k
  */
 const SEGMENT_PREPOSITIONS = /(^|\s)(za|fuer|für|for|ueber|über)(\s|$)/gi;
 
+/**
+ * Úvodné označenie riadku („položka kopanie", „položky: …", „Position …")
+ * nie je súčasť popisu (voice E2E 2026-10-11: z vety „…, položka kopanie,
+ * 300 eur" vznikal riadok „položka kopanie").
+ */
+const ITEM_LABEL_PREFIX = /^\s*(polo[zž]k[aauyi]|polo[zž]iek|position(en)?|posten|line\s+items?|items?)\s*[:–—-]?\s+/i;
+
 // -----------------------------------------------------------------------------
 // Množstvo × jednotková cena („10 hodín po 35 eur")
 // -----------------------------------------------------------------------------
@@ -679,6 +714,39 @@ function quantityPriceItem(segment: string, qp: QuantityPrice): InvoiceItemCandi
  * úsek bez čísla, za ktorým nasleduje množstvo × cena bez popisu, je jeho
  * popis. Spojí sa IBA táto dvojica; všetko ostatné ostáva rozdelené.
  */
+/**
+ * „kopanie, 300 eur" — popis a jeho cena oddelené čiarkou (prepis reči
+ * čiarky dopĺňa). Úsek BEZ čísla, za ktorým nasleduje úsek, ktorý je IBA
+ * cena (jedna suma s menou, žiadny popis), sa spojí do jedného riadku.
+ * Nič iné sa nespája: dve sumy, suma bez meny, popis za sumou → ostáva
+ * pôvodné prísne delenie (otázka).
+ */
+function isPriceOnlySegment(segment: string): boolean {
+  if (!hasCurrencyMarker(segment)) return false;
+  if (moneyTokens(segment).length !== 1) return false;
+  const amount = pricedNumber(segment) ?? findNumber(segment);
+  if (!amount) return false;
+  const rest = segment
+    .split(/\s+/)
+    .filter((_, index) => index < amount.startToken || index > amount.endToken)
+    .join(" ");
+  return cleanDescription(rest) === "";
+}
+
+function mergePriceOnlyContinuations(segments: string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < segments.length; i++) {
+    const next = segments[i + 1];
+    if (next !== undefined && findNumber(segments[i]) === null && isPriceOnlySegment(next)) {
+      out.push(`${segments[i]} ${next}`);
+      i++;
+      continue;
+    }
+    out.push(segments[i]);
+  }
+  return out;
+}
+
 function mergeQuantityContinuations(segments: string[]): string[] {
   const out: string[] = [];
   for (let i = 0; i < segments.length; i++) {
@@ -705,6 +773,7 @@ function cleanDescription(value: string): string {
   let description = value;
   for (let i = 0; i < 4; i++) {
     const next = description
+      .replace(ITEM_LABEL_PREFIX, "")
       .replace(PRICE_NOISE, " ")
       .replace(SEGMENT_PREPOSITIONS, " ")
       .replace(PRICE_FILLERS, " ")
@@ -841,7 +910,7 @@ export function extractInvoiceItems(
   }
 
   if (segments.length === 0) return empty();
-  const merged = mergeQuantityContinuations(segments);
+  const merged = mergeQuantityContinuations(mergePriceOnlyContinuations(segments));
   segments.length = 0;
   segments.push(...merged);
 

@@ -119,6 +119,15 @@
     <uses-permission android:name="android.permission.INTERNET" />
 
     <!--
+      VOICE E2E (2026-10-11): ACCESS_NETWORK_STATE — "normal" povolenie (bez
+      dialógu). Doteraz ho do merged manifestu pridávala iba knižnica
+      Firebase Messaging; offline detekcia hlasu (navigator.onLine / udalosť
+      "offline" vo WebView) od neho závisí, preto je deklarované explicitne
+      a nezávisí od závislostí. Nečíta žiadne osobné údaje.
+    -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!--
       PUSH (2026-10-01): Android 13+ runtime povolenie na notifikácie.
       Žiada sa IBA po ťuknutí na „Zapnúť upozornenia" v Nastaveniach
       (@capacitor/push-notifications requestPermissions), nikdy pri štarte.

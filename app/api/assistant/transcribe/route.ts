@@ -5,6 +5,7 @@ import { translate } from "@/lib/i18n/translate";
 import { MAX_AUDIO_SIZE_BYTES, ALLOWED_VOICE_AUDIO_MIME_TYPES } from "@/lib/voice-config";
 import { entitlementDenialResponse, getActiveRoleForRequest, requireVoiceEntitlement } from "@/lib/entitlements-server";
 import { guardTranscription } from "@/lib/voice/transcribe-guard";
+import { lazyAiClient, safeAiErrorMeta } from "@/lib/ai/openai-runtime";
 import type { EntitlementDenial } from "@/lib/entitlements";
 
 // -----------------------------------------------------------------------------
@@ -69,11 +70,16 @@ import type { EntitlementDenial } from "@/lib/entitlements";
 // Voice hardening 2026-10-11: časový limit a jedno opakovanie. SDK default
 // (10 min, 2 opakovania) by nechal hlasovú reláciu „Spracúvam…" visieť
 // dlhšie, než klient čaká (lib/voice/assistant-http.ts: 20 s).
-const client = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY!,
-  timeout: 18_000,
-  maxRetries: 1,
-});
+// Lenivo (lib/ai/openai-runtime.ts): bez OPENAI_API_KEY (staging s vypnutou
+// AI) route nepadá pri importe, ale vráti 503 „AI nedostupná".
+const getClient = lazyAiClient(
+  () =>
+    new OpenAI({
+      apiKey: process.env.OPENAI_API_KEY,
+      timeout: 18_000,
+      maxRetries: 1,
+    })
+);
 
 /** Strop behu funkcie (s) — prepis jednej vety je rádovo sekundy. */
 export const maxDuration = 30;
@@ -240,6 +246,16 @@ export async function POST(req: Request) {
     //    - `model: "gpt-4o-transcribe"` — plnohodnotný (nie "mini")
     //      transkripčný model, presnosť uprednostnená pred minimálnou
     //      cenou/latenciou (zadanie, bod 1).
+    const client = getClient();
+    if (!client) {
+      // AI zámerne vypnutá (napr. staging bez kľúča) — explicitný stav, nie
+      // retry slučka. Audio sa nikam neposiela ani neukladá.
+      return Response.json(
+        { success: false, code: "AI_UNAVAILABLE", error: translate(locale, "search.voice.errors.aiUnavailable") },
+        { status: 503, headers: { "Cache-Control": "private, no-store" } }
+      );
+    }
+
     let transcription: { text: string };
     try {
       transcription = await client.audio.transcriptions.create({
@@ -251,10 +267,8 @@ export async function POST(req: Request) {
           : DOMAIN_CONTEXT_PROMPT_BY_LOCALE[locale],
       });
     } catch (transcriptionError) {
-      console.error(
-        "api/assistant/transcribe: OpenAI volanie zlyhalo:",
-        transcriptionError instanceof Error ? transcriptionError.message : transcriptionError
-      );
+      // Iba bezpečná metadáta — message OpenAI môže niesť fragment kľúča.
+      console.error("api/assistant/transcribe: OpenAI volanie zlyhalo:", safeAiErrorMeta(transcriptionError));
       return Response.json(
         { success: false, error: translate(locale, "search.voice.errors.transcriptionFailed") },
         { status: 502 }
@@ -277,10 +291,7 @@ export async function POST(req: Request) {
 
     return Response.json({ success: true, text });
   } catch (error) {
-    console.error(
-      "api/assistant/transcribe: neočakávaná chyba:",
-      error instanceof Error ? error.message : error
-    );
+    console.error("api/assistant/transcribe: neočakávaná chyba:", safeAiErrorMeta(error));
     return Response.json(
       { success: false, error: translate(locale, "search.voice.errors.transcriptionFailed") },
       { status: 500 }

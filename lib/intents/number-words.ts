@@ -263,13 +263,56 @@ export function tokenize(text: string): string[] {
  * Vracia `null`, keď vo vete žiadne číslo nie je alebo sa nedá bezpečne
  * preložiť. Volajúci z toho urobí otázku, nikdy default.
  */
+// Hovorené desatinné číslo: „dvadsať celých päť" = 20,5, „tri celé dva" =
+// 3,2, „sto celých nula päť" = 100,05 (voice E2E 2026-10-11). PREDTÝM sa
+// vrátilo iba 20 a „celých päť" ostalo v popise — pri DPH to bola tichá
+// zmena sadzby. Desatinná časť max. 2 číslice (suma/percento); dlhšia alebo
+// nečitateľná → číslo sa NEvráti (otázka namiesto odhadu).
+const DECIMAL_MARKERS = new Set(["cela", "cele", "celych", "celu", "comma", "point", "komma"]);
+const ZERO_WORDS = new Set(["nula", "zero", "null"]);
+
+function readSpokenFraction(tokens: string[], at: number): { digits: string; end: number } | null {
+  let i = at;
+  let zeros = "";
+  while (i < tokens.length && ZERO_WORDS.has(tokens[i])) {
+    zeros += "0";
+    i++;
+  }
+  if (i < tokens.length && /^\d{1,2}$/.test(tokens[i])) {
+    const digits = zeros + tokens[i];
+    return digits.length <= 2 ? { digits, end: i } : null;
+  }
+  const words: string[] = [];
+  let end = i - 1;
+  for (let j = i; j < tokens.length && isNumberWord(tokens[j]); j++) {
+    const glued = splitGluedNumberWord(tokens[j]);
+    if (glued) words.push(...glued);
+    else words.push(tokens[j]);
+    end = j;
+  }
+  if (words.length === 0) return zeros ? (zeros.length <= 2 ? { digits: zeros, end: i - 1 } : null) : null;
+  const value = assembleWords(words);
+  if (value === null || value >= 100) return null;
+  const digits = zeros + String(value);
+  return digits.length <= 2 ? { digits, end } : null;
+}
+
+/** Dopočíta hovorenú desatinnú časť za celým číslom; inak vráti `base`. `null` = nečitateľné. */
+function withSpokenDecimal(tokens: string[], base: ParsedNumber): ParsedNumber | null {
+  const marker = tokens[base.endToken + 1];
+  if (!marker || !DECIMAL_MARKERS.has(marker) || !Number.isInteger(base.value)) return base;
+  const fraction = readSpokenFraction(tokens, base.endToken + 2);
+  if (!fraction) return null;
+  return { value: Number(`${base.value}.${fraction.digits}`), startToken: base.startToken, endToken: fraction.end };
+}
+
 export function findNumber(text: string, fromToken = 0): ParsedNumber | null {
   const tokens = tokenize(text);
 
   for (let i = fromToken; i < tokens.length; i++) {
     const numeric = parseNumericToken(tokens[i]);
     if (numeric !== null) {
-      return { value: numeric, startToken: i, endToken: i };
+      return withSpokenDecimal(tokens, { value: numeric, startToken: i, endToken: i });
     }
 
     if (!isNumberWord(tokens[i])) continue;
@@ -296,7 +339,7 @@ export function findNumber(text: string, fromToken = 0): ParsedNumber | null {
 
     const assembled = assembleWords(words);
     if (assembled !== null) {
-      return { value: assembled, startToken: i, endToken: end };
+      return withSpokenDecimal(tokens, { value: assembled, startToken: i, endToken: end });
     }
   }
 
@@ -408,12 +451,18 @@ export function findVatRate(text: string): number | null {
     return value !== null && value >= 0 && value <= 100 ? value : null;
   }
 
-  const spoken = findNumber(before);
-  if (spoken && spoken.value >= 0 && spoken.value <= 100) {
-    // Iba keď číslovka naozaj stojí na konci úseku pred "percent" — inak by
-    // "faktúra za 300 eur percent" priradila 300 ako sadzbu.
-    const tokens = tokenize(before);
-    if (spoken.endToken === tokens.length - 1) return spoken.value;
+  // Číslovka, ktorá KONČÍ tesne pred "percent" — nie prvé číslo vety
+  // („kopanie 300 eur dvadsať celých päť percent" → 20,5, nie 300 → nič).
+  const tokens = tokenize(before);
+  let from = 0;
+  for (let guard = 0; guard < 64 && from < tokens.length; guard++) {
+    const spoken = findNumber(before, from);
+    if (!spoken) break;
+    if (spoken.endToken === tokens.length - 1) {
+      // Inak by "faktúra za 300 eur percent" priradila 300 ako sadzbu.
+      return spoken.value >= 0 && spoken.value <= 100 ? spoken.value : null;
+    }
+    from = spoken.endToken + 1;
   }
 
   return null;

@@ -53,6 +53,7 @@ export type StopReason =
   | "mic_lost"      // odobraté povolenie / odpojený mikrofón
   | "session_end"   // odhlásenie / vypršané prihlásenie
   | "failures"      // opakované zlyhania (sieť/prepis/timeout) — nezacykliť sa
+  | "unavailable"   // AI na serveri zámerne vypnutá (503) — opakovanie nepomôže
   | "forbidden";    // server hlas pre túto rolu/plán odmietol
 
 /**
@@ -74,6 +75,8 @@ export type TranscribeFailureKind =
   | "unauthenticated"
   | "forbidden"
   | "too_large"
+  | "rate_limited"
+  | "unavailable"
   | "server";
 
 export type VoiceSessionState = {
@@ -119,17 +122,19 @@ export type VoiceEvent =
   | ({ type: "MIC_FAILED"; reason: MicFailureReason } & Completion)
   | ({ type: "UTTERANCE_CAPTURED" } & Completion)
   | ({ type: "NO_SPEECH" } & Completion)
-  | ({ type: "CAPTURE_FAILED" } & Completion)
+  | ({ type: "CAPTURE_FAILED"; tooLong?: boolean } & Completion)
   | ({ type: "TRANSCRIPT"; text: string } & Completion)
   | ({ type: "TRANSCRIBE_FAILED"; kind?: TranscribeFailureKind } & Completion)
   | ({ type: "TURN_RESULT"; spoken: string | null; endSession?: boolean } & Completion)
-  | ({ type: "TURN_FAILED" } & Completion)
+  | ({ type: "TURN_FAILED"; kind?: "offline" | "unavailable" } & Completion)
   | ({ type: "SPEECH_DONE" } & Completion)
   /** Strážny časovač: stav STARTING/TRANSCRIBING/WAITING_SERVER trval priveľmi dlho. */
   | ({ type: "WATCHDOG" } & Completion)
   | { type: "USER_TAP" }
   | { type: "MANUAL_TURN"; text: string }
-  | { type: "STOP"; reason: StopReason };
+  | { type: "STOP"; reason: StopReason }
+  /** Návrat do appky (napr. zo systémových nastavení): zhodiť zastaranú chybu mikrofónu. */
+  | { type: "CLEAR_MIC_ERROR" };
 
 export const INITIAL_VOICE_SESSION: VoiceSessionState = { status: "idle", turn: 0, gen: 0, idleWindows: 0 };
 
@@ -256,6 +261,8 @@ const TRANSCRIBE_FAILURE_NOTICE: Record<TranscribeFailureKind, string> = {
   unauthenticated: "sessionExpired",
   forbidden: "voiceNotAllowed",
   too_large: "tooLong",
+  rate_limited: "rateLimited",
+  unavailable: "aiUnavailable",
   server: "networkRetry",
 };
 
@@ -307,7 +314,8 @@ export function voiceSessionReducer(state: VoiceSessionState, event: VoiceEvent)
 
     case "CAPTURE_FAILED":
       if (s !== "listening") return same;
-      return failTurn(state, "asrRetry");
+      // Prekročená max. dĺžka vety → „povedzte kratší príkaz", nie „nerozumel som".
+      return failTurn(state, event.tooLong ? "tooLong" : "asrRetry");
 
     case "TRANSCRIPT": {
       if (s !== "transcribing") return same;
@@ -327,6 +335,7 @@ export function voiceSessionReducer(state: VoiceSessionState, event: VoiceEvent)
       if (kind === "unauthenticated") return stop(state, "session_end", TRANSCRIBE_FAILURE_NOTICE[kind]);
       if (kind === "forbidden") return stop(state, "forbidden", TRANSCRIBE_FAILURE_NOTICE[kind]);
       if (kind === "offline") return stop(state, "offline", TRANSCRIBE_FAILURE_NOTICE[kind]);
+      if (kind === "unavailable") return stop(state, "unavailable", TRANSCRIBE_FAILURE_NOTICE[kind]);
       return failTurn(state, TRANSCRIBE_FAILURE_NOTICE[kind]);
     }
 
@@ -342,6 +351,9 @@ export function voiceSessionReducer(state: VoiceSessionState, event: VoiceEvent)
     case "TURN_FAILED":
       // Chybová veta sa NIKDY nepošle ako nový príkaz — iba sa povie.
       if (s !== "waiting_server") return same;
+      // Offline / AI nedostupná: opakovanie nepomôže → koniec s oznámením.
+      if (event.kind === "offline") return stop(state, "offline", "offline");
+      if (event.kind === "unavailable") return stop(state, "unavailable", "aiUnavailable");
       return failTurn(state, "networkRetry");
 
     case "WATCHDOG":
@@ -383,6 +395,13 @@ export function voiceSessionReducer(state: VoiceSessionState, event: VoiceEvent)
     case "STOP":
       if (!isSessionActive(s)) return same;
       return stop(state, event.reason, STOP_NOTICE[event.reason]);
+
+    case "CLEAR_MIC_ERROR":
+      // Používateľ sa mohol vrátiť zo Settings s povoleným mikrofónom —
+      // stará hláška „zablokovaný" by klamala. Nič sa nespúšťa; ďalší
+      // štart je vždy nové ťuknutie.
+      if (s !== "error" || !state.micFailure) return same;
+      return { state: { ...state, status: "idle", noticeKey: undefined, micFailure: undefined, stopReason: undefined }, effects: [] };
   }
 }
 
