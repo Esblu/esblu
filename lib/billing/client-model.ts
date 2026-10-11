@@ -17,6 +17,7 @@ import {
   isEntitlingStatus,
   isOpenStatus,
   manageHere,
+  managedViaMessageKey,
   type CanonicalSubscriptionStatus,
   type ManagedVia,
 } from "@/lib/billing/canonical-state";
@@ -216,3 +217,55 @@ export function interpretCheckoutReturn(
 
 export const CHECKOUT_POLL_INTERVAL_MS = 2000;
 export const CHECKOUT_POLL_MAX_ATTEMPTS = 30;
+
+// ----------------------------------------------------------------------------- obrazovka Predplatné
+/**
+ * Čisté rozhodnutia obrazovky Predplatné (testovateľné bez DOM). Stránka ich
+ * len vykreslí — žiadne ďalšie podmienky o nákupe/správe v JSX.
+ *   - nákupné tlačidlá iba ak: správca, nič otvorené, server ponúkol kanál
+ *   - správa iba na platforme, kde predplatné vzniklo; inde „spravujete cez …"
+ *   - zmena plánu iba u providera, ktorý predplatné vlastní
+ */
+export type ScreenModel = {
+  paid: boolean;
+  buyActions: PurchaseAction[];
+  managedViaKey: string | null;
+  showManageControls: boolean;
+  storeManaged: "apple" | "google" | null;
+  storeChangeAction: PurchaseAction | null;
+  showWebChangePlan: boolean;
+  showRestore: boolean;
+  showViewOnly: boolean;
+  showStoreUnavailable: boolean;
+  showReadOnly: boolean;
+};
+
+export function screenModel(
+  view: SubscriptionView,
+  options: PurchaseOptions | null,
+  platform: ClientPlatform,
+  bridge: { available: boolean } | null,
+): ScreenModel {
+  const paid = hasPaidAccess(view);
+  const actions = options ? purchaseActions(options) : [];
+  const manageHereNow = canManageOnPlatform(view, platform);
+  const storeManaged = view.billingProvider === "apple" || view.billingProvider === "google" ? view.billingProvider : null;
+  const storeChangeAction =
+    paid && manageHereNow && storeManaged === "google" ? actions.find((a) => a.kind === "google") ?? null
+      : paid && manageHereNow && storeManaged === "apple" ? actions.find((a) => a.kind === "apple_iap") ?? null
+        : null;
+  return {
+    paid,
+    buyActions: view.canManage && canStartCheckout(view) ? actions : [],
+    managedViaKey: view.canManage && paid && !manageHereNow ? managedViaMessageKey(view.managedVia) : null,
+    showManageControls: view.canManage && paid && manageHereNow,
+    storeManaged,
+    storeChangeAction,
+    showWebChangePlan: paid && !storeManaged && manageHereNow,
+    showRestore: view.canManage && platform !== "web" && !!bridge?.available,
+    // „V tomto regióne sa nedá kúpiť" iba ak firma nemá platené predplatné (inak platí „spravujete cez …").
+    showViewOnly: view.canManage && !paid && !!options?.viewOnly,
+    showStoreUnavailable: view.canManage && platform !== "web" && !!bridge && !bridge.available && !options?.viewOnly,
+    showReadOnly: !view.canManage,
+  };
+}

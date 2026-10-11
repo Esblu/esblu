@@ -21,7 +21,8 @@ import {
   STRIPE_STATUS_MAP,
   TERMINAL_STATUSES,
 } from "@/lib/billing/canonical-state";
-import { canManageOnPlatform, canStartCheckout, hasPaidAccess, parseSubscriptionView } from "@/lib/billing/client-model";
+import { canManageOnPlatform, canStartCheckout, hasPaidAccess, parsePurchaseOptions, parseSubscriptionView, screenModel } from "@/lib/billing/client-model";
+import { gatePurchaseOptions, methodAllowedByServer, providerGateFromEnv } from "@/lib/billing/server-gates";
 import { normalizeGooglePluginResult } from "@/lib/billing/native-bridge-contract";
 import { BILLING_ENV_SCHEMA, resolveProviderModes, validateBillingEnv } from "@/lib/billing/provider-modes";
 import { normalizeAppleNotification, normalizeGoogleSubscription, GooglePlayProvider } from "@/lib/billing/providers/stores";
@@ -400,7 +401,116 @@ await check("native-contract: UI nikdy neudeľuje nárok z výsledku obchodu (ib
   assert.match(page, /result\.kind === "pending"[\s\S]*setBanner\("storePending"\)/);
   assert.match(page, /result\.kind === "already_owned"[\s\S]*restoreGoogle\(\)/);
   assert.match(page, /post\("\/api\/billing\/mobile\/confirm", \{ provider: "google", checkoutId: null, purchaseToken \}\)/);
-  assert.match(page, /canManageOnPlatform\(view, platform\)/);
+  assert.match(page, /screenModel\(view, options, platform, bridge\)/);
+});
+
+// ============================================================================= provider-gate
+await check("provider-gate: kanál bez zapojeného providera sa neponúkne ani nespustí (fail closed)", () => {
+  const off = providerGateFromEnv({});
+  assert.deepEqual(off, { webEnabled: false, storesEnabled: false });
+  const webOnly = providerGateFromEnv({ ESBLU_BILLING_MODE: "fake" });
+  assert.equal(methodAllowedByServer("stripe_web_checkout", webOnly), true);
+  assert.equal(methodAllowedByServer("google_play", webOnly), false, "web zapnutý, obchody vypnuté → žiadny Play nákup");
+  assert.equal(methodAllowedByServer("apple_iap", webOnly), false);
+  assert.equal(methodAllowedByServer("google_choice_developer", webOnly), true, "billing choice platí webový provider");
+  const prod = providerGateFromEnv({ VERCEL_ENV: "production", ESBLU_BILLING_MODE: "fake", ESBLU_BILLING_STORE_MODE: "fake" });
+  assert.deepEqual(prod, { webEnabled: false, storesEnabled: false }, "produkcia vždy vypnutá");
+  const db = { platform: "android", current: null, purchase_allowed: true, view_only: false,
+    methods: [{ method: "google_play", provider: "google", plans: [] }, { method: "google_choice_developer", provider: "fake", plans: [] }] };
+  const gated = gatePurchaseOptions(db, webOnly) as { methods: { method: string }[]; purchase_allowed: boolean; view_only: boolean };
+  assert.deepEqual(gated.methods.map((m) => m.method), ["google_choice_developer"]);
+  const none = gatePurchaseOptions(db, off) as { methods: unknown[]; purchase_allowed: boolean; view_only: boolean };
+  assert.deepEqual(none.methods, []);
+  assert.equal(none.purchase_allowed, false);
+  assert.equal(none.view_only, true);
+  assert.deepEqual(gatePurchaseOptions("garbage", webOnly), { methods: [], purchase_allowed: false, view_only: true });
+});
+await check("provider-gate: routy purchase-options a purchase-intent bránu naozaj používajú", () => {
+  assert.match(read("app/api/billing/purchase-options/route.ts"), /gatePurchaseOptions\(data, providerGateFromEnv\(\)\)/);
+  const intent = read("app/api/billing/purchase-intent/route.ts");
+  assert.match(intent, /methodAllowedByServer\(method, providerGateFromEnv\(\)\)/);
+  assert.ok(intent.indexOf("methodAllowedByServer") < intent.indexOf("esblu_billing_create_purchase_intent"), "brána pred zápisom do DB");
+});
+
+// ============================================================================= billing-ui (test mode, obrazovka Predplatné)
+const viewOf = (o: Record<string, unknown>) => parseSubscriptionView({ server_time: "2026-10-11T00:00:00Z", trial: {}, plan_entitlements: [], ...o })!;
+const optsOf = (platform: string, methods: string[], extra: Record<string, unknown> = {}) => parsePurchaseOptions({
+  platform, can_manage: true, ...extra,
+  methods: methods.map((m) => ({ method: m, provider: m === "google_play" ? "google" : m === "apple_iap" ? "apple" : "fake", plans: [{ plan_code: "test_pro", intervals: [{ interval: "month", store_product_id: null }], entitlements: [] }] })),
+});
+const none = { status: "none", can_manage: true, entitles: false };
+await check("billing-ui: billing vypnutý → stránka 'disabled' (404/503), žiadny nákup", () => {
+  const page = read("app/nastavenia/predplatne/page.tsx");
+  assert.match(page, /response\.status === 404 \|\| response\.status === 503[\s\S]{0,40}setState\("disabled"\)/);
+  assert.match(page, /state === "disabled" && <p[^>]*>\{t\("subscription\.disabled"\)\}/);
+  const m = screenModel(viewOf(none), parsePurchaseOptions({ platform: "web", methods: [] }), "web", null);
+  assert.deepEqual(m.buyActions, []);
+  assert.equal(m.showViewOnly, true);
+});
+await check("billing-ui: fake/test provider bez predplatného → web: kúpiť cez web; Android: Play (ak server ponúkne)", () => {
+  assert.deepEqual(screenModel(viewOf(none), optsOf("web", ["stripe_web_checkout"]), "web", null).buyActions.map((a) => a.kind), ["web_checkout"]);
+  const android = screenModel(viewOf(none), optsOf("android", ["google_play"]), "android", { available: true });
+  assert.deepEqual(android.buyActions.map((a) => a.kind), ["google"]);
+  assert.equal(android.showRestore, true);
+  assert.equal(android.managedViaKey, null);
+});
+await check("billing-ui: aktívne cez web → na webe správa; v appke iba 'spravujete cez web', žiadny nákup", () => {
+  const v = viewOf({ status: "active", can_manage: true, billing_provider: "fake", managed_via: "web", entitles: true, plan_code: "test_pro" });
+  const web = screenModel(v, optsOf("web", ["stripe_web_checkout"], { current: { status: "active" } }), "web", null);
+  assert.equal(web.showManageControls, true);
+  assert.equal(web.showWebChangePlan, true);
+  assert.deepEqual(web.buyActions, [], "nič otvorené nesmie ponúknuť druhý nákup");
+  for (const platform of ["android", "ios"] as const) {
+    const m = screenModel(v, optsOf(platform, [], { current: { status: "active" } }), platform, { available: true });
+    assert.equal(m.managedViaKey, "subscription.managedVia.web", platform);
+    assert.equal(m.showManageControls, false);
+    assert.deepEqual(m.buyActions, []);
+    assert.equal(m.showViewOnly, false, "nie 'v regióne sa nedá kúpiť' pri platenom predplatnom");
+  }
+});
+await check("billing-ui: aktívne cez Google → na Androide správa v Play + zmena plánu cez Play; web/iOS 'spravujete cez Google Play'", () => {
+  const v = viewOf({ status: "active", can_manage: true, billing_provider: "google", managed_via: "google_play", entitles: true, plan_code: "test_pro" });
+  const android = screenModel(v, optsOf("android", ["google_play"], { current: { status: "active" } }), "android", { available: true });
+  assert.equal(android.showManageControls, true);
+  assert.equal(android.storeManaged, "google");
+  assert.equal(android.storeChangeAction?.kind, "google");
+  assert.equal(android.showWebChangePlan, false);
+  assert.deepEqual(android.buyActions, []);
+  assert.equal(screenModel(v, optsOf("web", []), "web", null).managedViaKey, "subscription.managedVia.googlePlay");
+  assert.equal(screenModel(v, optsOf("ios", []), "ios", { available: true }).managedViaKey, "subscription.managedVia.googlePlay");
+});
+await check("billing-ui: aktívne cez Apple → iOS správa v App Store; Android/web 'spravujete cez App Store'", () => {
+  const v = viewOf({ status: "active", can_manage: true, billing_provider: "apple", managed_via: "app_store", entitles: true, plan_code: "test_pro" });
+  const ios = screenModel(v, optsOf("ios", ["apple_iap"], { current: { status: "active" } }), "ios", { available: true });
+  assert.equal(ios.showManageControls, true);
+  assert.equal(ios.storeChangeAction?.kind, "apple_iap");
+  assert.equal(screenModel(v, optsOf("android", []), "android", { available: true }).managedViaKey, "subscription.managedVia.appStore");
+  assert.equal(screenModel(v, optsOf("web", []), "web", null).managedViaKey, "subscription.managedVia.appStore");
+});
+await check("billing-ui: restore / already owned / pending / billing unavailable → správne bannery, nič sa neudelí na klientovi", () => {
+  const page = read("app/nastavenia/predplatne/page.tsx");
+  assert.match(page, /result\.kind === "pending"[\s\S]{0,200}setBanner\("storePending"\)/);
+  assert.match(page, /result\.kind === "already_owned"[\s\S]{0,240}restoreGoogle\(\)/);
+  assert.match(page, /result\.kind === "billing_unavailable" \|\| result\.kind === "error"[\s\S]{0,60}setBanner\("storeUnavailable"\)/);
+  assert.match(page, /setBanner\(tokens\.length > 0 \? "restoreDone" : "restoreNone"\)/);
+  for (const lang of ["sk", "en", "de"]) {
+    const dict = read(`lib/i18n/dictionaries/${lang}.ts`);
+    for (const key of ["storePending", "storeUnavailableNow", "alreadyOwned", "restoreDone", "restoreNone", "viewOnly", "disabled"]) assert.match(dict, new RegExp(`\\b${key}:`), `${lang}.${key}`);
+    for (const via of ["web", "googlePlay", "appStore", "support"]) assert.match(dict, new RegExp(`\\b${via}:`), `${lang}.managedVia.${via}`);
+  }
+  // Natívny plugin nedostupný (billing-off build) → 'nákup v obchode nedostupný', žiadne tlačidlo obnovy
+  const m = screenModel(viewOf(none), optsOf("android", ["google_play"]), "android", { available: false });
+  assert.equal(m.showStoreUnavailable, true);
+  assert.equal(m.showRestore, false);
+});
+await check("billing-ui: employee/accountant (bez správy) → iba prehľad, žiadne tlačidlá", () => {
+  const v = viewOf({ status: "active", can_manage: false, entitles: true, plan_code: "test_pro" });
+  const m = screenModel(v, optsOf("web", ["stripe_web_checkout"]), "web", null);
+  assert.equal(m.showReadOnly, true);
+  assert.deepEqual(m.buyActions, []);
+  assert.equal(m.showManageControls, false);
+  assert.equal(m.managedViaKey, null);
+  assert.equal(m.showRestore, false);
 });
 
 console.log(`\nsubscriptions-lifecycle: ${passed} passed, ${failed} failed`);

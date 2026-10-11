@@ -30,6 +30,8 @@ const read = (p: string) => readFileSync(path.join(ROOT, p), "utf8");
 const BASE = "supabase/migrations/20261008120000_subscriptions_platform.sql";
 const LIFECYCLE = "supabase/migrations/20261011120000_subscriptions_lifecycle_hardening.sql";
 const LIFECYCLE_ROLLBACK = "supabase/rollback/20261011120000_subscriptions_lifecycle_hardening_rollback.sql";
+const REDACTION = "supabase/migrations/20261012090000_subscriptions_event_token_redaction.sql";
+const OWNED_METHODS = "supabase/migrations/20261012091000_subscriptions_purchase_options_owned_methods.sql";
 const SUITE = (process.argv[2] ?? process.env.SUITE ?? "").replace(/^--suite=/, "").trim() || null;
 
 type Row = Record<string, unknown>;
@@ -131,6 +133,8 @@ await db.exec(`
 await db.exec(read("supabase/migrations/20260928100000_company_entitlements_trial.sql"));
 await db.exec(read(BASE));
 await db.exec(read(LIFECYCLE));
+await db.exec(read(REDACTION));
+await db.exec(read(OWNED_METHODS));
 await db.exec(`update public.billing_runtime_config set web_provider = 'fake',
   enabled_methods = array['stripe_web_checkout','apple_iap','google_play']`);
 
@@ -199,6 +203,8 @@ await check("subscription-migrations: obe migrácie sú idempotentné (re-run be
   await buyFake(co);
   await serialized(() => db.exec(read(BASE)));
   await serialized(() => db.exec(read(LIFECYCLE)));
+  await serialized(() => db.exec(read(REDACTION)));
+  await serialized(() => db.exec(read(OWNED_METHODS)));
   assert.equal((await accountOf(co)).status, "active");
   assert.equal((await ent(co.owner, "voice")).active, true);
 });
@@ -483,6 +489,15 @@ await check("purchase-idempotency: Google PENDING (odložená platba) → bez n�
   assert.equal((await applyVerifiedStorePurchase(serviceDb, storeProv("google"), va.eventId, va.state, va.payloadSha256)).outcome, "applied");
   assert.equal((await ent(co.owner, "voice")).active, true);
 });
+await check("purchase-idempotency: Google purchase token sa v audit logu (billing_events.summary) neukladá celý", async () => {
+  const rows = (await su<{ s: string | null; p: string }>(`select summary ->> 'subscription' s, provider p from public.billing_events where summary ? 'subscription'`)).rows;
+  const google = rows.filter((r) => r.p === "google");
+  assert.ok(google.length > 0, "existuje aspoň jeden Google event");
+  for (const r of google) assert.match(String(r.s), /^sha256:[0-9a-f]{24}$/);
+  assert.ok(rows.some((r) => r.p === "fake" && String(r.s).startsWith("fake_sub_")), "fake/Stripe ID ostáva (nie je bearer token)");
+  const links = Number((await one<{ n: number }>(`select count(*)::int n from public.billing_provider_links where provider = 'google' and link_kind = 'subscription' and external_id not like 'sha256:%'`)).n);
+  assert.ok(links > 0, "token ostáva v billing_provider_links (potrebný na overenie)");
+});
 await check("purchase-idempotency: token z cudzieho účtu (obfuscatedAccountId inej firmy) nepridelí nárok", async () => {
   const a = await newCompany({ trialEnded: true });
   const b = await newCompany({ trialEnded: true });
@@ -528,6 +543,27 @@ await check("cross-provider: store purchase obíde UI → apply_event = conflict
   assert.deepEqual((await options(co.owner, "web")).current, { status: "active", managed_via: "google_play", manage_here: false, cancel_at_period_end: false });
   assert.equal(((await options(co.owner, "android")).current as Row).manage_here, true);
   assert.equal(((await options(co.owner, "ios")).current as Row).manage_here, false);
+});
+await check("cross-provider: otvorené predplatné → kanály IBA vlastníka a IBA na jeho platforme (zmena plánu), nákup zakázaný", async () => {
+  // web (fake) predplatné: na webe kanál ostáva kvôli zmene plánu, na Androide/iOS nič
+  const web = await options(dash.owner, "web");
+  assert.equal(web.purchase_allowed, false);
+  assert.deepEqual((web.methods as Row[]).map((m) => m.method), ["stripe_web_checkout"]);
+  assert.deepEqual((await options(dash.owner, "android")).methods, []);
+  assert.deepEqual((await options(dash.owner, "ios")).methods, []);
+  // Google predplatné: na Androide google_play (zmena plánu cez Play), na webe nič
+  const co = await newCompany({ trialEnded: true });
+  const { i, token } = await buyGoogle(co);
+  const v = await verifyGoogleClientPurchase(googleApi, token, { environment: "test" });
+  assert.equal((await applyVerifiedStorePurchase(serviceDb, storeProv("google"), v.eventId, { ...v.state, checkout_ref: String(i.checkout_id) }, v.payloadSha256)).outcome, "applied");
+  const android = await options(co.owner, "android");
+  assert.equal(android.purchase_allowed, false);
+  assert.deepEqual((android.methods as Row[]).map((m) => m.method), ["google_play"]);
+  assert.deepEqual((await options(co.owner, "web")).methods, []);
+  // druhý nákup aj tak zablokuje DB, zmena plánu u toho istého obchodu prejde
+  await fails(() => intent(co.owner, "test_pro", "year", "android", "google_play"), /ALREADY_SUBSCRIBED/);
+  const change = await intent(co.owner, "test_pro", "year", "android", "google_play", "change");
+  assert.equal(change.replaces_subscription_id, token);
 });
 await check("cross-provider: po expirácii u jedného providera je nákup inde povolený", async () => {
   const co = await newCompany({ trialEnded: true });
