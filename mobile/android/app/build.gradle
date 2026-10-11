@@ -87,6 +87,18 @@ dependencies {
 
 apply from: 'capacitor.build.gradle'
 
+// Google Play Billing (predplatné) — OPT-IN, default VYPNUTÉ.
+//   ./gradlew bundleRelease -PesbluBilling=true
+// Bez prepínača: žiadna billing knižnica, žiadne com.android.vending.BILLING
+// povolenie, plugin EsbluBilling neexistuje (JS ukáže "nákup nedostupný").
+// Zapnutie neaktivuje Play Billing live — to vyžaduje produkty v Play Console.
+if (project.findProperty('esbluBilling') == 'true') {
+    android.sourceSets.main.java.srcDirs += 'src/billing/java'
+    dependencies {
+        implementation "com.android.billingclient:billing:9.1.0"
+    }
+}
+
 try {
     def servicesJSON = file('google-services.json')
     if (servicesJSON.text) {
