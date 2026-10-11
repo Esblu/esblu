@@ -150,10 +150,15 @@ await check("každý odkaz, ktorý vytvára server/asistent (lib/intents, lib/do
   assert.deepEqual(missing, []);
 });
 
-await check("odkazy v Dashboarde (dlaždice, menu) majú v appke cieľ alebo sa skryjú", () => {
+await check("odkazy v Dashboarde (moduly valca, menu) majú v appke cieľ alebo sa skryjú", () => {
   const src = read("app/components/Dashboard.tsx");
-  const hrefs = [...src.matchAll(/href:\s*"([^"]+)"/g)].map((m) => m[1]);
-  assert.ok(hrefs.length >= 10);
+  // Dashboard v3: routy modulov valca žijú v lib/dashboard/modules.ts (MODULE_ROUTES).
+  const moduleRoutes = read("lib/dashboard/modules.ts");
+  const hrefs = [
+    ...[...src.matchAll(/href:\s*"([^"]+)"/g)].map((m) => m[1]),
+    ...[...moduleRoutes.matchAll(/^\s+[a-z]+:\s*"(\/[^"]*)",$/gm)].map((m) => m[1]),
+  ];
+  assert.ok(hrefs.length >= 14, String(hrefs.length));
   for (const href of hrefs) assert.notEqual(routes.resolveAppHref(href, true), null, href);
   assert.match(src, /if \(!isAppRouteAvailable\(href\)\) return false;/);
 });

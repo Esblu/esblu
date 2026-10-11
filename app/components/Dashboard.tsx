@@ -14,7 +14,6 @@ import {
   hasFinanceView,
 } from "@/lib/company";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
-import ModuleCard, { type ModuleAccent } from "./ModuleCard";
 import InboxDocumentIcon from "./icons/InboxDocumentIcon";
 import BusinessPartnersIcon from "./icons/BusinessPartnersIcon";
 import InvoicesIcon from "./icons/InvoicesIcon";
@@ -36,7 +35,12 @@ import { VoiceReplyToggle } from "@/app/components/voice/VoiceReplyToggle";
 import { cancelSpeech } from "@/lib/voice/speech";
 import { spokenTextFor } from "@/lib/voice/spoken-text";
 import { todayLocalDate } from "@/lib/local-date";
-import { CarIcon, FolderIcon, MachineIcon, PackageIcon, UserIcon } from "@/app/components/icons/AppIcons";
+import { CarIcon, FolderIcon, MachineIcon, PackageIcon } from "@/app/components/icons/AppIcons";
+import { ModuleCylinder, type CylinderCardView } from "@/app/components/dashboard/ModuleCylinder";
+import { buildDashboardModules, type DashboardModuleKey } from "@/lib/dashboard/modules";
+import { parseCylinderVariant, type CylinderVariantName } from "@/lib/dashboard/cylinder";
+import { useCompanyEntitlements } from "@/hooks/use-company-entitlements";
+import { useMediaQuery, useSearchParamValue } from "@/hooks/use-media-query";
 import { downloadDocumentPackage, PackageDownloadError } from "@/lib/document-package-client";
 import { describePackageError, describePackageOutcome } from "@/app/components/folders/package-messages";
 import { signOutOnThisDevice } from "@/lib/sign-out";
@@ -591,88 +595,53 @@ export default function Dashboard() {
     setVoiceTranscript(text);
   }
 
-  // UI polish 2 (2026-10-11): všetky moduly majú JEDNU sadu line ikon
-  // (app/components/icons, rovnaká hrúbka ťahu 1.8) v rovnakom brand
-  // kontajneri. Fotorealistické van/excavator/warehouse obrázky sa na
-  // nástenke už nepoužívajú; `accent` ostáva iba kvôli typom (ModuleCard
-  // ho ignoruje — farba nesie význam iba pri stavoch).
-  const allModules: {
-    title: string;
-    subtitle: string;
-    stat?: string;
-    href: string;
-    image?: string;
-    imageZoom?: number;
-    icon?: ReactNode;
-    accent: ModuleAccent;
-  }[] = [
-    {
-      title: t("nav.inbox"),
-      subtitle: t("dashboard.moduleInboxSubtitle"),
-      href: "/ai-evidencia",
-      icon: <InboxDocumentIcon size={18} />,
-      accent: "cyan",
-    },
-    {
-      title: t("nav.vehicles"),
-      subtitle: t("dashboard.moduleVehiclesSubtitle"),
-      stat: String(vehicles.length),
-      href: "/vozidla",
-      icon: <CarIcon size={18} />,
-      accent: "blue",
-    },
-    {
-      title: t("nav.machines"),
-      subtitle: t("dashboard.moduleMachinesSubtitle"),
-      stat: String(machines.length),
-      href: "/stroje",
-      icon: <MachineIcon size={18} />,
-      accent: "orange",
-    },
-    {
-      title: t("nav.inventory"),
-      subtitle: t("dashboard.moduleInventorySubtitle"),
-      stat: String(items.length),
-      href: "/sklad",
-      icon: <PackageIcon size={18} />,
-      accent: "teal",
-    },
-    {
-      title: t("nav.businessPartners"),
-      subtitle: t("dashboard.moduleBusinessPartnersSubtitle"),
-      href: "/obchodni-partneri",
-      icon: <BusinessPartnersIcon size={18} />,
-      accent: "blue",
-    },
-    {
-      title: t("nav.invoices"),
-      subtitle: t("dashboard.moduleInvoicesSubtitle"),
-      href: "/faktury",
-      icon: <InvoicesIcon size={18} />,
-      accent: "teal",
-    },
-    {
-      title: t("nav.settings"),
-      subtitle: t("dashboard.moduleSettingsSubtitle"),
-      href: "/nastavenia",
-      // Vektorová ikona namiesto /images/settings.png — rovnaký vizuálny
-      // jazyk ako Inbox, Partneri a Faktúry, bez rastrového assetu.
-      icon: <SettingsIcon size={18} />,
-      accent: "blue",
-    },
-  ];
+  // ---------------------------------------------------------------------------
+  // DASHBOARD v3 (2026-10-11): nekonečný valec modulov.
+  //
+  // Moduly = existujúce routy + existujúca viditeľnosť (finance/operational,
+  // mobilné routy) + EXISTUJÚCE nároky firmy (esblu_get_my_company_entitlements).
+  // Poradie: dostupné → zamknuté. Žiadny nový stav predplatného sa tu
+  // nevymýšľa; pri nenačítaných nárokoch sa zámok nezobrazí (lib/dashboard/modules.ts).
+  // ---------------------------------------------------------------------------
+  const entitlements = useCompanyEntitlements();
+  // Experiment B: ?cylinder=spatial (iba vizuálny token, žiadna iná logika).
+  const cylinderVariant: CylinderVariantName = parseCylinderVariant(useSearchParamValue("cylinder"));
+  const largeDashboard = useMediaQuery("(min-width: 1024px)");
+  const [alertsOpen, setAlertsOpen] = useState(false);
 
-  // Finance Access Hardening — "Obchodní partneri" aj "Faktúry" dlaždice sa
-  // filtrujú (namiesto podmieneného push-u do allModules), aby poradie
-  // ostatných dlaždíc zostalo nezmenené bez ohľadu na finance access.
-  // allModules má explicitnú typovú anotáciu priamo na poli literálov
-  // (nutné pre ModuleAccent literal-union typovanie) — .filter() sa preto
-  // aplikuje až na už typovanú premennú, nie v rámci toho istého výrazu.
-  // Faktúry používajú TOTOŽNÝ finance-gating ako obchodní partneri (obe sú
-  // finančné/účtovné dáta, esblu_my_finance_view() na DB strane).
-  const modules = allModules.filter((module) =>
-    isModuleVisible(module.href, financeAccess, operationalAccess)
-  );
+  const dashboardModules = buildDashboardModules({
+    isVisible: (href) => isModuleVisible(href, financeAccess, operationalAccess),
+    entitlements: entitlements.loading ? null : entitlements.snapshot,
+    counts: { vehicles: vehicles.length, machines: machines.length, inventory: items.length },
+    alerts: { vehicles: alerts.length },
+  });
+
+  const MODULE_TITLES: Record<DashboardModuleKey, string> = {
+    inbox: t("nav.inbox"),
+    invoices: t("nav.invoices"),
+    vehicles: t("nav.vehicles"),
+    machines: t("nav.machines"),
+    inventory: t("nav.inventory"),
+    partners: t("nav.businessPartners"),
+  };
+  const COUNT_UNITS: Partial<Record<DashboardModuleKey, string>> = {
+    vehicles: t("dashboard.moduleVehiclesSubtitle"),
+    machines: t("dashboard.moduleMachinesSubtitle"),
+    inventory: t("dashboard.moduleInventorySubtitle"),
+  };
+
+  const cylinderModules: CylinderCardView[] = dashboardModules.map((module) => ({
+    ...module,
+    title: MODULE_TITLES[module.key],
+    description: t(`dashboard.cylinder.desc.${module.key}`),
+    countLabel: module.count !== undefined && COUNT_UNITS[module.key] ? `${module.count} ${COUNT_UNITS[module.key]}` : null,
+    alertsLabel: module.alerts ? t("dashboard.cylinder.alerts", { count: module.alerts }) : null,
+    lockedLabel:
+      module.access.state === "locked"
+        ? t(module.access.reason === "TRIAL_EXPIRED" ? "dashboard.cylinder.lockedTrial" : "dashboard.cylinder.locked")
+        : null,
+    illustration: `/images/modules/${module.key}.svg`,
+  }));
 
   // Spoločný zoznam navigačných položiek pre desktop sidebar AJ mobilné
   // výsuvné menu (jeden zdroj pravdy, žiadna duplicita odkazov/ciest).
@@ -853,8 +822,8 @@ export default function Dashboard() {
   // plain-substring searchResults panel bezo zmeny.
 
   return (
-    <main className="app-shell-bg relative min-h-screen">
-      <div className="relative flex min-h-screen flex-col lg:flex-row">
+    <main className="app-shell-bg relative">
+      <div className="relative flex flex-col lg:min-h-screen lg:flex-row">
         {/* Desktop sidebar — KOREKCIA (dashboard v2): užší, plochý a tmavší
             (bez glass/blur efektu), aby nedominoval obrazovke a nepôsobil
             ako klasický enterprise admin panel. */}
@@ -965,10 +934,14 @@ export default function Dashboard() {
           </div>
         )}
 
-        <section className="w-full flex-1 px-4 pb-10 pt-3 sm:px-6 lg:px-8 lg:py-8">
-          {/* Mobilný horný pruh — brand + hamburger (nahrádza predchádzajúci
-              priamy odkaz na Nastavenia). */}
-          <div className="flex items-center justify-between gap-3 lg:hidden">
+        {/* DASHBOARD v3: obrazovka bez scrollu — hlavička + hľadanie + valec
+            vyplnia presne výšku medzi hornou hranou a spodnou lištou. */}
+        <section
+          className="flex h-[calc(100dvh-var(--mobile-tabbar-space,0px))] w-full min-w-0 flex-1 flex-col overflow-hidden px-4 pb-2 sm:px-6 lg:h-screen lg:px-8 lg:pb-6"
+          style={{ paddingTop: "calc(var(--esblu-safe-top, 0px) + 12px)" }}
+        >
+          {/* Hlavička: firma (sekundárne) + pozdrav, logo firmy alebo Esblu znak. */}
+          <div className="flex shrink-0 items-center justify-between gap-3">
             <div className="flex min-w-0 items-center gap-2.5">
               {companyLogoUrl ? (
                 <div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-subtle bg-surface-1">
@@ -979,16 +952,13 @@ export default function Dashboard() {
                   />
                 </div>
               ) : (
-                <span aria-hidden="true" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand-500/12 text-brand-300">
-                  <UserIcon size={18} />
-                </span>
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src="/icons/icon-192.png" alt="" aria-hidden="true" className="h-9 w-9 shrink-0 rounded-lg" />
               )}
 
-              {/* UI polish 2: firma je tichý kontext, pozdrav je nadpis
-                  obrazovky — oba v jednom kompaktnom riadku. */}
               <div className="min-w-0">
                 <p className="truncate text-[11px] font-medium leading-4 text-muted-esblu">{companyName}</p>
-                <h2 className="truncate text-base font-semibold leading-6 text-primary">{greeting}</h2>
+                <h2 className="truncate text-[15px] font-semibold leading-5 text-primary lg:text-lg">{greeting}</h2>
               </div>
             </div>
 
@@ -999,21 +969,17 @@ export default function Dashboard() {
                 type="button"
                 aria-label={t("dashboard.openMenu")}
                 onClick={() => setMenuOpen(true)}
-                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-doc border border-subtle bg-surface-1 text-secondary transition hover:bg-surface-hover hover:text-primary"
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-doc border border-subtle bg-surface-1 text-secondary transition hover:bg-surface-hover hover:text-primary lg:hidden"
               >
                 <HamburgerIcon />
               </button>
             )}
           </div>
 
-          <h2 className="hidden text-xl font-semibold tracking-tight text-primary lg:block">
-            {greeting}
-          </h2>
-
           {/* Search — KOREKCIA v3: jednoduchá tmavá pilulka priamo na pozadí
               namiesto ďalšej "surface-card" krabice, menej rámov na
               obrazovke. */}
-          <div className="mt-3 flex min-h-10 items-center gap-2 rounded-doc border border-subtle bg-surface-1 py-1 pl-3 pr-1 transition focus-within:border-brand-400 lg:mt-4">
+          <div className="mt-3 flex min-h-10 shrink-0 items-center gap-2 rounded-doc border border-subtle bg-surface-1/80 py-1 pl-3 pr-1 transition focus-within:border-brand-400 lg:mt-4 lg:max-w-2xl">
             <SearchIcon />
             <input
               value={search}
@@ -1053,7 +1019,7 @@ export default function Dashboard() {
           )}
 
           {query && (
-            <div className="mt-3 space-y-2.5">
+            <div className="mt-3 min-h-0 flex-1 space-y-2.5 overflow-y-auto pb-4">
               {/* Intent Engine panel — beží NAD existujúcim substring
                   zoznamom nižšie (žiadne "loading" prekrytie existujúcich
                   výsledkov), ale keď má POUŽITEĽNÝ výsledok (nie
@@ -1133,48 +1099,26 @@ export default function Dashboard() {
             </div>
           )}
 
-          <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:mt-5 lg:grid-cols-4 lg:gap-2.5">
-            {modules
-              .filter((module) => module.title !== t("nav.settings"))
-              .map((module) => (
-                <ModuleCard
-                  key={module.href}
-                  href={module.href}
-                  title={module.title}
-                  subtitle={module.subtitle}
-                  stat={module.stat}
-                  image={module.image}
-                  icon={module.icon}
-                  accent={module.accent}
-                />
-              ))}
-          </div>
-
-          {/* STK/EK panel — KOREKCIA v3: tmavý status panel s malými
-              riadkami (ikona + text + drobný badge vpravo), farba je iba
-              akcent na ikone/badge, nie výplň celej položky.
-              ZMENA (Intent Engine + automatické upozornenia, bod 9A):
-              "žiadny prázdny box, ak nič nehrozí" — panel sa teraz
-              renderuje IBA keď existuje aspoň 1 aktívne upozornenie;
-              predtým sa vždy zobrazoval aj s "0"/"žiadne upozornenia". */}
-          {alerts.length > 0 && (
-            <div className="surface-card mt-4 p-3.5 sm:p-4 lg:mt-6">
-              <div className="flex items-center justify-between gap-4">
-                <div>
-                  <h3 className="text-[15px] font-semibold text-primary">
-                    {t("dashboard.stkEkTitle")}
-                  </h3>
-                  <p className="mt-1 text-xs text-muted-esblu">
-                    {t("dashboard.stkEkDescription")}
-                  </p>
-                </div>
-
-                <span className="shrink-0 rounded-full px-2.5 py-1 text-xs font-bold badge-danger">
-                  {alerts.length}
-                </span>
-              </div>
-
-              <div className="mt-2 divide-y divide-[color:var(--color-divider)]">
+          {!query && (
+            <div className="mt-2 flex min-h-0 flex-1 gap-6 lg:mt-4">
+              <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                {/* Termíny STK/EK/známky: na telefóne kompaktný pruh nad valcom
+                    (rozbalí zoznam), na desktope bočný panel. Iba ak niečo hrozí. */}
+                {alerts.length > 0 && (
+                  <div className="mb-1 shrink-0 lg:hidden">
+                    <button
+                      type="button"
+                      onClick={() => setAlertsOpen((open) => !open)}
+                      aria-expanded={alertsOpen}
+                      className="flex min-h-9 w-full items-center gap-2 rounded-doc border border-warning/25 bg-warning-soft px-3 text-left text-[13px] font-medium text-warning"
+                    >
+                      <span aria-hidden="true" className="flex h-5 w-5 items-center justify-center rounded-full bg-warning/20 text-[11px] font-bold">!</span>
+                      <span className="min-w-0 flex-1 truncate">{t("dashboard.stkEkTitle")} · {alerts.length}</span>
+                      <span className="text-xs">{alertsOpen ? t("dashboard.cylinder.hideAll") : t("dashboard.cylinder.showAll")}</span>
+                    </button>
+                    {alertsOpen && (
+                      <div className="mt-1 max-h-40 overflow-y-auto rounded-doc border border-subtle bg-surface-1 px-3 py-1">
+              <div className="divide-y divide-[color:var(--color-divider)]">
                 {alerts.map((alert, index) => {
                   const isOverdue = alert.level === "red";
 
@@ -1182,10 +1126,10 @@ export default function Dashboard() {
                     <Link
                       key={index}
                       href={vehicleDetailHref(alert.vehicleId)}
-                      className="flex items-center gap-3 rounded-lg py-2.5 -mx-2 px-2 transition cursor-pointer hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+                      className="flex items-center gap-3 rounded-lg py-2 -mx-2 px-2 transition cursor-pointer hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
                     >
                       <span
-                        className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
+                        className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
                           isOverdue
                             ? "bg-danger-soft text-danger"
                             : "bg-warning-soft text-warning"
@@ -1195,12 +1139,12 @@ export default function Dashboard() {
                         !
                       </span>
 
-                      <p className="min-w-0 flex-1 truncate text-sm font-medium text-primary">
+                      <p className="min-w-0 flex-1 truncate text-[13px] font-medium text-primary">
                         {alert.message}
                       </p>
 
                       <span
-                        className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-bold ${
+                        className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold ${
                           isOverdue
                             ? "bg-danger-soft text-danger"
                             : "bg-warning-soft text-warning"
@@ -1212,6 +1156,85 @@ export default function Dashboard() {
                   );
                 })}
               </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <ModuleCylinder
+                  modules={cylinderModules}
+                  variant={cylinderVariant}
+                  large={largeDashboard}
+                  onNavigate={(href) => router.push(href)}
+                  onLockedAction={() => router.push("/kontakt")}
+                  labels={{
+                    region: t("dashboard.cylinder.regionLabel"),
+                    previous: t("dashboard.cylinder.previous"),
+                    next: t("dashboard.cylinder.next"),
+                    position: (index, count) => t("dashboard.cylinder.position", { index, count }),
+                    slide: (name, index, count) => t("dashboard.cylinder.slideLabel", { name, index, count }),
+                    open: t("dashboard.cylinder.open"),
+                    lockedBadge: t("dashboard.cylinder.lockedBadge"),
+                    requestActivation: t("dashboard.cylinder.requestActivation"),
+                    lockedHint: t("dashboard.cylinder.lockedHint"),
+                    hint: t("dashboard.cylinder.hint"),
+                  }}
+                />
+              </div>
+
+              {alerts.length > 0 && (
+                <aside className="hidden w-80 shrink-0 flex-col overflow-hidden lg:flex" aria-label={t("dashboard.stkEkTitle")}>
+                  <div className="surface-card flex min-h-0 flex-col p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <h3 className="text-[15px] font-semibold text-primary">{t("dashboard.stkEkTitle")}</h3>
+                        <p className="mt-0.5 text-xs text-muted-esblu">{t("dashboard.stkEkDescription")}</p>
+                      </div>
+                      <span className="shrink-0 rounded-full px-2 py-0.5 text-xs font-bold badge-danger">{alerts.length}</span>
+                    </div>
+                    <div className="mt-2 min-h-0 overflow-y-auto">
+              <div className="divide-y divide-[color:var(--color-divider)]">
+                {alerts.map((alert, index) => {
+                  const isOverdue = alert.level === "red";
+
+                  return (
+                    <Link
+                      key={index}
+                      href={vehicleDetailHref(alert.vehicleId)}
+                      className="flex items-center gap-3 rounded-lg py-2 -mx-2 px-2 transition cursor-pointer hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+                    >
+                      <span
+                        className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
+                          isOverdue
+                            ? "bg-danger-soft text-danger"
+                            : "bg-warning-soft text-warning"
+                        }`}
+                        aria-hidden="true"
+                      >
+                        !
+                      </span>
+
+                      <p className="min-w-0 flex-1 truncate text-[13px] font-medium text-primary">
+                        {alert.message}
+                      </p>
+
+                      <span
+                        className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                          isOverdue
+                            ? "bg-danger-soft text-danger"
+                            : "bg-warning-soft text-warning"
+                        }`}
+                      >
+                        {alert.type}
+                      </span>
+                    </Link>
+                  );
+                })}
+              </div>
+                    </div>
+                  </div>
+                </aside>
+              )}
             </div>
           )}
         </section>
