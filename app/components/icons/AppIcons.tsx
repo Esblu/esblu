@@ -31,7 +31,7 @@ export type IconProps = Omit<SVGProps<SVGSVGElement>, "children"> & {
   size?: number;
 };
 
-function Svg({ size = 18, strokeWidth = 1.6, ...props }: IconProps) {
+function Svg({ size = 18, strokeWidth = 1.8, ...props }: IconProps) {
   return (
     <svg
       xmlns="http://www.w3.org/2000/svg"

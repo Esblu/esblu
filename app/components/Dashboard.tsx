@@ -36,7 +36,7 @@ import { VoiceReplyToggle } from "@/app/components/voice/VoiceReplyToggle";
 import { cancelSpeech } from "@/lib/voice/speech";
 import { spokenTextFor } from "@/lib/voice/spoken-text";
 import { todayLocalDate } from "@/lib/local-date";
-import { FolderIcon } from "@/app/components/icons/AppIcons";
+import { CarIcon, FolderIcon, MachineIcon, PackageIcon, UserIcon } from "@/app/components/icons/AppIcons";
 import { downloadDocumentPackage, PackageDownloadError } from "@/lib/document-package-client";
 import { describePackageError, describePackageOutcome } from "@/app/components/folders/package-messages";
 import { signOutOnThisDevice } from "@/lib/sign-out";
@@ -591,18 +591,11 @@ export default function Dashboard() {
     setVoiceTranscript(text);
   }
 
-  // ZVÄČŠENIE IKON (KOREKCIA v5): imageZoom kompenzuje vnútorný priehľadný
-  // okraj rastrových produktových fotiek (van/excavator/warehouse), aby po
-  // novej výraznejšej Inbox SVG ikone pôsobili moduly vizuálne vyvážene —
-  // pozri komentár pri ModuleCard. Hodnoty sú kalibrované na základe
-  // zmeranej polohy motívu v jednotlivých .png (percento auditu, nie
-  // odhad): van ~72 %/61 % vyplnenia rámu → miernejší zoom (1.2), excavator
-  // ~43 %/64 % → 1.6, warehouse ~45 %/49 % → 1.7 (najviac priehľadného
-  // okraja, preto najväčší dopočet). Každá hodnota ostáva bezpečne pod
-  // hranicou, pri ktorej by orez orezal samotný motív (min. nameraný okraj
-  // motívu vs. skutočne použitý orez má rezervu min. ~3 percentuálne
-  // body). Nastavenia a Inbox (SVG ikony) imageZoom nemajú —
-  // ich vzhľad je nezmenený.
+  // UI polish 2 (2026-10-11): všetky moduly majú JEDNU sadu line ikon
+  // (app/components/icons, rovnaká hrúbka ťahu 1.8) v rovnakom brand
+  // kontajneri. Fotorealistické van/excavator/warehouse obrázky sa na
+  // nástenke už nepoužívajú; `accent` ostáva iba kvôli typom (ModuleCard
+  // ho ignoruje — farba nesie význam iba pri stavoch).
   const allModules: {
     title: string;
     subtitle: string;
@@ -617,7 +610,7 @@ export default function Dashboard() {
       title: t("nav.inbox"),
       subtitle: t("dashboard.moduleInboxSubtitle"),
       href: "/ai-evidencia",
-      icon: <InboxDocumentIcon size={40} className="h-8 w-8 sm:h-9 sm:w-9" />,
+      icon: <InboxDocumentIcon size={18} />,
       accent: "cyan",
     },
     {
@@ -625,8 +618,7 @@ export default function Dashboard() {
       subtitle: t("dashboard.moduleVehiclesSubtitle"),
       stat: String(vehicles.length),
       href: "/vozidla",
-      image: "/images/van.webp",
-      imageZoom: 1.2,
+      icon: <CarIcon size={18} />,
       accent: "blue",
     },
     {
@@ -634,8 +626,7 @@ export default function Dashboard() {
       subtitle: t("dashboard.moduleMachinesSubtitle"),
       stat: String(machines.length),
       href: "/stroje",
-      image: "/images/excavator.webp",
-      imageZoom: 1.6,
+      icon: <MachineIcon size={18} />,
       accent: "orange",
     },
     {
@@ -643,22 +634,21 @@ export default function Dashboard() {
       subtitle: t("dashboard.moduleInventorySubtitle"),
       stat: String(items.length),
       href: "/sklad",
-      image: "/images/warehouse.webp",
-      imageZoom: 1.7,
+      icon: <PackageIcon size={18} />,
       accent: "teal",
     },
     {
       title: t("nav.businessPartners"),
       subtitle: t("dashboard.moduleBusinessPartnersSubtitle"),
       href: "/obchodni-partneri",
-      icon: <BusinessPartnersIcon size={40} className="h-8 w-8 sm:h-9 sm:w-9" />,
+      icon: <BusinessPartnersIcon size={18} />,
       accent: "blue",
     },
     {
       title: t("nav.invoices"),
       subtitle: t("dashboard.moduleInvoicesSubtitle"),
       href: "/faktury",
-      icon: <InvoicesIcon size={40} className="h-8 w-8 sm:h-9 sm:w-9" />,
+      icon: <InvoicesIcon size={18} />,
       accent: "teal",
     },
     {
@@ -667,7 +657,7 @@ export default function Dashboard() {
       href: "/nastavenia",
       // Vektorová ikona namiesto /images/settings.png — rovnaký vizuálny
       // jazyk ako Inbox, Partneri a Faktúry, bez rastrového assetu.
-      icon: <SettingsIcon size={40} className="h-8 w-8 sm:h-9 sm:w-9" />,
+      icon: <SettingsIcon size={18} />,
       accent: "blue",
     },
   ];
@@ -693,26 +683,26 @@ export default function Dashboard() {
     icon?: ReactNode;
     badge?: number;
   }[] = [
-    { href: "/ai-evidencia", label: t("nav.inbox"), icon: <InboxDocumentIcon size={20} /> },
-    { href: "/vozidla", label: t("nav.vehicles"), image: "/images/van.webp" },
-    { href: "/stroje", label: t("nav.machines"), image: "/images/excavator.webp" },
-    { href: "/sklad", label: t("nav.inventory"), image: "/images/warehouse.webp" },
+    { href: "/ai-evidencia", label: t("nav.inbox"), icon: <InboxDocumentIcon size={18} /> },
+    { href: "/vozidla", label: t("nav.vehicles"), icon: <CarIcon size={18} /> },
+    { href: "/stroje", label: t("nav.machines"), icon: <MachineIcon size={18} /> },
+    { href: "/sklad", label: t("nav.inventory"), icon: <PackageIcon size={18} /> },
     {
       href: "/obchodni-partneri",
       label: t("nav.businessPartners"),
-      icon: <BusinessPartnersIcon size={20} />,
+      icon: <BusinessPartnersIcon size={18} />,
     },
     {
       href: "/faktury",
       label: t("nav.invoices"),
-      icon: <InvoicesIcon size={20} />,
+      icon: <InvoicesIcon size={18} />,
     },
     {
       href: "/priecinky",
       label: t("folders.navLabel"),
-      icon: <FolderIcon size={20} />,
+      icon: <FolderIcon size={18} />,
     },
-    { href: "/nastavenia", label: t("nav.settings"), icon: <SettingsIcon size={20} /> },
+    { href: "/nastavenia", label: t("nav.settings"), icon: <SettingsIcon size={18} /> },
     // Finance Access Hardening — rovnaký filter ako pri "modules" vyššie.
   ].filter((item) => isModuleVisible(item.href, financeAccess, operationalAccess));
 
@@ -879,7 +869,7 @@ export default function Dashboard() {
                 />
               </div>
             ) : (
-              <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-accent-cyan to-accent-blue shadow-lg">
+              <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-brand-sky to-brand-500">
                 <div className="h-4 w-4 rotate-45 rounded-md border-[3px] border-[#051221]" />
               </div>
             )}
@@ -978,10 +968,10 @@ export default function Dashboard() {
         <section className="w-full flex-1 px-4 pb-10 pt-3 sm:px-6 lg:px-8 lg:py-8">
           {/* Mobilný horný pruh — brand + hamburger (nahrádza predchádzajúci
               priamy odkaz na Nastavenia). */}
-          <div className="flex items-center justify-between gap-4 lg:hidden">
+          <div className="flex items-center justify-between gap-3 lg:hidden">
             <div className="flex min-w-0 items-center gap-2.5">
               {companyLogoUrl ? (
-                <div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full border border-subtle bg-surface-1">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-subtle bg-surface-1">
                   <img
                     src={companyLogoUrl}
                     alt={`Logo ${companyName}`}
@@ -989,12 +979,17 @@ export default function Dashboard() {
                   />
                 </div>
               ) : (
-                <span className="text-xl">👤</span>
+                <span aria-hidden="true" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand-500/12 text-brand-300">
+                  <UserIcon size={18} />
+                </span>
               )}
 
-              <p className="truncate text-sm font-semibold text-secondary">
-                {companyName}
-              </p>
+              {/* UI polish 2: firma je tichý kontext, pozdrav je nadpis
+                  obrazovky — oba v jednom kompaktnom riadku. */}
+              <div className="min-w-0">
+                <p className="truncate text-[11px] font-medium leading-4 text-muted-esblu">{companyName}</p>
+                <h2 className="truncate text-base font-semibold leading-6 text-primary">{greeting}</h2>
+              </div>
             </div>
 
             {/* Mobile M1: v natívnej appke je navigácia v spodnej lište
@@ -1011,14 +1006,14 @@ export default function Dashboard() {
             )}
           </div>
 
-          <h2 className="mt-3 text-xl font-semibold tracking-tight text-primary sm:text-2xl lg:mt-0 lg:text-[1.75rem]">
+          <h2 className="hidden text-xl font-semibold tracking-tight text-primary lg:block">
             {greeting}
           </h2>
 
           {/* Search — KOREKCIA v3: jednoduchá tmavá pilulka priamo na pozadí
               namiesto ďalšej "surface-card" krabice, menej rámov na
               obrazovke. */}
-          <div className="mt-3 flex items-center gap-2.5 rounded-doc border border-subtle bg-surface-1 py-1.5 pl-3 pr-1.5 transition focus-within:border-brand-400 lg:mt-5">
+          <div className="mt-3 flex min-h-10 items-center gap-2 rounded-doc border border-subtle bg-surface-1 py-1 pl-3 pr-1 transition focus-within:border-brand-400 lg:mt-4">
             <SearchIcon />
             <input
               value={search}
@@ -1030,7 +1025,7 @@ export default function Dashboard() {
                 setVoiceTranscript(null);
               }}
               placeholder={t("dashboard.searchPlaceholder")}
-              className="w-full min-w-0 bg-transparent text-base text-primary outline-none placeholder:text-muted-esblu"
+              className="w-full min-w-0 bg-transparent text-sm text-primary outline-none placeholder:text-muted-esblu"
             />
             <VoiceSessionControl
               variant="icon"
@@ -1043,8 +1038,8 @@ export default function Dashboard() {
           </div>
 
           {voiceStatusText && (
-            <p aria-live="polite" className={`mt-2 flex items-center gap-2 text-xs font-semibold ${voice.session.status === "listening" ? "text-red-400" : "text-muted-esblu"}`}>
-              {voice.session.status === "listening" && <span className="h-2 w-2 animate-pulse rounded-full bg-red-400" />}
+            <p aria-live="polite" className={`mt-2 flex items-center gap-2 text-xs font-semibold ${voice.session.status === "listening" ? "text-danger" : "text-muted-esblu"}`}>
+              {voice.session.status === "listening" && <span className="h-2 w-2 animate-pulse rounded-full bg-danger" />}
               {voiceStatusText}
             </p>
           )}
@@ -1138,7 +1133,7 @@ export default function Dashboard() {
             </div>
           )}
 
-          <div className="mt-4 grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:mt-6 lg:grid-cols-4 lg:gap-3">
+          <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:mt-5 lg:grid-cols-4 lg:gap-2.5">
             {modules
               .filter((module) => module.title !== t("nav.settings"))
               .map((module) => (
@@ -1149,7 +1144,6 @@ export default function Dashboard() {
                   subtitle={module.subtitle}
                   stat={module.stat}
                   image={module.image}
-                  imageZoom={module.imageZoom}
                   icon={module.icon}
                   accent={module.accent}
                 />
@@ -1188,13 +1182,13 @@ export default function Dashboard() {
                     <Link
                       key={index}
                       href={vehicleDetailHref(alert.vehicleId)}
-                      className="flex items-center gap-3 rounded-lg py-2.5 -mx-2 px-2 transition cursor-pointer hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-cyan"
+                      className="flex items-center gap-3 rounded-lg py-2.5 -mx-2 px-2 transition cursor-pointer hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
                     >
                       <span
                         className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
                           isOverdue
-                            ? "bg-red-400/12 text-red-400"
-                            : "bg-amber-400/12 text-amber-400"
+                            ? "bg-danger-soft text-danger"
+                            : "bg-warning-soft text-warning"
                         }`}
                         aria-hidden="true"
                       >
@@ -1208,8 +1202,8 @@ export default function Dashboard() {
                       <span
                         className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-bold ${
                           isOverdue
-                            ? "bg-red-400/12 text-red-400"
-                            : "bg-amber-400/12 text-amber-400"
+                            ? "bg-danger-soft text-danger"
+                            : "bg-warning-soft text-warning"
                         }`}
                       >
                         {alert.type}
@@ -1249,13 +1243,13 @@ function SideLink({
       onClick={onNavigate}
       className={`flex items-center gap-2.5 rounded-lg border-l-2 py-1.5 pr-3 text-[13px] font-medium transition ${
         active
-          ? "border-accent-cyan pl-[10px] text-accent-cyan"
+          ? "border-brand-400 pl-[10px] text-brand-300"
           : "border-transparent pl-[10px] text-secondary hover:border-border-strong hover:text-primary"
       }`}
     >
       <div
         className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md ${
-          active ? "bg-accent-cyan/12" : "bg-surface-2"
+          active ? "bg-brand-500/15" : "bg-surface-2"
         }`}
       >
         {icon ??

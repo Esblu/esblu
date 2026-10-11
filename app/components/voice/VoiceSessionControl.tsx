@@ -92,7 +92,7 @@ export function VoiceSessionControl({
         title={label}
         className={
           variant === "icon"
-            ? `relative inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border bg-doc-surface transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring ${tone || "border-doc-border text-secondary hover:text-primary"}`
+            ? `relative inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border bg-doc-surface transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring ${tone || "border-doc-border text-secondary hover:text-primary"}`
             : `inline-flex min-h-[var(--control-h)] items-center gap-1.5 rounded-doc-sm border bg-doc-surface px-3 text-[13px] font-medium transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring ${tone || "border-doc-border text-primary hover:bg-surface-hover"}`
         }
       >

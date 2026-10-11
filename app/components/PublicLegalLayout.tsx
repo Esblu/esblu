@@ -39,7 +39,7 @@ export function PublicLegalLayout({
             >
               ESBLU
             </Link>
-            <LanguageSwitcher />
+            <LanguageSwitcher subtle />
           </div>
 
           <h1 className="mt-4 text-xl font-semibold tracking-tight text-primary sm:text-2xl">

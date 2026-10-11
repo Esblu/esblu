@@ -162,7 +162,7 @@ export default function LegalAcceptanceGate({
               <h2 className="text-lg font-semibold tracking-tight text-primary sm:text-xl">
                 {t("legalGate.title")}
               </h2>
-              <LanguageSwitcher />
+              <LanguageSwitcher subtle />
             </div>
 
             <p className="mt-2 text-sm leading-6 text-secondary">

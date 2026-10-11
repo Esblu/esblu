@@ -694,13 +694,14 @@ await check("chat FAB: mobilný layout, nad spodnou lištou, Link na /chat, web 
 // ----------------------------------------------------------------------------- CHAT FAB drag & snap
 const phone = { width: 360, height: 740, safeTop: 24, safeLeft: 0, safeRight: 0, bottomReserve: 60 + 16 };
 await check("chat FAB drag: povolená plocha na 360 px (pod headerom, nad spodnou lištou, safe area)", () => {
+  assert.ok(fab.CHAT_FAB_SIZE >= 48, "dotyková plocha FAB ≥ 48 px");
   const b = fab.fabBounds(phone);
-  assert.deepEqual(b, { minX: 16, maxX: 360 - 16 - 56, minY: 24 + 72, maxY: 740 - 76 - 16 - 56 });
+  assert.deepEqual(b, { minX: 16, maxX: 360 - 16 - fab.CHAT_FAB_SIZE, minY: 24 + 72, maxY: 740 - 76 - 16 - fab.CHAT_FAB_SIZE });
   const notch = fab.fabBounds({ ...phone, safeLeft: 30, safeRight: 20 });
   assert.equal(notch.minX, 46);
-  assert.equal(notch.maxX, 360 - 20 - 16 - 56);
+  assert.equal(notch.maxX, 360 - 20 - 16 - fab.CHAT_FAB_SIZE);
   // Tlačidlo nikdy neprekryje lištu: spodná hrana <= výška - lišta - okraj.
-  assert.ok(b.maxY + 56 <= phone.height - phone.bottomReserve - 16);
+  assert.ok(b.maxY + fab.CHAT_FAB_SIZE <= phone.height - phone.bottomReserve - 16);
   assert.ok(b.minY >= phone.safeTop + fab.CHAT_FAB_HEADER_RESERVE);
 });
 await check("chat FAB drag: ťuknutie (< 8 px) nie je ťahanie, väčší posun áno", () => {

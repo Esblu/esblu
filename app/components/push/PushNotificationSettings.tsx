@@ -63,7 +63,7 @@ export function PushNotificationSettings() {
       <div className="ui-row">
         <span className="min-w-0 flex-1">
           <span className="ui-row-title block">{t("settings.push.title")}</span>
-          <span className="ui-row-sub mt-0.5 block">
+          <span className="ui-row-sub mt-0.5 line-clamp-2">
             {support === "supported"
               ? t("settings.push.description")
               : t(support === "ios_needs_install" ? "settings.push.iosHint" : "settings.push.unsupported")}

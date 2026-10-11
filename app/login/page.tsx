@@ -331,15 +331,15 @@ async function resetPassword() {
     <main className="app-shell-bg flex min-h-screen items-center justify-center px-4 py-6">
       <div className="w-full max-w-sm rounded-doc border border-doc-border bg-surface-1 p-4 sm:p-6">
         <div className="flex items-start justify-between gap-3">
-          <h1 className="text-xl font-semibold tracking-tight text-primary sm:text-[22px]">
+          <h1 className="text-lg font-semibold tracking-tight text-primary sm:text-xl">
             {mode === "login"
               ? t("auth.login.title")
               : t("auth.login.registerTitle")}
           </h1>
-          <LanguageSwitcher />
+          <LanguageSwitcher subtle />
         </div>
 
-        <p className="mt-1 text-[13px] leading-5 text-muted-esblu">
+        <p className="mt-0.5 text-[13px] leading-5 text-muted-esblu">
           {mode === "login"
             ? t("auth.login.subtitleLogin")
             : t("auth.login.subtitleRegister")}
@@ -369,7 +369,7 @@ async function resetPassword() {
           </p>
         )}
 
-        <div className="mt-4 space-y-3">
+        <div className="mt-3 space-y-2.5">
           <input
             type="email"
             placeholder={t("auth.login.email")}
@@ -452,7 +452,7 @@ async function resetPassword() {
     loading ||
     (mode === "register" && (!agreedTerms || !agreedPrivacy))
   }
-  className="ui-btn ui-btn-primary mt-4 w-full"
+  className="ui-btn ui-btn-primary mt-3 w-full"
 >
   {loading
     ? t("auth.login.working")
@@ -495,7 +495,7 @@ async function resetPassword() {
 
         <nav
           aria-label={t("settings.legal.navAriaLabel")}
-          className="mt-4 flex flex-wrap justify-center gap-x-3 gap-y-0.5 border-t border-subtle pt-2 text-center text-xs font-medium text-muted-esblu"
+          className="mt-3 flex flex-wrap justify-center gap-x-2 gap-y-0 border-t border-subtle pt-1.5 text-center text-xs font-medium text-muted-esblu"
         >
           <Link href="/ochrana-osobnych-udajov" className="inline-flex min-h-7 items-center px-1 hover:text-brand-300 hover:underline">
             {t("common.legalLinks.privacy")}

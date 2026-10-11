@@ -69,10 +69,10 @@ check("WCAG AA: text na povrchoch (primary/secondary/muted) ≥ 4.5:1", () => {
   assert.ok(contrast(token("color-brand-300"), token("color-surface-1")) >= 4.5, "odkazy");
 });
 
-check("kompaktné ovládanie s dotykovým minimom (36 px desktop / 40 px dotyk, riadok 44/48 px)", () => {
+check("kompaktné ovládanie s dotykovým minimom (36 px desktop / 40 px dotyk, riadok 40/44 px)", () => {
   assert.equal(token("control-h"), "2.25rem");
   assert.match(css, /@media \(pointer: coarse\) \{\s*:root \{\s*--control-h: 2\.5rem;/);
-  assert.match(css, /--row-min-h: 3rem;/);
+  assert.match(css, /--row-min-h: 2.75rem;/, "riadok na dotyk 44 px (iOS HIG minimum)");
 });
 
 check("komponentová vrstva .ui-* existuje (button, input, group, row, segmented, switch, badge, notice)", () => {

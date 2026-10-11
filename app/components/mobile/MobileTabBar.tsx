@@ -46,9 +46,9 @@ import SettingsIcon from "@/app/components/icons/SettingsIcon";
 //   bezpečná zóna gest (safe-area) je započítaná.
 // =============================================================================
 
-const TABBAR_HEIGHT_PX = 60;
+const TABBAR_HEIGHT_PX = 56; // UI polish 2: 60 → 56 px (Material 3 kompaktná lišta, položka ≥ 48 px)
 
-function NavIcon({ navKey, size = 22 }: { navKey: MobileNavKey; size?: number }) {
+function NavIcon({ navKey, size = 20 }: { navKey: MobileNavKey; size?: number }) {
   switch (navKey) {
     case "home":
       return <HomeIcon size={size} />;
@@ -88,12 +88,19 @@ function TabButton({
   onClick?: () => void;
   expanded?: boolean;
 }) {
-  const className = `flex min-h-[52px] min-w-0 flex-1 flex-col items-center justify-center gap-0.5 rounded-doc-sm px-1 text-[11px] font-medium leading-tight transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring ${
-    active ? "text-brand-400" : "text-muted-esblu hover:text-primary"
+  const className = `flex min-h-12 min-w-0 flex-1 flex-col items-center justify-center gap-0.5 rounded-doc-sm px-1 text-[11px] font-medium leading-tight transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring ${
+    active ? "text-brand-300" : "text-muted-esblu hover:text-primary"
   }`;
+  // Aktívna položka: tichá brand „pilulka" za ikonou (Material 3) namiesto
+  // iba farby textu — čitateľné aj pri farbosleposti.
   const content = (
     <>
-      <span aria-hidden="true">{icon}</span>
+      <span
+        aria-hidden="true"
+        className={`flex h-6 w-11 items-center justify-center rounded-full transition ${active ? "bg-brand-500/15" : ""}`}
+      >
+        {icon}
+      </span>
       <span className="max-w-full truncate">{label}</span>
     </>
   );
@@ -225,7 +232,7 @@ export default function MobileTabBar() {
                     }`}
                     aria-current={activeKey === item.key ? "page" : undefined}
                   >
-                    <NavIcon navKey={item.key} size={22} />
+                    <NavIcon navKey={item.key} size={20} />
                     <span className="leading-tight">{label(item)}</span>
                   </Link>
                 </li>
@@ -251,7 +258,7 @@ export default function MobileTabBar() {
         aria-label={t("nav.mainNavigation")}
         className={`fixed inset-x-0 bottom-0 z-[45] border-t border-subtle bg-surface-1/95 pb-[var(--esblu-safe-bottom)] backdrop-blur ${keyboardOpen ? "hidden" : ""}`}
       >
-        <div className="mx-auto flex max-w-xl items-stretch gap-1 px-2 py-1" style={{ minHeight: TABBAR_HEIGHT_PX }}>
+        <div className="mx-auto flex max-w-xl items-stretch gap-0.5 px-1.5 py-1" style={{ minHeight: TABBAR_HEIGHT_PX }}>
           {tabs.map((item) => (
             <TabButton
               key={item.key}
@@ -266,7 +273,7 @@ export default function MobileTabBar() {
               active={moreOpen || moreActive}
               expanded={moreOpen}
               label={t("nav.more")}
-              icon={<MoreGridIcon size={22} />}
+              icon={<MoreGridIcon size={20} />}
               onClick={() => setMoreOpen((open) => !open)}
             />
           )}

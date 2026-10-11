@@ -115,7 +115,7 @@ export function SettingsDisclosure({
       <summary className="ui-row">
         <span className="min-w-0 flex-1">
           <span className="ui-row-title block">{title}</span>
-          {subtitle && <span className="ui-row-sub mt-0.5 block">{subtitle}</span>}
+          {subtitle && <span className="ui-row-sub mt-0.5 block truncate">{subtitle}</span>}
         </span>
         <ChevronRightIcon size={16} className="ui-chevron" aria-hidden="true" />
       </summary>

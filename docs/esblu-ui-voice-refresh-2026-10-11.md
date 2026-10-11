@@ -324,3 +324,42 @@ Výsledok: všetky `test:*` skripty prešli okrem `*-db` / `p0-bank-sql`. Tie vy
 - **Sklad a stroje:** iba zdieľané primitíva, bez vlastného passu.
 - **Lint:** 37 existujúcich chýb (`react-hooks/immutability` a `no-explicit-any` z pôvodného kódu) ostáva.
 - **Commit:** iba lokálne na `mobile-platform`, nepushnutý. Push spustí staging preview na Verceli (nie production).
+
+## 12. Polish pass 2 — podľa reálneho Android telefónu (2026-10-11)
+
+Optimalizované pre 360–390 px, Samsung-style system bars, predvolená veľkosť písma.
+
+- **Dashboard**
+  - **Dlaždice modulov:** výška ≈ 150 px → ≈ 76 px. Rozloženie: ikona 32 px + názov + počet v jednom riadku, pod tým jednoriadkový popis. Padding `px-3 py-2.5`, medzera 8 px.
+  - **Ikony:** iba jedna sada line ikon (`app/components/icons`). Hrúbka ťahu 1.8 v celej appke (AppIcons 1.6 → 1.8, vlastné 2.2 → 1.8). Rovnaký kontajner 32 px (`bg-brand-500/12 text-brand-300`).
+    - Rastrové van/excavator/warehouse obrázky a emoji 👤 sú preč (aj v bočnom menu).
+  - **Farby:** moduly nemajú vlastné farby (cyan/orange/teal/blue). Všetky sú brand modré, `accent` sa ignoruje. STK/EK upozornenia používajú stavové tokeny (`danger` / `warning`).
+  - **Typografia:**
+    - názov firmy 11 px tlmený;
+    - pozdrav 16 px semibold v jednom riadku s logom (desktop 20 px);
+    - názov modulu 14 px semibold v sentence case (žiadne „VOZIDLÁ" verzus „Faktúry");
+    - počet 16 px semibold tabular;
+    - popis 12 px.
+  - **Search bar:** ≈ 48 → 40 px, mikrofón 32 px, text 14 px.
+- **Chat FAB:** 56 → 48 px (`CHAT_FAB_SIZE`, hranice ťahania sa prepočítajú), ikona 20 px, jemný tmavý tieň namiesto modrého glow. Badge aj ťahanie ostávajú.
+- **Spodná lišta:** výška 60 → 56 px, položka min. 48 px, ikony 20 px. Aktívna položka má brand „pilulku" za ikonou a text v brand-300. Safe-area padding je nezmenený.
+- **Login:**
+  - nadpis 18/20 px, menšie medzery (`mt-3`, `space-y-2.5`);
+  - tichý jazykový prepínač (`LanguageSwitcher subtle`: bez rámu a bez modrej výplne, 28 px) — aj na pozvánke, právnych stránkach a v právnom gate;
+  - právne odkazy ostávajú 28 px vysoké.
+- **Nastavenia:**
+  - riadok skupiny 40 px desktop / 44 px dotyk (predtým 44/48), padding riadku 6×12 px, medzera skupín 16 px;
+  - **Firma:** jeden rozbaľovací riadok (názov + IČO · mesto) namiesto súhrnu a samostatného riadku;
+  - náhľad loga 40 px;
+  - riadok „Vaše členstvo" iba keď sa nezobrazuje zoznam členov; e-maily sú v jednom riadku (truncate), bez ikon;
+  - **Upozornenia:** popis max. 2 riadky;
+  - **Spätná väzba:** jeden riadok bez dlhého popisu (súkromie ostáva v pätičke);
+  - **Právne:** bez úvodnej pätičky;
+  - **Potvrdené dokumenty:** v rozbaľovacom riadku (počet ako podtitul);
+  - **Zrušiť účet:** jeden riadok (červený názov + popis max. 2 riadky).
+  - Zmeny sú iba v rozložení a skrytých/presunutých pomocných textoch, logika sa nemenila.
+- **Formuláre na telefóne:** 16 px písmo iba na iOS (`@supports (-webkit-touch-callout: none)` — auto-zoom). Android/Chrome má 15 px.
+- **Testy:**
+  - `mobile-m1`: nástenka bez rastrových modulov, pravidlo iOS 16 px / ostatné 15 px;
+  - `mobile-platform`: FAB hranice podľa `CHAT_FAB_SIZE ≥ 48`;
+  - `ui-tokens`: riadok 40/44 px.

@@ -62,7 +62,7 @@ export function unreadBadgeText(total: number | null): string | null {
 // viewportu sa prepočíta a vždy ostane v povolenom priestore.
 // -----------------------------------------------------------------------------
 
-export const CHAT_FAB_SIZE = 56;
+export const CHAT_FAB_SIZE = 48; // UI polish 2: 56 → 48 px (Material „small FAB" ≥ 48 dp dotyková plocha)
 export const CHAT_FAB_MARGIN = 16;
 /** Rezerva pre horný pruh dashboardu (logo + názov firmy, ~64 px) — FAB nikdy nejde pod header. */
 export const CHAT_FAB_HEADER_RESERVE = 72;

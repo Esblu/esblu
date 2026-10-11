@@ -14,16 +14,19 @@ import { SUPPORTED_LOCALES, LOCALE_SHORT_LABELS, LOCALE_LABELS } from "@/lib/i18
 // sú tmavé).
 export default function LanguageSwitcher({
   variant = "light",
+  subtle = false,
   className = "",
 }: {
   variant?: "light" | "dark";
+  /** Tichšia verzia (prihlásenie, verejné stránky): bez rámu, aktívny jazyk bez brand výplne. */
+  subtle?: boolean;
   className?: string;
 }) {
   const { locale, setLocale } = useLocale();
   void variant;
 
   return (
-    <div role="group" aria-label={LOCALE_LABELS[locale]} className={`ui-segmented ${className}`}>
+    <div role="group" aria-label={LOCALE_LABELS[locale]} className={`ui-segmented ${subtle ? "ui-segmented-subtle" : ""} ${className}`}>
       {SUPPORTED_LOCALES.map((code) => (
         <button
           key={code}

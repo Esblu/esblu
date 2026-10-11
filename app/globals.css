@@ -153,7 +153,7 @@
      (pozri @media (pointer: coarse) nižšie), desktop kompaktnejších 36 px. */
   --control-h: 2.25rem;
   --control-h-sm: 2rem;
-  --row-min-h: 2.75rem;
+  --row-min-h: 2.5rem;
 
   /* Legacy Next.js template vars */
   --background: var(--color-page-bg);
@@ -164,7 +164,7 @@
   :root {
     --control-h: 2.5rem;
     --control-h-sm: 2.25rem;
-    --row-min-h: 3rem;
+    --row-min-h: 2.75rem;
   }
 }
 
@@ -543,11 +543,23 @@ html[data-esblu-runtime="native-app"] body {
    utility triedy ako text-sm) a platí iba pre úzke obrazovky — desktop
    ostáva bez zmeny.
    ============================================================================= */
+/* UI polish 2 (2026-10-11): 16 px je nutné IBA pre iOS (auto-zoom pri fokuse).
+   Android/Chrome nezoomuje — tam 15 px (kompaktnejšie polia, stále čitateľné
+   pri predvolenej veľkosti písma; systémové zväčšenie písma sa prenáša). */
 @media (max-width: 639px) {
   input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]),
   textarea,
   select {
-    font-size: 16px;
+    font-size: 15px;
+  }
+}
+@supports (-webkit-touch-callout: none) {
+  @media (max-width: 639px) {
+    input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]),
+    textarea,
+    select {
+      font-size: 16px;
+    }
   }
 }
 
@@ -638,7 +650,7 @@ html[data-esblu-runtime="native-app"] body {
   .ui-group-label {
     display: block;
     padding: 0 var(--space-1);
-    margin-bottom: 0.375rem;
+    margin-bottom: 0.25rem;
     font-size: 0.6875rem;
     line-height: 1rem;
     font-weight: 600;
@@ -663,7 +675,7 @@ html[data-esblu-runtime="native-app"] body {
     gap: var(--space-3);
     width: 100%;
     min-height: var(--row-min-h);
-    padding: 0.5rem 0.875rem;
+    padding: 0.375rem 0.75rem;
     text-align: left;
     font-size: 0.875rem;
     line-height: 1.25rem;
@@ -703,7 +715,7 @@ html[data-esblu-runtime="native-app"] body {
   }
 
   .ui-group-body {
-    padding: 0.75rem 0.875rem;
+    padding: 0.625rem 0.75rem;
   }
 
   /* <details> v skupine: šípka sa otočí, natívny marker preč. */
@@ -977,5 +989,26 @@ html[data-esblu-runtime="native-app"] body {
   /* Riadky v obale s display:contents (napr. <nav> v skupine) — deliace čiary. */
   .ui-divided > * + * {
     border-top: 1px solid var(--color-divider);
+  }
+}
+
+@layer components {
+  /* UI polish 2: tichý prepínač (jazyk na prihlásení) — bez rámu a bez brand
+     výplne; aktívna položka iba jemne zvýraznená. Dotyk ≥ 28 px (WCAG 2.2 ≥ 24). */
+  .ui-segmented-subtle {
+    background-color: transparent;
+    border-color: transparent;
+    padding: 0;
+  }
+  .ui-segmented-subtle > button {
+    min-height: 1.75rem;
+    min-width: 2.25rem;
+    padding: 0 0.5rem;
+    font-size: 0.6875rem;
+    color: var(--color-text-muted);
+  }
+  .ui-segmented-subtle > button[aria-pressed="true"] {
+    background-color: var(--color-surface-hover);
+    color: var(--color-text-primary);
   }
 }

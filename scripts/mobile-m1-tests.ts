@@ -456,9 +456,10 @@ await check("spodná lišta rezervuje miesto (obsah, sticky akcie, chat) a rešp
   assert.match(read("app/chat/ChatShell.tsx"), /h-\[calc\(100dvh-var\(--mobile-tabbar-space,0px\)\)\]/);
 });
 
-await check("formuláre na telefóne ≥ 16 px (bez iOS auto-zoom)", () => {
+await check("formuláre na telefóne: iOS ≥ 16 px (bez auto-zoomu), ostatné ≥ 15 px", () => {
   const css = read("app/globals.css");
-  assert.match(css, /@media \(max-width: 639px\) \{\s*input:not\(\[type="checkbox"\]\)[\s\S]*?font-size: 16px;/);
+  assert.match(css, /@supports \(-webkit-touch-callout: none\) \{\s*@media \(max-width: 639px\) \{\s*input:not\(\[type="checkbox"\]\)[\s\S]*?font-size: 16px;/);
+  assert.match(css, /@media \(max-width: 639px\) \{\s*input:not\(\[type="checkbox"\]\)[\s\S]*?font-size: 15px;/);
 });
 
 // -----------------------------------------------------------------------------
@@ -527,11 +528,12 @@ await check("detail vozidla: kompaktná hlavička, 2 akčné metriky na telefón
 // -----------------------------------------------------------------------------
 // 7b. Výkon: obrázky v appke
 // -----------------------------------------------------------------------------
-await check("obrázky modulov sú WebP (bez 2+ MB PNG pri 56 px ikone); nepoužité rastre sa do appky nekopírujú", () => {
+await check("nástenka: jednotné line ikony (žiadne rastrové obrázky modulov); WebP pre landing; nepoužité rastre sa do appky nekopírujú", () => {
   const dash = read("app/components/Dashboard.tsx");
-  assert.doesNotMatch(dash, /\/images\/(van|excavator|warehouse)\.png/);
+  // UI polish 2 (2026-10-11): moduly a menu používajú iba SVG line ikony.
+  assert.doesNotMatch(dash, /\/images\/(van|excavator|warehouse)\.(png|webp)/);
+  for (const icon of ["<CarIcon", "<MachineIcon", "<PackageIcon"]) assert.ok(dash.includes(icon), icon);
   for (const name of ["van", "excavator", "warehouse"]) {
-    assert.match(dash, new RegExp(`/images/${name}\\.webp`));
     const size = statSync(path.join(ROOT, `public/images/${name}.webp`)).size;
     assert.ok(size < 200 * 1024, `${name}.webp ${size} B`);
   }

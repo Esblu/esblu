@@ -246,7 +246,7 @@ export default function InviteView({ token }: { token: string }) {
           <h1 className="text-xl font-semibold tracking-tight text-primary sm:text-[22px]">
             {t("invite.invalidTitle")}
           </h1>
-          <LanguageSwitcher />
+          <LanguageSwitcher subtle />
         </div>
         <p className="mt-2 text-sm leading-6 text-secondary">
           {t("invite.invalidDescription")}
@@ -291,7 +291,7 @@ export default function InviteView({ token }: { token: string }) {
         <h1 className="text-xl font-semibold tracking-tight text-primary sm:text-[22px]">
           {t("invite.title")}
         </h1>
-        <LanguageSwitcher />
+        <LanguageSwitcher subtle />
       </div>
 
       <p className="mt-2 text-sm leading-6 text-secondary">

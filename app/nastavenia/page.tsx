@@ -59,7 +59,7 @@ import {
   SettingsRow,
   SettingsSection,
 } from "@/app/components/ui/SettingsList";
-import { ImageIcon, TrashIcon, UserIcon } from "@/app/components/icons/AppIcons";
+import { ImageIcon, TrashIcon } from "@/app/components/icons/AppIcons";
 
 type SectionNotice = { tone: "success" | "error"; text: string } | null;
 
@@ -230,6 +230,7 @@ export default function NastaveniaPage() {
   const [companyOpen, setCompanyOpen] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [passwordOpen, setPasswordOpen] = useState(false);
+  const [acceptancesOpen, setAcceptancesOpen] = useState(false);
   const [companyNotice, setCompanyNotice] = useState<SectionNotice>(null);
   const [logoNotice, setLogoNotice] = useState<SectionNotice>(null);
   const [passwordNotice, setPasswordNotice] = useState<SectionNotice>(null);
@@ -886,7 +887,7 @@ export default function NastaveniaPage() {
   }
 
   const logoThumb = (url: string) => (
-    <span className="flex h-12 w-12 items-center justify-center overflow-hidden rounded-doc-sm border border-doc-border bg-surface-2">
+    <span className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-doc-sm border border-doc-border bg-surface-2">
       {url ? (
         // eslint-disable-next-line @next/next/no-img-element
         <img src={url} alt={t("settings.company.logoAlt")} className="h-full w-full object-contain" />
@@ -901,11 +902,11 @@ export default function NastaveniaPage() {
       <div className="ui-page max-w-2xl">
         <BackLink href="/" label={t("inbox.backToMenu")} />
 
-        <h1 className="ui-page-title mb-4 mt-1">{t("settings.pageTitle")}</h1>
+        <h1 className="ui-page-title mb-3">{t("settings.pageTitle")}</h1>
 
-        <div className="space-y-5">
+        <div className="space-y-4">
           {/* ---------------- Jazyk ---------------- */}
-          <SettingsSection title={t("settings.language.title")} footer={t("settings.language.description")}>
+          <SettingsSection title={t("settings.language.title")}>
             <SettingsRow title={LOCALE_LABELS[locale]} trailing={<LanguageSwitcher />} />
           </SettingsSection>
 
@@ -919,13 +920,11 @@ export default function NastaveniaPage() {
               title={t("settings.company.title")}
               footer={!canEditCompany ? t("settings.company.readOnlyNotice") : undefined}
             >
-              <SettingsRow
-                title={billingProfile.legal_name || t("settings.ui.notSet")}
-                subtitle={companySummary || undefined}
-              />
+              {/* UI polish 2: jeden riadok — názov firmy + IČO/mesto; ťuknutím
+                  sa rozbalí formulár firemných a fakturačných údajov. */}
               <SettingsDisclosure
-                title={t("settings.ui.companyDetails")}
-                subtitle={`${t("settings.ui.sectionIdentity")} · ${t("settings.ui.sectionAddress")} · ${t("settings.ui.sectionBank")} · ${t("settings.ui.sectionInvoicing")}`}
+                title={billingProfile.legal_name || t("settings.ui.notSet")}
+                subtitle={companySummary || t("settings.ui.companyDetails")}
                 open={companyOpen}
                 onOpenChange={setCompanyOpen}
               >
@@ -1063,7 +1062,11 @@ export default function NastaveniaPage() {
           {/* ---------------- Používatelia ---------------- */}
           {myRole && (
             <SettingsSection title={t("settings.users.title")}>
-              <SettingsRow title={t("settings.users.yourMembership").replace(/:\s*$/, "")} trailing={roleBadge(myRole)} />
+              {/* Vlastné členstvo iba keď sa nezobrazuje zoznam členov (owner/admin
+                  sa v ňom vidí sám — duplicitný riadok by iba predĺžil sekciu). */}
+              {(usersLoading || members.length === 0) && (
+                <SettingsRow title={t("settings.users.yourMembership").replace(/:\s*$/, "")} trailing={roleBadge(myRole)} />
+              )}
 
               {usersLoading ? (
                 <SettingsRow title={<span className="text-secondary">{t("settings.users.loading")}</span>} />
@@ -1072,8 +1075,7 @@ export default function NastaveniaPage() {
                   {members.map((member) => (
                     <SettingsRow
                       key={member.member_id}
-                      leading={<UserIcon size={16} className="text-muted-esblu" aria-hidden="true" />}
-                      title={<span className="break-all">{member.email}</span>}
+                      title={<span className="block truncate">{member.email}</span>}
                       trailing={roleBadge(member.role)}
                     />
                   ))}
@@ -1082,7 +1084,7 @@ export default function NastaveniaPage() {
                     invites.map((invite) => (
                       <SettingsRow
                         key={invite.invite_id}
-                        title={<span className="break-all text-secondary">{invite.email}</span>}
+                        title={<span className="block truncate text-secondary">{invite.email}</span>}
                         subtitle={`${t("settings.users.invitesTitle")} · ${MEMBER_ROLE_LABELS[invite.role] || invite.role}`}
                         trailing={<span className="ui-badge">{INVITE_STATUS_LABELS[invite.status] || invite.status}</span>}
                       />
@@ -1211,11 +1213,11 @@ export default function NastaveniaPage() {
 
           {/* ---------------- Spätná väzba ---------------- */}
           <SettingsSection title={t("settings.feedback.title")} footer={t("settings.feedback.privacyHint")}>
-            <SettingsLinkRow href={feedbackMailto} title={t("settings.feedback.sendButton")} subtitle={t("settings.feedback.description")} />
+            <SettingsLinkRow href={feedbackMailto} title={t("settings.feedback.sendButton")} />
           </SettingsSection>
 
           {/* ---------------- Právne informácie ---------------- */}
-          <SettingsSection title={t("settings.legal.title")} footer={t("settings.legal.description")}>
+          <SettingsSection title={t("settings.legal.title")}>
             <nav aria-label={t("settings.legal.navAriaLabel")} className="contents ui-divided">
               <SettingsLinkRow href="/ochrana-osobnych-udajov" title={t("settings.legal.privacyLink")} />
               <SettingsLinkRow href="/podmienky-pouzivania" title={t("settings.legal.termsLink")} />
@@ -1239,23 +1241,30 @@ export default function NastaveniaPage() {
               </>
             }
           >
-            <div className="ui-row">
-              <span className="ui-eyebrow">{t("settings.privacy.confirmedDocsTitle")}</span>
-            </div>
-            {acceptancesLoading ? (
-              <SettingsRow title={<span className="text-secondary">{t("settings.privacy.loading")}</span>} />
-            ) : acceptances.length > 0 ? (
-              acceptances.map((row) => (
-                <SettingsRow
-                  key={`${row.document_type}-${row.version}`}
-                  title={DOC_TYPE_LABELS[row.document_type] || row.document_type}
-                  subtitle={t("settings.privacy.confirmedAt", { date: formatDateTime(row.accepted_at, locale) })}
-                  trailing={<span className="ui-badge">{t("settings.privacy.versionLabel", { version: row.version })}</span>}
-                />
-              ))
-            ) : (
-              <SettingsRow title={<span className="text-secondary">{t("settings.privacy.noAcceptancesYet")}</span>} />
-            )}
+            <SettingsDisclosure
+              title={t("settings.privacy.confirmedDocsTitle")}
+              subtitle={acceptancesLoading ? t("settings.privacy.loading") : acceptances.length > 0 ? String(acceptances.length) : t("settings.privacy.noAcceptancesYet")}
+              open={acceptancesOpen}
+              onOpenChange={setAcceptancesOpen}
+            >
+              {acceptances.length > 0 ? (
+                <ul className="ui-divided -my-1">
+                  {acceptances.map((row) => (
+                    <li key={`${row.document_type}-${row.version}`} className="flex items-center gap-3 py-1.5">
+                      <span className="min-w-0 flex-1">
+                        <span className="ui-row-title block">{DOC_TYPE_LABELS[row.document_type] || row.document_type}</span>
+                        <span className="ui-row-sub block">
+                          {t("settings.privacy.confirmedAt", { date: formatDateTime(row.accepted_at, locale) })}
+                        </span>
+                      </span>
+                      <span className="ui-badge">{t("settings.privacy.versionLabel", { version: row.version })}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="ui-help">{acceptancesLoading ? t("settings.privacy.loading") : t("settings.privacy.noAcceptancesYet")}</p>
+              )}
+            </SettingsDisclosure>
             <SettingsLinkRow href={exportRequestMailto} title={t("settings.privacy.requestExport")} />
             <SettingsLinkRow href={correctionRequestMailto} title={t("settings.privacy.requestCorrection")} />
           </SettingsSection>
@@ -1263,22 +1272,18 @@ export default function NastaveniaPage() {
           {/* ---------------- Zrušiť účet ---------------- */}
           {(myRole || isOrphanAccount) && (
             <SettingsSection title={t("settings.deleteAccount.title")}>
-              <SettingsRow
-                title={
-                  <span className="text-secondary">
+              <button type="button" onClick={openDeleteAccountModal} className="ui-row">
+                <span className="min-w-0 flex-1">
+                  <span className="ui-row-title block !text-danger">{t("settings.deleteAccount.button")}</span>
+                  <span className="ui-row-sub mt-0.5 block line-clamp-2">
                     {myRole === "owner"
                       ? t("settings.deleteAccount.ownerDescription")
                       : myRole
                         ? t("settings.deleteAccount.memberDescription")
                         : t("settings.deleteAccount.orphanDescription")}
                   </span>
-                }
-              />
-              <div className="ui-row justify-end">
-                <button type="button" onClick={openDeleteAccountModal} className="ui-btn ui-btn-danger ui-btn-sm">
-                  {t("settings.deleteAccount.button")}
-                </button>
-              </div>
+                </span>
+              </button>
             </SettingsSection>
           )}
         </div>
