@@ -67,11 +67,14 @@ export function VoiceSessionControl({
       : t("search.voice.session.stop");
 
   const processing = session.status === "transcribing" || session.status === "waiting_server";
+  // Stavy: počúva (červený + pulz), spracúva (spinner), aktívny, chyba (tlmená červená), nečinný.
   const tone = listening
     ? "border-danger/50 text-danger"
     : active
-      ? "border-primary/40 text-primary"
-      : "";
+      ? "border-brand-400/50 text-brand-300"
+      : session.status === "error"
+        ? "border-danger/35 text-danger/80"
+        : "";
 
   // Hlas je platený modul. Bez nároku (aj počas načítania a pri chybe) sa
   // mikrofón vôbec neponúkne — reláciu teda nemožno spustiť. Bezpečnosť drží

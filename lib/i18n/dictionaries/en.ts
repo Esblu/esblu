@@ -97,6 +97,13 @@ const en = {
 
   dashboard: {
     cylinder: {
+      loading: "Loading modules…",
+      dataError: "Data could not be loaded",
+      entitlementsError: "Plan status could not be verified — modules are available according to your role.",
+      retry: "Try again",
+      allLocked: "No module is active in your plan yet.",
+      empty: "No modules are available for your role yet.",
+      clearSearch: "Clear search",
       regionLabel: "Modules",
       slideLabel: "{{name}} — {{index}} of {{count}}",
       previous: "Previous module",

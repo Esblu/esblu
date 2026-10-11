@@ -16,17 +16,24 @@ import { parseCompanyEntitlements, type CompanyEntitlements, type EntitlementKey
 // zmene session. Žiadne ukladanie do localStorage.
 // =============================================================================
 
-type State = { loading: boolean; snapshot: CompanyEntitlements | null };
+type State = { loading: boolean; snapshot: CompanyEntitlements | null; error: boolean };
 
-let cache: { userId: string; promise: Promise<CompanyEntitlements | null> } | null = null;
+type LoadResult = { snapshot: CompanyEntitlements | null; error: boolean };
 
-async function load(userId: string): Promise<CompanyEntitlements | null> {
+let cache: { userId: string; promise: Promise<LoadResult> } | null = null;
+
+async function load(userId: string): Promise<LoadResult> {
   if (cache?.userId === userId) return cache.promise;
-  const promise = (async () => {
+  const promise = (async (): Promise<LoadResult> => {
     const { data, error } = await supabase.rpc("esblu_get_my_company_entitlements");
-    return error ? null : parseCompanyEntitlements(data);
-  })().catch(() => null);
+    if (error) return { snapshot: null, error: true };
+    return { snapshot: parseCompanyEntitlements(data), error: false };
+  })().catch((): LoadResult => ({ snapshot: null, error: true }));
   cache = { userId, promise };
+  // Chyba sa necachuje — ďalší pokus (retry) sa spýta servera znova.
+  void promise.then((result) => {
+    if (result.error && cache?.promise === promise) cache = null;
+  });
   return promise;
 }
 
@@ -34,8 +41,9 @@ export function invalidateCompanyEntitlements(): void {
   cache = null;
 }
 
-export function useCompanyEntitlements(): State & { has: (key: EntitlementKey) => boolean } {
-  const [state, setState] = useState<State>({ loading: true, snapshot: null });
+export function useCompanyEntitlements(): State & { has: (key: EntitlementKey) => boolean; retry: () => void } {
+  const [state, setState] = useState<State>({ loading: true, snapshot: null, error: false });
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -43,11 +51,11 @@ export function useCompanyEntitlements(): State & { has: (key: EntitlementKey) =
     const refresh = async (userId: string | null) => {
       if (!userId) {
         cache = null;
-        if (!cancelled) setState({ loading: false, snapshot: null });
+        if (!cancelled) setState({ loading: false, snapshot: null, error: false });
         return;
       }
-      const snapshot = await load(userId);
-      if (!cancelled) setState({ loading: false, snapshot });
+      const result = await load(userId);
+      if (!cancelled) setState({ loading: false, snapshot: result.snapshot, error: result.error });
     };
 
     void supabase.auth.getSession().then(({ data }) => refresh(data.session?.user.id ?? null));
@@ -60,10 +68,15 @@ export function useCompanyEntitlements(): State & { has: (key: EntitlementKey) =
       cancelled = true;
       subscription.subscription.unsubscribe();
     };
-  }, []);
+  }, [attempt]);
 
   return {
     ...state,
     has: (key) => state.snapshot?.items[key]?.active === true,
+    retry: () => {
+      cache = null;
+      setState((current) => ({ ...current, loading: true, error: false }));
+      setAttempt((value) => value + 1);
+    },
   };
 }

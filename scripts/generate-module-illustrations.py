@@ -33,19 +33,40 @@ def iso(x: float, y: float, z: float) -> tuple[float, float]:
     return (CX + (x - y) * C30 * U, CY + (x + y) * S30 * U - z * U)
 
 
+def num(v: float) -> str:
+    text = f"{v:.1f}"
+    return text[:-2] if text.endswith(".0") else text
+
+
 def pts(points) -> str:
-    return " ".join(f"{px:.1f},{py:.1f}" for px, py in points)
+    return " ".join(f"{num(px)},{num(py)}" for px, py in points)
+
+
+def pts_compact(points) -> str:
+    """Kompaktné súradnice (bez zbytočných núl) — menšie SVG bez straty ostrosti."""
+    return " ".join(f"{num(px)},{num(py)}" for px, py in points)
 
 
 def poly(points, fill: str, extra: str = "") -> str:
-    return f'<polygon points="{pts(points)}" fill="{fill}" stroke="{fill}" stroke-width="0.6" stroke-linejoin="round"{extra}/>'
+    # stroke rovnakej farby zalepí subpixelové škáry medzi stenami (anti-aliasing)
+    return f'<polygon points="{pts_compact(points)}" fill="{fill}" stroke="{fill}" stroke-width=".6" stroke-linejoin="round"{extra}/>'
 
 
-def box(x, y, z, w, d, h, top="url(#top)", left="url(#left)", right="url(#right)") -> str:
+def edge(a, b, opacity: float = 0.5) -> str:
+    """Svetlá hrana (jednotné svetlo zľava zhora) — „soft 3D" detail celej rodiny."""
+    return f'<path d="M{pts_compact([a])}L{pts_compact([b])}" stroke="#EAF4FF" stroke-opacity="{opacity}" stroke-width=".9" stroke-linecap="round"/>'
+
+
+def box(x, y, z, w, d, h, top="url(#top)", left="url(#left)", right="url(#right)", highlight: bool = True) -> str:
     t = [iso(x, y, z + h), iso(x + w, y, z + h), iso(x + w, y + d, z + h), iso(x, y + d, z + h)]
     lf = [iso(x, y + d, z), iso(x + w, y + d, z), iso(x + w, y + d, z + h), iso(x, y + d, z + h)]
     rt = [iso(x + w, y, z), iso(x + w, y + d, z), iso(x + w, y + d, z + h), iso(x + w, y, z + h)]
-    return poly(lf, left) + poly(rt, right) + poly(t, top)
+    out = poly(lf, left) + poly(rt, right) + poly(t, top)
+    if highlight and w > 1.5 and d > 1.5:
+        # predná hrana vrchu (smer k svetlu) + zvislá hrana na nároží
+        out += edge(iso(x, y + d, z + h), iso(x + w, y + d, z + h), 0.55)
+        out += edge(iso(x + w, y + d, z + h), iso(x + w, y, z + h), 0.3)
+    return out
 
 
 def face_rect_y(x0, x1, z0, z1, y, fill) -> str:
@@ -142,7 +163,7 @@ DEFS = """
 def base() -> str:
     """Spoločná podstava rodiny (tmavá izometrická doska + brand hrana)."""
     out = '<ellipse cx="80" cy="84" rx="74" ry="66" fill="url(#glow)"/>'
-    out += box(-11, -11, -2.2, 22, 22, 2.2, top="url(#baseTop)", left="#0B1426", right="#081020")
+    out += box(-11, -11, -2.2, 22, 22, 2.2, top="url(#baseTop)", left="#0B1426", right="#081020", highlight=False)
     # brand hrana dosky
     out += poly([iso(-11, 11, 0), iso(11, 11, 0), iso(11, 11, -0.35), iso(-11, 11, -0.35)], "#0181FD", ' opacity="0.55"')
     out += poly([iso(11, -11, 0), iso(11, 11, 0), iso(11, 11, -0.35), iso(11, -11, -0.35)], "#0181FD", ' opacity="0.35"')
@@ -151,7 +172,7 @@ def base() -> str:
 
 def floor_shadow(w=13, d=13) -> str:
     cx, cy = iso(0, 0, 0)
-    return f'<ellipse cx="{cx:.1f}" cy="{cy:.1f}" rx="{w * U * 1.5:.1f}" ry="{d * U * 0.75:.1f}" fill="url(#shadow)"/>'
+    return f'<ellipse cx="{num(cx)}" cy="{num(cy)}" rx="{num(w * U * 1.5)}" ry="{num(d * U * 0.75)}" fill="url(#shadow)"/>'
 
 
 def svg(body: str, label: str) -> str:
@@ -245,7 +266,7 @@ def machines() -> str:
     b += arm([(8.0, 14.8), (9.4, 13.6), (14.4, 6.4), (13.0, 6.0)], "url(#left)", "#0B5ED0")
     b += arm([(12.2, 6.8), (15.6, 6.2), (15.2, 2.0), (12.6, 2.8)], "#1236C8", "#0A3FA8")
     jx, jy = iso(8.7, y + side, 14.2)
-    b += f'<circle cx="{jx:.1f}" cy="{jy:.1f}" r="1.7" fill="#9DCBFF"/>'
+    b += f'<circle cx="{num(jx)}" cy="{num(jy)}" r="1.7" fill="#9DCBFF"/>'
     # kabína (vpredu, na strane pozorovateľa)
     b += box(-3.4, 0.4, 6.0, 4.4, 4.2, 4.6)
     b += face_rect_x(1.0, 3.9, 7.2, 9.9, 1.01, "url(#glass)")
@@ -295,9 +316,9 @@ def partners() -> str:
     a = iso(-5.9, 4.7, 13.0)
     c = iso(5.1, -5.9, 9.0)
     mx, my = (a[0] + c[0]) / 2, min(a[1], c[1]) - 26
-    b += f'<path d="M{a[0]:.1f},{a[1]:.1f} Q{mx:.1f},{my:.1f} {c[0]:.1f},{c[1]:.1f}" fill="none" stroke="#38BDF8" stroke-width="2.4" stroke-linecap="round" stroke-dasharray="1 5.5"/>'
+    b += f'<path d="M{num(a[0])},{num(a[1])} Q{num(mx)},{num(my)} {num(c[0])},{num(c[1])}" fill="none" stroke="#38BDF8" stroke-width="2.4" stroke-linecap="round" stroke-dasharray="1 5.5"/>'
     for (px, py) in (a, c):
-        b += f'<circle cx="{px:.1f}" cy="{py:.1f}" r="4.2" fill="#EAF4FF"/><circle cx="{px:.1f}" cy="{py:.1f}" r="2.1" fill="#0181FD"/>'
+        b += f'<circle cx="{num(px)}" cy="{num(py)}" r="4.2" fill="#EAF4FF"/><circle cx="{num(px)}" cy="{num(py)}" r="2.1" fill="#0181FD"/>'
     return svg(b, "Obchodní partneri")
 
 

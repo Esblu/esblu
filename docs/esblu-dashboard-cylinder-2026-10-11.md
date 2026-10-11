@@ -236,3 +236,160 @@ Keď sa výška neskôr opraví (rotácia, klávesnica), valec sa sám vráti.
 - fokusovaná karta je vždy viditeľná (opacity 1, y = 0) pre n = 1–7, výšky 96–176 a oba varianty;
 - Android viewporty 360–430 px: platná geometria, fokus celý v ploche, susedia viditeľní;
 - fallback pri 0 px, NaN, nízkej ploche a príliš vysokej karte.
+
+## 15. Finálny produkčný polish (2026-10-11)
+
+### Vizuál
+
+**Valec (variant A):**
+
+| Parameter | Hodnota |
+|---|---|
+| Uhol medzi kartami | 21° |
+| Polomer valca | 2.75 × výška karty |
+| Mierka a priehľadnosť suseda | 0.92 / ≈ 0.82 |
+| Stmavnutie suseda | 0.26 |
+| Zvislé „skrátenie" podľa cos θ | 0.55 + 0.45·cos θ |
+| Prechodový gradient na hranách plochy | 32 px |
+
+**Fokus:**
+- silnejší brand rám, jemná brand žiara a hĺbkový tieň;
+- šípka „otvoriť";
+- prechody rámu a tieňa trvajú 250 ms (CSS, nie per-frame).
+
+**Stavy karty:**
+- **Zamknuté:** prerušovaný neutrálny rám, ilustrácia tlmená a čiernobiela, zámok.
+- **Skúšobné obdobie skončilo:** prerušovaný teplý rám, štítok s hodinami. Odlíšené od bežného zamknutia, ale nie ako chyba.
+
+**Ovládanie a indikátor polohy:**
+- Indikátor je bodový (2–8 modulov), aktívny bod je predĺžený. Pri viac než 8 moduloch je to kompaktné číslo.
+- Tlačidlá ▲/▼ sú tiché kruhové ikony (36/40 px) — nevyzerajú ako debug UI.
+
+**Karta:**
+- Písmo je v `rem`, takže škáluje s nastavením písma.
+- Názov má max. 2 riadky. Popis sa skryje, keď je karta nízka (`isCompactCard`).
+- Ilustrácia má max. 116 px na mobile a 156 px na desktope.
+
+**Ilustrácie:**
+- jednotné svetlo zľava zhora: svetlé hrany na prednej hrane vrchu a na nároží každého objektu;
+- kompaktné súradnice (bez `.0`), 6–8.5 kB na modul.
+
+### Stavy modulu (`moduleStatus`)
+
+| Stav | Kedy | UI |
+|---|---|---|
+| count | počet známy | brand štítok „3 uložených vozidiel" |
+| loading | počty sa načítavajú | skeleton s pevnou šírkou (bez layout shiftu) |
+| error | počty zlyhali | „Údaje sa nepodarilo načítať", **karta ostáva použiteľná** |
+| pending | nároky sa načítavajú | neutrálny skeleton — **nikdy zámok** |
+| locked | nárok neaktívny | zámok + „Nie je súčasťou vášho balíka" + „Požiadať o aktiváciu" → `/kontakt` |
+| trial | `TRIAL_EXPIRED` | „Skúšobné obdobie skončilo" (teplý akcent) + rovnaké CTA |
+| none | bez počtu | iba popis |
+
+**Ďalšie stavy nástenky:**
+- **Rola sa ešte načítava:** skeleton troch kariet (`aria-busy`), žiadny záblesk jedného modulu.
+- **Rola nemá žiadny modul:** pokojná prázdna správa.
+- **Všetko zamknuté:** pruh „Vo vašom balíku zatiaľ nie je aktívny žiadny modul" + CTA.
+- **Chyba nárokov:** tichý riadok „Stav balíka sa nepodarilo overiť — moduly sú dostupné podľa vašej roly" + „Skúsiť znova". Hook sa pokúsi znova a chyba sa necachuje.
+
+### Režimy (`cylinderMode`)
+
+| Stav | Zobrazenie |
+|---|---|
+| 0 modulov | prázdny stav |
+| 1 modul | jedna statická karta (`data-cylinder="single"`) |
+| 2 moduly | statický zoznam bez klonov (`pair`) |
+| reduced motion | plnohodnotný zoznam (`reduced`) |
+| neplatná geometria | zoznam (`fallback` + `data-fallback-reason`) |
+| 3+ modulov | valec |
+
+### Gestá a pohyb
+
+**Ťah:**
+- prah 10 px, potom sa os uzamkne; vodorovné gesto valec ignoruje;
+- 1 karta = 0.9 × výška karty;
+- dojazd po švihu podľa rýchlosti × 0.18 s, **max. 2 moduly** na jeden švih.
+
+**Pružina (190/26, ζ ≈ 0.94):** takmer kriticky tlmená, usadí sa bez prekmitu.
+
+**Koliesko a trackpad:** 50 px na krok, max. 1 krok na udalosť, pauza 220 ms (inertia trackpadu nepreletí valec).
+
+**Klávesnica:** ↑/↓, PageUp/PageDown, Home.
+
+**Ťuknutie:**
+- ťah nikdy neotvorí modul;
+- ťuknutie na suseda ho privedie dopredu, ťuknutie na fokus otvorí modul alebo ukáže CTA zamknutého modulu.
+
+**Haptika:** iba pri **dotykovom** snape na nový modul. Nie pri koliesku, klávesnici ani každom frame. Rešpektuje reduced motion (`lib/voice/device-feedback.ts`, Android `performHapticFeedback` bez povolenia VIBRATE).
+
+### Hľadanie a hlas
+
+**Pole hľadania:**
+- tlačidlo „Vymazať hľadanie";
+- Esc vráti valec, Enter zavrie klávesnicu;
+- spinner počas rozpoznávania; výsledky nahradia valec v tej istej ploche;
+- natívne „x" v `type=search` je skryté.
+
+**Mikrofón:** ostáva v poli (32 px), stavy počúva (červený pulz) / spracúva (spinner) / aktívny (brand) / chyba (tlmená červená). Je to jediná implementácia hlasu (`useVoiceSession`).
+
+### Chat FAB a spodná lišta
+
+**Chat FAB:**
+- Nástenka publikuje „zakázané pásy" (fokusovaná karta a ovládanie, `setFabAvoidBands`).
+- FAB po rozložení aj po pustení ťahu obíde pás nad alebo pod ním, v hraniciach nad lištou.
+- Pri malom viewporte sa presunie bezpečne dole. Po odchode z nástenky sa pásy zrušia.
+- Ťah FAB má pointer capture, takže nikdy nespustí ťah valca.
+
+**Spodná lišta:** výška nástenky je `viewport − lišta`, takže obsah nikdy nie je pod lištou. Hlavička rešpektuje `--esblu-safe-top`.
+
+### Viewport, klávesnica, resize, návrat
+
+- **Resize:** ResizeObserver prepočíta výšku karty a **zachová modul vo fokuse**. Fokus sa zachová aj pri zmene poradia po načítaní nárokov.
+- **Klávesnica, rotácia, okno:** ak plocha klesne pod 180 px (otvorená klávesnica, landscape), zobrazí sa zoznam. Valec sa skúsi vrátiť **iba po udalosti `resize`**, takže nevznikne slučka.
+- **Návrat z modulu:** posledný modul vo fokuse je v `sessionStorage` (`esblu.dashboard.focus.v1`), hodnota sa validuje. Žiadna DB.
+
+### Prístupnosť
+
+- carousel/slide sémantika a `aria-current`;
+- jediné `aria-live` (modul vo fokuse + stav zamknutia);
+- skeletony majú `role="status"`;
+- ovládanie bez swipe (▲/▼, klávesnica), focus ring na kartách aj tlačidlách;
+- stav nie je iba farbou (zámok, hodiny, text);
+- písmo v `rem` a výška karty až × 1.3 pri 130 % písme (`cardHeightFor`).
+
+### Výkon
+
+- žiadny React render na frame počas ťahu; iba transform + opacity;
+- rAF beží iba počas pohybu;
+- všetky listenery, ResizeObserver, časovače a FAB pásy sa pri odmontovaní upracú;
+- ilustrácie < 9 kB, `decoding="async"`, bez bitmáp.
+
+### Bezpečnosť a súkromie
+
+- žiadne analytics SDK;
+- jediný log je `console.debug` s dôvodom fallbacku (bez dát firmy);
+- finančné moduly sa nerenderujú bez práva roly (`isModuleVisible`); RLS ostáva autorita.
+
+### Známe limity
+
+- Skutočné screenshoty prihlásenej appky sandbox nevie spraviť. Vizuálna QA je **fixture** (verná replika DOM a tried na stagingu, označená).
+- Haptika na iOS nie je (chýba natívny plugin v Xcode projekte).
+- Landscape na telefóne = zoznam (plocha < 180 px) — zámerne.
+- Aktivácia modulov je zatiaľ ručná cez kontakt. Integrácia predplatného sa napojí na `onLockedAction`.
+
+### Checklist na reálnom zariadení
+
+1. Build ID v paneli „Viac" = nový build.
+2. Počas načítania sa zobrazí skeleton troch kariet, potom valec. Žiadny záblesk jednej karty ani zámku.
+3. Fokus je jasne dominantný, susedia čitateľní, ďalší naznačení. Spodok obrazovky nie je prázdny.
+4. Pomalý ťah: karta ide s prstom. Rýchly švih: max. 2 moduly, snap bez prekmitu, jemná haptika pri novom module.
+5. Vodorovný ťah (alebo gesto späť) valec nepohne.
+6. Ťuknutie na suseda ho privedie dopredu, ťuknutie na fokus otvorí modul. Po návrate je fokus na rovnakom module.
+7. Zamknutý modul je na konci, so zámkom a CTA → Kontakt. Pri skončenom triali sa zobrazí štítok s hodinami.
+8. Hľadanie: písanie → výsledky; „x"/Esc → valec. Otvorená klávesnica nerozbije layout a po zatvorení sa valec vráti.
+9. Mikrofón: stavy počúva / spracúva / chyba.
+10. Chat FAB: presuň ho na kartu, po pustení obíde fokus aj ▲/▼. Badge ostáva. Na iných obrazovkách funguje ako predtým.
+11. Spodná lišta: s 3-tlačidlovou aj gestovou navigáciou nie je obsah pod lištou.
+12. Veľkosť písma 130 % (Nastavenia Androidu): karty vyššie, text neprekypuje.
+13. „Odstrániť animácie" → zoznam kariet, všetko funguje.
+14. Rotácia na landscape a späť → zoznam, potom valec na tom istom module.

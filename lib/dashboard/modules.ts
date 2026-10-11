@@ -117,3 +117,50 @@ export function cardAction(module: DashboardModule, index: number, focusedIndex:
   if (isLocked(module)) return { type: "locked", key: module.key };
   return { type: "navigate", href: module.href };
 }
+
+
+// -----------------------------------------------------------------------------
+// Finálny polish 2026-10-11 — stav karty a zachovanie fokusu
+// -----------------------------------------------------------------------------
+
+/** Moduly, pri ktorých nástenka pozná počet záznamov (už načítané dáta). */
+export const COUNTED_MODULES: readonly DashboardModuleKey[] = ["vehicles", "machines", "inventory"];
+
+export type ModuleStatus =
+  | { kind: "locked" }
+  | { kind: "trial" }
+  | { kind: "pending" } // nároky sa načítavajú — neutrálny skeleton, nikdy zámok
+  | { kind: "loading" } // počet sa načítava — skeleton s pevnou šírkou (bez layout shiftu)
+  | { kind: "error" } // údaje sa nepodarilo načítať — karta ostáva použiteľná
+  | { kind: "count"; count: number }
+  | { kind: "none" };
+
+export function moduleStatus(
+  module: Pick<DashboardModule, "key" | "access" | "count">,
+  ctx: { entitlementsLoading: boolean; countsLoading: boolean; dataError: boolean }
+): ModuleStatus {
+  if (module.access.state === "locked") return module.access.reason === "TRIAL_EXPIRED" ? { kind: "trial" } : { kind: "locked" };
+  if (COUNTED_MODULES.includes(module.key)) {
+    if (ctx.countsLoading) return { kind: "loading" };
+    if (ctx.dataError) return { kind: "error" };
+    if (typeof module.count === "number") return { kind: "count", count: module.count };
+  }
+  if (ctx.entitlementsLoading) return { kind: "pending" };
+  return { kind: "none" };
+}
+
+/** Index modulu s daným kľúčom (návrat z modulu, zmena poradia po načítaní nárokov), inak 0. */
+export function focusIndexForKey(modules: ReadonlyArray<{ key: string }>, key: string | null | undefined): number {
+  if (!key) return 0;
+  const index = modules.findIndex((module) => module.key === key);
+  return index >= 0 ? index : 0;
+}
+
+export function isDashboardModuleKey(value: unknown): value is DashboardModuleKey {
+  return typeof value === "string" && (MODULE_ORDER as readonly string[]).includes(value);
+}
+
+/** Sú všetky moduly zamknuté? (prázdny/zamknutý stav nástenky s CTA) */
+export function allLocked(modules: ReadonlyArray<Pick<DashboardModule, "access">>): boolean {
+  return modules.length > 0 && modules.every(isLocked);
+}

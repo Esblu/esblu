@@ -10,7 +10,10 @@ import { resolveAppHref } from "@/lib/app-routes";
 import { isKeyboardEditable } from "@/lib/mobile/lifecycle";
 import {
   CHAT_FAB_STORAGE_KEY,
+  FAB_AVOID_EVENT,
+  avoidBandsY,
   clampToBounds,
+  getFabAvoidBands,
   fabBounds,
   fromStored,
   isDragGesture,
@@ -163,8 +166,12 @@ export default function MobileChatFab() {
   const drag = useRef<{ id: number; startX: number; startY: number; origX: number; origY: number; moved: boolean } | null>(null);
   const suppressClick = useRef(false);
 
+  // Uložená poloha → px, ale mimo zón, ktoré obrazovka nesmie mať zakryté
+  // (nástenka: fokusovaná karta a ovládanie valca).
   const relayout = useCallback(() => {
-    setPos(fromStored(readStored(), currentBounds()));
+    const bounds = currentBounds();
+    const stored = fromStored(readStored(), bounds);
+    setPos({ ...stored, y: avoidBandsY(stored.y, getFabAvoidBands(), bounds) });
   }, []);
 
   useEffect(() => {
@@ -173,10 +180,12 @@ export default function MobileChatFab() {
     const frame = window.requestAnimationFrame(relayout);
     window.addEventListener("resize", relayout);
     window.addEventListener("orientationchange", relayout);
+    window.addEventListener(FAB_AVOID_EVENT, relayout);
     return () => {
       window.cancelAnimationFrame(frame);
       window.removeEventListener("resize", relayout);
       window.removeEventListener("orientationchange", relayout);
+      window.removeEventListener(FAB_AVOID_EVENT, relayout);
     };
   }, [visible, relayout]);
 
@@ -213,7 +222,8 @@ export default function MobileChatFab() {
     suppressClick.current = true; // ťahanie nesmie otvoriť Chat
     setDragging(false);
     const bounds = currentBounds();
-    const snapped = snapToEdge(d.origX + (event.clientX - d.startX), d.origY + (event.clientY - d.startY), bounds);
+    const edge = snapToEdge(d.origX + (event.clientX - d.startX), d.origY + (event.clientY - d.startY), bounds);
+    const snapped = { ...edge, y: avoidBandsY(edge.y, getFabAvoidBands(), bounds) };
     setPos(snapped);
     writeStored(toStored(snapped, bounds));
   }

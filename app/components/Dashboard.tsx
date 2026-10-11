@@ -37,7 +37,7 @@ import { spokenTextFor } from "@/lib/voice/spoken-text";
 import { todayLocalDate } from "@/lib/local-date";
 import { CarIcon, FolderIcon, MachineIcon, PackageIcon } from "@/app/components/icons/AppIcons";
 import { ModuleCylinder, type CylinderCardView } from "@/app/components/dashboard/ModuleCylinder";
-import { buildDashboardModules, type DashboardModuleKey } from "@/lib/dashboard/modules";
+import { allLocked, buildDashboardModules, isDashboardModuleKey, moduleStatus, type DashboardModuleKey } from "@/lib/dashboard/modules";
 import { parseCylinderVariant, type CylinderVariantName } from "@/lib/dashboard/cylinder";
 import { useCompanyEntitlements } from "@/hooks/use-company-entitlements";
 import { useMediaQuery, useSearchParamValue } from "@/hooks/use-media-query";
@@ -66,6 +66,9 @@ const FINANCE_HREFS = ["/obchodni-partneri", "/faktury", "/priecinky"];
  * opačný smer — vidí doklady, nevidí majetok — takže obe osi patria na
  * jedno miesto, inak sa časom rozídu.
  */
+/** sessionStorage kľúč posledného modulu vo fokuse (návrat z modulu na nástenku). */
+const DASHBOARD_FOCUS_KEY = "esblu.dashboard.focus.v1";
+
 function isModuleVisible(
   href: string,
   financeAccess: boolean,
@@ -106,6 +109,10 @@ export default function Dashboard() {
   // Prevádzkový rozsah — účtovník nemá stroje, sklad ani vozidlá ako modul.
   const [operationalAccess, setOperationalAccess] = useState(false);
   const [search, setSearch] = useState("");
+  // Finálny polish: rola/členstvo načítané (pred tým skeleton, nie 1 modul),
+  // stav načítania počtov (skeleton bez layout shiftu / chyba).
+  const [accessReady, setAccessReady] = useState(false);
+  const [dataState, setDataState] = useState<"loading" | "ready" | "error">("loading");
   // Intent Engine (app/api/assistant/intent) — samostatný stav od
   // existujúceho plain-substring searchResults nižšie, aby sa pri
   // nerozpoznanom texte appka bezo zmeny vrátila na pôvodné správanie
@@ -187,6 +194,8 @@ export default function Dashboard() {
       setVignettes([]);
       setFinanceAccess(false);
       setOperationalAccess(false);
+      setDataState("ready");
+      setAccessReady(true);
       // Bez aktívneho membershipu niet "firmy", ktorej branding by sa dal
       // načítať (esblu_get_company_profile by aj tak nič nevrátila) —
       // ostáva dnešný generický fallback ("ESBLU", žiadne logo).
@@ -195,6 +204,7 @@ export default function Dashboard() {
 
     setFinanceAccess(hasFinanceView(membership));
     setOperationalAccess(canOperate(membership.role));
+    setAccessReady(true);
     loadData(membership.company_id);
     loadCompanyProfile();
   }
@@ -241,30 +251,25 @@ export default function Dashboard() {
   }
 
   async function loadData(currentCompanyId: string) {
-    const { data: vehicleData } = await supabase
-      .from("vehicles")
-      .select("*")
-      .eq("company_id", currentCompanyId);
+    setDataState("loading");
+    try {
+      const [vehicleRes, machineRes, itemRes, vignetteRes] = await Promise.all([
+        supabase.from("vehicles").select("*").eq("company_id", currentCompanyId),
+        supabase.from("machines").select("*").eq("company_id", currentCompanyId),
+        supabase.from("inventory_items").select("*").eq("company_id", currentCompanyId),
+        supabase.from("vehicle_vignettes").select("*").eq("company_id", currentCompanyId),
+      ]);
 
-    const { data: machineData } = await supabase
-      .from("machines")
-      .select("*")
-      .eq("company_id", currentCompanyId);
-
-    const { data: itemData } = await supabase
-      .from("inventory_items")
-      .select("*")
-      .eq("company_id", currentCompanyId);
-
-    const { data: vignetteData } = await supabase
-      .from("vehicle_vignettes")
-      .select("*")
-      .eq("company_id", currentCompanyId);
-
-    setVehicles(vehicleData || []);
-    setMachines(machineData || []);
-    setItems(itemData || []);
-    setVignettes(vignetteData || []);
+      setVehicles(vehicleRes.data || []);
+      setMachines(machineRes.data || []);
+      setItems(itemRes.data || []);
+      setVignettes(vignetteRes.data || []);
+      // Chyba načítania počtov NEZNEMOŽNÍ modul — karta ostane použiteľná,
+      // iba namiesto počtu ukáže „údaje sa nepodarilo načítať".
+      setDataState(vehicleRes.error || machineRes.error || itemRes.error ? "error" : "ready");
+    } catch {
+      setDataState("error");
+    }
   }
 
   // Upozornenia na STK/EK/diaľničné známky — logika je teraz v zdieľanom
@@ -611,6 +616,7 @@ export default function Dashboard() {
 
   const dashboardModules = buildDashboardModules({
     isVisible: (href) => isModuleVisible(href, financeAccess, operationalAccess),
+    // Načítavanie aj chyba nárokov = „unknown": nikdy falošný zámok.
     entitlements: entitlements.loading ? null : entitlements.snapshot,
     counts: { vehicles: vehicles.length, machines: machines.length, inventory: items.length },
     alerts: { vehicles: alerts.length },
@@ -630,18 +636,52 @@ export default function Dashboard() {
     inventory: t("dashboard.moduleInventorySubtitle"),
   };
 
-  const cylinderModules: CylinderCardView[] = dashboardModules.map((module) => ({
-    ...module,
-    title: MODULE_TITLES[module.key],
-    description: t(`dashboard.cylinder.desc.${module.key}`),
-    countLabel: module.count !== undefined && COUNT_UNITS[module.key] ? `${module.count} ${COUNT_UNITS[module.key]}` : null,
-    alertsLabel: module.alerts ? t("dashboard.cylinder.alerts", { count: module.alerts }) : null,
-    lockedLabel:
-      module.access.state === "locked"
-        ? t(module.access.reason === "TRIAL_EXPIRED" ? "dashboard.cylinder.lockedTrial" : "dashboard.cylinder.locked")
-        : null,
-    illustration: `/images/modules/${module.key}.svg`,
-  }));
+  const cylinderModules: CylinderCardView[] = dashboardModules.map((module) => {
+    const status = moduleStatus(module, {
+      entitlementsLoading: entitlements.loading,
+      countsLoading: dataState === "loading",
+      dataError: dataState === "error",
+    });
+    const statusText =
+      status.kind === "count"
+        ? `${status.count} ${COUNT_UNITS[module.key] ?? ""}`.trim()
+        : status.kind === "error"
+          ? t("dashboard.cylinder.dataError")
+          : status.kind === "locked"
+            ? t("dashboard.cylinder.locked")
+            : status.kind === "trial"
+              ? t("dashboard.cylinder.lockedTrial")
+              : null;
+    return {
+      ...module,
+      title: MODULE_TITLES[module.key],
+      description: t(`dashboard.cylinder.desc.${module.key}`),
+      status,
+      statusText,
+      alertsLabel: module.alerts ? t("dashboard.cylinder.alerts", { count: module.alerts }) : null,
+      illustration: `/images/modules/${module.key}.svg`,
+    };
+  });
+  const everythingLocked = allLocked(dashboardModules);
+
+  // Posledný modul vo fokuse — iba sessionStorage tejto karty/appky (žiadna DB).
+  const [initialFocusKey] = useState<string | null>(() => {
+    try {
+      const value = typeof window === "undefined" ? null : window.sessionStorage.getItem(DASHBOARD_FOCUS_KEY);
+      return isDashboardModuleKey(value) ? value : null;
+    } catch {
+      return null;
+    }
+  });
+  const [focusKey, setFocusKey] = useState<string | null>(initialFocusKey);
+  const rememberFocus = (key: DashboardModuleKey) => {
+    setFocusKey(key);
+    try {
+      window.sessionStorage.setItem(DASHBOARD_FOCUS_KEY, key);
+    } catch {
+      // súkromný režim — fokus sa jednoducho nezapamätá
+    }
+  };
 
   // Spoločný zoznam navigačných položiek pre desktop sidebar AJ mobilné
   // výsuvné menu (jeden zdroj pravdy, žiadna duplicita odkazov/ciest).
@@ -987,6 +1027,9 @@ export default function Dashboard() {
           <div className="mt-3 flex min-h-10 shrink-0 items-center gap-2 rounded-doc border border-subtle bg-surface-1/80 py-1 pl-3 pr-1 transition focus-within:border-brand-400 lg:mt-4 lg:max-w-2xl">
             <SearchIcon />
             <input
+              type="search"
+              enterKeyHint="search"
+              aria-label={t("dashboard.searchPlaceholder")}
               value={search}
               onChange={(e) => {
                 // Písanie = ručný režim: hlasová relácia sa ukončí.
@@ -995,9 +1038,37 @@ export default function Dashboard() {
                 setSearch(e.target.value);
                 setVoiceTranscript(null);
               }}
+              onKeyDown={(e) => {
+                // Esc = späť na valec; Enter iba zavrie klávesnicu (výsledky sú už živé).
+                if (e.key === "Escape") {
+                  setSearch("");
+                  setVoiceTranscript(null);
+                } else if (e.key === "Enter") {
+                  e.currentTarget.blur();
+                }
+              }}
               placeholder={t("dashboard.searchPlaceholder")}
-              className="w-full min-w-0 bg-transparent text-sm text-primary outline-none placeholder:text-muted-esblu"
+              className="dash-search-input w-full min-w-0 bg-transparent text-sm text-primary outline-none placeholder:text-muted-esblu"
             />
+            {intentLoading && query.length >= 2 && (
+              <span aria-hidden="true" className="h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-brand-400/30 border-t-brand-400 motion-reduce:animate-none" />
+            )}
+            {search && (
+              <button
+                type="button"
+                onClick={() => {
+                  if (voice.active) voice.stop("manual");
+                  setSearch("");
+                  setVoiceTranscript(null);
+                }}
+                aria-label={t("dashboard.cylinder.clearSearch")}
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-muted-esblu transition hover:bg-surface-hover hover:text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+                  <path d="M6 6l12 12M18 6L6 18" />
+                </svg>
+              </button>
+            )}
             <VoiceSessionControl
               variant="icon"
               session={voice.session}
@@ -1166,25 +1237,65 @@ export default function Dashboard() {
                   </div>
                 )}
 
-                <ModuleCylinder
-                  modules={cylinderModules}
-                  variant={cylinderVariant}
-                  large={largeDashboard}
-                  onNavigate={(href) => router.push(href)}
-                  onLockedAction={() => router.push("/kontakt")}
-                  labels={{
-                    region: t("dashboard.cylinder.regionLabel"),
-                    previous: t("dashboard.cylinder.previous"),
-                    next: t("dashboard.cylinder.next"),
-                    position: (index, count) => t("dashboard.cylinder.position", { index, count }),
-                    slide: (name, index, count) => t("dashboard.cylinder.slideLabel", { name, index, count }),
-                    open: t("dashboard.cylinder.open"),
-                    lockedBadge: t("dashboard.cylinder.lockedBadge"),
-                    requestActivation: t("dashboard.cylinder.requestActivation"),
-                    lockedHint: t("dashboard.cylinder.lockedHint"),
-                    hint: t("dashboard.cylinder.hint"),
-                  }}
-                />
+                {/* Nároky sa nepodarilo overiť: nikdy netvrdíme „nie je v balíku" —
+                    moduly ostávajú podľa roly a server je autorita. Tichý retry. */}
+                {entitlements.error && (
+                  <p className="mb-1 flex shrink-0 items-center gap-2 px-1 text-xs text-muted-esblu" role="status">
+                    <span className="min-w-0 flex-1 truncate">{t("dashboard.cylinder.entitlementsError")}</span>
+                    <button type="button" onClick={entitlements.retry} className="ui-btn ui-btn-ghost ui-btn-sm">
+                      {t("dashboard.cylinder.retry")}
+                    </button>
+                  </p>
+                )}
+                {accessReady && everythingLocked && (
+                  <div className="mb-1 flex shrink-0 items-center gap-2 rounded-doc border border-subtle bg-surface-1 px-3 py-2 text-[13px] text-secondary">
+                    <span className="min-w-0 flex-1">{t("dashboard.cylinder.allLocked")}</span>
+                    <button type="button" onClick={() => router.push("/kontakt")} className="ui-btn ui-btn-secondary ui-btn-sm shrink-0">
+                      {t("dashboard.cylinder.requestActivation")}
+                    </button>
+                  </div>
+                )}
+
+                {!accessReady ? (
+                  // Členstvo/rola sa ešte načítava: neutrálny skeleton (žiadny
+                  // „1 modul" záblesk, žiadny zámok, žiadny layout shift).
+                  <div className="flex min-h-0 flex-1 flex-col justify-center gap-2.5 lg:max-w-3xl" aria-busy="true" role="status" aria-label={t("dashboard.cylinder.loading")}>
+                    {[0.55, 1, 0.55].map((opacity, index) => (
+                      <div key={index} className="flex h-28 items-center gap-3 rounded-2xl border border-subtle bg-surface-1 px-3" style={{ opacity, transform: index === 1 ? "none" : "scale(0.94)" }}>
+                        <span className="h-20 w-20 shrink-0 animate-pulse rounded-xl bg-surface-hover motion-reduce:animate-none" />
+                        <span className="flex flex-1 flex-col gap-2">
+                          <span className="h-4 w-28 animate-pulse rounded bg-surface-hover motion-reduce:animate-none" />
+                          <span className="h-3 w-40 animate-pulse rounded bg-surface-hover motion-reduce:animate-none" />
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                ) : cylinderModules.length === 0 ? (
+                  <div className="flex min-h-[200px] flex-1 items-center justify-center rounded-2xl border border-dashed border-subtle px-6 text-center text-sm text-secondary lg:max-w-3xl">
+                    {t("dashboard.cylinder.empty")}
+                  </div>
+                ) : (
+                  <ModuleCylinder
+                    modules={cylinderModules}
+                    variant={cylinderVariant}
+                    large={largeDashboard}
+                    initialFocusKey={focusKey}
+                    onFocusChange={rememberFocus}
+                    onNavigate={(href) => router.push(href)}
+                    onLockedAction={() => router.push("/kontakt")}
+                    labels={{
+                      region: t("dashboard.cylinder.regionLabel"),
+                      previous: t("dashboard.cylinder.previous"),
+                      next: t("dashboard.cylinder.next"),
+                      position: (index, count) => t("dashboard.cylinder.position", { index, count }),
+                      slide: (name, index, count) => t("dashboard.cylinder.slideLabel", { name, index, count }),
+                      open: t("dashboard.cylinder.open"),
+                      requestActivation: t("dashboard.cylinder.requestActivation"),
+                      lockedHint: t("dashboard.cylinder.lockedHint"),
+                      loading: t("dashboard.cylinder.loading"),
+                    }}
+                  />
+                )}
               </div>
 
               {alerts.length > 0 && (

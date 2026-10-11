@@ -1063,3 +1063,63 @@ html[data-esblu-runtime="native-app"] body {
     height: 100vh;
   }
 }
+
+/* =============================================================================
+   DASHBOARD v3 — finálny polish (2026-10-11)
+   ============================================================================= */
+@layer components {
+  /* Fokus „vystúpi": silnejší brand rám, dvojitý tieň (hĺbka + jemná žiara). */
+  .cyl-card-focused {
+    border-color: rgba(47, 147, 255, 0.55);
+    background-image:
+      radial-gradient(120% 150% at 0% 50%, rgba(1, 129, 253, 0.28) 0%, rgba(1, 129, 253, 0) 58%),
+      linear-gradient(135deg, #12223f 0%, #0c1628 62%, #0a1220 100%);
+    box-shadow:
+      0 0 0 1px rgba(1, 129, 253, 0.16),
+      0 18px 40px -22px rgba(1, 129, 253, 0.65),
+      0 14px 28px -18px rgba(0, 0, 0, 0.95);
+  }
+  /* Skúšobné obdobie skončilo: jemný teplý akcent (nie agresívna chyba). */
+  .cyl-card-trial {
+    border-style: dashed;
+    border-color: rgba(245, 158, 11, 0.32);
+    background-image: linear-gradient(135deg, #15161f 0%, #0d111b 100%);
+  }
+  /* Ovládanie valca: tiché ikonové tlačidlá (dotyk 36/40 px, nie „debug UI"). */
+  .cyl-ctrl {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: var(--control-h);
+    height: var(--control-h);
+    border-radius: 999px;
+    color: var(--color-text-muted);
+    transition: background-color 0.15s ease, color 0.15s ease;
+  }
+  .cyl-ctrl:hover {
+    background-color: var(--color-surface-hover);
+    color: var(--color-text-primary);
+  }
+  .cyl-ctrl:focus-visible {
+    outline: 2px solid var(--color-focus-ring);
+    outline-offset: 1px;
+  }
+}
+/* Natívne „x" v type=search skryté — nástenka má vlastné tlačidlo vymazania. */
+.dash-search-input::-webkit-search-cancel-button,
+.dash-search-input::-webkit-search-decoration {
+  -webkit-appearance: none;
+  appearance: none;
+}
+@layer components {
+  .cyl-card-locked.cyl-card-focused {
+    border-color: rgba(125, 175, 235, 0.38);
+    background-image: linear-gradient(135deg, #111a2c 0%, #0b111d 100%);
+    box-shadow: 0 14px 28px -18px rgba(0, 0, 0, 0.95);
+  }
+  .cyl-card-trial.cyl-card-focused {
+    border-color: rgba(245, 158, 11, 0.45);
+    background-image: linear-gradient(135deg, #17182200 0%, #0d111b 100%), linear-gradient(135deg, #171822 0%, #0d111b 100%);
+    box-shadow: 0 14px 28px -18px rgba(0, 0, 0, 0.95);
+  }
+}

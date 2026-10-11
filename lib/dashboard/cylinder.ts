@@ -53,9 +53,11 @@ export const VARIANT_SUBTLE: CylinderVariant = {
   // (overené v reálnom Chromiu na 375 px, 2026-10-11).
   radiusFactor: 2.75,
   perspective: 1400,
-  scaleFalloff: 0.07,
-  opacityFalloff: 0.24,
-  dimFalloff: 0.22,
+  // Finálny polish 2026-10-11: susedia čitateľní (opacity ≈ 0.82), ale
+  // zreteľne „za" fokusom (mierka 0.92, stmavnutie 0.26) — fokus dominuje.
+  scaleFalloff: 0.08,
+  opacityFalloff: 0.18,
+  dimFalloff: 0.26,
   focusScale: 1,
   maxVisible: 2.6,
 };
@@ -236,14 +238,14 @@ export function visibleRatio(card: Rect, stage: Rect): number {
 // -----------------------------------------------------------------------------
 
 /** Max. počet kariet, o ktoré sa valec posunie jedným švihom (stabilita rýchleho swipe). */
-export const MAX_FLING_STEPS = 3;
+export const MAX_FLING_STEPS = 2; // finálny polish: jeden švih nikdy nepreskočí viac než 2 moduly
 
 /**
  * Cieľ po pustení prsta: pozícia + dojazd podľa rýchlosti (karty/s), zaokrúhlené
  * na celú kartu a obmedzené na MAX_FLING_STEPS od pozície pri začiatku gesta.
  */
 export function snapTarget(position: number, velocity: number, gestureStart: number): number {
-  const projected = position + velocity * 0.22;
+  const projected = position + velocity * 0.18;
   const target = Math.round(projected);
   const startRound = Math.round(gestureStart);
   return Math.max(startRound - MAX_FLING_STEPS, Math.min(startRound + MAX_FLING_STEPS, target));
@@ -256,7 +258,7 @@ export function dragToPosition(startPosition: number, dragPx: number, stepPx: nu
 }
 
 /** Ťuknutie vs. ťah (px). */
-export const TAP_SLOP_PX = 8;
+export const TAP_SLOP_PX = 10;
 
 export function isTap(dx: number, dy: number): boolean {
   return Math.hypot(dx, dy) < TAP_SLOP_PX;
@@ -266,7 +268,9 @@ export function isTap(dx: number, dy: number): boolean {
 // Pružina (kriticky tlmená) — jeden krok integrácie
 // -----------------------------------------------------------------------------
 
-export const SPRING = { stiffness: 210, damping: 27 } as const;
+// ζ = damping / (2·√stiffness) ≈ 0.94 → takmer kriticky tlmená: jemné
+// „usadenie" bez prekmitu/cartoon bounce, ~350 ms na jeden krok.
+export const SPRING = { stiffness: 190, damping: 26 } as const;
 
 export function springStep(
   position: number,
@@ -287,8 +291,8 @@ export function springStep(
 // -----------------------------------------------------------------------------
 
 /** Akumulovaný deltaY (px) na jeden krok a pauza medzi krokmi (ms). */
-export const WHEEL_STEP_PX = 60;
-export const WHEEL_COOLDOWN_MS = 160;
+export const WHEEL_STEP_PX = 50;
+export const WHEEL_COOLDOWN_MS = 220; // inertia trackpadu neprejde celý valec
 
 export function wheelSteps(accumulatedPx: number): { steps: number; remainder: number } {
   const steps = Math.trunc(accumulatedPx / WHEEL_STEP_PX);
@@ -338,4 +342,57 @@ export function focusCardRect(
   const width = (stage.width - gutter * 2) * variant.focusScale;
   const height = cardHeight * variant.focusScale;
   return { x: stage.x + (stage.width - width) / 2, y: stage.y + (stage.height - height) / 2, width, height };
+}
+
+
+// -----------------------------------------------------------------------------
+// Finálny polish 2026-10-11 — režim zobrazenia, os ťahu, výška karty
+// -----------------------------------------------------------------------------
+
+export type CylinderMode = "empty" | "single" | "list" | "cylinder";
+
+/**
+ * Režim nástenky:
+ *  - 0 modulov → prázdny stav (bezpečná správa, nie biela plocha),
+ *  - 1 modul → jedna statická karta (žiadny „nekonečný" pohyb jedného prvku),
+ *  - 2 moduly → statický zoznam (valec s 2 kartami by musel jednu klonovať
+ *    alebo ju skrývať — oboje pôsobí rozbito),
+ *  - reduced motion alebo neplatná geometria → plnohodnotný zoznam,
+ *  - inak valec.
+ */
+export function cylinderMode(input: { n: number; reducedMotion: boolean; geometryOk: boolean }): CylinderMode {
+  if (input.n <= 0) return "empty";
+  if (input.n === 1) return "single";
+  if (input.reducedMotion || input.n === 2 || !input.geometryOk) return "list";
+  return "cylinder";
+}
+
+/** Os ťahu po prekročení prahu: vodorovný ťah valec neovláda (napr. scroll stránky, gesto späť). */
+export function dragAxis(dx: number, dy: number): "vertical" | "horizontal" | null {
+  if (isTap(dx, dy)) return null;
+  return Math.abs(dy) >= Math.abs(dx) * 0.8 ? "vertical" : "horizontal";
+}
+
+/**
+ * Výška karty podľa plochy a zväčšenia písma (Android „Veľkosť písma",
+ * prehliadačový zoom). Pri 130 % písme je karta vyššia (až ×1.3), ale nikdy
+ * viac než ~1/3.4 plochy — aby fokus aj susedia stále vošli.
+ */
+export function cardHeightFor(stageHeight: number, options: { large?: boolean; fontScale?: number } = {}): number {
+  const max = options.large ? 176 : 140;
+  const scale = Math.min(1.3, Math.max(1, Number.isFinite(options.fontScale ?? 1) ? options.fontScale ?? 1 : 1));
+  const base = Math.max(96, Math.min(max, stageHeight / 4.6)) * scale;
+  const cap = Math.max(96, stageHeight / 3.4);
+  return Math.round(Math.min(base, cap));
+}
+
+/** Karta je nízka → skryť popis (ostane názov + stav), nech text nepretečie. */
+export function isCompactCard(cardHeight: number, fontScale = 1): boolean {
+  return cardHeight / Math.max(1, fontScale) < 108;
+}
+
+/** Bodový indikátor polohy (namiesto „1 / 6"): max. 8 bodov, inak kompaktné číslo. */
+export function progressDots(n: number, active: number): Array<{ index: number; active: boolean }> | null {
+  if (n < 2 || n > 8) return null;
+  return Array.from({ length: n }, (_, index) => ({ index, active: index === active }));
 }

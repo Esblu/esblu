@@ -99,6 +99,13 @@ const sk = {
 
   dashboard: {
     cylinder: {
+      loading: "Načítavam moduly…",
+      dataError: "Údaje sa nepodarilo načítať",
+      entitlementsError: "Stav balíka sa nepodarilo overiť — moduly sú dostupné podľa vašej roly.",
+      retry: "Skúsiť znova",
+      allLocked: "Vo vašom balíku zatiaľ nie je aktívny žiadny modul.",
+      empty: "Pre vašu rolu zatiaľ nie sú dostupné žiadne moduly.",
+      clearSearch: "Vymazať hľadanie",
       regionLabel: "Moduly",
       slideLabel: "{{name}} — {{index}} z {{count}}",
       previous: "Predchádzajúci modul",

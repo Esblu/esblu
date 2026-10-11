@@ -267,10 +267,12 @@ const component = read("app/components/dashboard/ModuleCylinder.tsx");
 
 check("reduced-motion fallback: statický zoznam bez 3D, bez kolieska a bez ťahu", () => {
   assert.ok(component.includes('useMediaQuery("(prefers-reduced-motion: reduce)")'));
-  assert.ok(component.includes("if (reducedMotion || fallbackReason) {"));
-  assert.ok(component.includes('data-cylinder={reducedMotion ? "reduced" : "fallback"}'));
-  assert.match(component, /if \(!stage \|\| reducedMotion \|\| fallbackReason\) return;/, "koliesko vypnuté");
-  assert.match(component, /if \(reducedMotion \|\| fallbackReason\) return;\s*const onMove/, "ťah vypnutý");
+  assert.equal(cyl.cylinderMode({ n: 6, reducedMotion: true, geometryOk: true }), "list");
+  assert.ok(component.includes("const motion = mode === \"cylinder\";"));
+  assert.ok(component.includes("if (!motion) {"), "zoznam namiesto valca");
+  assert.ok(component.includes('data-cylinder={reducedMotion ? "reduced" : mode === "single" ? "single" : n === 2 ? "pair" : "fallback"}'));
+  assert.match(component, /if \(!stage \|\| !motion\) return;\s*const onWheel/, "koliesko vypnuté");
+  assert.match(component, /if \(!motion\) return;\s*const onMove/, "ťah vypnutý");
   const css = read("app/globals.css");
   assert.match(css, /prefers-reduced-motion: reduce/);
 });
@@ -426,8 +428,230 @@ check("fallback pri neplatnej geometrii: 0 px / NaN / príliš nízka plocha / k
   // komponent: fallback pri chybe geometrie, nekonečných hodnotách aj DOM kontrole fokusu
   assert.ok(component.includes("const check = validateCylinderGeometry({ stageHeight: height, cardHeight: next, n, variant: config });"));
   assert.ok(component.includes('enterFallback("non_finite")'));
-  assert.ok(component.includes("if (ratio < 0.6 || !(opacity > 0.5)) enterFallback("));
-  assert.ok(component.includes('className="min-h-[240px] flex-1 overflow-y-auto pb-4"'), "zoznam má vlastnú min. výšku");
+  assert.ok(component.includes("if (ratio < 0.6 || !(opacity > 0.5)) {"));
+  assert.ok(component.includes('className="min-h-[240px] flex-1 overflow-y-auto pb-4 lg:max-w-3xl"'), "zoznam má vlastnú min. výšku");
+});
+
+// =============================================================================
+// FINÁLNY POLISH 2026-10-11 — produkčné stavy a hrany
+// =============================================================================
+
+const fakeModules = (keys: Array<"inbox" | "invoices" | "vehicles" | "machines" | "inventory" | "partners">) =>
+  mods.buildDashboardModules({ isVisible: (href) => keys.some((key) => mods.MODULE_ROUTES[key] === href), entitlements: entitlements({}) });
+
+check("1 modul: statická jedna karta (žiadny nekonečný pohyb), tap otvorí modul", () => {
+  assert.equal(cyl.cylinderMode({ n: 1, reducedMotion: false, geometryOk: true }), "single");
+  const one = fakeModules(["inbox"]);
+  assert.equal(one.length, 1);
+  assert.deepEqual(mods.cardAction(one[0], 0, 0), { type: "navigate", href: "/ai-evidencia" });
+});
+
+check("2 moduly: statický zoznam bez klonov (obe karty viditeľné), 3+ = valec", () => {
+  assert.equal(cyl.cylinderMode({ n: 2, reducedMotion: false, geometryOk: true }), "list");
+  assert.equal(cyl.cylinderMode({ n: 3, reducedMotion: false, geometryOk: true }), "cylinder");
+  assert.equal(cyl.cylinderMode({ n: 6, reducedMotion: false, geometryOk: true }), "cylinder");
+  assert.equal(cyl.cylinderMode({ n: 0, reducedMotion: false, geometryOk: true }), "empty");
+  // 3 moduly vo valci: obaja susedia viditeľní, žiadny „klon"
+  const t1 = cyl.cardTransform(1, 120, 3, V);
+  const tm1 = cyl.cardTransform(-1, 120, 3, V);
+  assert.ok(t1.visible && tm1.visible);
+});
+
+check("všetko zamknuté: valec funguje, nič sa neotvorí ako aktívne, nástenka ukáže CTA", () => {
+  const all = mods.buildDashboardModules({ isVisible: everyRoute, entitlements: entitlements({ invoicing: false, ai_documents: false, vehicles: false, machines: false, inventory: false }) });
+  assert.equal(mods.allLocked(all), true);
+  all.forEach((module, index) => assert.equal(mods.cardAction(module, index, index).type, "locked"));
+  const dash = read("app/components/Dashboard.tsx");
+  assert.ok(dash.includes("{accessReady && everythingLocked && ("));
+  assert.ok(dash.includes('t("dashboard.cylinder.allLocked")'));
+});
+
+check("mix zamknuté/odomknuté: zamknuté až za aktívnymi; v slučke sa objavia iba po poslednom aktívnom", () => {
+  const modules = mods.buildDashboardModules({ isVisible: everyRoute, entitlements: entitlements({ machines: false }) });
+  const lockedIndex = modules.findIndex(mods.isLocked);
+  assert.equal(lockedIndex, modules.length - 1, "jediný zamknutý je posledný");
+  // fokus štartuje na aktívnom module, nie na zamknutom
+  assert.equal(mods.isLocked(modules[cyl.activeIndexFor(0, modules.length)]), false);
+  assert.equal(mods.allLocked(modules), false);
+});
+
+check("stavy karty: locked vs trial (odlíšené), pending pri načítaní nárokov, loading/error počtov, count", () => {
+  const ctx = { entitlementsLoading: false, countsLoading: false, dataError: false };
+  assert.deepEqual(mods.moduleStatus({ key: "inbox", access: { state: "locked", reason: "ENTITLEMENT_REQUIRED" } }, ctx), { kind: "locked" });
+  assert.deepEqual(mods.moduleStatus({ key: "inbox", access: { state: "locked", reason: "TRIAL_EXPIRED" } }, ctx), { kind: "trial" });
+  assert.deepEqual(mods.moduleStatus({ key: "inbox", access: { state: "unknown" } }, { ...ctx, entitlementsLoading: true }), { kind: "pending" }, "načítavanie = neutrálne, nie zámok");
+  assert.deepEqual(mods.moduleStatus({ key: "vehicles", access: { state: "active" }, count: 3 }, { ...ctx, countsLoading: true }), { kind: "loading" });
+  assert.deepEqual(mods.moduleStatus({ key: "vehicles", access: { state: "active" }, count: 0 }, { ...ctx, dataError: true }), { kind: "error" }, "chyba ≠ „0 vozidiel“");
+  assert.deepEqual(mods.moduleStatus({ key: "vehicles", access: { state: "active" }, count: 3 }, ctx), { kind: "count", count: 3 });
+  assert.deepEqual(mods.moduleStatus({ key: "invoices", access: { state: "active" } }, ctx), { kind: "none" });
+  // chyba počtov nezamkne modul — karta ostáva použiteľná
+  const vehicles = mods.buildDashboardModules({ isVisible: everyRoute, entitlements: entitlements({}) }).find((m) => m.key === "vehicles")!;
+  assert.equal(mods.cardAction(vehicles, 0, 0).type, "navigate");
+});
+
+check("entitlement loading/error: nikdy falošný zámok; chyba má tichý retry", () => {
+  const loading = mods.buildDashboardModules({ isVisible: everyRoute, entitlements: null });
+  assert.ok(loading.every((m) => m.access.state === "unknown"));
+  const hook = read("hooks/use-company-entitlements.ts");
+  assert.ok(hook.includes("error: boolean") && hook.includes("retry: () => {"));
+  assert.ok(hook.includes("if (result.error && cache?.promise === promise) cache = null;"), "chyba sa necachuje");
+  const dash = read("app/components/Dashboard.tsx");
+  assert.ok(dash.includes("{entitlements.error && ("));
+  assert.ok(dash.includes("onClick={entitlements.retry}"));
+  assert.ok(dash.includes("entitlements: entitlements.loading ? null : entitlements.snapshot"));
+});
+
+check("count loading bez layout shiftu: skeleton s pevnou šírkou a riadok stavu má min. výšku", () => {
+  assert.ok(component.includes('className="inline-flex h-5 w-24 animate-pulse rounded-full'));
+  assert.ok(component.includes('className="mt-0.5 flex min-h-5 flex-wrap items-center gap-1.5"'));
+});
+
+check("rola sa ešte načítava: skeleton (žiadny záblesk 1 modulu), prázdny stav pre rolu bez modulov", () => {
+  const dash = read("app/components/Dashboard.tsx");
+  assert.ok(dash.includes("{!accessReady ? ("));
+  assert.ok(dash.includes('aria-busy="true"'));
+  assert.ok(dash.includes('t("dashboard.cylinder.empty")'));
+  assert.ok(dash.includes("setAccessReady(true);"));
+});
+
+check("zachovanie fokusu: návrat z modulu a zmena poradia nárokov nechajú rovnaký modul", () => {
+  const before = fakeModules(["inbox", "invoices", "vehicles", "machines", "inventory", "partners"]);
+  const reordered = mods.buildDashboardModules({ isVisible: everyRoute, entitlements: entitlements({ ai_documents: false }) });
+  const focusKey = before[3].key; // machines
+  const index = mods.focusIndexForKey(reordered, focusKey);
+  assert.equal(reordered[index].key, focusKey);
+  assert.equal(mods.focusIndexForKey(reordered, "neexistuje"), 0);
+  assert.equal(mods.focusIndexForKey(reordered, null), 0);
+  assert.equal(mods.isDashboardModuleKey("vehicles"), true);
+  assert.equal(mods.isDashboardModuleKey("javascript:alert(1)"), false, "sessionStorage hodnota sa validuje");
+  assert.ok(component.includes("const previousKey = keysRef.current[activeRef.current] ?? initialFocusKey;"));
+  const dash = read("app/components/Dashboard.tsx");
+  assert.ok(dash.includes('const DASHBOARD_FOCUS_KEY = "esblu.dashboard.focus.v1";'));
+  assert.ok(dash.includes("window.sessionStorage.setItem(DASHBOARD_FOCUS_KEY, key);"), "iba session, žiadna DB");
+});
+
+check("viewport resize / klávesnica: ResizeObserver prepočíta kartu bez resetu fokusu; fallback sa vracia iba po resize", () => {
+  assert.ok(component.includes("const next = cardHeightFor(height, { large, fontScale });"));
+  assert.ok(!/useLayoutEffect\(\(\) => \{[^}]*positionRef\.current = 0;/.test(component), "resize nevynuluje pozíciu");
+  assert.ok(component.includes('window.addEventListener("resize", retry);'));
+  assert.ok(component.includes("timer = setTimeout(exitFallback, 180);"));
+  // malá výška po otvorení klávesnice → zoznam; po zatvorení platná geometria
+  assert.equal(cyl.validateCylinderGeometry({ stageHeight: 150, cardHeight: cyl.cardHeightFor(150), n: 6, variant: V }).ok, false);
+  assert.equal(cyl.validateCylinderGeometry({ stageHeight: 560, cardHeight: cyl.cardHeightFor(560), n: 6, variant: V }).ok, true);
+});
+
+check("130 % písmo: karta vyššia (×≤1.3), stále vojde fokus + susedia; nízka karta skryje popis", () => {
+  for (const stage of [420, 532, 640, 724]) {
+    const normal = cyl.cardHeightFor(stage, { fontScale: 1 });
+    const big = cyl.cardHeightFor(stage, { fontScale: 1.3 });
+    assert.ok(big >= normal && big <= normal * 1.3 + 1);
+    assert.ok(big <= Math.max(96, stage / 3.4) + 1, `${stage}: ${big}`);
+    assert.equal(cyl.validateCylinderGeometry({ stageHeight: stage, cardHeight: big, n: 6, variant: V }).ok, true, `stage ${stage}`);
+  }
+  assert.equal(cyl.isCompactCard(100, 1), true);
+  assert.equal(cyl.isCompactCard(130, 1.3), true, "130 % písmo na 130 px karte = kompaktná");
+  assert.equal(cyl.isCompactCard(130, 1), false);
+  assert.ok(component.includes("text-[1.0625rem]") && component.includes("text-[0.78rem]"), "písmo karty v rem (škáluje s nastavením)");
+});
+
+check("dlhé názvy firmy aj preložené popisy SK/DE/EN: orezanie/clamp, popisy modulov ≤ 70 znakov", () => {
+  const dash = read("app/components/Dashboard.tsx");
+  assert.ok(dash.includes('className="truncate text-[11px] font-medium leading-4 text-muted-esblu">{companyName}</p>'));
+  assert.ok(component.includes("line-clamp-2 min-w-0 break-words font-semibold"), "názov modulu max 2 riadky");
+  for (const lang of ["sk", "de", "en"]) {
+    const dict = read(`lib/i18n/dictionaries/${lang}.ts`);
+    const desc = dict.slice(dict.indexOf("      desc: {"), dict.indexOf("      },", dict.indexOf("      desc: {")));
+    for (const match of desc.matchAll(/: "([^"]+)"/g)) assert.ok(match[1].length <= 70, `${lang}: ${match[1]}`);
+  }
+});
+
+check("rýchly swipe a tap vs swipe: max. MAX_FLING_STEPS, vodorovné gesto valec neovláda, ťah neotvorí modul", () => {
+  assert.equal(cyl.MAX_FLING_STEPS, 2);
+  assert.equal(cyl.snapTarget(0.2, 50, 0), 2);
+  assert.equal(cyl.dragAxis(2, 3), null, "pod prahom = ťuknutie");
+  assert.equal(cyl.dragAxis(4, 30), "vertical");
+  assert.equal(cyl.dragAxis(30, 6), "horizontal");
+  assert.ok(component.includes('if (drag.axis === "horizontal") return;'));
+  assert.ok(component.includes("suppressClickRef.current = true; // ťah nikdy neotvorí modul"));
+});
+
+check("tap na susednú kartu ju privedie dopredu (s haptikou iba pri dotykovom snape), tap na fokus otvorí modul", () => {
+  const modules = fakeModules(["inbox", "invoices", "vehicles", "machines", "inventory", "partners"]);
+  assert.deepEqual(mods.cardAction(modules[1], 1, 0), { type: "focus", index: 1 });
+  assert.deepEqual(mods.cardAction(modules[0], 0, 0), { type: "navigate", href: "/ai-evidencia" });
+  assert.ok(component.includes('if (touchSnapRef.current && activeRef.current !== startIndex) haptic("start");'));
+  assert.ok(!/onWheel[\s\S]{0,400}touchSnapRef\.current = true/.test(component), "koliesko bez haptiky");
+});
+
+check("chat FAB obíde fokusovanú kartu a ovládanie; zostane v hraniciach nad spodnou lištou", () => {
+  const bounds = fab.fabBounds({ width: 390, height: 844, safeTop: 24, safeLeft: 0, safeRight: 0, bottomReserve: 56 });
+  const bands = [{ top: 380, bottom: 510 }, { top: 140, bottom: 176 }];
+  const y = fab.avoidBandsY(420, bands, bounds);
+  assert.ok(y + fab.CHAT_FAB_SIZE <= 380 - 8 || y >= 510 + 8, `y=${y}`);
+  assert.ok(y >= bounds.minY && y <= bounds.maxY);
+  assert.equal(fab.avoidBandsY(bounds.maxY, bands, bounds), bounds.maxY, "predvolená poloha dole je voľná");
+  // veľmi malý viewport: nezmestí sa nikam → bezpečne dole (nie cez kartu mimo hraníc)
+  const tiny = fab.fabBounds({ width: 320, height: 420, safeTop: 0, safeLeft: 0, safeRight: 0, bottomReserve: 56 });
+  const ty = fab.avoidBandsY(200, [{ top: 60, bottom: 400 }], tiny);
+  assert.ok(ty >= tiny.minY && ty <= tiny.maxY);
+  const fabSrc = read("app/components/mobile/MobileChatFab.tsx");
+  assert.ok(fabSrc.includes("window.addEventListener(FAB_AVOID_EVENT, relayout);"));
+  assert.ok(fabSrc.includes("setPointerCapture"), "ťah FAB je zachytený na tlačidle — nekoliduje s ťahom valca");
+  assert.ok(component.includes("return () => setFabAvoidBands([]);"), "po odchode z nástenky sa zóny zrušia");
+});
+
+check("spodná lišta: obsah nástenky nikdy pod ňou (výška = viewport − lišta), safe-area hore", () => {
+  const css = read("app/globals.css");
+  assert.match(css, /\.dash-screen \{\s*height: calc\(100vh - var\(--mobile-tabbar-space, 0px\)\);/);
+  const dash = read("app/components/Dashboard.tsx");
+  assert.ok(dash.includes('style={{ paddingTop: "calc(var(--esblu-safe-top, 0px) + 12px)" }}'));
+});
+
+check("hľadanie: vymazanie, Esc späť na valec, Enter zavrie klávesnicu, indikátor načítania, výsledky nahradia valec", () => {
+  const dash = read("app/components/Dashboard.tsx");
+  assert.ok(dash.includes('aria-label={t("dashboard.cylinder.clearSearch")}'));
+  assert.ok(dash.includes('if (e.key === "Escape") {'));
+  assert.ok(dash.includes("e.currentTarget.blur();"));
+  assert.ok(dash.includes("{intentLoading && query.length >= 2 && ("));
+  assert.ok(dash.includes("{!query && ("), "valec sa pri hľadaní skryje (výsledky v tej istej ploche)");
+  assert.ok(dash.includes('t("dashboard.noResults")'));
+});
+
+check("hlas v hľadaní: stavy počúva / spracúva / chyba; jediná implementácia (useVoiceSession)", () => {
+  const control = read("app/components/voice/VoiceSessionControl.tsx");
+  assert.ok(control.includes('session.status === "error"') && control.includes("SpinnerGlyph"));
+  const dash = read("app/components/Dashboard.tsx");
+  assert.equal((dash.match(/useVoiceSession\(/g) ?? []).length, 1);
+});
+
+check("role-based visibility: valec renderuje IBA moduly povolené rolou (žiadne finančné moduly pre zamestnanca)", () => {
+  const employee = mods.buildDashboardModules({ isVisible: (href) => !["/faktury", "/obchodni-partneri", "/priecinky"].includes(href), entitlements: entitlements({}) });
+  assert.ok(!employee.some((m) => m.key === "invoices" || m.key === "partners"));
+  const accountant = mods.buildDashboardModules({ isVisible: (href) => !["/vozidla", "/stroje", "/sklad"].includes(href), entitlements: entitlements({}) });
+  assert.deepEqual(accountant.map((m) => m.key), ["inbox", "invoices", "partners"]);
+});
+
+check("bezpečnosť: žiadne analytics/tracking, debug log iba s dôvodom fallbacku (bez dát firmy)", () => {
+  const dash = read("app/components/Dashboard.tsx");
+  for (const src of [component, dash]) assert.ok(!/gtag|analytics|posthog|mixpanel|segment\.|sentry/i.test(src));
+  const logs = component.match(/console\.\w+\([^)]*\)/g) ?? [];
+  assert.deepEqual(logs, ['console.debug("[esblu:dashboard] cylinder → list fallback:", reason)']);
+});
+
+check("ilustrácie: jednotné svetlo (svetlé hrany), malé súbory, kompaktné súradnice", () => {
+  for (const key of ["inbox", "invoices", "vehicles", "machines", "inventory", "partners"]) {
+    const svg = read(`public/images/modules/${key}.svg`);
+    assert.ok(svg.includes('stroke="#EAF4FF"'), `${key}: svetlá hrana`);
+    assert.ok(!/\d\.0[ ,"]/.test(svg), `${key}: bez zbytočných „.0“`);
+    assert.ok(svg.length < 10 * 1024, `${key}: ${svg.length} B`);
+  }
+});
+
+check("indikátor polohy: body pre 2–8 modulov (bez „debug“ čísla), inak kompaktné číslo; ▲/▼ ostávajú", () => {
+  assert.equal(cyl.progressDots(6, 2)!.filter((d) => d.active).length, 1);
+  assert.equal(cyl.progressDots(1, 0), null);
+  assert.equal(cyl.progressDots(9, 0), null);
+  assert.ok(component.includes('className="cyl-ctrl" aria-label={labels.previous}'));
 });
 
 console.log(`${passed} prešlo, ${failed} zlyhalo`);

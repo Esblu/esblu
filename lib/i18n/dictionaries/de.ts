@@ -97,6 +97,13 @@ const de = {
 
   dashboard: {
     cylinder: {
+      loading: "Module werden geladen…",
+      dataError: "Daten konnten nicht geladen werden",
+      entitlementsError: "Paketstatus konnte nicht geprüft werden — Module sind gemäß Ihrer Rolle verfügbar.",
+      retry: "Erneut versuchen",
+      allLocked: "In Ihrem Paket ist noch kein Modul aktiv.",
+      empty: "Für Ihre Rolle sind noch keine Module verfügbar.",
+      clearSearch: "Suche löschen",
       regionLabel: "Module",
       slideLabel: "{{name}} — {{index}} von {{count}}",
       previous: "Vorheriges Modul",

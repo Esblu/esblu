@@ -134,3 +134,43 @@ export function parseStoredPosition(raw: string | null | undefined): StoredFabPo
 export function isDragGesture(dx: number, dy: number, threshold = CHAT_FAB_DRAG_THRESHOLD): boolean {
   return Math.hypot(dx, dy) >= threshold;
 }
+
+
+// -----------------------------------------------------------------------------
+// Zóny, ktoré FAB nesmie prekryť (dashboard: fokusovaná karta + ovládanie valca)
+// -----------------------------------------------------------------------------
+
+export type FabAvoidBand = { top: number; bottom: number };
+
+/** Udalosť, ktorou obrazovka (nástenka) oznamuje zóny; null/[] = žiadne. */
+export const FAB_AVOID_EVENT = "esblu:fab-avoid";
+
+let avoidBands: FabAvoidBand[] = [];
+
+export function setFabAvoidBands(bands: FabAvoidBand[]): void {
+  avoidBands = bands.filter((b) => Number.isFinite(b.top) && Number.isFinite(b.bottom) && b.bottom > b.top);
+  if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent(FAB_AVOID_EVENT));
+}
+
+export function getFabAvoidBands(): FabAvoidBand[] {
+  return avoidBands;
+}
+
+/**
+ * Posunie y tlačidla mimo zakázaných pásov (nad alebo pod — bližšia možnosť,
+ * ktorá sa zmestí do hraníc). Ak sa nezmestí nikam, ostane predvolene dole
+ * (maxY) — nikdy mimo hraníc ani pod spodnou lištou.
+ */
+export function avoidBandsY(y: number, bands: FabAvoidBand[], b: FabBounds, size = CHAT_FAB_SIZE, gap = 8): number {
+  let current = clamp(Number.isFinite(y) ? y : b.maxY, b.minY, b.maxY);
+  for (let pass = 0; pass < 4; pass++) {
+    const hit = bands.find((band) => current < band.bottom + gap && current + size > band.top - gap);
+    if (!hit) return current;
+    const above = hit.top - gap - size;
+    const below = hit.bottom + gap;
+    const options = [above, below].filter((candidate) => candidate >= b.minY && candidate <= b.maxY);
+    if (options.length === 0) return b.maxY;
+    current = options.sort((p, q) => Math.abs(p - current) - Math.abs(q - current))[0];
+  }
+  return current;
+}
