@@ -495,18 +495,18 @@ async function resetPassword() {
 
         <nav
           aria-label={t("settings.legal.navAriaLabel")}
-          className="mt-4 flex flex-wrap justify-center gap-x-4 gap-y-1.5 border-t border-subtle pt-3 text-center text-xs font-medium text-muted-esblu"
+          className="mt-4 flex flex-wrap justify-center gap-x-3 gap-y-0.5 border-t border-subtle pt-2 text-center text-xs font-medium text-muted-esblu"
         >
-          <Link href="/ochrana-osobnych-udajov" className="hover:text-brand-300 hover:underline">
+          <Link href="/ochrana-osobnych-udajov" className="inline-flex min-h-7 items-center px-1 hover:text-brand-300 hover:underline">
             {t("common.legalLinks.privacy")}
           </Link>
-          <Link href="/podmienky-pouzivania" className="hover:text-brand-300 hover:underline">
+          <Link href="/podmienky-pouzivania" className="inline-flex min-h-7 items-center px-1 hover:text-brand-300 hover:underline">
             {t("common.legalLinks.terms")}
           </Link>
-          <Link href="/cookies" className="hover:text-brand-300 hover:underline">
+          <Link href="/cookies" className="inline-flex min-h-7 items-center px-1 hover:text-brand-300 hover:underline">
             {t("common.legalLinks.cookies")}
           </Link>
-          <Link href="/kontakt" className="hover:text-brand-300 hover:underline">
+          <Link href="/kontakt" className="inline-flex min-h-7 items-center px-1 hover:text-brand-300 hover:underline">
             {t("common.legalLinks.contact")}
           </Link>
         </nav>
