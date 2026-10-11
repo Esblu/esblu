@@ -935,9 +935,14 @@ export default function Dashboard() {
         )}
 
         {/* DASHBOARD v3: obrazovka bez scrollu — hlavička + hľadanie + valec
-            vyplnia presne výšku medzi hornou hranou a spodnou lištou. */}
+            vyplnia presne výšku medzi hornou hranou a spodnou lištou.
+            OPRAVA 2026-10-11 (Android: neviditeľné karty): sekcia NESMIE mať
+            na mobile `flex-1` — v stĺpcovom flex rodičovi s neurčitou výškou
+            flex-basis 0% prebije `height`, sekcia sa zmrští na obsah a plocha
+            valca (iba absolútne karty) má 0 px → overflow:hidden orezal všetko.
+            Výška je v .dash-screen (100vh fallback + 100dvh, app/globals.css). */}
         <section
-          className="flex h-[calc(100dvh-var(--mobile-tabbar-space,0px))] w-full min-w-0 flex-1 flex-col overflow-hidden px-4 pb-2 sm:px-6 lg:h-screen lg:px-8 lg:pb-6"
+          className="dash-screen flex w-full min-w-0 flex-none flex-col overflow-hidden px-4 pb-2 sm:px-6 lg:flex-1 lg:px-8 lg:pb-6"
           style={{ paddingTop: "calc(var(--esblu-safe-top, 0px) + 12px)" }}
         >
           {/* Hlavička: firma (sekundárne) + pozdrav, logo firmy alebo Esblu znak. */}

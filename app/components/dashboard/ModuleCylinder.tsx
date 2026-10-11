@@ -4,6 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProp
 import {
   CYLINDER_VARIANTS,
   activeIndexFor,
+  cardCss,
   cardTransform,
   circularOffset,
   dragToPosition,
@@ -13,6 +14,9 @@ import {
   snapTarget,
   springStep,
   wheelSteps,
+  isFiniteTransform,
+  validateCylinderGeometry,
+  visibleRatio,
   WHEEL_COOLDOWN_MS,
   type CylinderVariantName,
 } from "@/lib/dashboard/cylinder";
@@ -69,7 +73,7 @@ export function ModuleCylinder({ modules, variant = "subtle", labels, onNavigate
   const n = modules.length;
   const config = CYLINDER_VARIANTS[variant];
 
-  const stageRef = useRef<HTMLDivElement | null>(null);
+  const stageRef = useRef<HTMLElement | null>(null);
   const cardRefs = useRef<Array<HTMLDivElement | null>>([]);
   const positionRef = useRef(0);
   const velocityRef = useRef(0);
@@ -85,6 +89,20 @@ export function ModuleCylinder({ modules, variant = "subtle", labels, onNavigate
   const [activeIndex, setActiveIndex] = useState(0);
   const [cardHeight, setCardHeight] = useState(120);
   const activeRef = useRef(0);
+  // Obrana (2026-10-11): neplatná geometria / nepoužiteľná výška / skrytá
+  // fokusovaná karta → bezpečný zvislý zoznam. Nikdy prázdna nástenka.
+  const [fallbackReason, setFallbackReason] = useState<string | null>(null);
+  const fallbackRef = useRef<string | null>(null);
+  const enterFallback = useCallback((reason: string) => {
+    if (fallbackRef.current === reason) return;
+    fallbackRef.current = reason;
+    setFallbackReason(reason);
+  }, []);
+  const exitFallback = useCallback(() => {
+    if (fallbackRef.current === null) return;
+    fallbackRef.current = null;
+    setFallbackReason(null);
+  }, []);
 
   // --- zápis transformácií (bez React renderu) -------------------------------
   const paint = useCallback(() => {
@@ -95,7 +113,13 @@ export function ModuleCylinder({ modules, variant = "subtle", labels, onNavigate
       if (!el) continue;
       const offset = circularOffset(i - position, n);
       const tr = cardTransform(offset, h, n, config);
-      el.style.transform = `translate3d(0, ${tr.y.toFixed(2)}px, ${tr.z.toFixed(2)}px) rotateX(${tr.rotateX.toFixed(2)}deg) scale(${tr.scale.toFixed(4)})`;
+      if (!isFiniteTransform(tr)) {
+        enterFallback("non_finite");
+        return;
+      }
+      // 2D projekcia valca — bez skutočného 3D CSS (perspektíva, 3D kontext, os Z)
+      // (Android WebView safe, pozri lib/dashboard/cylinder.ts#cardCss).
+      el.style.transform = cardCss(tr);
       el.style.opacity = tr.visible ? tr.opacity.toFixed(3) : "0";
       el.style.zIndex = String(tr.zIndex);
       el.style.visibility = tr.visible ? "visible" : "hidden";
@@ -108,7 +132,7 @@ export function ModuleCylinder({ modules, variant = "subtle", labels, onNavigate
       activeRef.current = nextActive;
       setActiveIndex(nextActive);
     }
-  }, [n, config]);
+  }, [n, config, enterFallback]);
 
   const stopLoop = () => {
     if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
@@ -161,28 +185,53 @@ export function ModuleCylinder({ modules, variant = "subtle", labels, onNavigate
     paint();
   }, [n, paint]);
 
-  // --- veľkosť karty podľa dostupnej výšky -----------------------------------
+  // --- veľkosť karty podľa dostupnej výšky + kontrola geometrie --------------
+  // Pozoruje sa vždy ten istý kontajner (plocha valca alebo záložný zoznam),
+  // takže keď sa výška neskôr opraví (rotácia, klávesnica), valec sa vráti.
   useLayoutEffect(() => {
     const stage = stageRef.current;
     if (!stage || typeof ResizeObserver === "undefined") return;
+    let frame = 0;
     const observer = new ResizeObserver(([entry]) => {
       const height = entry.contentRect.height;
       const max = large ? 176 : 140;
       const next = Math.round(Math.max(96, Math.min(max, height / 4.6))); // fokus + 2 susedia + náznak ďalších
+      const check = validateCylinderGeometry({ stageHeight: height, cardHeight: next, n, variant: config });
+      if (!check.ok) {
+        enterFallback(check.reason);
+        return;
+      }
       cardHeightRef.current = next;
       setCardHeight(next);
+      exitFallback();
       paint();
+      // Kontrola nad skutočným DOM po vykreslení: fokusovaná karta musí byť
+      // naozaj vidieť (výška, orezanie, priehľadnosť) — inak záložný zoznam.
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const card = cardRefs.current[activeRef.current];
+        const stageEl = stageRef.current;
+        if (!card || !stageEl || fallbackRef.current) return;
+        const c = card.getBoundingClientRect();
+        const st = stageEl.getBoundingClientRect();
+        const ratio = visibleRatio({ x: c.left, y: c.top, width: c.width, height: c.height }, { x: st.left, y: st.top, width: st.width, height: st.height });
+        const opacity = Number.parseFloat(getComputedStyle(card).opacity || "1");
+        if (ratio < 0.6 || !(opacity > 0.5)) enterFallback(ratio < 0.6 ? "focus_clipped" : "focus_hidden");
+      });
     });
     observer.observe(stage);
-    return () => observer.disconnect();
-  }, [paint, large]);
+    return () => {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, [paint, large, n, config, enterFallback, exitFallback, fallbackReason]);
 
   useEffect(() => () => stopLoop(), []);
 
   // --- koliesko / trackpad (natívny listener, aby šlo preventDefault) --------
   useEffect(() => {
     const stage = stageRef.current;
-    if (!stage || reducedMotion) return;
+    if (!stage || reducedMotion || fallbackReason) return;
     const onWheel = (event: WheelEvent) => {
       if (Math.abs(event.deltaY) < Math.abs(event.deltaX)) return;
       event.preventDefault();
@@ -199,7 +248,7 @@ export function ModuleCylinder({ modules, variant = "subtle", labels, onNavigate
     };
     stage.addEventListener("wheel", onWheel, { passive: false });
     return () => stage.removeEventListener("wheel", onWheel);
-  }, [step, reducedMotion]);
+  }, [step, reducedMotion, fallbackReason]);
 
   // --- dotyk / myš ------------------------------------------------------------
   const onPointerDown = (event: React.PointerEvent) => {
@@ -210,7 +259,7 @@ export function ModuleCylinder({ modules, variant = "subtle", labels, onNavigate
   };
 
   useEffect(() => {
-    if (reducedMotion) return;
+    if (reducedMotion || fallbackReason) return;
     const onMove = (event: PointerEvent) => {
       const drag = dragRef.current;
       if (!drag) return;
@@ -245,13 +294,13 @@ export function ModuleCylinder({ modules, variant = "subtle", labels, onNavigate
       window.removeEventListener("pointerup", onUp);
       window.removeEventListener("pointercancel", onUp);
     };
-  }, [animateTo, paint, reducedMotion]);
+  }, [animateTo, paint, reducedMotion, fallbackReason]);
 
   const handleCardClick = (index: number) => {
     if (suppressClickRef.current) return;
     const item = modules[index];
     if (!item) return;
-    const action = cardAction(item, index, reducedMotion ? index : activeRef.current);
+    const action = cardAction(item, index, reducedMotion || fallbackRef.current ? index : activeRef.current);
     if (action.type === "focus") animateTo(nearestPositionFor(index, targetRef.current, n));
     else if (action.type === "navigate") onNavigate(action.href);
     else onLockedAction(action.key);
@@ -269,10 +318,19 @@ export function ModuleCylinder({ modules, variant = "subtle", labels, onNavigate
   if (n === 0) return null;
   const active = modules[activeIndex] ?? modules[0];
 
-  // --- reduced motion: čistý zoznam bez 3D ----------------------------------
-  if (reducedMotion) {
+  // --- reduced motion alebo neplatná geometria: bezpečný zvislý zoznam -------
+  // min-h zaručí, že zoznam je viditeľný aj keď rodič nedá použiteľnú výšku.
+  if (reducedMotion || fallbackReason) {
     return (
-      <section aria-label={labels.region} className="min-h-0 flex-1 overflow-y-auto pb-4" data-cylinder="reduced">
+      <section
+        ref={(el) => {
+          stageRef.current = el;
+        }}
+        aria-label={labels.region}
+        className="min-h-[240px] flex-1 overflow-y-auto pb-4"
+        data-cylinder={reducedMotion ? "reduced" : "fallback"}
+        data-fallback-reason={fallbackReason ?? undefined}
+      >
         <ul className="space-y-2">
           {modules.map((module, index) => (
             <li key={module.key}>
@@ -284,7 +342,7 @@ export function ModuleCylinder({ modules, variant = "subtle", labels, onNavigate
     );
   }
 
-  const stageStyle: CSSProperties = { perspective: `${config.perspective}px`, touchAction: "none" };
+  const stageStyle: CSSProperties = { touchAction: "none" };
 
   return (
     <section
@@ -309,8 +367,10 @@ export function ModuleCylinder({ modules, variant = "subtle", labels, onNavigate
       </div>
 
       <div
-        ref={stageRef}
-        className="relative min-h-0 flex-1 select-none overflow-hidden"
+        ref={(el) => {
+          stageRef.current = el;
+        }}
+        className="relative min-h-[180px] flex-1 select-none overflow-hidden"
         style={stageStyle}
         onPointerDown={onPointerDown}
         onClickCapture={(event) => {
@@ -324,7 +384,7 @@ export function ModuleCylinder({ modules, variant = "subtle", labels, onNavigate
         <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-0 z-[200] h-10 bg-gradient-to-b from-page-bg to-transparent" />
         <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 bottom-0 z-[200] h-10 bg-gradient-to-t from-page-bg to-transparent" />
 
-        <div className="absolute inset-0" style={{ transformStyle: "preserve-3d" }}>
+        <div className="absolute inset-0">
           {modules.map((module, index) => {
             const focused = index === activeIndex;
             return (
@@ -339,7 +399,7 @@ export function ModuleCylinder({ modules, variant = "subtle", labels, onNavigate
                 aria-current={focused ? "true" : undefined}
                 aria-hidden={focused ? undefined : true}
                 className="absolute inset-x-1 top-1/2 will-change-transform"
-                style={{ height: cardHeight, marginTop: -cardHeight / 2, transformOrigin: "50% 50%", backfaceVisibility: "hidden" }}
+                style={{ height: cardHeight, marginTop: -cardHeight / 2, transformOrigin: "50% 50%" }}
               >
                 <CylinderCard
                   module={module}

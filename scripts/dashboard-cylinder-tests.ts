@@ -267,9 +267,10 @@ const component = read("app/components/dashboard/ModuleCylinder.tsx");
 
 check("reduced-motion fallback: statický zoznam bez 3D, bez kolieska a bez ťahu", () => {
   assert.ok(component.includes('useMediaQuery("(prefers-reduced-motion: reduce)")'));
-  assert.match(component, /if \(reducedMotion\) \{\s*return \(\s*<section aria-label=\{labels\.region\} className="min-h-0 flex-1 overflow-y-auto pb-4" data-cylinder="reduced">/);
-  assert.match(component, /if \(!stage \|\| reducedMotion\) return;/, "koliesko vypnuté");
-  assert.match(component, /if \(reducedMotion\) return;\s*const onMove/, "ťah vypnutý");
+  assert.ok(component.includes("if (reducedMotion || fallbackReason) {"));
+  assert.ok(component.includes('data-cylinder={reducedMotion ? "reduced" : "fallback"}'));
+  assert.match(component, /if \(!stage \|\| reducedMotion \|\| fallbackReason\) return;/, "koliesko vypnuté");
+  assert.match(component, /if \(reducedMotion \|\| fallbackReason\) return;\s*const onMove/, "ťah vypnutý");
   const css = read("app/globals.css");
   assert.match(css, /prefers-reduced-motion: reduce/);
 });
@@ -285,7 +286,7 @@ check("prístupnosť: carousel region, slide, aria-current, ovládanie bez swipe
 });
 
 check("výkon: pohyb iba cez transform/opacity v rAF, slučka sa zastaví, bez blur/filter na animovaných kartách", () => {
-  assert.ok(component.includes("el.style.transform = `translate3d("));
+  assert.ok(component.includes("el.style.transform = cardCss(tr);"));
   assert.ok(component.includes("rafRef.current = null;"));
   assert.ok(!/backdrop-blur|filter:\s*blur/.test(component));
   const css = read("app/globals.css");
@@ -341,14 +342,92 @@ check("no horizontal overflow na mobile: fokusovaná karta (aj s liftom variantu
   }
   const dash = read("app/components/Dashboard.tsx");
   assert.ok(dash.includes("overflow-hidden px-4"), "sekcia nástenky orezáva obsah");
-  assert.ok(component.includes('className="relative min-h-0 flex-1 select-none overflow-hidden"'));
+  assert.ok(component.includes('className="relative min-h-[180px] flex-1 select-none overflow-hidden"'));
 });
 
 check("dashboard vypĺňa výšku medzi hlavičkou a spodnou lištou (žiadny prázdny spodok, žiadny scroll stránky)", () => {
   const dash = read("app/components/Dashboard.tsx");
-  assert.ok(dash.includes("h-[calc(100dvh-var(--mobile-tabbar-space,0px))]"));
+  assert.ok(dash.includes('className="dash-screen flex w-full min-w-0 flex-none flex-col overflow-hidden'));
   assert.ok(dash.includes("<ModuleCylinder"));
   assert.ok(!dash.includes("<ModuleCard"), "stará mriežka dlaždíc je preč");
+});
+
+// -----------------------------------------------------------------------------
+// ANDROID REGRESIA 2026-10-11 (build 745c833: všetky karty neviditeľné)
+// -----------------------------------------------------------------------------
+
+check("ROOT CAUSE guard: sekcia nástenky nemá na mobile flex-1 (flex-basis 0% by prebil height → plocha valca 0 px)", () => {
+  const dash = read("app/components/Dashboard.tsx");
+  const match = /<section\s+className="(dash-screen[^"]*)"/.exec(dash);
+  assert.ok(match, "sekcia s .dash-screen");
+  const classes = match![1].split(/\s+/);
+  assert.ok(!classes.includes("flex-1"), "žiadne flex-1 na mobile");
+  assert.ok(classes.includes("flex-none") && classes.includes("lg:flex-1"));
+  assert.ok(!classes.some((c) => c.startsWith("h-[")), "výška iba cez .dash-screen");
+  const css = read("app/globals.css");
+  assert.match(css, /\.dash-screen \{\s*height: calc\(100vh - var\(--mobile-tabbar-space, 0px\)\);\s*\}/, "100vh fallback pre WebView bez dvh");
+  assert.match(css, /@supports \(height: 100dvh\) \{\s*\.dash-screen \{\s*height: calc\(100dvh - var\(--mobile-tabbar-space, 0px\)\);/);
+});
+
+check("Android WebView safe: valec je 2D projekcia — žiadne perspective/preserve-3d/translateZ/rotateX/backface", () => {
+  assert.ok(!/preserve-3d|backfaceVisibility|backface-visibility|perspective:|rotateX\(/.test(component));
+  for (let offset = -3; offset <= 3; offset += 0.5) {
+    const css = cyl.cardCss(cyl.cardTransform(offset, 120, 6, V));
+    assert.match(css, /^translate3d\(0px, -?\d+(\.\d+)?px, 0px\) scale\(\d+\.\d+, \d+\.\d+\)$/, css);
+    assert.ok(!/NaN|Infinity|rotate/.test(css), css);
+  }
+});
+
+check("focused card je vždy viditeľná: opacity 1, visible, mierka ≥ 1·focusScale, v strede (y = 0), konečné hodnoty", () => {
+  for (const variant of [cyl.VARIANT_SUBTLE, cyl.VARIANT_SPATIAL]) {
+    for (const n of [1, 2, 3, 4, 5, 6, 7]) {
+      for (const h of [96, 120, 140, 176]) {
+        const tr = cyl.cardTransform(0, h, n, variant);
+        assert.ok(cyl.isFiniteTransform(tr));
+        assert.equal(tr.opacity, 1, `${variant.name} n=${n}`);
+        assert.equal(tr.visible, true);
+        assert.equal(tr.y, 0);
+        assert.equal(tr.scale, variant.focusScale);
+        assert.match(cyl.cardCss(tr), /^translate3d\(0px, 0\.00px, 0px\)/);
+      }
+    }
+  }
+});
+
+check("Android viewporty 360–430 px: kladná výška plochy, platná geometria, fokus celý v ploche, žiadna karta úplne orezaná", () => {
+  for (const [width, height] of [[360, 640], [360, 740], [375, 667], [390, 844], [412, 915], [430, 932]]) {
+    const tabbar = 56;
+    const fixedTop = 12 + 36 + 12 + 40 + 8 + 32; // padding + hlavička + hľadanie + riadok ovládania
+    const stageHeight = height - tabbar - fixedTop - 8;
+    assert.ok(stageHeight > 0, `${width}×${height}`);
+    const cardHeight = Math.round(Math.max(96, Math.min(140, stageHeight / 4.6)));
+    const check = cyl.validateCylinderGeometry({ stageHeight, cardHeight, n: 6, variant: V });
+    assert.deepEqual(check, { ok: true }, `${width}×${height}: ${JSON.stringify(check)}`);
+    const stage = { x: 16, y: 0, width: width - 32, height: stageHeight };
+    const focus = { x: 20, y: stageHeight / 2 - cardHeight / 2, width: width - 40, height: cardHeight };
+    assert.equal(cyl.visibleRatio(focus, stage), 1);
+    for (let offset = -1; offset <= 1; offset++) {
+      const tr = cyl.cardTransform(offset, cardHeight, 6, V);
+      const scaleY = tr.scale * (0.55 + 0.45 * tr.foreshorten);
+      const rect = { x: 20, y: stageHeight / 2 + tr.y - (cardHeight * scaleY) / 2, width: width - 40, height: cardHeight * scaleY };
+      assert.ok(cyl.visibleRatio(rect, stage) > 0.5, `${width}×${height} offset ${offset}`);
+    }
+  }
+});
+
+check("fallback pri neplatnej geometrii: 0 px / NaN / príliš nízka plocha / karta vyššia než plocha → bezpečný zoznam", () => {
+  assert.deepEqual(cyl.validateCylinderGeometry({ stageHeight: 0, cardHeight: 96, n: 6, variant: V }), { ok: false, reason: "stage_height" });
+  assert.deepEqual(cyl.validateCylinderGeometry({ stageHeight: Number.NaN, cardHeight: 96, n: 6, variant: V }), { ok: false, reason: "stage_height" });
+  assert.deepEqual(cyl.validateCylinderGeometry({ stageHeight: 120, cardHeight: 96, n: 6, variant: V }), { ok: false, reason: "stage_height" });
+  assert.deepEqual(cyl.validateCylinderGeometry({ stageHeight: 400, cardHeight: Number.POSITIVE_INFINITY, n: 6, variant: V }), { ok: false, reason: "card_height" });
+  assert.deepEqual(cyl.validateCylinderGeometry({ stageHeight: 400, cardHeight: 500, n: 6, variant: V }), { ok: false, reason: "card_height" });
+  assert.equal(cyl.visibleRatio({ x: 0, y: 500, width: 300, height: 100 }, { x: 0, y: 0, width: 300, height: 0 }), 0, "plocha 0 px → karta neviditeľná");
+  assert.equal(cyl.visibleRatio({ x: 0, y: 0, width: 0, height: 0 }, { x: 0, y: 0, width: 300, height: 300 }), 0);
+  // komponent: fallback pri chybe geometrie, nekonečných hodnotách aj DOM kontrole fokusu
+  assert.ok(component.includes("const check = validateCylinderGeometry({ stageHeight: height, cardHeight: next, n, variant: config });"));
+  assert.ok(component.includes('enterFallback("non_finite")'));
+  assert.ok(component.includes("if (ratio < 0.6 || !(opacity > 0.5)) enterFallback("));
+  assert.ok(component.includes('className="min-h-[240px] flex-1 overflow-y-auto pb-4"'), "zoznam má vlastnú min. výšku");
 });
 
 console.log(`${passed} prešlo, ${failed} zlyhalo`);

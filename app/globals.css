@@ -1044,3 +1044,22 @@ html[data-esblu-runtime="native-app"] body {
     }
   }
 }
+
+/* =============================================================================
+   DASHBOARD v3 — výška obrazovky nástenky (oprava 2026-10-11).
+   Pevná výška (nie flex-1!) = viewport mínus spodná lišta. 100vh je fallback
+   pre staršie Android WebView bez jednotky dvh; kde dvh existuje, prebije ho.
+   ============================================================================= */
+.dash-screen {
+  height: calc(100vh - var(--mobile-tabbar-space, 0px));
+}
+@supports (height: 100dvh) {
+  .dash-screen {
+    height: calc(100dvh - var(--mobile-tabbar-space, 0px));
+  }
+}
+@media (min-width: 1024px) {
+  .dash-screen {
+    height: 100vh;
+  }
+}

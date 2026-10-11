@@ -139,6 +139,8 @@ export type CardTransform = {
   visible: boolean;
   /** Dá sa na kartu ťuknúť (iba viditeľné a dostatočne čitateľné). */
   interactive: boolean;
+  /** cos θ (0–1) — zvislé „skrátenie" karty natočenej po plášti (2D projekcia). */
+  foreshorten: number;
 };
 
 export function cardTransform(offset: number, cardHeight: number, n: number, variant: CylinderVariant): CardTransform {
@@ -160,7 +162,73 @@ export function cardTransform(offset: number, cardHeight: number, n: number, var
     zIndex: 100 - Math.round(distance * 10),
     visible: distance <= range + 0.4 && opacity > 0.01,
     interactive: distance <= Math.min(range, 1.6),
+    foreshorten: Math.max(0, Math.cos(theta)),
   };
+}
+
+// -----------------------------------------------------------------------------
+// 2D projekcia valca (ANDROID WEBVIEW SAFE) — oprava 2026-10-11
+//
+// Pôvodná verzia používala skutočné 3D CSS (perspective + preserve-3d +
+// translateZ + rotateX + backface-visibility). To je na Android WebView
+// zbytočné riziko (flattening pri overflow:hidden, GPU rozdiely, zmiznutie
+// vrstiev s backface-visibility). Valec sa teraz kreslí ako jeho 2D projekcia:
+//   posun Y = R·sin θ, mierka X = scale, mierka Y = scale · (0.55 + 0.45·cos θ)
+// Vizuálne rovnaký dojem, ale iba 2D transform + opacity (vždy podporované).
+// -----------------------------------------------------------------------------
+
+export function cardCss(tr: CardTransform): string {
+  const scaleY = tr.scale * (0.55 + 0.45 * tr.foreshorten);
+  return `translate3d(0px, ${tr.y.toFixed(2)}px, 0px) scale(${tr.scale.toFixed(4)}, ${scaleY.toFixed(4)})`;
+}
+
+export function isFiniteTransform(tr: CardTransform): boolean {
+  return [tr.y, tr.z, tr.rotateX, tr.scale, tr.opacity, tr.dim, tr.foreshorten].every((value) => Number.isFinite(value));
+}
+
+// -----------------------------------------------------------------------------
+// Obrana: geometria valca musí byť platná, inak sa zobrazí bezpečný zoznam.
+// Používateľ NIKDY nesmie dostať prázdnu nástenku.
+// -----------------------------------------------------------------------------
+
+/** Pod touto výškou plochy valec nedáva zmysel → bezpečný zoznam. */
+export const MIN_STAGE_PX = 180;
+
+export type GeometryCheck =
+  | { ok: true }
+  | { ok: false; reason: "stage_height" | "card_height" | "non_finite" | "focus_hidden" | "focus_clipped" };
+
+export function validateCylinderGeometry(input: {
+  stageHeight: number;
+  cardHeight: number;
+  n: number;
+  variant: CylinderVariant;
+}): GeometryCheck {
+  const { stageHeight, cardHeight, n, variant } = input;
+  if (!Number.isFinite(stageHeight) || stageHeight < MIN_STAGE_PX) return { ok: false, reason: "stage_height" };
+  if (!Number.isFinite(cardHeight) || cardHeight <= 0 || cardHeight > stageHeight) return { ok: false, reason: "card_height" };
+  for (let offset = -n / 2; offset <= n / 2; offset += 0.25) {
+    if (!isFiniteTransform(cardTransform(offset, cardHeight, Math.max(1, n), variant))) return { ok: false, reason: "non_finite" };
+  }
+  const focused = cardTransform(0, cardHeight, Math.max(1, n), variant);
+  if (!focused.visible || focused.opacity < 0.99 || focused.scale < 0.5) return { ok: false, reason: "focus_hidden" };
+  const halfExtent = Math.abs(focused.y) + (cardHeight * focused.scale) / 2;
+  if (halfExtent > stageHeight / 2 + 0.5) return { ok: false, reason: "focus_clipped" };
+  return { ok: true };
+}
+
+/**
+ * Kontrola nad skutočným DOM (getBoundingClientRect): aspoň `minRatio`
+ * fokusovanej karty musí byť vo vnútri plochy valca.
+ */
+export function visibleRatio(card: Rect, stage: Rect): number {
+  if (card.height <= 0 || card.width <= 0) return 0;
+  const top = Math.max(card.y, stage.y);
+  const bottom = Math.min(card.y + card.height, stage.y + stage.height);
+  const left = Math.max(card.x, stage.x);
+  const right = Math.min(card.x + card.width, stage.x + stage.width);
+  if (bottom <= top || right <= left) return 0;
+  return ((bottom - top) * (right - left)) / (card.height * card.width);
 }
 
 // -----------------------------------------------------------------------------

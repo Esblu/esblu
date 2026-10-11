@@ -196,3 +196,43 @@ Upravený test: `mobile-m1` (routy modulov sú v `MODULE_ROUTES`).
 6. Chat FAB neprekrýva fokus a dá sa ťahať. Upozornenia STK/EK sa rozbalia z pruhu.
 7. Android „Odstrániť animácie" (reduced motion) → statický zoznam.
 8. Web: koliesko a trackpad, šípky, bočný panel termínov.
+
+## 14. Regresia na Androide: neviditeľné karty (build 745c833) — root cause a oprava
+
+**Symptóm:** hlavička, hľadanie, počítadlo „1 / 6", tlačidlá ▲/▼, FAB aj spodná lišta sa zobrazili, ale všetkých 6 kariet bolo neviditeľných.
+
+**Root cause (deterministická, overená meraním v Chromiu pri šírke 390 px):**
+1. Sekcia nástenky mala `flex-1` a výšku cez `h-[calc(100dvh-…)]`.
+2. Jej rodič je na mobile **stĺpcový** flex kontajner (`flex-col`) s neurčitou výškou.
+3. `flex-1` = `flex: 1 1 0%`. V stĺpci flex-basis prebije `height` a percentuálny basis pri neurčitej výške rodiča znamená „content". Sekcia sa preto zmrštila na výšku obsahu (zmerané **136 px**).
+4. Plocha valca (`flex-1 min-h-0`) obsahuje iba absolútne pozicované karty, takže dostala **0 px**. Na ploche je `overflow: hidden`, ktorý orezal všetky karty.
+
+Počítadlo a tlačidlá sú v normálnom toku, preto boli vidieť. Dáta a nároky boli v poriadku.
+
+**Prečo to „fungovalo" pri overovaní:**
+- Na desktope (≥ 1024 px) je rodič `lg:flex-row`, takže `height` platí a sekcia mala plnú výšku.
+- Moja kontrola na 375 px bola replika s vlastnou sekciou s inline výškou, bez skutočného flex rodiča, a chybu preto nezachytila.
+- Chyba sa týkala **každého** prehliadača pod 1024 px, nielen Android WebView.
+
+**Oprava:**
+- **Sekcia:** `flex-none` na mobile (`lg:flex-1` iba pre desktopový riadok). Výška je v CSS triede `.dash-screen`:
+  - `calc(100vh − lišta)` ako fallback pre WebView bez jednotky `dvh`;
+  - `@supports (height: 100dvh)` → `100dvh`;
+  - desktop `100vh`.
+- **Plocha valca:** `min-h-[180px]` (nikdy 0 px).
+- **Android-safe vykresľovanie:** valec je teraz 2D projekcia (`translate3d(0,y,0) scale(sx, sy)` s `sy` podľa cos θ). Bez `perspective`, `preserve-3d`, `translateZ`, `rotateX` a `backface-visibility` — žiadne riziko „flatteningu" ani zmiznutých 3D vrstiev na GPU telefónov. Vizuálny dojem valca ostáva.
+
+**Obrana: nikdy prázdna nástenka.** Valec prejde na bezpečný zvislý zoznam kariet (`data-cylinder="fallback"`, `data-fallback-reason`, vlastné `min-h-[240px]`) pri:
+- výške plochy < 180 px alebo neplatnej (NaN);
+- neplatnej výške karty;
+- nekonečnej transformácii;
+- kontrole nad skutočným DOM po vykreslení: fokusovaná karta je vo vnútri plochy na < 60 % alebo má opacity ≤ 0.5.
+
+Keď sa výška neskôr opraví (rotácia, klávesnica), valec sa sám vráti.
+
+**Testy (+5, spolu 31):**
+- root-cause guard: sekcia bez `flex-1` na mobile, `.dash-screen` s fallbackom 100vh;
+- 2D projekcia bez 3D CSS a s konečnými hodnotami;
+- fokusovaná karta je vždy viditeľná (opacity 1, y = 0) pre n = 1–7, výšky 96–176 a oba varianty;
+- Android viewporty 360–430 px: platná geometria, fokus celý v ploche, susedia viditeľní;
+- fallback pri 0 px, NaN, nízkej ploche a príliš vysokej karte.
