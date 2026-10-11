@@ -61,6 +61,9 @@ import {
 } from "@/app/components/ui/SettingsList";
 import { ImageIcon, TrashIcon } from "@/app/components/icons/AppIcons";
 
+/** Staging prepínač odkazu na Predplatné (build-time, default vypnuté). */
+const BILLING_UI_ENABLED = process.env.NEXT_PUBLIC_ESBLU_BILLING_UI === "1";
+
 type SectionNotice = { tone: "success" | "error"; text: string } | null;
 
 /**
@@ -906,6 +909,14 @@ export default function NastaveniaPage() {
 
         <div className="space-y-4">
           {/* ---------------- Jazyk ---------------- */}
+          {/* Unified subscriptions (STAGING): odkaz iba ak build výslovne zapne
+              NEXT_PUBLIC_ESBLU_BILLING_UI=1. Stav aj oprávnenia rieši server. */}
+          {BILLING_UI_ENABLED && myRole && (
+            <SettingsSection title={t("subscription.title")}>
+              <SettingsLinkRow href="/nastavenia/predplatne" title={t("subscription.title")} />
+            </SettingsSection>
+          )}
+
           <SettingsSection title={t("settings.language.title")}>
             <SettingsRow title={LOCALE_LABELS[locale]} trailing={<LanguageSwitcher />} />
           </SettingsSection>

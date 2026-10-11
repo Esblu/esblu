@@ -1,0 +1,393 @@
+// =============================================================================
+// Stripe adapter — IBA TEST MODE / SANDBOX.
+//
+// - Kľúč musí začínať `sk_test_` alebo `rk_test_`; `*_live_*` → LIVE_MODE_FORBIDDEN
+//   (tvrdá poistka v kóde, nie iba konfigurácia). Event s `livemode: true` sa odmietne.
+// - Stripe-hosted Checkout (mode=subscription): Esblu nikdy nevidí PAN/CVC
+//   (PCI SAQ A). Apple Pay / Google Pay ponúka hosted Checkout sám podľa
+//   nastavení platobných metód v Stripe Dashboarde (bez registrácie domény).
+// - Bez závislosti na `stripe` npm balíku: priamy REST (form-encoded) +
+//   vlastné overenie podpisu (lib/billing/signature.ts) podľa docs.stripe.com/webhooks.
+// - Normalizácia vždy znova načíta predplatné z API (Stripe negarantuje
+//   poradie eventov) → do DB ide čerstvý stav s časom načítania (state_at).
+// - Nikdy sa neukladá celý payload — iba normalizovaný stav.
+// =============================================================================
+
+import { sha256Hex, verifyTimestampedSignature } from "@/lib/billing/signature";
+import {
+  BillingProviderError,
+  type BillingProvider,
+  type CanonicalStatus,
+  type CheckoutRequest,
+  type CheckoutSession,
+  type NormalizationResult,
+  type NormalizedCharge,
+  type NormalizedSubscriptionState,
+  type ProviderSubscriptionRef,
+  type VerifiedProviderEvent,
+} from "@/lib/billing/types";
+
+import { STRIPE_STATUS_MAP } from "@/lib/billing/canonical-state";
+
+const STRIPE_API = "https://api.stripe.com/v1";
+
+/** Eventy, ktoré menia kanonický stav (overené v docs.stripe.com/billing/subscriptions/webhooks). */
+export const STRIPE_STATE_EVENTS = new Set([
+  "checkout.session.completed",
+  "checkout.session.async_payment_succeeded",
+  "customer.subscription.created",
+  "customer.subscription.updated",
+  "customer.subscription.deleted",
+  "customer.subscription.paused",
+  "customer.subscription.resumed",
+  "invoice.paid",
+  "invoice.payment_failed",
+  "invoice.payment_action_required",
+]);
+
+/** Iba audit — žiadna automatická zmena nároku (rozhoduje operátor). */
+export const STRIPE_AUDIT_EVENTS = new Set([
+  "checkout.session.async_payment_failed",
+  "checkout.session.expired",
+  "customer.subscription.trial_will_end",
+]);
+
+/**
+ * invoice.paid → platba pre reporting obchodom (Google External Transactions /
+ * Apple External Purchase). Sumy v centoch; daň = total − total_excluding_tax.
+ */
+export function stripeChargeFromInvoice(invoice: unknown): NormalizedCharge | null {
+  if (!isObj(invoice) || invoice.object !== "invoice" || !str(invoice.id)) return null;
+  const total = typeof invoice.total === "number" ? invoice.total : null;
+  const excl = typeof invoice.total_excluding_tax === "number" ? invoice.total_excluding_tax : null;
+  const transitions = isObj(invoice.status_transitions) ? invoice.status_transitions : {};
+  const address = isObj(invoice.customer_address) ? invoice.customer_address : {};
+  const country = str(address.country);
+  return {
+    id: str(invoice.id)!,
+    kind: "purchase",
+    amount_pre_tax_minor: excl ?? total,
+    tax_minor: total !== null && excl !== null ? total - excl : null,
+    currency: str(invoice.currency)?.toUpperCase() ?? null,
+    at: isoFromUnix(transitions.paid_at) ?? isoFromUnix(invoice.created) ?? new Date().toISOString(),
+    tax_country: country && /^[A-Za-z]{2}$/.test(country) ? country.toUpperCase() : null,
+  };
+}
+
+export function assertStripeTestKey(secretKey: string | undefined): string {
+  const key = (secretKey ?? "").trim();
+  if (/^(sk|rk)_live_/.test(key)) throw new BillingProviderError("LIVE_MODE_FORBIDDEN");
+  if (!/^(sk|rk)_test_[A-Za-z0-9]{8,}$/.test(key)) throw new BillingProviderError("NOT_CONFIGURED");
+  return key;
+}
+
+export function mapStripeStatus(status: unknown): CanonicalStatus | null {
+  // Jediná mapa: lib/billing/canonical-state.ts (incomplete → pending, unpaid → account_hold).
+  if (typeof status !== "string" || !Object.prototype.hasOwnProperty.call(STRIPE_STATUS_MAP, status)) return null;
+  const mapped = STRIPE_STATUS_MAP[status];
+  return mapped === "none" ? null : (mapped as CanonicalStatus);
+}
+
+type Obj = Record<string, unknown>;
+const isObj = (value: unknown): value is Obj => typeof value === "object" && value !== null && !Array.isArray(value);
+const str = (value: unknown): string | null => (typeof value === "string" && value ? value : null);
+const idOf = (value: unknown): string | null => str(value) ?? (isObj(value) ? str(value.id) : null);
+const isoFromUnix = (value: unknown): string | null =>
+  typeof value === "number" && Number.isFinite(value) && value > 0 ? new Date(value * 1000).toISOString() : null;
+
+/**
+ * Stripe Subscription objekt → kanonický stav. Podporuje staré (period na
+ * subscription) aj nové API verzie (period na subscription item).
+ */
+export function normalizeStripeSubscription(sub: unknown, stateAt: string, checkoutRef: string | null = null): NormalizedSubscriptionState {
+  if (!isObj(sub) || sub.object !== "subscription") throw new BillingProviderError("MALFORMED_PAYLOAD");
+  const status = mapStripeStatus(sub.status);
+  if (!status) throw new BillingProviderError("MALFORMED_PAYLOAD", "unknown subscription status");
+  const items = isObj(sub.items) && Array.isArray(sub.items.data) ? (sub.items.data as unknown[]) : [];
+  // Jeden plán = jedna položka. Viac položiek → price null → DB odmietne (UNKNOWN_PRICE).
+  const item = items.length === 1 && isObj(items[0]) ? (items[0] as Obj) : null;
+  const priceId = item && isObj(item.price) ? str(item.price.id) : null;
+  const periodStart = isoFromUnix(item?.current_period_start ?? sub.current_period_start);
+  const periodEnd = isoFromUnix(item?.current_period_end ?? sub.current_period_end);
+  const cancelAt = typeof sub.cancel_at === "number" ? sub.cancel_at : null;
+  const periodEndUnix = typeof (item?.current_period_end ?? sub.current_period_end) === "number"
+    ? Number(item?.current_period_end ?? sub.current_period_end)
+    : null;
+  const metadata = isObj(sub.metadata) ? sub.metadata : {};
+  return {
+    provider_subscription_id: str(sub.id),
+    provider_customer_id: idOf(sub.customer),
+    provider_price_id: priceId,
+    status,
+    current_period_start: periodStart,
+    current_period_end: periodEnd,
+    cancel_at_period_end:
+      sub.cancel_at_period_end === true || (cancelAt !== null && periodEndUnix !== null && cancelAt <= periodEndUnix),
+    canceled_at: isoFromUnix(sub.canceled_at),
+    ended_at: isoFromUnix(sub.ended_at),
+    trial_start: isoFromUnix(sub.trial_start),
+    trial_end: isoFromUnix(sub.trial_end),
+    checkout_ref: checkoutRef ?? str(metadata.esblu_checkout_id),
+    account_token: null,
+    state_at: stateAt,
+  };
+}
+
+/** Z eventu zistí ID predplatného, ktoré treba znova načítať. */
+export function stripeSubscriptionIdFromEvent(eventType: string, object: unknown): { subscriptionId: string | null; checkoutRef: string | null } {
+  if (!isObj(object)) return { subscriptionId: null, checkoutRef: null };
+  if (eventType.startsWith("checkout.session.")) {
+    if (object.mode !== "subscription") return { subscriptionId: null, checkoutRef: null };
+    return { subscriptionId: idOf(object.subscription), checkoutRef: str(object.client_reference_id) };
+  }
+  if (eventType.startsWith("customer.subscription.")) return { subscriptionId: str(object.id), checkoutRef: null };
+  if (eventType.startsWith("invoice.")) {
+    const parent = isObj(object.parent) ? object.parent : null;
+    const details = parent && isObj(parent.subscription_details) ? parent.subscription_details : null;
+    return { subscriptionId: idOf(details?.subscription) ?? idOf(object.subscription), checkoutRef: null };
+  }
+  return { subscriptionId: null, checkoutRef: null };
+}
+
+function formEncode(params: Record<string, string | number | boolean | null | undefined>): string {
+  const body = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value === null || value === undefined) continue;
+    body.append(key, String(value));
+  }
+  return body.toString();
+}
+
+export type StripeTestProviderOptions = {
+  secretKey: string | undefined;
+  webhookSecret: string | undefined;
+  apiVersion?: string | undefined;
+  fetchImpl?: typeof fetch;
+  now?: () => Date;
+};
+
+export class StripeTestProvider implements BillingProvider {
+  readonly id = "stripe" as const;
+  readonly environment = "test" as const;
+  private readonly options: StripeTestProviderOptions;
+  private readonly fetchImpl: typeof fetch;
+  private readonly now: () => Date;
+
+  constructor(options: StripeTestProviderOptions) {
+    this.options = options;
+    this.fetchImpl = options.fetchImpl ?? fetch;
+    this.now = options.now ?? (() => new Date());
+  }
+
+  private async request(method: "GET" | "POST", path: string, params?: Record<string, string | number | boolean | null | undefined>, idempotencyKey?: string): Promise<Obj> {
+    const key = assertStripeTestKey(this.options.secretKey);
+    const headers: Record<string, string> = { Authorization: `Bearer ${key}` };
+    if (this.options.apiVersion) headers["Stripe-Version"] = this.options.apiVersion;
+    let url = `${STRIPE_API}${path}`;
+    let body: string | undefined;
+    if (method === "POST") {
+      headers["Content-Type"] = "application/x-www-form-urlencoded";
+      if (idempotencyKey) headers["Idempotency-Key"] = idempotencyKey;
+      body = formEncode(params ?? {});
+    } else if (params) {
+      url += `?${formEncode(params)}`;
+    }
+    const response = await this.fetchImpl(url, { method, headers, body, cache: "no-store" });
+    const json = (await response.json().catch(() => null)) as unknown;
+    if (!response.ok || !isObj(json)) {
+      // Nikdy neprepúšťame text chyby Stripe ďalej (môže obsahovať identifikátory).
+      throw new BillingProviderError("PROVIDER_ERROR", `stripe ${method} ${path.split("/")[1]} ${response.status}`);
+    }
+    if (json.livemode === true) throw new BillingProviderError("LIVE_MODE_FORBIDDEN");
+    return json;
+  }
+
+  async createCheckout(request: CheckoutRequest): Promise<CheckoutSession> {
+    const session = await this.request(
+      "POST",
+      "/checkout/sessions",
+      {
+        mode: "subscription",
+        "line_items[0][price]": request.providerPriceId,
+        "line_items[0][quantity]": 1,
+        client_reference_id: request.checkoutId,
+        "metadata[esblu_checkout_id]": request.checkoutId,
+        "subscription_data[metadata][esblu_checkout_id]": request.checkoutId,
+        customer: request.providerCustomerId,
+        "customer_update[name]": request.providerCustomerId ? "auto" : null,
+        "customer_update[address]": request.providerCustomerId ? "auto" : null,
+        billing_address_collection: "required",
+        "tax_id_collection[enabled]": true,
+        locale: "sk",
+        // Checkout otvorený z appky (in-app browser / Safari) — docs.stripe.com/mobile/digital-goods/checkout
+        origin_context: request.mobileApp ? "mobile_app" : null,
+        success_url: request.successUrl,
+        cancel_url: request.cancelUrl,
+      },
+      `esblu-checkout-${request.checkoutId}`,
+    );
+    const id = str(session.id);
+    const url = str(session.url);
+    if (!id || !url) throw new BillingProviderError("PROVIDER_ERROR", "checkout session without url");
+    return { providerSessionId: id, url };
+  }
+
+  async getSubscription(ref: ProviderSubscriptionRef): Promise<NormalizedSubscriptionState> {
+    const sub = await this.request("GET", `/subscriptions/${encodeURIComponent(ref.providerSubscriptionId)}`);
+    return normalizeStripeSubscription(sub, this.now().toISOString());
+  }
+
+  async cancelSubscription(ref: ProviderSubscriptionRef): Promise<NormalizedSubscriptionState> {
+    const sub = await this.request("POST", `/subscriptions/${encodeURIComponent(ref.providerSubscriptionId)}`, { cancel_at_period_end: true });
+    return normalizeStripeSubscription(sub, this.now().toISOString());
+  }
+
+  async resumeSubscription(ref: ProviderSubscriptionRef): Promise<NormalizedSubscriptionState> {
+    const sub = await this.request("POST", `/subscriptions/${encodeURIComponent(ref.providerSubscriptionId)}`, { cancel_at_period_end: false });
+    return normalizeStripeSubscription(sub, this.now().toISOString());
+  }
+
+  async changePlan(ref: ProviderSubscriptionRef, newProviderPriceId: string): Promise<NormalizedSubscriptionState> {
+    const current = await this.request("GET", `/subscriptions/${encodeURIComponent(ref.providerSubscriptionId)}`);
+    const items = isObj(current.items) && Array.isArray(current.items.data) ? (current.items.data as unknown[]) : [];
+    const itemId = items.length === 1 && isObj(items[0]) ? str((items[0] as Obj).id) : null;
+    if (!itemId) throw new BillingProviderError("UNSUPPORTED_OPERATION", "subscription must have exactly one item");
+    const sub = await this.request("POST", `/subscriptions/${encodeURIComponent(ref.providerSubscriptionId)}`, {
+      "items[0][id]": itemId,
+      "items[0][price]": newProviderPriceId,
+      proration_behavior: "create_prorations",
+      cancel_at_period_end: false,
+    });
+    return normalizeStripeSubscription(sub, this.now().toISOString());
+  }
+
+  async createPortalSession(providerCustomerId: string, returnUrl: string): Promise<{ url: string }> {
+    const session = await this.request("POST", "/billing_portal/sessions", { customer: providerCustomerId, return_url: returnUrl, locale: "sk" });
+    const url = str(session.url);
+    if (!url) throw new BillingProviderError("PROVIDER_ERROR", "portal session without url");
+    return { url };
+  }
+
+  async verifyWebhook(rawBody: string, headers: Headers): Promise<VerifiedProviderEvent> {
+    const secret = (this.options.webhookSecret ?? "").trim();
+    if (!/^whsec_[A-Za-z0-9+/=_-]{8,}$/.test(secret)) throw new BillingProviderError("NOT_CONFIGURED");
+    const check = verifyTimestampedSignature(headers.get("stripe-signature"), rawBody, secret, Math.floor(this.now().getTime() / 1000));
+    if (check === "stale") throw new BillingProviderError("STALE_SIGNATURE");
+    if (check !== "ok") throw new BillingProviderError("INVALID_SIGNATURE");
+    let event: unknown;
+    try {
+      event = JSON.parse(rawBody);
+    } catch {
+      throw new BillingProviderError("MALFORMED_PAYLOAD");
+    }
+    if (!isObj(event) || event.object !== "event" || !str(event.id) || !str(event.type) || typeof event.created !== "number") {
+      throw new BillingProviderError("MALFORMED_PAYLOAD");
+    }
+    if (event.livemode !== false) throw new BillingProviderError("LIVE_MODE_FORBIDDEN");
+    const data = isObj(event.data) ? event.data.object : null;
+    return {
+      provider: "stripe",
+      environment: "test",
+      eventId: str(event.id)!,
+      eventType: str(event.type)!,
+      createdAt: new Date((event.created as number) * 1000).toISOString(),
+      payloadSha256: sha256Hex(rawBody),
+      data,
+    };
+  }
+
+  async normalizeEvent(event: VerifiedProviderEvent): Promise<NormalizationResult> {
+    if (STRIPE_AUDIT_EVENTS.has(event.eventType)) return { kind: "ignore", reason: "AUDIT_ONLY" };
+    if (event.eventType === "charge.refunded") return this.normalizeRefund(event);
+    if (event.eventType === "charge.dispute.created" || event.eventType === "charge.dispute.closed") return this.normalizeDispute(event);
+    if (!STRIPE_STATE_EVENTS.has(event.eventType)) return { kind: "ignore", reason: "UNSUPPORTED_EVENT" };
+    const { subscriptionId, checkoutRef } = stripeSubscriptionIdFromEvent(event.eventType, event.data);
+    if (!subscriptionId) return { kind: "ignore", reason: "NO_SUBSCRIPTION" };
+    // Čerstvý stav z API (nie snapshot z eventu) — ochrana pred nesprávnym poradím.
+    const sub = await this.request("GET", `/subscriptions/${encodeURIComponent(subscriptionId)}`);
+    const state = normalizeStripeSubscription(sub, this.now().toISOString(), checkoutRef);
+    if (event.eventType === "invoice.paid") state.charge = stripeChargeFromInvoice(event.data);
+    return { kind: "state", state };
+  }
+
+  /**
+   * Refund → reporting obchodu (iba pre predplatné z kanálov s reportingom).
+   * Od API 2025-03-31 charge nemá `invoice`; cesta: payment_intent →
+   * invoice_payments → invoice → subscription. Ak sa nedá určiť → audit
+   * (REFUND_NEEDS_OPERATOR) — operátor nahlási ručne.
+   */
+  /** charge → (payment_intent → invoice_payments →) invoice → subscription. */
+  private async subscriptionIdForCharge(charge: Obj): Promise<{ subscriptionId: string | null; invoiceId: string | null }> {
+    let invoiceId = idOf(charge.invoice);
+    const paymentIntent = idOf(charge.payment_intent);
+    if (!invoiceId && paymentIntent) {
+      const payments = await this.request("GET", "/invoice_payments", {
+        "payment[type]": "payment_intent",
+        "payment[payment_intent]": paymentIntent,
+        limit: 1,
+      }).catch(() => null);
+      const first = payments && Array.isArray(payments.data) && isObj(payments.data[0]) ? (payments.data[0] as Obj) : null;
+      invoiceId = first ? idOf(first.invoice) : null;
+    }
+    if (!invoiceId) return { subscriptionId: null, invoiceId: null };
+    const invoice = await this.request("GET", `/invoices/${encodeURIComponent(invoiceId)}`);
+    return { subscriptionId: stripeSubscriptionIdFromEvent("invoice.paid", invoice).subscriptionId, invoiceId };
+  }
+
+  /**
+   * Refund. Od API 2025-03-31 charge nemá `invoice`; cesta: payment_intent →
+   * invoice_payments → invoice → subscription. Ak sa nedá určiť → audit
+   * (REFUND_NEEDS_OPERATOR).
+   *  - ÚPLNÝ refund → kanonický stav `refunded` (nároky okamžite odvolané,
+   *    dáta ostávajú) + refund charge pre reporting obchodu.
+   *  - ČIASTOČNÝ refund → iba charge (reporting) bez zmeny nároku; operátor.
+   * Politika „úplný refund = koniec prístupu" je PRODUKTOVÉ/CLIA rozhodnutie
+   * (docs/subscriptions-production-readiness-2026-10-11.md).
+   */
+  private async normalizeRefund(event: VerifiedProviderEvent): Promise<NormalizationResult> {
+    const charge = event.data;
+    if (!isObj(charge) || charge.object !== "charge") return { kind: "ignore", reason: "AUDIT_ONLY" };
+    const { subscriptionId, invoiceId } = await this.subscriptionIdForCharge(charge);
+    if (!subscriptionId) return { kind: "ignore", reason: "REFUND_NEEDS_OPERATOR" };
+    const refunded = typeof charge.amount_refunded === "number" ? charge.amount_refunded : null;
+    const amount = typeof charge.amount === "number" ? charge.amount : null;
+    const refundCharge: NormalizedCharge = {
+      id: `refund_${str(charge.id) ?? event.eventId}_${refunded ?? 0}`,
+      kind: "refund",
+      amount_pre_tax_minor: refunded,
+      tax_minor: null,
+      currency: str(charge.currency)?.toUpperCase() ?? null,
+      at: event.createdAt,
+      tax_country: null,
+      refunded_charge_id: invoiceId,
+    };
+    const full = charge.refunded === true || (refunded !== null && amount !== null && refunded >= amount);
+    if (!full) return { kind: "charge", providerSubscriptionId: subscriptionId, charge: refundCharge };
+    const sub = await this.request("GET", `/subscriptions/${encodeURIComponent(subscriptionId)}`);
+    const state = normalizeStripeSubscription(sub, this.now().toISOString()); // čas načítania = ochrana poradia
+    return {
+      kind: "state",
+      state: { ...state, status: "refunded", ended_at: event.createdAt, review_flag: null, charge: refundCharge },
+    };
+  }
+
+  /**
+   * Chargeback: dispute.created → príznak `dispute_open` (prístup sa NEMENÍ —
+   * rozhoduje výsledok); dispute.closed: lost → `revoked`, won → príznak zmazaný.
+   */
+  private async normalizeDispute(event: VerifiedProviderEvent): Promise<NormalizationResult> {
+    const dispute = event.data;
+    if (!isObj(dispute) || dispute.object !== "dispute") return { kind: "ignore", reason: "AUDIT_ONLY" };
+    const chargeId = idOf(dispute.charge);
+    if (!chargeId) return { kind: "ignore", reason: "DISPUTE_NEEDS_OPERATOR" };
+    const charge = await this.request("GET", `/charges/${encodeURIComponent(chargeId)}`);
+    const { subscriptionId } = await this.subscriptionIdForCharge(charge);
+    if (!subscriptionId) return { kind: "ignore", reason: "DISPUTE_NEEDS_OPERATOR" };
+    const sub = await this.request("GET", `/subscriptions/${encodeURIComponent(subscriptionId)}`);
+    const state = normalizeStripeSubscription(sub, this.now().toISOString()); // čas načítania = ochrana poradia
+    if (event.eventType === "charge.dispute.created") return { kind: "state", state: { ...state, review_flag: "dispute_open" } };
+    if (dispute.status === "lost") return { kind: "state", state: { ...state, status: "revoked", ended_at: event.createdAt, review_flag: null } };
+    if (dispute.status === "won") return { kind: "state", state: { ...state, review_flag: null } };
+    return { kind: "ignore", reason: "DISPUTE_PENDING" };
+  }
+}
