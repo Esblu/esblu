@@ -735,7 +735,10 @@ await check("VOICE: guardTranscription — rola a nárok pred audiom/OpenAI", as
   assert.match(route, /getActiveRole: \(\) => getActiveRoleForRequest\(req\)/);
   assert.match(read("lib/entitlements-server.ts"), /rpc\("esblu_my_active_role"\)/);
   // UI: mikrofón iba pre rolu s hlasom (server je aj tak autorita).
-  assert.match(read("app/components/voice/VoiceSessionControl.tsx"), /!voiceTranscriptionAllowed\(membershipState\.membership\?\.role\)\)\) return null;/);
+  // UI: rola bez hlasu → mikrofón sa nezobrazí (lib/voice/mic-gate.ts „hidden").
+  const controlSrc = read("app/components/voice/VoiceSessionControl.tsx");
+  assert.match(controlSrc, /roleAllowsVoice: voiceTranscriptionAllowed\(membershipState\.membership\?\.role\)/);
+  assert.match(controlSrc, /if \(gate === "hidden"\) return null;/);
 });
 
 // -----------------------------------------------------------------------------

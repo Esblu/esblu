@@ -336,6 +336,13 @@ const en = {
         tapToConfirm: "I don't confirm deletions by voice. If you really want this, tap the confirm button.",
         openSettings: "Open settings",
       },
+      gate: {
+        pending: "Voice control is loading",
+        locked: "Voice control — not included in your plan",
+        unavailable: "Couldn't check voice control — try again",
+        lockedNotice: "Voice control isn't included in your plan. You can type the command into the search field.",
+        unavailableNotice: "Couldn't check your plan. Retrying — you can type the command in the meantime.",
+      },
       states: {
         listening: "Listening…",
         transcribing: "Transcribing…",

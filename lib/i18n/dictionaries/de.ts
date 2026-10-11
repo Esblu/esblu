@@ -335,6 +335,13 @@ const de = {
         tapToConfirm: "Löschen bestätige ich nicht per Sprache. Wenn Sie es wirklich möchten, tippen Sie auf die Bestätigungstaste.",
         openSettings: "Einstellungen öffnen",
       },
+      gate: {
+        pending: "Sprachsteuerung wird geladen",
+        locked: "Sprachsteuerung — nicht in Ihrem Paket enthalten",
+        unavailable: "Sprachsteuerung konnte nicht geprüft werden — erneut versuchen",
+        lockedNotice: "Sprachsteuerung ist in Ihrem Paket nicht enthalten. Sie können den Befehl in das Suchfeld eintippen.",
+        unavailableNotice: "Ihr Paket konnte nicht geprüft werden. Neuer Versuch läuft — Sie können den Befehl inzwischen eintippen.",
+      },
       states: {
         listening: "Ich höre zu…",
         transcribing: "Wird transkribiert…",

@@ -350,6 +350,13 @@ const sk = {
         tapToConfirm: "Mazanie hlasom nepotvrdzujem. Ak to naozaj chcete, ťuknite na tlačidlo potvrdenia.",
         openSettings: "Otvoriť nastavenia",
       },
+      gate: {
+        pending: "Hlasové ovládanie sa načítava",
+        locked: "Hlasové ovládanie — nie je súčasťou balíka",
+        unavailable: "Stav hlasového ovládania sa nepodarilo overiť — skúsiť znova",
+        lockedNotice: "Hlasové ovládanie nie je súčasťou vášho balíka. Príkaz môžete napísať do poľa hľadania.",
+        unavailableNotice: "Stav balíka sa nepodarilo overiť. Skúšam znova — príkaz môžete zatiaľ napísať.",
+      },
       states: {
         listening: "Počúvam…",
         transcribing: "Prepisujem…",

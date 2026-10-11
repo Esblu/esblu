@@ -556,6 +556,9 @@ export function VoiceLauncher({
           onStop={() => voice.stop("user")}
           canOpenSettings={voice.canOpenSettings}
           onOpenSettings={voice.openSettings}
+          onGateNotice={(notice) =>
+            setMessage(t(notice === "locked" ? "search.voice.gate.lockedNotice" : "search.voice.gate.unavailableNotice"))
+          }
         />
 
         <span aria-live="polite" className={`min-w-0 flex-1 ${VOICE_TEXT} text-secondary`}>

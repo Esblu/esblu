@@ -294,9 +294,15 @@ await check("intent route: entitlement gate derived server-side and passed to or
   assert.equal(/body\?\.(entitlements|plan|voice)/.test(src), false, "nothing from request body");
 });
 
-await check("UI: microphone control hidden without voice entitlement (UX only, not security)", () => {
+await check("UI: without voice entitlement the microphone is LOCKED (no session start), not silently hidden (UX only, not security)", async () => {
   const src = read("app/components/voice/VoiceSessionControl.tsx");
-  assert.match(src, /if \(!active && !entitlements\.has\("voice"\)\) return null;/);
+  const { micGate } = await import("@/lib/voice/mic-gate");
+  const base = { sessionActive: false, membershipLoading: false, roleAllowsVoice: true, entitlementsLoading: false, entitlementsError: false };
+  assert.equal(micGate({ ...base, hasVoiceEntitlement: false }), "locked");
+  assert.equal(micGate({ ...base, hasVoiceEntitlement: true }), "ready");
+  assert.match(src, /hasVoiceEntitlement: entitlements\.has\("voice"\)/);
+  const gateBlock = src.slice(src.indexOf('if (gate !== "ready") {'), src.indexOf("  return (\n    <span"));
+  assert.ok(gateBlock && !gateBlock.includes("onTap"), "locked control never starts a session");
 });
 
 // ============================================================ 4. AI processing gates

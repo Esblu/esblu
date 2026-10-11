@@ -152,3 +152,65 @@ Ak je jediný reálny round-trip s OpenAI produkčná beta appka, smie sa testov
 | P10 | Hovoriť 25 s bez prestávky | „Veta bola príliš dlhá…" | |
 
 **Zakázané v produkcii:** „áno" na akýkoľvek návrh zápisu, mazanie, vytváranie partnerov, skladové pohyby, akékoľvek platobné alebo zápisové testy. Write a critical flow ostávajú overené harnessom (sekcia B), kým nebude bezpečný staging s AI.
+
+---
+
+## F. Mikrofón chýbal na reálnom telefóne (build 2026-10-11T17:36:58Z)
+
+### Príčina
+
+- `VoiceSessionControl` vracal `null`, keď firma nemala nárok `voice`. Rovnako sa skryl aj počas načítania nárokov a pri chybe ich načítania.
+- Hlas **nie je súčasťou 14-dňového trialu** (`entitlement_catalog.voice.included_in_trial = false`).
+- Staging firma **Anchar Bau (STAGING)** (esblu-test `cjbdijbbcujvmrzezusd`) je v triali do 2026-10-23 a nemala žiadny grant. RPC `esblu_get_my_company_entitlements` vracalo `voice: active=false, reason=VOICE_ENTITLEMENT_REQUIRED`.
+- Mikrofón preto bez vysvetlenia **vôbec nebol v DOM**. Nebolo to CSS ani detekcia platformy.
+
+### Oprava UI (`lib/voice/mic-gate.ts`)
+
+| Stav | Kedy | UI |
+|---|---|---|
+| ready | oprávnená rola + nárok | funkčný mikrofón (idle / počúva / spracúva / chyba) |
+| pending | načítava sa členstvo alebo nároky | neaktívny mikrofón na stabilnom mieste |
+| locked | bez nároku `voice` | mikrofón so zámkom. Ťuknutie ukáže „Hlasové ovládanie nie je súčasťou vášho balíka…" a „Požiadať o aktiváciu" |
+| unavailable | chyba načítania nárokov | ťuknutie = skúsiť znova a vysvetlenie |
+| hidden | rola bez hlasu (zamestnanec) | nič (politika rolí bez zmeny) |
+
+- Zamknutý ani čakajúci mikrofón **nikdy nespustí reláciu**.
+- Server ostáva autoritou: `guardTranscription` → `esblu_require_my_entitlement('voice')`.
+
+### Staging-only testovací grant (vykonané 2026-10-11 18:03 UTC)
+
+| Položka | Hodnota |
+|---|---|
+| Projekt | **esblu-test** `cjbdijbbcujvmrzezusd` (staging). **Nie** produkcia `fkpgvgvsmbpieduoatrt` |
+| Firma | `00d01023-94e4-4f0a-8616-bf76a5019d8b` „Anchar Bau (STAGING)" |
+| Mechanizmus | existujúca tabuľka `company_entitlements` (bez nového billing modelu) |
+| Riadok | id `189d17e2-aa67-4f42-9d80-5bdbb4b048a5` |
+| Hodnoty | `entitlement_key='voice'`, `source='manual'`, `status='active'`, `valid_until=2026-12-31 23:59:59+00` |
+| Poznámka | `STAGING-ONLY QA test grant 2026-10-11: native voice QA …` |
+
+**Overenie** (impersonácia `roia.juris@gmail.com` v read-only transakcii):
+- `esblu_get_my_company_entitlements` → `voice active=true source=manual`;
+- `esblu_require_my_entitlement('voice')` → `active=true`.
+
+**Zápis:**
+
+```sql
+insert into public.company_entitlements (company_id, entitlement_key, source, status, valid_until, note)
+select c.id, 'voice', 'manual', 'active', timestamptz '2026-12-31 23:59:59+00',
+       'STAGING-ONLY QA test grant 2026-10-11: native voice QA (mic permission/start/stop/haptics). Reversible: set status=revoked. Not billing.'
+from public.companies c
+where c.id = '00d01023-94e4-4f0a-8616-bf76a5019d8b' and c.name = 'Anchar Bau (STAGING)'
+  and not exists (select 1 from public.company_entitlements e
+                  where e.company_id = c.id and e.entitlement_key = 'voice' and e.status = 'active');
+```
+
+**Rollback** (iba staging, nič sa nemaže):
+
+```sql
+update public.company_entitlements set status = 'revoked', updated_at = now()
+where id = '189d17e2-aa67-4f42-9d80-5bdbb4b048a5';
+```
+
+Grant navyše sám vyprší 2026-12-31.
+
+**Po rollbacku musí mikrofón ostať viditeľný so zámkom.** To je zároveň test stavu „locked".

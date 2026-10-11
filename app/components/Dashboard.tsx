@@ -30,6 +30,7 @@ import { REQUEST_LOCALE_HEADER } from "@/lib/i18n/request-locale";
 import type { IntentResult } from "@/lib/intents/types";
 import { useVoiceSession } from "@/hooks/use-voice-session";
 import { VoiceSessionControl, voiceSessionStatusText } from "@/app/components/voice/VoiceSessionControl";
+import type { MicGateNotice } from "@/lib/voice/mic-gate";
 import { decideVoiceReplyForPreview } from "@/lib/voice/command-safety";
 import { ASSISTANT_TIMEOUTS, failureMessageKey, fetchJsonWithTimeout } from "@/lib/voice/assistant-http";
 import { IntentResultView, QuickReplies } from "@/app/components/voice/IntentResultView";
@@ -585,6 +586,9 @@ export default function Dashboard() {
     getTranscriptionContext: () => (intentResultRef.current?.kind === "clarify" ? "invoice" : null),
     onUtterance: handleVoiceUtterance,
   });
+  // Ťuknutie na zamknutý / nedostupný mikrofón (lib/voice/mic-gate.ts):
+  // vysvetlenie pod poľom hľadania, nikdy tichá nečinnosť.
+  const [voiceGateNotice, setVoiceGateNotice] = useState<MicGateNotice | null>(null);
   const voiceStatusText = voiceSessionStatusText(t, voice.session);
 
   // Tlačidlo „Áno" / „Nie" — tá istá cesta ako vyslovená odpoveď (asistent
@@ -1092,8 +1096,32 @@ export default function Dashboard() {
               onStop={() => voice.stop("user")}
               canOpenSettings={voice.canOpenSettings}
               onOpenSettings={voice.openSettings}
+              onGateNotice={setVoiceGateNotice}
             />
           </div>
+
+          {voiceGateNotice && !voice.active && (
+            <div role="status" data-testid="voice-gate-notice" className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-esblu">
+              <span className="min-w-0 flex-1">
+                {t(voiceGateNotice === "locked" ? "search.voice.gate.lockedNotice" : "search.voice.gate.unavailableNotice")}
+              </span>
+              {voiceGateNotice === "locked" && (
+                <button type="button" onClick={() => router.push("/kontakt")} className="ui-btn ui-btn-secondary ui-btn-sm shrink-0">
+                  {t("dashboard.cylinder.requestActivation")}
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setVoiceGateNotice(null)}
+                aria-label={t("common.buttons.close")}
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-muted-esblu transition hover:bg-surface-hover hover:text-primary"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+                  <path d="M6 6l12 12M18 6L6 18" />
+                </svg>
+              </button>
+            </div>
+          )}
 
           {voiceStatusText && (
             <p aria-live="polite" className={`mt-2 flex items-center gap-2 text-xs font-semibold ${voice.session.status === "listening" ? "text-danger" : "text-muted-esblu"}`}>
