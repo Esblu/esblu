@@ -7,10 +7,13 @@
 #   variables of this process (never written to disk, never printed).
 # - Aborts if the upload key fingerprint is not the expected one (release\upload-key.sha256,
 #   written by create-upload-keystore.ps1).
-# - Output: esblu-1.0.0-vc1.aab + esblu-1.0.0-vc1.signing.txt (public fingerprints only).
+# - Output: esblu-<versionName>-vc<versionCode>.aab + .signing.txt (public fingerprints only).
+# - versionCode must grow with EVERY Play upload: vc1 = first build (main @ 901c46c),
+#   vc2 = Internal Testing build from mobile-platform (dashboard + voice). An existing
+#   AAB with the same versionCode is never overwritten.
 
 $ErrorActionPreference = "Continue"  # native tools write to stderr; every step is checked explicitly
-$VersionCode = 1
+$VersionCode = 2
 $VersionName = "1.0.0"
 # NEW upload key (2026). The legacy esblu-upload-key.jks (unknown password) is NOT used.
 $Keystore = if ($env:ESBLU_UPLOAD_KEYSTORE) { $env:ESBLU_UPLOAD_KEYSTORE } else { Join-Path $env:USERPROFILE "Documents\Esblu-keys\esblu-upload-key-2026.jks" }
@@ -26,6 +29,9 @@ $OutAab = Join-Path $ReleaseDir ("esblu-{0}-vc{1}.aab" -f $VersionName, $Version
 $OutTxt = Join-Path $ReleaseDir ("esblu-{0}-vc{1}.signing.txt" -f $VersionName, $VersionCode)
 
 function Fail($msg) { Write-Host "FAIL: $msg" -ForegroundColor Red; exit 1 }
+
+if (Test-Path $OutAab) { Fail "$OutAab already exists - bump `$VersionCode instead of overwriting an uploaded/archived build" }
+Write-Host ("Building com.esblu.app {0} (versionCode {1})" -f $VersionName, $VersionCode)
 
 # --- JDK 21 (never JBR 25; existing valid JAVA_HOME is kept) -----------------------
 . (Join-Path $PSScriptRoot "jdk21.ps1")

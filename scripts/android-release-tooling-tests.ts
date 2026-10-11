@@ -60,7 +60,8 @@ check("build/create skripty: žiadny natvrdo JBR override, používajú Use-Jdk2
   assert.match(build, /gradlew\.bat bundleRelease "-Dorg\.gradle\.java\.home=\$env:JAVA_HOME"/, "aj Gradle daemon na JDK 21");
 });
 check("build skript: verzia/podpis/package nezmenené", () => {
-  assert.match(build, /\$VersionCode = 1\b/);
+  assert.match(build, /\$VersionCode = 2\b/, "vc2 = Internal Testing build z mobile-platform (vc1 už existuje)");
+  assert.match(build, /if \(Test-Path \$OutAab\) \{ Fail /, "existujúci AAB sa neprepíše");
   assert.match(build, /\$VersionName = "1\.0\.0"/);
   assert.match(build, /esblu-upload-key-2026\.jks/);
   assert.match(build, /\$Alias = "esblu"/);
