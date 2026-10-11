@@ -137,7 +137,7 @@ Kontrakt pre UI je pripravený: `DashboardModule.access` je `active` / `unknown`
 
 **Rozloženie:** hlavička → hľadanie → (pruh termínov, ak niečo hrozí) → riadok „n / N ▲▼" → valec.
 - Výška sekcie je `100dvh − spodná lišta`, takže stránka sa nescrolluje a valec vyplní zvyšok.
-- Karta má výšku `stage/4.2` (96–140 px). Ilustrácia je vľavo (≈ 86 % výšky karty); vpravo názov 17 px, popis 12.5 px a štítky (počet, upozornenia, zámok).
+- Karta má výšku `stage/4.6` (96–140 px). Ilustrácia je vľavo (≈ 86 % výšky karty); vpravo názov 17 px, popis 12.5 px a štítky (počet, upozornenia, zámok).
 
 **Hľadanie:** text v poli nahradí valec výsledkami (scroll v tej istej ploche).
 

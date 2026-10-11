@@ -168,7 +168,7 @@ export function ModuleCylinder({ modules, variant = "subtle", labels, onNavigate
     const observer = new ResizeObserver(([entry]) => {
       const height = entry.contentRect.height;
       const max = large ? 176 : 140;
-      const next = Math.round(Math.max(96, Math.min(max, height / 4.2)));
+      const next = Math.round(Math.max(96, Math.min(max, height / 4.6))); // fokus + 2 susedia + náznak ďalších
       cardHeightRef.current = next;
       setCardHeight(next);
       paint();

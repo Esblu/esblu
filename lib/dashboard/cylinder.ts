@@ -49,7 +49,9 @@ export type CylinderVariant = {
 export const VARIANT_SUBTLE: CylinderVariant = {
   name: "subtle",
   angleStep: 21,
-  radiusFactor: 2.35,
+  // R·sin(21°) ≈ 0.99·H → susedné karty sa dotýkajú hranou, neprekrývajú sa
+  // (overené v reálnom Chromiu na 375 px, 2026-10-11).
+  radiusFactor: 2.75,
   perspective: 1400,
   scaleFalloff: 0.07,
   opacityFalloff: 0.24,
@@ -65,7 +67,7 @@ export const VARIANT_SUBTLE: CylinderVariant = {
 export const VARIANT_SPATIAL: CylinderVariant = {
   name: "spatial",
   angleStep: 30,
-  radiusFactor: 1.85,
+  radiusFactor: 2.0, // R·sin(30°) = 1.0·H
   perspective: 900,
   scaleFalloff: 0.12,
   opacityFalloff: 0.32,

@@ -127,6 +127,16 @@ check("focus/lift/depth: fokus = plná mierka a priehľadnosť, susedia menší,
   assert.ok(center.zIndex > next.zIndex);
 });
 
+check("susedné karty sa neprekrývajú (rozostup ≥ výška karty × mierka) v oboch variantoch", () => {
+  for (const variant of [cyl.VARIANT_SUBTLE, cyl.VARIANT_SPATIAL]) {
+    const h = 120;
+    const center = cyl.cardTransform(0, h, 6, variant);
+    const next = cyl.cardTransform(1, h, 6, variant);
+    const gap = next.y - center.y - (h * center.scale) / 2 - (h * next.scale) / 2;
+    assert.ok(gap > -h * 0.12, `${variant.name}: prekryv ${gap.toFixed(1)} px`);
+  }
+});
+
 check("Variant A (subtle) je predvolený a jemnejší než Variant B (spatial)", () => {
   assert.equal(cyl.parseCylinderVariant(null), "subtle");
   assert.equal(cyl.parseCylinderVariant("xyz"), "subtle");
@@ -307,7 +317,7 @@ check("chat FAB sa neprekrýva s fokusovanou kartou ani s ovládaním valca (360
     const tabbar = 56;
     const header = 12 + 36 + 12 + 40 + 8 + 32; // safe-top padding + hlavička + hľadanie + riadok ovládania
     const stage = { x: 16, y: header, width: width - 32, height: height - tabbar - header - 8 };
-    const cardHeight = Math.max(96, Math.min(140, stage.height / 4.2));
+    const cardHeight = Math.max(96, Math.min(140, stage.height / 4.6));
     const focus = cyl.focusCardRect(stage, cardHeight, 4, V);
     const bounds = fab.fabBounds({ width, height, safeTop: 24, safeLeft: 0, safeRight: 0, bottomReserve: tabbar });
     const pos = fab.fromStored(null, bounds); // predvolená poloha vpravo dole
