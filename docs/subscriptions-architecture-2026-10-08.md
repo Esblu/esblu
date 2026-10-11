@@ -191,3 +191,16 @@ Spustenie DB testov: `npm i --no-save @electric-sql/pglite@0.5.8 && npm run test
   - Idempotentná (2× v teste).
   - Pozor: test baseline nepokrýva `20260929100000_closed_beta_p0_hardening` (potrebuje mnoho ďalších tabuliek). Tá mení iba RPC pozvánok a backfill `team_members`, resolver nie.
 - Rollback: zruší RPC a index, nároky ponechá (vypršia cez `valid_until`). Tabuľky zhodí iba s `esblu.rollback_drop_billing_tables='yes'`.
+
+## J. Lifecycle hardening (2026-10-11)
+
+Doplnené migráciou `20261011120000_subscriptions_lifecycle_hardening.sql` (forward-only, neaplikovaná nikde):
+kanonické stavy `pending / grace_period / account_hold / refunded / revoked`, okamžité odvolanie nárokov pri
+refunde/revoke (dáta ostávajú), `review_flag` pre spory, reconciliation (backoff + dead-letter, cron route bez
+plánovania), `esblu_billing_explain_my_entitlements`, cross-provider kontrakt v `purchase_options`
+(`managed_via`, `manage_here`), provider režimy `disabled | fake | sandbox | live` (live nikdy default,
+produkcia vždy vypnutá) a opravy: konflikt druhého predplatného od toho istého providera, explain pre firmu
+bez grantov, requeue dead-letter, žiadny acknowledge pending Play nákupu.
+
+Podrobnosti, testy, failure matrix, readiness matrix a 16-krokový rollout:
+`docs/subscriptions-production-readiness-2026-10-11.md`.
