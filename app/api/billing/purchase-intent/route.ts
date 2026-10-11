@@ -1,5 +1,6 @@
 import { billingReturnOrigin } from "@/lib/billing/config";
 import { authorizeBillingCaller, billingErrorResponse, getWebBillingProvider } from "@/lib/billing/server";
+import { methodAllowedByServer, providerGateFromEnv } from "@/lib/billing/server-gates";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 
 // -----------------------------------------------------------------------------
@@ -35,6 +36,11 @@ export async function POST(req: Request) {
   const storeToken = typeof body?.storeToken === "string" ? body.storeToken : null;
   if (!PLAN_CODE.test(planCode) || !interval || !platform || !METHOD.test(method)) {
     return Response.json({ success: false, code: "ESBLU_BILLING_INVALID_REQUEST" }, { status: 400 });
+  }
+  // Provider kanála musí byť na tomto serveri zapojený — inak by appka spustila
+  // nákup v obchode, ktorý server nevie overiť (fail closed, pred zápisom do DB).
+  if (!methodAllowedByServer(method, providerGateFromEnv())) {
+    return Response.json({ success: false, code: "ESBLU_BILLING_PROVIDER_NOT_CONFIGURED" }, { status: 409 });
   }
 
   const intent = await who.db.rpc("esblu_billing_create_purchase_intent", {

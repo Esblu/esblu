@@ -1,4 +1,5 @@
 import { authorizeBillingCaller, billingErrorResponse } from "@/lib/billing/server";
+import { gatePurchaseOptions, providerGateFromEnv } from "@/lib/billing/server-gates";
 
 // -----------------------------------------------------------------------------
 // GET /api/billing/purchase-options?platform=web|android|ios&storefront=SK
@@ -19,5 +20,6 @@ export async function GET(req: Request) {
   const storefront = (url.searchParams.get("storefront") ?? "").slice(0, 3);
   const { data, error } = await who.db.rpc("esblu_billing_purchase_options", { p_platform: platform, p_storefront: storefront || null });
   if (error) return billingErrorResponse(error);
-  return Response.json({ success: true, options: data }, { headers: { "Cache-Control": "no-store" } });
+  // Kanál bez zapojeného providera na tomto serveri sa neponúkne (fail closed).
+  return Response.json({ success: true, options: gatePurchaseOptions(data, providerGateFromEnv()) }, { headers: { "Cache-Control": "no-store" } });
 }

@@ -23,18 +23,16 @@ import { useLocale } from "@/lib/i18n/LocaleProvider";
 import { formatDate } from "@/lib/i18n/format";
 import { confirmAction } from "@/app/components/ui/AppDialog";
 import type { NativeBillingBridge } from "@/lib/billing/native-bridge";
-import { managedViaMessageKey } from "@/lib/billing/canonical-state";
 import {
   CHECKOUT_POLL_INTERVAL_MS,
   CHECKOUT_POLL_MAX_ATTEMPTS,
-  canManageOnPlatform,
-  canStartCheckout,
   hasPaidAccess,
   interpretCheckoutReturn,
   parsePurchaseOptions,
   parseSubscriptionView,
   plansFor,
   purchaseActions,
+  screenModel,
   type ClientPlatform,
   type PurchaseAction,
   type PurchaseOptions,
@@ -346,8 +344,10 @@ export default function SubscriptionPage() {
     limit === null ? t("subscription.unlimited") : period === "month" ? t("subscription.limitPerMonth", { limit }) : t("subscription.limitTotal", { limit });
 
   const actions = options ? purchaseActions(options) : [];
-  const storeProvider = view?.billingProvider === "apple" || view?.billingProvider === "google" ? view.billingProvider : null;
-  const paid = view ? hasPaidAccess(view) : false;
+  // Všetky rozhodnutia o nákupe / správe = screenModel (lib/billing/client-model.ts, testované).
+  const screen = view ? screenModel(view, options, platform, bridge) : null;
+  const storeProvider = screen?.storeManaged ?? null;
+  const paid = screen?.paid ?? false;
   // Plány: z prvého kanálu (všetky kanály predávajú ten istý katalóg plánov).
   const planList = options && actions[0] ? plansFor(options, actions[0].method, interval) : [];
   const actionLabel = (a: PurchaseAction) =>
@@ -356,12 +356,6 @@ export default function SubscriptionPage() {
         : a.kind === "google" ? t("subscription.buy.googlePlay")
           : a.method === "apple_us_link" ? t("subscription.buy.cardEsbluUs") : t("subscription.buy.cardEsblu");
 
-  // Zmena plánu: u obchodu, ktorý predplatné vlastní (StoreKit / Play), Stripe cez /manage.
-  const changeAction = (): PurchaseAction | null => {
-    if (storeProvider === "apple") return actions.find((a) => a.kind === "apple_iap") ?? null;
-    if (storeProvider === "google") return actions.find((a) => a.kind === "google") ?? null;
-    return null;
-  };
 
   const buttonClass = "rounded-xl px-4 py-2 text-sm font-semibold disabled:opacity-50";
   // Apple Attachment 14: IAP aspoň rovnako výrazné ako alternatíva → rovnaký štýl pre všetky voľby.
@@ -416,11 +410,11 @@ export default function SubscriptionPage() {
                 </>
               )}
 
-              {view.canManage && paid && !canManageOnPlatform(view, platform) && managedViaMessageKey(view.managedVia) && (
+              {screen?.managedViaKey && (
                 // Buy anywhere, use everywhere: správa iba tam, kde predplatné vzniklo.
-                <p className="mt-5 text-sm text-muted-esblu">{t(managedViaMessageKey(view.managedVia)!)}</p>
+                <p className="mt-5 text-sm text-muted-esblu">{t(screen.managedViaKey)}</p>
               )}
-              {view.canManage && paid && canManageOnPlatform(view, platform) && (
+              {screen?.showManageControls && (
                 <div className="mt-5 flex flex-wrap gap-3">
                   {storeProvider ? (
                     <>
@@ -445,17 +439,17 @@ export default function SubscriptionPage() {
                   )}
                 </div>
               )}
-              {platform === "android" && view.canManage && bridge?.available && (
+              {screen?.showRestore && platform === "android" && (
                 <button type="button" disabled={busy} onClick={restoreGoogle} className={`mt-4 ${secondary}`}>{t("subscription.restore")}</button>
               )}
-              {platform === "ios" && view.canManage && bridge?.available && (
+              {screen?.showRestore && platform === "ios" && (
                 <button type="button" disabled={busy} onClick={restoreApple} className={`mt-4 ${secondary}`}>{t("subscription.restore")}</button>
               )}
             </section>
 
-            {!view.canManage && <p className="text-sm text-muted-esblu">{t("subscription.readOnly")}</p>}
-            {view.canManage && options?.viewOnly && <p className="text-sm text-muted-esblu">{t("subscription.viewOnly")}</p>}
-            {view.canManage && platform !== "web" && bridge && !bridge.available && !options?.viewOnly && (
+            {screen?.showReadOnly && <p className="text-sm text-muted-esblu">{t("subscription.readOnly")}</p>}
+            {screen?.showViewOnly && <p className="text-sm text-muted-esblu">{t("subscription.viewOnly")}</p>}
+            {screen?.showStoreUnavailable && (
               <p className="text-sm text-muted-esblu">{t("subscription.storeUnavailable")}</p>
             )}
             {actionError && <p role="alert" className="text-sm text-red-500">{actionError}</p>}
@@ -476,7 +470,7 @@ export default function SubscriptionPage() {
                 <div className="mt-4 space-y-4">
                   {planList.map((plan) => {
                     const isCurrent = plan.planCode === view.planCode && paid;
-                    const change = changeAction();
+                    const change = screen?.storeChangeAction ?? null;
                     return (
                       <div key={plan.planCode} className="rounded-2xl border border-subtle p-4">
                         <p className="font-semibold text-primary">{planName(plan.planCode)}</p>
@@ -486,7 +480,7 @@ export default function SubscriptionPage() {
                           ))}
                         </ul>
                         <div className="mt-3 flex flex-wrap gap-3">
-                          {!isCurrent && canStartCheckout(view) && actions.map((a) => (
+                          {!isCurrent && (screen?.buyActions ?? []).map((a) => (
                             <button key={a.method} type="button" disabled={busy} onClick={() => runAction(a, plan.planCode, "new")} className={primary}>
                               {actionLabel(a)}
                             </button>
@@ -494,7 +488,7 @@ export default function SubscriptionPage() {
                           {!isCurrent && paid && change && (
                             <button type="button" disabled={busy} onClick={() => runAction(change, plan.planCode, "change")} className={secondary}>{t("subscription.changePlan")}</button>
                           )}
-                          {!isCurrent && paid && !storeProvider && canManageOnPlatform(view, platform) && (
+                          {!isCurrent && screen?.showWebChangePlan && (
                             <button type="button" disabled={busy} onClick={() => manageStripe("change", plan.planCode)} className={secondary}>{t("subscription.changePlan")}</button>
                           )}
                         </div>
