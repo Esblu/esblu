@@ -461,6 +461,28 @@ await check("purchase-idempotency: ten istý Google purchase token 10× (aj súb
   assert.equal(Number((await one<{ n: number }>(`select count(*)::int n from public.subscription_accounts where company_id = '${co.id}'`)).n), 1);
   assert.equal((await ent(co.owner, "voice")).active, true);
 });
+await check("purchase-idempotency: Google PENDING (odložená platba) → bez nároku, bez acknowledge; po zaplatení nárok + acknowledge", async () => {
+  const co = await newCompany({ trialEnded: true });
+  const i = await intent(co.owner, "test_pro", "month", "android", "google_play");
+  const [productId, basePlanId] = String(i.provider_price_id).split(":");
+  const token = fakeGooglePurchase(STORE_SECRET, { productId, basePlanId, obfuscatedAccountId: String(i.account_token), now: clock }).purchaseToken;
+  const real = googleApi.getSubscriptionV2.bind(googleApi);
+  googleApi.getSubscriptionV2 = async (t: string) => ({ ...(await real(t)), subscriptionState: "SUBSCRIPTION_STATE_PENDING" });
+  const vp = await verifyGoogleClientPurchase(googleApi, token, { environment: "test" });
+  googleApi.getSubscriptionV2 = real;
+  assert.equal(vp.state.status, "pending");
+  assert.equal(vp.acknowledge, null, "pending sa neacknowledguje");
+  assert.equal((await applyVerifiedStorePurchase(serviceDb, storeProv("google"), vp.eventId, { ...vp.state, checkout_ref: String(i.checkout_id) }, vp.payloadSha256)).outcome, "applied");
+  assert.equal((await ent(co.owner, "voice")).active, false);
+  assert.equal((await options(co.owner, "android")).purchase_allowed, false, "pending = žiadny druhý nákup");
+  tick(60);
+  const va = await verifyGoogleClientPurchase(googleApi, token, { environment: "test" });
+  assert.equal(va.state.status, "active");
+  assert.ok(va.acknowledge);
+  assert.notEqual(va.eventId, vp.eventId);
+  assert.equal((await applyVerifiedStorePurchase(serviceDb, storeProv("google"), va.eventId, va.state, va.payloadSha256)).outcome, "applied");
+  assert.equal((await ent(co.owner, "voice")).active, true);
+});
 await check("purchase-idempotency: token z cudzieho účtu (obfuscatedAccountId inej firmy) nepridelí nárok", async () => {
   const a = await newCompany({ trialEnded: true });
   const b = await newCompany({ trialEnded: true });

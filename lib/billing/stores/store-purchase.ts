@@ -15,6 +15,7 @@ import { normalizeAppleNotification, normalizeGoogleSubscription } from "@/lib/b
 import { BillingProviderError, type NormalizedSubscriptionState } from "@/lib/billing/types";
 import type { AppleSignedDataVerifier } from "@/lib/billing/stores/apple-jws";
 import type { GooglePlayApi } from "@/lib/billing/stores/store-apis";
+import { isEntitlingStatus } from "@/lib/billing/canonical-state";
 
 export type VerifiedStorePurchase = {
   eventId: string;
@@ -68,7 +69,11 @@ export async function verifyGoogleClientPurchase(
     eventId: `client:google:${sha256Hex(purchaseToken).slice(0, 40)}:${result.state.status}`,
     state: result.state,
     payloadSha256: sha256Hex(JSON.stringify(resource)),
+    // Acknowledge iba dokončený nákup (nie PENDING / ON_HOLD …): Google povoľuje
+    // acknowledge len pre zaplatené predplatné; pending sa potvrdí neskôr (RTDN / restore).
     acknowledge:
-      productId && resource.acknowledgementState === "ACKNOWLEDGEMENT_STATE_PENDING" ? { productId, purchaseToken } : null,
+      productId && resource.acknowledgementState === "ACKNOWLEDGEMENT_STATE_PENDING" && isEntitlingStatus(result.state.status)
+        ? { productId, purchaseToken }
+        : null,
   };
 }
