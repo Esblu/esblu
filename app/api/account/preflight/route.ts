@@ -15,6 +15,8 @@ const NO_SUBSCRIPTION: SubscriptionDeletionCheck = {
   managed_via: null,
   current_period_end: null,
   cancel_at_period_end: false,
+  forfeits_remaining_period: false,
+  store_subscription_notice: false,
 };
 
 // -----------------------------------------------------------------------------
@@ -156,6 +158,7 @@ export async function GET(req: Request) {
       companyId: membership.company_id,
       userId: user.id,
       scope: membership.role === "owner" ? "company" : "member",
+      memberCanManageBilling: membership.role === "admin",
     });
 
     return Response.json({

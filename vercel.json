@@ -3,6 +3,10 @@
     {
       "path": "/api/cron/deadline-notifications",
       "schedule": "0 6 * * *"
+    },
+    {
+      "path": "/api/cron/account-deletion-cleanup",
+      "schedule": "30 3 * * *"
     }
   ]
 }

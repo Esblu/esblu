@@ -7,6 +7,8 @@ import { findOwnerDeletionBlocker } from "@/lib/account-deletion-retention";
 import { checkSubscriptionForDeletion } from "@/lib/account-deletion-subscription";
 import type { SubscriptionDeletionCheck } from "@/lib/billing/deletion-guard";
 import type { Locale } from "@/lib/i18n/locales";
+import { orchestrateAccountDeletion, type OrchestrationResult } from "@/lib/account-deletion-orchestrator";
+import { supabaseDeletionDeps } from "@/lib/account-deletion-deps";
 
 // =============================================================================
 // POST /api/account/delete
@@ -21,27 +23,22 @@ import type { Locale } from "@/lib/i18n/locales";
 //      načítanie company_members riadku).
 //   1b. owner: retention blocker + owner_id + PREDPLATNÉ (2026-10-12,
 //      lib/billing/deletion-guard.ts) — obnovujúce sa / nedokončené externé
-//      predplatné alebo otvorený checkout = 409 a nič sa nemaže. Člen: blokuje
-//      iba ako platiteľ store predplatného. DB trigger (20261012120000) je
-//      poistka pre súbeh medzi precheckom a transakciou.
-//   2. Storage objekty firmy — vyčítané PRESNE z DB riadkov (storage_bucket +
-//      storage_path/file_path/logo_path), zmazané cez Storage API, PRED
-//      akoukoľvek DB zmenou (bezpečné zopakovať pri zlyhaní — remove() na už
-//      zmazanej ceste nie je chyba).
-//   3. DB časť (business tabuľky / company / memberships / settings / legal
-//      acceptances) — JEDNA atomická transakcia cez SECURITY DEFINER RPC
-//      (public.esblu_owner_delete_company / esblu_member_delete_self,
-//      pozri 20260816100000).
-//   4. auth.users zmazanie cez Admin API — VÝHRADNE posledný krok.
-//   5. Ľahká nezávislá post-verifikácia (company_members riadok + auth
-//      užívateľ skutočne zmizli).
+//      predplatné alebo otvorený checkout = 409 a nič sa nemaže. Zrušená obnova
+//      s bežiacim obdobím = povolené iba s acknowledgeForfeit. DB trigger
+//      (20261012120000) je poistka pre súbeh medzi precheckom a transakciou.
+//   2. DB NAJPRV (2026-10-12): esblu_account_deletion_commit — JEDNA transakcia
+//      (zámok firmy, zber Storage ciest z DB riadkov, esblu_owner_delete_company /
+//      esblu_member_delete_self, cleanup job). Odmietnutie = rollback a ŽIADNY
+//      Storage delete (lib/account-deletion-orchestrator.ts).
+//   3. Až po commite: Storage objekty podľa jobu (remove() je idempotentné).
+//   4. auth.users zmazanie cez Admin API + post-verifikácia.
+//   5. Čo zlyhá v 3/4, ostáva v jobe pending → /api/cron/account-deletion-cleanup.
 //
 // Ak ktorýkoľvek krok zlyhá, funkcia vyhodí výnimku → chytené v POST() →
 // klientovi ide zrozumiteľná chyba (nikdy "success"), server-side log
 // obsahuje Postgres error code/message (bez akýchkoľvek secretov).
 // =============================================================================
 
-type StorageTarget = { bucket: string; path: string };
 
 /**
  * Predplatné blokuje zrušenie (2026-10-12) — 409, NIČ sa nezmazalo (Storage
@@ -65,198 +62,57 @@ function subscriptionBlockedResponse(locale: Locale, check: SubscriptionDeletion
   );
 }
 
-/** DB poistka (trigger 20261012120000) zastavila kaskádu — nič v DB sa nezmenilo. */
-function isDbSubscriptionGuardError(error: { message?: string | null } | null): boolean {
-  return /ESBLU_(ACTIVE_SUBSCRIPTION|CHECKOUT_IN_PROGRESS)_BLOCKS_DELETION/.test(error?.message ?? "");
-}
-
-async function collectOwnerStorageTargets(
-  admin: SupabaseClient,
-  companyId: string,
-  ownerUserId: string
-): Promise<StorageTarget[]> {
-  const targets: StorageTarget[] = [];
-
-  const [
-    documentsRes,
-    attachmentsRes,
-    aiEvidenceRes,
-    machinePhotosRes,
-    inventoryPhotosRes,
-    vehiclePhotosRes,
-    settingsRes,
-    billingProfileRes,
-  ] = await Promise.all([
-    admin
-      .from("documents")
-      .select("storage_bucket, storage_path")
-      .eq("company_id", companyId),
-    admin
-      .from("document_attachments")
-      .select("storage_bucket, storage_path")
-      .eq("company_id", companyId),
-    admin
-      .from("ai_evidence")
-      .select("photo_url")
-      .eq("company_id", companyId)
-      .not("photo_url", "is", null),
-    admin
-      .from("machine_photos")
-      .select("file_path")
-      .eq("company_id", companyId)
-      .not("file_path", "is", null),
-    admin
-      .from("inventory_photos")
-      .select("file_path")
-      .eq("company_id", companyId)
-      .not("file_path", "is", null),
-    admin
-      .from("vehicle_photos")
-      .select("storage_path")
-      .eq("company_id", companyId)
-      .not("storage_path", "is", null),
-    admin
-      .from("settings")
-      .select("logo_path")
-      .eq("user_id", ownerUserId)
-      .not("logo_path", "is", null),
-    // Fáza 1B: company_billing_profile.logo_path je teraz JEDINÝ živý zdroj
-    // aktuálneho firemného loga (settings.logo_path vyššie je legacy a od
-    // tejto fázy doň appka už nezapisuje — pozri lib/company-billing-
-    // profile.ts). Bez tohto riadku by zrušenie firmy nechalo osirelý
-    // Storage objekt vždy, keď logo naposledy nahral/zmenil ADMIN (nie
-    // owner) — company_billing_profile je company-scoped, nie user-scoped,
-    // takže presne túto latentnú medzeru (predtým: logo nahraté adminom sa
-    // pri zrušení firmy vôbec nekontrolovalo) zároveň opravuje.
-    admin
-      .from("company_billing_profile")
-      .select("logo_path")
-      .eq("company_id", companyId)
-      .not("logo_path", "is", null),
-  ]);
-
-  for (const [label, res] of [
-    ["documents", documentsRes],
-    ["document_attachments", attachmentsRes],
-    ["ai_evidence", aiEvidenceRes],
-    ["machine_photos", machinePhotosRes],
-    ["inventory_photos", inventoryPhotosRes],
-    ["vehicle_photos", vehiclePhotosRes],
-    ["settings", settingsRes],
-    ["company_billing_profile", billingProfileRes],
-  ] as const) {
-    if (res.error) {
-      throw new Error(
-        `ESBLU_STORAGE_LOOKUP_FAILED:${label}:${res.error.code ?? ""}:${res.error.message}`
+/** Výsledok orchestrácie (DB najprv → Storage → auth) → HTTP odpoveď. */
+function orchestrationResponse(locale: Locale, role: string, result: OrchestrationResult): Response {
+  const owner = role === "owner";
+  switch (result.status) {
+    case "blocked_subscription":
+      // Súbeh: predplatné/checkout vzniklo medzi precheckom a transakciou.
+      // DB transakcia sa vrátila a ŽIADNY súbor sa nezmazal.
+      console.error("account/delete: DB subscription guard zastavil zrušenie:", result.code);
+      return Response.json(
+        {
+          error: translate(locale, "settings.errors.subscriptionBlocksDeletion"),
+          can_delete: false,
+          blocking_reason: result.code.includes("CHECKOUT") ? "CHECKOUT_IN_PROGRESS" : "ACTIVE_SUBSCRIPTION_RENEWING",
+        },
+        { status: 409 }
       );
-    }
+    case "db_failed":
+      // Nič sa nezmenilo (rollback) a Storage sa nedotkol — bezpečne opakovateľné.
+      console.error("account/delete: DB zrušenie zlyhalo:", result.code);
+      return Response.json(
+        { error: translate(locale, owner ? "settings.errors.companyDeletionFailedRetry" : "settings.errors.deletionFailedRetry") },
+        { status: 500 }
+      );
+    case "auth_failed":
+      // DB je commitnutá (nevratné); auth cleanup ostáva v jobe na retry.
+      // partial=true → klient vynúti odhlásenie (app/nastavenia confirmDeleteAccount).
+      console.error("account/delete: auth cleanup ostal pending:", result.code);
+      return Response.json(
+        {
+          error: translate(
+            locale,
+            result.code === "ESBLU_AUTH_VERIFY_FAILED"
+              ? "settings.errors.accountVerificationFailedContactSupport"
+              : owner
+                ? "settings.errors.companyDataDeletedButLoginRemained"
+                : "settings.errors.membershipDeletedButLoginRemained"
+          ),
+          partial: true,
+        },
+        { status: 500 }
+      );
+    case "deleted":
+      return Response.json({
+        success: true,
+        role,
+        storageRemovedCount: result.storageRemoved,
+        // Súbory, ktoré sa nepodarilo zmazať, dočistí retry (cron) — účet je zrušený.
+        cleanupPending: result.cleanupPending,
+        dbSummary: result.summary,
+      });
   }
-
-  for (const row of documentsRes.data ?? []) {
-    if (row.storage_bucket && row.storage_path) {
-      targets.push({ bucket: row.storage_bucket, path: row.storage_path });
-    }
-  }
-
-  for (const row of attachmentsRes.data ?? []) {
-    if (row.storage_bucket && row.storage_path) {
-      targets.push({ bucket: row.storage_bucket, path: row.storage_path });
-    }
-  }
-
-  for (const row of aiEvidenceRes.data ?? []) {
-    if (row.photo_url) {
-      targets.push({ bucket: "ai-evidence-documents", path: row.photo_url });
-    }
-  }
-
-  for (const row of machinePhotosRes.data ?? []) {
-    if (row.file_path) {
-      targets.push({ bucket: "machine-photos", path: row.file_path });
-    }
-  }
-
-  for (const row of inventoryPhotosRes.data ?? []) {
-    if (row.file_path) {
-      targets.push({ bucket: "inventory-photos", path: row.file_path });
-    }
-  }
-
-  for (const row of vehiclePhotosRes.data ?? []) {
-    if (row.storage_path) {
-      targets.push({ bucket: "vehicle-photos", path: row.storage_path });
-    }
-  }
-
-  for (const row of settingsRes.data ?? []) {
-    if (row.logo_path) {
-      targets.push({ bucket: "company-logos", path: row.logo_path });
-    }
-  }
-
-  for (const row of billingProfileRes.data ?? []) {
-    if (row.logo_path) {
-      targets.push({ bucket: "company-logos", path: row.logo_path });
-    }
-  }
-
-  return targets;
-}
-
-async function collectMemberOwnStorageTargets(
-  admin: SupabaseClient,
-  userId: string
-): Promise<StorageTarget[]> {
-  // Admin/employee flow NIKDY nemaže firemné dáta/Storage — jediný Storage
-  // objekt, ktorý mu môže patriť VÝHRADNE osobne, je jeho vlastný nahraný
-  // logo súbor v jeho vlastnom (typicky prázdnom) settings riadku.
-  const { data, error } = await admin
-    .from("settings")
-    .select("logo_path")
-    .eq("user_id", userId)
-    .not("logo_path", "is", null);
-
-  if (error) {
-    throw new Error(
-      `ESBLU_STORAGE_LOOKUP_FAILED:settings:${error.code ?? ""}:${error.message}`
-    );
-  }
-
-  return (data ?? [])
-    .filter((row) => row.logo_path)
-    .map((row) => ({ bucket: "company-logos", path: row.logo_path as string }));
-}
-
-async function removeStorageTargets(
-  admin: SupabaseClient,
-  targets: StorageTarget[]
-): Promise<number> {
-  const byBucket = new Map<string, string[]>();
-
-  for (const target of targets) {
-    const list = byBucket.get(target.bucket) ?? [];
-    list.push(target.path);
-    byBucket.set(target.bucket, list);
-  }
-
-  let removed = 0;
-
-  for (const [bucket, paths] of byBucket) {
-    for (let i = 0; i < paths.length; i += 100) {
-      const batch = paths.slice(i, i + 100);
-      const { data, error } = await admin.storage.from(bucket).remove(batch);
-
-      if (error) {
-        throw new Error(
-          `ESBLU_STORAGE_REMOVE_FAILED:${bucket}:${error.message}`
-        );
-      }
-
-      removed += data?.length ?? batch.length;
-    }
-  }
-
-  return removed;
 }
 
 // -----------------------------------------------------------------------------
@@ -439,7 +295,7 @@ export async function POST(req: Request) {
     }
 
     if (membership.role === "owner") {
-      let body: { confirmPhrase?: string } = {};
+      let body: { confirmPhrase?: string; acknowledgeForfeit?: boolean } = {};
 
       try {
         body = await req.json();
@@ -514,222 +370,52 @@ export async function POST(req: Request) {
         return subscriptionBlockedResponse(locale, subscriptionCheck);
       }
 
-      const storageTargets = await collectOwnerStorageTargets(
-        admin,
-        membership.company_id,
-        user.id
-      );
-
-      const storageRemovedCount = await removeStorageTargets(
-        admin,
-        storageTargets
-      );
-
-      const { data: dbSummary, error: rpcError } = await admin.rpc(
-        "esblu_owner_delete_company",
-        { p_owner_user_id: user.id }
-      );
-
-      if (rpcError && isDbSubscriptionGuardError(rpcError)) {
-        // Súbeh: predplatné/checkout vzniklo medzi precheckom a transakciou.
-        // DB transakcia sa vrátila (firma aj väzby na providera ostali).
-        console.error("account/delete (owner): DB subscription guard zastavil zrušenie firmy");
+      // Zrušená obnova, ale zaplatené obdobie ešte beží: zrušenie je povolené,
+      // ale iba s výslovným potvrdením straty zvyšku obdobia (texty: LEGAL/CLIA
+      // REVIEW REQUIRED). Žiadny automatický refund.
+      if (subscriptionCheck.forfeits_remaining_period && body.acknowledgeForfeit !== true) {
         return Response.json(
           {
-            error: translate(locale, "settings.errors.subscriptionBlocksDeletion"),
-            can_delete: false,
-            blocking_reason: "ACTIVE_SUBSCRIPTION_RENEWING",
+            error: translate(locale, "settings.errors.forfeitAcknowledgementRequired"),
+            can_delete: true,
+            blocking_reason: "FORFEIT_ACKNOWLEDGEMENT_REQUIRED",
+            subscription_status: subscriptionCheck.subscription_status,
+            subscription: subscriptionCheck,
           },
           { status: 409 }
         );
       }
 
-      if (rpcError) {
-        console.error(
-          "account/delete (owner): esblu_owner_delete_company zlyhalo:",
-          rpcError.code,
-          rpcError.message,
-          rpcError.details,
-          rpcError.hint
-        );
-        return Response.json(
-          {
-            error: translate(
-              locale,
-              "settings.errors.companyDeletionFailedRetry"
-            ),
-          },
-          { status: 500 }
-        );
-      }
-
-      const { error: deleteAuthError } =
-        await admin.auth.admin.deleteUser(user.id);
-
-      if (deleteAuthError) {
-        // Granulárne, bezpečné (bez secretov) logovanie — .status/.code sú
-        // štruktúrované info z GoTrue REST API (AuthApiError), nikdy
-        // citlivé. Toto je JEDINÝ spôsob, ako z Vercel logov zistiť presnú
-        // príčinu zlyhania deleteUser() (predtým sa logovala iba .message).
-        console.error(
-          "account/delete (owner): auth.admin.deleteUser zlyhalo:",
-          JSON.stringify({
-            userId: user.id,
-            name: deleteAuthError.name,
-            status: deleteAuthError.status,
-            code: deleteAuthError.code,
-            message: deleteAuthError.message,
-          })
-        );
-        // partial=true: firemné dáta/DB časť je NEVRATNE zmazaná (RPC
-        // uspela), ale auth.users účet ostáva existovať — klient MUSÍ na
-        // tento flag reagovať vynúteným odhlásením (pozri
-        // app/nastavenia/page.tsx confirmDeleteAccount()).
-        return Response.json(
-          {
-            error: translate(
-              locale,
-              "settings.errors.companyDataDeletedButLoginRemained"
-            ),
-            partial: true,
-          },
-          { status: 500 }
-        );
-      }
-
-      const { data: verifyUser } = await admin.auth.admin.getUserById(
+      // DB NAJPRV (2026-10-12): Storage sa maže až po úspešnom commite
+      // (lib/account-deletion-orchestrator.ts). Odmietnutie DB = žiadny súbor
+      // sa nezmaže.
+      const ownerResult = await orchestrateAccountDeletion(
+        supabaseDeletionDeps(admin, { companyId: membership.company_id }),
+        "owner",
         user.id
       );
-
-      if (verifyUser?.user) {
-        console.error(
-          "account/delete (owner): post-verifikácia zlyhala — auth.users stále existuje po deleteUser().",
-          JSON.stringify({ userId: user.id })
-        );
-        return Response.json(
-          {
-            error: translate(
-              locale,
-              "settings.errors.accountVerificationFailedContactSupport"
-            ),
-            partial: true,
-          },
-          { status: 500 }
-        );
-      }
-
-      return Response.json({
-        success: true,
-        role: "owner",
-        storageRemovedCount,
-        dbSummary,
-      });
+      return orchestrationResponse(locale, "owner", ownerResult);
     }
 
-    // ADMIN / EMPLOYEE flow — firemné dáta sa nedotýkajú. Blokuje iba člen,
-    // ktorý je platiteľom obnovujúceho sa predplatného cez SVOJ účet obchodu.
+    // ADMIN / EMPLOYEE / ACCOUNTANT flow — firemné dáta ani predplatné firmy sa
+    // nedotýkajú. Blokácia člena iba pri OVERENEJ identite platiteľa (dnes ju
+    // architektúra nepozná — store účet je viazaný na firmu, nie osobu).
     const memberSubscriptionCheck = await checkSubscriptionForDeletion(admin, {
       companyId: membership.company_id,
       userId: user.id,
       scope: "member",
+      memberCanManageBilling: membership.role === "admin",
     });
     if (!memberSubscriptionCheck.can_delete) {
       return subscriptionBlockedResponse(locale, memberSubscriptionCheck);
     }
 
-    const storageTargets = await collectMemberOwnStorageTargets(
-      admin,
+    const memberResult = await orchestrateAccountDeletion(
+      supabaseDeletionDeps(admin, { companyId: membership.company_id }),
+      "member",
       user.id
     );
-
-    const storageRemovedCount = await removeStorageTargets(
-      admin,
-      storageTargets
-    );
-
-    const { data: dbSummary, error: rpcError } = await admin.rpc(
-      "esblu_member_delete_self",
-      { p_user_id: user.id }
-    );
-
-    if (rpcError) {
-      console.error(
-        "account/delete (member): esblu_member_delete_self zlyhalo:",
-        rpcError.code,
-        rpcError.message,
-        rpcError.details,
-        rpcError.hint
-      );
-      return Response.json(
-        {
-          error: translate(locale, "settings.errors.deletionFailedRetry"),
-        },
-        { status: 500 }
-      );
-    }
-
-    const { error: deleteAuthError } = await admin.auth.admin.deleteUser(
-      user.id
-    );
-
-    if (deleteAuthError) {
-      // Granulárne, bezpečné (bez secretov) logovanie — .status/.code sú
-      // štruktúrované info z GoTrue REST API (AuthApiError), nikdy citlivé.
-      // Toto je JEDINÝ spôsob, ako z Vercel logov zistiť presnú príčinu
-      // zlyhania deleteUser() (predtým sa logovala iba .message).
-      console.error(
-        "account/delete (member): auth.admin.deleteUser zlyhalo:",
-        JSON.stringify({
-          userId: user.id,
-          role: membership.role,
-          name: deleteAuthError.name,
-          status: deleteAuthError.status,
-          code: deleteAuthError.code,
-          message: deleteAuthError.message,
-        })
-      );
-      // partial=true: membership/settings sú NEVRATNE zmazané (RPC uspela),
-      // ale auth.users účet ostáva existovať — klient MUSÍ na tento flag
-      // reagovať vynúteným odhlásením (pozri app/nastavenia/page.tsx
-      // confirmDeleteAccount()), aby nezostala aktívna session pre už
-      // odstránené členstvo.
-      return Response.json(
-        {
-          error: translate(
-            locale,
-            "settings.errors.membershipDeletedButLoginRemained"
-          ),
-          partial: true,
-        },
-        { status: 500 }
-      );
-    }
-
-    const { data: verifyUser } = await admin.auth.admin.getUserById(user.id);
-
-    if (verifyUser?.user) {
-      console.error(
-        "account/delete (member): post-verifikácia zlyhala — auth.users stále existuje po deleteUser().",
-        JSON.stringify({ userId: user.id, role: membership.role })
-      );
-      return Response.json(
-        {
-          error: translate(
-            locale,
-            "settings.errors.accountVerificationFailedContactSupport"
-          ),
-          partial: true,
-        },
-        { status: 500 }
-      );
-    }
-
-    return Response.json({
-      success: true,
-      role: membership.role,
-      storageRemovedCount,
-      dbSummary,
-    });
+    return orchestrationResponse(locale, membership.role, memberResult);
   } catch (error) {
     console.error(
       "account/delete: neočakávaná chyba:",

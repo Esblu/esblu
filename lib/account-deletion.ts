@@ -102,7 +102,8 @@ export async function fetchAccountDeletionPreflight(
 
 export async function deleteMyAccount(
   locale: Locale,
-  confirmPhrase?: string
+  confirmPhrase?: string,
+  options: { acknowledgeForfeit?: boolean } = {}
 ): Promise<void> {
   const accessToken = await getAccessToken(locale);
 
@@ -113,9 +114,11 @@ export async function deleteMyAccount(
       "Content-Type": "application/json",
       [REQUEST_LOCALE_HEADER]: locale,
     },
-    body: JSON.stringify(
-      confirmPhrase !== undefined ? { confirmPhrase } : {}
-    ),
+    body: JSON.stringify({
+      ...(confirmPhrase !== undefined ? { confirmPhrase } : {}),
+      // Zrušená obnova + bežiace obdobie: server vyžaduje výslovné potvrdenie.
+      ...(options.acknowledgeForfeit ? { acknowledgeForfeit: true } : {}),
+    }),
   });
 
   const body = (await response.json().catch(() => ({}))) as { success?: boolean; error?: string; partial?: boolean };

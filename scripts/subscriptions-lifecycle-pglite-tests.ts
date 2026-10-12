@@ -21,9 +21,12 @@ import { providerReconcileSource } from "@/lib/billing/reconcile-sources";
 import { runReconciliation, type ReconcileSource } from "@/lib/billing/reconciliation";
 import { signTimestamped } from "@/lib/billing/signature";
 import { FakeGooglePlayApi, fakeGooglePurchase } from "@/lib/billing/stores/fake-stores";
-import { verifyGoogleClientPurchase } from "@/lib/billing/stores/store-purchase";
 import { parseSubscriptionView } from "@/lib/billing/client-model";
 import { classifySubscriptionForDeletion, evaluateDeletionGuard } from "@/lib/billing/deletion-guard";
+import { orchestrateAccountDeletion, runCleanupJob, type DeletionDeps } from "@/lib/account-deletion-orchestrator";
+import { parseStorageTargets, type StorageTarget } from "@/lib/account-deletion-storage";
+import { FakeAppleVerifier, fakeApplePurchase } from "@/lib/billing/stores/fake-stores";
+import { verifyAppleClientPurchase, verifyGoogleClientPurchase } from "@/lib/billing/stores/store-purchase";
 import type { NormalizedSubscriptionState } from "@/lib/billing/types";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -35,6 +38,8 @@ const REDACTION = "supabase/migrations/20261012090000_subscriptions_event_token_
 const OWNED_METHODS = "supabase/migrations/20261012091000_subscriptions_purchase_options_owned_methods.sql";
 const DELETION_GUARD = "supabase/migrations/20261012120000_account_deletion_subscription_guard.sql";
 const DELETION_GUARD_ROLLBACK = "supabase/rollback/20261012120000_account_deletion_subscription_guard_rollback.sql";
+const POST_COMMIT = "supabase/migrations/20261012130000_account_deletion_post_commit_cleanup.sql";
+const POST_COMMIT_ROLLBACK = "supabase/rollback/20261012130000_account_deletion_post_commit_cleanup_rollback.sql";
 const SUITE = (process.argv[2] ?? process.env.SUITE ?? "").replace(/^--suite=/, "").trim() || null;
 
 type Row = Record<string, unknown>;
@@ -139,6 +144,51 @@ await db.exec(read(LIFECYCLE));
 await db.exec(read(REDACTION));
 await db.exec(read(OWNED_METHODS));
 await db.exec(read(DELETION_GUARD));
+// Prod tabuľky súborov, ktoré lokálny baseline nemá + zjednodušené prod RPC
+// zrušenia (overenie roly + mazanie detí → companies; kaskáda a poistka
+// predplatného sú SKUTOČNÉ). Testuje sa obal esblu_account_deletion_commit.
+await db.exec(`
+  create table if not exists public.document_attachments (id uuid primary key default gen_random_uuid(),
+    company_id uuid not null references public.companies(id), storage_bucket text, storage_path text);
+  create table if not exists public.machine_photos (id uuid primary key default gen_random_uuid(),
+    company_id uuid not null references public.companies(id), file_path text);
+  create table if not exists public.inventory_photos (id uuid primary key default gen_random_uuid(),
+    company_id uuid not null references public.companies(id), file_path text);
+  create table if not exists public.vehicle_photos (id uuid primary key default gen_random_uuid(),
+    company_id uuid not null references public.companies(id), storage_path text);
+  alter table public.company_billing_profile add column if not exists logo_path text;
+  create or replace function public.esblu_owner_delete_company(p_owner_user_id uuid) returns jsonb
+  language plpgsql security definer set search_path to '' as $f$
+  declare v_company uuid;
+  begin
+    select cm.company_id into v_company from public.company_members cm
+      where cm.user_id = p_owner_user_id and cm.status = 'active' and cm.role = 'owner';
+    if v_company is null then raise exception using errcode = 'P0001', message = 'ESBLU_NOT_ACTIVE_OWNER'; end if;
+    delete from public.documents where company_id = v_company;
+    delete from public.document_attachments where company_id = v_company;
+    delete from public.ai_evidence where company_id = v_company;
+    delete from public.machine_photos where company_id = v_company;
+    delete from public.inventory_photos where company_id = v_company;
+    delete from public.vehicle_photos where company_id = v_company;
+    delete from public.company_billing_profile where company_id = v_company;
+    delete from public.company_dpa_acceptances where company_id = v_company;
+    delete from public.settings where user_id = p_owner_user_id;
+    delete from public.company_members where company_id = v_company;
+    delete from public.companies where id = v_company;
+    return jsonb_build_object('company_id', v_company);
+  end $f$;
+  create or replace function public.esblu_member_delete_self(p_user_id uuid) returns jsonb
+  language plpgsql security definer set search_path to '' as $f$
+  declare v_company uuid;
+  begin
+    select cm.company_id into v_company from public.company_members cm where cm.user_id = p_user_id and cm.status = 'active' and cm.role <> 'owner';
+    if v_company is null then raise exception using errcode = 'P0001', message = 'ESBLU_NOT_ACTIVE_MEMBER'; end if;
+    delete from public.settings where user_id = p_user_id;
+    delete from public.company_members where user_id = p_user_id and company_id = v_company;
+    return jsonb_build_object('company_id', v_company);
+  end $f$;
+`);
+await db.exec(read(POST_COMMIT));
 await db.exec(`update public.billing_runtime_config set web_provider = 'fake',
   enabled_methods = array['stripe_web_checkout','apple_iap','google_play']`);
 
@@ -827,13 +877,14 @@ async function deleteCompanyTx(co: Co): Promise<string | null> {
 const companyExists = async (co: Co) => Number((await one<{ n: number }>(`select count(*)::int n from public.companies where id = '${co.id}'`)).n) === 1;
 const membersOf = async (co: Co) => Number((await one<{ n: number }>(`select count(*)::int n from public.company_members where company_id = '${co.id}'`)).n);
 const linksOf = async (co: Co) => Number((await one<{ n: number }>(`select count(*)::int n from public.billing_provider_links where company_id = '${co.id}'`)).n);
-const guardOf = async (co: Co, scope: "company" | "member" = "company") => {
-  const a = await one<Row>(`select status, billing_provider, cancel_at_period_end, current_period_end::text from public.subscription_accounts where company_id = '${co.id}'`);
+const guardOf = async (co: Co, scope: "company" | "member" = "company", memberCanManageBilling = false) => {
+  const a = await one<Row>(`select status, billing_provider, cancel_at_period_end, to_json(current_period_end) #>> '{}' as current_period_end from public.subscription_accounts where company_id = '${co.id}'`);
   const open = await one<{ provider: string }>(`select provider from public.billing_checkout_sessions where company_id = '${co.id}' and status in ('created','open') and expires_at > now() limit 1`);
   return evaluateDeletionGuard({
     account: a ? { status: a.status as string, billing_provider: a.billing_provider as string, cancel_at_period_end: a.cancel_at_period_end as boolean, current_period_end: a.current_period_end as string } : null,
     openCheckoutProvider: open?.provider ?? null,
     scope,
+    memberCanManageBilling,
   });
 };
 
@@ -961,7 +1012,7 @@ await check("account-deletion: člen (employee) firmy s aktívnym predplatným s
   const co = await newCompany({ trialEnded: true });
   await buyFake(co);
   assert.equal((await guardOf(co, "member")).can_delete, true);
-  assert.equal(evaluateDeletionGuard({ account: { status: "active", billing_provider: "google", cancel_at_period_end: false, current_period_end: null }, openCheckoutProvider: null, scope: "member", memberIsStorePurchaser: true }).blocking_reason, "STORE_SUBSCRIPTION_PURCHASER");
+  assert.equal(evaluateDeletionGuard({ account: { status: "active", billing_provider: "google", cancel_at_period_end: false, current_period_end: null }, openCheckoutProvider: null, scope: "member", verifiedMemberPurchaser: true }).blocking_reason, "STORE_SUBSCRIPTION_PURCHASER");
 });
 
 await check("account-deletion: údržbová výnimka iba vedome (GUC v transakcii), migrácia idempotentná, rollback čistý", async () => {
@@ -990,6 +1041,224 @@ await check("account-deletion: údržbová výnimka iba vedome (GUC v transakcii
   assert.match((await deleteCompanyTx(co)) ?? "", /BLOCKS_DELETION/);
   // klient (authenticated) predikát volať nesmie
   await fails(() => as(co.owner, () => db.query(`select public.esblu_billing_blocks_account_deletion('active','stripe',false)`)), /permission denied/);
+});
+
+// ----------------------------------------------------------------------------- account-deletion: DB NAJPRV, Storage až po commite
+type Calls = string[];
+function pgliteDeletionDeps(calls: Calls, opts: { failStorage?: () => boolean } = {}): DeletionDeps {
+  return {
+    async commit(kind, userId) {
+      calls.push("commit");
+      try {
+        const rows = await asRole("service_role", async () =>
+          (await db.query<{ r: { job_id: string; storage_targets: unknown; summary: unknown } }>(`select public.esblu_account_deletion_commit($1, $2) r`, [kind, userId])).rows);
+        const r = rows[0].r;
+        calls.push("commit:ok");
+        return { ok: true, jobId: r.job_id, storageTargets: parseStorageTargets(r.storage_targets), summary: r.summary };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        calls.push("commit:rejected");
+        const guard = /ESBLU_(ACTIVE_SUBSCRIPTION|CHECKOUT_IN_PROGRESS)_BLOCKS_DELETION/.exec(message)?.[0];
+        return guard ? { ok: false, reason: "subscription_guard", code: guard } : { ok: false, reason: "db_error", code: /ESBLU_[A-Z_]+/.exec(message)?.[0] ?? "DB" };
+      }
+    },
+    async removeStorage(targets: StorageTarget[]) {
+      calls.push(`storage:${targets.length}`);
+      if (opts.failStorage?.()) throw new Error("ESBLU_STORAGE_REMOVE_FAILED:documents:simulated outage");
+      return targets.length;
+    },
+    async deleteAuthUser(userId) {
+      calls.push("auth");
+      await su(`delete from auth.users where id = $1`, [userId]);
+      return { ok: true };
+    },
+    async updateJob(jobId, patch) {
+      calls.push("job");
+      const sets = Object.entries(patch).map(([k], i) => `${k} = $${i + 2}`);
+      await su(`update public.account_deletion_cleanup_jobs set ${sets.join(", ")} where id = $1`,
+        [jobId, ...Object.values(patch).map((v) => (Array.isArray(v) ? JSON.stringify(v) : v))]);
+    },
+    now: () => clock,
+  };
+}
+async function seedFiles(co: Co) {
+  // Priamy seed (bez JWT kontextu) — insert triggery modulov (company_id z auth.uid, limity) sa obídu.
+  await serialized(() => db.exec(`
+    set session_replication_role = replica;
+    insert into public.documents (company_id, storage_bucket, storage_path) values ('${co.id}', 'documents', '${co.id}/doc-1.pdf');
+    insert into public.ai_evidence (company_id, user_id, photo_url) values ('${co.id}', '${co.owner}', '${co.id}/scan-1.jpg');
+    insert into public.vehicle_photos (company_id, storage_path) values ('${co.id}', '${co.id}/car.jpg');
+    insert into public.settings (user_id, logo_path) values ('${co.owner}', '${co.id}/logo.png')
+      on conflict (user_id) do update set logo_path = excluded.logo_path;
+    set session_replication_role = origin;
+  `));
+}
+const filesOf = async (co: Co) => Number((await one<{ n: number }>(`select (select count(*) from public.documents where company_id = '${co.id}')
+  + (select count(*) from public.ai_evidence where company_id = '${co.id}') + (select count(*) from public.vehicle_photos where company_id = '${co.id}') as n`)).n);
+const jobsOf = (userId: string) => su<Row>(`select * from public.account_deletion_cleanup_jobs where user_id = '${userId}'`).then((r) => r.rows);
+
+await check("account-deletion: AKTIVÁCIA PREDPLATNÉHO POČAS ZRUŠENIA → DB odmietne, Storage callback sa NEZAVOLÁ, firma aj súbory ostanú", async () => {
+  const co = await newCompany({ trialEnded: true });
+  await seedFiles(co);
+  // A: precheck prešiel (bez predplatného)…
+  assert.equal((await guardOf(co)).can_delete, true);
+  // …medzitým príde aktivačný webhook (súbeh).
+  await buyFake(co);
+  const calls: Calls = [];
+  const result = await orchestrateAccountDeletion(pgliteDeletionDeps(calls), "owner", co.owner);
+  assert.equal(result.status, "blocked_subscription", JSON.stringify(result));
+  assert.deepEqual(calls, ["commit", "commit:rejected"], "žiadny storage ani auth krok");
+  assert.equal(await companyExists(co), true);
+  assert.equal(await filesOf(co), 3, "DB riadky súborov ostali");
+  assert.equal((await jobsOf(co.owner)).length, 0, "žiadny cleanup job (rollback)");
+  assert.equal(Number((await one<{ n: number }>(`select count(*)::int n from auth.users where id = '${co.owner}'`)).n), 1);
+});
+
+await check("account-deletion: otvorený checkout počas zrušenia → DB guard odmietne, Storage sa nedotkne", async () => {
+  const co = await newCompany({ trialEnded: true });
+  await seedFiles(co);
+  await rpcAs(co.owner, "esblu_billing_create_checkout_intent", ["test_pro", "month"]);
+  const calls: Calls = [];
+  const result = await orchestrateAccountDeletion(pgliteDeletionDeps(calls), "owner", co.owner);
+  assert.equal(result.status, "blocked_subscription");
+  assert.ok(!calls.some((c) => c.startsWith("storage")));
+  assert.equal(await filesOf(co), 3);
+});
+
+await check("account-deletion: iná DB chyba (nie owner) → rollback, Storage sa nedotkne", async () => {
+  const co = await newCompany({ trialEnded: true });
+  const calls: Calls = [];
+  const result = await orchestrateAccountDeletion(pgliteDeletionDeps(calls), "owner", co.emp);
+  assert.equal(result.status, "db_failed");
+  assert.equal((result as { code: string }).code, "ESBLU_NOT_ACTIVE_OWNER");
+  assert.ok(!calls.some((c) => c.startsWith("storage") || c === "auth"));
+  assert.equal(await companyExists(co), true);
+});
+
+await check("account-deletion: DB commit OK → job s cieľmi z DB, Storage AŽ PO commite, potom auth; job done a cesty vymazané", async () => {
+  const co = await newCompany({ trialEnded: true });
+  await seedFiles(co);
+  const calls: Calls = [];
+  const result = await orchestrateAccountDeletion(pgliteDeletionDeps(calls), "owner", co.owner);
+  assert.equal(result.status, "deleted", JSON.stringify(result));
+  assert.deepEqual(calls, ["commit", "commit:ok", "storage:4", "auth", "job"]);
+  assert.equal(await companyExists(co), false);
+  const [job] = await jobsOf(co.owner);
+  assert.equal(job.kind, "owner");
+  assert.equal(job.storage_target_count, 4);
+  assert.equal(job.storage_status, "done");
+  assert.equal(job.auth_status, "done");
+  assert.deepEqual(job.storage_targets, [], "po vyčistení sa cesty nedržia");
+  assert.ok(job.completed_at);
+});
+
+await check("account-deletion: Storage cleanup zlyhá → účet zrušený, job pending (retryable), DB integrita; retry neskôr dočistí", async () => {
+  const co = await newCompany({ trialEnded: true });
+  await seedFiles(co);
+  let outage = true;
+  const calls: Calls = [];
+  const deps = pgliteDeletionDeps(calls, { failStorage: () => outage });
+  const result = await orchestrateAccountDeletion(deps, "owner", co.owner);
+  assert.equal(result.status, "deleted");
+  assert.equal((result as { cleanupPending: boolean }).cleanupPending, true);
+  assert.deepEqual(calls, ["commit", "commit:ok", "storage:4", "auth", "job"], "auth beží aj pri zlyhanom Storage");
+  assert.equal(await companyExists(co), false, "DB commit je finálny");
+  let [job] = await jobsOf(co.owner);
+  assert.equal(job.storage_status, "pending");
+  assert.equal(job.auth_status, "done");
+  assert.equal(job.attempts, 1);
+  assert.match(String(job.last_error_code), /^ESBLU_STORAGE_REMOVE_FAILED/);
+  assert.equal(parseStorageTargets(job.storage_targets).length, 4, "ciele ostali pre retry");
+  assert.ok(new Date(String(job.next_attempt_at)).getTime() > clock.getTime(), "backoff");
+  // retry (cron) — rovnaká funkcia, idempotentná
+  outage = false;
+  const out = await runCleanupJob(deps, { id: String(job.id), userId: co.owner, storageTargets: parseStorageTargets(job.storage_targets), storagePending: true, authPending: false, attempts: Number(job.attempts) });
+  assert.equal(out.storageDone && out.authDone, true);
+  [job] = await jobsOf(co.owner);
+  assert.equal(job.storage_status, "done");
+  assert.equal(job.last_error_code, null);
+  assert.deepEqual(job.storage_targets, []);
+  // opakovaný retry hotového jobu nič nevolá
+  const before = calls.length;
+  await runCleanupJob(deps, { id: String(job.id), userId: co.owner, storageTargets: [], storagePending: false, authPending: false, attempts: 2 });
+  assert.deepEqual(calls.slice(before), ["job"]);
+});
+
+await check("account-deletion: člen — DB najprv (iba jeho logo), firma ostáva, potom Storage", async () => {
+  const co = await newCompany({ trialEnded: true });
+  await su(`insert into public.settings (user_id, logo_path) values ('${co.emp}', 'members/${co.emp}.png')`);
+  const calls: Calls = [];
+  const result = await orchestrateAccountDeletion(pgliteDeletionDeps(calls), "member", co.emp);
+  assert.equal(result.status, "deleted");
+  assert.deepEqual(calls, ["commit", "commit:ok", "storage:1", "auth", "job"]);
+  assert.equal(await companyExists(co), true);
+  assert.equal((await jobsOf(co.emp))[0].kind, "member");
+});
+
+await check("account-deletion: cleanup job tabuľka a commit funkcia nie sú prístupné klientovi", async () => {
+  const co = await newCompany({ trialEnded: true });
+  await fails(() => as(co.owner, () => db.query(`select public.esblu_account_deletion_commit('owner', $1)`, [co.owner])), /permission denied/);
+  await fails(() => as(co.owner, () => db.query(`select * from public.account_deletion_cleanup_jobs`)), /permission denied/);
+  assert.equal(await companyExists(co), true);
+});
+
+// ----------------------------------------------------------------------------- account-deletion: restore nákupu (Google / Apple) bez checkoutu
+async function priceOf(provider: "google" | "apple") {
+  return String((await one<{ p: string }>(`select provider_price_id p from public.billing_provider_prices
+    where provider = '${provider}' and plan_code = 'test_pro' and billing_interval = 'month' and environment = 'test' and active limit 1`)).p);
+}
+await check("account-deletion: RESTORE Google (bez checkout záznamu) → firma blokovaná; člen-admin NEblokovaný (identita sa nevymýšľa), iba upozornenie", async () => {
+  const co = await newCompany({ trialEnded: true });
+  // account token je FIREMNÝ (nie osobný) — vydá ho ktorýkoľvek správca billingu
+  const token = String(await rpcAs(co.billingAdmin, "esblu_billing_issue_account_token", ["google"]));
+  const [productId, basePlanId] = (await priceOf("google")).split(":");
+  const purchase = fakeGooglePurchase(STORE_SECRET, { productId, basePlanId, obfuscatedAccountId: token, now: clock }).purchaseToken;
+  const v = await verifyGoogleClientPurchase(googleApi, purchase, { environment: "test" });
+  assert.equal(v.state.checkout_ref ?? null, null, "restore = bez checkoutu");
+  const r = await applyVerifiedStorePurchase(serviceDb, storeProv("google"), v.eventId, v.state, v.payloadSha256);
+  assert.equal(r.outcome, "applied", JSON.stringify(r));
+  assert.equal(Number((await one<{ n: number }>(`select count(*)::int n from public.billing_checkout_sessions where company_id = '${co.id}'`)).n), 0);
+  const owner = await guardOf(co);
+  assert.equal(owner.can_delete, false);
+  assert.equal(owner.blocking_reason, "ACTIVE_SUBSCRIPTION_RENEWING");
+  assert.equal(owner.managed_via, "google_play");
+  const admin = await guardOf(co, "member", true);
+  assert.equal(admin.can_delete, true, "neoverený platiteľ sa neblokuje");
+  assert.equal(admin.blocking_reason, null);
+  assert.equal(admin.store_subscription_notice, true);
+  assert.equal((await guardOf(co, "member", false)).store_subscription_notice, false, "employee bez upozornenia");
+  // DB poistka: zrušenie firmy aj tak neprejde
+  const calls: Calls = [];
+  assert.equal((await orchestrateAccountDeletion(pgliteDeletionDeps(calls), "owner", co.owner)).status, "blocked_subscription");
+  assert.ok(!calls.some((c) => c.startsWith("storage")));
+  assert.equal(Number((await one<{ n: number }>(`select count(*)::int n from public.billing_provider_links where company_id = '${co.id}' and link_kind = 'account_token'`)).n), 1, "väzba na firmu ostala");
+});
+
+await check("account-deletion: RESTORE Apple (appAccountToken firmy, bez checkoutu) → firma blokovaná; člen-admin iba upozornenie", async () => {
+  const co = await newCompany({ trialEnded: true });
+  const appleVerifier = new FakeAppleVerifier(STORE_SECRET);
+  const token = String(await rpcAs(co.billingAdmin, "esblu_billing_issue_account_token", ["apple"]));
+  const device = fakeApplePurchase(STORE_SECRET, { productId: await priceOf("apple"), appAccountToken: token, interval: "month", now: clock });
+  const v = await verifyAppleClientPurchase(appleVerifier, device.signedTransaction, { bundleId: "com.esblu.app", environment: "test" });
+  const r = await applyVerifiedStorePurchase(serviceDb, storeProv("apple"), v.eventId, v.state, v.payloadSha256);
+  assert.equal(r.outcome, "applied", JSON.stringify(r));
+  assert.equal((await accountOf(co)).billing_provider, "apple");
+  assert.equal(Number((await one<{ n: number }>(`select count(*)::int n from public.billing_checkout_sessions where company_id = '${co.id}'`)).n), 0);
+  const owner = await guardOf(co);
+  assert.equal(owner.blocking_reason, "ACTIVE_SUBSCRIPTION_RENEWING");
+  assert.equal(owner.managed_via, "app_store");
+  const admin = await guardOf(co, "member", true);
+  assert.equal(admin.can_delete, true);
+  assert.equal(admin.store_subscription_notice, true);
+  assert.match((await deleteCompanyTx(co)) ?? "", /ESBLU_ACTIVE_SUBSCRIPTION_BLOCKS_DELETION/);
+});
+
+await check("account-deletion: post-commit migrácia idempotentná, rollback čistý, re-apply OK", async () => {
+  await serialized(() => db.exec(read(POST_COMMIT)));
+  await serialized(() => db.exec(read(POST_COMMIT_ROLLBACK)));
+  await fails(() => su(`select public.esblu_account_deletion_commit('owner', gen_random_uuid())`), /does not exist/);
+  await serialized(() => db.exec(read(POST_COMMIT)));
+  await fails(() => su(`select public.esblu_account_deletion_commit('owner', gen_random_uuid())`), /ESBLU_NOT_ACTIVE_OWNER/);
 });
 
 // ============================================================================= subscription-migrations (rollback — posledné)

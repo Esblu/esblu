@@ -216,7 +216,8 @@ await check("zrušenie firmy s finalizovanými dokladmi: blokované PRED akýmko
   await assert.rejects(() => retention.findOwnerDeletionBlocker(fakeAdmin(null, { code: "x" }), "c"));
   const route = read("app/api/account/delete/route.ts");
   const blockAt = route.indexOf("findOwnerDeletionBlocker(admin, membership.company_id)");
-  const storageAt = route.indexOf("await collectOwnerStorageTargets(");
+  // 2026-10-12: Storage maže až orchestrácia PO DB commite — kontroly musia byť pred ňou.
+  const storageAt = route.indexOf("await orchestrateAccountDeletion(");
   assert.ok(blockAt > 0 && storageAt > blockAt, "kontrola musí byť pred mazaním Storage");
   // RC 2026-10-12: owner_id (ESBLU_OWNER_MISMATCH) overený pred mazaním Storage.
   const ownerCheckAt = route.indexOf('ownedCompany.owner_id !== user.id');
