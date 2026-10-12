@@ -56,6 +56,19 @@ try {
     New-FakeJdk (Join-Path $pf3 "Android\Android Studio\jbr") "25.0.1" | Out-Null
     $null -eq (Select-Jdk21 -CurrentJavaHome $jdk17 -Candidates (Get-Jdk21Candidates -ProgramFilesRoots @($pf3)))
   }
+  Check "java -version on STDERR under ErrorActionPreference=Stop -> no NativeCommandError, exit 0, major 21" {
+    $fake = Join-Path $tmp "fakejava-ok.cmd"
+    Set-Content -LiteralPath $fake -Encoding ASCII -Value @('@echo off', 'echo openjdk version "21.0.12.1" 2026-08-18 LTS 1>&2', 'echo OpenJDK Runtime Environment 1>&2', 'exit /b 0')
+    $ErrorActionPreference = "Stop"
+    $r = Invoke-JavaVersion $fake
+    $r.ExitCode -eq 0 -and (Get-JavaVersionMajor $r.Text) -eq 21
+  }
+  Check "java -version non-zero exit code is reported (not treated as JDK 21); JDK 25 text -> major 25" {
+    $bad = Join-Path $tmp "fakejava-bad.cmd"
+    Set-Content -LiteralPath $bad -Encoding ASCII -Value @('@echo off', 'echo openjdk version "21.0.12.1" 1>&2', 'exit /b 3')
+    $r = Invoke-JavaVersion $bad
+    $r.ExitCode -eq 3 -and (Get-JavaVersionMajor 'openjdk version "25.0.1" 2025-10-21') -eq 25 -and (Get-JavaVersionMajor 'java version "1.8.0_402"') -eq 8 -and $null -eq (Invoke-JavaVersion (Join-Path $tmp "nope.exe"))
+  }
   Check "missing JAVA_HOME folder / no java.exe -> ignored" {
     (Get-JdkMajor (Join-Path $tmp "does-not-exist")) -eq $null
   }
