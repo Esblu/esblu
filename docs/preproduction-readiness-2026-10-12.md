@@ -187,17 +187,20 @@ Preview `dpl_65E69MVmnRpysbxEgwRR6LuPY15N` (`esblu-5xd2lfvqn-esblu.vercel.app`) 
 `docs/multi-company-architecture-2026-10-12.md`. Jeden login → N firiem s rôznymi rolami, explicitná a serverom
 validovaná aktívna firma (nikdy `LIMIT 1`), prepínač firmy, „Pridať vlastnú firmu", pozvánka pre existujúceho
 používateľa, presne 1 owner na firmu, billing authority = owner, odchod ≠ zrušenie firmy ≠ zrušenie loginu.
-Migrácie `20261012140000` + `20261012150000` pripravené, **neaplikované** (staging ani produkcia); PGlite
-`multi-company-db` 33/33, kontrakt 14/14, celý regres 74/74 suites.
+Migrácie `20261012140000` + `20261012150000` + `20261012160000` pripravené, **neaplikované** (staging ani
+produkcia); PGlite `multi-company-db` 39/39, `company-legal-identity` 7/7, kontrakt 16/16, celý regres 75/75 suites.
 
-**Hardening pred stagingom (20261012150000) — finálne:** billing = iba owner (admin/billing.manage, accountant,
-employee deny; prepnutie na inom zariadení nič neprenáša); trial = právny subjekt (krajina + IČO overené v RPO),
-trvalá história `trial_claims` bez FK na firmu, provizórny trial prvej firmy 1× na login, existujúce trialy bez
-zmeny; aktívna firma = per auth session (JWT `session_id`), zariadenie si pamätá iba návrh, server overuje členstvo.
-Otvorené: GDPR/CLIA retencia `trial_claims` a autor faktúr (CLIA REVIEW), povinné IČO pri onboardingu (biznis),
-overenie IČO existujúcej firmy v Nastaveniach (follow-up), push deep link z inej firmy, zoradenie eFaktúra migrácií.
+**Finálne (20261012150000 + 20261012160000):** billing = iba owner (admin/billing.manage, accountant, employee deny;
+prepnutie na inom zariadení nič neprenáša); **trial = iba overený právny subjekt** (krajina + normalizované IČO
+overené v RPO) — **provizórny trial „1× na login" ODSTRÁNENÝ**; firma bez IČO funguje bez trialu (stav „čaká na
+overenie"); IČO sa dá doplniť / overiť kedykoľvek v Nastaveniach → Identita firmy (iba owner; admin/účtovník čítajú);
+nedostupný register = opakovateľné, nikdy trial ani vymyslená identita; overené IČO zamknuté; trvalá história
+`trial_claims` (hash, bez FK na firmu); existujúce trialy bez zmeny; aktívna firma = per auth session.
+Otvorené: CLIA retencia hashovaných `trial_claims` (+ autor faktúr), beta prístup bez IČO = manuálny grant (operátor),
+zmena overeného IČO = samostatný postup cez podporu, overenie iba SK, push deep link z inej firmy, zoradenie eFaktúra
+migrácií. Poradie migrácií: `docs/multi-company-architecture-2026-10-12.md` sekcia Z.
 
-**Verdikt: READY FOR STAGING MIGRATION** (čaká iba na explicitný súhlas; nič nebolo aplikované).
+**Verdikt: READY FOR STAGING MIGRATION — YES** (čaká iba na explicitný súhlas; nič nebolo aplikované).
 
 ## Go / No-Go matrix
 
@@ -220,5 +223,5 @@ overenie IČO existujúcej firmy v Nastaveniach (follow-up), push deep link z in
 | privacy | BLOCKED LEGAL |
 | Data Safety | BLOCKED LEGAL |
 | reviewer access | BLOCKED EXTERNAL (vyžaduje súhlas na produkčný účet) |
-| multi-company | READY FOR STAGING MIGRATION (140000 + 150000 neaplikované; čaká na súhlas; staging QA; CLIA retencia trial histórie) |
+| multi-company | READY FOR STAGING MIGRATION (140000 + 150000 + 160000 neaplikované; čaká na súhlas; staging QA; CLIA retencia trial histórie) |
 | production rollout | BLOCKED LEGAL (CLIA) + čaká na explicitný súhlas |

@@ -20,7 +20,7 @@ npm ci
 ```powershell
 npx tsc --noEmit
 npm run lint          # baseline: 37 errors / 26 warnings, identical to 1fe2c17 (no new ones)
-# all suites (74):
+# all suites (75):
 Get-Content package.json | ConvertFrom-Json | % { $_.scripts.PSObject.Properties.Name } |
   ? { $_ -like 'test:*' } | % { npm run -s $_; if ($LASTEXITCODE) { throw "FAIL $_" } }
 ```
@@ -68,11 +68,13 @@ Texts for deleting before the end of a cancelled period: LEGAL/CLIA REVIEW REQUI
 
 ## 5c. Multi-company hardening (2026-10-12)
 
-`npm run test:multi-company` (14) and `npm run test:multi-company-db` (33, PGlite; included in step 2) cover
-owner-only billing, legal-entity trial (abuse + race) and per-device active company (cross-device isolation).
-Migrations `20261012140000` and `20261012150000` are NOT applied anywhere (status: READY FOR STAGING
-MIGRATION, waits for explicit approval). Real-device / Android smoke for multi-company: not run yet.
-Details: `docs/multi-company-architecture-2026-10-12.md` (sections R–W).
+`npm run test:multi-company` (16), `npm run test:multi-company-db` (39, PGlite) and
+`npm run test:company-legal-identity` (7) — all included in step 2 — cover owner-only billing, the final
+legal-entity trial rule (no per-login trial; trial only after a verified IČO; abuse, normalization, concurrency,
+register failure, legacy trials, entitlements), Settings → Company identity, and per-device active company.
+Migrations `20261012140000`, `20261012150000`, `20261012160000` are NOT applied anywhere (status: READY FOR
+STAGING MIGRATION, waits for explicit approval; order in `docs/multi-company-architecture-2026-10-12.md` §Z).
+Real-device / Android smoke for multi-company: not run.
 
 ## 6. Hard stops
 

@@ -1,8 +1,13 @@
 # Esblu multi-company / workspace model (2026-10-12)
 
-Branch `preprod-release-candidate`. Migrácie `20261012140000_multi_company_workspaces.sql` a
-`20261012150000_session_company_context_and_legal_entity_trial.sql` (+ rollbacky) sú **pripravené, nikde
-neaplikované** (produkcia, staging = bez zmeny). Overené iba v PGlite.
+Branch `preprod-release-candidate`. Migrácie `20261012140000_multi_company_workspaces.sql`,
+`20261012150000_session_company_context_and_legal_entity_trial.sql` a `20261012160000_legal_entity_trial_final.sql`
+(+ rollbacky) sú **pripravené, nikde neaplikované** (produkcia, staging = bez zmeny). Overené iba v PGlite.
+
+**Finálne trial pravidlo (20261012160000):** trial **nepatrí používateľovi ani workspace-u** — iba **overenému
+právnemu / podnikateľskému subjektu** (krajina + normalizované IČO). Provizórny trial „prvá firma po registrácii,
+1× na login" z 20261012150000 je **ODSTRÁNENÝ** (kód, claimy, testy, dokumentácia). Firma bez overeného IČO
+nemá trial ani trial nároky; IČO sa dá doplniť a overiť kedykoľvek v Nastaveniach (X).
 
 **Hardening pred stagingom (20261012150000) — finálne rozhodnutia:**
 1. billing = **iba owner** (R), 2. trial = **právny subjekt** (krajina + IČO), nie workspace (S–U),
@@ -90,7 +95,8 @@ názov firmy + rola, zoznam firiem, „+ Pridať vlastnú firmu". Štart: 0 firi
 členstvo, `company_billing_profile`, nová firma aktívna. Ochrany: názov 2–200 znakov, duplicitný názov u toho istého
 ownera, max 10 vlastných firiem (ochrana proti zneužitiu, **nie** pricing), advisory lock. Prvá firma ide naďalej
 cez onboarding (`esblu_ensure_my_owner_company`: beta allowlist, čakajúce pozvánky).
-**Trial:** od 20261012150000 nová firma trial **automaticky nedostane** — trial patrí právnemu subjektu (S–U).
+**Trial:** nová firma (aj prvá po registrácii) trial **automaticky nedostane** — trial patrí overenému právnemu
+subjektu (S–U, X). Text: „Firmu môžete vytvoriť aj teraz. Skúšobné obdobie sa aktivuje až po overení IČO."
 Formulár má voliteľné IČO a text „Trial aktivujeme po overení firemných údajov."
 
 ## H. Pozvánky
@@ -166,13 +172,19 @@ dokumenty / súbory (`esblu_can_read_document`), AI kvóta, nároky, billing.
   existujúce firmy `trial_policy = 'legacy'` (trial bez zmeny), backfill `trial_claims`.
 - Rollback `20261012150000_…_rollback.sql` — vráti 140000 definície (globálna voľba) a pôvodný trial guard; poslednú
   voľbu každého používateľa prenesie do `user_active_company`; `trial_claims` / `company_legal_identities` **ponechá**
-  (zmazanie histórie by umožnilo opakovaný trial). Poradie rollbacku: 150000 → 140000 → 130000 → 120000.
+  (zmazanie histórie by umožnilo opakovaný trial).
+- `20261012160000_legal_entity_trial_final.sql` — forward-only, idempotentná: ruší provizórne claimy per login
+  (`user:` kľúče — nič ich nečíta; trial firmy, ktorá ho dostala, ostáva v `companies.trial_*` + audit
+  `legacy_workspace`), `esblu_ensure_my_owner_company` bez trialu, stav `failed` + evidencia pokusov,
+  `esblu_record_company_legal_identity_attempt`, `esblu_my_company_legal_identity`, robustnejšia normalizácia.
+- Rollback `20261012160000_…_rollback.sql` — vráti 150000 definície; zmazané `user:` claimy **nerekonštruuje**,
+  `failed` → `unverified`, constrainty = zjednotenie oboch modelov. Poradie rollbacku: 160000 → 150000 → 140000 → 130000 → 120000.
 - Test-only: `scripts/sql/multi-company-local-stubs.sql` (ON DELETE zrkadlí produkciu; `auth.sessions`, `ico`, `country_code`).
 
 ## P. Rollout (nič nevykonané)
 
 1. local / PGlite PASS ✅
-2. staging migrácia (billing + `20261012120000` + `20261012130000` + `20261012140000` + `20261012150000`)
+2. staging migrácia (billing + `20261012120000` + `20261012130000` + `20261012140000` + `20261012150000` + `20261012160000`)
 3. staging multi-company QA (QA firmy s jasným prefixom, cleanup; existujúce staging dáta nemazať)
 4. eFaktúra integrácia (zoradenie migrácií, M)
 5. finálny RC
@@ -190,13 +202,17 @@ dokumenty / súbory (`esblu_can_read_document`), AI kvóta, nároky, billing.
 3. **GDPR/CLIA:** zrušenie loginu autora faktúr / DPA (K); zobrazovanie mena bývalého člena v histórii (dnes `SET NULL` → „neznámy autor").
 4. **Push deep link z inej firmy:** payload nesie iba obrazovku + ID (bez firmy) → klik na notifikáciu firmy A v kontexte B otvorí cieľ, ktorý RLS nevráti (bezpečné, „nenájdené"). Automatické prepnutie do A po overení členstva = follow-up (payload + `public/sw.js`).
 5. ~~Viac zariadení~~ — **vyriešené** (20261012150000): kontext per auth session (V–W).
-8. **Trial história (GDPR/CLIA REVIEW REQUIRED):** `trial_claims` uchováva `sha256(krajina:IČO)` / `sha256(user_id)`
-   aj po zrušení firmy / loginu (ochrana proti opakovanému trialu). Retencia a právny základ (oprávnený záujem) — CLIA.
-   `company_legal_identities` (IČO v čitateľnej podobe) sa maže so zrušením firmy (FK cascade).
-9. **Registrácia nového loginu = nový provizórny trial** (1× na login): proti zneužitiu cez nové e-maily chráni beta
-   allowlist; pred verejným spustením zvážiť povinné IČO pri onboardingu (biznis rozhodnutie).
-10. **Nová firma bez IČO nemá trial ani nároky** (iba manuálne granty / predplatné) — UX: „Trial aktivujeme po overení
-   firemných údajov"; overenie IČO je aj v `/firmy/nova`. Overenie IČO pre existujúcu firmu v Nastaveniach = follow-up.
+8. **Trial história (GDPR/CLIA REVIEW REQUIRED):** `trial_claims` uchováva `sha256(krajina:IČO)` (a audit
+   `sha256(company_id)` pre legacy trialy) aj po zrušení firmy (ochrana proti opakovanému trialu); IČO SZČO môže byť
+   osobný údaj. Retencia a právny základ (oprávnený záujem) — CLIA. `company_legal_identities` (IČO v čitateľnej
+   podobe) sa maže so zrušením firmy (FK cascade). Žiadne kľúče podľa používateľa.
+9. ~~Registrácia nového loginu = nový provizórny trial~~ — **odstránené** (20261012160000).
+10. **Nová firma bez IČO nemá trial ani trial nároky** (iba manuálne granty / predplatné). **Beta:** allowlist je iba
+   brána registrácie; beta prístup bez IČO = explicitný manuálny grant v `company_entitlements` (operátor), nie trial.
+   Overenie IČO: `/firmy/nova` aj Nastavenia → Identita firmy (X).
+11. **Zmena overeného IČO** (reálna zmena právneho subjektu) = samostatný biznis / právny postup cez podporu;
+   automatický reset trialu neexistuje.
+12. **Overenie iba SK (RPO)**; CZ/ostatné krajiny → `ESBLU_COUNTRY_NOT_SUPPORTED` (DB normalizácia ich už pozná).
 6. Ostatné PGlite sady (`m1-authz`, `push`, `storage-media`, `google-oauth`, …) bežia bez multi-company migrácie; multi-company izoláciu pokrýva `multi-company-pglite` + billing regres.
 7. Texty zrušenia / odchodu (SK/EN/DE) — **LEGAL/CLIA REVIEW REQUIRED**.
 
@@ -212,7 +228,9 @@ posielajú `memberCanManageBilling: false`. Prepnutie firmy na inom zariadení *
 
 ## S. Trial — právny subjekt
 
-- Subjekt = `krajina + normalizované registračné číslo` (SK/CZ IČO → 8 číslic, medzery preč, doplnené nulami).
+- Subjekt = `krajina + normalizované registračné číslo` (SK/CZ IČO → 8 číslic; medzery vrátane NBSP, oddeľovače
+  `-./` a úvodné „IČO:/ICO/IČ:" preč; doplnené nulami). `SK 12345678` = `SK "12 345 678"` = `SK "IČO: 12 345 678"`.
+  TS (`lib/company-legal-identity/normalize.ts`) a DB (`esblu_normalize_registration_id`) sú zhodné (PGlite test).
   **Nie** názov, owner ani počet workspace-ov. Rovnaké číslo v inej krajine = iný subjekt.
 - Identita sa **nevymýšľa**: `POST /api/company/legal-identity { ico }` — owner aktívnej firmy, server overí IČO v RPO
   (zdroj `rpo` VERIFIED, stav `active`), až potom service role zapíše `verification_status = 'verified'`.
@@ -224,15 +242,20 @@ posielajú `memberCanManageBilling: false`. Prepnutie firmy na inom zariadení *
 ## T. Trial claim — perzistencia
 
 `trial_claims (claim_key PK, claim_kind, country_code, first_company_id, source, trial_*)`:
-- `entity:sha256(SK:12345678)` — subjekt; `user:sha256(user_id)` — provizórny trial prvej firmy; `override:…` — operátor.
+- `entity:sha256(SK:12345678)` — subjekt (jediný kľúč, ktorý rozhoduje o nároku); `workspace:sha256(company_id)` —
+  audit trialu existujúcej (legacy) firmy; `override:…` — operátor. **Žiadne kľúče podľa používateľa / loginu.**
 - **Bez FK na `companies`** → zrušenie / znovuvytvorenie workspace-u históriu nemaže. IČO sa v claime neukladá čitateľne.
 - Súbeh: advisory lock na kľúč + PK → max 1 claim na subjekt (PGlite test serializuje volania; v Postgrese lock).
 - Trigger `esblu_companies_trial_guard`: INSERT trial **nikdy** nenastaví; trial udelí iba serverová funkcia (GUC
   `esblu.trial_grant` v tej istej transakcii, NULL → `now()` / `+14 dní`, raz); reset / posun / zmena `trial_policy` = chyba.
-- Provizórny model: prvá firma po registrácii (`esblu_ensure_my_owner_company`) dostane trial, ak login ešte žiadny
-  nemal; neskôr overené IČO ho priradí subjektu (`provisional_upgrade`) → iný workspace toho subjektu trial nedostane.
-- Backfill: firmy s trialom → claim subjektu (IČO v billing profile) alebo provizórny claim ownera; firmy bez trialu
-  s IČO → `legacy` claim. **Žiadny reset ani predĺženie**; produkcia (read-only audit): 4 firmy, 1 s trialom, 0 s IČO.
+- ~~Provizórny model (trial prvej firmy 1× na login)~~ — **odstránený** v 20261012160000.
+- Legacy: existujúce trialy (aktívne aj skončené) **bez zmeny** — žiadny reset, predĺženie ani skrátenie; legacy firma
+  bez IČO **nie je** spätne zablokovaná (jej stav = `trial_active` / `trial_used`, nie pending). Keď legacy firma neskôr
+  overí IČO, subjekt sa zaznamená (`legacy` / `existing_trial`) → iný workspace toho subjektu trial nedostane.
+  Backfill: firmy s IČO v billing profile → claim subjektu; každá firma s trialom → audit `legacy_workspace`.
+  Produkcia (read-only audit): 4 firmy, 1 s trialom, 0 s IČO.
+- Začiatok trialu = serverový `now()` v transakcii **úspešného overenia** (nie registrácia, vytvorenie firmy, login
+  ani otvorenie Nastavení).
 - Manuálne granty (`company_entitlements`) a operátorská výnimka (`esblu_operator_override_company_trial`) fungujú
   nezávisle od histórie subjektu.
 
@@ -249,7 +272,11 @@ posielajú `memberCanManageBilling: false`. Prepnutie firmy na inom zariadení *
 | manuálny grant / override | funguje, nemení históriu |
 | aktívny trial | opakovaný claim / override = `already_has_trial`; priamy UPDATE = `ESBLU_TRIAL_IMMUTABLE` |
 | klient volá claim / record / override / číta `trial_claims` | `permission denied` |
-| dva workspace-y, rovnaký nový subjekt naraz | práve 1 `granted` |
+| dva workspace-y, rovnaký nový subjekt naraz | práve 1 `granted` (advisory lock + PK; PGlite = 1 spojenie, súbeh serializovaný) |
+| nový login (iný e-mail), tá istá reálna firma | `not_eligible_previous_trial` |
+| prvá firma po registrácii bez IČO | žiadny trial, žiadny trial nárok |
+| register nedostupný / subjekt neexistuje / zaniknutý | `unverified` / `failed`, žiadny trial, subjekt sa nezaberie |
+| overenie firmy na zariadení A | trial iba firmy A; zariadenie B v inej firme ostáva `pending` |
 
 ## V. Aktívna firma per zariadenie — model
 
@@ -266,3 +293,39 @@ jednej session nemení inú: PGlite `cross-device-isolation` (súbežné prepín
 `cross-device-owner-billing`, `cross-device-voice-chat-files-einvoice` (nároky, AI kvóta, hlasový záznam, chat,
 dokumenty, eFaktúra), `session-stale-revoked-logout-deleted` (revoke, obnovenie, odhlásenie, nové prihlásenie,
 starý token bez `session_id`, podvrhnutá session, zrušená firma, 0 firiem).
+
+## X. Nastavenia → Identita firmy (overenie aj neskôr)
+
+`app/components/workspaces/CompanyLegalIdentityCard.tsx` (Nastavenia, pre owner / admin / accountant; employee
+sekciu nevidí a DB ho odmietne `ESBLU_FORBIDDEN`). Dáta: `esblu_my_company_legal_identity()` (aktívna firma TEJTO
+session): krajina, IČO, názov firmy, stav overenia, stav trialu, `can_edit` (iba owner).
+
+| Stav | Zobrazenie | CTA (iba owner) |
+|---|---|---|
+| `missing` | Nevyplnené | „Doplniť IČO" |
+| `unverified` (register nedostupný) | Čaká na overenie | „Skúsiť overenie znova" |
+| `failed` (neexistuje / zaniknutý) | Overenie zlyhalo + dôvod | „Skúsiť overenie znova" (IČO sa dá opraviť) |
+| `verified` + trial | Overené, „Aktívne do …" | — (IČO zamknuté) |
+| `verified` + `not_eligible_previous_trial` | Overené — skúšobné obdobie už bolo využité | — |
+
+Formulár → `POST /api/company/legal-identity` → po výsledku reset klientskych cache nárokov (trial sa prejaví hneď).
+Admin / accountant: iba čítanie (RLS tabuľky = iba owner; zápis iba service role).
+
+## Y. Zlyhanie registra (RPO)
+
+Logika: `lib/company-legal-identity/handler.ts` (unit testy `npm run test:company-legal-identity`).
+- nedostupný / timeout / rate limit / neúplné overenie (`rpo` ≠ VERIFIED) / register vrátil iný subjekt → 503,
+  `retryable`, `esblu_record_company_legal_identity_attempt('unavailable')` → `unverified`;
+- neexistuje → 404, `failed`; zaniknutý → 409, `failed`;
+- **nikdy** trial, **nikdy** overená identita, subjekt sa nezaberie; overenú identitu neúspešný pokus nezmení;
+- workspace funguje ďalej v existujúcom modeli bez trialu (manuálne granty / predplatné), nič nepadá.
+
+## Z. Poradie migrácií (staging, iba po explicitnom súhlase)
+
+Produkcia (read-only `list_migrations`, 2026-10-12) končí na `20261005091000`. Na DB s rovnakým stavom v tomto poradí:
+`20261008120000_subscriptions_platform` → `20261008130000_client_mutation_idempotency` →
+`20261011120000_subscriptions_lifecycle_hardening` → `20261012090000_subscriptions_event_token_redaction` →
+`20261012091000_subscriptions_purchase_options_owned_methods` → `20261012120000_account_deletion_subscription_guard` →
+`20261012130000_account_deletion_post_commit_cleanup` → `20261012140000_multi_company_workspaces` →
+`20261012150000_session_company_context_and_legal_entity_trial` → `20261012160000_legal_entity_trial_final`.
+Pred aplikovaním overiť skutočný stav staging DB (`list_migrations`) a vynechať už aplikované.
