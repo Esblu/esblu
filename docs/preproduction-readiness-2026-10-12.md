@@ -182,6 +182,15 @@ Preview `dpl_65E69MVmnRpysbxEgwRR6LuPY15N` (`esblu-5xd2lfvqn-esblu.vercel.app`) 
 6. Data Safety + IARC + store listing (podľa CLIA).
 7. Billing (samostatne, neskôr): produkčné DB migrácie → Play produkty + SA + RTDN + license testers → `ESBLU_BILLING_STORE_MODE=sandbox` iba na Preview → billing ON AAB do Internal testing → test nákupov → až potom live rozhodnutie (nový kód/migrácia pre `live`).
 
+## Multi-company / workspace model (2026-10-12)
+
+`docs/multi-company-architecture-2026-10-12.md`. Jeden login → N firiem s rôznymi rolami, explicitná a serverom
+validovaná aktívna firma (nikdy `LIMIT 1`), prepínač firmy, „Pridať vlastnú firmu", pozvánka pre existujúceho
+používateľa, presne 1 owner na firmu, billing authority = owner, odchod ≠ zrušenie firmy ≠ zrušenie loginu.
+Migrácia `20261012140000` pripravená, **neaplikovaná**; PGlite 20/20 + billing regres 60/60 nad ňou.
+Otvorené: trial na každú novú firmu, admin+billing.manage (zmenené na owner-only), GDPR/CLIA autor faktúr,
+push deep link z inej firmy, zoradenie eFaktúra migrácií pri integrácii.
+
 ## Go / No-Go matrix
 
 | Oblasť | Stav |
@@ -203,4 +212,5 @@ Preview `dpl_65E69MVmnRpysbxEgwRR6LuPY15N` (`esblu-5xd2lfvqn-esblu.vercel.app`) 
 | privacy | BLOCKED LEGAL |
 | Data Safety | BLOCKED LEGAL |
 | reviewer access | BLOCKED EXTERNAL (vyžaduje súhlas na produkčný účet) |
+| multi-company | PASS WITH EXTERNAL BLOCKER (migrácia neaplikovaná; staging QA; biznis rozhodnutia v Q) |
 | production rollout | BLOCKED LEGAL (CLIA) + čaká na explicitný súhlas |
