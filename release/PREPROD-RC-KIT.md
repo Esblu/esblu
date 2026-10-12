@@ -58,6 +58,14 @@ Login (email + Google), session restore after force-stop, offline cold start (ai
 deny/allow), push register/unregister on logout, Predplatné shows "disabled" unless staging
 billing env is set, Settings → Zrušiť účet preflight.
 
+## 5b. Account deletion × subscription (2026-10-12)
+
+`npm run test:account-deletion-subscription` and `npm run test:account-deletion-orchestration`
+(both included in step 2). Migrations `20261012120000` and `20261012130000` are NOT applied
+anywhere; without them the code falls back to "DB first, Storage after" without a retry job.
+Texts for deleting before the end of a cancelled period: LEGAL/CLIA REVIEW REQUIRED
+(`docs/account-deletion-subscription-policy-2026-10-12.md`, section 5d).
+
 ## 6. Hard stops
 
 No `main` merge, no production deploy/migration/secrets, no Play upload, no Stripe/Apple/Play live,

@@ -129,7 +129,7 @@ Data Safety formulár sa **nevypĺňa** — toto je iba faktický podklad.
 ## Account deletion readiness
 
 - In-app: Nastavenia → Zrušiť účet → `/api/account/preflight` → `/api/account/delete`. Owner: fráza, retention blocker (finalizované doklady → 409), **owner_id precheck (RC)**, zber Storage → mazanie Storage → `esblu_owner_delete_company` (transakcia) → `auth.admin.deleteUser` posledné. Člen: iba identita + vlastné nastavenia. Orphan: owner_id check → deleteUser.
-- Zostávajúce riziko: medzi zmazaním súborov a DB transakciou môže DB zlyhať z iného dôvodu (FK/trigger) → osirelé DB riadky bez súborov. Odporúčanie (neimplementované): DB najprv (vráti cesty) → potom best-effort Storage + orphan sweep.
+- ~~Riziko: súbory zmazané pred DB transakciou~~ → **vyriešené na branchi**: DB najprv (`esblu_account_deletion_commit` + cleanup job), Storage a auth až po commite, retry cron (`docs/account-deletion-subscription-policy-2026-10-12.md` časť 5b). Migrácia `20261012130000` neaplikovaná.
 - Verejná `/zrusenie-uctu`: `https://www.esblu.com/zrusenie-uctu` = **404** (commit `4caca14` nie je v `main`).
 - Production delta checklist: (1) schváliť merge RC/route do `main`, (2) deploy, (3) overiť 200 SK/EN/DE bez prihlásenia, (4) URL do Play Console „Delete account URL", (5) pred billingom: blocker pre aktívne predplatné.
 
@@ -154,7 +154,7 @@ Data Safety formulár sa **nevypĺňa** — toto je iba faktický podklad.
 2. Produkčné DB migrácie subscriptions (4 migrácie + rollback skripty) — iba po schválení. Kód je bez nich bezpečný: pri billing OFF `authorizeBillingCaller` vráti `404 ESBLU_BILLING_DISABLED` ešte pred DB, Predplatné ukáže „disabled", v `vercel.json` nie je žiadny nový cron. Migrácie sú potrebné až pre zapnutie billingu.
 3. `/zrusenie-uctu` na produkcii.
 4. Android build matrix + Turbopack mobile build + device smoke na Windows kite.
-5. Migrácia `20261012120000_account_deletion_subscription_guard` (DB poistka zrušenia účtu pri predplatnom) — aplikovať spolu s billing migráciami.
+5. Migrácie `20261012120000_account_deletion_subscription_guard` + `20261012130000_account_deletion_post_commit_cleanup` — aplikovať spolu s billing migráciami; texty zrušenia pri predplatnom = LEGAL/CLIA REVIEW REQUIRED.
 
 ## K. External provider blockers
 
