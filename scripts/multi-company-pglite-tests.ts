@@ -3,6 +3,8 @@
 //   20261012140000_multi_company_workspaces.sql
 //   20261012150000_session_company_context_and_legal_entity_trial.sql
 //     (aktívna firma per session/zariadenie, trial per právny subjekt)
+//   20261012160000_legal_entity_trial_final.sql
+//     (bez provizórneho trialu per login; overenie IČO aj neskôr v Nastaveniach)
 // nad prod-vernou entitlement / RLS vrstvou + billing + zrušenie účtu.
 // Nikdy Supabase / staging / produkcia.
 //   npm run test:multi-company-db            (SUITE=cross-company-rls … pre jednu suite)
@@ -11,6 +13,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { legalEntityKey, normalizeRegistrationId } from "@/lib/company-legal-identity/normalize";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (p: string) => readFileSync(path.join(ROOT, p), "utf8");
@@ -18,6 +21,8 @@ const MULTI = "supabase/migrations/20261012140000_multi_company_workspaces.sql";
 const MULTI_ROLLBACK = "supabase/rollback/20261012140000_multi_company_workspaces_rollback.sql";
 const SESSION = "supabase/migrations/20261012150000_session_company_context_and_legal_entity_trial.sql";
 const SESSION_ROLLBACK = "supabase/rollback/20261012150000_session_company_context_and_legal_entity_trial_rollback.sql";
+const TRIAL_FINAL = "supabase/migrations/20261012160000_legal_entity_trial_final.sql";
+const TRIAL_FINAL_ROLLBACK = "supabase/rollback/20261012160000_legal_entity_trial_final_rollback.sql";
 const SUITE = (process.argv[2] ?? process.env.SUITE ?? "").replace(/^--suite=/, "").trim() || null;
 
 type Row = Record<string, unknown>;
@@ -237,6 +242,24 @@ await check("session-migration-backfill: existujúce firmy = legacy, trial nezme
   await serialized(() => db.exec(read(SESSION)));
   assert.equal(Number((await one<{ n: number }>(`select count(*)::int n from public.trial_claims`)).n), 2);
   assert.equal(await activeOf(U.y), C.a);
+});
+
+// ----------------------------------------------------------------------------- 20261012160000 (finálny trial model)
+await db.exec(read(TRIAL_FINAL));
+
+await check("trial-existing-legacy: provizórne claimy per login zrušené; legacy trialy bez zmeny (aj bez IČO), audit legacy_workspace", async () => {
+  const after = (await su<Row>(`select id, trial_started_at, trial_ends_at from public.companies order by id`)).rows;
+  assert.deepEqual(after.map((r) => [r.id, r.trial_started_at, r.trial_ends_at]), trialBefore.map((r) => [r.id, r.trial_started_at, r.trial_ends_at]), "žiadny reset / predĺženie / skrátenie");
+  assert.equal(Number((await one<{ n: number }>(`select count(*)::int n from public.trial_claims where claim_kind = 'provisional_user' or claim_key like 'user:%'`)).n), 0);
+  const audit = (await su<Row>(`select first_company_id, claim_kind, source from public.trial_claims where claim_kind = 'legacy_workspace' order by first_company_id`)).rows;
+  assert.deepEqual(audit.map((r) => [r.first_company_id, r.source]), [[C.a, "backfill"], [C.c, "backfill"]]);
+  assert.equal(Number((await one<{ n: number }>(`select count(*)::int n from public.trial_claims where claim_key = public.esblu_claim_key('entity', 'SK:87654321')`)).n), 1, "subjekt s IČO ostáva blokovaný");
+  // legacy firma bez IČO nie je spätne zablokovaná: trial (aj skončený) = jej stav, nie pending
+  assert.equal((await rpc<Row>(U.x, "esblu_my_company_trial_eligibility")).status, "trial_used");
+  assert.equal((await rpc<Row>(U.z, "esblu_my_company_trial_eligibility")).status, "trial_active");
+  // idempotentná
+  await serialized(() => db.exec(read(TRIAL_FINAL)));
+  assert.equal(Number((await one<{ n: number }>(`select count(*)::int n from public.trial_claims`)).n), 3);
 });
 
 // ----------------------------------------------------------------------------- SZČO scenár: Y si založí vlastnú firmu
@@ -672,6 +695,7 @@ await check("session-stale-revoked-logout-deleted: revoke / odhlásenie / zruše
 // ============================================================================= 20261012150000 — trial per právny subjekt
 const O1 = "a0000000-0000-4000-8000-000000000041";
 const O2 = "a0000000-0000-4000-8000-000000000042";
+const O3 = "a0000000-0000-4000-8000-000000000043"; // nový login, tá istá reálna firma
 const companyTrial = async (id: string) => one<{ trial_started_at: string | null; trial_ends_at: string | null }>(`select trial_started_at, trial_ends_at from public.companies where id = $1`, [id]);
 const recordIdentity = (companyId: string, reg: string, verified = true, country = "SK") =>
   svc(async () => (await db.query<{ r: Row }>(`select public.esblu_record_company_legal_identity($1, $2, $3, $4, 'registry:rpo') r`, [companyId, country, reg, verified])).rows[0].r);
@@ -684,24 +708,41 @@ let O1first = "";
 let O1two = "";
 let O2two = "";
 
-await check("trial-provisional-first-company: prvá firma po registrácii má trial (1× na používateľa); overené IČO ju priradí subjektu", async () => {
-  await su(`insert into auth.users (id, email) values ($1, 'o1@example.invalid'), ($2, 'o2@example.invalid')`, [O1, O2]);
-  await su(`insert into public.beta_allowlist (email) values ('o1@example.invalid'), ('o2@example.invalid')`);
+await check("trial-no-provisional-login + trial-verified-legal-entity: prvá firma po registrácii NEMÁ trial; trial až po overenom IČO (server čas)", async () => {
+  await su(`insert into auth.users (id, email) values ($1, 'o1@example.invalid'), ($2, 'o2@example.invalid'), ($3, 'o3@example.invalid')`, [O1, O2, O3]);
+  await su(`insert into public.beta_allowlist (email) values ('o1@example.invalid'), ('o2@example.invalid'), ('o3@example.invalid')`);
   const [first] = await rows<{ company_id: string; created: boolean }>(O1, "esblu_ensure_my_owner_company");
   O1first = first.company_id;
   assert.equal(first.created, true);
-  const t = await companyTrial(O1first);
-  assert.ok(t.trial_ends_at);
-  assert.equal(new Date(t.trial_ends_at!).getTime() - new Date(t.trial_started_at!).getTime(), 14 * 864e5);
+  assert.deepEqual(await companyTrial(O1first), { trial_started_at: null, trial_ends_at: null }, "žiadny trial pri registrácii / vytvorení");
   assert.equal(await activeOf(O1), O1first);
-  assert.equal(await trialStatus(O1, O1first), "trial_active");
+  assert.equal(await trialStatus(O1, O1first), "pending_legal_identity");
+  type Ent = { key: string; active: boolean };
+  assert.equal((await rpc<{ entitlements: Ent[] }>(O1, "esblu_get_my_company_entitlements")).entitlements.find((e) => e.key === "invoicing")!.active, false, "žiadny trial nárok");
+  assert.equal(Number((await one<{ n: number }>(`select count(*)::int n from public.trial_claims where first_company_id = $1`, [O1first])).n), 0);
+  // otvorenie Nastavení (čítanie) trial nespustí
+  await rpc(O1, "esblu_my_company_legal_identity");
+  assert.equal((await companyTrial(O1first)).trial_started_at, null);
+  const before = Date.now();
   const r = await recordIdentity(O1first, " 111 111 11");
-  assert.deepEqual([r.verification_status, r.trial], ["verified", "already_has_trial"]);
-  assert.deepEqual(await companyTrial(O1first), t, "trial sa nemení");
-  const claim = await one<Row>(`select claim_kind, source from public.trial_claims where claim_key = public.esblu_claim_key('entity', 'SK:11111111')`);
-  assert.deepEqual([claim.claim_kind, claim.source], ["legal_entity", "provisional_upgrade"]);
+  assert.deepEqual([r.verification_status, r.trial], ["verified", "granted"]);
+  const t = await companyTrial(O1first);
+  assert.ok(new Date(t.trial_started_at!).getTime() >= before - 5000, "začiatok = serverový čas overenia");
+  assert.equal(new Date(t.trial_ends_at!).getTime() - new Date(t.trial_started_at!).getTime(), 14 * 864e5);
+  const claim = await one<Row>(`select claim_kind, source, first_company_id from public.trial_claims where claim_key = public.esblu_claim_key('entity', 'SK:11111111')`);
+  assert.deepEqual([claim.claim_kind, claim.source, claim.first_company_id], ["legal_entity", "trial", O1first]);
+  assert.equal(await trialStatus(O1, O1first), "trial_active");
   const [again] = await rows<{ created: boolean }>(O1, "esblu_ensure_my_owner_company");
   assert.equal(again.created, false);
+  // nový login (iný e-mail), tá istá reálna firma → žiadny druhý trial
+  const [o3] = await rows<{ company_id: string; created: boolean }>(O3, "esblu_ensure_my_owner_company");
+  assert.equal((await companyTrial(o3.company_id)).trial_started_at, null);
+  assert.equal((await recordIdentity(o3.company_id, "11111111")).trial, "not_eligible_previous_trial");
+  assert.equal(await trialStatus(O3, o3.company_id), "not_eligible_previous_trial");
+  // premenovanie + opätovné overenie toho istého IČO → bez nového trialu, trial nezmenený
+  await su(`update public.companies set name = 'O1 premenovaná' where id = $1`, [O1first]);
+  assert.equal((await recordIdentity(O1first, "11111111")).trial, "already_has_trial");
+  assert.deepEqual(await companyTrial(O1first), t);
 });
 
 await check("trial-same-owner-two-entities: ďalší workspace = pending, kým nie je overený subjekt; iný subjekt rovnakého ownera dostane vlastný trial", async () => {
@@ -731,7 +772,7 @@ await check("trial-same-entity-second-workspace + delete/recreate: rovnaké IČO
 });
 
 await check("trial-different-owner-same-entity / same-name-different-ico / renamed-same-ico / legacy backfill", async () => {
-  // O2 dostane prvú firmu (provizórny trial)
+  // O2 dostane prvú firmu (bez trialu)
   await rows(O2, "esblu_ensure_my_owner_company");
   const o2a = await createCompany(O2, "Iná firma");
   assert.equal((await recordIdentity(o2a, "22222222")).trial, "not_eligible_previous_trial", "iný owner, rovnaký subjekt");
@@ -800,14 +841,134 @@ await check("trial-race-and-normalization: dva workspace-y rovnakého nového su
   for (const bad of ["abc", "", "000000", "123", "123456789"]) await fails(() => recordIdentity(r1, bad), /ESBLU_INVALID_REGISTRATION_ID/);
   const norm = await one<{ a: string; b: string; c: string | null }>(`select public.esblu_normalize_registration_id('sk', ' 1234 56') a, public.esblu_legal_entity_key('cz', '00012345') b, public.esblu_normalize_registration_id('XX1', '1') c`);
   assert.deepEqual([norm.a, norm.b, norm.c], ["00123456", "CZ:00012345", null]);
-  // provizórny trial je 1× na používateľa — opätovné vytvorenie prvej firmy po zrušení všetkých firiem trial nedá
-  assert.equal(Number((await one<{ n: number }>(`select count(*)::int n from public.trial_claims where claim_kind = 'provisional_user'`)).n), 3, "A (backfill), O1, O2");
+  assert.equal(Number((await one<{ n: number }>(`select count(*)::int n from public.trial_claims where claim_kind = 'provisional_user' or claim_key like 'user:%'`)).n), 0, "žiadny trial per login");
+  // PK = unikátnosť na kanonickom kľúči (aj mimo funkcie)
+  await fails(() => su(`insert into public.trial_claims (claim_key, claim_kind, source) values (public.esblu_claim_key('entity', 'SK:55555555'), 'legal_entity', 'trial')`), /duplicate key|trial_claims_pkey/);
+  await fails(() => su(`insert into public.trial_claims (claim_key, claim_kind, source) values (public.esblu_claim_key('user', 'x'), 'provisional_user', 'trial')`), /trial_claims_(key_format|kind_check)/);
 });
 
-await check("session-rollback: rollback 20261012150000 prenesie poslednú voľbu do user_active_company, história trialov ostáva (v transakcii, vrátené)", async () => {
+await check("trial-normalization: SK „12345678“ = „12 345 678“ = „IČO: 12 345 678“ = NBSP; TS a DB normalizácia sú zhodné", async () => {
+  const samples: Array<[string, string]> = [
+    ["SK", "12345678"], ["SK", "12 345 678"], ["sk", " 12 345 678 "], ["SK", "IČO: 12 345 678"], ["SK", "ico 12345678"],
+    ["SK", "12 345 678"], ["SK", "12-345-678"], ["SK", "123456"], ["SK", "1234567"], ["SK", "123456789"], ["SK", "abc"],
+    ["SK", ""], ["SK", "00000000"], ["CZ", "IČ: 00012345"], ["DE", "HRB 1234"], ["XX1", "1"], ["SK", "SK2020123456"],
+  ];
+  for (const [country, value] of samples) {
+    const db = await one<{ n: string | null; k: string | null }>(`select public.esblu_normalize_registration_id($1, $2) n, public.esblu_legal_entity_key($1, $2) k`, [country, value]);
+    assert.equal(normalizeRegistrationId(country, value), db.n, `${country} ${JSON.stringify(value)}`);
+    assert.equal(legalEntityKey(country, value), db.k, `key ${country} ${JSON.stringify(value)}`);
+  }
+  const same = await one<{ a: string; b: string; c: string }>(`select public.esblu_legal_entity_key('SK', '12345678') a, public.esblu_legal_entity_key('SK', '12 345 678') b, public.esblu_legal_entity_key('sk', 'IČO: 12 345 678') c`);
+  assert.deepEqual([same.a, same.b, same.c], ["SK:12345678", "SK:12345678", "SK:12345678"]);
+});
+
+const attempt = (companyId: string, reg: string, outcome: string) =>
+  svc(async () => (await db.query<{ r: Row }>(`select public.esblu_record_company_legal_identity_attempt($1, 'SK', $2, $3) r`, [companyId, reg, outcome])).rows[0].r);
+
+await check("trial-register-unavailable: nedostupný register = čaká (opakovateľné), neexistujúci / zaniknutý = zlyhalo; nikdy trial ani overená identita", async () => {
+  const c = await createCompany(O2, "Register test");
+  const r1 = await attempt(c, "66666666", "unavailable");
+  assert.deepEqual([r1.verification_status, r1.trial], ["unverified", "pending_legal_identity"]);
+  let id = await one<Row>(`select verification_status, last_error, attempt_count, verified_at from public.company_legal_identities where company_id = $1`, [c]);
+  assert.deepEqual([id.verification_status, id.last_error, id.attempt_count, id.verified_at], ["unverified", "unavailable", 1, null]);
+  assert.equal((await companyTrial(c)).trial_started_at, null);
+  assert.equal(await trialStatus(O2, c), "pending_legal_identity");
+  const r2 = await attempt(c, "66666666", "not_found");
+  assert.equal(r2.verification_status, "failed");
+  assert.equal(await trialStatus(O2, c), "pending_legal_identity", "failed ≠ eligible");
+  assert.equal(Number((await one<{ n: number }>(`select count(*)::int n from public.trial_claims where claim_key = public.esblu_claim_key('entity', 'SK:66666666')`)).n), 0, "neúspech nezaberie subjekt");
+  await attempt(c, "77777777", "terminated");
+  id = await one<Row>(`select verification_status, last_error, registration_id, attempt_count from public.company_legal_identities where company_id = $1`, [c]);
+  assert.deepEqual([id.verification_status, id.last_error, id.registration_id, id.attempt_count], ["failed", "terminated", "77777777", 3], "neoverené IČO sa dá opraviť");
+  // úspech po zlyhaniach → overené + trial
+  assert.equal((await recordIdentity(c, "66666666")).trial, "granted");
+  id = await one<Row>(`select verification_status, last_error from public.company_legal_identities where company_id = $1`, [c]);
+  assert.deepEqual([id.verification_status, id.last_error], ["verified", null]);
+  // neúspešný pokus po overení overenú identitu nezmení
+  const r3 = await attempt(c, "88888888", "not_found");
+  assert.deepEqual([r3.verification_status, r3.trial], ["verified", "unchanged"]);
+  assert.equal((await one<Row>(`select registration_id from public.company_legal_identities where company_id = $1`, [c])).registration_id, "66666666");
+  await fails(() => attempt(c, "66666666", "verified"), /ESBLU_INVALID_ATTEMPT_OUTCOME/);
+  await fails(() => rpc(O2, "esblu_record_company_legal_identity_attempt", [c, "SK", "66666666", "unavailable"]), /permission denied/);
+});
+
+await check("company-settings-legal-identity + company-settings-rbac: owner vidí a upravuje, admin/účtovník iba čítajú, zamestnanec bez prístupu", async () => {
+  const c = await createCompany(O3, "Settings s.r.o.");
+  await su(`insert into public.company_entitlements (company_id, entitlement_key, source, status, limit_value, limit_period) values ($1, 'team_members', 'manual', 'active', 50, 'total')`, [c]);
+  await switchTo(O3, c);
+  let view = await rpc<Row>(O3, "esblu_my_company_legal_identity");
+  assert.deepEqual([view.company_id, view.company_name, view.verification_status, view.registration_id, view.trial_status, view.can_edit],
+    [c, "Settings s.r.o.", "missing", null, "pending_legal_identity", true]);
+  await attempt(c, "90909090", "unavailable");
+  view = await rpc<Row>(O3, "esblu_my_company_legal_identity");
+  assert.deepEqual([view.verification_status, view.registration_id, view.last_error], ["unverified", "90909090", "unavailable"]);
+  assert.equal((await recordIdentity(c, "90909090")).trial, "granted");
+  view = await rpc<Row>(O3, "esblu_my_company_legal_identity");
+  assert.deepEqual([view.verification_status, view.country_code, view.trial_status], ["verified", "SK", "trial_active"]);
+  assert.ok(view.trial_ends_at);
+  // role
+  const ADM = "a0000000-0000-4000-8000-000000000051";
+  const ACC = "a0000000-0000-4000-8000-000000000052";
+  const EMP = "a0000000-0000-4000-8000-000000000053";
+  await su(`insert into auth.users (id, email) values ($1, 'adm51@example.invalid'), ($2, 'acc52@example.invalid'), ($3, 'emp53@example.invalid')`, [ADM, ACC, EMP]);
+  await su(`insert into public.company_members (company_id, user_id, role, status, permissions) values ($1, $2, 'admin', 'active', '{"billing":{"manage":true}}'), ($1, $3, 'accountant', 'active', '{}'), ($1, $4, 'employee', 'active', '{}')`, [c, ADM, ACC, EMP]);
+  for (const uid of [ADM, ACC]) {
+    const v = await rpc<Row>(uid, "esblu_my_company_legal_identity");
+    assert.deepEqual([v.registration_id, v.can_edit], ["90909090", false], uid);
+    await fails(() => rpc(uid, "esblu_record_company_legal_identity", [c, "SK", "90909091", true, "x"]), /permission denied/);
+  }
+  await fails(() => rpc(EMP, "esblu_my_company_legal_identity"), /ESBLU_FORBIDDEN/);
+  assert.equal((await q(EMP, `select * from public.company_legal_identities`)).length, 0);
+  assert.equal((await q(ADM, `select * from public.company_legal_identities`)).length, 0, "tabuľku číta iba owner (RLS)");
+  // owner-only billing po overení / triale bez zmeny
+  assert.equal((await rpc<Row>(O3, "esblu_billing_my_access")).can_manage, true);
+  for (const uid of [ADM, ACC, EMP]) {
+    assert.equal((await rpc<Row>(uid, "esblu_billing_my_access")).can_manage, false, uid);
+    await fails(() => rpc(uid, "esblu_billing_create_checkout_intent", ["test_pro", "month"]), /FORBIDDEN/);
+  }
+});
+
+await check("company-switch-trial-isolation: overenie firmy na zariadení A neaktivuje trial firmy na zariadení B", async () => {
+  const m1 = await createCompany(O3, "Izolácia 1");
+  const m2 = await createCompany(O3, "Izolácia 2");
+  await on("A", () => switchTo(O3, m1));
+  await on("B", () => switchTo(O3, m2));
+  // route berie company_id z membership TEJTO session → service zapíše iba m1
+  const sessionCompany = (await svc(async () => (await db.query<Row>(`select * from public.esblu_active_membership_for_user($1, $2)`, [O3, sessionOf(O3, "A")])).rows))[0].company_id as string;
+  assert.equal(sessionCompany, m1);
+  assert.equal((await recordIdentity(sessionCompany, "31313131")).trial, "granted");
+  assert.equal((await on("A", () => rpc<Row>(O3, "esblu_my_company_trial_eligibility"))).status, "trial_active");
+  assert.equal((await on("B", () => rpc<Row>(O3, "esblu_my_company_trial_eligibility"))).status, "pending_legal_identity");
+  assert.equal((await companyTrial(m2)).trial_started_at, null);
+  assert.equal((await on("B", () => rpc<Row>(O3, "esblu_my_company_legal_identity"))).verification_status, "missing");
+  assert.equal(await on("B", () => activeOf(O3)), m2, "druhé zariadenie ostáva v inej firme");
+});
+
+await check("entitlement-after-verification: overenie → trial → nároky aktívne (existujúci resolver); expirácia → existujúce správanie", async () => {
+  type Ent = { key: string; active: boolean; source?: string };
+  const c = await createCompany(O3, "Nároky s.r.o.");
+  await switchTo(O3, c);
+  const inv = async () => (await rpc<{ entitlements: Ent[] }>(O3, "esblu_get_my_company_entitlements")).entitlements.find((e) => e.key === "invoicing")!;
+  assert.equal((await inv()).active, false, "bez overenia žiadny trial nárok");
+  await fails(() => rpc(O3, "esblu_require_my_entitlement", ["invoicing"]));
+  assert.equal((await recordIdentity(c, "41414141")).trial, "granted");
+  assert.equal((await inv()).active, true, "trial nárok rovnako ako legacy trial");
+  await rpc(O3, "esblu_require_my_entitlement", ["invoicing"]);
+  // expirácia (test posunie okno do minulosti; trigger mimo testu by to nedovolil)
+  await serialized(() => db.exec(`alter table public.companies disable trigger esblu_companies_trial_guard;
+    update public.companies set trial_started_at = now() - interval '20 days', trial_ends_at = now() - interval '6 days' where id = '${c}';
+    alter table public.companies enable trigger esblu_companies_trial_guard;`));
+  assert.equal((await inv()).active, false);
+  assert.equal((await rpc<Row>(O3, "esblu_my_company_trial_eligibility")).status, "trial_used");
+  assert.equal((await recordIdentity(c, "41414141")).trial, "already_has_trial", "žiadny nový trial po expirácii");
+});
+
+await check("session-rollback: rollback 20261012160000 → 20261012150000 prenesie poslednú voľbu do user_active_company, história trialov ostáva (v transakcii, vrátené)", async () => {
   await serialized(async () => {
     await db.exec("begin");
     try {
+      await db.exec(read(TRIAL_FINAL_ROLLBACK));
+      assert.equal((await db.query<{ r: string | null }>(`select to_regprocedure('public.esblu_my_company_legal_identity()')::text r`)).rows[0].r, null);
       await db.exec(read(SESSION_ROLLBACK));
       const claims = await db.query<{ n: number }>(`select count(*)::int n from public.trial_claims`);
       assert.ok(Number(claims.rows[0].n) > 0);
