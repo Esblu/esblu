@@ -22,6 +22,7 @@ import { IS_MOBILE_BUILD } from "@/lib/build-target";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import { formatDate } from "@/lib/i18n/format";
 import { confirmAction } from "@/app/components/ui/AppDialog";
+import { invalidateCompanyEntitlements } from "@/hooks/use-company-entitlements";
 import type { NativeBillingBridge } from "@/lib/billing/native-bridge";
 import {
   CHECKOUT_POLL_INTERVAL_MS,
@@ -82,6 +83,23 @@ function detectPlatform(): ClientPlatform {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** RC 2026-10-12: žiadny billing request nesmie visieť donekonečna (offline / API nedostupné). */
+const BILLING_FETCH_TIMEOUT_MS = 15000;
+async function fetchWithTimeout(input: string, init: RequestInit = {}): Promise<Response | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), BILLING_FETCH_TIMEOUT_MS);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Banner, po ktorom server potvrdil zmenu nárokov → dashboard musí načítať nároky znova. */
+const ENTITLEMENT_CHANGING_BANNERS: ReadonlySet<Banner> = new Set<Banner>(["confirmed", "purchaseConfirmed", "restoreDone"]);
+
 export default function SubscriptionPage() {
   const { locale, t } = useLocale();
   const platform = useMemo(() => detectPlatform(), []);
@@ -94,11 +112,25 @@ export default function SubscriptionPage() {
   const [banner, setBanner] = useState<Banner>(null);
   const [bridge, setBridge] = useState<NativeBillingBridge | null>(null);
   const storefrontRef = useRef<string | null>(null);
+  // RC 2026-10-12: synchrónna poistka proti double-submit (dva tapy v jednom frame)
+  // a stop pollingu po odchode zo stránky.
+  const inFlightRef = useRef(false);
+  const aliveRef = useRef(true);
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => {
+      aliveRef.current = false;
+    };
+  }, []);
+  useEffect(() => {
+    // Kúpa/obnova potvrdená serverom → zdieľaná cache nárokov (dashboard) je neplatná.
+    if (ENTITLEMENT_CHANGING_BANNERS.has(banner)) invalidateCompanyEntitlements();
+  }, [banner]);
 
   const loadSubscription = useCallback(async (): Promise<SubscriptionView | null> => {
     const headers = await authHeaders();
     if (!headers) return null;
-    const response = await fetch(apiUrl("/api/billing/subscription"), { headers, cache: "no-store" }).catch(() => null);
+    const response = await fetchWithTimeout(apiUrl("/api/billing/subscription"), { headers, cache: "no-store" });
     if (!response) return null;
     if (response.status === 404 || response.status === 503) {
       setState("disabled");
@@ -114,7 +146,7 @@ export default function SubscriptionPage() {
     const headers = await authHeaders();
     if (!headers) return;
     const query = new URLSearchParams({ platform, ...(storefront ? { storefront } : {}) });
-    const response = await fetch(apiUrl(`/api/billing/purchase-options?${query}`), { headers, cache: "no-store" }).catch(() => null);
+    const response = await fetchWithTimeout(apiUrl(`/api/billing/purchase-options?${query}`), { headers, cache: "no-store" });
     const json = response?.ok ? ((await response.json().catch(() => null)) as { options?: unknown } | null) : null;
     setOptions(parsePurchaseOptions(json?.options));
   }, [platform]);
@@ -122,11 +154,12 @@ export default function SubscriptionPage() {
   /** Serverové potvrdenie: čaká na kanonický stav (webhook / overenie obchodu). */
   const waitForServer = useCallback(async (check: (v: SubscriptionView | null, checkoutStatus: string | null) => "done" | "failed" | "wait", checkoutId?: string) => {
     for (let attempt = 0; attempt < CHECKOUT_POLL_MAX_ATTEMPTS; attempt++) {
+      if (!aliveRef.current) return "aborted" as const;
       let checkoutStatus: string | null = null;
       if (checkoutId) {
         const headers = await authHeaders();
         if (headers) {
-          const r = await fetch(apiUrl(`/api/billing/checkout/${encodeURIComponent(checkoutId)}`), { headers, cache: "no-store" }).catch(() => null);
+          const r = await fetchWithTimeout(apiUrl(`/api/billing/checkout/${encodeURIComponent(checkoutId)}`), { headers, cache: "no-store" });
           const j = r ? ((await r.json().catch(() => null)) as { checkout?: { status?: string } } | null) : null;
           checkoutStatus = j?.checkout?.status ?? null;
         }
@@ -145,6 +178,7 @@ export default function SubscriptionPage() {
       const verdict = interpretCheckoutReturn({}, { checkoutStatus: status, subscription: v });
       return verdict === "confirmed" ? "done" : verdict === "failed" ? "failed" : "wait";
     }, checkoutId);
+    if (result === "aborted") return;
     setBanner(result === "done" ? "confirmed" : result === "failed" ? "failed" : "timeout");
   }, [waitForServer]);
 
@@ -153,22 +187,46 @@ export default function SubscriptionPage() {
     (async () => {
       let storefront: string | null = null;
       if (platform !== "web") {
-        const { loadNativeBillingBridge } = await import("@/lib/billing/native-bridge");
-        const b = await loadNativeBillingBridge(platform);
-        if (cancelled) return;
-        setBridge(b);
-        storefront = (await b.getStorefront().catch(() => null))?.country ?? null;
+        try {
+          const { loadNativeBillingBridge } = await import("@/lib/billing/native-bridge");
+          const b = await loadNativeBillingBridge(platform);
+          if (cancelled) return;
+          setBridge(b);
+          // Storefront je iba nápoveda pre ponuku; obchod, ktorý neodpovie, nesmie blokovať stránku.
+          storefront = (await Promise.race([
+            b.getStorefront().catch(() => null),
+            sleep(BILLING_FETCH_TIMEOUT_MS).then(() => null),
+          ]))?.country ?? null;
+        } catch {
+          // Bridge sa nenačítal → bez nákupu v obchode (stav ostáva čitateľný zo servera).
+          storefront = null;
+        }
       }
       storefrontRef.current = storefront;
-      const v = await loadSubscription();
-      await loadOptions(storefront);
+      let v: SubscriptionView | null = null;
+      try {
+        v = await loadSubscription();
+        await loadOptions(storefront);
+      } catch {
+        v = null;
+      }
       if (cancelled) return;
       setState((s) => (s === "disabled" ? s : v ? "ready" : "error"));
       const params = new URLSearchParams(window.location.search);
       const checkoutId = params.get("checkout_id");
       if (checkoutId) {
         if (params.get("checkout") === "canceled") setBanner("canceled");
-        else await waitForCheckout(checkoutId);
+        else {
+          // Počas čakania na webhook nesmie vzniknúť druhý checkout.
+          inFlightRef.current = true;
+          setBusy(true);
+          try {
+            await waitForCheckout(checkoutId);
+          } finally {
+            inFlightRef.current = false;
+            if (!cancelled) setBusy(false);
+          }
+        }
       }
     })();
     return () => {
@@ -182,7 +240,7 @@ export default function SubscriptionPage() {
       setActionError(t("subscription.errors.generic"));
       return null;
     }
-    const response = await fetch(apiUrl(path), { method: "POST", headers, body: JSON.stringify(body) }).catch(() => null);
+    const response = await fetchWithTimeout(apiUrl(path), { method: "POST", headers, body: JSON.stringify(body) });
     const json = response ? ((await response.json().catch(() => null)) as (T & { success?: boolean; code?: string }) | null) : null;
     if (!response?.ok || !json?.success) {
       setActionError(t(ERROR_KEYS[json?.code ?? ""] ?? "subscription.errors.generic"));
@@ -205,16 +263,24 @@ export default function SubscriptionPage() {
       return;
     }
     const verdict = await waitForServer((v) => (v && hasPaidAccess(v) && v.planCode === planCode ? "done" : "wait"));
+    if (verdict === "aborted") return;
     setBanner(verdict === "done" ? "purchaseConfirmed" : "timeout");
   }
 
   async function runAction(action: PurchaseAction, planCode: string, mode: "new" | "change") {
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
+    let navigating = false;
     setBusy(true);
     setActionError(null);
     try {
       if (action.kind === "web_checkout") {
         const intent = await intentFor(planCode, action.method, "new");
-        if (intent?.url) window.location.assign(intent.url);
+        if (intent?.url) {
+          // Stránka odchádza na checkout — tlačidlá ostanú zablokované (žiadny druhý zámer).
+          navigating = true;
+          window.location.assign(intent.url);
+        }
         return;
       }
       if (!bridge?.available) {
@@ -271,7 +337,7 @@ export default function SubscriptionPage() {
       if (result.kind === "already_owned") {
         // Nikdy druhá platba — obnova existujúceho nákupu cez server.
         setBanner("alreadyOwned");
-        await restoreGoogle();
+        await restoreGoogle(true);
         return;
       }
       if (result.kind === "billing_unavailable" || result.kind === "error") {
@@ -290,28 +356,51 @@ export default function SubscriptionPage() {
     } catch {
       setActionError(t("subscription.errors.generic"));
     } finally {
-      setBusy(false);
+      if (!navigating) {
+        inFlightRef.current = false;
+        if (aliveRef.current) setBusy(false);
+      }
     }
   }
 
   async function manageStripe(action: "cancel" | "resume" | "change" | "portal", planCode?: string) {
+    if (inFlightRef.current) return;
     if (action === "cancel" && !(await confirmAction({ message: t("subscription.confirmCancel"), destructive: true }))) return;
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
+    let navigating = false;
     setBusy(true);
     setActionError(null);
-    const result = await post<{ url?: string }>("/api/billing/manage", { action, planCode, interval });
-    setBusy(false);
-    if (action === "portal" && result?.url) {
-      if (bridge?.available) await bridge.openCheckout(result.url, "in_app");
-      else window.location.assign(result.url);
-      return;
+    try {
+      const result = await post<{ url?: string }>("/api/billing/manage", { action, planCode, interval });
+      if (action === "portal" && result?.url) {
+        if (bridge?.available) await bridge.openCheckout(result.url, "in_app");
+        else {
+          navigating = true;
+          window.location.assign(result.url);
+        }
+        return;
+      }
+      if (result) await loadSubscription();
+    } catch {
+      setActionError(t("subscription.errors.generic"));
+    } finally {
+      if (!navigating) {
+        inFlightRef.current = false;
+        if (aliveRef.current) setBusy(false);
+      }
     }
-    if (result) await loadSubscription();
   }
 
   /** Play obnova / reconnect: každý token overí SERVER (nikdy nie klient). */
-  async function restoreGoogle() {
+  async function restoreGoogle(nested = false) {
     if (!bridge?.available) return;
-    setBusy(true);
+    if (!nested) {
+      if (inFlightRef.current) return;
+      inFlightRef.current = true;
+      setBusy(true);
+      setActionError(null);
+    }
     try {
       const tokens = await bridge.restoreGoogle();
       for (const purchaseToken of tokens) {
@@ -319,21 +408,42 @@ export default function SubscriptionPage() {
       }
       setBanner(tokens.length > 0 ? "restoreDone" : "restoreNone");
       await loadSubscription();
+    } catch {
+      setActionError(t("subscription.errors.generic"));
     } finally {
-      setBusy(false);
+      if (!nested) {
+        inFlightRef.current = false;
+        if (aliveRef.current) setBusy(false);
+      }
     }
   }
 
   async function restoreApple() {
-    if (!bridge?.available) return;
+    if (!bridge?.available || inFlightRef.current) return;
+    inFlightRef.current = true;
     setBusy(true);
+    setActionError(null);
     try {
-      for (const jws of await bridge.restoreApple()) {
+      const transactions = await bridge.restoreApple();
+      for (const jws of transactions) {
         await post("/api/billing/mobile/confirm", { provider: "apple", checkoutId: null, signedTransaction: jws });
       }
+      setBanner(transactions.length > 0 ? "restoreDone" : "restoreNone");
       await loadSubscription();
+    } catch {
+      setActionError(t("subscription.errors.generic"));
     } finally {
-      setBusy(false);
+      inFlightRef.current = false;
+      if (aliveRef.current) setBusy(false);
+    }
+  }
+
+  async function manageInStore(provider: Parameters<NativeBillingBridge["manageStoreSubscription"]>[0]) {
+    if (!bridge?.available) return;
+    try {
+      await bridge.manageStoreSubscription(provider);
+    } catch {
+      setActionError(t("subscription.storeUnavailable"));
     }
   }
 
@@ -357,13 +467,14 @@ export default function SubscriptionPage() {
           : a.method === "apple_us_link" ? t("subscription.buy.cardEsbluUs") : t("subscription.buy.cardEsblu");
 
 
-  const buttonClass = "rounded-xl px-4 py-2 text-sm font-semibold disabled:opacity-50";
+  // min-h-11 = 44 px dotyková plocha; aria-busy cez disabled + busy.
+  const buttonClass = "min-h-11 rounded-xl px-4 py-2 text-sm font-semibold disabled:opacity-50";
   // Apple Attachment 14: IAP aspoň rovnako výrazné ako alternatíva → rovnaký štýl pre všetky voľby.
   const primary = `${buttonClass} bg-accent-esblu text-white`;
   const secondary = `${buttonClass} border border-subtle text-primary`;
 
   return (
-    <main className="app-shell-bg min-h-screen p-4 sm:p-6 lg:p-10">
+    <main className="app-shell-bg min-h-screen p-4 sm:p-6 lg:p-10" aria-busy={busy || state === "loading"}>
       <BackLink href="/nastavenia" label={t("settings.pageTitle")} className="mb-4" />
       <h1 className="text-2xl sm:text-4xl font-bold text-primary">{t("subscription.title")}</h1>
 
@@ -373,11 +484,14 @@ export default function SubscriptionPage() {
         {state === "loading" && <p className="text-sm text-muted-esblu">{t("subscription.loading")}</p>}
         {state === "disabled" && <p className="text-sm text-muted-esblu">{t("subscription.disabled")}</p>}
         {state === "error" && <p className="text-sm text-red-500">{t("subscription.loadError")}</p>}
-        {banner && (
-          <p role="status" className="rounded-2xl border border-subtle bg-surface-1 p-4 text-sm text-primary">
-            {t(BANNER_KEYS[banner])}
-          </p>
-        )}
+        {/* Live región je v DOM vždy (prvé oznámenie sa nestratí); obsah iba pri bannery. */}
+        <div role="status" aria-live="polite">
+          {banner && (
+            <p className="rounded-2xl border border-subtle bg-surface-1 p-4 text-sm text-primary">
+              {t(BANNER_KEYS[banner])}
+            </p>
+          )}
+        </div>
 
         {state === "ready" && view && (
           <>
@@ -420,7 +534,7 @@ export default function SubscriptionPage() {
                     <>
                       <p className="w-full text-sm text-muted-esblu">{t("subscription.manageInStore", { store: t(`subscription.provider.${storeProvider}`) })}</p>
                       {bridge?.available && (
-                        <button type="button" disabled={busy} onClick={() => bridge.manageStoreSubscription(storeProvider)} className={secondary}>
+                        <button type="button" disabled={busy} onClick={() => void manageInStore(storeProvider)} className={secondary}>
                           {t("subscription.manageInStoreButton")}
                         </button>
                       )}
@@ -440,7 +554,7 @@ export default function SubscriptionPage() {
                 </div>
               )}
               {screen?.showRestore && platform === "android" && (
-                <button type="button" disabled={busy} onClick={restoreGoogle} className={`mt-4 ${secondary}`}>{t("subscription.restore")}</button>
+                <button type="button" disabled={busy} onClick={() => void restoreGoogle()} className={`mt-4 ${secondary}`}>{t("subscription.restore")}</button>
               )}
               {screen?.showRestore && platform === "ios" && (
                 <button type="button" disabled={busy} onClick={restoreApple} className={`mt-4 ${secondary}`}>{t("subscription.restore")}</button>
@@ -460,7 +574,7 @@ export default function SubscriptionPage() {
                 <div className="mt-3 flex gap-2">
                   {(["month", "year"] as const).map((value) => (
                     <button key={value} type="button" onClick={() => setInterval_(value)} aria-pressed={interval === value}
-                      className={`rounded-xl px-3 py-1 text-sm ${interval === value ? "bg-accent-esblu text-white" : "border border-subtle text-primary"}`}>
+                      className={`min-h-11 rounded-xl px-3 py-1 text-sm ${interval === value ? "bg-accent-esblu text-white" : "border border-subtle text-primary"}`}>
                       {t(`subscription.interval.${value}`)}
                     </button>
                   ))}

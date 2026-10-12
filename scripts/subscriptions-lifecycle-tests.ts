@@ -447,6 +447,32 @@ await check("billing-ui: billing vypnutý → stránka 'disabled' (404/503), ži
   assert.deepEqual(m.buyActions, []);
   assert.equal(m.showViewOnly, true);
 });
+await check("billing-ui (RC hardening): double-submit, timeout, stop pollingu, invalidácia nárokov, žiadny večný loading", () => {
+  const page = read("app/nastavenia/predplatne/page.tsx");
+  // synchrónna poistka (ref) vo všetkých akciách
+  for (const fn of ["runAction", "manageStripe", "restoreApple"]) {
+    assert.match(page, new RegExp(`async function ${fn}\\([^)]*\\) \\{[\\s\\S]{0,200}inFlightRef\\.current`), fn);
+  }
+  // po úspešnom redirecte na checkout/portál sa busy neresetuje
+  assert.match(page, /navigating = true;\s*window\.location\.assign\(intent\.url\)/);
+  assert.match(page, /if \(!navigating\) \{\s*inFlightRef\.current = false;/);
+  // žiadny holý fetch bez timeoutu
+  assert.equal((page.match(/\bfetch\(/g) ?? []).length, 1, "jediný fetch = vnútri fetchWithTimeout");
+  assert.match(page, /controller\.abort\(\), BILLING_FETCH_TIMEOUT_MS/);
+  // polling končí po odchode zo stránky
+  assert.match(page, /if \(!aliveRef\.current\) return "aborted" as const;/);
+  // potvrdená kúpa/obnova → dashboard načíta nároky znova
+  assert.match(page, /ENTITLEMENT_CHANGING_BANNERS\.has\(banner\)\) invalidateCompanyEntitlements\(\)/);
+  for (const b of ["confirmed", "purchaseConfirmed", "restoreDone"]) assert.ok(page.includes(`"${b}"`));
+  // štart: bridge/storefront/sieť nesmú nechať stránku v "loading"
+  assert.match(page, /try \{\s*const \{ loadNativeBillingBridge \}/);
+  assert.match(page, /sleep\(BILLING_FETCH_TIMEOUT_MS\)\.then\(\(\) => null\)/);
+  // návrat z checkoutu: počas čakania na webhook sú tlačidlá zablokované
+  assert.match(page, /inFlightRef\.current = true;\s*setBusy\(true\);\s*try \{\s*await waitForCheckout\(checkoutId\)/);
+  // Apple restore dáva spätnú väzbu
+  assert.match(page, /setBanner\(transactions\.length > 0 \? "restoreDone" : "restoreNone"\)/);
+});
+
 await check("billing-ui: fake/test provider bez predplatného → web: kúpiť cez web; Android: Play (ak server ponúkne)", () => {
   assert.deepEqual(screenModel(viewOf(none), optsOf("web", ["stripe_web_checkout"]), "web", null).buyActions.map((a) => a.kind), ["web_checkout"]);
   const android = screenModel(viewOf(none), optsOf("android", ["google_play"]), "android", { available: true });
@@ -490,7 +516,7 @@ await check("billing-ui: aktívne cez Apple → iOS správa v App Store; Android
 await check("billing-ui: restore / already owned / pending / billing unavailable → správne bannery, nič sa neudelí na klientovi", () => {
   const page = read("app/nastavenia/predplatne/page.tsx");
   assert.match(page, /result\.kind === "pending"[\s\S]{0,200}setBanner\("storePending"\)/);
-  assert.match(page, /result\.kind === "already_owned"[\s\S]{0,240}restoreGoogle\(\)/);
+  assert.match(page, /result\.kind === "already_owned"[\s\S]{0,240}restoreGoogle\((true)?\)/);
   assert.match(page, /result\.kind === "billing_unavailable" \|\| result\.kind === "error"[\s\S]{0,60}setBanner\("storeUnavailable"\)/);
   assert.match(page, /setBanner\(tokens\.length > 0 \? "restoreDone" : "restoreNone"\)/);
   for (const lang of ["sk", "en", "de"]) {

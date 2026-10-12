@@ -83,7 +83,22 @@ function Read-ManifestFacts([string]$Path) {
     Components  = ($components | Sort-Object -Unique)
     Cleartext   = $m.application.GetAttribute("usesCleartextTraffic", $AndroidNs)
     NetConfig   = $m.application.GetAttribute("networkSecurityConfig", $AndroidNs)
+    AllowBackup = $m.application.GetAttribute("allowBackup", $AndroidNs)
   }
+}
+
+# RC 2026-10-12: production-intended permission baseline (Play policy delta guard).
+# Any of these appearing in a merged manifest = FAIL until there is an objective reason.
+$ForbiddenPermissionPattern = '^android\.permission\.(ACCESS_(FINE|COARSE|BACKGROUND)_LOCATION|CAMERA|READ_CONTACTS|WRITE_CONTACTS|GET_ACCOUNTS|READ_EXTERNAL_STORAGE|WRITE_EXTERNAL_STORAGE|MANAGE_EXTERNAL_STORAGE|READ_MEDIA_[A-Z_]+|SCHEDULE_EXACT_ALARM|USE_EXACT_ALARM|FOREGROUND_SERVICE[A-Z_]*|SYSTEM_ALERT_WINDOW|REQUEST_INSTALL_PACKAGES|QUERY_ALL_PACKAGES)$|^com\.google\.android\.gms\.permission\.AD_ID$'
+function Check-Baseline([string]$Label, $Facts) {
+  $bad = @($Facts.Permissions | Where-Object { $_ -match $ForbiddenPermissionPattern })
+  Check "[$Label] no location/camera/contacts/storage/media/AD_ID/exact-alarm/foreground-service permission" ($bad.Count -eq 0) ($bad -join ', ')
+  Check "[$Label] android:allowBackup=false" ($Facts.AllowBackup -eq "false") "allowBackup=$($Facts.AllowBackup)"
+  foreach ($p in @("android.permission.INTERNET", "android.permission.ACCESS_NETWORK_STATE", "android.permission.POST_NOTIFICATIONS", "android.permission.RECORD_AUDIO", "android.permission.MODIFY_AUDIO_SETTINGS")) {
+    Check "[$Label] baseline permission $p" ($Facts.Permissions -contains $p) ""
+  }
+  Log "  [$Label] permissions: $($Facts.Permissions -join ', ')"
+  Log "  [$Label] exported: $($Facts.Exported -join ', ')"
 }
 
 function Build-Variant([string]$Label, [string[]]$ExtraArgs) {
@@ -128,6 +143,7 @@ if ($off) {
   Check "[billing-off] NO com.android.billingclient dependency" (-not ($off.DepsText -match 'com\.android\.billingclient')) ""
   Check "[billing-off] NO com.android.vending.BILLING permission" (-not ($f.Permissions -contains "com.android.vending.BILLING")) ""
   Check "[billing-off] EsbluBillingPlugin NOT compiled" (-not $off.PluginClass) ""
+  Check-Baseline "billing-off" $f
   Check "[billing-off] no cleartext traffic / custom network security config" ((-not $f.Cleartext -or $f.Cleartext -eq "false") -and -not $f.NetConfig) "usesCleartextTraffic=$($f.Cleartext)"
 }
 if ($on) {
@@ -135,6 +151,7 @@ if ($on) {
   Check "[billing-on] package com.esblu.app" ($f.Package -eq "com.esblu.app") $f.Package
   Check "[billing-on] com.android.billingclient:billing:9.1.0 resolved" ($on.DepsText -match 'com\.android\.billingclient:billing:9\.1\.0') ""
   Check "[billing-on] EsbluBillingPlugin compiled" $on.PluginClass ""
+  Check-Baseline "billing-on" $f
   Check "[billing-on] com.android.vending.BILLING permission present" ($f.Permissions -contains "com.android.vending.BILLING") ""
   Check "[billing-on] no cleartext traffic / custom network security config" ((-not $f.Cleartext -or $f.Cleartext -eq "false") -and -not $f.NetConfig) "usesCleartextTraffic=$($f.Cleartext)"
 }

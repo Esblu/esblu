@@ -94,5 +94,19 @@ check("MainActivity registruje billing plugin voliteľne (reflection, bez pádu)
   assert.doesNotMatch(MAIN, /^import com\.esblu\.app\.billing/m);
 });
 
+check("RC: build matrix stráži produkčný baseline manifestu (zakázané povolenia, allowBackup=false) v oboch variantoch", () => {
+  const ps = read("release/build-billing-matrix.ps1");
+  assert.match(ps, /Check-Baseline "billing-off" \$f/);
+  assert.match(ps, /Check-Baseline "billing-on" \$f/);
+  for (const p of ["ACCESS_(FINE|COARSE|BACKGROUND)_LOCATION", "CAMERA", "READ_CONTACTS", "READ_MEDIA_", "SCHEDULE_EXACT_ALARM", "FOREGROUND_SERVICE", "AD_ID"]) assert.ok(ps.includes(p), p);
+  assert.match(ps, /android:allowBackup=false/);
+});
+
+check("RC: fake natívny bridge iba vo výslovnom staging builde (default = produkcia → nikdy fake)", () => {
+  const bridge = read("lib/billing/native-bridge.ts");
+  assert.match(bridge, /NEXT_PUBLIC_ESBLU_BILLING_FAKE_NATIVE === "1" && process\.env\.NEXT_PUBLIC_ESBLU_ENV === "staging"\)/);
+  assert.equal((bridge.match(/new FakeBillingBridge\(/g) ?? []).length, 1, "jediné miesto vytvorenia fake bridge");
+});
+
 console.log(`\nnative-billing-contract: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

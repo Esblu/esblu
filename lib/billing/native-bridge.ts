@@ -238,7 +238,12 @@ export class CapacitorBillingBridge implements NativeBillingBridge {
 
 /** Vyberie bridge: fake (staging) → skutočný plugin → null (web). */
 export async function loadNativeBillingBridge(platform: "android" | "ios"): Promise<NativeBillingBridge> {
-  if (process.env.NEXT_PUBLIC_ESBLU_BILLING_FAKE_NATIVE === "1") return new FakeBillingBridge(platform);
+  // Fake bridge IBA vo výslovnom staging builde (RC 2026-10-12, fail-closed ako
+  // lib/build-target.ts: bez NEXT_PUBLIC_ESBLU_ENV=staging = produkcia → nikdy fake).
+  // Druhá poistka k serverovému VERCEL_ENV=production → stores disabled.
+  if (process.env.NEXT_PUBLIC_ESBLU_BILLING_FAKE_NATIVE === "1" && process.env.NEXT_PUBLIC_ESBLU_ENV === "staging") {
+    return new FakeBillingBridge(platform);
+  }
   const [{ Capacitor, registerPlugin }, { Browser }] = await Promise.all([import("@capacitor/core"), import("@capacitor/browser")]);
   const plugin = registerPlugin<EsbluBillingPlugin>("EsbluBilling");
   return new CapacitorBillingBridge(plugin, Capacitor.isPluginAvailable("EsbluBilling"), (url) => Browser.open({ url }));
