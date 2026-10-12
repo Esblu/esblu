@@ -45,3 +45,10 @@ create table if not exists public.invoice_events (
   id uuid primary key default gen_random_uuid(), company_id uuid not null references public.companies(id) on delete cascade,
   actor_user_id uuid references auth.users(id));
 alter table public.company_billing_profile add column if not exists logo_path text;
+-- 20261012150000: IČO / krajina v billing profile (prod stĺpce z 20260916120000)
+-- a auth.sessions (session_active_company → FK on delete cascade ako v prod).
+alter table public.company_billing_profile add column if not exists ico text;
+alter table public.company_billing_profile add column if not exists country_code text;
+create table if not exists auth.sessions (
+  id uuid primary key, user_id uuid not null references auth.users(id) on delete cascade,
+  created_at timestamptz not null default now());
