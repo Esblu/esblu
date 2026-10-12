@@ -187,9 +187,17 @@ Preview `dpl_65E69MVmnRpysbxEgwRR6LuPY15N` (`esblu-5xd2lfvqn-esblu.vercel.app`) 
 `docs/multi-company-architecture-2026-10-12.md`. Jeden login → N firiem s rôznymi rolami, explicitná a serverom
 validovaná aktívna firma (nikdy `LIMIT 1`), prepínač firmy, „Pridať vlastnú firmu", pozvánka pre existujúceho
 používateľa, presne 1 owner na firmu, billing authority = owner, odchod ≠ zrušenie firmy ≠ zrušenie loginu.
-Migrácia `20261012140000` pripravená, **neaplikovaná**; PGlite 20/20 + billing regres 60/60 nad ňou.
-Otvorené: trial na každú novú firmu, admin+billing.manage (zmenené na owner-only), GDPR/CLIA autor faktúr,
-push deep link z inej firmy, zoradenie eFaktúra migrácií pri integrácii.
+Migrácie `20261012140000` + `20261012150000` pripravené, **neaplikované** (staging ani produkcia); PGlite
+`multi-company-db` 33/33, kontrakt 14/14, celý regres 74/74 suites.
+
+**Hardening pred stagingom (20261012150000) — finálne:** billing = iba owner (admin/billing.manage, accountant,
+employee deny; prepnutie na inom zariadení nič neprenáša); trial = právny subjekt (krajina + IČO overené v RPO),
+trvalá história `trial_claims` bez FK na firmu, provizórny trial prvej firmy 1× na login, existujúce trialy bez
+zmeny; aktívna firma = per auth session (JWT `session_id`), zariadenie si pamätá iba návrh, server overuje členstvo.
+Otvorené: GDPR/CLIA retencia `trial_claims` a autor faktúr (CLIA REVIEW), povinné IČO pri onboardingu (biznis),
+overenie IČO existujúcej firmy v Nastaveniach (follow-up), push deep link z inej firmy, zoradenie eFaktúra migrácií.
+
+**Verdikt: READY FOR STAGING MIGRATION** (čaká iba na explicitný súhlas; nič nebolo aplikované).
 
 ## Go / No-Go matrix
 
@@ -212,5 +220,5 @@ push deep link z inej firmy, zoradenie eFaktúra migrácií pri integrácii.
 | privacy | BLOCKED LEGAL |
 | Data Safety | BLOCKED LEGAL |
 | reviewer access | BLOCKED EXTERNAL (vyžaduje súhlas na produkčný účet) |
-| multi-company | PASS WITH EXTERNAL BLOCKER (migrácia neaplikovaná; staging QA; biznis rozhodnutia v Q) |
+| multi-company | READY FOR STAGING MIGRATION (140000 + 150000 neaplikované; čaká na súhlas; staging QA; CLIA retencia trial histórie) |
 | production rollout | BLOCKED LEGAL (CLIA) + čaká na explicitný súhlas |

@@ -20,7 +20,7 @@ npm ci
 ```powershell
 npx tsc --noEmit
 npm run lint          # baseline: 37 errors / 26 warnings, identical to 1fe2c17 (no new ones)
-# all suites (52):
+# all suites (74):
 Get-Content package.json | ConvertFrom-Json | % { $_.scripts.PSObject.Properties.Name } |
   ? { $_ -like 'test:*' } | % { npm run -s $_; if ($LASTEXITCODE) { throw "FAIL $_" } }
 ```
@@ -65,6 +65,14 @@ billing env is set, Settings → Zrušiť účet preflight.
 anywhere; without them the code falls back to "DB first, Storage after" without a retry job.
 Texts for deleting before the end of a cancelled period: LEGAL/CLIA REVIEW REQUIRED
 (`docs/account-deletion-subscription-policy-2026-10-12.md`, section 5d).
+
+## 5c. Multi-company hardening (2026-10-12)
+
+`npm run test:multi-company` (14) and `npm run test:multi-company-db` (33, PGlite; included in step 2) cover
+owner-only billing, legal-entity trial (abuse + race) and per-device active company (cross-device isolation).
+Migrations `20261012140000` and `20261012150000` are NOT applied anywhere (status: READY FOR STAGING
+MIGRATION, waits for explicit approval). Real-device / Android smoke for multi-company: not run yet.
+Details: `docs/multi-company-architecture-2026-10-12.md` (sections R–W).
 
 ## 6. Hard stops
 
