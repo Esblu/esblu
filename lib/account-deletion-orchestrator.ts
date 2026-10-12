@@ -17,10 +17,20 @@
 
 import type { StorageTarget } from "@/lib/account-deletion-storage";
 
-export type DeletionKind = "owner" | "member";
+/** owner = zrušiť firmu, member = opustiť firmu, global = zrušiť login (multi-company 2026-10-12). */
+export type DeletionKind = "owner" | "member" | "global";
+
+export type DeletionRequest = {
+  kind: DeletionKind;
+  userId: string;
+  /** Firma, ktorej sa akcia týka (owner/member). Pri global null. */
+  companyId: string | null;
+  /** Zrušiť aj login: global, alebo posledná firma používateľa (pôvodné „Zrušiť účet"). */
+  deleteAccount: boolean;
+};
 
 export type CommitResult =
-  | { ok: true; jobId: string | null; storageTargets: StorageTarget[]; summary: unknown }
+  | { ok: true; jobId: string | null; storageTargets: StorageTarget[]; summary: unknown; deleteAccount: boolean }
   | { ok: false; reason: "subscription_guard" | "db_error"; code: string };
 
 export type AuthDeleteResult = { ok: true } | { ok: false; code: string };
@@ -37,7 +47,7 @@ export type JobPatch = {
 };
 
 export type DeletionDeps = {
-  commit(kind: DeletionKind, userId: string): Promise<CommitResult>;
+  commit(request: DeletionRequest): Promise<CommitResult>;
   /** Vyhodí pri zlyhaní; chýbajúca cesta nie je chyba. */
   removeStorage(targets: StorageTarget[]): Promise<number>;
   /** Neexistujúci používateľ = ok (idempotentné). */
@@ -65,7 +75,7 @@ export type CleanupOutcome = {
 export type OrchestrationResult =
   | { status: "blocked_subscription"; code: string }
   | { status: "db_failed"; code: string }
-  | { status: "deleted"; jobId: string | null; storageRemoved: number; cleanupPending: boolean; summary: unknown }
+  | { status: "deleted"; jobId: string | null; storageRemoved: number; cleanupPending: boolean; summary: unknown; accountDeleted: boolean }
   | { status: "auth_failed"; jobId: string | null; storageRemoved: number; cleanupPending: true; code: string; summary: unknown };
 
 export const CLEANUP_MAX_ATTEMPTS = 30;
@@ -129,8 +139,8 @@ export async function runCleanupJob(deps: DeletionDeps, job: CleanupJob): Promis
   return { storageRemoved, storageDone, authDone, errorCode };
 }
 
-export async function orchestrateAccountDeletion(deps: DeletionDeps, kind: DeletionKind, userId: string): Promise<OrchestrationResult> {
-  const commit = await deps.commit(kind, userId);
+export async function orchestrateAccountDeletion(deps: DeletionDeps, request: DeletionRequest): Promise<OrchestrationResult> {
+  const commit = await deps.commit(request);
   if (!commit.ok) {
     // Nič sa nezmenilo: DB rollback, Storage sa NEDOTKOL.
     return commit.reason === "subscription_guard"
@@ -140,10 +150,11 @@ export async function orchestrateAccountDeletion(deps: DeletionDeps, kind: Delet
 
   const outcome = await runCleanupJob(deps, {
     id: commit.jobId,
-    userId,
+    userId: request.userId,
     storageTargets: commit.storageTargets,
     storagePending: commit.storageTargets.length > 0,
-    authPending: true,
+    // Login sa ruší IBA keď to DB commit potvrdil (global / posledná firma).
+    authPending: commit.deleteAccount,
     attempts: 0,
   });
 
@@ -163,5 +174,6 @@ export async function orchestrateAccountDeletion(deps: DeletionDeps, kind: Delet
     storageRemoved: outcome.storageRemoved,
     cleanupPending: !outcome.storageDone,
     summary: commit.summary,
+    accountDeleted: commit.deleteAccount,
   };
 }

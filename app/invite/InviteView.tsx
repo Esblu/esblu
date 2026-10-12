@@ -15,6 +15,8 @@ import { useLocale } from "@/lib/i18n/LocaleProvider";
 import LanguageSwitcher from "@/app/components/LanguageSwitcher";
 import { SocialAuthButtons } from "@/app/components/auth/SocialAuthButtons";
 import { signOutOnThisDevice } from "@/lib/sign-out";
+import { listMyCompanies, switchCompanyAndReload } from "@/lib/company-workspaces";
+import { navigateHard } from "@/lib/app-navigation";
 
 // Táto stránka NIKDY nevolá ensureMyOwnerCompany() / esblu_ensure_my_owner_company().
 // Registrácia aj prihlásenie tu vždy skončí zavolaním
@@ -54,6 +56,9 @@ export default function InviteView({ token }: { token: string }) {
   const [formError, setFormError] = useState("");
   const [awaitingEmailConfirmation, setAwaitingEmailConfirmation] =
     useState(false);
+  // Multi-company: existujúci používateľ s ďalšími firmami → ponuka prepnutia.
+  const [joined, setJoined] = useState<{ companyId: string; role: string } | null>(null);
+  const [switching, setSwitching] = useState(false);
 
   function validateEmail(value: string) {
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
@@ -110,10 +115,19 @@ export default function InviteView({ token }: { token: string }) {
     setFormError("");
 
     try {
-      await acceptCompanyInvite(token);
+      const accepted = await acceptCompanyInvite(token);
       // Token pozvánky už nie je potrebný — odstráni sa z metadát účtu
       // (best effort; slúžil iba na návrat po overení e-mailu).
       await supabase.auth.updateUser({ data: { esblu_invite_token: null } }).catch(() => undefined);
+
+      // Multi-company: ak má používateľ aj iné firmy, aktívna firma sa NEMENÍ
+      // automaticky — ponúkne sa „Prepnúť do firmy" (nová registrácia nie je potrebná).
+      const companies = await listMyCompanies().catch(() => []);
+      if (companies.length > 1) {
+        setJoined({ companyId: accepted.company_id, role: accepted.role });
+        setState("accepted");
+        return;
+      }
       setState("accepted");
 
       setTimeout(() => {
@@ -257,6 +271,42 @@ export default function InviteView({ token }: { token: string }) {
         >
           {t("invite.goToLogin")}
         </Link>
+      </Centered>
+    );
+  }
+
+  if (state === "accepted" && joined) {
+    return (
+      <Centered>
+        <h1 className="text-xl font-semibold tracking-tight text-primary sm:text-[22px]">
+          {t("invite.acceptedTitle")}
+        </h1>
+        <p className="mt-2 text-sm leading-6 text-secondary" role="status">
+          {t("workspaces.invite.added", {
+            company: preview?.company_name ?? "",
+            role: t(`workspaces.roles.${joined.role}`),
+          })}
+        </p>
+        <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:justify-center">
+          <button
+            type="button"
+            className="ui-btn ui-btn-primary"
+            disabled={switching}
+            onClick={async () => {
+              setSwitching(true);
+              try {
+                await switchCompanyAndReload(joined.companyId, "/");
+              } catch {
+                setSwitching(false);
+              }
+            }}
+          >
+            {switching ? t("workspaces.switching") : t("workspaces.invite.switchNow")}
+          </button>
+          <button type="button" className="ui-btn ui-btn-secondary" disabled={switching} onClick={() => navigateHard("/")}>
+            {t("workspaces.invite.stay")}
+          </button>
+        </div>
       </Centered>
     );
   }

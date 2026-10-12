@@ -1,4 +1,5 @@
 import { supabase } from "@/lib/supabase";
+import { fetchMyActiveMembership } from "@/lib/active-membership";
 
 export type CompanyMemberRole = "owner" | "admin" | "accountant" | "employee";
 export type CompanyInviteRole = "admin" | "accountant" | "employee";
@@ -98,12 +99,10 @@ export async function getMyActiveMembership(): Promise<MyActiveMembership | null
     return null;
   }
 
-  const { data, error } = await supabase
-    .from("company_members")
-    .select("company_id, role, permissions")
-    .eq("user_id", session.user.id)
-    .eq("status", "active")
-    .maybeSingle();
+  // Multi-company (2026-10-12): AKTÍVNA firma podľa serverom validovanej
+  // voľby (esblu_my_active_membership), nie „prvé" členstvo. Pri 2+ firmách
+  // bez platnej voľby null → appka ukáže výber firmy.
+  const { data, error } = await fetchMyActiveMembership(supabase, session.user.id);
 
   if (error || !data) {
     return null;
@@ -377,6 +376,7 @@ const INVITE_ERROR_CODES = [
   "ESBLU_INVITE_EXPIRED",
   "ESBLU_INVITE_EMAIL_MISMATCH",
   "ESBLU_ALREADY_HAS_ACTIVE_MEMBERSHIP",
+  "ESBLU_INVITE_ALREADY_MEMBER",
   "ESBLU_INVITE_ROLE_NOT_PERMITTED",
 ] as const;
 

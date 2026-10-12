@@ -37,6 +37,8 @@ export const MOBILE_STATIC_ROUTES: ReadonlySet<string> = new Set([
   "/nastavenia",
   // Unified subscriptions (staging): stav predplatného, bez nákupu v appke.
   "/nastavenia/predplatne",
+  // Multi-company: ďalšia vlastná firma existujúceho používateľa.
+  "/firmy/nova",
   "/login",
   "/reset-hesla",
   "/onboarding/company",

@@ -5,6 +5,7 @@ import { translate } from "@/lib/i18n/translate";
 import { findOwnerDeletionBlocker, type OwnerDeletionBlocker } from "@/lib/account-deletion-retention";
 import { checkSubscriptionForDeletion } from "@/lib/account-deletion-subscription";
 import type { SubscriptionDeletionCheck } from "@/lib/billing/deletion-guard";
+import { resolveActiveMembershipForUser } from "@/lib/active-membership-server";
 
 // Bez firmy (orphan) nie je čo účtovať.
 const NO_SUBSCRIPTION: SubscriptionDeletionCheck = {
@@ -45,12 +46,30 @@ export async function GET(req: Request) {
 
     const admin = getSupabaseAdmin();
 
-    const { data: membership, error: membershipError } = await admin
+    // Multi-company: aktívna firma zo servera (nie „prvé" členstvo).
+    const { data: active, error: membershipError } = await resolveActiveMembershipForUser(admin, user.id);
+    const membership = active?.companyId && active.role ? { company_id: active.companyId, role: active.role } : null;
+    const membershipCount = active?.activeMembershipCount ?? 0;
+
+    // Globálny login: povolený iba bez vlastnených firiem (DB to overí znova).
+    const { count: ownedCount, error: ownedError } = await admin
       .from("company_members")
-      .select("role, company_id")
+      .select("id", { count: "exact", head: true })
       .eq("user_id", user.id)
       .eq("status", "active")
-      .maybeSingle();
+      .eq("role", "owner");
+    if (ownedError) {
+      console.error("account/preflight: počet vlastnených firiem zlyhal:", ownedError.code);
+      return Response.json({ error: translate(locale, "settings.errors.membershipVerifyFailed") }, { status: 500 });
+    }
+    const multi = {
+      membershipCount,
+      ownedCompanyCount: ownedCount ?? 0,
+      // Akcia nad aktívnou firmou zruší aj login iba pri poslednej firme.
+      deletesAccount: membershipCount <= 1,
+      canDeleteGlobalAccount: (ownedCount ?? 0) === 0,
+      companyId: membership?.company_id ?? null,
+    };
 
     if (membershipError) {
       console.error(
@@ -62,6 +81,21 @@ export async function GET(req: Request) {
         { error: translate(locale, "settings.errors.membershipVerifyFailed") },
         { status: 500 }
       );
+    }
+
+    if (!membership && membershipCount > 0) {
+      // 2+ firiem bez platnej aktívnej firmy → appka najprv ukáže výber firmy.
+      return Response.json({
+        role: null,
+        otherActiveMembersCount: 0,
+        orphan: false,
+        needsCompanySelection: true,
+        can_delete: false,
+        blocking_reason: "ACTIVE_COMPANY_REQUIRED",
+        subscription_status: NO_SUBSCRIPTION.subscription_status,
+        subscription: NO_SUBSCRIPTION,
+        ...multi,
+      });
     }
 
     if (!membership) {
@@ -113,6 +147,7 @@ export async function GET(req: Request) {
         blocking_reason: null,
         subscription_status: NO_SUBSCRIPTION.subscription_status,
         subscription: NO_SUBSCRIPTION,
+        ...multi,
       });
     }
 
@@ -170,6 +205,7 @@ export async function GET(req: Request) {
       blocking_reason: ownerDeletionBlocked ?? subscription.blocking_reason,
       subscription_status: subscription.subscription_status,
       subscription,
+      ...multi,
     });
   } catch (error) {
     console.error(

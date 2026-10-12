@@ -9,6 +9,7 @@ import type { SubscriptionDeletionCheck } from "@/lib/billing/deletion-guard";
 import type { Locale } from "@/lib/i18n/locales";
 import { orchestrateAccountDeletion, type OrchestrationResult } from "@/lib/account-deletion-orchestrator";
 import { supabaseDeletionDeps } from "@/lib/account-deletion-deps";
+import { resolveActiveMembershipForUser } from "@/lib/active-membership-server";
 
 // =============================================================================
 // POST /api/account/delete
@@ -78,13 +79,26 @@ function orchestrationResponse(locale: Locale, role: string, result: Orchestrati
         },
         { status: 409 }
       );
-    case "db_failed":
+    case "db_failed": {
       // Nič sa nezmenilo (rollback) a Storage sa nedotkol — bezpečne opakovateľné.
       console.error("account/delete: DB zrušenie zlyhalo:", result.code);
+      // Biznis pravidlá multi-company → 409 so zrozumiteľnou správou.
+      const rule: Record<string, string> = {
+        ESBLU_USER_OWNS_COMPANY: "settings.errors.globalDeleteOwnsCompany",
+        ESBLU_RETAINED_RECORDS_AUTHOR: "settings.errors.globalDeleteRetainedRecords",
+        ESBLU_OWNER_CANNOT_LEAVE: "settings.errors.ownerCannotLeave",
+        ESBLU_ACCOUNT_HAS_OTHER_COMPANIES: "settings.errors.accountHasOtherCompanies",
+        ESBLU_MULTI_COMPANY_NOT_MIGRATED: "settings.errors.deletionFailedRetry",
+      };
+      const key = rule[result.code];
       return Response.json(
-        { error: translate(locale, owner ? "settings.errors.companyDeletionFailedRetry" : "settings.errors.deletionFailedRetry") },
-        { status: 500 }
+        {
+          error: translate(locale, key ?? (owner ? "settings.errors.companyDeletionFailedRetry" : "settings.errors.deletionFailedRetry")),
+          code: key ? result.code : undefined,
+        },
+        { status: key ? 409 : 500 }
       );
+    }
     case "auth_failed":
       // DB je commitnutá (nevratné); auth cleanup ostáva v jobe na retry.
       // partial=true → klient vynúti odhlásenie (app/nastavenia confirmDeleteAccount).
@@ -110,6 +124,8 @@ function orchestrationResponse(locale: Locale, role: string, result: Orchestrati
         storageRemovedCount: result.storageRemoved,
         // Súbory, ktoré sa nepodarilo zmazať, dočistí retry (cron) — účet je zrušený.
         cleanupPending: result.cleanupPending,
+        // false = login ostáva (používateľ má ďalšie firmy) → klient prepne firmu, neodhlasuje.
+        accountDeleted: result.accountDeleted,
         dbSummary: result.summary,
       });
   }
@@ -269,12 +285,19 @@ export async function POST(req: Request) {
 
     const admin = getSupabaseAdmin();
 
-    const { data: membership, error: membershipError } = await admin
-      .from("company_members")
-      .select("role, company_id")
-      .eq("user_id", user.id)
-      .eq("status", "active")
-      .maybeSingle();
+    // Telo požiadavky (scope: company | global; owner: fráza + forfeit potvrdenie).
+    let body: { confirmPhrase?: string; acknowledgeForfeit?: boolean; scope?: string } = {};
+    try {
+      body = await req.json();
+    } catch {
+      body = {};
+    }
+
+    // Multi-company (2026-10-12): akcia sa týka AKTÍVNEJ firmy, nie „prvého"
+    // členstva. Firma sa nikdy neberie z klienta.
+    const { data: active, error: membershipError } = await resolveActiveMembershipForUser(admin, user.id);
+    const membership = active?.companyId && active.role ? { company_id: active.companyId, role: active.role } : null;
+    const membershipCount = active?.activeMembershipCount ?? 0;
 
     if (membershipError) {
       console.error(
@@ -290,19 +313,35 @@ export async function POST(req: Request) {
       );
     }
 
-    if (!membership) {
+    if (membershipCount === 0) {
       return handleOrphanDelete(admin, user.id, locale);
     }
 
+    // C. Zrušenie GLOBÁLNEHO loginu (iba bez vlastnených firiem) — opustí všetky
+    //    zostávajúce firmy; ich dáta ostávajú firmám.
+    if (body.scope === "global") {
+      const globalResult = await orchestrateAccountDeletion(supabaseDeletionDeps(admin), {
+        kind: "global",
+        userId: user.id,
+        companyId: null,
+        deleteAccount: true,
+      });
+      return orchestrationResponse(locale, "global", globalResult);
+    }
+
+    if (!membership) {
+      // 2+ firiem bez platnej aktívnej firmy → najprv výber firmy (nič sa nemaže).
+      return Response.json(
+        { error: translate(locale, "settings.errors.selectCompanyFirst"), code: "ESBLU_ACTIVE_COMPANY_REQUIRED" },
+        { status: 409 }
+      );
+    }
+
+    // Login sa ruší spolu s firmou / členstvom IBA ak je to posledná firma
+    // používateľa (pôvodné „Zrušiť účet"); inak ostáva pre ďalšie firmy.
+    const deleteAccount = membershipCount === 1;
+
     if (membership.role === "owner") {
-      let body: { confirmPhrase?: string; acknowledgeForfeit?: boolean } = {};
-
-      try {
-        body = await req.json();
-      } catch {
-        body = {};
-      }
-
       if (body.confirmPhrase !== "ZRUŠIŤ FIRMU") {
         return Response.json(
           { error: translate(locale, "settings.errors.confirmPhraseMismatch") },
@@ -390,9 +429,8 @@ export async function POST(req: Request) {
       // (lib/account-deletion-orchestrator.ts). Odmietnutie DB = žiadny súbor
       // sa nezmaže.
       const ownerResult = await orchestrateAccountDeletion(
-        supabaseDeletionDeps(admin, { companyId: membership.company_id }),
-        "owner",
-        user.id
+        supabaseDeletionDeps(admin),
+        { kind: "owner", userId: user.id, companyId: membership.company_id, deleteAccount }
       );
       return orchestrationResponse(locale, "owner", ownerResult);
     }
@@ -411,9 +449,8 @@ export async function POST(req: Request) {
     }
 
     const memberResult = await orchestrateAccountDeletion(
-      supabaseDeletionDeps(admin, { companyId: membership.company_id }),
-      "member",
-      user.id
+      supabaseDeletionDeps(admin),
+      { kind: "member", userId: user.id, companyId: membership.company_id, deleteAccount }
     );
     return orchestrationResponse(locale, membership.role, memberResult);
   } catch (error) {

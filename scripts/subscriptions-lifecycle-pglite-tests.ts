@@ -1047,14 +1047,14 @@ await check("account-deletion: údržbová výnimka iba vedome (GUC v transakcii
 type Calls = string[];
 function pgliteDeletionDeps(calls: Calls, opts: { failStorage?: () => boolean } = {}): DeletionDeps {
   return {
-    async commit(kind, userId) {
+    async commit({ kind, userId }) {
       calls.push("commit");
       try {
         const rows = await asRole("service_role", async () =>
           (await db.query<{ r: { job_id: string; storage_targets: unknown; summary: unknown } }>(`select public.esblu_account_deletion_commit($1, $2) r`, [kind, userId])).rows);
         const r = rows[0].r;
         calls.push("commit:ok");
-        return { ok: true, jobId: r.job_id, storageTargets: parseStorageTargets(r.storage_targets), summary: r.summary };
+        return { ok: true, jobId: r.job_id, storageTargets: parseStorageTargets(r.storage_targets), summary: r.summary, deleteAccount: true };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         calls.push("commit:rejected");
@@ -1105,7 +1105,7 @@ await check("account-deletion: AKTIVÁCIA PREDPLATNÉHO POČAS ZRUŠENIA → DB 
   // …medzitým príde aktivačný webhook (súbeh).
   await buyFake(co);
   const calls: Calls = [];
-  const result = await orchestrateAccountDeletion(pgliteDeletionDeps(calls), "owner", co.owner);
+  const result = await orchestrateAccountDeletion(pgliteDeletionDeps(calls), { kind: "owner", userId: co.owner, companyId: null, deleteAccount: true });
   assert.equal(result.status, "blocked_subscription", JSON.stringify(result));
   assert.deepEqual(calls, ["commit", "commit:rejected"], "žiadny storage ani auth krok");
   assert.equal(await companyExists(co), true);
@@ -1119,7 +1119,7 @@ await check("account-deletion: otvorený checkout počas zrušenia → DB guard 
   await seedFiles(co);
   await rpcAs(co.owner, "esblu_billing_create_checkout_intent", ["test_pro", "month"]);
   const calls: Calls = [];
-  const result = await orchestrateAccountDeletion(pgliteDeletionDeps(calls), "owner", co.owner);
+  const result = await orchestrateAccountDeletion(pgliteDeletionDeps(calls), { kind: "owner", userId: co.owner, companyId: null, deleteAccount: true });
   assert.equal(result.status, "blocked_subscription");
   assert.ok(!calls.some((c) => c.startsWith("storage")));
   assert.equal(await filesOf(co), 3);
@@ -1128,7 +1128,7 @@ await check("account-deletion: otvorený checkout počas zrušenia → DB guard 
 await check("account-deletion: iná DB chyba (nie owner) → rollback, Storage sa nedotkne", async () => {
   const co = await newCompany({ trialEnded: true });
   const calls: Calls = [];
-  const result = await orchestrateAccountDeletion(pgliteDeletionDeps(calls), "owner", co.emp);
+  const result = await orchestrateAccountDeletion(pgliteDeletionDeps(calls), { kind: "owner", userId: co.emp, companyId: null, deleteAccount: true });
   assert.equal(result.status, "db_failed");
   assert.equal((result as { code: string }).code, "ESBLU_NOT_ACTIVE_OWNER");
   assert.ok(!calls.some((c) => c.startsWith("storage") || c === "auth"));
@@ -1139,7 +1139,7 @@ await check("account-deletion: DB commit OK → job s cieľmi z DB, Storage AŽ 
   const co = await newCompany({ trialEnded: true });
   await seedFiles(co);
   const calls: Calls = [];
-  const result = await orchestrateAccountDeletion(pgliteDeletionDeps(calls), "owner", co.owner);
+  const result = await orchestrateAccountDeletion(pgliteDeletionDeps(calls), { kind: "owner", userId: co.owner, companyId: null, deleteAccount: true });
   assert.equal(result.status, "deleted", JSON.stringify(result));
   assert.deepEqual(calls, ["commit", "commit:ok", "storage:4", "auth", "job"]);
   assert.equal(await companyExists(co), false);
@@ -1158,7 +1158,7 @@ await check("account-deletion: Storage cleanup zlyhá → účet zrušený, job 
   let outage = true;
   const calls: Calls = [];
   const deps = pgliteDeletionDeps(calls, { failStorage: () => outage });
-  const result = await orchestrateAccountDeletion(deps, "owner", co.owner);
+  const result = await orchestrateAccountDeletion(deps, { kind: "owner", userId: co.owner, companyId: null, deleteAccount: true });
   assert.equal(result.status, "deleted");
   assert.equal((result as { cleanupPending: boolean }).cleanupPending, true);
   assert.deepEqual(calls, ["commit", "commit:ok", "storage:4", "auth", "job"], "auth beží aj pri zlyhanom Storage");
@@ -1188,7 +1188,7 @@ await check("account-deletion: člen — DB najprv (iba jeho logo), firma ostáv
   const co = await newCompany({ trialEnded: true });
   await su(`insert into public.settings (user_id, logo_path) values ('${co.emp}', 'members/${co.emp}.png')`);
   const calls: Calls = [];
-  const result = await orchestrateAccountDeletion(pgliteDeletionDeps(calls), "member", co.emp);
+  const result = await orchestrateAccountDeletion(pgliteDeletionDeps(calls), { kind: "member", userId: co.emp, companyId: null, deleteAccount: true });
   assert.equal(result.status, "deleted");
   assert.deepEqual(calls, ["commit", "commit:ok", "storage:1", "auth", "job"]);
   assert.equal(await companyExists(co), true);
@@ -1229,7 +1229,7 @@ await check("account-deletion: RESTORE Google (bez checkout záznamu) → firma 
   assert.equal((await guardOf(co, "member", false)).store_subscription_notice, false, "employee bez upozornenia");
   // DB poistka: zrušenie firmy aj tak neprejde
   const calls: Calls = [];
-  assert.equal((await orchestrateAccountDeletion(pgliteDeletionDeps(calls), "owner", co.owner)).status, "blocked_subscription");
+  assert.equal((await orchestrateAccountDeletion(pgliteDeletionDeps(calls), { kind: "owner", userId: co.owner, companyId: null, deleteAccount: true })).status, "blocked_subscription");
   assert.ok(!calls.some((c) => c.startsWith("storage")));
   assert.equal(Number((await one<{ n: number }>(`select count(*)::int n from public.billing_provider_links where company_id = '${co.id}' and link_kind = 'account_token'`)).n), 1, "väzba na firmu ostala");
 });

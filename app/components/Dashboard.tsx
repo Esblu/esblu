@@ -48,6 +48,8 @@ import { downloadDocumentPackage, PackageDownloadError } from "@/lib/document-pa
 import { describePackageError, describePackageOutcome } from "@/app/components/folders/package-messages";
 import { signOutOnThisDevice } from "@/lib/sign-out";
 import { AppLink } from "@/app/components/AppLink";
+import CompanyPicker from "@/app/components/workspaces/CompanyPicker";
+import { listMyCompanies, type MyCompany } from "@/lib/company-workspaces";
 
 function getGreeting(t: (key: string) => string) {
   const hour = new Date().getHours();
@@ -127,6 +129,8 @@ export default function Dashboard() {
   const pendingPreviewRef = useRef<IntentResult | null>(null);
   const confirmInFlightRef = useRef(false);
   const logoutInFlightRef = useRef(false);
+  // Multi-company: 2+ firiem bez platnej aktívnej firmy → výber firmy (nie náhodná firma).
+  const [pickerCompanies, setPickerCompanies] = useState<MyCompany[] | null>(null);
   // Posledný výsledok pre kontext prepisu reči (čítané v callbacku nahrávania).
   const intentResultRef = useRef<IntentResult | null>(null);
   // Veta už vybavená hlasovou reláciou — debounced efekt hľadania ju
@@ -192,6 +196,11 @@ export default function Dashboard() {
     const membership = await getMyActiveMembership();
 
     if (!membership) {
+      const companies = await listMyCompanies().catch(() => [] as MyCompany[]);
+      if (companies.length > 0) {
+        setPickerCompanies(companies);
+        return;
+      }
       setVehicles([]);
       setMachines([]);
       setItems([]);
@@ -890,6 +899,10 @@ export default function Dashboard() {
   // nejednoznačné → výber. Ak permission denied → jasná bezpečná chyba.").
   // Vracia null, ak niet čo zobraziť — volajúci potom padne na existujúci
   // plain-substring searchResults panel bezo zmeny.
+
+  if (pickerCompanies) {
+    return <CompanyPicker companies={pickerCompanies} />;
+  }
 
   return (
     <main

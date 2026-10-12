@@ -26,6 +26,11 @@ function loadFor(userId: string): Promise<MyActiveMembership | null> {
   return promise;
 }
 
+/** Multi-company: po prepnutí / opustení firmy sa členstvo načíta nanovo. */
+export function resetActiveMembershipCache(): void {
+  cache = null;
+}
+
 export type ActiveMembershipState = {
   loading: boolean;
   signedIn: boolean;

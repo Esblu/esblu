@@ -35,6 +35,8 @@ import {
 } from "@/lib/account-deletion";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import { formatDate, formatDateTime } from "@/lib/i18n/format";
+import { fetchMyActiveMembership } from "@/lib/active-membership";
+import { resetCompanyScopedClientState } from "@/lib/company-workspaces";
 import { deletionManagedViaKey, deletionReasonKey } from "@/lib/billing/deletion-guard";
 import Link from "next/link";
 import LanguageSwitcher from "@/app/components/LanguageSwitcher";
@@ -62,6 +64,7 @@ import {
   SettingsSection,
 } from "@/app/components/ui/SettingsList";
 import { ImageIcon, TrashIcon } from "@/app/components/icons/AppIcons";
+import CompanySwitcher from "@/app/components/workspaces/CompanySwitcher";
 
 /** Staging prepínač odkazu na Predplatné (build-time, default vypnuté). */
 const BILLING_UI_ENABLED = process.env.NEXT_PUBLIC_ESBLU_BILLING_UI === "1";
@@ -229,6 +232,8 @@ export default function NastaveniaPage() {
   const [deleteConfirmText, setDeleteConfirmText] = useState("");
   // Zrušená obnova + bežiace obdobie: výslovné potvrdenie straty zvyšku obdobia.
   const [forfeitAcknowledged, setForfeitAcknowledged] = useState(false);
+  // Multi-company: názov aktívnej firmy (texty „Opustiť firmu …").
+  const [activeCompanyName, setActiveCompanyName] = useState("");
   const [deleteSubmitting, setDeleteSubmitting] = useState(false);
   const [deleteError, setDeleteError] = useState("");
 
@@ -256,13 +261,9 @@ export default function NastaveniaPage() {
       // esblu_list_my_company_members()/..._invites(), ktoré sú teraz
       // vyhradené iba pre aktívneho owner/admin a employee by pre ne
       // dostal chybu (zámerne, pozri report).
+      // Multi-company: aktívna firma (nie „prvé" členstvo).
       const { data: ownMembership, error: ownMembershipError } =
-        await supabase
-          .from("company_members")
-          .select("role, company_id, permissions")
-          .eq("user_id", currentUserId)
-          .eq("status", "active")
-          .maybeSingle();
+        await fetchMyActiveMembership(supabase, currentUserId);
 
       if (ownMembershipError) {
         throw ownMembershipError;
@@ -270,6 +271,7 @@ export default function NastaveniaPage() {
 
       const role = ownMembership?.role ?? null;
       setMyRole(role);
+      setActiveCompanyName(ownMembership?.company_name ?? "");
 
       const permissions = (ownMembership?.permissions ?? {}) as MemberPermissions;
       setMyPermissions(permissions);
@@ -811,6 +813,25 @@ export default function NastaveniaPage() {
     setDeleteError("");
   }
 
+  async function confirmDeleteGlobalAccount() {
+    if (deleteSubmitting) return;
+    setDeleteSubmitting(true);
+    setDeleteError("");
+    try {
+      await deleteMyAccount(locale, undefined, { scope: "global" });
+      await signOutOnThisDevice();
+      navigateHard("/login?ucet-zruseny=1");
+    } catch (error) {
+      if (isPartialAccountDeletionError(error)) {
+        await signOutOnThisDevice();
+        navigateHard("/login?ucet-zruseny-ciastocne=1");
+        return;
+      }
+      setDeleteSubmitting(false);
+      setDeleteError(error instanceof Error ? stripPartialAccountDeletionMarker(error.message) : t("settings.deleteModal.deleteFailed"));
+    }
+  }
+
   async function confirmDeleteAccount() {
     if (!deletePreflight) {
       return;
@@ -827,11 +848,18 @@ export default function NastaveniaPage() {
     setDeleteError("");
 
     try {
-      await deleteMyAccount(
+      const { accountDeleted } = await deleteMyAccount(
         locale,
         deletePreflight.role === "owner" ? deleteConfirmText : undefined,
         { acknowledgeForfeit: deletePreflight.role === "owner" && forfeitAcknowledged }
       );
+
+      if (!accountDeleted) {
+        // Multi-company: firma zrušená / opustená, login ostáva pre ďalšie firmy.
+        resetCompanyScopedClientState();
+        navigateHard("/");
+        return;
+      }
 
       await signOutOnThisDevice();
 
@@ -913,6 +941,9 @@ export default function NastaveniaPage() {
         <BackLink href="/" label={t("inbox.backToMenu")} />
 
         <h1 className="ui-page-title mb-3">{t("settings.pageTitle")}</h1>
+
+        {/* Multi-company: aktívna firma + prepnutie / pridanie vlastnej firmy. */}
+        <CompanySwitcher className="mb-4" />
 
         <div className="space-y-4">
           {/* ---------------- Jazyk ---------------- */}
@@ -1319,7 +1350,9 @@ export default function NastaveniaPage() {
               <h2 id="delete-account-title" className="ui-section-title">
                 {deletePreflight?.role === "owner"
                   ? t("settings.deleteModal.ownerTitle")
-                  : t("settings.deleteModal.genericTitle")}
+                  : deletePreflight?.deletesAccount === false && !deletePreflight?.orphan
+                    ? t("settings.deleteModal.leaveTitle", { company: activeCompanyName })
+                    : t("settings.deleteModal.genericTitle")}
               </h2>
               <button
                 type="button"
@@ -1407,6 +1440,9 @@ export default function NastaveniaPage() {
                     </div>
                   )}
                   <p className="ui-body">{t("settings.deleteModal.irreversibleIntro")}</p>
+                  {deletePreflight.deletesAccount === false && (
+                    <p className="ui-notice" data-tone="info">{t("settings.deleteModal.keepsAccountNote")}</p>
+                  )}
 
                   <ul className="ui-body list-disc space-y-0.5 pl-5">
                     <li>{t("settings.deleteModal.deleteItemCompany")}</li>
@@ -1477,8 +1513,13 @@ export default function NastaveniaPage() {
                   <p className="ui-body">
                     {deletePreflight?.orphan
                       ? t("settings.deleteModal.orphanIrreversible")
-                      : t("settings.deleteModal.memberIrreversible")}
+                      : deletePreflight?.deletesAccount === false
+                        ? t("settings.deleteModal.leaveBody", { company: activeCompanyName })
+                        : t("settings.deleteModal.memberIrreversible")}
                   </p>
+                  {deletePreflight?.deletesAccount === false && (
+                    <p className="ui-body">{t("settings.deleteModal.keepsAccountNote")}</p>
+                  )}
 
                   {deletePreflight?.subscription?.store_subscription_notice && (
                     <p className="ui-notice" data-tone="warning" role="status">
@@ -1507,9 +1548,39 @@ export default function NastaveniaPage() {
                       disabled={deleteSubmitting}
                       className="ui-btn bg-red-600 text-white hover:bg-red-700"
                     >
-                      {deleteSubmitting ? t("settings.deleteModal.deletingAccount") : t("settings.deleteModal.confirmDelete")}
+                      {deleteSubmitting
+                        ? t("settings.deleteModal.deletingAccount")
+                        : deletePreflight?.deletesAccount === false && !deletePreflight?.orphan
+                          ? t("settings.deleteModal.leaveConfirm")
+                          : t("settings.deleteModal.confirmDelete")}
                     </button>
                   </div>
+                </div>
+              )}
+
+              {/* Multi-company: zrušenie CELÉHO loginu (iba ak používateľ nevlastní firmu). */}
+              {!deletePreflightLoading && !deletePreflightError && (deletePreflight?.membershipCount ?? 0) > 1 && (
+                <div className="mt-5 space-y-2 border-t border-subtle pt-4">
+                  <h3 className="ui-label">{t("settings.deleteModal.globalTitle")}</h3>
+                  {deletePreflight?.canDeleteGlobalAccount ? (
+                    <>
+                      <p className="ui-body">{t("settings.deleteModal.globalBody")}</p>
+                      <div className="flex justify-end">
+                        <button
+                          type="button"
+                          onClick={confirmDeleteGlobalAccount}
+                          disabled={deleteSubmitting}
+                          className="ui-btn bg-red-600 text-white hover:bg-red-700"
+                        >
+                          {deleteSubmitting ? t("settings.deleteModal.deletingAccount") : t("settings.deleteModal.globalConfirm")}
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <p className="ui-body">
+                      {t("settings.deleteModal.globalBlockedOwns", { count: deletePreflight?.ownedCompanyCount ?? 0 })}
+                    </p>
+                  )}
                 </div>
               )}
             </div>

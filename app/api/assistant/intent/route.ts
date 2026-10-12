@@ -12,6 +12,7 @@ import { runAssistantTurn } from "@/lib/intents/orchestrator";
 import { getCompanyEntitlements, entitlementDenialMessage } from "@/lib/entitlements-server";
 import { assistantEntitlementDenial } from "@/lib/entitlements";
 import { isRegisteredReadOnlyIntent } from "@/lib/intents/registry";
+import { fetchMyActiveMembership } from "@/lib/active-membership";
 
 // -----------------------------------------------------------------------------
 // POST /api/assistant/intent
@@ -180,12 +181,9 @@ export async function POST(req: Request) {
     // Fail closed: bez aktívneho membershipu appka nemá čo prehľadávať —
     // nikdy nespustí handler "naprázdno" (čo by pri chybe v RLS mohlo byť
     // nebezpečné ticho-prázdne správanie namiesto explicitnej chyby).
-    const { data: membership, error: membershipError } = await supabase
-      .from("company_members")
-      .select("company_id, role")
-      .eq("user_id", user.id)
-      .eq("status", "active")
-      .maybeSingle();
+    // Multi-company: AKTÍVNA firma (serverom validovaná voľba), nie „prvé"
+    // členstvo — hlasový príkaz nikdy nevznikne v starej / inej firme.
+    const { data: membership, error: membershipError } = await fetchMyActiveMembership(supabase, user.id);
 
     if (membershipError || !membership) {
       return Response.json(

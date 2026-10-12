@@ -81,6 +81,8 @@
     "test:provider-gate": "npm run test:subscriptions-lifecycle -- provider-gate",
     "test:billing-ui": "npm run test:subscriptions-lifecycle -- billing-ui",
     "test:account-deletion-subscription": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/account-deletion-subscription-tests.ts && npm run test:subscriptions-lifecycle-db -- account-deletion",
+    "test:multi-company": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/multi-company-tests.ts",
+    "test:multi-company-db": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/multi-company-pglite-tests.ts",
     "test:account-deletion-orchestration": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/account-deletion-orchestration-tests.ts",
     "verify:mobile-bundle": "node scripts/verify-mobile-bundle.mjs"
   },

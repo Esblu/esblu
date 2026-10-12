@@ -32,6 +32,7 @@ import InvoicesIcon from "@/app/components/icons/InvoicesIcon";
 import BusinessPartnersIcon from "@/app/components/icons/BusinessPartnersIcon";
 import ChatBubbleIcon from "@/app/components/icons/ChatBubbleIcon";
 import SettingsIcon from "@/app/components/icons/SettingsIcon";
+import CompanySwitcher from "@/app/components/workspaces/CompanySwitcher";
 
 // =============================================================================
 // Spodná navigácia mobilnej appky (Mobile M1, 2026-09-28).
@@ -226,6 +227,8 @@ export default function MobileTabBar() {
                 <CloseIcon size={20} />
               </button>
             </div>
+            {/* Multi-company: prepínač firmy dostupný aj v natívnej appke. */}
+            <CompanySwitcher className="mt-3" />
             <ul className="mt-3 grid grid-cols-3 gap-2">
               {more.map((item) => (
                 <li key={item.key}>

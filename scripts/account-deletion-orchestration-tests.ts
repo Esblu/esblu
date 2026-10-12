@@ -64,19 +64,19 @@ function fakeDeps(commit: CommitResult, opts: { storageFails?: boolean; authFail
 
 await check("DB guard odmietne (súbeh s aktiváciou predplatného) → Storage ani auth sa NEZAVOLAJÚ", async () => {
   const { deps, log } = fakeDeps({ ok: false, reason: "subscription_guard", code: "ESBLU_ACTIVE_SUBSCRIPTION_BLOCKS_DELETION" });
-  const r = await orchestrateAccountDeletion(deps, "owner", "u1");
+  const r = await orchestrateAccountDeletion(deps, { kind: "owner", userId: "u1", companyId: null, deleteAccount: true });
   assert.equal(r.status, "blocked_subscription");
   assert.deepEqual(log, ["commit"]);
 });
 await check("iná DB chyba → rollback, Storage ani auth sa NEZAVOLAJÚ", async () => {
   const { deps, log } = fakeDeps({ ok: false, reason: "db_error", code: "ESBLU_NOT_ACTIVE_OWNER" });
-  const r = await orchestrateAccountDeletion(deps, "owner", "u1");
+  const r = await orchestrateAccountDeletion(deps, { kind: "owner", userId: "u1", companyId: null, deleteAccount: true });
   assert.equal(r.status, "db_failed");
   assert.deepEqual(log, ["commit"]);
 });
 await check("DB commit OK → Storage až potom, potom auth, job done + cesty vymazané", async () => {
-  const { deps, log, patches } = fakeDeps({ ok: true, jobId: "j1", storageTargets: TARGETS, summary: {} });
-  const r = await orchestrateAccountDeletion(deps, "owner", "u1");
+  const { deps, log, patches } = fakeDeps({ ok: true, jobId: "j1", storageTargets: TARGETS, summary: {}, deleteAccount: true });
+  const r = await orchestrateAccountDeletion(deps, { kind: "owner", userId: "u1", companyId: null, deleteAccount: true });
   assert.deepEqual(log, ["commit", "storage:2", "auth", "job"]);
   assert.equal(r.status, "deleted");
   assert.equal((r as { cleanupPending: boolean }).cleanupPending, false);
@@ -86,8 +86,8 @@ await check("DB commit OK → Storage až potom, potom auth, job done + cesty vy
   assert.equal(patches[0].completed_at, NOW.toISOString());
 });
 await check("Storage zlyhá → účet zrušený, auth aj tak, job pending s backoffom (retryable), cesty ostanú", async () => {
-  const { deps, log, patches } = fakeDeps({ ok: true, jobId: "j1", storageTargets: TARGETS, summary: {} }, { storageFails: true });
-  const r = await orchestrateAccountDeletion(deps, "member", "u1");
+  const { deps, log, patches } = fakeDeps({ ok: true, jobId: "j1", storageTargets: TARGETS, summary: {}, deleteAccount: true }, { storageFails: true });
+  const r = await orchestrateAccountDeletion(deps, { kind: "member", userId: "u1", companyId: null, deleteAccount: true });
   assert.equal(r.status, "deleted");
   assert.equal((r as { cleanupPending: boolean }).cleanupPending, true);
   assert.deepEqual(log, ["commit", "storage:2", "auth", "job"]);
@@ -98,14 +98,14 @@ await check("Storage zlyhá → účet zrušený, auth aj tak, job pending s bac
   assert.equal(patches[0].completed_at, null);
 });
 await check("auth zlyhá → partial (DB commitnutá), job auth pending na retry", async () => {
-  const { deps, patches } = fakeDeps({ ok: true, jobId: "j1", storageTargets: [], summary: {} }, { authFails: true });
-  const r = await orchestrateAccountDeletion(deps, "owner", "u1");
+  const { deps, patches } = fakeDeps({ ok: true, jobId: "j1", storageTargets: [], summary: {}, deleteAccount: true }, { authFails: true });
+  const r = await orchestrateAccountDeletion(deps, { kind: "owner", userId: "u1", companyId: null, deleteAccount: true });
   assert.equal(r.status, "auth_failed");
   assert.equal(patches[0].auth_status, "pending");
   assert.equal(patches[0].storage_status, "done", "bez súborov = storage hotový");
 });
 await check("retry jobu: idempotentné, hotový job nič nevolá, zlyhanie zápisu jobu nič nerozbije", async () => {
-  const { deps, log } = fakeDeps({ ok: true, jobId: "j1", storageTargets: [], summary: {} });
+  const { deps, log } = fakeDeps({ ok: true, jobId: "j1", storageTargets: [], summary: {}, deleteAccount: true });
   const done = await runCleanupJob(deps, { id: "j1", userId: "u1", storageTargets: [], storagePending: false, authPending: false, attempts: 3 });
   assert.equal(done.storageDone && done.authDone, true);
   assert.deepEqual(log, ["job"]);
@@ -152,15 +152,15 @@ function fakeAdmin(rpc: Record<string, RpcRes>, log: string[]) {
 
 await check("deps: commit funkcia existuje → ciele z DB transakcie (TS kolektory sa nevolajú)", async () => {
   const log: string[] = [];
-  const deps = supabaseDeletionDeps(fakeAdmin({ esblu_account_deletion_commit: { data: { job_id: "j9", storage_targets: TARGETS, summary: { ok: 1 } }, error: null } }, log), { companyId: "c" });
-  const r = await orchestrateAccountDeletion(deps, "owner", "u1");
+  const deps = supabaseDeletionDeps(fakeAdmin({ esblu_account_deletion_commit: { data: { job_id: "j9", storage_targets: TARGETS, summary: { ok: 1 }, delete_account: true }, error: null } }, log));
+  const r = await orchestrateAccountDeletion(deps, { kind: "owner", userId: "u1", companyId: "c", deleteAccount: true });
   assert.equal(r.status, "deleted");
   assert.deepEqual(log.filter((l) => !l.startsWith("read:account_deletion_cleanup_jobs")), ["rpc:esblu_account_deletion_commit", "remove:documents:1", "remove:vehicle-photos:1", "auth:delete"]);
 });
 await check("deps: migrácia ešte neaplikovaná → fallback: TS zber (read-only) → legacy RPC → AŽ POTOM Storage", async () => {
   const log: string[] = [];
-  const deps = supabaseDeletionDeps(fakeAdmin({ esblu_owner_delete_company: { data: { ok: true }, error: null } }, log), { companyId: "c" });
-  const r = await orchestrateAccountDeletion(deps, "owner", "u1");
+  const deps = supabaseDeletionDeps(fakeAdmin({ esblu_owner_delete_company: { data: { ok: true }, error: null } }, log));
+  const r = await orchestrateAccountDeletion(deps, { kind: "owner", userId: "u1", companyId: "c", deleteAccount: true });
   assert.equal(r.status, "deleted");
   const rpcAt = log.indexOf("rpc:esblu_owner_delete_company");
   const firstRemove = log.findIndex((l) => l.startsWith("remove:"));
@@ -169,8 +169,8 @@ await check("deps: migrácia ešte neaplikovaná → fallback: TS zber (read-onl
 });
 await check("deps: fallback + legacy RPC odmietnuté poistkou → Storage sa NEZAVOLÁ", async () => {
   const log: string[] = [];
-  const deps = supabaseDeletionDeps(fakeAdmin({ esblu_owner_delete_company: { data: null, error: { code: "P0001", message: "ESBLU_ACTIVE_SUBSCRIPTION_BLOCKS_DELETION" } } }, log), { companyId: "c" });
-  const r = await orchestrateAccountDeletion(deps, "owner", "u1");
+  const deps = supabaseDeletionDeps(fakeAdmin({ esblu_owner_delete_company: { data: null, error: { code: "P0001", message: "ESBLU_ACTIVE_SUBSCRIPTION_BLOCKS_DELETION" } } }, log));
+  const r = await orchestrateAccountDeletion(deps, { kind: "owner", userId: "u1", companyId: "c", deleteAccount: true });
   assert.equal(r.status, "blocked_subscription");
   assert.ok(!log.some((l) => l.startsWith("remove:") || l === "auth:delete"), log.join(","));
 });
@@ -180,14 +180,61 @@ await check("deps: commit odmietnutý poistkou / inou chybou → bez fallbacku, 
     [{ code: "40P01", message: "deadlock detected" }, "db_failed"],
   ] as const) {
     const log: string[] = [];
-    const deps = supabaseDeletionDeps(fakeAdmin({ esblu_account_deletion_commit: { data: null, error } }, log), { companyId: "c" });
-    const r = await orchestrateAccountDeletion(deps, "owner", "u1");
+    const deps = supabaseDeletionDeps(fakeAdmin({ esblu_account_deletion_commit: { data: null, error } }, log));
+    const r = await orchestrateAccountDeletion(deps, { kind: "owner", userId: "u1", companyId: "c", deleteAccount: true });
     assert.equal(r.status, status);
     assert.deepEqual(log, ["rpc:esblu_account_deletion_commit"], "žiadny fallback, žiadne čítanie, žiadny remove");
   }
   assert.equal(subscriptionGuardCode({ message: "x ESBLU_ACTIVE_SUBSCRIPTION_BLOCKS_DELETION y" }), "ESBLU_ACTIVE_SUBSCRIPTION_BLOCKS_DELETION");
   assert.equal(isMissingFunctionError({ code: "PGRST202" }), true);
   assert.equal(isMissingFunctionError({ code: "40P01", message: "deadlock" }), false);
+});
+
+await check("multi-company: odchod z firmy / zrušenie firmy pri ďalších firmách → login sa NEZRUŠÍ (žiadne auth volanie)", async () => {
+  const log: string[] = [];
+  const deps: DeletionDeps = {
+    async commit(req) {
+      log.push(`commit:${req.kind}:${req.companyId}:${req.deleteAccount}`);
+      return { ok: true, jobId: "j2", storageTargets: [], summary: {}, deleteAccount: false };
+    },
+    async removeStorage() { log.push("storage"); return 0; },
+    async deleteAuthUser() { log.push("auth"); return { ok: true }; },
+    async updateJob() { log.push("job"); },
+    now: () => NOW,
+  };
+  const r = await orchestrateAccountDeletion(deps, { kind: "member", userId: "u1", companyId: "c1", deleteAccount: false });
+  assert.equal(r.status, "deleted");
+  assert.equal((r as { accountDeleted: boolean }).accountDeleted, false);
+  assert.deepEqual(log, ["commit:member:c1:false", "job"], "žiadny storage ani auth");
+});
+await check("multi-company: globálne zrušenie loginu = auth sa ruší až po commite", async () => {
+  const log: string[] = [];
+  const deps: DeletionDeps = {
+    async commit(req) {
+      log.push(`commit:${req.kind}`);
+      return { ok: true, jobId: "j3", storageTargets: [{ bucket: "company-logos", path: "u/logo.png" }], summary: {}, deleteAccount: true };
+    },
+    async removeStorage() { log.push("storage"); return 1; },
+    async deleteAuthUser() { log.push("auth"); return { ok: true }; },
+    async updateJob() { log.push("job"); },
+    now: () => NOW,
+  };
+  const r = await orchestrateAccountDeletion(deps, { kind: "global", userId: "u1", companyId: null, deleteAccount: true });
+  assert.equal((r as { accountDeleted: boolean }).accountDeleted, true);
+  assert.deepEqual(log, ["commit:global", "storage", "auth", "job"]);
+});
+await check("deps: bez multi-company migrácie sa „iba opustiť firmu“ / globálne zrušenie NEvykoná (fail closed)", async () => {
+  for (const req of [
+    { kind: "member" as const, userId: "u1", companyId: "c", deleteAccount: false },
+    { kind: "global" as const, userId: "u1", companyId: null, deleteAccount: true },
+  ]) {
+    const log: string[] = [];
+    const deps = supabaseDeletionDeps(fakeAdmin({}, log));
+    const r = await orchestrateAccountDeletion(deps, req);
+    assert.equal(r.status, "db_failed");
+    assert.equal((r as { code: string }).code, "ESBLU_MULTI_COMPANY_NOT_MIGRATED");
+    assert.ok(!log.some((l) => l.startsWith("remove:") || l === "auth:delete"));
+  }
 });
 
 console.log(`\naccount-deletion-orchestration: ${passed} passed, ${failed} failed`);

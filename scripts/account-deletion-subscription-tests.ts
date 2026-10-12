@@ -254,10 +254,10 @@ await check("delete route: predplatné + forfeit potvrdenie PRED zrušením; DB 
   const retention = route.indexOf("findOwnerDeletionBlocker(admin, membership.company_id)");
   const ownerCheck = route.indexOf('scope: "company",');
   const forfeit = route.indexOf("subscriptionCheck.forfeits_remaining_period && body.acknowledgeForfeit !== true");
-  const ownerOrchestrate = route.indexOf('"owner",\n        user.id');
+  const ownerOrchestrate = route.indexOf('{ kind: "owner", userId: user.id');
   assert.ok(retention > 0 && retention < ownerCheck && ownerCheck < forfeit && forfeit < ownerOrchestrate, "owner: archivácia → predplatné → potvrdenie → orchestrácia");
   const memberCheck = route.indexOf('scope: "member",');
-  const memberOrchestrate = route.indexOf('"member",\n      user.id');
+  const memberOrchestrate = route.indexOf('{ kind: "member", userId: user.id');
   assert.ok(memberCheck > 0 && memberCheck < memberOrchestrate, "člen: predplatné → orchestrácia");
   // route už nemaže Storage ani nevolá legacy RPC priamo (iba cez orchestráciu / deps)
   for (const direct of ["collectOwnerStorageTargets", "collectMemberOwnStorageTargets", "removeStorageTargets", "storage.from(", '"esblu_owner_delete_company"', '"esblu_member_delete_self"']) {

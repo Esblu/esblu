@@ -60,6 +60,14 @@ export type AccountDeletionPreflight = {
   subscription_status?: DeletionSubscriptionStatus;
   /** Detail predplatného pre UI (kde ho spravovať, koniec obdobia). */
   subscription?: SubscriptionDeletionCheck;
+  /** Multi-company (2026-10-12). */
+  membershipCount?: number;
+  ownedCompanyCount?: number;
+  /** Akcia nad aktívnou firmou zruší aj login (posledná firma používateľa). */
+  deletesAccount?: boolean;
+  canDeleteGlobalAccount?: boolean;
+  companyId?: string | null;
+  needsCompanySelection?: boolean;
 };
 
 async function getAccessToken(locale: Locale): Promise<string> {
@@ -103,8 +111,8 @@ export async function fetchAccountDeletionPreflight(
 export async function deleteMyAccount(
   locale: Locale,
   confirmPhrase?: string,
-  options: { acknowledgeForfeit?: boolean } = {}
-): Promise<void> {
+  options: { acknowledgeForfeit?: boolean; scope?: "company" | "global" } = {}
+): Promise<{ accountDeleted: boolean }> {
   const accessToken = await getAccessToken(locale);
 
   const response = await fetch(apiUrl("/api/account/delete"), {
@@ -118,10 +126,11 @@ export async function deleteMyAccount(
       ...(confirmPhrase !== undefined ? { confirmPhrase } : {}),
       // Zrušená obnova + bežiace obdobie: server vyžaduje výslovné potvrdenie.
       ...(options.acknowledgeForfeit ? { acknowledgeForfeit: true } : {}),
+      ...(options.scope === "global" ? { scope: "global" } : {}),
     }),
   });
 
-  const body = (await response.json().catch(() => ({}))) as { success?: boolean; error?: string; partial?: boolean };
+  const body = (await response.json().catch(() => ({}))) as { success?: boolean; error?: string; partial?: boolean; accountDeleted?: boolean };
 
   if (!response.ok || !body.success) {
     const message =
@@ -137,6 +146,9 @@ export async function deleteMyAccount(
         : message
     );
   }
+
+  // Staršia odpoveď (bez poľa) = pôvodná sémantika: účet zrušený.
+  return { accountDeleted: body.accountDeleted !== false };
 }
 
 export { CONFIRM_PHRASE as ACCOUNT_DELETION_CONFIRM_PHRASE };

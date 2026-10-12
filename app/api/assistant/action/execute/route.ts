@@ -4,6 +4,7 @@ import { getRequestLocale } from "@/lib/i18n/request-locale";
 import { translate } from "@/lib/i18n/translate";
 import { executeAction } from "@/lib/intents/actions";
 import type { CompanyMemberRole } from "@/lib/company";
+import { fetchMyActiveMembership } from "@/lib/active-membership";
 
 // -----------------------------------------------------------------------------
 // POST /api/assistant/action/execute
@@ -80,12 +81,9 @@ export async function POST(req: Request) {
       : "";
     const supabase = getUserScopedSupabaseClient(accessToken);
 
-    const { data: membership, error: membershipError } = await supabase
-      .from("company_members")
-      .select("company_id, role")
-      .eq("user_id", user.id)
-      .eq("status", "active")
-      .maybeSingle();
+    // Multi-company: AKTÍVNA firma (serverom validovaná voľba), nie „prvé"
+    // členstvo — hlasový príkaz nikdy nevznikne v starej / inej firme.
+    const { data: membership, error: membershipError } = await fetchMyActiveMembership(supabase, user.id);
 
     if (membershipError || !membership) {
       return Response.json(

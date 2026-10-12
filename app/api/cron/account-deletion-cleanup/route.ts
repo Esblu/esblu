@@ -56,7 +56,7 @@ export async function GET(req: Request) {
     return Response.json({ success: false }, { status: 500 });
   }
 
-  const deps = supabaseDeletionDeps(admin, { companyId: null });
+  const deps = supabaseDeletionDeps(admin);
   let completed = 0;
   let pending = 0;
   for (const row of (data ?? []) as JobRow[]) {
