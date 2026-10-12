@@ -79,7 +79,7 @@ Nespustené tu (vyžaduje zariadenie): reálny Android WebView beh, FCM doručen
 - Klient: UI odkaz iba s `NEXT_PUBLIC_ESBLU_BILLING_UI=1`; natívny plugin iba s `-PesbluBilling=true`; fake bridge iba v staging builde. Bez explicitnej provider konfigurácie **nie je možné spustiť reálnu platbu**.
 - Kontrakty: `managed_via`, restore, `pending`, `already_owned`, `billing_unavailable`, fail-closed provider modes — testy `subscriptions` (60 PGlite), `subscriptions-lifecycle` (44 + 49 PGlite), `native-billing-contract`.
 - Entitlement E2E (PGlite): fake/podpísaný webhook → subscription active → `company_entitlements` → rovnaké nároky web/Android/iOS; expiry bez webhooku → nárok vyprší; refund/revoke → zamknuté; manuálny/beta grant prežije zrušenie; trial zachovaný a nepredĺžiteľný klientom; employee vidí plán/stav, nesmie spravovať. Klient: po potvrdení sa zdieľaná cache nárokov invaliduje → dashboard odomkne modul bez reštartu (RC fix).
-- **Gap pred zapnutím billingu**: zrušenie účtu ownerom s aktívnym predplatným → `ON DELETE CASCADE` zmaže subscription riadky, ale predplatné v Stripe/Play/App Store beží ďalej. Pred live billingom: blokovať/upozorniť v `findOwnerDeletionBlocker` (aktívne/obnovujúce sa predplatné) alebo zrušiť u providera.
+- ~~Gap: zrušenie účtu s aktívnym predplatným~~ → **vyriešené na branchi** (fail-closed precheck + DB poistka, `docs/account-deletion-subscription-policy-2026-10-12.md`). Migrácia `20261012120000` čaká na staging/prod schválenie.
 
 ## E. Security
 
@@ -154,7 +154,7 @@ Data Safety formulár sa **nevypĺňa** — toto je iba faktický podklad.
 2. Produkčné DB migrácie subscriptions (4 migrácie + rollback skripty) — iba po schválení. Kód je bez nich bezpečný: pri billing OFF `authorizeBillingCaller` vráti `404 ESBLU_BILLING_DISABLED` ešte pred DB, Predplatné ukáže „disabled", v `vercel.json` nie je žiadny nový cron. Migrácie sú potrebné až pre zapnutie billingu.
 3. `/zrusenie-uctu` na produkcii.
 4. Android build matrix + Turbopack mobile build + device smoke na Windows kite.
-5. Gap: zrušenie účtu s aktívnym predplatným (pred zapnutím billingu).
+5. Migrácia `20261012120000_account_deletion_subscription_guard` (DB poistka zrušenia účtu pri predplatnom) — aplikovať spolu s billing migráciami.
 
 ## K. External provider blockers
 
@@ -194,7 +194,7 @@ Preview `dpl_65E69MVmnRpysbxEgwRR6LuPY15N` (`esblu-5xd2lfvqn-esblu.vercel.app`) 
 | push | PASS WITH EXTERNAL BLOCKER (FCM prod config, device test) |
 | files | PASS |
 | account deletion | PASS WITH EXTERNAL BLOCKER (`/zrusenie-uctu` 404 na produkcii do deployu) |
-| subscriptions | PASS WITH EXTERNAL BLOCKER (vypnuté; prod migrácie neaplikované; deletion gap pred zapnutím) |
+| subscriptions | PASS WITH EXTERNAL BLOCKER (vypnuté; prod migrácie neaplikované) |
 | Google Billing | BLOCKED EXTERNAL |
 | Stripe | BLOCKED EXTERNAL |
 | Apple | BLOCKED EXTERNAL |
