@@ -373,6 +373,7 @@ async function resetPassword() {
           <input
             type="email"
             placeholder={t("auth.login.email")}
+            aria-label={t("auth.login.email")}
             autoComplete="email"
             className="ui-input"
             value={email}
@@ -383,6 +384,7 @@ async function resetPassword() {
           <input
             type="password"
             placeholder={t("auth.login.password")}
+            aria-label={t("auth.login.password")}
             autoComplete={
               mode === "login" ? "current-password" : "new-password"
             }
@@ -396,6 +398,7 @@ async function resetPassword() {
             <input
               type="password"
               placeholder={t("auth.login.confirmPasswordPlaceholder")}
+              aria-label={t("auth.login.confirmPasswordPlaceholder")}
               autoComplete="new-password"
               className="ui-input"
               value={confirmPassword}

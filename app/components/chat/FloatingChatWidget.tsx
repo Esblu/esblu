@@ -354,6 +354,11 @@ function FloatingChatWidgetInner() {
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerUp}
+        // Klávesnica (Enter/Space) vyšle iba click bez pointer udalostí
+        // (event.detail === 0) — myš/dotyk rieši pointer-up vyššie (RC 2026-10-12).
+        onClick={(event) => {
+          if (event.detail === 0) setOpen((current) => !current);
+        }}
         style={{
           position: "fixed",
           left: position.x,

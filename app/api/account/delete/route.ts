@@ -443,6 +443,32 @@ export async function POST(req: Request) {
         );
       }
 
+      // RC 2026-10-12: rovnaká podmienka ako ESBLU_OWNER_MISMATCH v
+      // esblu_owner_delete_company — overená PRED mazaním súborov, aby DB
+      // odmietnutie nenastalo až po odstránení Storage objektov.
+      const { data: ownedCompany, error: ownerCheckError } = await admin
+        .from("companies")
+        .select("owner_id")
+        .eq("id", membership.company_id)
+        .maybeSingle();
+      if (ownerCheckError) {
+        console.error(
+          "account/delete (owner): overenie owner_id zlyhalo:",
+          ownerCheckError.code
+        );
+        return Response.json(
+          { error: translate(locale, "settings.errors.companyDeletionFailedRetry") },
+          { status: 500 }
+        );
+      }
+      if (!ownedCompany || ownedCompany.owner_id !== user.id) {
+        console.error("account/delete (owner): owner_id nesúhlasí s rolou owner — zastavené pred mazaním");
+        return Response.json(
+          { error: translate(locale, "settings.errors.ownerWithoutMembership") },
+          { status: 409 }
+        );
+      }
+
       const storageTargets = await collectOwnerStorageTargets(
         admin,
         membership.company_id,

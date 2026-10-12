@@ -218,6 +218,9 @@ await check("zrušenie firmy s finalizovanými dokladmi: blokované PRED akýmko
   const blockAt = route.indexOf("findOwnerDeletionBlocker(admin, membership.company_id)");
   const storageAt = route.indexOf("await collectOwnerStorageTargets(");
   assert.ok(blockAt > 0 && storageAt > blockAt, "kontrola musí byť pred mazaním Storage");
+  // RC 2026-10-12: owner_id (ESBLU_OWNER_MISMATCH) overený pred mazaním Storage.
+  const ownerCheckAt = route.indexOf('ownedCompany.owner_id !== user.id');
+  assert.ok(ownerCheckAt > blockAt && ownerCheckAt < storageAt, "owner_id kontrola musí byť pred mazaním Storage");
   assert.match(read("app/api/account/preflight/route.ts"), /ownerDeletionBlocked/);
   assert.match(read("app/nastavenia/page.tsx"), /ownerDeletionBlocked \?/);
 });

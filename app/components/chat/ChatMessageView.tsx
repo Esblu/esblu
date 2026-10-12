@@ -621,7 +621,7 @@ export default function ChatMessageView({
 
       <div className="border-t border-subtle px-3 py-2.5 sm:px-4">
         {composerError && (
-          <p className="mb-2 text-xs font-medium text-danger">{composerError}</p>
+          <p role="alert" className="mb-2 text-xs font-medium text-danger">{composerError}</p>
         )}
 
         {pendingFile && (
@@ -630,6 +630,8 @@ export default function ChatMessageView({
             <button
               type="button"
               onClick={() => handleFilePick(null)}
+              aria-label={t("chat.attachments.remove")}
+              title={t("chat.attachments.remove")}
               className="font-semibold text-danger"
             >
               ✕
@@ -693,6 +695,7 @@ export default function ChatMessageView({
               }
             }}
             placeholder={t("chat.composerPlaceholder")}
+            aria-label={t("chat.composerPlaceholder")}
             rows={1}
             // Výška riadená JS efektom vyššie (auto-grow podľa obsahu,
             // pohodlné min ~2-3 riadky až max ~5-6 riadkov, potom vnútorný

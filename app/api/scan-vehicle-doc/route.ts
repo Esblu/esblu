@@ -5,6 +5,7 @@ import { normalizeAndValidateWeights } from "@/lib/weight-utils";
 import { getRequestLocale } from "@/lib/i18n/request-locale";
 import { getUserScopedSupabaseClient } from "@/lib/server-supabase-user-client";
 import { finalizeAiProcessing, guardAiProcessing } from "@/lib/entitlements-server";
+import { safeAiErrorMeta } from "@/lib/ai/openai-runtime";
 
 const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY!,
@@ -553,7 +554,7 @@ značka viazaná na explicitný label, nie iba istotu OCR čitateľnosti.`,
           spzSource = "none";
         }
       } catch (spzError) {
-        console.error("SPZ FALLBACK ERROR:", spzError);
+        console.error("SPZ FALLBACK ERROR:", safeAiErrorMeta(spzError));
         vehicleData.spz = null;
         spzSource = "none";
       }
@@ -575,7 +576,7 @@ značka viazaná na explicitný label, nie iba istotu OCR čitateľnosti.`,
 
     return Response.json({ success: true, data: vehicleData });
   } catch (error) {
-    console.error("OPENAI ERROR:", error);
+    console.error("OPENAI ERROR:", safeAiErrorMeta(error));
     return Response.json(
       { success: false, error: "AI spracovanie zlyhalo." },
       { status: 500 }

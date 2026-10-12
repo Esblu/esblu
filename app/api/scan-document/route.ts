@@ -12,6 +12,7 @@ import {
 } from "@/lib/entitlements-server";
 import { getRequestLocale } from "@/lib/i18n/request-locale";
 import { translate } from "@/lib/i18n/translate";
+import { safeAiErrorMeta } from "@/lib/ai/openai-runtime";
 
 // -----------------------------------------------------------------------------
 // Univerzálny AI Inbox scan endpoint.
@@ -833,7 +834,7 @@ značka viazaná na explicitný label, nie iba istotu OCR čitateľnosti.`,
       ? { spz: fallbackSpzNormalized, source: "fallback" }
       : { spz: null, source: "none" };
   } catch (spzError) {
-    console.error("DOCUMENT SCAN SPZ FALLBACK ERROR:", spzError);
+    console.error("DOCUMENT SCAN SPZ FALLBACK ERROR:", safeAiErrorMeta(spzError));
     return { spz: null, source: "none" };
   }
 }
@@ -1579,7 +1580,7 @@ export async function POST(req: Request) {
       },
     });
   } catch (error) {
-    console.error("DOCUMENT SCAN ERROR:", error);
+    console.error("DOCUMENT SCAN ERROR:", safeAiErrorMeta(error));
     return Response.json(
       {
         success: false,

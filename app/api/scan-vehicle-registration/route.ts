@@ -6,6 +6,7 @@ import { translate } from "@/lib/i18n/translate";
 import type { Locale } from "@/lib/i18n/locales";
 import { getUserScopedSupabaseClient } from "@/lib/server-supabase-user-client";
 import { finalizeAiProcessing, guardAiProcessing } from "@/lib/entitlements-server";
+import { safeAiErrorMeta } from "@/lib/ai/openai-runtime";
 
 const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY!,
@@ -324,7 +325,7 @@ obrázok, je to zadná strana toho istého technického preukazu.
       );
     }
 
-    console.error("VEHICLE REGISTRATION SCAN ERROR:", error);
+    console.error("VEHICLE REGISTRATION SCAN ERROR:", safeAiErrorMeta(error));
 
     return Response.json(
       {
