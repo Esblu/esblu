@@ -34,7 +34,9 @@ import {
   type AccountDeletionPreflight,
 } from "@/lib/account-deletion";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
-import { formatDateTime } from "@/lib/i18n/format";
+import { formatDate, formatDateTime } from "@/lib/i18n/format";
+import { deletionManagedViaKey, deletionReasonKey } from "@/lib/billing/deletion-guard";
+import Link from "next/link";
 import LanguageSwitcher from "@/app/components/LanguageSwitcher";
 import { LOCALE_LABELS } from "@/lib/i18n/locales";
 import {
@@ -1341,8 +1343,45 @@ export default function NastaveniaPage() {
                     </button>
                   </div>
                 </div>
+              ) : deletePreflight?.subscription && !deletePreflight.subscription.can_delete ? (
+                <div className="space-y-3">
+                  {/* Predplatné (2026-10-12): obnovujúce sa / nedokončené externé predplatné
+                      alebo otvorený checkout → zrušenie sa NEPONÚKNE (nič sa nemaže). */}
+                  <h3 className="ui-label">{t("settings.deleteModal.subscription.title")}</h3>
+                  <p className="ui-notice" data-tone="warning" role="status">
+                    {t(deletionReasonKey(deletePreflight.subscription) ?? "settings.deleteModal.subscription.blockedUnverified", {
+                      store: deletePreflight.subscription.provider ? t(`subscription.provider.${deletePreflight.subscription.provider}`) : "",
+                    })}
+                  </p>
+                  {deletionManagedViaKey(deletePreflight.subscription) && (
+                    <p className="ui-body">{t(deletionManagedViaKey(deletePreflight.subscription) as string)}</p>
+                  )}
+                  {(deletePreflight.subscription.blocking_reason === "ACTIVE_SUBSCRIPTION_RENEWING" ||
+                    deletePreflight.subscription.blocking_reason === "STORE_SUBSCRIPTION_PURCHASER") && (
+                    <p className="ui-body">{t("settings.deleteModal.subscription.afterCancel")}</p>
+                  )}
+                  <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                    <button type="button" onClick={closeDeleteAccountModal} className="ui-btn ui-btn-secondary">
+                      {t("settings.deleteModal.cancel")}
+                    </button>
+                    {deletePreflight.subscription.blocking_reason !== "SUBSCRIPTION_STATE_UNVERIFIED" && (
+                      <Link href="/nastavenia/predplatne" className="ui-btn ui-btn-primary">
+                        {t("subscription.title")}
+                      </Link>
+                    )}
+                  </div>
+                </div>
               ) : deletePreflight?.role === "owner" ? (
                 <div className="space-y-3">
+                  {deletePreflight.subscription?.subscription_status === "active_non_renewing" && (
+                    <p className="ui-notice" data-tone="warning">
+                      {t("settings.deleteModal.subscription.nonRenewingWarning", {
+                        date: deletePreflight.subscription.current_period_end
+                          ? formatDate(deletePreflight.subscription.current_period_end, locale)
+                          : "—",
+                      })}
+                    </p>
+                  )}
                   <p className="ui-body">{t("settings.deleteModal.irreversibleIntro")}</p>
 
                   <ul className="ui-body list-disc space-y-0.5 pl-5">

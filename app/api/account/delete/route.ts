@@ -4,6 +4,8 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { getRequestLocale } from "@/lib/i18n/request-locale";
 import { translate } from "@/lib/i18n/translate";
 import { findOwnerDeletionBlocker } from "@/lib/account-deletion-retention";
+import { checkSubscriptionForDeletion } from "@/lib/account-deletion-subscription";
+import type { SubscriptionDeletionCheck } from "@/lib/billing/deletion-guard";
 import type { Locale } from "@/lib/i18n/locales";
 
 // =============================================================================
@@ -17,6 +19,11 @@ import type { Locale } from "@/lib/i18n/locales";
 // Poradie (spoločné pre oba flow, detaily nižšie vo funkciách):
 //   1. server-side autorizácia + preflight (verifyRequestUser + znovu-
 //      načítanie company_members riadku).
+//   1b. owner: retention blocker + owner_id + PREDPLATNÉ (2026-10-12,
+//      lib/billing/deletion-guard.ts) — obnovujúce sa / nedokončené externé
+//      predplatné alebo otvorený checkout = 409 a nič sa nemaže. Člen: blokuje
+//      iba ako platiteľ store predplatného. DB trigger (20261012120000) je
+//      poistka pre súbeh medzi precheckom a transakciou.
 //   2. Storage objekty firmy — vyčítané PRESNE z DB riadkov (storage_bucket +
 //      storage_path/file_path/logo_path), zmazané cez Storage API, PRED
 //      akoukoľvek DB zmenou (bezpečné zopakovať pri zlyhaní — remove() na už
@@ -35,6 +42,33 @@ import type { Locale } from "@/lib/i18n/locales";
 // =============================================================================
 
 type StorageTarget = { bucket: string; path: string };
+
+/**
+ * Predplatné blokuje zrušenie (2026-10-12) — 409, NIČ sa nezmazalo (Storage
+ * ani DB). Klient zobrazí, kde predplatné spravovať.
+ */
+function subscriptionBlockedResponse(locale: Locale, check: SubscriptionDeletionCheck): Response {
+  return Response.json(
+    {
+      error: translate(
+        locale,
+        check.blocking_reason === "SUBSCRIPTION_STATE_UNVERIFIED"
+          ? "settings.errors.subscriptionStateUnverified"
+          : "settings.errors.subscriptionBlocksDeletion"
+      ),
+      can_delete: false,
+      blocking_reason: check.blocking_reason,
+      subscription_status: check.subscription_status,
+      subscription: check,
+    },
+    { status: check.blocking_reason === "SUBSCRIPTION_STATE_UNVERIFIED" ? 503 : 409 }
+  );
+}
+
+/** DB poistka (trigger 20261012120000) zastavila kaskádu — nič v DB sa nezmenilo. */
+function isDbSubscriptionGuardError(error: { message?: string | null } | null): boolean {
+  return /ESBLU_(ACTIVE_SUBSCRIPTION|CHECKOUT_IN_PROGRESS)_BLOCKS_DELETION/.test(error?.message ?? "");
+}
 
 async function collectOwnerStorageTargets(
   admin: SupabaseClient,
@@ -469,6 +503,17 @@ export async function POST(req: Request) {
         );
       }
 
+      // Predplatné: overené PRED mazaním súborov aj DB. Obnovujúce sa /
+      // nedokončené externé predplatné = 409, nič sa nemaže (fail closed).
+      const subscriptionCheck = await checkSubscriptionForDeletion(admin, {
+        companyId: membership.company_id,
+        userId: user.id,
+        scope: "company",
+      });
+      if (!subscriptionCheck.can_delete) {
+        return subscriptionBlockedResponse(locale, subscriptionCheck);
+      }
+
       const storageTargets = await collectOwnerStorageTargets(
         admin,
         membership.company_id,
@@ -484,6 +529,20 @@ export async function POST(req: Request) {
         "esblu_owner_delete_company",
         { p_owner_user_id: user.id }
       );
+
+      if (rpcError && isDbSubscriptionGuardError(rpcError)) {
+        // Súbeh: predplatné/checkout vzniklo medzi precheckom a transakciou.
+        // DB transakcia sa vrátila (firma aj väzby na providera ostali).
+        console.error("account/delete (owner): DB subscription guard zastavil zrušenie firmy");
+        return Response.json(
+          {
+            error: translate(locale, "settings.errors.subscriptionBlocksDeletion"),
+            can_delete: false,
+            blocking_reason: "ACTIVE_SUBSCRIPTION_RENEWING",
+          },
+          { status: 409 }
+        );
+      }
 
       if (rpcError) {
         console.error(
@@ -567,7 +626,17 @@ export async function POST(req: Request) {
       });
     }
 
-    // ADMIN / EMPLOYEE flow — firemné dáta sa nedotýkajú.
+    // ADMIN / EMPLOYEE flow — firemné dáta sa nedotýkajú. Blokuje iba člen,
+    // ktorý je platiteľom obnovujúceho sa predplatného cez SVOJ účet obchodu.
+    const memberSubscriptionCheck = await checkSubscriptionForDeletion(admin, {
+      companyId: membership.company_id,
+      userId: user.id,
+      scope: "member",
+    });
+    if (!memberSubscriptionCheck.can_delete) {
+      return subscriptionBlockedResponse(locale, memberSubscriptionCheck);
+    }
+
     const storageTargets = await collectMemberOwnStorageTargets(
       admin,
       user.id

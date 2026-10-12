@@ -80,6 +80,7 @@
     "test:native-billing-contract": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/native-billing-contract-tests.ts",
     "test:provider-gate": "npm run test:subscriptions-lifecycle -- provider-gate",
     "test:billing-ui": "npm run test:subscriptions-lifecycle -- billing-ui",
+    "test:account-deletion-subscription": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/account-deletion-subscription-tests.ts && npm run test:subscriptions-lifecycle-db -- account-deletion",
     "verify:mobile-bundle": "node scripts/verify-mobile-bundle.mjs"
   },
   "dependencies": {

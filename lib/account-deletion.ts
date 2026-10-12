@@ -3,6 +3,7 @@ import { apiUrl } from "@/lib/api-url";
 import { REQUEST_LOCALE_HEADER } from "@/lib/i18n/request-locale";
 import { translate } from "@/lib/i18n/translate";
 import type { Locale } from "@/lib/i18n/locales";
+import type { DeletionBlockingReason, DeletionSubscriptionStatus, SubscriptionDeletionCheck } from "@/lib/billing/deletion-guard";
 
 // -----------------------------------------------------------------------------
 // Klientske helpery pre samoobslužné "Zrušiť účet" v app/nastavenia.
@@ -53,6 +54,12 @@ export type AccountDeletionPreflight = {
   orphan: boolean;
   /** Owner: zrušenie firmy blokované archiváciou účtovných dokladov (nič sa nemaže). */
   ownerDeletionBlocked?: "FINALIZED_ACCOUNTING_DOCUMENTS" | null;
+  /** Server: dá sa účet zrušiť (archivácia + predplatné). Chýba = starší server → rozhoduje server pri delete. */
+  can_delete?: boolean;
+  blocking_reason?: "FINALIZED_ACCOUNTING_DOCUMENTS" | DeletionBlockingReason | null;
+  subscription_status?: DeletionSubscriptionStatus;
+  /** Detail predplatného pre UI (kde ho spravovať, koniec obdobia). */
+  subscription?: SubscriptionDeletionCheck;
 };
 
 async function getAccessToken(locale: Locale): Promise<string> {

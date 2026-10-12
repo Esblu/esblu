@@ -23,6 +23,7 @@ import { signTimestamped } from "@/lib/billing/signature";
 import { FakeGooglePlayApi, fakeGooglePurchase } from "@/lib/billing/stores/fake-stores";
 import { verifyGoogleClientPurchase } from "@/lib/billing/stores/store-purchase";
 import { parseSubscriptionView } from "@/lib/billing/client-model";
+import { classifySubscriptionForDeletion, evaluateDeletionGuard } from "@/lib/billing/deletion-guard";
 import type { NormalizedSubscriptionState } from "@/lib/billing/types";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -32,6 +33,8 @@ const LIFECYCLE = "supabase/migrations/20261011120000_subscriptions_lifecycle_ha
 const LIFECYCLE_ROLLBACK = "supabase/rollback/20261011120000_subscriptions_lifecycle_hardening_rollback.sql";
 const REDACTION = "supabase/migrations/20261012090000_subscriptions_event_token_redaction.sql";
 const OWNED_METHODS = "supabase/migrations/20261012091000_subscriptions_purchase_options_owned_methods.sql";
+const DELETION_GUARD = "supabase/migrations/20261012120000_account_deletion_subscription_guard.sql";
+const DELETION_GUARD_ROLLBACK = "supabase/rollback/20261012120000_account_deletion_subscription_guard_rollback.sql";
 const SUITE = (process.argv[2] ?? process.env.SUITE ?? "").replace(/^--suite=/, "").trim() || null;
 
 type Row = Record<string, unknown>;
@@ -135,6 +138,7 @@ await db.exec(read(BASE));
 await db.exec(read(LIFECYCLE));
 await db.exec(read(REDACTION));
 await db.exec(read(OWNED_METHODS));
+await db.exec(read(DELETION_GUARD));
 await db.exec(`update public.billing_runtime_config set web_provider = 'fake',
   enabled_methods = array['stripe_web_checkout','apple_iap','google_play']`);
 
@@ -800,6 +804,192 @@ await check("failure-matrix: neznáma cena / neznáma firma → failed_permanent
   assert.equal((await ent(co.owner, "voice")).active, false);
   const orphan = await fake.simulateCheckoutPaid({ checkoutId: "00000000-0000-4000-8000-0000000000ff", providerPriceId: "fake_price_pro_month", interval: "month" });
   assert.equal((await deliver("fake.checkout.completed", orphan)).outcome, "failed_permanent");
+});
+
+// ============================================================================= account-deletion (2026-10-12)
+// Zrušenie firmy (owner) = rovnaký koniec ako esblu_owner_delete_company: členstvá + companies
+// v JEDNEJ transakcii, kaskáda na subscription_accounts / links / checkouty. DB poistka musí
+// vrátiť celú transakciu, ak predplatné u providera ešte beží.
+async function deleteCompanyTx(co: Co): Promise<string | null> {
+  return serialized(async () => {
+    await db.exec("begin");
+    try {
+      await db.query(`delete from public.company_members where company_id = $1`, [co.id]);
+      await db.query(`delete from public.companies where id = $1`, [co.id]);
+      await db.exec("commit");
+      return null;
+    } catch (error) {
+      await db.exec("rollback");
+      return error instanceof Error ? error.message : String(error);
+    }
+  });
+}
+const companyExists = async (co: Co) => Number((await one<{ n: number }>(`select count(*)::int n from public.companies where id = '${co.id}'`)).n) === 1;
+const membersOf = async (co: Co) => Number((await one<{ n: number }>(`select count(*)::int n from public.company_members where company_id = '${co.id}'`)).n);
+const linksOf = async (co: Co) => Number((await one<{ n: number }>(`select count(*)::int n from public.billing_provider_links where company_id = '${co.id}'`)).n);
+const guardOf = async (co: Co, scope: "company" | "member" = "company") => {
+  const a = await one<Row>(`select status, billing_provider, cancel_at_period_end, current_period_end::text from public.subscription_accounts where company_id = '${co.id}'`);
+  const open = await one<{ provider: string }>(`select provider from public.billing_checkout_sessions where company_id = '${co.id}' and status in ('created','open') and expires_at > now() limit 1`);
+  return evaluateDeletionGuard({
+    account: a ? { status: a.status as string, billing_provider: a.billing_provider as string, cancel_at_period_end: a.cancel_at_period_end as boolean, current_period_end: a.current_period_end as string } : null,
+    openCheckoutProvider: open?.provider ?? null,
+    scope,
+  });
+};
+
+await check("account-deletion: parita TS ↔ DB predikát (všetky kanonické stavy × provideri × cancel_at_period_end)", async () => {
+  const providers = [null, "manual", "stripe", "google", "apple", "fake", "unknown_provider"];
+  for (const status of [...CANONICAL_STATUSES, "weird_status"]) {
+    for (const provider of providers) {
+      for (const cancel of [false, true]) {
+        const db_ = (await one<{ b: boolean }>(`select public.esblu_billing_blocks_account_deletion($1, $2, $3) b`, [status, provider, cancel])).b;
+        const ts = classifySubscriptionForDeletion({ status, billing_provider: provider, cancel_at_period_end: cancel, current_period_end: null }).blocks;
+        assert.equal(ts, db_, `${status}/${provider}/${cancel}`);
+      }
+    }
+  }
+  // explicitné očakávania (nie iba parita)
+  const b = (status: string, provider: string | null, cancel = false) => classifySubscriptionForDeletion({ status, billing_provider: provider, cancel_at_period_end: cancel, current_period_end: null }).blocks;
+  for (const p of ["stripe", "google", "apple"]) {
+    assert.equal(b("active", p), true, `${p} active renewing blokuje`);
+    assert.equal(b("trialing", p), true, `${p} provider trial (prejde na platbu) blokuje`);
+    assert.equal(b("active", p, true), false, `${p} neobnovujúce sa neblokuje`);
+    for (const s of ["pending", "incomplete", "grace_period", "past_due", "account_hold", "unpaid", "paused"]) assert.equal(b(s, p, true), true, `${p} ${s}`);
+    for (const s of ["canceled", "expired", "refunded", "revoked"]) assert.equal(b(s, p), false, `${p} ${s}`);
+  }
+  assert.equal(b("active", "manual"), false, "manuálny grant neblokuje");
+  assert.equal(b("none", null), false);
+});
+
+await check("account-deletion: fake nákup (obnovuje sa) → zrušenie firmy zablokované, firma + členstvá + väzby na providera ostali", async () => {
+  const co = await newCompany({ trialEnded: true });
+  await buyFake(co);
+  const g = await guardOf(co);
+  assert.equal(g.can_delete, false);
+  assert.equal(g.blocking_reason, "ACTIVE_SUBSCRIPTION_RENEWING");
+  assert.equal(g.managed_via, "web");
+  const before = { members: await membersOf(co), links: await linksOf(co) };
+  assert.ok(before.links > 0, "väzba na providera existuje");
+  const err = await deleteCompanyTx(co);
+  assert.match(err ?? "", /ESBLU_ACTIVE_SUBSCRIPTION_BLOCKS_DELETION/);
+  assert.equal(await companyExists(co), true);
+  assert.equal(await membersOf(co), before.members, "rollback vrátil aj členstvá");
+  assert.equal(await linksOf(co), before.links, "väzba na provider subscription zachovaná");
+  assert.equal((await accountOf(co)).status, "active");
+});
+
+await check("account-deletion: zrušenie obnovy (cancel_at_period_end) → povolené; firma sa zmaže, audit eventy ostanú (company_id = null)", async () => {
+  const co = await newCompany({ trialEnded: true });
+  const s = await buyFake(co);
+  assert.equal((await deliver("fake.subscription.updated", next(s, { cancel_at_period_end: true }))).outcome, "applied");
+  const g = await guardOf(co);
+  assert.equal(g.can_delete, true, JSON.stringify(g));
+  assert.equal(g.subscription_status, "active_non_renewing");
+  const events = await eventsOf(co);
+  assert.ok(events > 0);
+  const orphanedBefore = Number((await one<{ n: number }>(`select count(*)::int n from public.billing_events where company_id is null`)).n);
+  assert.equal(await deleteCompanyTx(co), null);
+  const orphanedAfter = Number((await one<{ n: number }>(`select count(*)::int n from public.billing_events where company_id is null`)).n);
+  assert.equal(orphanedAfter - orphanedBefore, events, "billing_events ostali (audit), iba bez väzby na firmu");
+  assert.equal(await companyExists(co), false);
+  assert.equal(Number((await one<{ n: number }>(`select count(*)::int n from public.subscription_accounts where company_id = '${co.id}'`)).n), 0);
+});
+
+await check("account-deletion: past_due / account_hold (provider ešte strháva) → blokované aj so zrušenou obnovou", async () => {
+  const co = await newCompany({ trialEnded: true });
+  const s = await buyFake(co);
+  for (const patch of [{ status: "past_due" as const }, { status: "account_hold" as const }]) {
+    assert.equal((await deliver("fake.subscription.updated", next(s, { ...patch, cancel_at_period_end: true }))).outcome, "applied");
+    const g = await guardOf(co);
+    assert.equal(g.can_delete, false, patch.status);
+    assert.equal(g.blocking_reason, "SUBSCRIPTION_PAYMENT_IN_PROGRESS");
+    assert.match((await deleteCompanyTx(co)) ?? "", /ESBLU_ACTIVE_SUBSCRIPTION_BLOCKS_DELETION/);
+  }
+});
+
+await check("account-deletion: ukončené (canceled / expired / refunded / revoked) → povolené", async () => {
+  for (const status of ["canceled", "expired", "refunded", "revoked"] as const) {
+    const co = await newCompany({ trialEnded: true });
+    const s = await buyFake(co);
+    await deliver(status === "canceled" || status === "expired" ? "fake.subscription.deleted" : "fake.subscription.updated", next(s, { status, ended_at: clock.toISOString() }));
+    assert.equal((await accountOf(co)).status, status);
+    assert.equal((await guardOf(co)).can_delete, true, status);
+    assert.equal(await deleteCompanyTx(co), null, status);
+  }
+});
+
+await check("account-deletion: trial / free / manuálny grant (bez externého predplatného) → povolené", async () => {
+  const trial = await newCompany();
+  assert.equal((await guardOf(trial)).can_delete, true);
+  assert.equal(await deleteCompanyTx(trial), null);
+  const free = await newCompany({ trialEnded: true });
+  assert.equal(await deleteCompanyTx(free), null);
+  const manual = await newCompany({ trialEnded: true });
+  await su(`insert into public.company_entitlements (company_id, entitlement_key, source, status) values ('${manual.id}', 'voice', 'manual', 'active')`);
+  await su(`insert into public.subscription_accounts (company_id, status, billing_provider, plan_code) values ('${manual.id}', 'active', 'manual', 'test_pro')`);
+  assert.equal((await guardOf(manual)).can_delete, true);
+  assert.equal(await deleteCompanyTx(manual), null);
+});
+
+await check("account-deletion: Google Play / App Store / Stripe aktívne obnovujúce sa → blokované s inštrukciou podľa providera", async () => {
+  for (const [provider, via] of [["google", "google_play"], ["apple", "app_store"], ["stripe", "web"]] as const) {
+    const co = await newCompany({ trialEnded: true });
+    await su(`insert into public.subscription_accounts (company_id, status, billing_provider, provider_environment, plan_code, cancel_at_period_end)
+      values ('${co.id}', 'active', '${provider}', 'test', 'test_pro', false)`);
+    const g = await guardOf(co);
+    assert.equal(g.can_delete, false);
+    assert.equal(g.managed_via, via);
+    assert.match((await deleteCompanyTx(co)) ?? "", /ESBLU_ACTIVE_SUBSCRIPTION_BLOCKS_DELETION/, provider);
+    await su(`update public.subscription_accounts set cancel_at_period_end = true where company_id = '${co.id}'`);
+    assert.equal(await deleteCompanyTx(co), null, `${provider} po zrušení obnovy`);
+  }
+});
+
+await check("account-deletion: otvorený checkout blokuje (platba by prešla po zmazaní); expirovaný nie", async () => {
+  const co = await newCompany({ trialEnded: true });
+  await rpcAs(co.owner, "esblu_billing_create_checkout_intent", ["test_pro", "month"]);
+  const g = await guardOf(co);
+  assert.equal(g.can_delete, false);
+  assert.equal(g.blocking_reason, "CHECKOUT_IN_PROGRESS");
+  assert.match((await deleteCompanyTx(co)) ?? "", /ESBLU_CHECKOUT_IN_PROGRESS_BLOCKS_DELETION/);
+  await su(`update public.billing_checkout_sessions set expires_at = now() - interval '1 minute', created_at = now() - interval '2 days' where company_id = '${co.id}'`);
+  assert.equal((await guardOf(co)).can_delete, true);
+  assert.equal(await deleteCompanyTx(co), null);
+});
+
+await check("account-deletion: člen (employee) firmy s aktívnym predplatným sa zrušiť smie — firma a predplatné ostávajú", async () => {
+  const co = await newCompany({ trialEnded: true });
+  await buyFake(co);
+  assert.equal((await guardOf(co, "member")).can_delete, true);
+  assert.equal(evaluateDeletionGuard({ account: { status: "active", billing_provider: "google", cancel_at_period_end: false, current_period_end: null }, openCheckoutProvider: null, scope: "member", memberIsStorePurchaser: true }).blocking_reason, "STORE_SUBSCRIPTION_PURCHASER");
+});
+
+await check("account-deletion: údržbová výnimka iba vedome (GUC v transakcii), migrácia idempotentná, rollback čistý", async () => {
+  const co = await newCompany({ trialEnded: true });
+  await buyFake(co);
+  const err = await serialized(async () => {
+    await db.exec("begin");
+    try {
+      await db.query(`select set_config('esblu.allow_subscription_delete', 'on', true)`);
+      await db.query(`delete from public.companies where id = $1`, [co.id]);
+      await db.exec("rollback"); // nič nemeníme — iba overenie, že výnimka funguje
+      return null;
+    } catch (e) {
+      await db.exec("rollback");
+      return e instanceof Error ? e.message : String(e);
+    }
+  });
+  assert.equal(err, null);
+  assert.equal(await companyExists(co), true);
+  // GUC je transakčný — mimo nej poistka znova platí
+  assert.match((await deleteCompanyTx(co)) ?? "", /BLOCKS_DELETION/);
+  await serialized(() => db.exec(read(DELETION_GUARD)));
+  await serialized(() => db.exec(read(DELETION_GUARD_ROLLBACK)));
+  await fails(() => su(`select public.esblu_billing_blocks_account_deletion('active','stripe',false)`), /does not exist/);
+  await serialized(() => db.exec(read(DELETION_GUARD)));
+  assert.match((await deleteCompanyTx(co)) ?? "", /BLOCKS_DELETION/);
+  // klient (authenticated) predikát volať nesmie
+  await fails(() => as(co.owner, () => db.query(`select public.esblu_billing_blocks_account_deletion('active','stripe',false)`)), /permission denied/);
 });
 
 // ============================================================================= subscription-migrations (rollback — posledné)

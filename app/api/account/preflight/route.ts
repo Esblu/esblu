@@ -3,6 +3,19 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { getRequestLocale } from "@/lib/i18n/request-locale";
 import { translate } from "@/lib/i18n/translate";
 import { findOwnerDeletionBlocker, type OwnerDeletionBlocker } from "@/lib/account-deletion-retention";
+import { checkSubscriptionForDeletion } from "@/lib/account-deletion-subscription";
+import type { SubscriptionDeletionCheck } from "@/lib/billing/deletion-guard";
+
+// Bez firmy (orphan) nie je čo účtovať.
+const NO_SUBSCRIPTION: SubscriptionDeletionCheck = {
+  can_delete: true,
+  blocking_reason: null,
+  subscription_status: "none",
+  provider: null,
+  managed_via: null,
+  current_period_end: null,
+  cancel_at_period_end: false,
+};
 
 // -----------------------------------------------------------------------------
 // GET /api/account/preflight
@@ -94,6 +107,10 @@ export async function GET(req: Request) {
         role: null,
         otherActiveMembersCount: 0,
         orphan: true,
+        can_delete: true,
+        blocking_reason: null,
+        subscription_status: NO_SUBSCRIPTION.subscription_status,
+        subscription: NO_SUBSCRIPTION,
       });
     }
 
@@ -132,11 +149,24 @@ export async function GET(req: Request) {
       ownerDeletionBlocked = await findOwnerDeletionBlocker(admin, membership.company_id);
     }
 
+    // Predplatné (2026-10-12): firma s obnovujúcim sa / nedokončeným externým
+    // predplatným sa nezruší, kým ho používateľ neukončí u providera
+    // (lib/billing/deletion-guard.ts). Člen blokuje iba ako platiteľ cez obchod.
+    const subscription = await checkSubscriptionForDeletion(admin, {
+      companyId: membership.company_id,
+      userId: user.id,
+      scope: membership.role === "owner" ? "company" : "member",
+    });
+
     return Response.json({
       role: membership.role,
       otherActiveMembersCount,
       orphan: false,
       ownerDeletionBlocked,
+      can_delete: !ownerDeletionBlocked && subscription.can_delete,
+      blocking_reason: ownerDeletionBlocked ?? subscription.blocking_reason,
+      subscription_status: subscription.subscription_status,
+      subscription,
     });
   } catch (error) {
     console.error(
