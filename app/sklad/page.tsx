@@ -143,6 +143,7 @@ export default function SkladPage() {
     isLimited: isPlanLimited,
     loading: planUsageLoading,
     refresh: refreshPlanUsage,
+    error: planUsageError,
   } = usePlanUsage("inventory_items");
   const { legalHold } = useCompanyDpaLegalHold();
   // Sklad upravuje iba owner/admin. Zamestnanec ho vidí iba na čítanie —
@@ -183,6 +184,9 @@ export default function SkladPage() {
     if (!membership) {
       setCompanyId("");
       setItems([]);
+      // RC 2026-10-12: bez členstva (alebo offline) nesmie zostať skeleton navždy.
+      setLoading(false);
+      if (typeof navigator !== "undefined" && !navigator.onLine) setLoadError(t("common.offline"));
       return;
     }
 
@@ -574,6 +578,8 @@ export default function SkladPage() {
       {!planUsageLoading && isPlanLimited && (
         <PlanLimitNotice
           resource="inventory_items"
+          loadFailed={Boolean(planUsageError)}
+          onRetry={() => void refreshPlanUsage()}
           usage={planUsage}
           limit={planLimit}
           className="mt-4"

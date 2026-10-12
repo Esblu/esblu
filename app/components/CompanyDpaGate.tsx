@@ -117,7 +117,11 @@ export default function CompanyDpaGate({
 
     run();
 
-    const { data: authListener } = supabase.auth.onAuthStateChange(() => {
+    const { data: authListener } = supabase.auth.onAuthStateChange((event) => {
+      // INITIAL_SESSION hneď po subscribe = duplicitný run() (už beží vyššie);
+      // TOKEN_REFRESHED nemení používateľa. Obe by pri každej navigácii/refreshi
+      // zbytočne volali RPC a krátko resetovali gate (RC 2026-10-12).
+      if (event === "INITIAL_SESSION" || event === "TOKEN_REFRESHED") return;
       setChecked(false);
       setEmployeeNoticeDismissed(false);
       run();

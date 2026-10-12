@@ -48,7 +48,11 @@ export default function Home() {
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
+    } = supabase.auth.onAuthStateChange((event, session) => {
+      // Štart vlastní resolveStartupSession. INITIAL_SESSION príde s null aj pri
+      // chybe načítania (offline refresh) a prepísal by chybovú obrazovku
+      // redirectom na /login (RC 2026-10-12).
+      if (event === "INITIAL_SESSION") return;
       if (mounted) {
         setHasSession(Boolean(session));
       }

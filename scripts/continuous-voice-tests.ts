@@ -618,7 +618,9 @@ await check("UI: syntéza čaká na skutočný koniec (onend/onerror), mikrofón
   const capture = readFileSync("lib/voice/utterance-capture.ts", "utf8");
   assert.ok(capture.includes("echoCancellation: true"));
   assert.ok(capture.includes("track.stop()"), "release zastaví stopy mikrofónu");
-  assert.ok(capture.includes("recorder.onstop = () =>"), "koniec nahrávky podľa udalosti stop");
+  // RC 2026-10-12: udalosť stop + poistka pre WebView, ktoré ju nevyšle.
+  assert.ok(capture.includes("recorder.onstop = deliver;"), "koniec nahrávky podľa udalosti stop");
+  assert.ok(capture.includes("setTimeout(deliver, RECORDER_STOP_FALLBACK_MS)"), "poistka bez udalosti stop");
 });
 
 await check("hlasový náhľad: za súhrn sa pridá otázka na potvrdenie (iba v relácii)", () => {

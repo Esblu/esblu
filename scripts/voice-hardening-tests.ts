@@ -539,5 +539,12 @@ await check("server: OpenAI prepis má časový limit a obmedzené opakovanie; S
   for (const term of ["IČO", "DIČ", "IČ DPH", "IBAN", "číslo faktúry", "splatnosť"]) assert.ok(route.includes(term), term);
 });
 
+await check("lifecycle: MediaRecorder bez udalosti `stop` (Android WebView) → poistka, session nevisí v listening", () => {
+  const src = readFileSync("lib/voice/utterance-capture.ts", "utf8");
+  assert.match(src, /export const RECORDER_STOP_FALLBACK_MS = \d+;/);
+  assert.match(src, /const stopFallback = setTimeout\(deliver, RECORDER_STOP_FALLBACK_MS\);\s*recorder\.onstop = deliver;/);
+  assert.match(src, /if \(delivered\) return;\s*delivered = true;\s*clearTimeout\(stopFallback\);/);
+});
+
 console.log(`${passed} prešlo, ${failed} zlyhalo`);
 if (failed > 0) process.exit(1);

@@ -29,6 +29,8 @@ export type CaptureOutcome =
 
 /** Frekvencia merania hlasitosti. Vzorkovanie, nie oneskorenie. */
 const SAMPLE_MS = 50;
+/** Poistka, keď MediaRecorder po stop() nevyšle udalosť `stop` (Android WebView). */
+export const RECORDER_STOP_FALLBACK_MS = 4000;
 
 type AudioContextCtor = typeof AudioContext;
 
@@ -145,11 +147,20 @@ export class MicSession {
         }
         // Posledné dáta prídu v `dataavailable` pred `stop` — čaká sa na
         // skutočnú udalosť, nie na časovač.
-        recorder.onstop = () => {
+        let delivered = false;
+        const deliver = () => {
+          if (delivered) return;
+          delivered = true;
+          clearTimeout(stopFallback);
           const type = recorder.mimeType || mimeType || "audio/webm";
           const blob = new Blob(chunks, { type });
           resolve(blob.size > 0 ? { kind: "speech", blob, mimeType: type } : { kind: "error" });
         };
+        // RC 2026-10-12: niektoré Android WebView `stop` nikdy nevyšlú — bez
+        // poistky by session ostala v „listening". Po limite sa odovzdá to,
+        // čo už prišlo (prázdne → error, nikdy nie visiaci stav).
+        const stopFallback = setTimeout(deliver, RECORDER_STOP_FALLBACK_MS);
+        recorder.onstop = deliver;
         if (recorder.state !== "inactive") recorder.stop();
         else recorder.onstop?.(new Event("stop"));
       };

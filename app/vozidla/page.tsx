@@ -219,6 +219,7 @@ export default function VozidlaPage() {
     isLimited: isPlanLimited,
     loading: planUsageLoading,
     refresh: refreshPlanUsage,
+    error: planUsageError,
   } = usePlanUsage("vehicles");
   const { legalHold } = useCompanyDpaLegalHold();
   // Legal-hold blokuje IBA vytváranie NOVÝCH vozidiel (rovnako ako
@@ -305,6 +306,9 @@ export default function VozidlaPage() {
       setCompanyId("");
       setRole(null);
       setVehicles([]);
+      // RC 2026-10-12: bez členstva (alebo offline) nesmie zostať skeleton navždy.
+      setLoading(false);
+      if (typeof navigator !== "undefined" && !navigator.onLine) setLoadError(t("common.offline"));
       return;
     }
 
@@ -1299,6 +1303,8 @@ export default function VozidlaPage() {
       {!planUsageLoading && isPlanLimited && (
         <PlanLimitNotice
           resource="vehicles"
+          loadFailed={Boolean(planUsageError)}
+          onRetry={() => void refreshPlanUsage()}
           usage={planUsage}
           limit={planLimit}
           className="mt-4"

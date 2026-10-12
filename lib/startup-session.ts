@@ -32,6 +32,12 @@ function isStorageError(error: unknown): boolean {
   return e?.name === "SecureStorageError" || /secure_storage_|not implemented on/i.test(String(e?.message ?? ""));
 }
 
+/** Sieťová (retryable) chyba refreshu — auth-js AuthRetryableFetchError / status 0. */
+function isRetryableNetworkError(error: unknown): boolean {
+  const e = error as { name?: unknown; status?: unknown } | null;
+  return e?.name === "AuthRetryableFetchError" || e?.status === 0;
+}
+
 export async function resolveStartupSession(
   getSession: () => Promise<GetSessionResult>,
   timeoutMs: number = STARTUP_SESSION_TIMEOUT_MS
@@ -46,6 +52,12 @@ export async function resolveStartupSession(
     ]);
     if (result === "timeout") return { status: "error", reason: "startup_session_timeout" };
     if (result.error && isStorageError(result.error)) return { status: "error", reason: reasonOf(result.error) };
+    // RC 2026-10-12: expirovaný access token + refresh zlyhal na sieti (offline
+    // cold start). auth-js vráti session:null, ale uloženú session NEZMAŽE —
+    // nie je to odhlásenie, takže žiadny redirect na /login, ale „Skúsiť znova".
+    if (!result.data?.session && result.error && isRetryableNetworkError(result.error)) {
+      return { status: "error", reason: "startup_session_offline" };
+    }
     return result.data?.session ? { status: "signed_in" } : { status: "signed_out" };
   } catch (error) {
     return { status: "error", reason: reasonOf(error) };

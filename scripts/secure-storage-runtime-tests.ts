@@ -14,6 +14,7 @@
 // =============================================================================
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { createClient } from "@supabase/supabase-js";
 
 const secureMod = await import("@/lib/mobile/secure-storage");
@@ -235,6 +236,19 @@ await check("pôvodný bug (async proxy loader) → startup error namiesto večn
   // Loader visí (asimilácia) → startup timeout → chybová obrazovka, nie prihlásenie ani večné čakanie.
   const result = await resolveStartupSession(() => client(storage).auth.getSession(), 300);
   assert.deepEqual(result, { status: "error", reason: "startup_session_timeout" });
+});
+
+await check("offline cold start: expirovaný token + sieťový refresh zlyhal → startup error (nie /login)", async () => {
+  const netErr = Object.assign(new Error("Failed to fetch"), { name: "AuthRetryableFetchError", status: 0 });
+  assert.deepEqual(await resolveStartupSession(async () => ({ data: { session: null }, error: netErr }), 3000), {
+    status: "error",
+    reason: "startup_session_offline",
+  });
+  // Neretryable chyba refreshu (zneplatnený refresh token) = skutočné odhlásenie.
+  const authErr = Object.assign(new Error("Invalid Refresh Token"), { name: "AuthApiError", status: 400 });
+  assert.deepEqual(await resolveStartupSession(async () => ({ data: { session: null }, error: authErr }), 3000), { status: "signed_out" });
+  const page = readFileSync("app/page.tsx", "utf8");
+  assert.match(page, /if \(event === "INITIAL_SESSION"\) return;/, "INITIAL_SESSION neprepíše chybovú obrazovku");
 });
 
 await check("getSession, ktorý nikdy neskončí → startup_session_timeout", async () => {

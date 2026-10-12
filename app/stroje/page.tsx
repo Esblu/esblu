@@ -97,6 +97,7 @@ export default function StrojePage() {
     isLimited: isPlanLimited,
     loading: planUsageLoading,
     refresh: refreshPlanUsage,
+    error: planUsageError,
   } = usePlanUsage("machines");
   const { legalHold } = useCompanyDpaLegalHold();
   const isMachineCreationUnavailable =
@@ -137,6 +138,9 @@ export default function StrojePage() {
     if (!membership) {
       setCompanyId("");
       setMachines([]);
+      // RC 2026-10-12: bez členstva (alebo offline) nesmie zostať skeleton navždy.
+      setLoading(false);
+      if (typeof navigator !== "undefined" && !navigator.onLine) setLoadError(t("common.offline"));
       return;
     }
 
@@ -670,6 +674,8 @@ export default function StrojePage() {
         <div className="mt-4">
           <PlanLimitNotice
             resource="machines"
+            loadFailed={Boolean(planUsageError)}
+            onRetry={() => void refreshPlanUsage()}
             usage={planUsage}
             limit={planLimit}
             className="mt-0"

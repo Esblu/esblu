@@ -8,6 +8,9 @@ type PlanLimitNoticeProps = {
   usage?: number;
   limit?: number | null;
   className?: string;
+  /** RC 2026-10-12: nároky sa nepodarilo načítať (offline / server) — NIE je to limit plánu. */
+  loadFailed?: boolean;
+  onRetry?: () => void;
 };
 
 export default function PlanLimitNotice({
@@ -15,6 +18,8 @@ export default function PlanLimitNotice({
   usage,
   limit,
   className = "",
+  loadFailed = false,
+  onRetry,
 }: PlanLimitNoticeProps) {
   const { t } = useLocale();
   const hasUsage =
@@ -41,20 +46,31 @@ export default function PlanLimitNotice({
 
         <div className="min-w-0">
           <p className="text-sm font-semibold">
-            {resource
+            {loadFailed
+              ? t("common.planLimitNotice.loadFailedTitle")
+              : resource
               ? t("common.planLimitNotice.moduleLimit", {
                   module: resourceLabels[resource],
                 })
               : t("common.planLimitNotice.planLimit")}
           </p>
-          {hasUsage && (
+          {!loadFailed && hasUsage && (
             <p className="mt-0.5 text-[13px] font-medium">
               {t("common.planLimitNotice.usage", { usage, limit })}
             </p>
           )}
           <p className="mt-1 text-[13px] leading-5 text-secondary">
-            {t("common.planLimitMessage")}
+            {loadFailed ? t("common.planLimitNotice.loadFailedBody") : t("common.planLimitMessage")}
           </p>
+          {loadFailed && onRetry && (
+            <button
+              type="button"
+              onClick={onRetry}
+              className="mt-2 min-h-11 rounded-doc-sm border border-amber-400/40 px-3 text-[13px] font-semibold"
+            >
+              {t("common.misc.startupRetry")}
+            </button>
+          )}
         </div>
       </div>
     </aside>

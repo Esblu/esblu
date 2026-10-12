@@ -47,6 +47,9 @@ const en = {
       startupFailedTitle: "Esblu could not start",
       startupFailedBody: "The securely stored sign-in could not be loaded. Nothing was sent or changed. Please try again; if the problem persists, restart the app.",
       startupRetry: "Try again",
+      renderErrorTitle: "Something went wrong",
+      renderErrorBody: "This screen could not be displayed. Your data was not changed. Try again or go back to the start.",
+      renderErrorHome: "Back to start",
     },
     legalLinks: {
       privacy: "Privacy Policy",
@@ -70,6 +73,8 @@ const en = {
       moduleLimit: "{{module}} module limit",
       planLimit: "Plan limit",
       usage: "Usage: {{usage}} / {{limit}}",
+      loadFailedTitle: "Module availability could not be verified",
+      loadFailedBody: "Check your connection. Until it loads, adding new records is temporarily disabled. Existing data is unchanged.",
     },
   },
 

@@ -15,7 +15,14 @@ let cache: { userId: string; promise: Promise<MyActiveMembership | null> } | nul
 function loadFor(userId: string): Promise<MyActiveMembership | null> {
   if (cache?.userId === userId) return cache.promise;
   const promise = getMyActiveMembership().catch(() => null);
-  cache = { userId, promise };
+  const entry = { userId, promise };
+  cache = entry;
+  // RC 2026-10-12: null = „bez firmy" ALEBO sieťová chyba (getMyActiveMembership
+  // ich nerozlišuje) → necachuje sa, inak offline štart skryje firemnú navigáciu
+  // až do reštartu appky. Úspešné členstvo ostáva v cache.
+  void promise.then((membership) => {
+    if (!membership && cache === entry) cache = null;
+  });
   return promise;
 }
 
@@ -45,9 +52,15 @@ export function useActiveMembership(): ActiveMembershipState {
     const { data } = supabase.auth.onAuthStateChange((_event, session) => {
       void resolve(session?.user.id ?? null);
     });
+    // Po návrate siete znova (z cache, ak už bola úspešná — žiadny extra dotaz).
+    const onOnline = () => {
+      void supabase.auth.getSession().then(({ data }) => resolve(data.session?.user.id ?? null));
+    };
+    window.addEventListener("online", onOnline);
     return () => {
       active = false;
       data.subscription.unsubscribe();
+      window.removeEventListener("online", onOnline);
     };
   }, []);
 

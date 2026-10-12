@@ -126,6 +126,7 @@ export default function Dashboard() {
   // Náhľad čakajúci na potvrdenie — pre hlasové „Áno" (ref: číta ho callback nahrávania).
   const pendingPreviewRef = useRef<IntentResult | null>(null);
   const confirmInFlightRef = useRef(false);
+  const logoutInFlightRef = useRef(false);
   // Posledný výsledok pre kontext prepisu reči (čítané v callbacku nahrávania).
   const intentResultRef = useRef<IntentResult | null>(null);
   // Veta už vybavená hlasovou reláciou — debounced efekt hľadania ju
@@ -213,10 +214,16 @@ export default function Dashboard() {
   }
 
   async function logout() {
+    // Opakované ťuknutie nesmie spustiť paralelné odhlásenia (RC 2026-10-12).
+    if (logoutInFlightRef.current) return;
+    logoutInFlightRef.current = true;
     // Toto zariadenie po odhlásení nesmie ďalej dostávať upozornenia
     // (signOutOnThisDevice: push odregistrácia + lokálne artefakty + signOut).
-    await signOutOnThisDevice();
-    router.push("/login");
+    try {
+      await signOutOnThisDevice();
+    } finally {
+      router.push("/login");
+    }
   }
 
   // Firemný názov + logo pre AKTÍVNEHO ČLENA firmy (owner/admin/employee
@@ -379,6 +386,10 @@ export default function Dashboard() {
     }
 
     let cancelled = false;
+    // RC 2026-10-12: visiaci server nesmie nechať spinner navždy; zrušený
+    // efekt (ďalší znak) ukončí aj rozbehnutý request.
+    const controller = new AbortController();
+    let abortTimer: ReturnType<typeof setTimeout> | undefined;
 
     const timer = setTimeout(async () => {
       // `setIntentLoading(true)` je zámerne až TU (v callbacku setTimeout),
@@ -397,7 +408,9 @@ export default function Dashboard() {
           return;
         }
 
+        abortTimer = setTimeout(() => controller.abort(), 15000);
         const response = await fetch(apiUrl("/api/assistant/intent"), {
+          signal: controller.signal,
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -454,6 +467,7 @@ export default function Dashboard() {
         console.error("Intent Engine dopyt zlyhal:", error);
         if (!cancelled) setIntentResult(null);
       } finally {
+        clearTimeout(abortTimer);
         if (!cancelled) setIntentLoading(false);
       }
     }, 400);
@@ -461,6 +475,8 @@ export default function Dashboard() {
     return () => {
       cancelled = true;
       clearTimeout(timer);
+      clearTimeout(abortTimer);
+      controller.abort();
     };
     // recentFolderId sa zámerne nesleduje: zmena kontextu nemá znova
     // spustiť rozpoznanie toho istého textu.

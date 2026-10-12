@@ -19,6 +19,8 @@ function subscribe(callback: () => void) {
   };
 }
 
+// RC 2026-10-12: sticky (v toku dokumentu) namiesto fixed — fixed banner prekrýval
+// hlavičku obrazovky (Späť, nadpis, pozdrav) a tie neboli offline dostupné.
 export default function OfflineBanner() {
   const { t } = useLocale();
   const state = useSyncExternalStore(
@@ -31,7 +33,7 @@ export default function OfflineBanner() {
     <div
       role="status"
       aria-live="polite"
-      className="fixed inset-x-0 top-0 z-[100] bg-amber-500 px-4 pb-2 text-center text-sm font-semibold text-black"
+      className="sticky inset-x-0 top-0 z-[100] shrink-0 bg-amber-500 px-4 pb-2 text-center text-sm font-semibold text-black"
       style={{ paddingTop: "calc(var(--esblu-safe-top) + 0.5rem)" }}
     >
       {t("common.offline")}

@@ -47,6 +47,9 @@ const de = {
       startupFailedTitle: "Esblu konnte nicht gestartet werden",
       startupFailedBody: "Die sicher gespeicherte Anmeldung konnte nicht geladen werden. Es wurde nichts gesendet oder geändert. Bitte versuche es erneut; besteht das Problem weiter, starte die App neu.",
       startupRetry: "Erneut versuchen",
+      renderErrorTitle: "Etwas ist schiefgelaufen",
+      renderErrorBody: "Dieser Bildschirm konnte nicht angezeigt werden. Ihre Daten wurden nicht geändert. Versuchen Sie es erneut oder kehren Sie zum Start zurück.",
+      renderErrorHome: "Zurück zum Start",
     },
     legalLinks: {
       privacy: "Datenschutz",
@@ -70,6 +73,8 @@ const de = {
       moduleLimit: "Limit für Modul {{module}}",
       planLimit: "Tarif-Limit",
       usage: "Nutzung: {{usage}} / {{limit}}",
+      loadFailedTitle: "Verfügbarkeit des Moduls konnte nicht geprüft werden",
+      loadFailedBody: "Prüfen Sie die Verbindung. Bis der Status geladen ist, ist das Hinzufügen neuer Einträge vorübergehend deaktiviert. Bestehende Daten bleiben unverändert.",
     },
   },
 

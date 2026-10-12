@@ -49,6 +49,9 @@ const sk = {
       startupFailedTitle: "Esblu sa nepodarilo spustiť",
       startupFailedBody: "Nepodarilo sa načítať bezpečne uložené prihlásenie. Nič sa neodoslalo ani nezmenilo. Skús to znova; ak chyba pretrváva, reštartuj appku.",
       startupRetry: "Skúsiť znova",
+      renderErrorTitle: "Niečo sa pokazilo",
+      renderErrorBody: "Túto obrazovku sa nepodarilo zobraziť. Tvoje dáta sa nezmenili. Skús to znova alebo sa vráť na úvod.",
+      renderErrorHome: "Späť na úvod",
     },
     legalLinks: {
       privacy: "Ochrana osobných údajov",
@@ -72,6 +75,8 @@ const sk = {
       moduleLimit: "Limit modulu {{module}}",
       planLimit: "Limit plánu",
       usage: "Využitie: {{usage}} / {{limit}}",
+      loadFailedTitle: "Dostupnosť modulu sa nepodarilo overiť",
+      loadFailedBody: "Skontroluj pripojenie. Kým sa stav nenačíta, pridávanie nových záznamov je dočasne vypnuté. Existujúce údaje sa nemenia.",
     },
   },
 

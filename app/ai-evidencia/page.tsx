@@ -968,6 +968,7 @@ export default function AiEvidenciaPage() {
     isLimited: isPlanLimited,
     loading: planUsageLoading,
     refresh: refreshPlanUsage,
+    error: planUsageError,
   } = usePlanUsage("ai_evidence");
   const { legalHold } = useCompanyDpaLegalHold();
   // Legal-hold blokuje vytváranie NOVÝCH ai_evidence/documents/
@@ -3437,6 +3438,8 @@ function renderDocumentRegister(
         {!planUsageLoading && isPlanLimited && (
           <PlanLimitNotice
             resource="ai_evidence"
+            loadFailed={Boolean(planUsageError)}
+            onRetry={() => void refreshPlanUsage()}
             usage={planUsage}
             limit={planLimit}
             className="mt-4"
