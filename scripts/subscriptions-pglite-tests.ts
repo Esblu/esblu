@@ -92,6 +92,13 @@ await check("migrácie sú idempotentné (druhé spustenie oboch)", async () => 
   await db.exec(read(MIGRATION));
   await db.exec(read(LIFECYCLE));
 });
+// RC obsahuje aj multi-company model (20261012140000): billing authority = owner
+// AKTÍVNEJ firmy; celý billing regres beží nad ním (stuby tabuliek pre zrušenie firmy).
+await db.exec(read("scripts/sql/multi-company-local-stubs.sql"));
+await db.exec(`alter table public.invoices add column if not exists finalized_by uuid;`);
+await db.exec(read("supabase/migrations/20261012120000_account_deletion_subscription_guard.sql"));
+await db.exec(read("supabase/migrations/20261012130000_account_deletion_post_commit_cleanup.sql"));
+await db.exec(read("supabase/migrations/20261012140000_multi_company_workspaces.sql"));
 
 // ----------------------------------------------------------------------------- dáta
 const C = {
@@ -252,11 +259,11 @@ await check("klient nemôže poslať price ID (RPC nemá taký parameter)", asyn
 });
 
 // ============================================================================= 2. Rolová matica checkoutu
-await check("owner a admin+billing.manage smú začať checkout; admin(finance) / accountant / employee / neaktívny nie", async () => {
+await check("owner smie začať checkout; admin (aj s billing.manage — multi-company: billing authority = owner) / accountant / employee / neaktívny nie", async () => {
   const ok = (await rpcAs(U.owner, "esblu_billing_create_checkout_intent", ["test_pro", "month"])) as Row;
   assert.equal(ok.provider, "fake");
   assert.equal(ok.provider_price_id, "fake_price_pro_month");
-  await rpcAs(U.billingAdmin, "esblu_billing_create_checkout_intent", ["test_starter", "year"]);
+  await fails(() => rpcAs(U.billingAdmin, "esblu_billing_create_checkout_intent", ["test_starter", "year"]), /ESBLU_BILLING_FORBIDDEN/);
   await fails(() => rpcAs(U.admin, "esblu_billing_create_checkout_intent", ["test_pro", "month"]), /ESBLU_BILLING_FORBIDDEN/);
   await fails(() => rpcAs(U.acc, "esblu_billing_create_checkout_intent", ["test_pro", "month"]), /ESBLU_BILLING_FORBIDDEN/);
   await fails(() => rpcAs(U.emp, "esblu_billing_create_checkout_intent", ["test_pro", "month"]), /ESBLU_BILLING_FORBIDDEN/);
@@ -273,7 +280,7 @@ await check("live prostredie je v DB zakázané (check constraint)", async () =>
   await fails(() => db.query(`update public.billing_runtime_config set environment = 'live'`), /billing_runtime_config_env_check/);
 });
 await check("employee / accountant nesmú meniť predplatné ani vydať mobilný token", async () => {
-  for (const uid of [U.emp, U.acc, U.admin]) {
+  for (const uid of [U.emp, U.acc, U.admin, U.billingAdmin]) {
     await fails(() => rpcAs(uid, "esblu_billing_authorize_manage"), /ESBLU_BILLING_FORBIDDEN/);
     await fails(() => rpcAs(uid, "esblu_billing_issue_account_token", ["apple"]), /ESBLU_BILLING_FORBIDDEN/);
   }
@@ -888,7 +895,11 @@ await check("žiadny paralelný „mobilný plán“: všetky kanály zapisujú 
 // ============================================================================= 10. Rollback
 await check("rollback: RPC zmiznú, tabuľky (default) ostanú, nároky sa nemažú; opätovné nasadenie OK", async () => {
   const before = await subscriptionRowsA();
-  // Poradie: najprv rollback novšej migrácie (2026-10-11), potom pôvodnej.
+  // Poradie: od najnovšej — multi-company, post-commit cleanup, poistka zrušenia,
+  // lifecycle (2026-10-11), potom pôvodná billing migrácia.
+  await db.exec(read("supabase/rollback/20261012140000_multi_company_workspaces_rollback.sql"));
+  await db.exec(read("supabase/rollback/20261012130000_account_deletion_post_commit_cleanup_rollback.sql"));
+  await db.exec(read("supabase/rollback/20261012120000_account_deletion_subscription_guard_rollback.sql"));
   await db.exec(read(LIFECYCLE_ROLLBACK));
   await db.exec(read(ROLLBACK));
   const fn = await one<{ n: number }>(`select count(*)::int n from pg_proc where proname like 'esblu_billing_%' or proname in ('esblu_get_my_subscription','esblu_get_my_checkout_status')`);
