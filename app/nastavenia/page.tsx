@@ -227,6 +227,8 @@ export default function NastaveniaPage() {
   const [deletePreflightLoading, setDeletePreflightLoading] = useState(false);
   const [deletePreflightError, setDeletePreflightError] = useState("");
   const [deleteConfirmText, setDeleteConfirmText] = useState("");
+  // Zrušená obnova + bežiace obdobie: výslovné potvrdenie straty zvyšku obdobia.
+  const [forfeitAcknowledged, setForfeitAcknowledged] = useState(false);
   const [deleteSubmitting, setDeleteSubmitting] = useState(false);
   const [deleteError, setDeleteError] = useState("");
 
@@ -778,6 +780,7 @@ export default function NastaveniaPage() {
   async function openDeleteAccountModal() {
     setShowDeleteAccountModal(true);
     setDeleteConfirmText("");
+    setForfeitAcknowledged(false);
     setDeleteError("");
     setDeletePreflightError("");
     setDeletePreflight(null);
@@ -804,6 +807,7 @@ export default function NastaveniaPage() {
 
     setShowDeleteAccountModal(false);
     setDeleteConfirmText("");
+    setForfeitAcknowledged(false);
     setDeleteError("");
   }
 
@@ -825,7 +829,8 @@ export default function NastaveniaPage() {
     try {
       await deleteMyAccount(
         locale,
-        deletePreflight.role === "owner" ? deleteConfirmText : undefined
+        deletePreflight.role === "owner" ? deleteConfirmText : undefined,
+        { acknowledgeForfeit: deletePreflight.role === "owner" && forfeitAcknowledged }
       );
 
       await signOutOnThisDevice();
@@ -1373,14 +1378,33 @@ export default function NastaveniaPage() {
                 </div>
               ) : deletePreflight?.role === "owner" ? (
                 <div className="space-y-3">
-                  {deletePreflight.subscription?.subscription_status === "active_non_renewing" && (
-                    <p className="ui-notice" data-tone="warning">
-                      {t("settings.deleteModal.subscription.nonRenewingWarning", {
-                        date: deletePreflight.subscription.current_period_end
-                          ? formatDate(deletePreflight.subscription.current_period_end, locale)
-                          : "—",
-                      })}
-                    </p>
+                  {deletePreflight.subscription?.forfeits_remaining_period && (
+                    // LEGAL/CLIA REVIEW REQUIRED (texty) — zrušená obnova, obdobie ešte beží.
+                    <div className="ui-notice space-y-2" data-tone="warning" role="status">
+                      <p className="font-semibold">{t("settings.deleteModal.subscription.forfeitTitle")}</p>
+                      <ul className="list-disc space-y-0.5 pl-5">
+                        <li>{t("settings.deleteModal.subscription.forfeitNoRenewal")}</li>
+                        <li>{t("settings.deleteModal.subscription.forfeitAccessEnds")}</li>
+                        <li>
+                          {t("settings.deleteModal.subscription.forfeitRemaining", {
+                            date: deletePreflight.subscription.current_period_end
+                              ? formatDate(deletePreflight.subscription.current_period_end, locale)
+                              : "—",
+                          })}
+                        </li>
+                        <li>{t("settings.deleteModal.subscription.forfeitNoRefund")}</li>
+                      </ul>
+                      <label className="flex min-h-11 items-start gap-2">
+                        <input
+                          type="checkbox"
+                          className="mt-1 h-4 w-4"
+                          checked={forfeitAcknowledged}
+                          onChange={(event) => setForfeitAcknowledged(event.target.checked)}
+                          disabled={deleteSubmitting}
+                        />
+                        <span>{t("settings.deleteModal.subscription.forfeitAcknowledge")}</span>
+                      </label>
+                    </div>
                   )}
                   <p className="ui-body">{t("settings.deleteModal.irreversibleIntro")}</p>
 
@@ -1435,7 +1459,11 @@ export default function NastaveniaPage() {
                     <button
                       type="button"
                       onClick={confirmDeleteAccount}
-                      disabled={deleteSubmitting || deleteConfirmText !== ACCOUNT_DELETION_CONFIRM_PHRASE}
+                      disabled={
+                        deleteSubmitting ||
+                        deleteConfirmText !== ACCOUNT_DELETION_CONFIRM_PHRASE ||
+                        (deletePreflight.subscription?.forfeits_remaining_period === true && !forfeitAcknowledged)
+                      }
                       className="ui-btn bg-red-600 text-white hover:bg-red-700"
                     >
                       {deleteSubmitting
@@ -1451,6 +1479,12 @@ export default function NastaveniaPage() {
                       ? t("settings.deleteModal.orphanIrreversible")
                       : t("settings.deleteModal.memberIrreversible")}
                   </p>
+
+                  {deletePreflight?.subscription?.store_subscription_notice && (
+                    <p className="ui-notice" data-tone="warning" role="status">
+                      {t("settings.deleteModal.subscription.storeNotice")}
+                    </p>
+                  )}
 
                   {deleteError && (
                     <p className="ui-notice" data-tone="error" role="alert">

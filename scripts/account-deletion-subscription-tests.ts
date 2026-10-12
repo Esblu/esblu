@@ -53,12 +53,24 @@ await check("policy: Stripe / Google Play / App Store aktívne a obnovujúce sa 
 await check("policy: trial PROVIDERA (trialing bez zrušenia) sa zmení na platbu → blokuje", () => {
   assert.equal(owner(acc("trialing", "stripe")).can_delete, false);
 });
-await check("policy: zrušená obnova (cancel_at_period_end) → povolené + upozornenie na zánik zaplateného obdobia", () => {
-  const r = owner(acc("active", "google", true));
+await check("policy (NEZMENENÁ): zrušená obnova → povolené aj pred current_period_end; forfeits_remaining_period + upozornenie", () => {
+  const now = new Date("2026-10-12T12:00:00Z");
+  const r = owner(acc("active", "google", true), { now });
   assert.equal(r.can_delete, true);
+  assert.equal(r.blocking_reason, null);
   assert.equal(r.subscription_status, "active_non_renewing");
   assert.equal(r.current_period_end, "2026-11-12T00:00:00Z");
-  assert.equal(deletionReasonKey(r), "settings.deleteModal.subscription.nonRenewingWarning");
+  assert.equal(r.forfeits_remaining_period, true);
+  assert.equal(deletionReasonKey(r), "settings.deleteModal.subscription.forfeitTitle");
+  // obdobie už skončilo → nič neprepadá
+  const after = owner(acc("active", "google", true), { now: new Date("2026-11-13T00:00:00Z") });
+  assert.equal(after.can_delete, true);
+  assert.equal(after.forfeits_remaining_period, false);
+  // neznámy koniec obdobia → fail closed na upozornenie
+  assert.equal(owner(acc("active", "stripe", true, null), { now }).forfeits_remaining_period, true);
+  // obnovujúce sa / ukončené nikdy nie „forfeit"
+  assert.equal(owner(acc("active", "stripe"), { now }).forfeits_remaining_period, false);
+  assert.equal(owner(acc("canceled", "stripe"), { now }).forfeits_remaining_period, false);
 });
 await check("policy: platba u providera (pending/incomplete/grace/past_due/hold/unpaid/paused) → blokuje aj so zrušenou obnovou", () => {
   for (const s of ["pending", "incomplete", "grace_period", "past_due", "account_hold", "unpaid", "paused"]) {
@@ -96,16 +108,23 @@ await check("policy: otvorený checkout blokuje (aj bez predplatného); predplat
   assert.equal(owner(acc("active", "google"), { openCheckoutProvider: "stripe" }).blocking_reason, "ACTIVE_SUBSCRIPTION_RENEWING");
   assert.equal(owner(acc("canceled", "stripe"), { openCheckoutProvider: "apple" }).blocking_reason, "CHECKOUT_IN_PROGRESS");
 });
-await check("policy: člen — firma ostáva; blokuje iba platiteľ obnovujúceho sa store predplatného", () => {
-  const m = (a: SubscriptionAccountSnapshot | null, purchaser: boolean) =>
-    evaluateDeletionGuard({ account: a, openCheckoutProvider: "stripe", scope: "member", memberIsStorePurchaser: purchaser });
-  assert.equal(m(acc("active", "stripe"), true).can_delete, true, "Stripe = firemná karta, nie osobný účet obchodu");
-  assert.equal(m(acc("active", "google"), false).can_delete, true);
-  assert.equal(m(acc("active", "google"), true).blocking_reason, "STORE_SUBSCRIPTION_PURCHASER");
-  assert.equal(m(acc("past_due", "apple", true), true).blocking_reason, "STORE_SUBSCRIPTION_PURCHASER");
-  assert.equal(m(acc("active", "apple", true), true).can_delete, true, "zrušená obnova → člen smie");
-  assert.equal(m(acc("active", "apple"), true).managed_via, "app_store");
-  assert.equal(m(null, true).can_delete, true, "otvorený checkout firmy člena neblokuje");
+await check("policy: člen — firma ostáva; blokuje IBA overená identita platiteľa (dnes neexistuje), inak upozornenie správcovi", () => {
+  const m = (a: SubscriptionAccountSnapshot | null, o: { verified?: boolean; manage?: boolean } = {}) =>
+    evaluateDeletionGuard({ account: a, openCheckoutProvider: "stripe", scope: "member", verifiedMemberPurchaser: o.verified, memberCanManageBilling: o.manage });
+  // bez overenej identity: nikdy neblokovať, nevymýšľať platiteľa
+  for (const p of ["google", "apple"]) {
+    const admin = m(acc("active", p), { manage: true });
+    assert.equal(admin.can_delete, true, p);
+    assert.equal(admin.store_subscription_notice, true, p);
+    assert.equal(m(acc("active", p)).store_subscription_notice, false, `${p} employee`);
+  }
+  assert.equal(m(acc("active", "stripe"), { manage: true }).store_subscription_notice, false, "Stripe = firemná karta");
+  assert.equal(m(acc("active", "apple", true), { manage: true }).store_subscription_notice, false, "zrušená obnova → bez upozornenia");
+  // keby architektúra raz poskytla OVERENÚ identitu platiteľa
+  assert.equal(m(acc("active", "google"), { verified: true }).blocking_reason, "STORE_SUBSCRIPTION_PURCHASER");
+  assert.equal(m(acc("past_due", "apple", true), { verified: true }).blocking_reason, "STORE_SUBSCRIPTION_PURCHASER");
+  assert.equal(m(acc("active", "stripe"), { verified: true }).can_delete, true);
+  assert.equal(m(null, { verified: true }).can_delete, true, "otvorený checkout firmy člena neblokuje");
 });
 await check("guidance: dôvod + kde spravovať (rovnaké texty ako obrazovka Predplatné)", () => {
   assert.equal(deletionReasonKey(owner(acc("active", "stripe"))), "settings.deleteModal.subscription.blockedRenewing");
@@ -120,13 +139,15 @@ await check("guidance: dôvod + kde spravovať (rovnaké texty ako obrazovka Pre
   assert.equal(sk.subscription.managedVia.appStore, "Predplatné spravujete cez App Store.");
 });
 await check("i18n: všetky nové kľúče v SK / EN / DE", () => {
-  const keys = ["title", "blockedRenewing", "blockedPayment", "blockedCheckout", "blockedPurchaser", "blockedUnverified", "afterCancel", "nonRenewingWarning"];
+  const keys = ["title", "blockedRenewing", "blockedPayment", "blockedCheckout", "blockedPurchaser", "blockedUnverified", "afterCancel",
+    "forfeitTitle", "forfeitNoRenewal", "forfeitAccessEnds", "forfeitRemaining", "forfeitNoRefund", "forfeitAcknowledge", "storeNotice"];
   for (const [name, d] of [["sk", sk], ["en", en], ["de", de]] as const) {
     const m = (d.settings.deleteModal as Record<string, unknown>).subscription as Record<string, string>;
     for (const k of keys) assert.ok(typeof m[k] === "string" && m[k].length > 10, `${name}.${k}`);
-    assert.ok(m.blockedPurchaser.includes("{{store}}") && m.nonRenewingWarning.includes("{{date}}"), name);
+    assert.ok(m.blockedPurchaser.includes("{{store}}") && m.forfeitRemaining.includes("{{date}}"), name);
+    assert.equal(m.nonRenewingWarning, undefined, `${name}: starý kľúč odstránený`);
     const e = d.settings.errors as Record<string, string>;
-    assert.ok(e.subscriptionBlocksDeletion && e.subscriptionStateUnverified, name);
+    assert.ok(e.subscriptionBlocksDeletion && e.subscriptionStateUnverified && e.forfeitAcknowledgementRequired, name);
   }
 });
 
@@ -211,41 +232,45 @@ await check("reader: owner — aktívne Google predplatné blokuje; otvorený ch
   );
   assert.equal(e.can_delete, true);
 });
-await check("reader: člen — platiteľ podľa posledného dokončeného store checkoutu (created_by)", async () => {
-  const tables = (createdBy: string) => ({
-    subscription_accounts: { data: acc("active", "apple"), error: null },
-    billing_checkout_sessions: (f: Record<string, unknown>) => {
-      assert.equal(f.provider, "apple");
-      assert.equal(f.status, "completed");
-      return { data: [{ created_by: createdBy }], error: null };
-    },
-  });
-  assert.equal((await checkSubscriptionForDeletion(fakeAdmin(tables("u1")), { companyId: "c", userId: "u1", scope: "member" }, NOW)).blocking_reason, "STORE_SUBSCRIPTION_PURCHASER");
-  assert.equal((await checkSubscriptionForDeletion(fakeAdmin(tables("other")), { companyId: "c", userId: "u1", scope: "member" }, NOW)).can_delete, true);
-  // Stripe: žiadne vyhľadávanie platiteľa
-  const calls: string[] = [];
-  await checkSubscriptionForDeletion(fakeAdmin({ subscription_accounts: { data: acc("active", "stripe"), error: null } }, calls), { companyId: "c", userId: "u1", scope: "member" }, NOW);
-  assert.ok(!calls.includes("billing_checkout_sessions"));
+await check("reader: člen — ŽIADNE odvodzovanie platiteľa z checkoutov (restore nemá checkout); správca dostane upozornenie", async () => {
+  for (const p of ["apple", "google"]) {
+    const calls: string[] = [];
+    const tables = {
+      subscription_accounts: { data: acc("active", p), error: null },
+      // aj keby existoval dokončený checkout tohto používateľa, nesmie sa použiť
+      billing_checkout_sessions: { data: [{ created_by: "u1", provider: p }], error: null },
+    };
+    const admin = await checkSubscriptionForDeletion(fakeAdmin(tables, calls), { companyId: "c", userId: "u1", scope: "member", memberCanManageBilling: true }, NOW);
+    assert.equal(admin.can_delete, true, p);
+    assert.equal(admin.blocking_reason, null, p);
+    assert.equal(admin.store_subscription_notice, true, p);
+    assert.ok(!calls.includes("billing_checkout_sessions"), "checkout sa pre člena vôbec nečíta");
+  }
 });
 
 // ----------------------------------------------------------------------------- routes / UI contract
-await check("delete route: predplatné overené PRED mazaním Storage aj DB (owner aj člen); DB poistka → 409", () => {
+await check("delete route: predplatné + forfeit potvrdenie PRED zrušením; DB NAJPRV cez orchestráciu; route sama Storage nemaže", () => {
   const route = read("app/api/account/delete/route.ts");
-  const ownerCheck = route.indexOf('scope: "company",');
-  const ownerStorage = route.indexOf("await collectOwnerStorageTargets(");
-  const ownerRpc = route.indexOf('"esblu_owner_delete_company"');
-  assert.ok(ownerCheck > 0 && ownerCheck < ownerStorage && ownerStorage < ownerRpc, "owner: subscription → storage → DB");
   const retention = route.indexOf("findOwnerDeletionBlocker(admin, membership.company_id)");
-  assert.ok(retention < ownerCheck);
+  const ownerCheck = route.indexOf('scope: "company",');
+  const forfeit = route.indexOf("subscriptionCheck.forfeits_remaining_period && body.acknowledgeForfeit !== true");
+  const ownerOrchestrate = route.indexOf('"owner",\n        user.id');
+  assert.ok(retention > 0 && retention < ownerCheck && ownerCheck < forfeit && forfeit < ownerOrchestrate, "owner: archivácia → predplatné → potvrdenie → orchestrácia");
   const memberCheck = route.indexOf('scope: "member",');
-  const memberStorage = route.indexOf("await collectMemberOwnStorageTargets(");
-  assert.ok(memberCheck > 0 && memberCheck < memberStorage, "člen: subscription → storage");
+  const memberOrchestrate = route.indexOf('"member",\n      user.id');
+  assert.ok(memberCheck > 0 && memberCheck < memberOrchestrate, "člen: predplatné → orchestrácia");
+  // route už nemaže Storage ani nevolá legacy RPC priamo (iba cez orchestráciu / deps)
+  for (const direct of ["collectOwnerStorageTargets", "collectMemberOwnStorageTargets", "removeStorageTargets", "storage.from(", '"esblu_owner_delete_company"', '"esblu_member_delete_self"']) {
+    assert.ok(!route.includes(direct), direct);
+  }
+  // owner/member flow (POST) nevolá deleteUser priamo — iba orphan flow (bez súborov a firmy)
+  assert.ok(!route.slice(route.indexOf("export async function POST")).includes("auth.admin.deleteUser("));
   assert.match(route, /if \(!subscriptionCheck\.can_delete\) \{\s*return subscriptionBlockedResponse/);
   assert.match(route, /if \(!memberSubscriptionCheck\.can_delete\) \{\s*return subscriptionBlockedResponse/);
-  assert.match(route, /ESBLU_\(ACTIVE_SUBSCRIPTION\|CHECKOUT_IN_PROGRESS\)_BLOCKS_DELETION/);
+  assert.match(route, /case "blocked_subscription":/);
+  assert.match(route, /blocking_reason: "FORFEIT_ACKNOWLEDGEMENT_REQUIRED"/);
   assert.match(route, /status: check\.blocking_reason === "SUBSCRIPTION_STATE_UNVERIFIED" \? 503 : 409/);
-  // žiadne volanie provider API (žiadne live rušenie)
-  for (const forbidden of [/stripe\.com/i, /androidpublisher/i, /api\.storekit/i, /cancelSubscription/]) assert.doesNotMatch(route, forbidden);
+  for (const forbidden of [/stripe\.com/i, /androidpublisher/i, /api\.storekit/i, /cancelSubscription/, /\.refunds?\b|createRefund|issueRefund/i]) assert.doesNotMatch(route, forbidden);
 });
 await check("preflight route: vracia can_delete, blocking_reason, subscription_status (+ detail)", () => {
   const route = read("app/api/account/preflight/route.ts");
@@ -265,7 +290,12 @@ await check("UI: zablokované zrušenie nemá potvrdzovacie tlačidlo; ukazuje d
   assert.match(panel, /deletionReasonKey\(deletePreflight\.subscription\)/);
   assert.match(panel, /deletionManagedViaKey\(deletePreflight\.subscription\)/);
   assert.match(panel, /href="\/nastavenia\/predplatne"/);
-  assert.match(page, /subscription_status === "active_non_renewing"[\s\S]{0,200}nonRenewingWarning/);
+  // zrušená obnova + bežiace obdobie: 4 body upozornenia + povinné potvrdenie (tlačidlo inak vypnuté)
+  const forfeit = page.slice(page.indexOf("deletePreflight.subscription?.forfeits_remaining_period && ("));
+  for (const k of ["forfeitTitle", "forfeitNoRenewal", "forfeitAccessEnds", "forfeitRemaining", "forfeitNoRefund", "forfeitAcknowledge"]) assert.ok(forfeit.includes(`settings.deleteModal.subscription.${k}`), k);
+  assert.match(page, /forfeits_remaining_period === true && !forfeitAcknowledged/);
+  assert.match(page, /acknowledgeForfeit: deletePreflight\.role === "owner" && forfeitAcknowledged/);
+  assert.match(page, /store_subscription_notice && \(/);
 });
 await check("migrácia: forward-only, bez DROP TABLE / DELETE dát, rollback existuje", () => {
   const sql = read("supabase/migrations/20261012120000_account_deletion_subscription_guard.sql");

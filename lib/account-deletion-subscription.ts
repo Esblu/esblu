@@ -24,10 +24,10 @@ export function isMissingBillingSchemaError(error: QueryError): boolean {
 
 export async function checkSubscriptionForDeletion(
   admin: SupabaseClient,
-  params: { companyId: string; userId: string; scope: "company" | "member" },
+  params: { companyId: string; userId: string; scope: "company" | "member"; memberCanManageBilling?: boolean },
   now: Date = new Date()
 ): Promise<SubscriptionDeletionCheck> {
-  const { companyId, userId, scope } = params;
+  const { companyId, scope } = params;
 
   const accountRes = await admin
     .from("subscription_accounts")
@@ -37,13 +37,12 @@ export async function checkSubscriptionForDeletion(
 
   if (accountRes.error && !isMissingBillingSchemaError(accountRes.error)) {
     console.error("account-deletion/subscription: subscription_accounts zlyhalo:", accountRes.error.code ?? "unknown");
-    return evaluateDeletionGuard({ account: null, openCheckoutProvider: null, scope, readFailed: true });
+    return evaluateDeletionGuard({ account: null, openCheckoutProvider: null, scope, readFailed: true, now });
   }
   const billingInstalled = !accountRes.error;
   const account = (accountRes.data as SubscriptionAccountSnapshot | null) ?? null;
 
   let openCheckoutProvider: string | null = null;
-  let memberIsStorePurchaser = false;
 
   if (billingInstalled) {
     if (scope === "company") {
@@ -56,25 +55,15 @@ export async function checkSubscriptionForDeletion(
         .limit(1);
       if (checkoutRes.error) {
         console.error("account-deletion/subscription: billing_checkout_sessions zlyhalo:", checkoutRes.error.code ?? "unknown");
-        return evaluateDeletionGuard({ account, openCheckoutProvider: null, scope, readFailed: true });
+        return evaluateDeletionGuard({ account, openCheckoutProvider: null, scope, readFailed: true, now });
       }
       openCheckoutProvider = (checkoutRes.data as { provider: string }[] | null)?.[0]?.provider ?? null;
-    } else if (account?.billing_provider === "google" || account?.billing_provider === "apple") {
-      // Store predplatné je viazané na účet obchodu toho, kto ho kúpil.
-      const purchaserRes = await admin
-        .from("billing_checkout_sessions")
-        .select("created_by")
-        .eq("company_id", companyId)
-        .eq("provider", account.billing_provider)
-        .eq("status", "completed")
-        .order("completed_at", { ascending: false, nullsFirst: false })
-        .limit(1);
-      if (purchaserRes.error) {
-        console.error("account-deletion/subscription: purchaser lookup zlyhalo:", purchaserRes.error.code ?? "unknown");
-        return evaluateDeletionGuard({ account, openCheckoutProvider: null, scope, readFailed: true });
-      }
-      memberIsStorePurchaser = (purchaserRes.data as { created_by: string }[] | null)?.[0]?.created_by === userId;
     }
+    // Člen: ŽIADNE odvodzovanie platiteľa z checkoutov. Store predplatné (Apple
+    // appAccountToken / Google obfuscatedAccountId) je overene viazané na FIRMU
+    // (billing_provider_links.account_token), nie na osobu; restore nemá
+    // checkout záznam. Overená identita platiteľa neexistuje → verifiedMemberPurchaser
+    // sa nenastavuje (nevymýšľa sa); správca billingu dostane iba upozornenie.
   }
 
   // Informačný kontext (Esblu trial) — neblokuje, chyba sa ignoruje. Manuálne
@@ -87,5 +76,12 @@ export async function checkSubscriptionForDeletion(
     trialActive = !companyRes.error && !!trialEndsAt && new Date(trialEndsAt).getTime() > now.getTime();
   }
 
-  return evaluateDeletionGuard({ account, openCheckoutProvider, scope, memberIsStorePurchaser, trialActive });
+  return evaluateDeletionGuard({
+    account,
+    openCheckoutProvider,
+    scope,
+    memberCanManageBilling: params.memberCanManageBilling === true,
+    trialActive,
+    now,
+  });
 }

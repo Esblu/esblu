@@ -20,9 +20,16 @@
 //   - NEZNÁMY stav alebo chyba čítania → BLOKOVANÉ.
 //   - OTVORENÝ CHECKOUT (created/open, neexpirovaný) → BLOKOVANÉ (platba by
 //     mohla prebehnúť po zmazaní firmy).
-//   - ČLEN (nie owner), ktorý predplatné kúpil cez Google Play / App Store
-//     (viazané na JEHO účet obchodu) a predplatné sa stále obnovuje →
-//     BLOKOVANÉ, kým ho v obchode nezruší.
+//   - ČLEN (nie owner): firma a jej predplatné ostávajú → neblokuje. Blokácia
+//     STORE_SUBSCRIPTION_PURCHASER iba pri OVERENEJ identite platiteľa
+//     (verifiedMemberPurchaser). Dnes ju architektúra NEPOZNÁ: Apple
+//     appAccountToken / Google obfuscatedAccountId je vydaný pre FIRMU
+//     (billing_provider_links.account_token), restore nemá checkout záznam →
+//     identita sa nevymýšľa; správca billingu (admin) dostane iba upozornenie
+//     (store_subscription_notice), že zrušenie Esblu účtu nezruší predplatné
+//     v obchode.
+//   - ZRUŠENÁ OBNOVA + obdobie ešte beží → povolené, forfeits_remaining_period
+//     = true (UI výslovné upozornenie + serverom vyžadované potvrdenie).
 //
 // Zrkadlí DB predikát public.esblu_billing_blocks_account_deletion
 // (20261012120000_account_deletion_subscription_guard.sql). Parita je
@@ -60,6 +67,10 @@ export type SubscriptionDeletionCheck = {
   /** ISO; pri active_non_renewing = koniec zaplateného obdobia (UI upozornenie). */
   current_period_end: string | null;
   cancel_at_period_end: boolean;
+  /** Zrušená obnova a zaplatené obdobie ešte nevypršalo → zrušením účtu zvyšok prepadne. */
+  forfeits_remaining_period: boolean;
+  /** Člen-správca billingu + firemné store predplatné: upozornenie (neblokuje). */
+  store_subscription_notice: boolean;
 };
 
 /** Kanonický riadok public.subscription_accounts (iba stĺpce potrebné pre rozhodnutie). */
@@ -77,8 +88,16 @@ export type DeletionGuardInput = {
   openCheckoutProvider: string | null;
   /** Mazanie celej firmy (owner) alebo iba člena. */
   scope: "company" | "member";
-  /** Člen: kúpil aktuálne predplatné cez obchod (billing_checkout_sessions.created_by). */
-  memberIsStorePurchaser?: boolean;
+  /**
+   * Člen: OVERENÁ identita platiteľa store predplatného (z overeného nákupu
+   * obchodu, nie z checkout heuristiky). Dnes ju architektúra neposkytuje →
+   * nenastavuje sa. Nikdy ju neodvodzovať z posledného checkoutu.
+   */
+  verifiedMemberPurchaser?: boolean;
+  /** Člen môže spravovať billing (admin) → môže byť platiteľom cez svoj účet obchodu. */
+  memberCanManageBilling?: boolean;
+  /** Čas servera (forfeits_remaining_period). */
+  now?: Date;
   /** Informačný kontext pre neblokujúce stavy. */
   trialActive?: boolean;
   manualGrantActive?: boolean;
@@ -147,6 +166,8 @@ export function evaluateDeletionGuard(input: DeletionGuardInput): SubscriptionDe
     managed_via: managedViaFor(account?.billing_provider ?? null),
     current_period_end: account?.current_period_end ?? null,
     cancel_at_period_end: account?.cancel_at_period_end === true,
+    forfeits_remaining_period: false,
+    store_subscription_notice: false,
   };
 
   if (input.readFailed) {
@@ -156,17 +177,19 @@ export function evaluateDeletionGuard(input: DeletionGuardInput): SubscriptionDe
   const sub = classifySubscriptionForDeletion(account);
 
   if (input.scope === "member") {
-    // Firma (a jej predplatné) ostáva — člen blokuje iba ak je platiteľom cez
-    // SVOJ účet obchodu a predplatné sa stále obnovuje / čaká na platbu.
-    if (
-      input.memberIsStorePurchaser === true &&
-      provider !== null &&
-      STORE_PROVIDERS.has(provider) &&
-      sub.blocks
-    ) {
+    // Firma (a jej predplatné) ostáva. Blokuje iba OVERENÝ platiteľ store
+    // predplatného, ktoré sa ešte obnovuje / čaká na platbu.
+    const storeOpen = provider !== null && STORE_PROVIDERS.has(provider) && sub.blocks;
+    if (storeOpen && input.verifiedMemberPurchaser === true) {
       return { ...base, can_delete: false, blocking_reason: "STORE_SUBSCRIPTION_PURCHASER", subscription_status: sub.status };
     }
-    return { ...base, can_delete: true, blocking_reason: null, subscription_status: sub.status };
+    return {
+      ...base,
+      can_delete: true,
+      blocking_reason: null,
+      subscription_status: sub.status,
+      store_subscription_notice: storeOpen && input.memberCanManageBilling === true,
+    };
   }
 
   if (sub.blocks) {
@@ -195,13 +218,17 @@ export function evaluateDeletionGuard(input: DeletionGuardInput): SubscriptionDe
   if (status === "none") {
     status = input.manualGrantActive ? "manual" : input.trialActive ? "trial" : "none";
   }
-  return { ...base, can_delete: true, blocking_reason: null, subscription_status: status };
+  const now = input.now ?? new Date();
+  const periodEnd = account?.current_period_end ? Date.parse(account.current_period_end) : NaN;
+  // Neznámy koniec obdobia = fail closed → upozorniť (vyžaduje potvrdenie).
+  const forfeits = status === "active_non_renewing" && (!Number.isFinite(periodEnd) || periodEnd > now.getTime());
+  return { ...base, can_delete: true, blocking_reason: null, subscription_status: status, forfeits_remaining_period: forfeits };
 }
 
 /** i18n kľúč dôvodu blokácie / upozornenia (settings.deleteModal.subscription.*). */
 export function deletionReasonKey(check: SubscriptionDeletionCheck): string | null {
   if (check.can_delete) {
-    return check.subscription_status === "active_non_renewing" ? "settings.deleteModal.subscription.nonRenewingWarning" : null;
+    return check.forfeits_remaining_period ? "settings.deleteModal.subscription.forfeitTitle" : null;
   }
   switch (check.blocking_reason) {
     case "ACTIVE_SUBSCRIPTION_RENEWING":
