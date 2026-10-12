@@ -67,6 +67,16 @@ check("build skript: verzia/podpis/package nezmenené", () => {
   assert.match(build, /\$Alias = "esblu"/);
   assert.match(build, /-notcontains "com\.esblu\.app"/);
 });
+check("jdk21.ps1: java -version bez NativeCommandError (Process capture), overený exit code + major 21", () => {
+  assert.doesNotMatch(jdk, /&\s*\$java\s+-version\s+2>&1/, "žiadne & java -version 2>&1 (PS 5.1 + EAP Stop = NativeCommandError)");
+  assert.doesNotMatch(jdk, /bin\\java\.exe"\)\s+-version\s+2>&1/);
+  assert.match(jdk, /System\.Diagnostics\.ProcessStartInfo/);
+  assert.match(jdk, /RedirectStandardError = \$true/);
+  assert.match(jdk, /\$r\.ExitCode -ne 0/);
+  assert.match(jdk, /\(Get-JavaVersionMajor \$r\.Text\) -ne \$script:EsbluRequiredJdkMajor/);
+  assert.match(psTests, /java -version on STDERR under ErrorActionPreference=Stop/);
+  assert.match(psTests, /non-zero exit code is reported/);
+});
 check("PowerShell regresné testy pokrývajú požadované scenáre", () => {
   for (const s of ["JAVA_HOME = JDK 21 -> PASS and kept", "JAVA_HOME = JDK 25 -> not used blindly", "Android Studio JBR 25 + Adoptium 21", "no JDK 21 anywhere", "JBR accepted only when it really is JDK 21"]) {
     assert.ok(psTests.includes(s), s);

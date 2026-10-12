@@ -13,6 +13,46 @@
 
 $script:EsbluRequiredJdkMajor = 21
 
+function Invoke-JavaVersion {
+  # Runs `<java> -version` and returns { ExitCode; Text } or $null when it cannot start.
+  # `java -version` writes its normal output to STDERR. In Windows PowerShell 5.1 a redirected
+  # native stderr (`& java -version 2>&1`) becomes ErrorRecords, which turn into a terminating
+  # NativeCommandError whenever the caller runs with $ErrorActionPreference = "Stop".
+  # System.Diagnostics.Process captures stdout/stderr as plain strings (no ErrorRecords),
+  # independent of $ErrorActionPreference, identically in PowerShell 5.1 and 7.
+  param([string]$JavaExe, [int]$TimeoutMs = 30000)
+  if (-not $JavaExe -or -not (Test-Path -LiteralPath $JavaExe)) { return $null }
+  try {
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $JavaExe
+    $psi.Arguments = "-version"
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.CreateNoWindow = $true
+    $proc = [System.Diagnostics.Process]::Start($psi)
+    $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
+    $stderr = $proc.StandardError.ReadToEnd()
+    if (-not $proc.WaitForExit($TimeoutMs)) {
+      try { $proc.Kill() } catch { }
+      return [pscustomobject]@{ ExitCode = -1; Text = "TIMEOUT" }
+    }
+    $proc.WaitForExit()
+    $text = ($stderr + "`n" + $stdoutTask.Result).Trim()
+    return [pscustomobject]@{ ExitCode = $proc.ExitCode; Text = $text }
+  } catch {
+    return $null
+  }
+}
+
+function Get-JavaVersionMajor([string]$Text) {
+  $m = [regex]::Match([string]$Text, 'version "(\d+)(?:\.(\d+))?')
+  if (-not $m.Success) { return $null }
+  $maj = [int]$m.Groups[1].Value
+  if ($maj -eq 1 -and $m.Groups[2].Success) { $maj = [int]$m.Groups[2].Value }
+  return $maj
+}
+
 function Get-JdkMajor {
   param([string]$JavaHome)
   if (-not $JavaHome) { return $null }
@@ -27,15 +67,10 @@ function Get-JdkMajor {
       return $maj
     }
   }
-  # 2) Fallback: java -version (stderr)
-  $out = (& $java -version 2>&1 | Out-String)
-  $m = [regex]::Match($out, 'version "(\d+)(?:\.(\d+))?')
-  if ($m.Success) {
-    $maj = [int]$m.Groups[1].Value
-    if ($maj -eq 1 -and $m.Groups[2].Success) { $maj = [int]$m.Groups[2].Value }
-    return $maj
-  }
-  return $null
+  # 2) Fallback: java -version (stderr, captured safely; non-zero exit = unknown)
+  $r = Invoke-JavaVersion $java
+  if (-not $r -or $r.ExitCode -ne 0) { return $null }
+  return (Get-JavaVersionMajor $r.Text)
 }
 
 function Get-JdkDirVersion([string]$Name) {
@@ -103,8 +138,16 @@ function Use-Jdk21OrFail {
     exit 1
   }
   if ($env:JAVA_HOME -ne $sel.Home) { $env:JAVA_HOME = $sel.Home }
-  $ver = (& (Join-Path $env:JAVA_HOME "bin\java.exe") -version 2>&1 | Select-Object -First 1).ToString()
+  # Real check of the selected runtime: exit code 0 AND `java -version` reports major 21.
+  $r = Invoke-JavaVersion (Join-Path $env:JAVA_HOME "bin\java.exe")
+  $verLine = if ($r) { ($r.Text -split "`r?`n" | Select-Object -First 1) } else { "<java.exe could not be started>" }
+  if (-not $r -or $r.ExitCode -ne 0 -or (Get-JavaVersionMajor $r.Text) -ne $script:EsbluRequiredJdkMajor) {
+    $code = if ($r) { $r.ExitCode } else { "n/a" }
+    Write-Host "FAIL: JDK 21 is required for the Esblu Android release build (java -version check failed)." -ForegroundColor Red
+    Write-Host "      JAVA_HOME: $env:JAVA_HOME  exit code: $code  output: $verLine" -ForegroundColor Red
+    exit 1
+  }
   Write-Host "Selected JAVA_HOME: $env:JAVA_HOME  [$($sel.Source)]"
-  Write-Host "Java version: $ver"
+  Write-Host "Java version: $verLine"
   return $sel
 }

@@ -58,7 +58,12 @@ export const CORS_MAX_AGE_SECONDS = "600";
 
 /** Cesty, na ktoré sa CORS nikdy neaplikuje (server-to-server). */
 export function isCorsExcludedPath(pathname: string): boolean {
-  return pathname === "/api/cron" || pathname.startsWith("/api/cron/");
+  // Server-to-server: cron a webhooky providerov (Stripe/fake) — žiadny prehliadačový origin.
+  return (
+    pathname === "/api/cron" ||
+    pathname.startsWith("/api/cron/") ||
+    pathname.startsWith("/api/billing/webhooks/")
+  );
 }
 
 // Lokálne vývojové hosty — iba pre ne sa v ESBLU_CORS_EXTRA_ORIGINS povolí http.
