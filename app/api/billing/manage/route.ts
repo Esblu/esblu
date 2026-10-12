@@ -8,8 +8,8 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 // -----------------------------------------------------------------------------
 // POST /api/billing/manage   { action: "cancel" | "resume" | "change" | "portal", planCode?, interval? }
 //
-// Rola sa overí v DB (esblu_billing_authorize_manage — owner alebo admin s
-// permissions.billing.manage; accountant/employee 403). Provider ID a
+// Rola sa overí v DB (esblu_billing_authorize_manage — IBA owner aktívnej
+// firmy tejto session; admin aj s billing.manage, accountant, employee → 403). Provider ID a
 // subscription ID sa berú z kanonického stavu firmy, nikdy z požiadavky.
 // Výsledný stav providera ide rovnakou pipeline ako webhook (record → apply).
 // Apple/Google predplatné sa spravuje v obchode → 409 MANAGE_IN_STORE.

@@ -43,6 +43,7 @@ export function requestGuardDeps(req: Request): CompanyLookupGuardDeps {
 
 // Jedna inštancia na serverový proces (cache, limity a circuit breaker sú
 // zdieľané medzi požiadavkami tej istej inštancie).
-const service = createCompanyLookupService({ rpo: createRpoProvider(), ruz: createRuzProvider() });
+export const companyLookupService = createCompanyLookupService({ rpo: createRpoProvider(), ruz: createRuzProvider() });
+const service = companyLookupService;
 
 export const companyLookupHandlers = createCompanyLookupHandlers({ guardDeps: requestGuardDeps, service });

@@ -5,18 +5,21 @@
 // používateľ si založí ďalší workspace, v ktorom je owner. Žiadna nová
 // registrácia, e-mail ani heslo (rovnaká identita). Po vytvorení je nová
 // firma aktívna a appka sa načíta nanovo na nástenke.
-// Trial / nároky: existujúca logika pre každú novú firmu (žiadny pricing).
+// Trial patrí PRÁVNEMU SUBJEKTU (20261012150000), nie workspace-u: nový
+// workspace trial nedostane hneď; voliteľné IČO sa po vytvorení overí
+// v registri na serveri a DB rozhodne podľa histórie subjektu.
 // =============================================================================
 
 import { useState } from "react";
 import BackLink from "@/app/components/BackLink";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
-import { createMyCompany, resetCompanyScopedClientState, workspaceErrorKey } from "@/lib/company-workspaces";
+import { createMyCompany, resetCompanyScopedClientState, verifyActiveCompanyLegalIdentity, workspaceErrorKey } from "@/lib/company-workspaces";
 import { navigateHard } from "@/lib/app-navigation";
 
 export default function NewCompanyPage() {
   const { t } = useLocale();
   const [name, setName] = useState("");
+  const [ico, setIco] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const trimmed = name.trim();
@@ -28,6 +31,11 @@ export default function NewCompanyPage() {
     setError("");
     try {
       await createMyCompany(trimmed);
+      if (ico.trim()) {
+        // Firma už existuje; neúspešné overenie IČO ju nezruší — trial ostáva
+        // „čaká na overenie" a IČO sa dá overiť neskôr.
+        await verifyActiveCompanyLegalIdentity(ico.trim()).catch(() => undefined);
+      }
       resetCompanyScopedClientState();
       navigateHard("/");
     } catch (createError) {
@@ -59,6 +67,23 @@ export default function NewCompanyPage() {
               required
             />
           </label>
+          <label className="block">
+            <span className="ui-label">{t("workspaces.create.icoLabel")}</span>
+            <input
+              type="text"
+              inputMode="numeric"
+              className="ui-input mt-1"
+              value={ico}
+              onChange={(event) => setIco(event.target.value)}
+              maxLength={12}
+              autoComplete="off"
+              disabled={submitting}
+              aria-describedby="new-company-trial-note"
+            />
+          </label>
+          <p id="new-company-trial-note" className="text-sm text-secondary">
+            {t("workspaces.create.trialNote")}
+          </p>
           {error && (
             <p id="new-company-error" role="alert" className="ui-notice" data-tone="error">
               {error}

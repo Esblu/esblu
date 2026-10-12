@@ -10,6 +10,7 @@ import { MOBILE_STATIC_ROUTES } from "@/lib/app-routes";
 import sk from "@/lib/i18n/dictionaries/sk";
 import en from "@/lib/i18n/dictionaries/en";
 import de from "@/lib/i18n/dictionaries/de";
+import { sessionIdFromAccessToken } from "@/lib/request-session";
 
 let passed = 0;
 let failed = 0;
@@ -46,13 +47,14 @@ await check("active-company: žiadny kód nečíta „moje“ členstvo cez comp
 
 await check("active-company: klient aj server berú aktívnu firmu z DB (RPC), nikdy z parametra klienta", () => {
   assert.match(read("lib/active-membership.ts"), /rpc\("esblu_my_active_membership"\)/);
-  assert.match(read("lib/active-membership-server.ts"), /rpc\("esblu_active_membership_for_user", \{ p_user_id: userId \}\)/);
+  assert.match(read("lib/active-membership-server.ts"), /rpc\("esblu_active_membership_for_user", \{ p_user_id: userId, p_session_id: sessionId \}\)/);
   assert.match(read("lib/company.ts"), /fetchMyActiveMembership\(supabase, session\.user\.id\)/);
   for (const route of ["app/api/assistant/intent/route.ts", "app/api/assistant/action/execute/route.ts"]) {
     assert.match(read(route), /fetchMyActiveMembership\(supabase, user\.id\)/, route);
   }
   for (const route of ["app/api/account/delete/route.ts", "app/api/account/preflight/route.ts"]) {
-    assert.match(read(route), /resolveActiveMembershipForUser\(admin, user\.id\)/, route);
+    assert.match(read(route), /resolveActiveMembershipForUser\(admin, user\.id, requestSessionId\(req, user\.id\)\)/, route);
+    assert.match(read(route), /memberCanManageBilling: false/, `${route}: billing iba owner`);
     assert.doesNotMatch(read(route), /company_id"?\s*:\s*body\./, `${route}: company_id z tela požiadavky`);
   }
 });
@@ -86,9 +88,9 @@ await check("migrácia: každé „moje členstvo“ (user_id = auth.uid()/v_uid
 await check("switcher: prepnutie cez server, potom reset cache a plný reload (žiadny stale obsah / realtime)", () => {
   const ws = read("lib/company-workspaces.ts");
   assert.match(ws, /rpc\("esblu_set_my_active_company", \{ p_company_id: companyId \}\)/);
-  assert.match(ws, /await setActiveCompany\(companyId\);\s*resetCompanyScopedClientState\(\);\s*navigateHard\(target\);/);
   assert.match(ws, /invalidateCompanyEntitlements\(\);\s*resetActiveMembershipCache\(\);/);
   assert.doesNotMatch(ws, /localStorage|sessionStorage/, "voľba firmy sa neukladá klientsky ako autorizácia");
+  assert.match(ws, /await setActiveCompany\(companyId\);\s*rememberCompanyPreference\(await currentUserId\(\), companyId\);\s*resetCompanyScopedClientState\(\);\s*navigateHard\(target\);/);
   const sw = read("app/components/workspaces/CompanySwitcher.tsx");
   assert.match(sw, /switchCompanyAndReload\(company\.company_id, "\/"\)/);
   assert.match(sw, /href="\/firmy\/nova"/);
@@ -139,6 +141,69 @@ await check("i18n: workspace a zrušenie texty v SK / EN / DE", () => {
     const e = d.settings.errors as Record<string, string>;
     for (const k of ["selectCompanyFirst", "globalDeleteOwnsCompany", "globalDeleteRetainedRecords", "ownerCannotLeave", "accountHasOtherCompanies"]) assert.ok(e[k], `${name}.${k}`);
   }
+});
+
+const SESSION_MIGRATION = read("supabase/migrations/20261012150000_session_company_context_and_legal_entity_trial.sql");
+
+await check("per-device: aktívna firma = session_id z JWT; žiadna globálna voľba; preferencia zariadenia iba návrh pre server", () => {
+  assert.match(SESSION_MIGRATION, /sac\.session_id = public\.esblu_request_session_id\(\)\s*and sac\.user_id = auth\.uid\(\)/);
+  const resolver = SESSION_MIGRATION.slice(SESSION_MIGRATION.indexOf("create or replace function public.esblu_my_active_company_id()"), SESSION_MIGRATION.indexOf("comment on function public.esblu_my_active_company_id()"));
+  assert.doesNotMatch(resolver, /user_active_company|limit 1/i);
+  assert.match(SESSION_MIGRATION, /ESBLU_SESSION_REQUIRED/);
+  assert.match(SESSION_MIGRATION, /auth\.sessions s where s\.id = v_session and s\.user_id = v_uid/);
+  const pref = read("lib/company-preference.ts");
+  assert.match(pref, /localStorage\.getItem\(KEY_PREFIX \+ userId\)/, "per používateľ");
+  assert.match(pref, /try \{[\s\S]*catch/);
+  const ws = read("lib/company-workspaces.ts");
+  assert.match(ws, /try \{\s*await setActiveCompany\(preferred\);\s*return true;\s*\} catch \{\s*forgetCompanyPreference\(userId\);/, "server overí; neplatná preferencia = výber");
+  assert.match(read("app/components/Dashboard.tsx"), /if \(await restorePreferredCompany\(companies\)\) \{\s*resetCompanyScopedClientState\(\);\s*navigateHard\("\/"\);/);
+  const rs = read("lib/request-session.ts");
+  assert.match(rs, /payload\.sub !== verifiedUserId/);
+  // žiadny kód nečíta preferenciu ako autorizáciu
+  const readers = SOURCES.filter((f) => /readCompanyPreference\(/.test(read(f))).map((f) => path.relative(".", f).replace(/\\/g, "/")).sort();
+  assert.deepEqual(readers, ["lib/company-preference.ts", "lib/company-workspaces.ts"]);
+});
+
+await check("request-session: session_id iba z tokenu overeného používateľa; zlý formát / iný sub / starý token = null", () => {
+  const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString("base64url");
+  const tok = (p: unknown) => `${b64({ alg: "HS256" })}.${b64(p)}.sig`;
+  const uid = "a0000000-0000-4000-8000-00000000000a";
+  const sid = "51000000-0000-4000-8000-00000000000A";
+  assert.equal(sessionIdFromAccessToken(tok({ sub: uid, session_id: sid }), uid), sid.toLowerCase());
+  assert.equal(sessionIdFromAccessToken(tok({ sub: "other", session_id: sid }), uid), null);
+  assert.equal(sessionIdFromAccessToken(tok({ sub: uid }), uid), null);
+  assert.equal(sessionIdFromAccessToken(tok({ sub: uid, session_id: "x' or 1=1" }), uid), null);
+  assert.equal(sessionIdFromAccessToken("garbage", uid), null);
+});
+
+await check("owner-only-billing: žiadna admin/billing.manage výnimka v app ani v novej migrácii", () => {
+  for (const f of ["app/api/billing/manage/route.ts", "app/api/billing/checkout/route.ts"]) assert.doesNotMatch(read(f), /owner alebo admin|admin\+billing\.manage/, f);
+  assert.doesNotMatch(SESSION_MIGRATION, /billing\.manage|v_manage/);
+});
+
+await check("trial-legal-entity: trial iba serverom po overení subjektu; route = owner + register; žiadny trial z klienta", () => {
+  assert.match(SESSION_MIGRATION, /new\.trial_started_at := null;\s*new\.trial_ends_at := null;/);
+  assert.match(SESSION_MIGRATION, /trial_claims[\s\S]{0,40}\(\s*claim_key text primary key/);
+  assert.doesNotMatch(SESSION_MIGRATION.slice(SESSION_MIGRATION.indexOf("create table if not exists public.trial_claims"), SESSION_MIGRATION.indexOf("comment on table public.trial_claims")), /references public\.companies/, "história prežije zrušenie firmy");
+  assert.match(SESSION_MIGRATION, /revoke all on function public\.esblu_record_company_legal_identity\(uuid, text, text, boolean, text\) from public, anon, authenticated;/);
+  const route = read("app/api/company/legal-identity/route.ts");
+  assert.match(route, /membership\.role !== "owner"/);
+  assert.match(route, /companyLookupService\.detail\(ico\)/);
+  assert.match(route, /source\.id === "rpo" && source\.status === "VERIFIED"/);
+  assert.match(route, /p_company_id: membership\.company_id/);
+  assert.doesNotMatch(route, /body\??\.(company_?[iI]d|trial|verified)/);
+  assert.match(read("app/firmy/nova/page.tsx"), /workspaces\.create\.trialNote/);
+  for (const [name, d] of [["sk", sk], ["en", en], ["de", de]] as const) {
+    const w = (d as unknown as { workspaces: { create: Record<string, string>; errors: Record<string, string> } }).workspaces;
+    for (const k of ["icoLabel", "trialNote"]) assert.ok(w.create[k], `${name}.create.${k}`);
+    for (const k of ["sessionExpired", "invalidIco", "icoNotFound", "icoTerminated", "registryUnavailable", "identityLocked"]) assert.ok(w.errors[k], `${name}.errors.${k}`);
+  }
+  assert.equal((sk as unknown as { workspaces: { create: { trialNote: string } } }).workspaces.create.trialNote, "Trial aktivujeme po overení firemných údajov.");
+});
+
+await check("migrácie: 20261012140000 sa nemení; 20261012150000 nič nemaže", () => {
+  assert.doesNotMatch(SESSION_MIGRATION, /\bdelete from\b|\btruncate\b|drop table|drop column/i);
+  assert.ok(existsSync("supabase/rollback/20261012150000_session_company_context_and_legal_entity_trial_rollback.sql"));
 });
 
 console.log(`\nmulti-company: ${passed} passed, ${failed} failed`);

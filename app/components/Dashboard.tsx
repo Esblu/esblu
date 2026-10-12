@@ -49,7 +49,8 @@ import { describePackageError, describePackageOutcome } from "@/app/components/f
 import { signOutOnThisDevice } from "@/lib/sign-out";
 import { AppLink } from "@/app/components/AppLink";
 import CompanyPicker from "@/app/components/workspaces/CompanyPicker";
-import { listMyCompanies, type MyCompany } from "@/lib/company-workspaces";
+import { listMyCompanies, resetCompanyScopedClientState, restorePreferredCompany, type MyCompany } from "@/lib/company-workspaces";
+import { navigateHard } from "@/lib/app-navigation";
 
 function getGreeting(t: (key: string) => string) {
   const hour = new Date().getHours();
@@ -198,6 +199,12 @@ export default function Dashboard() {
     if (!membership) {
       const companies = await listMyCompanies().catch(() => [] as MyCompany[]);
       if (companies.length > 0) {
+        // Nové prihlásenie na tomto zariadení: posledná voľba zariadenia (server ju overí), inak výber.
+        if (await restorePreferredCompany(companies)) {
+          resetCompanyScopedClientState();
+          navigateHard("/");
+          return;
+        }
         setPickerCompanies(companies);
         return;
       }

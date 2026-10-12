@@ -1,10 +1,12 @@
 // =============================================================================
 // Aktívna firma používateľa na SERVERI (service_role) — multi-company 2026-10-12.
 //
-// Jediný zdroj pravdy je DB funkcia esblu_active_membership_for_user
-// (20261012140000): platná uložená voľba (user_active_company) alebo jediné
-// aktívne členstvo; pri 2+ členstvách bez platnej voľby žiadna firma (klient
-// ukáže výber). Nikdy `.maybeSingle()` nad company_members (pri 2+ riadkoch
+// Jediný zdroj pravdy je DB funkcia esblu_active_membership_for_user.
+// 20261012150000: aktívna firma je PER SESSION (zariadenie) — route pošle
+// session_id z overeného Bearer tokenu (lib/request-session.ts); DB vráti
+// platný kontext tejto session alebo jediné aktívne členstvo; pri 2+
+// členstvách bez platného kontextu žiadna firma (klient ukáže výber).
+// Kým 20261012150000 nie je v DB: 1-arg verzia z 20261012140000. Nikdy `.maybeSingle()` nad company_members (pri 2+ riadkoch
 // by zlyhalo / vybralo náhodne).
 //
 // Fallback, kým migrácia nie je v DB: pôvodný model (max 1 aktívne členstvo).
@@ -28,9 +30,14 @@ function isMissingFunction(error: PgError): boolean {
 
 export async function resolveActiveMembershipForUser(
   admin: SupabaseClient,
-  userId: string
+  userId: string,
+  sessionId: string | null
 ): Promise<{ data: ServerActiveMembership | null; error: PgError }> {
-  const { data, error } = await admin.rpc("esblu_active_membership_for_user", { p_user_id: userId });
+  let { data, error } = await admin.rpc("esblu_active_membership_for_user", { p_user_id: userId, p_session_id: sessionId });
+  if (error && isMissingFunction(error)) {
+    // 20261012150000 ešte nie je v DB → staršia (globálna) voľba z 20261012140000.
+    ({ data, error } = await admin.rpc("esblu_active_membership_for_user", { p_user_id: userId }));
+  }
 
   if (!error) {
     const row = ((data ?? []) as Array<{ company_id: string; role: ServerActiveMembership["role"]; permissions: unknown; active_membership_count: number }>)[0];

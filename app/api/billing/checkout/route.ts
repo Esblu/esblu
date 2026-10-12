@@ -5,7 +5,7 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 // -----------------------------------------------------------------------------
 // POST /api/billing/checkout   { planCode, interval }
 //
-// Klient posiela IBA kód plánu a interval. Rolu (owner / admin+billing.manage),
+// Klient posiela IBA kód plánu a interval. Rolu (IBA owner aktívnej firmy),
 // firmu, povolenie plánu, provider, prostredie a provider price ID určí
 // esblu_billing_create_checkout_intent v DB. Price/product ID z prehliadača sa
 // nikdy nečíta. Návratové URL skladá server z ESBLU_BILLING_RETURN_ORIGIN.

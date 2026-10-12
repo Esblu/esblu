@@ -6,6 +6,7 @@ import { findOwnerDeletionBlocker, type OwnerDeletionBlocker } from "@/lib/accou
 import { checkSubscriptionForDeletion } from "@/lib/account-deletion-subscription";
 import type { SubscriptionDeletionCheck } from "@/lib/billing/deletion-guard";
 import { resolveActiveMembershipForUser } from "@/lib/active-membership-server";
+import { requestSessionId } from "@/lib/request-session";
 
 // Bez firmy (orphan) nie je čo účtovať.
 const NO_SUBSCRIPTION: SubscriptionDeletionCheck = {
@@ -47,7 +48,7 @@ export async function GET(req: Request) {
     const admin = getSupabaseAdmin();
 
     // Multi-company: aktívna firma zo servera (nie „prvé" členstvo).
-    const { data: active, error: membershipError } = await resolveActiveMembershipForUser(admin, user.id);
+    const { data: active, error: membershipError } = await resolveActiveMembershipForUser(admin, user.id, requestSessionId(req, user.id));
     const membership = active?.companyId && active.role ? { company_id: active.companyId, role: active.role } : null;
     const membershipCount = active?.activeMembershipCount ?? 0;
 
@@ -193,7 +194,7 @@ export async function GET(req: Request) {
       companyId: membership.company_id,
       userId: user.id,
       scope: membership.role === "owner" ? "company" : "member",
-      memberCanManageBilling: membership.role === "admin",
+      memberCanManageBilling: false, // billing = iba owner (20261012140000)
     });
 
     return Response.json({

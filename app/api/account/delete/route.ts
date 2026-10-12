@@ -10,6 +10,7 @@ import type { Locale } from "@/lib/i18n/locales";
 import { orchestrateAccountDeletion, type OrchestrationResult } from "@/lib/account-deletion-orchestrator";
 import { supabaseDeletionDeps } from "@/lib/account-deletion-deps";
 import { resolveActiveMembershipForUser } from "@/lib/active-membership-server";
+import { requestSessionId } from "@/lib/request-session";
 
 // =============================================================================
 // POST /api/account/delete
@@ -295,7 +296,7 @@ export async function POST(req: Request) {
 
     // Multi-company (2026-10-12): akcia sa týka AKTÍVNEJ firmy, nie „prvého"
     // členstva. Firma sa nikdy neberie z klienta.
-    const { data: active, error: membershipError } = await resolveActiveMembershipForUser(admin, user.id);
+    const { data: active, error: membershipError } = await resolveActiveMembershipForUser(admin, user.id, requestSessionId(req, user.id));
     const membership = active?.companyId && active.role ? { company_id: active.companyId, role: active.role } : null;
     const membershipCount = active?.activeMembershipCount ?? 0;
 
@@ -442,7 +443,7 @@ export async function POST(req: Request) {
       companyId: membership.company_id,
       userId: user.id,
       scope: "member",
-      memberCanManageBilling: membership.role === "admin",
+      memberCanManageBilling: false, // billing = iba owner (20261012140000)
     });
     if (!memberSubscriptionCheck.can_delete) {
       return subscriptionBlockedResponse(locale, memberSubscriptionCheck);
