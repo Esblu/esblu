@@ -33,7 +33,7 @@ export default function NewCompanyPage() {
       await createMyCompany(trimmed);
       if (ico.trim()) {
         // Firma už existuje; neúspešné overenie IČO ju nezruší — trial ostáva
-        // „čaká na overenie" a IČO sa dá overiť neskôr.
+        // „čaká na overenie" a IČO sa dá overiť neskôr v Nastaveniach (Identita firmy).
         await verifyActiveCompanyLegalIdentity(ico.trim()).catch(() => undefined);
       }
       resetCompanyScopedClientState();

@@ -101,6 +101,30 @@ export async function verifyActiveCompanyLegalIdentity(ico: string): Promise<Leg
   return body.trial ?? "pending_legal_identity";
 }
 
+export type CompanyLegalIdentity = {
+  company_id: string;
+  company_name: string | null;
+  country_code: string | null;
+  registration_id: string | null;
+  verification_status: "missing" | "unverified" | "verified" | "manual" | "failed";
+  verified_at: string | null;
+  last_error: "not_found" | "terminated" | "unavailable" | null;
+  trial_status: "eligible" | "not_eligible_previous_trial" | "pending_legal_identity" | "manual_override" | "trial_active" | "trial_used" | "legacy_no_trial";
+  trial_ends_at: string | null;
+  can_edit: boolean;
+};
+
+/** Identita aktívnej firmy pre Nastavenia; null = bez prístupu (zamestnanec) alebo bez firmy. */
+export async function loadActiveCompanyLegalIdentity(): Promise<CompanyLegalIdentity | null> {
+  const { data, error } = await supabase.rpc("esblu_my_company_legal_identity");
+  if (error) {
+    const code = errorCode(error);
+    if (code === "ESBLU_FORBIDDEN" || code === "ESBLU_NO_ACTIVE_COMPANY") return null;
+    throw new CompanyWorkspaceError(code);
+  }
+  return (data ?? null) as CompanyLegalIdentity | null;
+}
+
 /** Vyčistí všetky company-scoped klientske cache (pred reloadom aj pri odchode z firmy). */
 export function resetCompanyScopedClientState(): void {
   invalidateCompanyEntitlements();
@@ -128,6 +152,9 @@ export const WORKSPACE_ERROR_KEYS: Record<string, string> = {
   ESBLU_REGISTRY_ENTITY_TERMINATED: "workspaces.errors.icoTerminated",
   ESBLU_REGISTRY_UNAVAILABLE: "workspaces.errors.registryUnavailable",
   ESBLU_LEGAL_IDENTITY_LOCKED: "workspaces.errors.identityLocked",
+  ESBLU_RATE_LIMITED: "workspaces.errors.rateLimited",
+  ESBLU_COUNTRY_NOT_SUPPORTED: "workspaces.errors.countryNotSupported",
+  ESBLU_NOT_ACTIVE_OWNER: "workspaces.errors.ownerOnly",
 };
 
 export function workspaceErrorKey(error: unknown): string {

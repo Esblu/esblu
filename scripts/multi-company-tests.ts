@@ -187,23 +187,64 @@ await check("trial-legal-entity: trial iba serverom po overení subjektu; route 
   assert.doesNotMatch(SESSION_MIGRATION.slice(SESSION_MIGRATION.indexOf("create table if not exists public.trial_claims"), SESSION_MIGRATION.indexOf("comment on table public.trial_claims")), /references public\.companies/, "história prežije zrušenie firmy");
   assert.match(SESSION_MIGRATION, /revoke all on function public\.esblu_record_company_legal_identity\(uuid, text, text, boolean, text\) from public, anon, authenticated;/);
   const route = read("app/api/company/legal-identity/route.ts");
-  assert.match(route, /membership\.role !== "owner"/);
+  const handler = read("lib/company-legal-identity/handler.ts");
+  assert.match(handler, /membership\.role !== "owner"/);
   assert.match(route, /companyLookupService\.detail\(ico\)/);
-  assert.match(route, /source\.id === "rpo" && source\.status === "VERIFIED"/);
-  assert.match(route, /p_company_id: membership\.company_id/);
-  assert.doesNotMatch(route, /body\??\.(company_?[iI]d|trial|verified)/);
+  assert.match(handler, /source\.id === "rpo" && source\.status === "VERIFIED"/);
+  assert.match(handler, /deps\.recordVerified\(membership\.companyId, country, ico\)/);
+  assert.match(route, /esblu_my_active_membership/);
+  assert.doesNotMatch(route + handler, /input\.(company_?[iI]d|trial|verified)|body\??\.(company_?[iI]d|trial|verified)/);
   assert.match(read("app/firmy/nova/page.tsx"), /workspaces\.create\.trialNote/);
   for (const [name, d] of [["sk", sk], ["en", en], ["de", de]] as const) {
     const w = (d as unknown as { workspaces: { create: Record<string, string>; errors: Record<string, string> } }).workspaces;
     for (const k of ["icoLabel", "trialNote"]) assert.ok(w.create[k], `${name}.create.${k}`);
     for (const k of ["sessionExpired", "invalidIco", "icoNotFound", "icoTerminated", "registryUnavailable", "identityLocked"]) assert.ok(w.errors[k], `${name}.errors.${k}`);
   }
-  assert.equal((sk as unknown as { workspaces: { create: { trialNote: string } } }).workspaces.create.trialNote, "Trial aktivujeme po overení firemných údajov.");
+  assert.equal((sk as unknown as { workspaces: { create: { trialNote: string } } }).workspaces.create.trialNote, "Firmu môžete vytvoriť aj teraz. Skúšobné obdobie sa aktivuje až po overení IČO.");
 });
 
 await check("migrácie: 20261012140000 sa nemení; 20261012150000 nič nemaže", () => {
   assert.doesNotMatch(SESSION_MIGRATION, /\bdelete from\b|\btruncate\b|drop table|drop column/i);
   assert.ok(existsSync("supabase/rollback/20261012150000_session_company_context_and_legal_entity_trial_rollback.sql"));
+});
+
+const TRIAL_FINAL = read("supabase/migrations/20261012160000_legal_entity_trial_final.sql");
+
+await check("trial-no-provisional-login: žiadny trial viazaný na login / workspace bez overenej identity", () => {
+  const ensure = TRIAL_FINAL.slice(TRIAL_FINAL.indexOf("create or replace function public.esblu_ensure_my_owner_company()"));
+  const ensureBody = ensure.slice(0, ensure.indexOf("$function$;", ensure.indexOf("as $function$") + 15));
+  assert.doesNotMatch(ensureBody, /trial_claims|esblu_grant_company_trial_internal|esblu_claim_key\('user'/);
+  assert.match(TRIAL_FINAL, /check \(claim_kind in \('legal_entity', 'legacy_workspace', 'manual_override'\)\)/);
+  assert.match(TRIAL_FINAL, /check \(claim_key ~ '\^\(entity\|workspace\|override\):\[0-9a-f\]\{64\}\$'\)/);
+  // grant trialu iba v try_claim po overenej identite (+ operátorská výnimka zo 150000)
+  const grants = [...TRIAL_FINAL.matchAll(/perform public\.esblu_grant_company_trial_internal/g)].length;
+  assert.equal(grants, 1);
+  for (const f of SOURCES) assert.doesNotMatch(read(f), /provisional_user|esblu_grant_company_trial_internal|esblu_try_claim_company_trial/, f);
+});
+
+await check("company-settings-legal-identity: karta v Nastaveniach pre owner/admin/accountant, CTA podľa stavu, overené IČO zamknuté", () => {
+  const page = read("app/nastavenia/page.tsx");
+  assert.match(page, /\(myRole === "owner" \|\| myRole === "admin" \|\| myRole === "accountant"\) && <CompanyLegalIdentityCard \/>/);
+  const card = read("app/components/workspaces/CompanyLegalIdentityCard.tsx");
+  assert.match(card, /const ctaKey = identity\.can_edit \? legalIdentityCtaKey\(identity\) : null;/, "CTA iba owner");
+  assert.match(card, /case "missing":\s*return "workspaces\.identity\.cta\.add";/);
+  assert.match(card, /case "unverified":\s*case "failed":\s*return "workspaces\.identity\.cta\.retry";/);
+  assert.match(card, /default:\s*return null; \/\/ overené = zamknuté/);
+  assert.match(card, /resetCompanyScopedClientState\(\); \/\/ nároky sa znova načítajú/);
+  assert.doesNotMatch(card, /esblu_record_company_legal_identity|trial_started_at|localStorage/);
+  const ws = read("lib/company-workspaces.ts");
+  assert.match(ws, /rpc\("esblu_my_company_legal_identity"\)/);
+  for (const [name, d] of [["sk", sk], ["en", en], ["de", de]] as const) {
+    const id = (d as unknown as { workspaces: { identity: Record<string, Record<string, string> | string> } }).workspaces.identity;
+    for (const k of ["missing", "pending", "verified", "failed", "trialUsed"]) assert.ok((id.status as Record<string, string>)[k], `${name}.status.${k}`);
+    for (const k of ["add", "verify", "retry"]) assert.ok((id.cta as Record<string, string>)[k], `${name}.cta.${k}`);
+    for (const k of ["trial_active", "trial_used", "not_eligible_previous_trial", "pending_legal_identity", "eligible", "manual_override", "legacy_no_trial"]) assert.ok((id.trial as Record<string, string>)[k], `${name}.trial.${k}`);
+    for (const k of ["granted", "already_has_trial", "not_eligible_previous_trial", "pending_legal_identity", "legacy_no_trial"]) assert.ok((id.result as Record<string, string>)[k], `${name}.result.${k}`);
+    for (const k of ["not_found", "terminated", "unavailable"]) assert.ok((id.errors as Record<string, string>)[k], `${name}.errors.${k}`);
+  }
+  const skId = (sk as unknown as { workspaces: { identity: { cta: Record<string, string>; footer: string } } }).workspaces.identity;
+  assert.deepEqual([skId.cta.add, skId.cta.verify, skId.cta.retry], ["Doplniť IČO", "Overiť firemné údaje", "Skúsiť overenie znova"]);
+  assert.match(skId.footer, /^Skúšobné obdobie aktivujeme po overení firemných údajov\./);
 });
 
 console.log(`\nmulti-company: ${passed} passed, ${failed} failed`);

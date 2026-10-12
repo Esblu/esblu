@@ -65,6 +65,7 @@ import {
 } from "@/app/components/ui/SettingsList";
 import { ImageIcon, TrashIcon } from "@/app/components/icons/AppIcons";
 import CompanySwitcher from "@/app/components/workspaces/CompanySwitcher";
+import CompanyLegalIdentityCard from "@/app/components/workspaces/CompanyLegalIdentityCard";
 
 /** Staging prepínač odkazu na Predplatné (build-time, default vypnuté). */
 const BILLING_UI_ENABLED = process.env.NEXT_PUBLIC_ESBLU_BILLING_UI === "1";
@@ -1107,6 +1108,11 @@ export default function NastaveniaPage() {
               />
             </SettingsSection>
           )}
+
+          {/* ---------------- Identita firmy (20261012160000) ----------------
+              Owner doplní / overí IČO aj neskôr; admin / účtovník iba čítajú;
+              zamestnanec sekciu nevidí. Trial rozhoduje server. */}
+          {(myRole === "owner" || myRole === "admin" || myRole === "accountant") && <CompanyLegalIdentityCard />}
 
           {/* ---------------- Používatelia ---------------- */}
           {myRole && (
