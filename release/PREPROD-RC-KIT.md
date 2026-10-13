@@ -72,8 +72,9 @@ Texts for deleting before the end of a cancelled period: LEGAL/CLIA REVIEW REQUI
 `npm run test:company-legal-identity` (7) — all included in step 2 — cover owner-only billing, the final
 legal-entity trial rule (no per-login trial; trial only after a verified IČO; abuse, normalization, concurrency,
 register failure, legacy trials, entitlements), Settings → Company identity, and per-device active company.
-Migrations `20261012140000`, `20261012150000`, `20261012160000` are NOT applied anywhere (status: READY FOR
-STAGING MIGRATION, waits for explicit approval; order in `docs/multi-company-architecture-2026-10-12.md` §Z).
+Migrations `20261012120000`–`20261012160000` are applied on STAGING only (esblu-test, 2026-10-13, STAGING
+VALIDATION PASS); production: NOT applied. Staging file / signed-URL results are non-authoritative until the
+staging media baseline (`20261005090000`, `20261005091000`) is aligned.
 Real-device / Android smoke for multi-company: not run.
 
 ## 6. Hard stops

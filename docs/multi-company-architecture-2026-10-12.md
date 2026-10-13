@@ -329,3 +329,71 @@ Produkcia (read-only `list_migrations`, 2026-10-12) končí na `20261005091000`.
 `20261012130000_account_deletion_post_commit_cleanup` → `20261012140000_multi_company_workspaces` →
 `20261012150000_session_company_context_and_legal_entity_trial` → `20261012160000_legal_entity_trial_final`.
 Pred aplikovaním overiť skutočný stav staging DB (`list_migrations`) a vynechať už aplikované.
+
+## STAGING VALIDATION (2026-10-13)
+
+**Cieľ:** Supabase `esblu-test`, ref `cjbdijbbcujvmrzezusd` (overené pred každým zápisom; produkcia
+`fkpgvgvsmbpieduoatrt` iba read-only metadáta na porovnanie). **Výsledok: PASS.**
+
+### Migrácie
+
+| migrácia | staging pred | akcia |
+|---|---|---|
+| 20261008120000, 20261008130000, 20261011120000, 20261012090000, 20261012091000 | aplikované | preskočené |
+| 20261012120000_account_deletion_subscription_guard | nie | aplikovaná |
+| 20261012130000_account_deletion_post_commit_cleanup | nie | aplikovaná |
+| 20261012140000_multi_company_workspaces | nie | aplikovaná |
+| 20261012150000_session_company_context_and_legal_entity_trial | nie | aplikovaná |
+| 20261012160000_legal_entity_trial_final | nie | aplikovaná |
+
+Po jednej, s verifikáciou po každej. **Fingerprint:** `md5(prosrc)` všetkých 62 funkcií z 120000–160000 na
+stagingu = výstup repa (PGlite) — 62/62 zhoda. Advisors: iba očakávané nálezy (service-only tabuľky bez politík,
+zámerné klientske RPC `authenticated`).
+
+**Drift stagingu (zistené pred migráciou):** staging = eInvoice vetva (aplikované eInvoice/invoicing migrácie
+20261002…–20261008100011); oproti produkcii **chýbajú** `20261001130000_push_devices_session_binding`,
+`20261005090000_media_storage_access_model`, `20261005091000_private_media_buckets` (staršie storage politiky).
+Nie sú dependency multi-company migrácií. eInvoice verzie `esblu_my_finance_view/manage` (filter aktívnej firmy) sú
+sémanticky zhodné s 140000 → žiadna regresia eFaktúry. **Súbory / signed URL výsledky zo stagingu sú
+NON-AUTHORITATIVE UNTIL STAGING MEDIA BASELINE IS ALIGNED.**
+
+### Owner invariant
+
+Pred: 7 firiem, 2 bez ownera (`E2E Partner C/D s.r.o.` — eInvoice E2E counterparty fixtures, 0 členov).
+Oprava (explicitný súhlas, iba staging): po 140000 (starý index `company_members_one_active_per_user_idx`
+blokoval 2. aktívne členstvo) pridaný presne 1 owner membership pre `companies.owner_id` každej z nich.
+Po: 7/7 firiem presne 1 owner, 7/7 `owner_id` = owner membership.
+
+### Zachovanie dát (pred → po, mimo QA)
+
+companies 7→7, memberships 9→11 (+2 schválená oprava), users 9→9, auth sessions 3→3, manual granty 4→4,
+trialy: fingerprint `trial_started_at/ends_at` identický (žiadny reset/predĺženie), subscription_accounts 0→0,
+faktúry 54→54, eInvoice organizácie 5→5, storage objekty 46→46, beta allowlist 10→10. Trial claims:
+6 `legal_entity` (backfill IČO) + 7 `legacy_workspace`; jediný provizórny `user:` claim (backfill 150000) zrušený v 160000.
+
+### QA (reálny Postgres, QA fixtures `QA-MC*`, `qa-mc-*@esblu-qa.invalid`)
+
+| oblasť | výsledok |
+|---|---|
+| per-session aktívna firma | S1=A→B: S2 ostala A; S2 B→A: S1 ostala B; nové prihlásenie s 2 firmami = NULL (výber) |
+| session security | podvrhnutý / neznámy session_id → `ESBLU_SESSION_MISMATCH`; token bez session_id → `ESBLU_SESSION_REQUIRED` + NULL; cudzia firma → `ESBLU_NOT_A_MEMBER`; priamy zápis kontextu → permission denied; revoke → fallback na jedinú firmu, A dáta/chat 0; zrušená firma → kontext kaskádou zmazaný, fallback |
+| RLS matica (A→B, A→C, B→A, B→C) | invoices, partners, documents, vehicles, machines, inventory, chat, subscription_accounts, entitlements: SELECT 0 / INSERT deny / UPDATE 0 / DELETE 0 (dokument z B do A: trigger priradí aktívnu firmu B) |
+| owner-only billing | owner: access + manage + account token OK, checkout `ESBLU_BILLING_DISABLED` (provider vypnutý, autorizácia prešla); admin+billing.manage, admin, accountant, employee: `ESBLU_BILLING_FORBIDDEN`; ten istý user owner B / employee A: zariadenie B povolené, zariadenie A zamietnuté |
+| legal identity / trial | bez IČO pending + žiadny trial nárok; overené IČO → 1 claim, trial = server `now()` +14 d, `invoicing` aktívny (source trial); 2. workspace / iný user / delete+recreate → `not_eligible_previous_trial`; iný subjekt → granted; zmena overeného IČO → `LOCKED` |
+| **skutočný paralelný race** | 2 súbežné backendy (pg_cron, pid 990557/990558, štart 07:43:00.086/.087), rovnaký subjekt rôzne zapísaný („99 888 801" / „IČO: 99888801"): 1 `granted`, 1 `not_eligible_previous_trial` (čakal na lock ~3 s), 1 claim, 1 trial. pg_cron + pomocná tabuľka po teste odstránené |
+| normalizácia | 13 variantov (medzery, NBSP, U+202F, `-./`, „IČO:"): staging DB = TS 13/13 |
+| Nastavenia identity | owner can_edit; admin/accountant read-only; employee `ESBLU_FORBIDDEN`; klient record → permission denied; unavailable → `unverified`, not_found → `failed`, retry → verified + trial; firma B nedotknutá |
+| druhá firma | rovnaký login, owner novej firmy, A členstvo ostáva, aktívna iba v session, bez trialu |
+| pozvánka existujúceho používateľa | owner D prijal accountant do A bez registrácie, D ostáva aktívna, roly správne, replay → `ALREADY_ACCEPTED` |
+| odchod člena | členstvo preč, dokument/chat A zamietnuté, vozidlo + dokument ostávajú A (owner ich vidí), vlastná firma a login ostávajú |
+| zrušenie účtu | global pri vlastnení firmy → `ESBLU_USER_OWNS_COMPANY`; obnovujúce sa predplatné → `ESBLU_ACTIVE_SUBSCRIPTION_BLOCKS_DELETION`, bez cleanup jobu (Storage sa nevolá); úspešné zrušenie firmy → job `storage pending / auth done`, A členstvo ostáva, login ostáva; zrušenie loginu pri ďalšej firme → `ESBLU_ACCOUNT_HAS_OTHER_COMPANIES` |
+| hlas | návrh vytvorený v B: claim z A (iné zariadenie aj po prepnutí) = 0 riadkov; v B = 1; replay 0 |
+| nároky | B: voice ✓, machines ✗; A (trial): voice ✗ (`VOICE_ENTITLEMENT_REQUIRED`), machines ✓ — bez cache (DB) |
+| eInvoice readiness (read-only, rollback) | B owner vidí iba B identitu/inbox; A owner/accountant iba A; employee A nič; cudzí owner nič |
+| súbory (NON-AUTHORITATIVE) | DB funkcie storage politík: A objekt owner/accountant A ✓, kontext B ✗, po odchode ✗. Signed URL TTL v appke 60–3600 s (už vydaná URL platí do expirácie) |
+
+**Cleanup:** odstránené iba QA fixtures (10 users, 12 sessions, 11 firiem + dáta, 4 QA trial claims, 3 jobs,
+1 ai limit, pg_cron extension, `qa_mc_race_log`); 0 zvyškov. Stav po cleanup = stav pred QA (+ migrácie + oprava C/D).
+
+**Blokery / poznámky:** staging media/push baseline (vyššie); real-device smoke neurobený (podľa plánu);
+CLIA retencia `trial_claims`; eInvoice E2E harness môže pri ďalších fixtures vytvárať firmy bez členstva → pridať owner membership.

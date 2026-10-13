@@ -200,7 +200,19 @@ Otvorené: CLIA retencia hashovaných `trial_claims` (+ autor faktúr), beta pr�
 zmena overeného IČO = samostatný postup cez podporu, overenie iba SK, push deep link z inej firmy, zoradenie eFaktúra
 migrácií. Poradie migrácií: `docs/multi-company-architecture-2026-10-12.md` sekcia Z.
 
-**Verdikt: READY FOR STAGING MIGRATION — YES** (čaká iba na explicitný súhlas; nič nebolo aplikované).
+**Verdikt: READY FOR STAGING MIGRATION — YES** → **APLIKOVANÉ NA STAGING 2026-10-13.**
+
+### STAGING VALIDATION (esblu-test `cjbdijbbcujvmrzezusd`) — PASS
+
+Aplikované po jednej: `20261012120000`, `20261012130000`, `20261012140000`, `20261012150000`, `20261012160000`
+(preskočené už aplikované `20261008120000`, `20261008130000`, `20261011120000`, `20261012090000`, `20261012091000`).
+Schéma: 62/62 funkcií zhodných s repom (md5 prosrc). Owner invariant 7/7 (2 eInvoice E2E fixtures bez ownera
+opravené so súhlasom). Dáta zachované (firmy, členstvá, trialy — identický fingerprint, granty, faktúry, eInvoice,
+storage). QA: per-session izolácia, session security, RLS matica 9 tabuliek × 4 smery, owner-only billing (5 rolí +
+cross-company), legal identity / trial, **skutočný paralelný race (2 backendy, 1 claim)**, normalizácia, Nastavenia,
+druhá firma, pozvánka, odchod, zrušenie účtu + predplatné, hlas, nároky, eInvoice readiness. QA fixtures odstránené.
+Súbory / signed URL: **NON-AUTHORITATIVE UNTIL STAGING MEDIA BASELINE IS ALIGNED** (staging nemá
+`20261005090000`, `20261005091000`, `20261001130000`). Detail: `docs/multi-company-architecture-2026-10-12.md` → STAGING VALIDATION.
 
 ## Go / No-Go matrix
 
@@ -223,5 +235,5 @@ migrácií. Poradie migrácií: `docs/multi-company-architecture-2026-10-12.md` 
 | privacy | BLOCKED LEGAL |
 | Data Safety | BLOCKED LEGAL |
 | reviewer access | BLOCKED EXTERNAL (vyžaduje súhlas na produkčný účet) |
-| multi-company | READY FOR STAGING MIGRATION (140000 + 150000 + 160000 neaplikované; čaká na súhlas; staging QA; CLIA retencia trial histórie) |
+| multi-company | STAGING PASS (120000–160000 na esblu-test; produkcia neaplikovaná; media baseline stagingu + real-device smoke + CLIA retencia otvorené) |
 | production rollout | BLOCKED LEGAL (CLIA) + čaká na explicitný súhlas |
