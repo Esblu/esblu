@@ -23,7 +23,7 @@ import {
 // =============================================================================
 // POST /api/einvoice/staging-e2e — STAGING-ONLY driver reálneho sandbox E2E.
 //
-// Mimo Vercel Preview vetvy einvoice-port so staging DB a sandbox kľúčom = 404
+// Mimo Vercel Preview vetiev z allowlistu (preprod-release-candidate, einvoice-port) so staging DB a sandbox kľúčom = 404
 // (lib/einvoice/staging-e2e/guard.ts). Autorizácia: Bearer ESBLU_STAGING_E2E_SECRET.
 // Pracuje IBA s uzavretým zoznamom syntetických firiem A–D a sandbox kódmi FS
 // z dokumentácie. Volá TIE ISTÉ moduly ako produkcia (onboarding, webhook/feed

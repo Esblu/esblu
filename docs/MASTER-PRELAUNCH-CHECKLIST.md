@@ -1,7 +1,7 @@
 # Esblu — MASTER PRE-LAUNCH CHECKLIST
 
 Kanonický zoznam všetkého, čo musí byť hotové pred verejným spustením. Aktualizovať pri každom bloku.
-Posledná aktualizácia: **2026-10-13** (branch `preprod-release-candidate` — eInvoice integračný merge nad `bc96307`).
+Posledná aktualizácia: **2026-10-13** (branch `preprod-release-candidate` @ `16e468c` + staging alignment / eInvoice RC validácia).
 
 Statusy: **PASS** · **READY** (pripravené, čaká na vykonanie/súhlas) · **BLOCKED LEGAL** · **BLOCKED EXTERNAL** ·
 **TODO** · **NOT YET RUN**
@@ -31,12 +31,12 @@ Statusy: **PASS** · **READY** (pripravené, čaká na vykonanie/súhlas) · **B
 | trial per overený právny subjekt (IČO) | PASS | vrátane skutočného paralelného race na stagingu |
 | account deletion (DB najprv, Storage po commite, guard predplatného) | PASS | staging: guard + cleanup job |
 | eInvoice integrácia do RC | PASS | merge `einvoice-port` → RC (audit §12); 94/94 test sád, tsc, lint baseline, buildy |
-| eInvoice ↔ zrušenie firmy (reconciliation guard) | PASS (kód + PGlite) | `20261013100000` + preflight/route; staging NOT YET RUN; retencia BLOCKED LEGAL |
-| eInvoice E2E harness (owner C/D) | READY | seed opravený + owner assert; na stagingu nespustené |
+| eInvoice ↔ zrušenie firmy (reconciliation guard) | PASS (kód + PGlite + staging) | `20261013100000` na stagingu; A–E overené (audit §13); retencia / deaktivácia u providera BLOCKED LEGAL |
+| eInvoice E2E harness (owner C/D) | PASS (invariant) | staging: všetky firmy presne 1 owner = owner_id; seed sa znova nespúšťal (dáta už spĺňajú) |
 | voice | PASS | RC sady; staging: návrh viazaný na firmu |
 | push | PASS (kód) | real-device NOT YET RUN |
 | chat | PASS | staging izolácia per session |
-| files / signed URL | NOT YET RUN (autoritatívne) | staging media baseline nezosúladená |
+| files / signed URL | PASS (DB politiky, autoritatívne) | media baseline = produkcia; role/odchod/cross-tenant/anon; HTTP podpis URL NOT YET RUN (TTL 3600 s, vydaná URL platí do expirácie) |
 | dashboard (nový) | READY | v RC; produkčný merge TODO |
 | auth (email, Google, session restore) | PASS (RC) | real-device NOT YET RUN |
 | web build / mobile static export | PASS (po integrácii) | offline font mock v sandboxe; `verify-mobile-bundle` PASS |
@@ -46,13 +46,14 @@ Statusy: **PASS** · **READY** (pripravené, čaká na vykonanie/súhlas) · **B
 | položka | status |
 |---|---|
 | multi-company migrácie 120000–160000 | PASS |
-| push session migrácia `20261001130000` | READY (objekty = prod, chýba záznam v histórii) |
-| media migrácie `20261005090000`, `20261005091000` | READY (plán v audite §10; neprepisujú 140000) |
+| push session migrácia `20261001130000` | PASS (aplikovaná idempotentne, fingerprint bez zmeny = prod) |
+| media migrácie `20261005090000`, `20261005091000` | PASS (aplikované po jednej; funkcie/triggre/storage politiky/buckety = produkcia) |
 | eInvoice ↔ multi-company DB scoping | PASS (DB, rollback) |
-| eInvoice migrácie + `20261013100000` na stagingu | READY (poradie audit §3) |
-| eInvoice finálny staging QA (sandbox provider) | NOT YET RUN (driver guard viazaný na `einvoice-port`) |
+| eInvoice migrácie + `20261013100000` na stagingu | PASS (eInvoice cez 100011 už v histórii — nespúšťané znova; 20261013100000 aplikovaná) |
+| eInvoice multi-company / roly / RLS na stagingu (reálny Postgres) | PASS (SZČO 2 sessions, 5 rolí, cudzí owner; audit §13) |
+| eInvoice finálny staging QA (sandbox provider HTTP E2E) | BLOCKED (owner) — driver allowlist povoľuje RC, ale preview env (sandbox kľúč, E2E secret, CRON_SECRET) je viazaný iba na `einvoice-port`; `ESBLU_STAGING_E2E_SECRET` chýba |
 | subscriptions staging QA (fake/test provider) | NOT YET RUN (po integrácii) |
-| finálny staging schema fingerprint | NOT YET RUN |
+| finálny staging schema fingerprint | PASS (pred/po v audite §13; dáta bez zmeny) |
 
 ## C. LEGAL / CLIA
 
@@ -145,7 +146,7 @@ Statusy: **PASS** · **READY** (pripravené, čaká na vykonanie/súhlas) · **B
 | `/zrusenie-uctu` v produkcii | READY (RC) |
 | privacy / legal stránky | BLOCKED LEGAL |
 | billing web (Stripe) | READY (test) / ⛔ live |
-| Vercel plán podporuje minútové crony (e-Faktúra) | TODO overiť |
+| Vercel plán podporuje minútové crony (e-Faktúra) | READY (nepriamo: preview `16e468c` s `* * * * *` = READY; Hobby by deployment zamietol) — potvrdiť plán v dashboarde |
 | produkčný monitoring | TODO |
 
 ## I. ANDROID
@@ -166,7 +167,7 @@ Statusy: **PASS** · **READY** (pripravené, čaká na vykonanie/súhlas) · **B
 | RLS / tenant izolácia (multi-company) | PASS (PGlite + staging) |
 | eInvoice RLS (SELECT iba aktívna firma + finance) | PASS (staging DB) |
 | secrets (žiadne v repe, server-only) | PASS (scan) |
-| signed URL / media model | NOT YET RUN (staging media baseline) |
+| signed URL / media model | PASS (staging DB politiky = produkcia; HTTP podpis NOT YET RUN) |
 | poradie zrušenia účtu (DB → Storage → auth) | PASS |
 | logovanie / PII (webhook payloady) | TODO (audit pri integrácii) |
 | zálohy | TODO (pred produkčnou migráciou) |

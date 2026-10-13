@@ -8,7 +8,8 @@
 // do main, bez VŠETKÝCH podmienok nižšie nič nespraví.
 //
 // Podmienky (všetky naraz):
-//   VERCEL_ENV = preview a VERCEL_GIT_COMMIT_REF = einvoice-port
+//   VERCEL_ENV = preview a VERCEL_GIT_COMMIT_REF ∈ STAGING_E2E_BRANCHES (explicitný allowlist:
+//   canonical RC `preprod-release-candidate` + legacy `einvoice-port`; nikdy main ani iná vetva)
 //   ESBLU_STAGING_E2E_ENABLED = true, ESBLU_STAGING_E2E_SECRET ≥ 32 znakov
 //   Supabase URL = presne staging esblu-test; service_role JWT (ak je JWT) má ref stagingu
 //   žiadna premenná neobsahuje produkčný ref
@@ -17,6 +18,12 @@
 
 export const STAGING_SUPABASE_REF = "cjbdijbbcujvmrzezusd";
 export const PRODUCTION_SUPABASE_REF = "fkpgvgvsmbpieduoatrt";
+/**
+ * Explicitný allowlist vetiev (2026-10-13): canonical RC po integrácii eInvoice + legacy
+ * einvoice-port. Žiadne vzory / prefixy — presná zhoda. `main` sem nikdy nepatrí.
+ */
+export const STAGING_E2E_BRANCHES: readonly string[] = Object.freeze(["preprod-release-candidate", "einvoice-port"]);
+/** @deprecated Legacy (jedna vetva); použi STAGING_E2E_BRANCHES. */
 export const STAGING_E2E_BRANCH = "einvoice-port";
 
 export type GuardResult = { ok: true } | { ok: false; reason: string };
@@ -35,7 +42,7 @@ function jwtRef(token: string): string | null | "not-jwt" {
 export function stagingE2eGuard(env: Record<string, string | undefined>): GuardResult {
   const v = (k: string) => (env[k] ?? "").trim();
   if (v("VERCEL_ENV") !== "preview") return { ok: false, reason: "NOT_PREVIEW" };
-  if (v("VERCEL_GIT_COMMIT_REF") !== STAGING_E2E_BRANCH) return { ok: false, reason: "WRONG_BRANCH" };
+  if (!STAGING_E2E_BRANCHES.includes(v("VERCEL_GIT_COMMIT_REF"))) return { ok: false, reason: "WRONG_BRANCH" };
   if (v("ESBLU_STAGING_E2E_ENABLED") !== "true") return { ok: false, reason: "DISABLED" };
   if (v("ESBLU_STAGING_E2E_SECRET").length < 32) return { ok: false, reason: "SECRET_MISSING" };
   if (v("NEXT_PUBLIC_SUPABASE_URL") !== `https://${STAGING_SUPABASE_REF}.supabase.co`) return { ok: false, reason: "NOT_STAGING_DB" };

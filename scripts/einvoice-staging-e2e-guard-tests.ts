@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
   PRODUCTION_SUPABASE_REF,
+  STAGING_E2E_BRANCHES,
   STAGING_E2E_COMPANIES,
   STAGING_SUPABASE_REF,
   parseTarget,
@@ -51,6 +52,26 @@ test("production / development VERCEL_ENV → zakázané", () => {
 test("iná vetva (main, iný preview) → zakázané", () => {
   assert.equal(reason({ VERCEL_GIT_COMMIT_REF: "main" }), "WRONG_BRANCH");
   assert.equal(reason({ VERCEL_GIT_COMMIT_REF: "feature-x" }), "WRONG_BRANCH");
+});
+test("allowlist vetiev: canonical RC aj legacy einvoice-port povolené, nič iné (presná zhoda)", () => {
+  assert.equal(reason({ VERCEL_GIT_COMMIT_REF: "preprod-release-candidate" }), "OK");
+  assert.equal(reason({ VERCEL_GIT_COMMIT_REF: "einvoice-port" }), "OK");
+  assert.deepEqual([...STAGING_E2E_BRANCHES].sort(), ["einvoice-port", "preprod-release-candidate"]);
+  assert.ok(!STAGING_E2E_BRANCHES.includes("main"), "main nikdy");
+  for (const ref of ["preprod-release-candidate-x", "x-preprod-release-candidate", "PREPROD-RELEASE-CANDIDATE",
+    "einvoice-port/feature", "refs/heads/preprod-release-candidate", "*", "", "production", "mobile-platform"]) {
+    assert.equal(reason({ VERCEL_GIT_COMMIT_REF: ref }), "WRONG_BRANCH", ref);
+  }
+  assert.ok(Object.isFrozen(STAGING_E2E_BRANCHES), "allowlist je nemenná");
+});
+test("RC vetva nikdy neaktivuje produkciu / live: production env, prod DB, live kľúč, live flag → zakázané", () => {
+  const rc = { VERCEL_GIT_COMMIT_REF: "preprod-release-candidate" };
+  assert.equal(reason({ ...rc, VERCEL_ENV: "production" }), "NOT_PREVIEW");
+  assert.equal(reason({ ...rc, NEXT_PUBLIC_SUPABASE_URL: `https://${PRODUCTION_SUPABASE_REF}.supabase.co` }), "NOT_STAGING_DB");
+  assert.equal(reason({ ...rc, ESBLU_EINVOICE_ENVIRONMENT: "live" }), "NOT_SANDBOX");
+  assert.equal(reason({ ...rc, ESBLU_EFAKTURA_API_KEY: "efk_pk_live_" + "0".repeat(24) }), "NOT_TEST_KEY");
+  assert.equal(reason({ ...rc, ESBLU_EINVOICE_LIVE_ENABLED: "true" }), "LIVE_FLAG_SET");
+  assert.equal(reason({ ...rc, SUPABASE_SERVICE_ROLE_KEY: jwt(PRODUCTION_SUPABASE_REF, "service_role") }), "SERVICE_KEY_NOT_STAGING");
 });
 test("vypnutý prepínač alebo krátke tajomstvo → zakázané", () => {
   assert.equal(reason({ ESBLU_STAGING_E2E_ENABLED: "1" }), "DISABLED");

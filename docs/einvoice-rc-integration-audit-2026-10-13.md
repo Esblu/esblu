@@ -236,3 +236,61 @@ webpack s `NEXT_FONT_GOOGLE_MOCKED_RESPONSES`; nič z toho nie je v repe), place
 **Otvorené:** §10 staging media baseline + aplikácia eInvoice migrácií a 20261013100000 na staging, eInvoice
 sandbox QA na RC preview (driver guard `STAGING_E2E_BRANCH` je stále `einvoice-port` — rozhodnúť), retencia /
 deaktivácia u providera (CLIA), minútové crony vs. Vercel plán.
+
+## 13. Staging alignment + eInvoice RC validácia (2026-10-13, `esblu-test` `cjbdijbbcujvmrzezusd`)
+
+Produkcia (`fkpgvgvsmbpieduoatrt`) iba **read-only** (porovnanie fingerprintov). Žiadny zápis, deploy ani main.
+
+**Migration history pred** (33 záznamov, názvy = repo verzia): eInvoice 20261002100000 → 20261008100011 (23),
+20261008130000, 20261008120000, 20261011120000, 20261012090000/091000, 20261012120000–160000. Chýbali:
+`20261001130000`, `20261005090000`, `20261005091000`, `20261013100000`.
+
+| migrácia | staging pred | objekty | akcia | po |
+|---|---|---|---|---|
+| 20261001130000 push session binding | chýba | 13 funkcií, stĺpce, indexy, granty = prod (CHECK líšia iba zátvorkami deparse, tabuľky 0 riadkov) | `apply_migration` presného SQL (všetko idempotentné) | fingerprint bez zmeny, história +1 |
+| 20261005090000 media model | chýba | 0 média objektov / riadkov; žiadny prekryv s 140000+ | apply | 8 funkcií, triggre, fronta, 11 storage politík = **prod fingerprint** |
+| 20261005091000 private buckets | chýba | company-logos, vehicle/machine/inventory-photos public | apply | všetky buckety private (= prod) |
+| eInvoice 100000–100011 | v histórii | 199 RC/eInvoice funkcií: 189 identických, 5 iba bez komentárov, 2 = in-place patch 100006/100008 (očakávané), 3 zrušené 100004 | **nespúšťané znova** | — |
+| subscriptions / multi-company 120000–160000 | v histórii | `esblu_account_deletion_commit` = telo 140000 | — | — |
+| 20261013100000 deletion guard | chýba | — | apply | helper service_role only, commit SECURITY DEFINER |
+
+**Deletion guard (reálny Postgres, QA transakcia vrátená):** A čistá firma → zmazaná + job; B finalizovaná faktúra
+(L3 ABC) → `ESBLU_ACCOUNTING_RECORDS_BLOCK_DELETION`; C iba prijatá e-faktúra → block (`EINVOICE_RECORDS`);
+D iba enrollment (reálna E2E Partner C) → block (`EINVOICE_PROVIDER_ENROLLED`); E po blokoch: firmy 4/4, cleanup
+joby 0, enrolled orgs 2/2, auth users 3/3, storage objekty 46 → nič sa nezmazalo. Odchod outbound-only firmy
+pokrýva PGlite (outbound vyžaduje finalizovanú faktúru → staging vždy B).
+
+**Multi-company eInvoice (Y = employee L3 ABC + owner „Ján Novák – SZČO (QA)“, 2 sessions súčasne):**
+S1 (ABC, employee): org/inbound/outbound/webhooky/udalosti 0, rollout false, billing false. S2 (SZČO, owner):
+iba SZČO (org 1, inbound 1, udalosť 1), rollout true, billing true. S2 → 0 riadkov ABC (inbound, outbound,
+invoices); prepnutie do cudzej firmy `ESBLU_NOT_A_MEMBER`. **Roly ABC:** owner / účtovník / admin s finance →
+eInvoice áno (org 1, in 2, out 2, ev 20), billing iba owner; admin bez finance a employee (aj s finance flagom)
+→ 0. Cudzí owner (Partner B) → iba B (org 1, in 21), 0 z ABC/SZČO. **0 zlyhaní.**
+
+**Files / signed URL (media baseline zosúladená → autoritatívne na úrovni DB):** fotka vozidla ABC — owner/admin/
+employee čítajú, mazať smie owner/admin; účtovník, cudzí owner, anon 0; cudzí owner nenahrá do cesty s cudzím
+vozidlom (`42501`); odídený employee stratí prístup. Signed URL sa vydáva user-scoped klientom (RLS SELECT),
+TTL 3600 s; už vydaná URL platí do expirácie (Supabase token) — HTTP podpis na stagingu nespustený.
+
+**Owner invariant / harness:** všetkých 7 firiem presne 1 aktívny owner = `owner_id` (C/D už majú ownera Partner B).
+
+**E2E driver:** `STAGING_E2E_BRANCHES` = explicitný, zmrazený allowlist `preprod-release-candidate` + legacy
+`einvoice-port` (presná zhoda; main / prefixy / iné vetvy = `WRONG_BRANCH`; RC nikdy neobíde production / prod DB /
+live kľúč / live flag) + testy. **Sandbox HTTP E2E (outbound, inbound, zálohy, opravy) nespustené:** preview env
+(`ESBLU_EFAKTURA_API_KEY`, `ESBLU_STAGING_E2E_ENABLED`, provider, environment, `CRON_SECRET`, webhook secrets) je
+v Verceli viazaný iba na vetvu `einvoice-port` a `ESBLU_STAGING_E2E_SECRET` neexistuje → vyžaduje majiteľa
+(tajomstvá sa nekopírujú). Posledný reálny sandbox E2E: einvoice-port `58d5a00` (388 + zdanená záloha,
+/submissions, 409 in-progress); RC kód = rovnaké eInvoice moduly (offline selftesty + PGlite PASS).
+
+**Crony (RC `vercel.json`, 8):** deadline-notifications `0 6 * * *`, account-deletion-cleanup `30 3 * * *`,
+fx-rates `0 5,16 * * *`, einvoice-outbound send `* * * * *`, reconcile `*/5 * * * *`, einvoice-events `*/5 * * * *`,
+einvoice-inbound `*/10 * * * *`, einvoice-maintenance `17 * * * *`. Hobby = 1×/deň a častejšie výrazy deployment
+zamietne; preview `16e468c` je READY → nepriamo plán podporuje minútové crony (potvrdiť v dashboarde).
+Bezpečný variant pre Hobby: send/reconcile/events/inbound ako jeden denný sweep + spúšťanie odoslania priamo z
+requestu (bez minútového cronu). billing-reconcile / billing-store-reports routy nie sú v `vercel.json` (zámer: billing nie je live).
+
+**Pred / po (staging):** firmy 7/7, členstvá 11/11, owner porušenia 0/0, používatelia 9/9, migrácie 33→37,
+funkcie 260→269, public RLS 126/126 (fingerprint bez zmeny), indexy 292→295 (fronta médií), storage politiky
+23→11 (= prod `bb9e2c0f…`), storage objekty 46/46, eInvoice org/out/in/ev/wh/rollout 5/23/23/207/88/3 bez zmeny,
+predplatné 0, nároky 4, trial claimy 13, cleanup joby 0. Security advisors: iba 3 známe kategórie (RLS bez
+politiky na service tabuľkách, SECURITY DEFINER RPC pre authenticated, náhľad pozvánky pre anon).
