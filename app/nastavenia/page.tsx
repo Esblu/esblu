@@ -30,6 +30,7 @@ import {
   deleteMyAccount,
   fetchAccountDeletionPreflight,
   isPartialAccountDeletionError,
+  ownerDeletionBlockerMessageKey,
   stripPartialAccountDeletionMarker,
   type AccountDeletionPreflight,
 } from "@/lib/account-deletion";
@@ -66,6 +67,7 @@ import {
 import { ImageIcon, TrashIcon } from "@/app/components/icons/AppIcons";
 import CompanySwitcher from "@/app/components/workspaces/CompanySwitcher";
 import CompanyLegalIdentityCard from "@/app/components/workspaces/CompanyLegalIdentityCard";
+import EinvoiceReceptionPanel from "@/app/components/einvoice/EinvoiceReceptionPanel";
 
 /** Staging prepínač odkazu na Predplatné (build-time, default vypnuté). */
 const BILLING_UI_ENABLED = process.env.NEXT_PUBLIC_ESBLU_BILLING_UI === "1";
@@ -1028,6 +1030,41 @@ export default function NastaveniaPage() {
                     {field("invoice_numbering_prefix", "settings.company.invoiceNumberingPrefixLabel")}
                   </fieldset>
 
+                  {/* eInvoice (Peppol / e-Faktúra) identifikátory firmy. */}
+                  <fieldset className="space-y-3">
+                    <legend className="ui-eyebrow mb-2">{t("settings.company.einvoiceTitle")}</legend>
+                    <p className="ui-help">{t("settings.company.einvoiceHint")}</p>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      {field("electronic_address", "settings.company.electronicAddressLabel")}
+                      {field("electronic_address_scheme_id", "settings.company.electronicAddressSchemeLabel")}
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      {field("legal_registration_id", "settings.company.legalRegistrationIdLabel")}
+                      {field("legal_registration_scheme_id", "settings.company.legalRegistrationSchemeLabel")}
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      {field("vat_identifier", "settings.company.vatIdentifierLabel")}
+                      <FormField
+                        label={t("settings.company.vatPayerStatusLabel")}
+                        error={billingProfileFieldError("vat_payer_status") || undefined}
+                      >
+                        {(aria) => (
+                          <select
+                            {...aria}
+                            className="ui-input"
+                            value={billingProfile.vat_payer_status}
+                            onChange={(event) => updateBillingProfileField("vat_payer_status", event.target.value)}
+                            disabled={!canEditCompany || settingsLoading}
+                          >
+                            <option value="">{t("settings.company.vatPayerUnknown")}</option>
+                            <option value="vat_payer">{t("settings.company.vatPayerYes")}</option>
+                            <option value="non_vat_payer">{t("settings.company.vatPayerNo")}</option>
+                          </select>
+                        )}
+                      </FormField>
+                    </div>
+                  </fieldset>
+
                   {canEditCompany && (
                     <div className="flex flex-wrap items-center justify-end gap-2 border-t border-divider pt-3">
                       <button
@@ -1043,6 +1080,13 @@ export default function NastaveniaPage() {
                   <InlineNotice notice={companyNotice} />
                 </div>
               </SettingsDisclosure>
+            </SettingsSection>
+          )}
+
+          {/* Stav príjmu E-Faktúry + aktivácia FS kódom — server rozhoduje (finance.view / finance.manage, aktívna firma session). */}
+          {myRole && financeView && (
+            <SettingsSection title={t("settings.company.einvoiceTitle")}>
+              <EinvoiceReceptionPanel />
             </SettingsSection>
           )}
 
@@ -1379,8 +1423,8 @@ export default function NastaveniaPage() {
                 </p>
               ) : deletePreflight?.role === "owner" && deletePreflight.ownerDeletionBlocked ? (
                 <div className="space-y-3">
-                  {/* Archivácia účtovných dokladov: zrušenie sa NEPONÚKNE (nič sa nemaže). */}
-                  <p className="ui-body">{t("settings.deleteModal.ownerBlockedRetention")}</p>
+                  {/* Archivácia účtovných dokladov / e-faktúry / registrácia u providera: zrušenie sa NEPONÚKNE (nič sa nemaže). */}
+                  <p className="ui-body">{t(ownerDeletionBlockerMessageKey(deletePreflight.ownerDeletionBlocked))}</p>
                   <div className="flex justify-end">
                     <button type="button" onClick={closeDeleteAccountModal} className="ui-btn ui-btn-secondary">
                       {t("settings.deleteModal.cancel")}

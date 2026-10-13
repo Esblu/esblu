@@ -209,11 +209,48 @@ await check("súbory: žiadny klientsky kód neotvára signed URL mimo file-acti
 
 // ----------------------------------------------------------------------------- ACCOUNT DELETION
 await check("zrušenie firmy s finalizovanými dokladmi: blokované PRED akýmkoľvek mazaním", async () => {
-  const fakeAdmin = (count: number | null, error: unknown = null) =>
-    ({ from: () => ({ select: () => ({ eq: () => ({ eq: async () => ({ count, error }) }) }) }) }) as never;
+  // Thenable PostgREST fake: výsledok podľa tabuľky (count / error), reťazenie eq/not ľubovoľné.
+  type Res = { count: number | null; error: unknown };
+  const fakeTables = (byTable: Record<string, Res>) =>
+    ({
+      from: (table: string) => {
+        const res = byTable[table] ?? { count: 0, error: null };
+        const builder: Record<string, unknown> = {
+          select: () => builder,
+          eq: () => builder,
+          not: () => builder,
+          then: (ok: (v: Res) => unknown, ko?: (e: unknown) => unknown) => Promise.resolve(res).then(ok, ko),
+        };
+        return builder;
+      },
+    }) as never;
+  const fakeAdmin = (count: number | null, error: unknown = null) => fakeTables({ invoices: { count, error } });
   assert.equal(await retention.findOwnerDeletionBlocker(fakeAdmin(2), "c"), "FINALIZED_ACCOUNTING_DOCUMENTS");
   assert.equal(await retention.findOwnerDeletionBlocker(fakeAdmin(0), "c"), null);
   await assert.rejects(() => retention.findOwnerDeletionBlocker(fakeAdmin(null, { code: "x" }), "c"));
+  // eInvoice ↔ RC (2026-10-13): e-faktúry a registrácia u providera blokujú; chýbajúca tabuľka = 0; iná chyba = fail closed
+  assert.equal(await retention.findOwnerDeletionBlocker(fakeTables({ einvoice_inbound: { count: 1, error: null } }), "c"), "EINVOICE_RECORDS");
+  assert.equal(await retention.findOwnerDeletionBlocker(fakeTables({ einvoice_outbound: { count: 3, error: null } }), "c"), "EINVOICE_RECORDS");
+  assert.equal(await retention.findOwnerDeletionBlocker(fakeTables({ einvoice_organizations: { count: 1, error: null } }), "c"), "EINVOICE_PROVIDER_ENROLLED");
+  const missing = { count: null, error: { code: "PGRST205" } };
+  assert.equal(await retention.findOwnerDeletionBlocker(fakeTables({ einvoice_inbound: missing, einvoice_outbound: missing, einvoice_organizations: missing }), "c"), null);
+  await assert.rejects(() => retention.findOwnerDeletionBlocker(fakeTables({ einvoice_organizations: { count: null, error: { code: "42501" } } }), "c"));
+  await assert.rejects(() => retention.findOwnerDeletionBlocker(fakeTables({ invoices: missing }), "c"), "invoices musí existovať (fail closed)");
+  const blockers = await import("@/lib/account-deletion-blockers");
+  assert.equal(blockers.ownerDeletionBlockerMessageKey("FINALIZED_ACCOUNTING_DOCUMENTS"), "settings.deleteModal.ownerBlockedRetention");
+  assert.equal(blockers.ownerDeletionBlockerMessageKey("EINVOICE_RECORDS"), "settings.errors.companyHasAccountingRecords");
+  assert.equal(blockers.ownerDeletionBlockerMessageKey("EINVOICE_PROVIDER_ENROLLED"), "settings.deleteModal.ownerBlockedEinvoiceEnrolled");
+  // nemenná evidencia: einvoice-documents sa pri zrušení nikdy nemaže (ani z jobu, ani priamo)
+  const storage = await import("@/lib/account-deletion-storage");
+  assert.deepEqual(storage.parseStorageTargets([{ bucket: "einvoice-documents", path: "c/x.xml" }, { bucket: "documents", path: "c/a.pdf" }]),
+    [{ bucket: "documents", path: "c/a.pdf" }]);
+  const removed: string[] = [];
+  const fakeStorage = { storage: { from: (bucket: string) => ({ remove: async (paths: string[]) => { removed.push(...paths.map((p) => `${bucket}/${p}`)); return { data: paths, error: null }; } }) } } as never;
+  await storage.removeStorageTargets(fakeStorage, [{ bucket: "einvoice-documents", path: "c/x.xml" }, { bucket: "documents", path: "c/a.pdf" }]);
+  assert.deepEqual(removed, ["documents/c/a.pdf"]);
+  const deletionRoute = read("app/api/account/delete/route.ts");
+  assert.match(deletionRoute, /ESBLU_ACCOUNTING_RECORDS_BLOCK_DELETION: "settings\.errors\.companyHasAccountingRecords"/);
+  for (const lang of ["sk", "en", "de"]) assert.match(read(`lib/i18n/dictionaries/${lang}.ts`), /ownerBlockedEinvoiceEnrolled:/);
   const route = read("app/api/account/delete/route.ts");
   const blockAt = route.indexOf("findOwnerDeletionBlocker(admin, membership.company_id)");
   // 2026-10-12: Storage maže až orchestrácia PO DB commite — kontroly musia byť pred ňou.

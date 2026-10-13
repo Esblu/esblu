@@ -42,12 +42,12 @@ const DRAFT_INVOICE_MUTATION: MutationKeyRef = { current: null };
 // rovnaký izolovaný Suspense-wrapped vzor ako EditFromQueryParam v
 // app/obchodni-partneri/page.tsx, aby useSearchParams() nezablokoval
 // vykreslenie zvyšku formulára.
-function CorrectsFromQueryParam({ onCorrectsId }: { onCorrectsId: (id: string) => void }) {
+function CorrectsFromQueryParam({ onCorrectsId }: { onCorrectsId: (id: string, kind: "credit_note" | "debit_note") => void }) {
   const searchParams = useSearchParams();
 
   useEffect(() => {
     const correctsId = searchParams.get("corrects");
-    if (correctsId) onCorrectsId(correctsId);
+    if (correctsId) onCorrectsId(correctsId, searchParams.get("kind") === "debit_note" ? "debit_note" : "credit_note");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
 
@@ -86,10 +86,6 @@ export default function NewInvoicePage() {
   const [saving, setSaving] = useState(false);
   const [submitError, setSubmitError] = useState("");
 
-  useEffect(() => {
-    void init();
-  }, []);
-
   async function init() {
     const {
       data: { session },
@@ -123,9 +119,16 @@ export default function NewInvoicePage() {
     }
   }
 
-  async function handleCorrectsId(id: string) {
+  // Efekt až za deklaráciou init (react-hooks/immutability); init zapisuje stav až po await.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void init();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function handleCorrectsId(id: string, correctionKind: "credit_note" | "debit_note" = "credit_note") {
     setCorrectsInvoiceId(id);
-    setKind("credit_note");
+    setKind(correctionKind);
 
     try {
       const original = await getInvoice(id);
@@ -259,6 +262,7 @@ export default function NewInvoicePage() {
                   <option value="payment_received_invoice">
                     {t("invoices.kind.payment_received_invoice")}
                   </option>
+                  <option value="proforma">{t("invoices.kind.proforma")}</option>
                 </select>
               </div>
             )}

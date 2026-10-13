@@ -23,6 +23,8 @@ const SESSION = "supabase/migrations/20261012150000_session_company_context_and_
 const SESSION_ROLLBACK = "supabase/rollback/20261012150000_session_company_context_and_legal_entity_trial_rollback.sql";
 const TRIAL_FINAL = "supabase/migrations/20261012160000_legal_entity_trial_final.sql";
 const TRIAL_FINAL_ROLLBACK = "supabase/rollback/20261012160000_legal_entity_trial_final_rollback.sql";
+// eInvoice ↔ zrušenie firmy (2026-10-13): všetky RC deletion scenáre bežia aj s guardom (regresia).
+const EINVOICE_DELETION_GUARD = "supabase/migrations/20261013100000_einvoice_company_deletion_guard.sql";
 const SUITE = (process.argv[2] ?? process.env.SUITE ?? "").replace(/^--suite=/, "").trim() || null;
 
 type Row = Record<string, unknown>;
@@ -156,7 +158,7 @@ await db.exec(`
   -- eInvoice readiness: tabuľky + RLS podľa referencie einvoice-port (20261002100000), iba stĺpce pre test
   create table public.einvoice_organizations (id uuid primary key default gen_random_uuid(),
     company_id uuid not null references public.companies(id) on delete cascade, provider text not null, environment text not null,
-    participant_id text, unique (company_id, environment));
+    provider_org_id text, participant_id text, unique (company_id, environment));
   create table public.einvoice_inbound (id uuid primary key default gen_random_uuid(),
     company_id uuid not null references public.companies(id) on delete cascade, sender text);
   alter table public.einvoice_organizations enable row level security;
@@ -246,6 +248,7 @@ await check("session-migration-backfill: existujúce firmy = legacy, trial nezme
 
 // ----------------------------------------------------------------------------- 20261012160000 (finálny trial model)
 await db.exec(read(TRIAL_FINAL));
+await db.exec(read(EINVOICE_DELETION_GUARD));
 
 await check("trial-existing-legacy: provizórne claimy per login zrušené; legacy trialy bez zmeny (aj bez IČO), audit legacy_workspace", async () => {
   const after = (await su<Row>(`select id, trial_started_at, trial_ends_at from public.companies order by id`)).rows;
@@ -471,7 +474,19 @@ await check("owner-only-company-delete: employee / admin firmu nezruší; owner 
   await su(`insert into public.subscription_accounts (company_id, status, billing_provider, provider_environment, plan_code) values ($1, 'active', 'stripe', 'test', 'test_pro')`, [C.a]);
   await su(`insert into public.company_members (company_id, user_id, role, status) values ($1, 'a0000000-0000-4000-8000-000000000012', 'employee', 'active')`, [C.a]);
   await svc(() => db.query(`select public.esblu_account_deletion_commit('member', 'a0000000-0000-4000-8000-000000000012', $1, false)`, [C.a]));
-  await fails(() => svc(() => db.query(`select public.esblu_account_deletion_commit('owner', $1, $2, false)`, [U.x, C.a])), /ESBLU_ACTIVE_SUBSCRIPTION_BLOCKS_DELETION/);
+  // A má e-faktúru (einvoice-readiness) → eInvoice guard má prednosť (rovnaké poradie ako route: archivácia → predplatné)
+  await fails(() => svc(() => db.query(`select public.esblu_account_deletion_commit('owner', $1, $2, false)`, [U.x, C.a])), /ESBLU_ACCOUNTING_RECORDS_BLOCK_DELETION/);
+  // bez e-faktúr blokuje predplatné (RC guard nezmenený) — v transakcii, vrátené
+  await serialized(async () => {
+    await db.exec("begin");
+    try {
+      await db.query(`delete from public.einvoice_inbound where company_id = $1`, [C.a]);
+      await db.exec("set local role service_role");
+      await fails(() => db.query(`select public.esblu_account_deletion_commit('owner', $1, $2, false)`, [U.x, C.a]), /ESBLU_ACTIVE_SUBSCRIPTION_BLOCKS_DELETION/);
+    } finally {
+      await db.exec("rollback");
+    }
+  });
   assert.equal(Number((await one<{ n: number }>(`select count(*)::int n from public.companies where id = $1`, [C.a])).n), 1);
 });
 
@@ -499,6 +514,8 @@ await check("account-deletion-regression: owner A + employee B — zrušenie fir
   const inv = (await rows<{ token: string }>(U.z, "esblu_create_company_invite", ["y@example.invalid", "employee"]))[0];
   await rows(U.y, "esblu_accept_company_invite", [inv.token]);
   await su(`delete from public.invoices where company_id = $1`, [B]);
+  // e-faktúry blokujú zrušenie (20261013100000) — fixture z einvoice-readiness odstránená (stub bez append-only guardu)
+  await su(`delete from public.einvoice_inbound where company_id = $1`, [B]);
   const r = await svc(async () => (await db.query<{ r: Row }>(`select public.esblu_account_deletion_commit('owner', $1, $2, false) r`, [U.y, B])).rows[0].r);
   assert.equal(r.remaining_memberships, 1);
   assert.equal(Number((await one<{ n: number }>(`select count(*)::int n from public.companies where id = $1`, [B])).n), 0);

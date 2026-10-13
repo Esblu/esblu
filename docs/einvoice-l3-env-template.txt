@@ -1,0 +1,57 @@
+# =============================================================================
+# Esblu eFaktúra — L3 lokálny staging env (ŠABLÓNA, BEZ HODNÔT)
+#
+# Skopíruj MIMO repa, napr. C:\Users\roiaj\Documents\esblu-l3-staging.env,
+# a doplň hodnoty iba tam. Tento súbor ani jeho kópiu NIKDY necommituj.
+# NIKDY nemeň .env.local v repe/worktree (v assetpilot-einvoice je to hardlink
+# na produkčný .env.local hlavného repa).
+#
+# Kontrola:   npm run dev:l3-staging -- --check     (nič nespustí)
+# Spustenie:  npm run dev:l3-staging                (http://localhost:3000)
+# Iná cesta:  node scripts/l3/run-local-staging.mjs --l3-env=C:\cesta\subor.env
+# Launcher odmietne: produkčný ref fkpgvgvsmbpieduoatrt kdekoľvek, live kľúč,
+# ESBLU_EINVOICE_LIVE_ENABLED, VERCEL_ENV=production, neznáme premenné a
+# hodnoty so zástupnými znakmi <...>.
+# Formát: KEY=VALUE, jedna premenná na riadok, bez viacriadkových hodnôt.
+# =============================================================================
+
+# --- Supabase STAGING (esblu-test, ref cjbdijbbcujvmrzezusd) -------------------
+# Dashboard → esblu-test → Project Settings → API. Iba staging, nikdy produkcia.
+# Presne https://cjbdijbbcujvmrzezusd.supabase.co (bez lomky na konci)
+NEXT_PUBLIC_SUPABASE_URL=
+# anon / publishable kľúč stagingu (JWT s role=anon alebo sb_publishable_…)
+NEXT_PUBLIC_SUPABASE_ANON_KEY=
+# service_role / secret kľúč stagingu (JWT s role=service_role alebo sb_secret_…)
+SUPABASE_SERVICE_ROLE_KEY=
+
+# --- Aplikačné tajomstvá — NOVÉ, iba pre staging (nie kópie z produkcie) -------
+# aspoň 32 znakov; PowerShell: -join ((1..32) | % { '{0:x2}' -f (Get-Random -Max 256) })
+CRON_SECRET=
+# hex, aspoň 64 znakov (32 B); vygeneruj rovnako ako vyššie
+ESBLU_ACTION_CONFIRMATION_SECRET=
+
+# --- eFaktura.sk SANDBOX ---------------------------------------------------------
+ESBLU_EINVOICE_PROVIDER=efaktura_sk
+ESBLU_EINVOICE_ENVIRONMENT=sandbox
+# iba sandbox kľúč efk_pk_test_… (z C:\Users\roiaj\Documents\efaktura-sandbox.env)
+ESBLU_EFAKTURA_API_KEY=
+# webhook tajomstvo sandbox endpointu; pri rotácii čiarkou oddelené
+ESBLU_EFAKTURA_WEBHOOK_SECRETS=
+
+# --- Voliteľné (pre L3 eInvoice E2E netreba) --------------------------------------
+# Riadky nechaj zakomentované, ak ich nepotrebuješ.
+# upload dokladov / AI intake; aspoň 32 znakov
+# ESBLU_INTAKE_ATTEST_SECRET=
+# AI funkcie (store:false ostáva); radšej samostatný kľúč pre staging
+# OPENAI_API_KEY=
+# default https://api.efaktura.sk (iné hodnoty launcher odmietne)
+# ESBLU_EFAKTURA_BASE_URL=
+# ESBLU_EINVOICE_WORKER_BATCH=
+# ESBLU_CORS_EXTRA_ORIGINS=
+# pre scripts/l3/staging-guard.mjs; ak je nastavené, musí byť cjbdijbbcujvmrzezusd
+# STAGING_SUPABASE_REF=
+
+# --- ZAKÁZANÉ v L3 ------------------------------------------------------------------
+# ESBLU_EINVOICE_LIVE_ENABLED  (launcher ho vždy nastaví na false)
+# VERCEL_ENV=production        (launcher nastaví development)
+# VAPID_* / FCM_* / APNS_*     (push notifikácie zo stagingu nie sú povolené)

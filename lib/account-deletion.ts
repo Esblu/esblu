@@ -4,6 +4,8 @@ import { REQUEST_LOCALE_HEADER } from "@/lib/i18n/request-locale";
 import { translate } from "@/lib/i18n/translate";
 import type { Locale } from "@/lib/i18n/locales";
 import type { DeletionBlockingReason, DeletionSubscriptionStatus, SubscriptionDeletionCheck } from "@/lib/billing/deletion-guard";
+import type { OwnerDeletionBlockerCode } from "@/lib/account-deletion-blockers";
+export { ownerDeletionBlockerMessageKey, type OwnerDeletionBlockerCode } from "@/lib/account-deletion-blockers";
 
 // -----------------------------------------------------------------------------
 // Klientske helpery pre samoobslužné "Zrušiť účet" v app/nastavenia.
@@ -53,10 +55,10 @@ export type AccountDeletionPreflight = {
   otherActiveMembersCount: number;
   orphan: boolean;
   /** Owner: zrušenie firmy blokované archiváciou účtovných dokladov (nič sa nemaže). */
-  ownerDeletionBlocked?: "FINALIZED_ACCOUNTING_DOCUMENTS" | null;
+  ownerDeletionBlocked?: OwnerDeletionBlockerCode | null;
   /** Server: dá sa účet zrušiť (archivácia + predplatné). Chýba = starší server → rozhoduje server pri delete. */
   can_delete?: boolean;
-  blocking_reason?: "FINALIZED_ACCOUNTING_DOCUMENTS" | DeletionBlockingReason | null;
+  blocking_reason?: OwnerDeletionBlockerCode | DeletionBlockingReason | null;
   subscription_status?: DeletionSubscriptionStatus;
   /** Detail predplatného pre UI (kde ho spravovať, koniec obdobia). */
   subscription?: SubscriptionDeletionCheck;

@@ -13,6 +13,14 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 export type StorageTarget = { bucket: string; path: string };
 
+/**
+ * Nemenná evidencia (eInvoice ↔ RC, 2026-10-13): XML / PDF e-faktúr v privátnom
+ * bucket einvoice-documents sa pri zrušení NIKDY nemažú — firma s e-faktúrami sa
+ * zrušiť ani nedá (20261013100000). Obrana do hĺbky: aj keby sa cieľ do jobu
+ * dostal (ručná úprava, budúci kolektor), tu sa zahodí.
+ */
+export const DELETION_PROTECTED_BUCKETS: ReadonlySet<string> = new Set(["einvoice-documents"]);
+
 /** Validácia jobu z DB (jsonb) — iba {bucket, path} stringy, bez prázdnych ciest. */
 export function parseStorageTargets(value: unknown): StorageTarget[] {
   if (!Array.isArray(value)) return [];
@@ -20,7 +28,14 @@ export function parseStorageTargets(value: unknown): StorageTarget[] {
   for (const item of value) {
     const bucket = (item as { bucket?: unknown })?.bucket;
     const path = (item as { path?: unknown })?.path;
-    if (typeof bucket === "string" && typeof path === "string" && bucket && path && !path.includes("..")) {
+    if (
+      typeof bucket === "string" &&
+      typeof path === "string" &&
+      bucket &&
+      path &&
+      !path.includes("..") &&
+      !DELETION_PROTECTED_BUCKETS.has(bucket)
+    ) {
       out.push({ bucket, path });
     }
   }
@@ -191,6 +206,7 @@ export async function removeStorageTargets(
   const byBucket = new Map<string, string[]>();
 
   for (const target of targets) {
+    if (DELETION_PROTECTED_BUCKETS.has(target.bucket)) continue;
     const list = byBucket.get(target.bucket) ?? [];
     list.push(target.path);
     byBucket.set(target.bucket, list);

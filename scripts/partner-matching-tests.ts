@@ -278,7 +278,8 @@ check("iba interpunkcia", resolve("...", PROD), "NENASIEL");
   for (const file of files) {
     const code = readFileSync(file, "utf8")
       .replace(/\/\*[\s\S]*?\*\//g, "")
-      .split("\n")
+      // CRLF pracovná kópia (Windows checkout): `.` nezachytí \r, riadkový komentár by sa neodstránil.
+      .split(/\r?\n/)
       .map((line) => line.replace(/(^|[^:"'`])\/\/.*$/, "$1"))
       .join("\n");
     if (NAMES.test(code)) offenders.push(file);

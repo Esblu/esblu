@@ -1,0 +1,3 @@
+-- Rollback 20261008100007 a 20261008100006. Iba staging / po výslovnom schválení.
+-- 20261008100007: esblu_einvoice_inbound_create_draft obnoviť z 20261008100005 (bez dodatočného prepojenia opráv).
+-- 20261008100006: esblu_einvoice_request_outbound obnoviť z 20261002140000 (bez payment_received_invoice).

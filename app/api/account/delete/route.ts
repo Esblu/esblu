@@ -4,6 +4,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { getRequestLocale } from "@/lib/i18n/request-locale";
 import { translate } from "@/lib/i18n/translate";
 import { findOwnerDeletionBlocker } from "@/lib/account-deletion-retention";
+import { ownerDeletionBlockerMessageKey } from "@/lib/account-deletion-blockers";
 import { checkSubscriptionForDeletion } from "@/lib/account-deletion-subscription";
 import type { SubscriptionDeletionCheck } from "@/lib/billing/deletion-guard";
 import type { Locale } from "@/lib/i18n/locales";
@@ -90,6 +91,8 @@ function orchestrationResponse(locale: Locale, role: string, result: Orchestrati
         ESBLU_OWNER_CANNOT_LEAVE: "settings.errors.ownerCannotLeave",
         ESBLU_ACCOUNT_HAS_OTHER_COMPANIES: "settings.errors.accountHasOtherCompanies",
         ESBLU_MULTI_COMPANY_NOT_MIGRATED: "settings.errors.deletionFailedRetry",
+        // eInvoice ↔ zrušenie firmy (20261013100000): súbeh medzi preflightom a transakciou.
+        ESBLU_ACCOUNTING_RECORDS_BLOCK_DELETION: "settings.errors.companyHasAccountingRecords",
       };
       const key = rule[result.code];
       return Response.json(
@@ -368,7 +371,7 @@ export async function POST(req: Request) {
       }
       if (blocker) {
         return Response.json(
-          { error: translate(locale, "settings.deleteModal.ownerBlockedRetention"), blocked: blocker },
+          { error: translate(locale, ownerDeletionBlockerMessageKey(blocker)), blocked: blocker, code: "ESBLU_ACCOUNTING_RECORDS_BLOCK_DELETION" },
           { status: 409 }
         );
       }

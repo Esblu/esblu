@@ -70,9 +70,17 @@ nothing and breaks the link between the repo file and the `name` in history.
 
 ## 6. Versions for new migrations
 
-- Current highest reserved repo migration version: **`20260926110000`**.
+- Current highest reserved repo migration version: **`20261003100000`**
+  (`einvoice_inbound_draft_totals` — received e-invoice draft carries header totals,
+  BT-81 and VAT breakdown from the immutable XML; finalize must match the XML.
+  Before it: `20261002150000_einvoice_rollout_gate`, E-Faktúra Phase 6 — rollout allowlist, fail-closed;
+  Phase 4 is `20261002140000_einvoice_operations`, Phase 3 is `20261002130000_einvoice_inbound_flow`,
+  Phase 2 is `20261002120000_einvoice_outbound_flow`; the E-Faktúra migrations
+  `20261002100000_einvoice_foundation` and `20261002110000_einvoice_en16931_fields`
+  were renumbered from `20261001100000` / `20261001110000` before they were
+  ever applied, so they sort after `20261001130000_push_devices_session_binding`).
 - New repo migrations must use a unique, monotonically higher version,
-  starting at **`20260926120000`** or later.
+  starting at **`20261002160000`** or later.
 - Do not rely on `supabase migration new` for the prefix — it stamps the
   current time, which may be lower than the highest reserved version.
 

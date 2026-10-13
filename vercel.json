@@ -7,6 +7,30 @@
     {
       "path": "/api/cron/account-deletion-cleanup",
       "schedule": "30 3 * * *"
+    },
+    {
+      "path": "/api/cron/fx-rates",
+      "schedule": "0 5,16 * * *"
+    },
+    {
+      "path": "/api/cron/einvoice-outbound?mode=send",
+      "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/cron/einvoice-outbound?mode=reconcile",
+      "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/einvoice-events",
+      "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/einvoice-inbound",
+      "schedule": "*/10 * * * *"
+    },
+    {
+      "path": "/api/cron/einvoice-maintenance",
+      "schedule": "17 * * * *"
     }
   ]
 }

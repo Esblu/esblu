@@ -41,9 +41,11 @@ export type InvoiceKind =
   | "regular_invoice"
   | "payment_received_invoice"
   | "credit_note"
-  | "debit_note";
+  | "debit_note"
+  /** 20261008100000: výzva na úhradu — NIE JE daňový doklad (vlastná séria PF, nikdy e-faktúra). */
+  | "proforma";
 export type DocumentStatus = "draft" | "finalized";
-export type PaymentStatus = "unpaid" | "partially_paid" | "paid";
+export type PaymentStatus = "unpaid" | "partially_paid" | "paid" | "overpaid";
 export type InvoiceSource = "manual" | "ai_inbox" | "efaktura_peppol";
 export type InvoicePartyRole = "seller" | "buyer";
 
@@ -59,6 +61,27 @@ export type Invoice = {
   issue_date: string;
   due_date: string | null;
   delivery_date: string | null;
+  /** 20261008100000 — draft-only, po finalizácii nemenné. */
+  correction_reason?: string | null;
+  /** 20261008100005 — prijaté opravy: review stav a väzba z XML (BT-25/26). */
+  correction_review_status?: "review" | "accepted" | "rejected" | null;
+  correction_review_reasons?: string[] | null;
+  correction_review_note?: string | null;
+  corrected_document_reference?: string | null;
+  corrected_document_issue_date?: string | null;
+  /** 20261008100008 — prijatá konečná faktúra: BT-113 z XML a review priradenia prijatých záloh (386). */
+  prepaid_amount?: number | string | null;
+  advance_review_status?: "review" | "proposed" | "linked" | null;
+  advance_review_reasons?: string[] | null;
+  advance_review_note?: string | null;
+  /** 20261008100009: nezdanená záloha vydanej konečnej faktúry (BT-113 PrepaidAmount) a referencia. */
+  untaxed_prepaid_amount?: number | string | null;
+  untaxed_prepaid_reference?: string | null;
+  fx_rate?: number | string | null;
+  fx_rate_date?: string | null;
+  fx_rate_source?: "ECB" | "NBS" | "CUSTOMS" | null;
+  tax_base_eur?: number | string | null;
+  vat_total_eur?: number | string | null;
   tax_point_date: string | null;
   currency: string;
   subtotal_amount: number;
@@ -135,6 +158,10 @@ export type InvoiceItem = {
   line_net_amount: number;
   line_vat_amount: number;
   line_gross_amount: number;
+  /** 20261008100009: mínusový riadok zdanenej zálohy (FS FAQ eFaktúra, príklad 38) — 1 × záporná cena. */
+  is_advance_deduction?: boolean;
+  advance_invoice_id?: string | null;
+  advance_vat_amount?: number | null;
   created_at: string;
   updated_at: string | null;
 };
@@ -172,6 +199,11 @@ export type InvoiceParty = {
   iban: string | null;
   bic: string | null;
   email: string | null;
+  /**
+   * @deprecated LEGACY voľný text (pred EN16931 P1). Nie je zdrojom pravdy pre
+   * e-faktúru — E-Faktúra (lib/einvoice/**) používa výhradne
+   * electronic_address + electronic_address_scheme_id. Nové flow ho nečítajú.
+   */
   peppol_identifier: string | null;
   // EN16931 P1 identifikátory zo snapshotu (migrácia 20260920122000).
   // Sú súčasťou IMMUTABLE snapshotu — nikdy sa nečítajú z live
@@ -307,6 +339,16 @@ export type DraftInvoiceHeaderInput = {
   variable_symbol: string | null;
   payment_terms_days: number | null;
   corrects_invoice_id: string | null;
+  /** EN16931 BT-72 (dátum dodania). Zapisuje esblu_save_invoice_draft (20261002110000). */
+  delivery_date?: string | null;
+  /** EN16931 BT-10. */
+  buyer_reference?: string | null;
+  /** EN16931 BT-13. */
+  purchase_order_reference?: string | null;
+  /** EN16931 BT-81 (UNTDID 4461), napr. 30 / 58. */
+  payment_means_code?: string | null;
+  /** EN16931 BT-83. */
+  payment_reference?: string | null;
 };
 
 /**
@@ -365,6 +407,9 @@ export type DraftInvoiceItemInput = {
   description: string;
   quantity: number;
   unit: string;
+  /** EN16931 BT-130 — kód mernej jednotky UN/ECE Rec 20 (napr. H87, HUR, KGM).
+   *  Nikdy sa automaticky neodvodzuje z `unit`. */
+  unit_code?: string | null;
   vat_category_code: VatCategoryCode;
   vat_rate: number;
   unit_price: number;
@@ -415,6 +460,7 @@ export async function saveInvoiceDraft(
     description: item.description,
     quantity: item.quantity,
     unit: item.unit,
+    unit_code: item.unit_code?.trim() ? item.unit_code.trim().toUpperCase() : null,
     unit_price: item.unit_price,
     price_mode: item.price_mode ?? DEFAULT_PRICE_MODE,
     vat_category_code: item.vat_category_code,
@@ -680,6 +726,31 @@ const FINALIZE_ERROR_CODES = [
   "ESBLU_MISSING_SUPPLIER_INVOICE_NUMBER",
   "ESBLU_SUPPLIER_NOT_FOUND",
   "ESBLU_DUPLICATE_RECEIVED_INVOICE",
+  // 20261008100000 — súlad so zákonom o DPH (finalizačné kontroly).
+  "ESBLU_DELIVERY_DATE_REQUIRED",
+  "ESBLU_PAYMENT_RECEIVED_DATE_REQUIRED",
+  "ESBLU_VAT_RATE_NOT_ALLOWED",
+  "ESBLU_NON_VAT_PAYER_CATEGORY",
+  "ESBLU_BUYER_VAT_ID_REQUIRED",
+  "ESBLU_FX_RATE_REQUIRED",
+  "ESBLU_FX_RATE_DATE_INVALID",
+  "ESBLU_FX_RATE_NOT_ALLOWED_FOR_EUR",
+  "ESBLU_FX_RATE_DATA_MISSING",
+  "ESBLU_FX_RATE_NOT_PUBLISHED",
+  "ESBLU_FX_RATE_MISMATCH",
+  "ESBLU_FX_SOURCE_YEAR_MISMATCH",
+  "ESBLU_CORRECTION_REASON_REQUIRED",
+  "ESBLU_CORRECTION_OF_PROFORMA",
+  "ESBLU_CORRECTION_CURRENCY_MISMATCH",
+  "ESBLU_CORRECTION_FX_RATE_MISMATCH",
+  "ESBLU_CREDIT_EXCEEDS_ORIGINAL",
+  "ESBLU_CORRECTION_REJECTED",
+  "ESBLU_CORRECTION_ORIGINAL_REQUIRED",
+  "ESBLU_CORRECTION_TARGET_INVALID",
+  "ESBLU_CORRECTION_SUPPLIER_MISMATCH",
+  "ESBLU_ADVANCE_DEDUCTION_EXCEEDS_TOTAL",
+  "ESBLU_ADVANCE_DEDUCTION_INVALID",
+  "ESBLU_ADVANCE_DEDUCTION_EXCEEDS",
 ] as const;
 export type FinalizeErrorCode = (typeof FINALIZE_ERROR_CODES)[number];
 
@@ -695,6 +766,22 @@ export function parseFinalizeErrorCode(error: unknown): FinalizeErrorCode | null
  * invoice_parties snapshot, všetko v jednej DB transakcii. Táto funkcia
  * nikdy nič sama nezapisuje, iba volá RPC a vracia jeho výsledok.
  */
+/** Draft-only daňové polia (RPC esblu_set_invoice_compliance_fields, 20261008100000). */
+export type InvoiceComplianceFields = {
+  correction_reason?: string | null;
+  fx_rate?: number | null;
+  fx_rate_date?: string | null;
+  fx_rate_source?: "ECB" | "NBS" | "CUSTOMS" | null;
+  tax_point_date?: string | null;
+  /** 20261008100009: nezdanená záloha vydanej konečnej faktúry (BT-113). */
+  untaxed_prepaid_amount?: number | null;
+  untaxed_prepaid_reference?: string | null;
+};
+export async function setInvoiceComplianceFields(invoiceId: string, fields: InvoiceComplianceFields): Promise<void> {
+  const { error } = await supabase.rpc("esblu_set_invoice_compliance_fields", { p_invoice_id: invoiceId, p_fields: fields });
+  if (error) throw error;
+}
+
 export async function finalizeInvoice(invoiceId: string): Promise<FinalizeInvoiceResult> {
   const { data, error } = await supabase.rpc("esblu_finalize_invoice", {
     p_invoice_id: invoiceId,

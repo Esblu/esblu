@@ -37,6 +37,7 @@ export type DocumentStatusKind =
   | "finalized"
   | "paid"
   | "partially_paid"
+  | "overpaid"
   | "unpaid"
   | "overdue"
   | "received"
@@ -51,6 +52,7 @@ const TONE_BY_KIND: Record<DocumentStatusKind, DocumentStatusTone> = {
   finalized: "neutral",
   paid: "positive",
   partially_paid: "warning",
+  overpaid: "warning",
   unpaid: "neutral",
   overdue: "critical",
   received: "neutral",

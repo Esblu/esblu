@@ -13,9 +13,13 @@ import {
 } from "@/lib/invoicing/handoff-errors";
 import { renderInvoicePdfBuffer } from "@/lib/invoicing/pdf-renderer";
 import { documentSign } from "@/lib/invoicing/credit-note-semantics";
+import { createSupabaseOutboundStore } from "@/lib/einvoice/outbound/supabase-store";
 import {
   buildManifest,
-  directionFolder,
+  packageFolder,
+  parseExportPeriod,
+  toCsv,
+  type ExportPeriod,
   eligibilityProblems,
   invoiceFolderName,
   isSafeZipPath,
@@ -36,6 +40,7 @@ import type {
   InvoiceParty,
   InvoiceTaxBreakdown,
 } from "@/lib/invoices";
+import { issueDeadline, isIssuedAfterDeadline } from "@/lib/invoicing/sk-deadlines";
 
 // =============================================================================
 // POST /api/accounting-handoff/package — úplný balík pre účtovníka.
@@ -157,20 +162,27 @@ export async function POST(req: Request) {
   // ---------------------------------------------------------------------------
   // 1. Vstup
   // ---------------------------------------------------------------------------
-  let invoiceIds: string[];
+  // 20261008100005: buď výber dokladov (invoiceIds), alebo hromadný export za obdobie (period).
+  let invoiceIds: string[] = [];
+  let period: ExportPeriod | null = null;
   let note: string | null = null;
   try {
-    const body = (await req.json()) as { invoiceIds?: unknown; note?: unknown };
-    if (!Array.isArray(body.invoiceIds)) throw new Error("invoiceIds");
-    invoiceIds = Array.from(
-      new Set(body.invoiceIds.filter((id): id is string => typeof id === "string" && UUID_RE.test(id)))
-    );
+    const body = (await req.json()) as { invoiceIds?: unknown; note?: unknown; period?: unknown };
+    if (body.period !== undefined) {
+      period = parseExportPeriod(body.period);
+      if (!period) throw new Error("period");
+    } else {
+      if (!Array.isArray(body.invoiceIds)) throw new Error("invoiceIds");
+      invoiceIds = Array.from(
+        new Set(body.invoiceIds.filter((id): id is string => typeof id === "string" && UUID_RE.test(id)))
+      );
+    }
     if (typeof body.note === "string" && body.note.trim()) note = body.note.trim().slice(0, 500);
   } catch {
     return errorResponse(locale, 400, "BAD_REQUEST");
   }
 
-  if (invoiceIds.length === 0) {
+  if (!period && invoiceIds.length === 0) {
     return errorResponse(locale, 400, "NO_DOCUMENTS_SELECTED");
   }
   if (invoiceIds.length > PACKAGE_LIMITS.maxInvoices) {
@@ -209,12 +221,24 @@ export async function POST(req: Request) {
   // ---------------------------------------------------------------------------
   // 3. Zber. Každý dotaz beží pod RLS ako prihlásený používateľ.
   // ---------------------------------------------------------------------------
-  const { data: invoiceRows, error: invoiceError } = await db
-    .from("invoices")
-    .select("*")
-    .in("id", invoiceIds)
-    .order("issue_date", { ascending: true })
-    .returns<Invoice[]>();
+  // Obdobie: iba finalizované doklady aktívnej firmy (RLS + explicitný filter); koncepty do exportu nepatria.
+  const { data: invoiceRows, error: invoiceError } = period
+    ? await db
+        .from("invoices")
+        .select("*")
+        .eq("company_id", companyId)
+        .eq("document_status", "finalized")
+        .gte("issue_date", period.from)
+        .lte("issue_date", period.to)
+        .order("issue_date", { ascending: true })
+        .limit(PACKAGE_LIMITS.maxInvoices + 1)
+        .returns<Invoice[]>()
+    : await db
+        .from("invoices")
+        .select("*")
+        .in("id", invoiceIds)
+        .order("issue_date", { ascending: true })
+        .returns<Invoice[]>();
 
   if (invoiceError) {
     console.error("handoff/package: načítanie faktúr zlyhalo:", invoiceError.code);
@@ -223,8 +247,11 @@ export async function POST(req: Request) {
 
   // Cudzia firma sa sem cez RLS nedostane; explicitný filter je druhá vrstva.
   const invoices = (invoiceRows ?? []).filter((i) => i.company_id === companyId);
+  if (period && invoices.length > PACKAGE_LIMITS.maxInvoices) {
+    return failed("TOO_MANY_INVOICES", undefined, { max: PACKAGE_LIMITS.maxInvoices });
+  }
   if (invoices.length === 0) {
-    return errorResponse(locale, 404, "NO_DOCUMENTS_SELECTED");
+    return period ? failed("NO_FINALIZED_DOCUMENTS", { excludedDrafts: [], eligibleCount: 0 }) : errorResponse(locale, 404, "NO_DOCUMENTS_SELECTED");
   }
 
   const ids = invoices.map((i) => i.id);
@@ -306,6 +333,59 @@ export async function POST(req: Request) {
   }
 
   const documentById = new Map(documents.map((d) => [d.id, d]));
+
+  // ---------------------------------------------------------------------------
+  // 20261008100000: úhrady, odpočty záloh, opravné väzby a e-faktúra (XML + dôkaz
+  // doručenia). Všetko pod RLS volajúceho; bajty XML sa čítajú až po overení
+  // riadku pod RLS a pred zabalením sa overí SHA-256 (ako pri sťahovaní XML).
+  // ---------------------------------------------------------------------------
+  const [paymentsRes, deductionsRes, inboundRes, outboundRes, receivedAdvRes] = await Promise.all([
+    db.from("invoice_payments").select("invoice_id, paid_amount, paid_at, payment_method, note, created_at, entry_type").in("invoice_id", ids)
+      .returns<{ invoice_id: string; paid_amount: number; paid_at: string; payment_method: string | null; note: string | null; created_at: string; entry_type: string }[]>(),
+    db.from("invoice_advance_deductions").select("invoice_id, advance_invoice_id, vat_category_code, vat_rate, taxable_amount, vat_amount").in("invoice_id", ids)
+      .returns<{ invoice_id: string; advance_invoice_id: string; vat_category_code: string; vat_rate: number; taxable_amount: number; vat_amount: number }[]>(),
+    db.from("einvoice_inbound").select("invoice_id, xml_storage_path, xml_sha256, provider, provider_received_id, received_at, acknowledged_at, sender_participant_id").in("invoice_id", ids)
+      .returns<{ invoice_id: string; xml_storage_path: string | null; xml_sha256: string | null; provider: string; provider_received_id: string; received_at: string; acknowledged_at: string | null; sender_participant_id: string | null }[]>(),
+    db.from("einvoice_outbound").select("invoice_id, attempt, state, ubl_storage_path, ubl_sha256, provider, sent_at, delivered_at, evidence, receiver_participant_id").in("invoice_id", ids)
+      .returns<{ invoice_id: string; attempt: number; state: string; ubl_storage_path: string | null; ubl_sha256: string | null; provider: string; sent_at: string | null; delivered_at: string | null; evidence: Record<string, unknown> | null; receiver_participant_id: string | null }[]>(),
+    // 20261008100008: prijaté zálohy (386) odpočítané na prijatej konečnej faktúre (BT-113).
+    db.from("received_advance_links").select("invoice_id, advance_invoice_id, vat_category_code, vat_rate, amount, taxable_amount, vat_amount, source, created_at").in("invoice_id", ids)
+      .returns<{ invoice_id: string; advance_invoice_id: string; vat_category_code: string | null; vat_rate: number | null; amount: number; taxable_amount: number; vat_amount: number; source: string; created_at: string }[]>(),
+  ]);
+  if (paymentsRes.error || deductionsRes.error || inboundRes.error || outboundRes.error || receivedAdvRes.error) {
+    console.error("handoff/package: načítanie úhrad / e-faktúr zlyhalo.");
+    return errorResponse(locale, 500, "INTERNAL_ERROR");
+  }
+  const paymentsByInvoice = groupBy(paymentsRes.data ?? [], (x) => x.invoice_id);
+  const deductionsByInvoice = groupBy(deductionsRes.data ?? [], (x) => x.invoice_id);
+  const receivedAdvByInvoice = groupBy(receivedAdvRes.data ?? [], (x) => x.invoice_id);
+  const inboundByInvoice = new Map((inboundRes.data ?? []).filter((r) => r.xml_storage_path && r.xml_sha256).map((r) => [r.invoice_id, r]));
+  const outboundByInvoice = new Map<string, NonNullable<typeof outboundRes.data>[number]>();
+  for (const o of outboundRes.data ?? []) {
+    const prev = outboundByInvoice.get(o.invoice_id);
+    if (o.ubl_storage_path && o.ubl_sha256 && (!prev || o.attempt > prev.attempt)) outboundByInvoice.set(o.invoice_id, o);
+  }
+  // Čísla opravovaných dokladov (aj keď nie sú vo výbere).
+  // Čísla opravovaných dokladov aj zálohových faktúr (odpočty) — aj keď nie sú vo výbere.
+  const correctedIds = Array.from(new Set([
+    ...invoices.map((i) => (i as Invoice & { corrects_invoice_id?: string | null }).corrects_invoice_id),
+    ...(deductionsRes.data ?? []).map((d) => d.advance_invoice_id),
+    ...(receivedAdvRes.data ?? []).map((d) => d.advance_invoice_id),
+  ].filter((x): x is string => Boolean(x))));
+  const correctedNumber = new Map<string, string | null>();
+  if (correctedIds.length > 0) {
+    const { data: corr, error: corrError } = await db.from("invoices").select("id, invoice_number, supplier_invoice_number").in("id", correctedIds)
+      .returns<{ id: string; invoice_number: string | null; supplier_invoice_number: string | null }[]>();
+    if (corrError) return errorResponse(locale, 500, "INTERNAL_ERROR");
+    for (const c of corr ?? []) correctedNumber.set(c.id, c.invoice_number ?? c.supplier_invoice_number);
+  }
+  const einvoiceStorage = createSupabaseOutboundStore();
+  const readVerified = async (path: string, sha: string): Promise<Uint8Array> => {
+    const bytes = await einvoiceStorage.getUbl(path);
+    if (!bytes) throw new Error("EINVOICE_XML_MISSING");
+    if (createHash("sha256").update(bytes).digest("hex") !== sha) throw new Error("EINVOICE_XML_INTEGRITY");
+    return bytes;
+  };
   const attachmentsByDoc = groupBy(attachments, (a) => a.document_id);
 
   // ---------------------------------------------------------------------------
@@ -338,10 +418,11 @@ export async function POST(req: Request) {
       invoice,
       itemCount: (itemsByInvoice.get(invoice.id) ?? []).length,
       // IBA kanonický originál. Sprievodné dokumenty sa sem nezapočítavajú.
+      // Prijatá e-faktúra: originálom je nemenné XML z einvoice_inbound (§ 35 ods. 2 ZoÚ, § 85o ods. 15).
       hasOriginalDocument: Boolean(
         documentById.get(originalDocIdByInvoice.get(invoice.id) ?? "")
-      ),
-    });
+      ) || inboundByInvoice.has(invoice.id),
+    }, { includeNonTaxDocuments: Boolean(period) });
 
     if (problems.length === 0) {
       eligible.push(invoice);
@@ -395,7 +476,7 @@ export async function POST(req: Request) {
 
   try {
     for (const invoice of eligible) {
-      const folder = directionFolder(invoice.direction);
+      const folder = packageFolder(invoice);
       if (!folder) throw new HandoffFailure("unknown_direction", invoice.id);
 
       const dir = `${folder}/${invoiceFolderName(invoice)}`;
@@ -427,7 +508,66 @@ export async function POST(req: Request) {
           // −1 = dobropis (znižuje), +1 inak; sumy sú uložené kladné.
           accounting_sign: documentSign(invoice.kind),
           finalized_at: invoice.finalized_at,
+          source: (invoice as Invoice & { source?: string }).source ?? null,
+          corrects_invoice_id: (invoice as Invoice & { corrects_invoice_id?: string | null }).corrects_invoice_id ?? null,
+          corrects_invoice_number: correctedNumber.get((invoice as Invoice & { corrects_invoice_id?: string | null }).corrects_invoice_id ?? "") ?? null,
+          correction_reason: (invoice as Invoice & { correction_reason?: string | null }).correction_reason ?? null,
+          fx_rate: (invoice as Invoice & { fx_rate?: number | null }).fx_rate ?? null,
+          fx_rate_date: (invoice as Invoice & { fx_rate_date?: string | null }).fx_rate_date ?? null,
+          fx_rate_source: (invoice as Invoice & { fx_rate_source?: string | null }).fx_rate_source ?? null,
+          tax_base_eur: (invoice as Invoice & { tax_base_eur?: number | null }).tax_base_eur ?? null,
+          vat_total_eur: (invoice as Invoice & { vat_total_eur?: number | null }).vat_total_eur ?? null,
+          // § 73: informatívne; skutočný dátum vyhotovenia (issue_date) a finalized_at sa nemenia.
+          ...(() => {
+            const seller = parties.find((p) => p.role === "seller");
+            const buyer = parties.find((p) => p.role === "buyer");
+            const sellerIcDph = Boolean(seller?.ic_dph && String(seller.ic_dph).trim());
+            const dl = issueDeadline({
+              direction: invoice.direction === "received" ? "received" : "issued",
+              kind: invoice.kind,
+              deliveryDate: invoice.delivery_date ?? null,
+              taxPointDate: invoice.tax_point_date ?? null,
+              vatCategories: breakdown.map((b) => b.vat_category_code),
+              buyerCountry: buyer?.country_code ? String(buyer.country_code) : null,
+              // Snapshot nemá stav platiteľa: IČ DPH = platiteľ; bez IČ DPH neznáme → lehota sa neurčí (REVIEW).
+              sellerVatPayer: sellerIcDph ? true : null,
+              sellerHasIcDph: sellerIcDph,
+            });
+            return {
+              issue_deadline_status: dl.status,
+              issue_deadline: dl.status === "determined" ? dl.deadline : null,
+              issue_deadline_alternative: dl.status === "determined" ? dl.alternativeDeadline ?? null : null,
+              issue_deadline_rule: dl.status === "determined" ? dl.rule : null,
+              issue_deadline_review_reason: dl.status === "review" ? dl.reason : null,
+              issued_after_deadline: dl.status === "determined" ? isIssuedAfterDeadline(invoice.issue_date, dl) : null,
+            };
+          })(),
+          fx_tax_point_date: (invoice as Invoice & { fx_tax_point_date?: string | null }).fx_tax_point_date ?? null,
+          fx_reference_rate_id: (invoice as Invoice & { fx_reference_rate_id?: string | null }).fx_reference_rate_id ?? null,
         },
+        payments: (paymentsByInvoice.get(invoice.id) ?? []).map((p) => ({
+          entry_type: p.entry_type, paid_amount: p.paid_amount, paid_at: p.paid_at, payment_method: p.payment_method, note: p.note, recorded_at: p.created_at,
+        })),
+        advance_deductions: (deductionsByInvoice.get(invoice.id) ?? []).map((d) => ({
+          advance_invoice_id: d.advance_invoice_id, vat_category_code: d.vat_category_code, vat_rate: d.vat_rate,
+          taxable_amount: d.taxable_amount, vat_amount: d.vat_amount,
+        })),
+        // Prijatá konečná faktúra: BT-113 z XML a priradené prijaté zálohy (informatívny rozklad DPH, nie rozhodnutie o odpočte).
+        received_advances: (invoice as Invoice & { prepaid_amount?: number | null }).prepaid_amount != null
+          ? {
+              prepaid_amount: (invoice as Invoice & { prepaid_amount?: number | null }).prepaid_amount,
+              review_status: (invoice as Invoice & { advance_review_status?: string | null }).advance_review_status ?? null,
+              links: (receivedAdvByInvoice.get(invoice.id) ?? []).map((l) => ({
+                advance_invoice_id: l.advance_invoice_id, advance_number: correctedNumber.get(l.advance_invoice_id) ?? null,
+                amount: l.amount, taxable_amount: l.taxable_amount, vat_amount: l.vat_amount, source: l.source,
+              })),
+            }
+          : null,
+        einvoice: inboundByInvoice.has(invoice.id)
+          ? (() => { const r = inboundByInvoice.get(invoice.id)!; return { direction: "received", provider: r.provider, provider_document_id: r.provider_received_id, xml_sha256: r.xml_sha256, received_at: r.received_at, acknowledged_at: r.acknowledged_at, sender_participant_id: r.sender_participant_id }; })()
+          : outboundByInvoice.has(invoice.id)
+            ? (() => { const o = outboundByInvoice.get(invoice.id)!; return { direction: "sent", provider: o.provider, attempt: o.attempt, state: o.state, ubl_sha256: o.ubl_sha256, sent_at: o.sent_at, delivered_at: o.delivered_at, receiver_participant_id: o.receiver_participant_id, delivery_evidence: o.evidence }; })()
+            : null,
         parties: parties.map((p) => ({
           role: p.role, legal_name: p.legal_name, ico: p.ico, dic: p.dic, ic_dph: p.ic_dph,
           address_line1: p.address_line1, address_line2: p.address_line2, city: p.city,
@@ -440,10 +580,16 @@ export async function POST(req: Request) {
           vat_category_code: i.vat_category_code, vat_rate: i.vat_rate,
           line_net_amount: i.line_net_amount, line_vat_amount: i.line_vat_amount,
           line_gross_amount: i.line_gross_amount,
+          // 20261008100009: mínusový riadok zdanenej zálohy + odkaz na faktúru k prijatej platbe.
+          advance_deduction: Boolean((i as typeof i & { is_advance_deduction?: boolean }).is_advance_deduction),
+          advance_invoice_number: (i as typeof i & { advance_invoice_id?: string | null }).advance_invoice_id
+            ? correctedNumber.get((i as typeof i & { advance_invoice_id?: string | null }).advance_invoice_id!) ?? null : null,
         })),
         vat_breakdown: breakdown.map((b) => ({
           vat_category_code: b.vat_category_code, vat_rate: b.vat_rate,
           taxable_amount: b.taxable_amount, vat_amount: b.vat_amount,
+          vat_exemption_reason_code: (b as InvoiceTaxBreakdown & { vat_exemption_reason_code?: string | null }).vat_exemption_reason_code ?? null,
+          vat_exemption_reason_text: (b as InvoiceTaxBreakdown & { vat_exemption_reason_text?: string | null }).vat_exemption_reason_text ?? null,
         })),
         disclaimer: MANIFEST_DISCLAIMER,
       };
@@ -469,6 +615,10 @@ export async function POST(req: Request) {
             invoice, seller,
             buyer: parties.find((p) => p.role === "buyer") ?? null,
             items, taxBreakdowns: breakdown, locale,
+            correctedInvoiceNumber: correctedNumber.get((invoice as Invoice & { corrects_invoice_id?: string | null }).corrects_invoice_id ?? "") ?? null,
+            advanceDeductions: (deductionsByInvoice.get(invoice.id) ?? []).map((d) => ({
+              taxable_amount: Number(d.taxable_amount), vat_amount: Number(d.vat_amount), advance_number: correctedNumber.get(d.advance_invoice_id) ?? null,
+            })),
           });
         } catch (renderError) {
           console.error("handoff/package: PDF zlyhalo:", invoice.id,
@@ -559,6 +709,32 @@ export async function POST(req: Request) {
       };
 
       if (originalDoc) await packDocument(originalDoc, true, 0);
+
+      // E-faktúra: presné XML (prijaté = originál dokladu; odoslané = vydaný UBL).
+      const inbound = inboundByInvoice.get(invoice.id);
+      const outbound = outboundByInvoice.get(invoice.id);
+      const einv = inbound
+        ? { path: inbound.xml_storage_path!, sha: inbound.xml_sha256!, name: originalDoc ? "einvoice-received.xml" : "original.xml" }
+        : outbound
+          ? { path: outbound.ubl_storage_path!, sha: outbound.ubl_sha256!, name: "einvoice-sent.xml" }
+          : null;
+      if (einv) {
+        let xmlBytes: Uint8Array;
+        try {
+          xmlBytes = await readVerified(einv.path, einv.sha);
+        } catch {
+          throw new HandoffFailure(inbound ? "missing_original_document" : "einvoice_xml_unavailable", invoice.id);
+        }
+        addFile(
+          {
+            path: `${dir}/${einv.name}`, kind: "einvoice_xml", invoice_id: invoice.id,
+            source_document_id: null, provenance: inbound ? "original" : "generated", mime_type: "application/xml",
+            original_filename: null,
+          },
+          xmlBytes
+        );
+        artifactCount++;
+      }
       for (const [index, doc] of supportingDocs.entries()) {
         await packDocument(doc, false, index);
       }
@@ -578,6 +754,72 @@ export async function POST(req: Request) {
         folder: dir,
         artifact_count: artifactCount,
       });
+    }
+
+    // --- 20261008100005: súhrnné CSV (doklady, úhrady, partneri, DPH, opravy, audit, saldo)
+    {
+      const byId = new Map(eligible.map((i) => [i.id, i]));
+      const label = (id: string | null | undefined) => {
+        if (!id) return "";
+        const i = byId.get(id);
+        return i ? (i.invoice_number ?? i.supplier_invoice_number ?? i.id) : (correctedNumber.get(id) ?? id);
+      };
+      const settlements = new Map<string, Record<string, unknown>>();
+      const roots = eligible.filter((i) => i.kind !== "proforma");
+      for (let k = 0; k < roots.length; k += 20) {
+        await Promise.all(roots.slice(k, k + 20).map(async (i) => {
+          const { data } = await db.rpc("esblu_invoice_settlement", { p_invoice_id: i.id });
+          if (data) settlements.set(i.id, data as Record<string, unknown>);
+        }));
+      }
+      const { data: eventRows } = await db.from("invoice_events").select("invoice_id, event_type, actor_source, created_at")
+        .in("invoice_id", eligible.map((i) => i.id)).order("created_at", { ascending: true })
+        .returns<{ invoice_id: string; event_type: string; actor_source: string; created_at: string }[]>();
+      const ext = (i: Invoice) => i as Invoice & { corrects_invoice_id?: string | null; correction_reason?: string | null; correction_review_status?: string | null; fx_rate?: number | null; fx_rate_date?: string | null; fx_rate_source?: string | null; tax_base_eur?: number | null; vat_total_eur?: number | null; prepaid_amount?: number | null; advance_review_status?: string | null; untaxed_prepaid_amount?: number | null; untaxed_prepaid_reference?: string | null };
+      const csv = (name: string, header: string[], rows: unknown[][]) => addFile(
+        { path: `summary/${name}`, kind: "summary_csv", invoice_id: null, source_document_id: null, provenance: "generated", mime_type: "text/csv", original_filename: null },
+        toCsv(header, rows)
+      );
+      csv("invoices.csv",
+        ["invoice_id", "folder", "direction", "kind", "number", "supplier_number", "issue_date", "delivery_date", "tax_point_date", "due_date", "currency", "subtotal", "vat_total", "total", "accounting_sign", "fx_rate", "fx_rate_date", "fx_rate_source", "tax_base_eur", "vat_total_eur", "payment_status", "amount_due", "paid", "refunded", "balance", "corrects", "correction_reason", "correction_review_status", "source", "prepaid_amount", "advance_review_status", "untaxed_prepaid_amount"],
+        eligible.map((i) => {
+          const st = settlements.get(i.id);
+          return [i.id, packageFolder(i), i.direction, i.kind, i.invoice_number, i.supplier_invoice_number, i.issue_date, i.delivery_date, i.tax_point_date, i.due_date, i.currency,
+            i.subtotal_amount, i.vat_total_amount, i.total_amount, documentSign(i.kind), ext(i).fx_rate ?? "", ext(i).fx_rate_date ?? "", ext(i).fx_rate_source ?? "",
+            ext(i).tax_base_eur ?? "", ext(i).vat_total_eur ?? "", i.kind === "proforma" ? "" : (st?.payment_status ?? i.payment_status), st?.amount_due ?? "", st?.paid ?? "", st?.refunded ?? "", st?.balance ?? "",
+            label(ext(i).corrects_invoice_id), ext(i).correction_reason ?? "", ext(i).correction_review_status ?? "", (i as Invoice & { source?: string }).source ?? "",
+            ext(i).prepaid_amount ?? "", ext(i).advance_review_status ?? "", ext(i).untaxed_prepaid_amount ?? ""];
+        }));
+      csv("payments.csv", ["invoice", "entry_type", "amount", "date", "method", "recorded_at"],
+        eligible.flatMap((i) => (paymentsByInvoice.get(i.id) ?? []).map((p) => [label(i.id), p.entry_type, p.paid_amount, p.paid_at, p.payment_method ?? "", p.created_at])));
+      csv("partners.csv", ["invoice", "role", "legal_name", "ico", "dic", "ic_dph", "country"],
+        eligible.flatMap((i) => (partiesByInvoice.get(i.id) ?? []).map((p) => [label(i.id), p.role, p.legal_name, p.ico ?? "", p.dic ?? "", p.ic_dph ?? "", p.country_code ?? ""])));
+      csv("vat-breakdown.csv", ["invoice", "accounting_sign", "vat_category", "vat_rate", "taxable", "vat", "exemption_reason"],
+        eligible.flatMap((i) => (taxByInvoice.get(i.id) ?? []).map((b) => [label(i.id), documentSign(i.kind), b.vat_category_code, b.vat_rate, b.taxable_amount, b.vat_amount,
+          (b as typeof b & { vat_exemption_reason_text?: string | null }).vat_exemption_reason_text ?? ""])));
+      csv("corrections.csv", ["correction", "kind", "direction", "corrects", "reason", "review_status"],
+        eligible.filter((i) => i.kind === "credit_note" || i.kind === "debit_note").map((i) => [label(i.id), i.kind, i.direction, label(ext(i).corrects_invoice_id), ext(i).correction_reason ?? "", ext(i).correction_review_status ?? ""]));
+      // 20261008100009 (FS FAQ eFaktúra, príklad 38): typ odpočtu — taxed_line = zdanená záloha ako mínusový
+      // riadok (znižuje základ aj DPH; odkaz na faktúru k prijatej platbe), untaxed_prepaid = nezdanená záloha
+      // (BT-113, znižuje iba sumu na úhradu), legacy_outside_lines = staršia konečná faktúra (odpočet mimo riadkov).
+      csv("advance-deductions.csv", ["final_invoice", "direction", "deduction_type", "advance_invoice", "reference", "vat_category", "vat_rate", "taxable", "vat", "amount"],
+        eligible.flatMap((i) => {
+          const hasLines = (itemsByInvoice.get(i.id) ?? []).some((it) => (it as typeof it & { is_advance_deduction?: boolean }).is_advance_deduction);
+          const taxed = (deductionsByInvoice.get(i.id) ?? []).map((d) => [label(i.id), i.direction, hasLines ? "taxed_line" : "legacy_outside_lines",
+            label(d.advance_invoice_id), "", d.vat_category_code, d.vat_rate, d.taxable_amount, d.vat_amount,
+            Math.round((Number(d.taxable_amount) + Number(d.vat_amount)) * 100) / 100]);
+          const received = (receivedAdvByInvoice.get(i.id) ?? []).map((l) => [label(i.id), i.direction, l.vat_category_code ? "taxed_line" : "legacy_outside_lines",
+            label(l.advance_invoice_id), "", l.vat_category_code ?? "", l.vat_rate ?? "", l.taxable_amount, l.vat_amount, l.amount]);
+          const untaxedAmount = i.direction === "issued" ? ext(i).untaxed_prepaid_amount : ext(i).prepaid_amount;
+          const untaxed = untaxedAmount ? [[label(i.id), i.direction, "untaxed_prepaid", "", i.direction === "issued" ? ext(i).untaxed_prepaid_reference ?? "" : "BT-113",
+            "", "", "", "", untaxedAmount]] : [];
+          return [...taxed, ...received, ...untaxed];
+        }));
+      // Prijaté zálohy (UBL 386) → prijatá konečná faktúra: suma odpočtu a pomerná DPH (informatívne).
+      csv("received-advance-links.csv", ["final_invoice", "advance_invoice", "advance_kind", "vat_category", "vat_rate", "amount", "taxable", "vat", "source"],
+        eligible.flatMap((i) => (receivedAdvByInvoice.get(i.id) ?? []).map((l) => [label(i.id), label(l.advance_invoice_id), "payment_received_invoice", l.vat_category_code ?? "", l.vat_rate ?? "", l.amount, l.taxable_amount, l.vat_amount, l.source])));
+      csv("audit-events.csv", ["invoice", "event_type", "actor_source", "created_at"],
+        (eventRows ?? []).map((e) => [label(e.invoice_id), e.event_type, e.actor_source, e.created_at]));
     }
 
     // --- README

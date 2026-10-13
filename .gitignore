@@ -57,3 +57,6 @@ release/*.signing.txt
 release/upload-key.sha*
 release/*.jks
 release/*.keystore
+
+# L3 staging: lokálny export štruktúry produkcie (nikdy necommitovať)
+/.l3-local/

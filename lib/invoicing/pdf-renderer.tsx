@@ -14,6 +14,7 @@ import { formatDate, formatNumber, formatMoney as formatMoneyIntl } from "@/lib/
 import { translate } from "@/lib/i18n/translate";
 import { documentSign } from "@/lib/invoicing/credit-note-semantics";
 import type { Locale } from "@/lib/i18n/locales";
+import { advanceSummary } from "@/lib/invoicing/advance-summary";
 
 // =============================================================================
 // FÁZA 3A — deterministic PDF renderer finalizovanej faktúry.
@@ -67,6 +68,8 @@ export type InvoicePdfBundle = {
   locale: Locale;
   /** Číslo opravovanej faktúry (iba dobropis/ťarchopis) — voliteľné. */
   correctedInvoiceNumber?: string | null;
+  /** 20261008100005: odpočty záloh konečnej faktúry (základ + DPH) a čísla zálohových faktúr. */
+  advanceDeductions?: { taxable_amount: number; vat_amount: number; advance_number: string | null }[];
 };
 
 const styles = StyleSheet.create({
@@ -324,7 +327,7 @@ function documentNumberFor(invoice: InvoicePdfBundle["invoice"]): string | null 
     : (invoice.invoice_number ?? null);
 }
 
-function InvoicePdfDocument({ invoice, seller, buyer, items, taxBreakdowns, locale, correctedInvoiceNumber }: InvoicePdfBundle) {
+function InvoicePdfDocument({ invoice, seller, buyer, items, taxBreakdowns, locale, correctedInvoiceNumber, advanceDeductions = [] }: InvoicePdfBundle) {
   const documentLabel = translate(locale, `invoices.kind.${invoice.kind}`);
   // Dobropis: sumy sa tlačia so znamienkom mínus (v DB sú kladné; znamienko
   // určuje druh dokladu — lib/invoicing/credit-note-semantics.ts).
@@ -369,7 +372,7 @@ function InvoicePdfDocument({ invoice, seller, buyer, items, taxBreakdowns, loca
             )}
             {invoice.tax_point_date && invoice.tax_point_date !== invoice.delivery_date && (
               <Text style={styles.metaLine}>
-                {translate(locale, "invoices.pdf.taxPointDateLabel")}: {formatDate(invoice.tax_point_date, locale)}
+                {translate(locale, invoice.kind === "payment_received_invoice" ? "invoices.pdf.paymentReceivedDateLabel" : "invoices.pdf.taxPointDateLabel")}: {formatDate(invoice.tax_point_date, locale)}
               </Text>
             )}
             {invoice.variable_symbol && (
@@ -413,12 +416,21 @@ function InvoicePdfDocument({ invoice, seller, buyer, items, taxBreakdowns, loca
           </View>
           {items.map((item) => (
             <View key={item.id} style={styles.tableRow} wrap={false}>
-              <Text style={[styles.td, styles.colDescription]}>{item.description}</Text>
+              <Text style={[styles.td, styles.colDescription]}>
+                {item.description}
+                {/* 20261008100009: mínusový riadok zdanenej zálohy — základ aj DPH (FS FAQ eFaktúra, príklad 38). */}
+                {item.is_advance_deduction
+                  ? `\n${translate(locale, "invoices.pdf.advanceLineDetail", {
+                      taxable: formatMoney(item.line_net_amount, invoice.currency, locale),
+                      vat: formatMoney(item.line_vat_amount, invoice.currency, locale),
+                    })}`
+                  : ""}
+              </Text>
               <Text style={[styles.td, styles.colQuantity]}>
-                {formatNumber(item.quantity, locale)} {item.unit}
+                {formatNumber(item.is_advance_deduction ? -item.quantity : item.quantity, locale)} {item.unit}
               </Text>
               <Text style={[styles.td, styles.colUnitPrice]}>
-                {formatMoney(item.unit_price, invoice.currency, locale)}
+                {formatMoney(item.is_advance_deduction ? -item.unit_price : item.unit_price, invoice.currency, locale)}
               </Text>
               <Text style={[styles.td, styles.colVat]}>
                 {vatCategoryLabel(item.vat_category_code, item.vat_rate, locale)}
@@ -485,7 +497,68 @@ function InvoicePdfDocument({ invoice, seller, buyer, items, taxBreakdowns, loca
               {formatMoney(sign * invoice.total_amount, invoice.currency, locale)}
             </Text>
           </View>
+          {/* 20261008100009: nezdanená záloha (BT-113) — platba znižujúca sumu na úhradu, nie daňový riadok. */}
+          {!isCreditNote && Number(invoice.untaxed_prepaid_amount ?? 0) > 0 && (
+            <>
+              <View style={styles.totalsRow}>
+                <Text style={styles.totalsLabel}>
+                  {translate(locale, "invoices.pdf.untaxedPrepaidLabel", { reference: invoice.untaxed_prepaid_reference ?? "" })}
+                </Text>
+                <Text style={styles.totalsValue}>{formatMoney(-Number(invoice.untaxed_prepaid_amount), invoice.currency, locale)}</Text>
+              </View>
+              <View style={styles.grandTotalRow}>
+                <Text style={styles.grandTotalLabel}>{translate(locale, "invoices.pdf.amountPayableLabel")}</Text>
+                <Text style={styles.grandTotalValue}>
+                  {formatMoney(advanceSummary({ totalAmount: invoice.total_amount, untaxedPrepaidAmount: invoice.untaxed_prepaid_amount, items }).payable, invoice.currency, locale)}
+                </Text>
+              </View>
+            </>
+          )}
+          {advanceDeductions.length > 0 && (
+            <>
+              {advanceDeductions.map((d, i) => (
+                <View key={i} style={styles.totalsRow}>
+                  <Text style={styles.totalsLabel}>
+                    {translate(locale, "invoices.pdf.advanceDeductedLabel", { number: d.advance_number ?? "—" })}
+                  </Text>
+                  <Text style={styles.totalsValue}>{formatMoney(-(d.taxable_amount + d.vat_amount), invoice.currency, locale)}</Text>
+                </View>
+              ))}
+              <View style={styles.grandTotalRow}>
+                <Text style={styles.grandTotalLabel}>{translate(locale, "invoices.pdf.amountPayableLabel")}</Text>
+                <Text style={styles.grandTotalValue}>
+                  {formatMoney(advanceSummary({ totalAmount: invoice.total_amount, items, legacyDeductions: advanceDeductions }).payable, invoice.currency, locale)}
+                </Text>
+              </View>
+            </>
+          )}
         </View>
+
+        {/* 20261008100000: zákonné slovné informácie (§ 74 ods. 1 písm. h), i), k), § 74 ods. 3 písm. c)). */}
+        {(() => {
+          const ext = invoice as typeof invoice & { correction_reason?: string | null; fx_rate?: number | string | null; fx_rate_date?: string | null; fx_rate_source?: string | null; tax_base_eur?: number | string | null; vat_total_eur?: number | string | null };
+          const reasons = Array.from(new Set(taxBreakdowns
+            .map((b) => (b as typeof b & { vat_exemption_reason_text?: string | null }).vat_exemption_reason_text)
+            .filter((t): t is string => Boolean(t && t.trim()))));
+          const notes: string[] = [];
+          if (invoice.kind === "proforma") notes.push(translate(locale, "invoices.pdf.proformaNotice"));
+          if ((invoice.kind === "credit_note" || invoice.kind === "debit_note") && ext.correction_reason) {
+            notes.push(`${translate(locale, "invoices.pdf.correctionReasonLabel")}: ${ext.correction_reason}`);
+          }
+          notes.push(...reasons);
+          if (invoice.currency !== "EUR" && ext.fx_rate) {
+            notes.push(`${translate(locale, "invoices.pdf.fxLabel")}: 1 EUR = ${formatNumber(Number(ext.fx_rate), locale)} ${invoice.currency} (${translate(locale, "invoices.pdf.fxSourceLabel")} ${ext.fx_rate_source ?? "—"}, ${ext.fx_rate_date ? formatDate(ext.fx_rate_date, locale) : "—"})`);
+            if (ext.tax_base_eur !== null && ext.tax_base_eur !== undefined) notes.push(`${translate(locale, "invoices.pdf.taxBaseEurLabel")}: ${formatMoney(Number(ext.tax_base_eur) * sign, "EUR", locale)}`);
+            if (ext.vat_total_eur !== null && ext.vat_total_eur !== undefined) notes.push(`${translate(locale, "invoices.pdf.vatEurLabel")}: ${formatMoney(Number(ext.vat_total_eur) * sign, "EUR", locale)}`);
+          }
+          if (notes.length === 0) return null;
+          return (
+            <View style={styles.paymentBox}>
+              <Text style={styles.partyLabel}>{translate(locale, "invoices.pdf.vatNotesTitle")}</Text>
+              {notes.map((n, i) => <Text key={i} style={styles.paymentLine}>{n}</Text>)}
+            </View>
+          );
+        })()}
 
         {(seller?.iban || invoice.variable_symbol || invoice.due_date) && (
           <View style={styles.paymentBox}>

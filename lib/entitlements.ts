@@ -19,6 +19,9 @@ import type { IntentName } from "@/lib/intents/types";
 
 export const ENTITLEMENT_KEYS = [
   "invoicing",
+  // Samostatný platený modul eFaktúra (20261002100000). Mimo trialu. Sám
+  // o sebe stačí aj na vznik/finalizáciu faktúr (DB trigger fakturácie).
+  "einvoice",
   "ai_documents",
   "vehicles",
   "machines",

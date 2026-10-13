@@ -21,6 +21,9 @@ import {
   buildManifest,
   directionFolder,
   eligibilityProblems,
+  packageFolder,
+  parseExportPeriod,
+  toCsv,
   invoiceFolderName,
   isSafeZipPath,
   packageFileName,
@@ -599,6 +602,32 @@ check(
   true
 );
 // -----------------------------------------------------------------------------
+
+// -----------------------------------------------------------------------------
+// 20261008100005: hromadný export za obdobie
+// -----------------------------------------------------------------------------
+check("proforma ide do samostatného priečinka", packageFolder({ direction: "issued", kind: "proforma" }), "proforma");
+check("vydaná faktúra ostáva v issued/", packageFolder({ direction: "issued", kind: "regular_invoice" }), "issued");
+check("prijatý dobropis ostáva v received/", packageFolder({ direction: "received", kind: "credit_note" }), "received");
+check("obdobie: platné", parseExportPeriod({ from: "2026-10-01", to: "2026-10-31" }), { from: "2026-10-01", to: "2026-10-31" });
+check("obdobie: od > do", parseExportPeriod({ from: "2026-11-01", to: "2026-10-31" }), null);
+check("obdobie: neexistujúci dátum", parseExportPeriod({ from: "2026-02-30", to: "2026-03-01" }), null);
+check("obdobie: viac než rok", parseExportPeriod({ from: "2025-01-01", to: "2026-03-01" }), null);
+check("obdobie: zlý typ", parseExportPeriod({ from: 1, to: "2026-03-01" }), null);
+{
+  const bytes = toCsv(["a", "b"], [["=SUM(1)", "x;y"], [-12.3, "ok"]]);
+  const text = new TextDecoder().decode(bytes);
+  check("CSV: UTF-8 BOM", Array.from(bytes.slice(0, 3)), [0xef, 0xbb, 0xbf]);
+  check("CSV: hlavička a CRLF", text.startsWith("a;b\r\n"), true);
+  check("CSV: vzorec neutralizovaný (CSV injection)", text.includes("'=SUM(1)"), true);
+  check("CSV: bodkočiarka v úvodzovkách", text.includes('"x;y"'), true);
+  check("CSV: záporné číslo ostáva číslom", text.includes("-12.3;ok"), true);
+}
+{
+  const pf = { id: "p", direction: "issued", kind: "proforma", document_status: "finalized", invoice_number: "PF20260001", supplier_invoice_number: null, issue_date: "2026-10-01", currency: "EUR", subtotal_amount: 100, vat_total_amount: 23, total_amount: 123 };
+  check("proforma vo výbere = nie daňový doklad", eligibilityProblems({ invoice: pf, itemCount: 1, hasOriginalDocument: false }), ["not_tax_document"]);
+  check("proforma v exporte za obdobie = povolená (oddelene)", eligibilityProblems({ invoice: pf, itemCount: 1, hasOriginalDocument: false }, { includeNonTaxDocuments: true }), []);
+}
 
 console.log(`\n${passed} prešlo, ${failed} zlyhalo`);
 if (failed > 0) process.exit(1);
