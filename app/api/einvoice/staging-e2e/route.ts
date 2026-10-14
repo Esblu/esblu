@@ -131,24 +131,10 @@ function sanitizeEvent(e: { id: string; event: string; eventId: string | null; o
   };
 }
 
-/**
- * Dôvod zamietnutia do serverového logu (iba strojový kód z guardu alebo "AUTH" — nikdy
- * hodnoty env, hlavičky ani telo). Klient dostane vždy rovnakú 404 → žiadny únik cez odpoveď.
- */
-function logDenied(reason: string): void {
-  console.warn(`[staging-e2e] denied ${reason.replace(/[^A-Z0-9_]/g, "").slice(0, 80)}`);
-}
-
 export async function POST(req: Request) {
   const guard = stagingE2eGuard(process.env);
-  if (!guard.ok) {
-    logDenied(guard.reason);
-    return notFound();
-  }
-  if (!authorized(req)) {
-    logDenied("AUTH");
-    return notFound();
-  }
+  if (!guard.ok) return notFound();
+  if (!authorized(req)) return notFound();
 
   let body: Json;
   try {

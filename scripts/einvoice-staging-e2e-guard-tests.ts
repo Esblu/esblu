@@ -97,16 +97,13 @@ test("uzavretý zoznam cieľov A–D", () => {
   assert.equal(targetForCompany(STAGING_E2E_COMPANIES.D), "D");
   assert.equal(targetForCompany("a1300000-0000-4000-8000-00000000000a"), null);
 });
-test("route: guard + autorizácia pred akoukoľvek prácou, 404 pri zamietnutí, log iba kódu dôvodu", () => {
+test("route: guard + autorizácia pred akoukoľvek prácou, 404 pri zamietnutí, žiadne logovanie", () => {
   const src = readFileSync(new URL("../app/api/einvoice/staging-e2e/route.ts", import.meta.url), "utf8");
   assert.match(src, /^import "server-only";/);
   const post = src.slice(src.indexOf("export async function POST"));
   assert.ok(post.indexOf("stagingE2eGuard(process.env)") < post.indexOf("req.json()"), "guard pred čítaním tela");
   assert.ok(post.indexOf("authorized(req)") < post.indexOf("req.json()"), "auth pred čítaním tela");
-  // Jediný povolený log: kód dôvodu zamietnutia (guard reason / AUTH) — nikdy hodnoty, hlavičky ani telo.
-  const logs = src.match(/console\.[a-z]+\([^;]*\);/g) ?? [];
-  assert.deepEqual(logs, ['console.warn(`[staging-e2e] denied ${reason.replace(/[^A-Z0-9_]/g, "").slice(0, 80)}`);'], "iba log kódu zamietnutia");
-  assert.ok(post.indexOf('logDenied("AUTH")') > 0 && post.indexOf("logDenied(guard.reason)") > 0);
+  assert.doesNotMatch(src, /console\./);
   assert.doesNotMatch(src, /access_token\b[^;]*json\(/, "token sa nevracia");
 });
 
