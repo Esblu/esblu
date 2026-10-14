@@ -99,6 +99,14 @@ async function userSession(admin: SupabaseClient, target: "A" | "B"): Promise<{ 
     auth: { autoRefreshToken: false, persistSession: false },
     global: { headers: { Authorization: `Bearer ${token}` } },
   });
+  // Multi-company (RC 20261012150000): nová session používateľa s 2+ firmami nemá aktívnu firmu,
+  // kým ju nevyberie (ako CompanySwitcher po prihlásení). Owner B vlastní aj C a D → explicitne
+  // aktívna jeho syntetická firma; server overí členstvo (inak ESBLU_NOT_A_MEMBER).
+  const { error: sErr } = await client.rpc("esblu_set_my_active_company", { p_company_id: STAGING_E2E_COMPANIES[target] });
+  if (sErr) {
+    await endSession(admin, token);
+    throw new Error("SESSION_COMPANY_FAILED");
+  }
   return { token, client, userId: verified.user.id };
 }
 

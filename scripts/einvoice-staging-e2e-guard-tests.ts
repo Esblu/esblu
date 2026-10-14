@@ -105,6 +105,8 @@ test("route: guard + autorizácia pred akoukoľvek prácou, 404 pri zamietnutí,
   assert.ok(post.indexOf("authorized(req)") < post.indexOf("req.json()"), "auth pred čítaním tela");
   assert.doesNotMatch(src, /console\./);
   assert.doesNotMatch(src, /access_token\b[^;]*json\(/, "token sa nevracia");
+  // Multi-company: session E2E ownera má explicitne aktívnu SVOJU syntetickú firmu (owner B vlastní B, C, D).
+  assert.match(src, /rpc\("esblu_set_my_active_company", \{ p_company_id: STAGING_E2E_COMPANIES\[target\] \}\)/);
 });
 
 console.log(`\neinvoice-staging-guard: ${passed} passed, ${failures.length} failed`);
