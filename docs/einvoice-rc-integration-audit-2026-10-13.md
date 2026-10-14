@@ -294,3 +294,46 @@ funkcie 260→269, public RLS 126/126 (fingerprint bez zmeny), indexy 292→295 
 23→11 (= prod `bb9e2c0f…`), storage objekty 46/46, eInvoice org/out/in/ev/wh/rollout 5/23/23/207/88/3 bez zmeny,
 predplatné 0, nároky 4, trial claimy 13, cleanup joby 0. Security advisors: iba 3 známe kategórie (RLS bez
 politiky na service tabuľkách, SECURITY DEFINER RPC pre authenticated, náhľad pozvánky pre anon).
+
+## 14. Reálny sandbox E2E na canonical RC (2026-10-14)
+
+Preview `preprod-release-candidate` @ `48456f1` (git deployment, target preview) × staging `esblu-test` ×
+eFaktura.sk **sandbox** (test kľúč). Production env / DB / deploy / main nedotknuté, nič live.
+
+**Env (Preview, iba vetva `preprod-release-candidate`):** `ESBLU_EINVOICE_PROVIDER=efaktura_sk`,
+`ESBLU_EINVOICE_ENVIRONMENT=sandbox`, `ESBLU_STAGING_E2E_ENABLED` (po teste `false`), sandbox
+`ESBLU_EFAKTURA_API_KEY` presunutý z `einvoice-port` (hodnota nečítaná ani nemenená), `ESBLU_STAGING_E2E_SECRET`
+a `CRON_SECRET` nastavil majiteľ (hodnoty mimo chatu / logov), Protection Bypass for Automation (majiteľ).
+
+**Harness oprava (`48456f1`):** session E2E ownera vyberá aktívnu syntetickú firmu
+(`esblu_set_my_active_company`) — owner B vlastní B, C, D, takže bez výberu mal po RC multi-company 0 riadkov / 403
+(správne fail-closed správanie RC, harness ho nepoznal). Dočasná diagnostika `af94ea5` (log iba kódu
+zamietnutia) bola revertnutá (`9934189`), lebo porušuje invariant „eInvoice runtime bez console“.
+
+**Precheck (fail-closed):** bez bypass 401, bez / zlý secret 404, guard `ok` (preview, allowlist vetvy,
+staging URL/kľúče, sandbox test kľúč, bez live flagu), cron bez auth 401, produkčný host 404.
+
+| | Scenár | Výsledok |
+|---|---|---|
+| A | enrollment / readiness | PASS — A aj B `active` (príjem + odosielanie), C `failed`, D `send_only`; reception route 200 pre A aj B; sandbox, provider nakonfigurovaný |
+| B | outbound FA20260021 | PASS — readiness najprv odmietla FA20260020 (PEPPOL-EN16931-R003 bez BT-10/BT-13, ostáva finalizovaná neodoslaná); route 202 QUEUED → worker `sent` → feed `delivered` |
+| B | idempotencia / duplicita | PASS — druhá požiadavka 200 `ALREADY_REQUESTED` (to isté outbound ID); 1 riadok na faktúru |
+| B | provider 409 | PASS — 2 súbežné `connector/send` s tým istým kľúčom: 200 + 409 `CONFLICT` „in progress“ → `EINVOICE_PROVIDER_IDEMPOTENCY_IN_PROGRESS` (retryable); worker potom replay tej istej submission (hash zhodný) |
+| B | timeout odolnosť | PASS — send cron s 504 (function timeout) nezdvojil odoslanie (lease, 1 submission na riadok) |
+| C | payment received (386) FA20260022 | PASS — odoslaná ako 386, doručená; úhrada 123 → `paid`, saldo 0 |
+| D | inbound | PASS — 4 udalosti `received` → firma B podľa provider org; koncepty: bežná, `payment_received_invoice`, konečná s návrhom zálohy, dobropis v review |
+| D | dedup / replay | PASS — 8 udalostí znova → 8× `DUPLICATE`; počty B 25 inbound / 24 dokladov nezmenené |
+| D | nemenné XML | PASS — 4 objekty v `einvoice-documents`, veľkosť = záznam; zmena SHA-256 / cesty → `ESBLU_EINVOICE_INBOUND_IDENTITY_IMMUTABLE`; export B: 4× `original.xml`, SHA-256 balíka sedí |
+| E | zdanená záloha + konečná | PASS — A: konečná FA20260023 369 − 123 = 246, záloha spotrebovaná 123 / zostatok 0; B: auto-návrh → finalizácia (presná zhoda BT-113, záloha finalizovaná) → `linked`, saldo 246, úhrada → `paid` |
+| E | dvojitý odpočet | PASS — aj 1 € zo spotrebovanej zálohy → `ESBLU_ADVANCE_DEDUCTION_EXCEEDS`; potvrdenie po finalizácii → `ESBLU_RECEIVED_ADVANCE_LINK_LOCKED` |
+| F | oprava (dobropis DO20260004) | PASS — odoslaný, doručený; u B review `ORIGINAL_NOT_FINALIZED` → po finalizácii originálu prijatý (finalizácia = prijatie: originál, dôvod, mena, limit); saldo originálu 123 − 12,30 = 110,70 |
+| G | multi-company izolácia | PASS — A/B vidia iba svoje (iné 0); A → doklady B a B → doklady A: 6× `ESBLU_INVOICE_NOT_FOUND` / 0 riadkov; privilegované RPC `DENIED:42501` |
+
+Webhook sa v tomto behu nepoužil (príjem cez partner feed `/api/cron/einvoice-events`, `webhook_secrets: 0`).
+HTTP signed URL: NOT YET RUN (driver nemá akciu pre médiá; DB politiky overené autoritatívne v §13).
+
+**Upratanie:** rollout A/B späť `paused`, nepoužitý koncept FIN2 zmazaný, `ESBLU_STAGING_E2E_ENABLED=false`.
+Finalizované QA doklady (FA20260020–23, DO20260004 u A; 4 prijaté u B), ich outbound/inbound riadky, udalosti a
+XML ostávajú ako nemenná evidencia testu (rovnako ako predchádzajúce E2E). Owner invariant 0/0, migrácie 37.
+Zostáva u majiteľa: zrušiť Protection Bypass, zmazať `ESBLU_STAGING_E2E_SECRET` a súbor `.env.staging-e2e.local`.
+Accounting otvorené body bez zmeny (ACCOUNTING DECISION REQUIRED).

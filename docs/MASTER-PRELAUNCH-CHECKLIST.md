@@ -1,7 +1,7 @@
 # Esblu — MASTER PRE-LAUNCH CHECKLIST
 
 Kanonický zoznam všetkého, čo musí byť hotové pred verejným spustením. Aktualizovať pri každom bloku.
-Posledná aktualizácia: **2026-10-13** (branch `preprod-release-candidate` @ `16e468c` + staging alignment / eInvoice RC validácia).
+Posledná aktualizácia: **2026-10-14** (branch `preprod-release-candidate` @ `48456f1` — reálny sandbox E2E eInvoice na RC Preview).
 
 Statusy: **PASS** · **READY** (pripravené, čaká na vykonanie/súhlas) · **BLOCKED LEGAL** · **BLOCKED EXTERNAL** ·
 **TODO** · **NOT YET RUN**
@@ -36,7 +36,7 @@ Statusy: **PASS** · **READY** (pripravené, čaká na vykonanie/súhlas) · **B
 | voice | PASS | RC sady; staging: návrh viazaný na firmu |
 | push | PASS (kód) | real-device NOT YET RUN |
 | chat | PASS | staging izolácia per session |
-| files / signed URL | PASS (DB politiky, autoritatívne) | media baseline = produkcia; role/odchod/cross-tenant/anon; HTTP podpis URL NOT YET RUN (TTL 3600 s, vydaná URL platí do expirácie) |
+| files / signed URL | PASS (DB politiky, autoritatívne) | media baseline = produkcia; role/odchod/cross-tenant/anon; HTTP podpis URL NOT YET RUN (E2E driver nemá akciu pre médiá; TTL 3600 s, vydaná URL platí do expirácie) |
 | dashboard (nový) | READY | v RC; produkčný merge TODO |
 | auth (email, Google, session restore) | PASS (RC) | real-device NOT YET RUN |
 | web build / mobile static export | PASS (po integrácii) | offline font mock v sandboxe; `verify-mobile-bundle` PASS |
@@ -51,7 +51,7 @@ Statusy: **PASS** · **READY** (pripravené, čaká na vykonanie/súhlas) · **B
 | eInvoice ↔ multi-company DB scoping | PASS (DB, rollback) |
 | eInvoice migrácie + `20261013100000` na stagingu | PASS (eInvoice cez 100011 už v histórii — nespúšťané znova; 20261013100000 aplikovaná) |
 | eInvoice multi-company / roly / RLS na stagingu (reálny Postgres) | PASS (SZČO 2 sessions, 5 rolí, cudzí owner; audit §13) |
-| eInvoice finálny staging QA (sandbox provider HTTP E2E) | BLOCKED (owner) — driver allowlist povoľuje RC, ale preview env (sandbox kľúč, E2E secret, CRON_SECRET) je viazaný iba na `einvoice-port`; `ESBLU_STAGING_E2E_SECRET` chýba |
+| eInvoice finálny staging QA (sandbox provider HTTP E2E) | PASS (2026-10-14, RC `48456f1`, eFaktura.sk sandbox × `esblu-test`; audit §14) |
 | subscriptions staging QA (fake/test provider) | NOT YET RUN (po integrácii) |
 | finálny staging schema fingerprint | PASS (pred/po v audite §13; dáta bez zmeny) |
 
@@ -146,7 +146,7 @@ Statusy: **PASS** · **READY** (pripravené, čaká na vykonanie/súhlas) · **B
 | `/zrusenie-uctu` v produkcii | READY (RC) |
 | privacy / legal stránky | BLOCKED LEGAL |
 | billing web (Stripe) | READY (test) / ⛔ live |
-| Vercel plán podporuje minútové crony (e-Faktúra) | READY (nepriamo: preview `16e468c` s `* * * * *` = READY; Hobby by deployment zamietol) — potvrdiť plán v dashboarde |
+| Vercel plán podporuje minútové crony (e-Faktúra) | VERCEL PLAN CONFIRMATION REQUIRED (plán nie je čitateľný cez API; preview READY nie je autoritatívny dôkaz) |
 | produkčný monitoring | TODO |
 
 ## I. ANDROID
