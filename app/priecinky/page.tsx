@@ -147,7 +147,7 @@ export default function FoldersPage() {
           {!loaded ? (
             <LoadingRows label={t("folders.loading")} />
           ) : folders.length === 0 ? (
-            <EmptyState title={t("folders.empty")} />
+            <EmptyState title={t("emptyStates.folders.title")} description={t("emptyStates.folders.body")} />
           ) : (
             <ul className="grid grid-cols-1 gap-1.5 sm:grid-cols-2 sm:gap-2">
               {folders.map((folder) => (

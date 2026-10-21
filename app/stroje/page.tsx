@@ -938,7 +938,10 @@ export default function StrojePage() {
           <Notice tone="critical">{loadError}</Notice>
         ) : machines.length === 0 ? (
           <EmptyState
-            title={t("machines.list.noneYet")}
+            title={t("emptyStates.machines.title")}
+            description={
+              canManageMachines ? t("emptyStates.machines.body") : `${t("emptyStates.machines.body")} ${t("emptyStates.readOnly")}`
+            }
             action={
               canManageMachines ? (
                 <button

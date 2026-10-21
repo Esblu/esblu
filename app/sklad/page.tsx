@@ -813,7 +813,10 @@ export default function SkladPage() {
           <Notice tone="critical">{loadError}</Notice>
         ) : items.length === 0 ? (
           <EmptyState
-            title={t("inventory.list.noneYet")}
+            title={t("emptyStates.inventory.title")}
+            description={
+              canManageInventory ? t("emptyStates.inventory.body") : `${t("emptyStates.inventory.body")} ${t("emptyStates.readOnly")}`
+            }
             action={
               canManageInventory ? (
                 <button

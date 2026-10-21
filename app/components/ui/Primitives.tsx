@@ -346,10 +346,23 @@ export function MetricGrid({ children }: { children: ReactNode }) {
  * Veľký marketingový blok v registri, ktorý používateľ uvidí päťkrát denne,
  * je otrava, nie onboarding.
  */
-export function EmptyState({ title, action }: { title: ReactNode; action?: ReactNode }) {
+/**
+ * Prázdny stav. S `description` je to „prvý krok" modulu: čo modul robí,
+ * prečo sa oplatí a čo spraviť ako prvé (titulok je potom výzva k akcii).
+ */
+export function EmptyState({
+  title,
+  description,
+  action,
+}: {
+  title: ReactNode;
+  description?: ReactNode;
+  action?: ReactNode;
+}) {
   return (
     <div className="rounded-doc border border-dashed border-doc-border px-4 py-7 text-center">
-      <p className="text-sm text-muted-esblu">{title}</p>
+      <p className={description ? "text-sm font-semibold text-primary" : "text-sm text-muted-esblu"}>{title}</p>
+      {description && <p className="mx-auto mt-1 max-w-md text-sm text-secondary">{description}</p>}
       {action && <div className="mt-3 flex justify-center">{action}</div>}
     </div>
   );

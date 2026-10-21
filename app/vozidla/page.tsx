@@ -1884,7 +1884,10 @@ export default function VozidlaPage() {
             <Notice tone="critical">{loadError}</Notice>
           ) : vehicles.length === 0 ? (
             <EmptyState
-              title={t("vehicles.list.noneYet")}
+              title={t("emptyStates.vehicles.title")}
+              description={
+                canOperate(role) ? t("emptyStates.vehicles.body") : `${t("emptyStates.vehicles.body")} ${t("emptyStates.readOnly")}`
+              }
               action={
                 canOperate(role) ? (
                   <button

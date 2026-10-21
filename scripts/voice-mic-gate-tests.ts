@@ -71,7 +71,8 @@ await check("bez nároku voice (trial) → zámok + vysvetlenie + „Požiadať 
   assert.ok(!/if \(!active && !entitlements\.has\("voice"\)\) return null;/.test(control), "pôvodné tiché skrytie odstránené");
   assert.match(control, /\{gate === "locked" && <LockBadge \/>\}/);
   assert.match(dashboard, /onGateNotice=\{setVoiceGateNotice\}/);
-  assert.match(dashboard, /voiceGateNotice === "locked" && \(\s*<button type="button" onClick=\{\(\) => router\.push\("\/kontakt"\)\}/);
+  // Aktiváciu (predplatné) rieši iba vlastník firmy — ostatným sa výzva nezobrazí (2026-10-22).
+  assert.match(dashboard, /voiceGateNotice === "locked" && isOwner && \(\s*<button type="button" onClick=\{\(\) => router\.push\("\/kontakt"\)\}/);
 });
 
 await check("zamknutý / čakajúci mikrofón NIKDY nespustí reláciu (žiadne onTap)", () => {

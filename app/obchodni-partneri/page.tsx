@@ -807,6 +807,11 @@ export default function ObchodniPartneriPage() {
           <p className="text-sm text-secondary">{t("businessPartners.loading")}</p>
         ) : loadError ? (
           <p className="text-sm font-medium text-danger">{loadError}</p>
+        ) : partners.length === 0 ? (
+          <div className="rounded-doc border border-dashed border-doc-border bg-surface-2 p-4 text-center">
+            <p className="text-sm font-semibold text-primary">{t("emptyStates.partners.title")}</p>
+            <p className="mx-auto mt-1 max-w-md text-sm text-secondary">{t("emptyStates.partners.body")}</p>
+          </div>
         ) : filteredPartners.length === 0 ? (
           <p className="rounded-doc border border-dashed border-doc-border bg-surface-2 p-4 text-center text-sm text-secondary">
             {t("businessPartners.empty")}

@@ -55,6 +55,7 @@
     "test:grants-guard": "node --experimental-strip-types --no-warnings scripts/grants-migration-guard-tests.ts",
     "test:idempotency-db": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/idempotency-pglite-tests.ts",
     "test:voice-hardening": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/voice-hardening-tests.ts",
+    "test:dashboard-today": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/dashboard-today-tests.ts",
     "test:dashboard-cylinder": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/dashboard-cylinder-tests.ts",
     "test:ui-tokens": "node --experimental-strip-types --no-warnings scripts/ui-design-tokens-tests.ts",
     "test:voice-e2e": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/voice-e2e-contract-tests.ts",

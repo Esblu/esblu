@@ -70,6 +70,7 @@ import {
   type SectionKey,
 } from "@/lib/invoicing/invoice-register-filters";
 import { listBusinessPartners, type BusinessPartner } from "@/lib/business-partners";
+import { useSearchParamValue } from "@/hooks/use-media-query";
 import {
   RegisterToolbar,
   RegisterHeader,
@@ -149,7 +150,12 @@ export default function FakturyPage() {
   const [partnersById, setPartnersById] = useState<Record<string, BusinessPartner>>({});
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
-  const [section, setSection] = useState<SectionKey>("all");
+  // Odkaz z prehľadu „Dnes" môže otvoriť konkrétnu sekciu (/faktury?section=drafts).
+  // Voľba používateľa má vždy prednosť pred parametrom v URL.
+  const sectionParam = useSearchParamValue("section");
+  const [sectionChoice, setSection] = useState<SectionKey | null>(null);
+  const section: SectionKey =
+    sectionChoice ?? ((SECTION_ORDER as string[]).includes(sectionParam ?? "") ? (sectionParam as SectionKey) : "all");
   const [directionFilter, setDirectionFilter] = useState<DirectionFilter>("all");
 
   // Účtovný lifecycle. Stav spracovania a stav odovzdania sú dve rôzne
@@ -866,8 +872,21 @@ export default function FakturyPage() {
             <LoadingRows label={t("invoices.loading")} />
           ) : loadError ? (
             <DocumentNotice tone="critical">{loadError}</DocumentNotice>
+          ) : invoices.length === 0 ? (
+            // Firma ešte nemá žiadny doklad: čo modul robí + prvý krok.
+            <EmptyState
+              title={t("emptyStates.invoices.title")}
+              description={t("emptyStates.invoices.body")}
+              action={
+                canEdit && !createDisabled ? (
+                  <Link href="/faktury/new" className="ui-btn ui-btn-primary ui-btn-sm">
+                    {t("emptyStates.invoices.cta")}
+                  </Link>
+                ) : undefined
+              }
+            />
           ) : filteredInvoices.length === 0 ? (
-            <EmptyState title={t("invoices.empty")} />
+            <EmptyState title={t("emptyStates.invoicesFiltered")} />
           ) : (
             <>
               <RegisterHeader columns={INVOICE_COLUMNS}>

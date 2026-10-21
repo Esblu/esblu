@@ -13,8 +13,26 @@ import {
   canOperate,
   getCompanyProfile,
   getMyActiveMembership,
+  hasFinanceManage,
   hasFinanceView,
+  listMyCompanyInvites,
+  listMyCompanyMembers,
+  type CompanyMemberRole,
+  type MyActiveMembership,
 } from "@/lib/company";
+import { getCompanyBillingProfile } from "@/lib/company-billing-profile";
+import { getMyUnreadCounts } from "@/lib/chat";
+import { isUnassignedInboxDocument, type InboxDocumentRow } from "@/lib/inbox-unassigned";
+import type { MinimalServiceRecord } from "@/lib/deadlines";
+import {
+  buildFirstSteps,
+  buildTodayItems,
+  firstStepsPending,
+  isBillingProfileComplete,
+  type TodayInvoice,
+} from "@/lib/dashboard/today";
+import { TodayPanel, type FirstStepAction } from "@/app/components/dashboard/TodayPanel";
+import CompanySwitcher from "@/app/components/workspaces/CompanySwitcher";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import InboxDocumentIcon from "./icons/InboxDocumentIcon";
 import BusinessPartnersIcon from "./icons/BusinessPartnersIcon";
@@ -74,6 +92,42 @@ const FINANCE_HREFS = ["/obchodni-partneri", "/faktury", "/priecinky"];
  */
 /** sessionStorage kľúč posledného modulu vo fokuse (návrat z modulu na nástenku). */
 const DASHBOARD_FOCUS_KEY = "esblu.dashboard.focus.v1";
+/** Skrytie „Prvých krokov" — iba toto zariadenie, kľúč podľa firmy (žiadna DB, žiadne meranie). */
+const FIRST_STEPS_DISMISSED_KEY = "esblu.dashboard.firstSteps.dismissed.v1";
+
+/** Overené vety asistenta (deterministický parser, scripts/dashboard-today-tests.ts). */
+const ASK_SUGGESTION_KEYS = {
+  overdue: "today.ask.overdue",
+  deadlines: "today.ask.deadlines",
+  lowStock: "today.ask.lowStock",
+  unassigned: "today.ask.unassigned",
+} as const;
+
+/** Stĺpce faktúr pre „Dnes" — iba to, čo agregácia potrebuje. */
+const TODAY_INVOICE_COLUMNS =
+  "id, kind, direction, document_status, payment_status, total_amount, currency, due_date, corrects_invoice_id, invoice_number, supplier_invoice_number, source, correction_review_status, advance_review_status";
+
+type TodayData = {
+  invoices: TodayInvoice[];
+  vehicleServices: MinimalServiceRecord[];
+  machineServices: MinimalServiceRecord[];
+  inboxUnassigned: number;
+  unreadChat: number;
+  partnerCount: number;
+  profileComplete: boolean | null;
+  teamCount: number | null;
+};
+
+const EMPTY_TODAY_DATA: TodayData = {
+  invoices: [],
+  vehicleServices: [],
+  machineServices: [],
+  inboxUnassigned: 0,
+  unreadChat: 0,
+  partnerCount: 0,
+  profileComplete: null,
+  teamCount: null,
+};
 
 function isModuleVisible(
   href: string,
@@ -88,6 +142,14 @@ function isModuleVisible(
   if (FINANCE_HREFS.includes(href)) return financeAccess;
   if (OPERATIONAL_HREFS.includes(href)) return operationalAccess;
   return true;
+}
+
+function readFirstStepsDismissed(companyId: string): boolean {
+  try {
+    return window.localStorage.getItem(`${FIRST_STEPS_DISMISSED_KEY}:${companyId}`) === "1";
+  } catch {
+    return false;
+  }
 }
 
 export default function Dashboard() {
@@ -114,6 +176,12 @@ export default function Dashboard() {
   const [financeAccess, setFinanceAccess] = useState(false);
   // Prevádzkový rozsah — účtovník nemá stroje, sklad ani vozidlá ako modul.
   const [operationalAccess, setOperationalAccess] = useState(false);
+  // „Dnes" (2026-10-22): rola + agregované dáta aktívnej firmy. Iba UI —
+  // autoritou ostáva RLS, nič nové sa neukladá.
+  const [membership, setMembership] = useState<MyActiveMembership | null>(null);
+  const [todayData, setTodayData] = useState<TodayData>(EMPTY_TODAY_DATA);
+  const [todayState, setTodayState] = useState<"loading" | "ready" | "error">("loading");
+  const [firstStepsDismissed, setFirstStepsDismissed] = useState(false);
   const [search, setSearch] = useState("");
   // Finálny polish: rola/členstvo načítané (pred tým skeleton, nie 1 modul),
   // stav načítania počtov (skeleton bez layout shiftu / chyba).
@@ -215,6 +283,7 @@ export default function Dashboard() {
       setFinanceAccess(false);
       setOperationalAccess(false);
       setDataState("ready");
+      setTodayState("ready");
       setAccessReady(true);
       // Bez aktívneho membershipu niet "firmy", ktorej branding by sa dal
       // načítať (esblu_get_company_profile by aj tak nič nevrátila) —
@@ -224,8 +293,11 @@ export default function Dashboard() {
 
     setFinanceAccess(hasFinanceView(membership));
     setOperationalAccess(canOperate(membership.role));
+    setMembership(membership);
+    setFirstStepsDismissed(readFirstStepsDismissed(membership.company_id));
     setAccessReady(true);
     loadData(membership.company_id);
+    void loadToday(membership);
     loadCompanyProfile();
   }
 
@@ -295,6 +367,79 @@ export default function Dashboard() {
       setDataState(vehicleRes.error || machineRes.error || itemRes.error ? "error" : "ready");
     } catch {
       setDataState("error");
+    }
+  }
+
+  // „Dnes" — doplnkové dáta AKTÍVNEJ firmy (company_id z membershipu, RLS
+  // vynucuje rozsah). Každý zdroj zlyhá samostatne: chýbajúci zdroj nikdy
+  // nezhodí celý prehľad, iba sa z neho nič nezobrazí.
+  async function loadToday(current: MyActiveMembership) {
+    setTodayState("loading");
+    const companyId = current.company_id;
+    const financeView = hasFinanceView(current);
+    const operate = canOperate(current.role);
+    const steward = current.role === "owner" || current.role === "admin";
+    try {
+      const [invoiceRes, partnerRes, vehicleServiceRes, machineServiceRes, inboxRes, unread, profile, team] = await Promise.all([
+        financeView
+          ? supabase.from("invoices").select(TODAY_INVOICE_COLUMNS).eq("company_id", companyId).limit(2000)
+          : Promise.resolve({ data: [], error: null }),
+        financeView
+          ? supabase.from("business_partners").select("id", { count: "exact", head: true }).eq("company_id", companyId)
+          : Promise.resolve({ count: 0, error: null }),
+        operate
+          ? supabase.from("vehicle_services").select("vehicle_id, service_date, next_service_date").eq("company_id", companyId)
+          : Promise.resolve({ data: [], error: null }),
+        operate
+          ? supabase.from("machine_services").select("machine_id, service_date, next_service_date").eq("company_id", companyId)
+          : Promise.resolve({ data: [], error: null }),
+        supabase
+          .from("documents")
+          .select("id, document_type, custom_category_id, document_links(vehicle_id, machine_id, invoice_id)")
+          .eq("company_id", companyId)
+          .in("document_type", ["receipt", "invoice"])
+          .is("deleted_at", null)
+          .is("archived_from_inbox_at", null)
+          .limit(500),
+        getMyUnreadCounts().catch(() => []),
+        current.role === "owner" || hasFinanceManage(current)
+          ? getCompanyBillingProfile(companyId).then(
+              (row) => isBillingProfileComplete(row),
+              () => null
+            )
+          : Promise.resolve(null),
+        steward
+          ? Promise.all([listMyCompanyMembers(), listMyCompanyInvites()]).then(
+              ([members, invites]) =>
+                Math.max(0, members.filter((member) => member.status === "active").length - 1) +
+                invites.filter((invite) => invite.status === "pending").length,
+              () => null
+            )
+          : Promise.resolve(null),
+      ]);
+
+      setTodayData({
+        invoices: ((invoiceRes.data ?? []) as unknown as TodayInvoice[]),
+        partnerCount: partnerRes.count ?? 0,
+        vehicleServices: ((vehicleServiceRes.data ?? []) as MinimalServiceRecord[]),
+        machineServices: ((machineServiceRes.data ?? []) as MinimalServiceRecord[]),
+        inboxUnassigned: ((inboxRes.data ?? []) as unknown as InboxDocumentRow[]).filter(isUnassignedInboxDocument).length,
+        unreadChat: unread.reduce((sum, row) => sum + (Number(row.unread_count) || 0), 0),
+        profileComplete: profile,
+        teamCount: team,
+      });
+      setTodayState(invoiceRes.error ? "error" : "ready");
+    } catch {
+      setTodayState("error");
+    }
+  }
+
+  function dismissFirstSteps() {
+    setFirstStepsDismissed(true);
+    try {
+      if (membership) window.localStorage.setItem(`${FIRST_STEPS_DISMISSED_KEY}:${membership.company_id}`, "1");
+    } catch {
+      // Súkromné okno / zablokované úložisko: skrytie platí aspoň do obnovenia.
     }
   }
 
@@ -658,7 +803,6 @@ export default function Dashboard() {
   // Experiment B: ?cylinder=spatial (iba vizuálny token, žiadna iná logika).
   const cylinderVariant: CylinderVariantName = parseCylinderVariant(useSearchParamValue("cylinder"));
   const largeDashboard = useMediaQuery("(min-width: 1024px)");
-  const [alertsOpen, setAlertsOpen] = useState(false);
 
   const dashboardModules = buildDashboardModules({
     isVisible: (href) => isModuleVisible(href, financeAccess, operationalAccess),
@@ -710,6 +854,87 @@ export default function Dashboard() {
   });
   const everythingLocked = allLocked(dashboardModules);
 
+  // --- „Dnes": čo dnes treba riešiť v AKTÍVNEJ firme -------------------------
+  const role: CompanyMemberRole | null = membership?.role ?? null;
+  const isOwner = role === "owner";
+  const financeManage = hasFinanceManage(membership);
+  const todayItems = buildTodayItems({
+    access: { financeView: financeAccess, operational: operationalAccess, billingOwner: isOwner },
+    today: todayLocalDate(),
+    locale,
+    vehicles,
+    vignettes,
+    vehicleServices: todayData.vehicleServices,
+    machines,
+    machineServices: todayData.machineServices,
+    inventory: items,
+    invoices: todayData.invoices,
+    inboxUnassigned: todayData.inboxUnassigned,
+    unreadChat: todayData.unreadChat,
+    trialEndsAt: entitlements.snapshot?.trial.endsAt ?? null,
+    trialActive: entitlements.snapshot?.trial.active ?? false,
+  });
+  const todayPanelState: "loading" | "ready" | "error" =
+    dataState === "loading" || todayState === "loading"
+      ? "loading"
+      : dataState === "error" || todayState === "error"
+        ? "error"
+        : "ready";
+  const recordCount = vehicles.length + machines.length + items.length + todayData.invoices.length + todayData.partnerCount;
+  const allFirstSteps = buildFirstSteps({
+    role,
+    profileComplete: todayData.profileComplete,
+    recordCount,
+    teamCount: todayData.teamCount,
+  });
+  const firstSteps =
+    !firstStepsDismissed && todayPanelState === "ready" && firstStepsPending(allFirstSteps) ? allFirstSteps : [];
+  const firstRecordActions: FirstStepAction[] = [
+    ...(operationalAccess
+      ? [
+          { labelKey: "today.firstSteps.actions.vehicle", href: "/vozidla" },
+          { labelKey: "today.firstSteps.actions.machine", href: "/stroje" },
+        ]
+      : []),
+    ...(financeManage ? [{ labelKey: "today.firstSteps.actions.invoice", href: "/faktury/new" }] : []),
+    ...(financeAccess ? [{ labelKey: "today.firstSteps.actions.partner", href: "/obchodni-partneri" }] : []),
+  ];
+  // Iba vety, ktoré deterministický parser naozaj rozpozná a rola smie
+  // vykonať (lib/intents/permissions.ts). Zamestnanec má asistenta iba v Inboxe.
+  const fullAssistant = role === "owner" || role === "admin" || role === "accountant";
+  const askSuggestions = [
+    ...(fullAssistant && financeAccess ? [t(ASK_SUGGESTION_KEYS.overdue)] : []),
+    ...(fullAssistant && operationalAccess ? [t(ASK_SUGGESTION_KEYS.deadlines), t(ASK_SUGGESTION_KEYS.lowStock)] : []),
+    ...(fullAssistant && financeAccess ? [t(ASK_SUGGESTION_KEYS.unassigned)] : []),
+  ];
+  const roleLabel = role ? t(`workspaces.roles.${role}`) : null;
+  const todayPanelProps = {
+    t,
+    state: todayPanelState,
+    items: todayItems,
+    companyName,
+    roleLabel,
+    firstSteps,
+    firstStepActions: {
+      profile: [{ labelKey: "today.firstSteps.actions.profile", href: "/nastavenia" }],
+      firstRecord: firstRecordActions,
+      invite: [{ labelKey: "today.firstSteps.actions.invite", href: "/nastavenia" }],
+    },
+    onDismissFirstSteps: dismissFirstSteps,
+    suggestions: askSuggestions,
+    onAsk: (text: string) => {
+      if (voice.active) voice.stop("manual");
+      voiceHandledTextRef.current = null;
+      setVoiceTranscript(null);
+      setSearch(text);
+    },
+    onRetry: () => {
+      if (!membership) return;
+      loadData(membership.company_id);
+      void loadToday(membership);
+    },
+  };
+
   // Posledný modul vo fokuse — iba sessionStorage tejto karty/appky (žiadna DB).
   const [initialFocusKey] = useState<string | null>(() => {
     try {
@@ -731,35 +956,68 @@ export default function Dashboard() {
 
   // Spoločný zoznam navigačných položiek pre desktop sidebar AJ mobilné
   // výsuvné menu (jeden zdroj pravdy, žiadna duplicita odkazov/ciest).
+  // Navigácia v niekoľkých oblastiach namiesto plochého zoznamu modulov
+  // (2026-10-22): Dokumenty · Financie · Prevádzka · Nastavenia. Viditeľnosť
+  // sa nemení — rovnaké isModuleVisible ako dlaždice.
+  type NavGroup = "documents" | "finance" | "operations" | "settings";
   const navItems: {
     href: string;
     label: string;
+    group: NavGroup;
     image?: string;
     icon?: ReactNode;
     badge?: number;
   }[] = [
-    { href: "/ai-evidencia", label: t("nav.inbox"), icon: <InboxDocumentIcon size={18} /> },
-    { href: "/vozidla", label: t("nav.vehicles"), icon: <CarIcon size={18} /> },
-    { href: "/stroje", label: t("nav.machines"), icon: <MachineIcon size={18} /> },
-    { href: "/sklad", label: t("nav.inventory"), icon: <PackageIcon size={18} /> },
+    { href: "/ai-evidencia", group: "documents" as const, label: t("nav.inbox"), icon: <InboxDocumentIcon size={18} /> },
     {
-      href: "/obchodni-partneri",
-      label: t("nav.businessPartners"),
-      icon: <BusinessPartnersIcon size={18} />,
+      href: "/priecinky",
+      group: "documents" as const,
+      label: t("folders.navLabel"),
+      icon: <FolderIcon size={18} />,
     },
     {
       href: "/faktury",
+      group: "finance" as const,
       label: t("nav.invoices"),
       icon: <InvoicesIcon size={18} />,
     },
     {
-      href: "/priecinky",
-      label: t("folders.navLabel"),
-      icon: <FolderIcon size={18} />,
+      href: "/obchodni-partneri",
+      group: "finance" as const,
+      label: t("nav.businessPartners"),
+      icon: <BusinessPartnersIcon size={18} />,
     },
-    { href: "/nastavenia", label: t("nav.settings"), icon: <SettingsIcon size={18} /> },
-    // Finance Access Hardening — rovnaký filter ako pri "modules" vyššie.
+    { href: "/vozidla", group: "operations" as const, label: t("nav.vehicles"), icon: <CarIcon size={18} /> },
+    { href: "/stroje", group: "operations" as const, label: t("nav.machines"), icon: <MachineIcon size={18} /> },
+    { href: "/sklad", group: "operations" as const, label: t("nav.inventory"), icon: <PackageIcon size={18} /> },
+    { href: "/nastavenia", group: "settings" as const, label: t("nav.settings"), icon: <SettingsIcon size={18} /> },
   ].filter((item) => isModuleVisible(item.href, financeAccess, operationalAccess));
+  const NAV_GROUPS: NavGroup[] = ["documents", "finance", "operations", "settings"];
+  const renderNavGroups = (onNavigate?: () => void) =>
+    NAV_GROUPS.map((group) => {
+      const groupItems = navItems.filter((item) => item.group === group);
+      if (groupItems.length === 0) return null;
+      return (
+        <div key={group} className="pt-3">
+          {group !== "settings" && (
+            <p className="px-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-esblu">
+              {t(`nav.groups.${group}`)}
+            </p>
+          )}
+          {groupItems.map((item) => (
+            <SideLink
+              key={item.href}
+              href={item.href}
+              label={item.label}
+              image={item.image}
+              icon={item.icon}
+              badge={item.badge}
+              onNavigate={onNavigate}
+            />
+          ))}
+        </div>
+      );
+    });
 
   // Action Engine — [Zrušiť]: jednoduchý no-op, appka nič nezapísala do DB
   // (a pri EXPORT_DOCUMENTS ani nič nestiahla) — panel sa iba skryje, `search`
@@ -949,18 +1207,12 @@ export default function Dashboard() {
             </div>
           </div>
 
-          <nav className="mt-6 flex-1 space-y-0.5">
+          {/* Aktívna firma + rola + prepnutie firmy — vždy viditeľné. */}
+          <CompanySwitcher className="mt-4" />
+
+          <nav className="mt-3 flex-1 space-y-0.5 overflow-y-auto">
             <SideLink active href="/" label={t("nav.overview")} icon={<MenuIcon />} />
-            {navItems.map((item) => (
-              <SideLink
-                key={item.href}
-                href={item.href}
-                label={item.label}
-                image={item.image}
-                icon={item.icon}
-                badge={item.badge}
-              />
-            ))}
+            {renderNavGroups()}
           </nav>
 
           <button
@@ -998,7 +1250,9 @@ export default function Dashboard() {
                 </button>
               </div>
 
-              <nav className="mt-6 flex-1 space-y-1.5">
+              <CompanySwitcher className="mt-4" />
+
+              <nav className="mt-3 flex-1 space-y-1 overflow-y-auto">
                 <SideLink
                   active
                   href="/"
@@ -1006,17 +1260,7 @@ export default function Dashboard() {
                   icon={<MenuIcon />}
                   onNavigate={() => setMenuOpen(false)}
                 />
-                {navItems.map((item) => (
-                  <SideLink
-                    key={item.href}
-                    href={item.href}
-                    label={item.label}
-                    image={item.image}
-                    icon={item.icon}
-                    badge={item.badge}
-                    onNavigate={() => setMenuOpen(false)}
-                  />
-                ))}
+                {renderNavGroups(() => setMenuOpen(false))}
               </nav>
 
               <button
@@ -1059,6 +1303,7 @@ export default function Dashboard() {
 
               <div className="min-w-0">
                 <p className="truncate text-[11px] font-medium leading-4 text-muted-esblu">{companyName}</p>
+                {roleLabel && <span className="sr-only">{roleLabel}</span>}
                 <h2 className="truncate text-[15px] font-semibold leading-5 text-primary lg:text-lg">{greeting}</h2>
               </div>
             </div>
@@ -1141,7 +1386,7 @@ export default function Dashboard() {
               <span className="min-w-0 flex-1">
                 {t(voiceGateNotice === "locked" ? "search.voice.gate.lockedNotice" : "search.voice.gate.unavailableNotice")}
               </span>
-              {voiceGateNotice === "locked" && (
+              {voiceGateNotice === "locked" && isOwner && (
                 <button type="button" onClick={() => router.push("/kontakt")} className="ui-btn ui-btn-secondary ui-btn-sm shrink-0">
                   {t("dashboard.cylinder.requestActivation")}
                 </button>
@@ -1258,62 +1503,11 @@ export default function Dashboard() {
           {!query && (
             <div className="mt-2 flex min-h-0 flex-1 gap-6 lg:mt-4">
               <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-                {/* Termíny STK/EK/známky: na telefóne kompaktný pruh nad valcom
-                    (rozbalí zoznam), na desktope bočný panel. Iba ak niečo hrozí. */}
-                {alerts.length > 0 && (
-                  <div className="mb-1 shrink-0 lg:hidden">
-                    <button
-                      type="button"
-                      onClick={() => setAlertsOpen((open) => !open)}
-                      aria-expanded={alertsOpen}
-                      className="flex min-h-9 w-full items-center gap-2 rounded-doc border border-warning/25 bg-warning-soft px-3 text-left text-[13px] font-medium text-warning"
-                    >
-                      <span aria-hidden="true" className="flex h-5 w-5 items-center justify-center rounded-full bg-warning/20 text-[11px] font-bold">!</span>
-                      <span className="min-w-0 flex-1 truncate">{t("dashboard.stkEkTitle")} · {alerts.length}</span>
-                      <span className="text-xs">{alertsOpen ? t("dashboard.cylinder.hideAll") : t("dashboard.cylinder.showAll")}</span>
-                    </button>
-                    {alertsOpen && (
-                      <div className="mt-1 max-h-40 overflow-y-auto rounded-doc border border-subtle bg-surface-1 px-3 py-1">
-              <div className="divide-y divide-[color:var(--color-divider)]">
-                {alerts.map((alert, index) => {
-                  const isOverdue = alert.level === "red";
-
-                  return (
-                    <Link
-                      key={index}
-                      href={vehicleDetailHref(alert.vehicleId)}
-                      className="flex items-center gap-3 rounded-lg py-2 -mx-2 px-2 transition cursor-pointer hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
-                    >
-                      <span
-                        className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
-                          isOverdue
-                            ? "bg-danger-soft text-danger"
-                            : "bg-warning-soft text-warning"
-                        }`}
-                        aria-hidden="true"
-                      >
-                        !
-                      </span>
-
-                      <p className="min-w-0 flex-1 truncate text-[13px] font-medium text-primary">
-                        {alert.message}
-                      </p>
-
-                      <span
-                        className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold ${
-                          isOverdue
-                            ? "bg-danger-soft text-danger"
-                            : "bg-warning-soft text-warning"
-                        }`}
-                      >
-                        {alert.type}
-                      </span>
-                    </Link>
-                  );
-                })}
-              </div>
-                      </div>
-                    )}
+                {/* „Dnes" na telefóne: kompaktný blok nad valcom (2 položky +
+                    „Zobraziť všetko"). Desktop má rovnaký obsah v bočnom paneli. */}
+                {accessReady && !largeDashboard && (
+                  <div className="lg:hidden">
+                    <TodayPanel variant="compact" {...todayPanelProps} />
                   </div>
                 )}
 
@@ -1330,9 +1524,13 @@ export default function Dashboard() {
                 {accessReady && everythingLocked && (
                   <div className="mb-1 flex shrink-0 items-center gap-2 rounded-doc border border-subtle bg-surface-1 px-3 py-2 text-[13px] text-secondary">
                     <span className="min-w-0 flex-1">{t("dashboard.cylinder.allLocked")}</span>
-                    <button type="button" onClick={() => router.push("/kontakt")} className="ui-btn ui-btn-secondary ui-btn-sm shrink-0">
-                      {t("dashboard.cylinder.requestActivation")}
-                    </button>
+                    {isOwner ? (
+                      <button type="button" onClick={() => router.push("/kontakt")} className="ui-btn ui-btn-secondary ui-btn-sm shrink-0">
+                        {t("dashboard.cylinder.requestActivation")}
+                      </button>
+                    ) : (
+                      <span className="shrink-0 text-xs text-muted-esblu">{t("dashboard.cylinder.ownerActivates")}</span>
+                    )}
                   </div>
                 )}
 
@@ -1363,7 +1561,15 @@ export default function Dashboard() {
                     paused={!dashboardActive}
                     onFocusChange={rememberFocus}
                     onNavigate={(href) => router.push(href)}
-                    onLockedAction={() => router.push("/kontakt")}
+                    onLockedAction={(key) => {
+                      // Predplatné spravuje iba vlastník; ostatní otvoria modul
+                      // (údaje ostávajú na čítanie) namiesto výzvy na platbu.
+                      if (isOwner) router.push("/kontakt");
+                      else {
+                        const target = dashboardModules.find((module) => module.key === key)?.href;
+                        if (target) router.push(target);
+                      }
+                    }}
                     labels={{
                       region: t("dashboard.cylinder.regionLabel"),
                       previous: t("dashboard.cylinder.previous"),
@@ -1371,65 +1577,17 @@ export default function Dashboard() {
                       position: (index, count) => t("dashboard.cylinder.position", { index, count }),
                       slide: (name, index, count) => t("dashboard.cylinder.slideLabel", { name, index, count }),
                       open: t("dashboard.cylinder.open"),
-                      requestActivation: t("dashboard.cylinder.requestActivation"),
-                      lockedHint: t("dashboard.cylinder.lockedHint"),
+                      requestActivation: isOwner ? t("dashboard.cylinder.requestActivation") : t("dashboard.cylinder.ownerActivates"),
+                      lockedHint: isOwner ? t("dashboard.cylinder.lockedHint") : t("dashboard.cylinder.ownerActivatesHint"),
                       loading: t("dashboard.cylinder.loading"),
                     }}
                   />
                 )}
               </div>
 
-              {alerts.length > 0 && (
-                <aside className="hidden w-80 shrink-0 flex-col overflow-hidden lg:flex" aria-label={t("dashboard.stkEkTitle")}>
-                  <div className="surface-card flex min-h-0 flex-col p-4">
-                    <div className="flex items-center justify-between gap-3">
-                      <div>
-                        <h3 className="text-[15px] font-semibold text-primary">{t("dashboard.stkEkTitle")}</h3>
-                        <p className="mt-0.5 text-xs text-muted-esblu">{t("dashboard.stkEkDescription")}</p>
-                      </div>
-                      <span className="shrink-0 rounded-full px-2 py-0.5 text-xs font-bold badge-danger">{alerts.length}</span>
-                    </div>
-                    <div className="mt-2 min-h-0 overflow-y-auto">
-              <div className="divide-y divide-[color:var(--color-divider)]">
-                {alerts.map((alert, index) => {
-                  const isOverdue = alert.level === "red";
-
-                  return (
-                    <Link
-                      key={index}
-                      href={vehicleDetailHref(alert.vehicleId)}
-                      className="flex items-center gap-3 rounded-lg py-2 -mx-2 px-2 transition cursor-pointer hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
-                    >
-                      <span
-                        className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
-                          isOverdue
-                            ? "bg-danger-soft text-danger"
-                            : "bg-warning-soft text-warning"
-                        }`}
-                        aria-hidden="true"
-                      >
-                        !
-                      </span>
-
-                      <p className="min-w-0 flex-1 truncate text-[13px] font-medium text-primary">
-                        {alert.message}
-                      </p>
-
-                      <span
-                        className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold ${
-                          isOverdue
-                            ? "bg-danger-soft text-danger"
-                            : "bg-warning-soft text-warning"
-                        }`}
-                      >
-                        {alert.type}
-                      </span>
-                    </Link>
-                  );
-                })}
-              </div>
-                    </div>
-                  </div>
+              {accessReady && largeDashboard && (
+                <aside className="hidden w-96 shrink-0 flex-col overflow-hidden lg:flex" aria-label={t("today.title")}>
+                  <TodayPanel variant="full" {...todayPanelProps} />
                 </aside>
               )}
             </div>
