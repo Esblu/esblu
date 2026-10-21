@@ -1438,6 +1438,8 @@ const sk = {
       aiFieldsMismatchType:
         "Vyplnený fields objekt nezodpovedá rozpoznanému typu dokumentu. Skús sken zopakovať.",
       scanFailedGeneric: "AI spracovanie dokumentu zlyhalo.",
+      aiUnavailable:
+        "AI spracovanie dokumentov je na tomto prostredí dočasne nedostupné. Dokument môžete doplniť ručne.",
       scanRateLimited:
         "Dosiahli ste technický limit počtu skenov za hodinu. Skúste to o chvíľu znova.",
       scanNoActiveCompany:

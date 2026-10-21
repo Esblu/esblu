@@ -12,7 +12,7 @@ import {
 } from "@/lib/entitlements-server";
 import { getRequestLocale } from "@/lib/i18n/request-locale";
 import { translate } from "@/lib/i18n/translate";
-import { safeAiErrorMeta } from "@/lib/ai/openai-runtime";
+import { isOpenAiConfigured, safeAiErrorMeta } from "@/lib/ai/openai-runtime";
 
 // -----------------------------------------------------------------------------
 // Univerzálny AI Inbox scan endpoint.
@@ -1117,6 +1117,16 @@ export async function POST(req: Request) {
           error: translate(locale, "inbox.errors.sessionExpired"),
         },
         { status: 401 }
+      );
+    }
+
+    // AI zámerne vypnutá (Preview/staging: OPENAI_API_KEY = zástupná hodnota,
+    // nie kľúč „sk-…“) — fail-closed PRED kvótou, nahratím obsahu aj akýmkoľvek
+    // volaním OpenAI. Nič sa neodosiela, kvóta sa nespotrebuje.
+    if (!isOpenAiConfigured()) {
+      return Response.json(
+        { success: false, code: "AI_UNAVAILABLE", error: translate(locale, "inbox.errors.aiUnavailable") },
+        { status: 503, headers: { "Cache-Control": "private, no-store" } }
       );
     }
 

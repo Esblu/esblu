@@ -6,7 +6,7 @@ import { translate } from "@/lib/i18n/translate";
 import type { Locale } from "@/lib/i18n/locales";
 import { getUserScopedSupabaseClient } from "@/lib/server-supabase-user-client";
 import { finalizeAiProcessing, guardAiProcessing } from "@/lib/entitlements-server";
-import { safeAiErrorMeta } from "@/lib/ai/openai-runtime";
+import { isOpenAiConfigured, safeAiErrorMeta } from "@/lib/ai/openai-runtime";
 
 const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY!,
@@ -172,6 +172,16 @@ export async function POST(request: Request) {
           error: translate(locale, "inbox.errors.sessionExpired"),
         },
         { status: 401 }
+      );
+    }
+
+    // AI zámerne vypnutá (Preview/staging: OPENAI_API_KEY = zástupná hodnota,
+    // nie kľúč „sk-…“) — fail-closed PRED kvótou, nahratím obsahu aj akýmkoľvek
+    // volaním OpenAI. Nič sa neodosiela, kvóta sa nespotrebuje.
+    if (!isOpenAiConfigured()) {
+      return Response.json(
+        { success: false, code: "AI_UNAVAILABLE", error: translate(locale, "inbox.errors.aiUnavailable") },
+        { status: 503, headers: { "Cache-Control": "private, no-store" } }
       );
     }
 

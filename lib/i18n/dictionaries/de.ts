@@ -1427,6 +1427,8 @@ const de = {
       aiFieldsMismatchType:
         "Das ausgefüllte Felderobjekt entspricht nicht dem erkannten Dokumenttyp. Versuchen Sie den Scan erneut.",
       scanFailedGeneric: "Die KI-Verarbeitung des Dokuments ist fehlgeschlagen.",
+      aiUnavailable:
+        "Die KI-Dokumentverarbeitung ist in dieser Umgebung vorübergehend nicht verfügbar. Sie können das Dokument manuell erfassen.",
       scanRateLimited:
         "Sie haben das technische Limit für Scans pro Stunde erreicht. Bitte versuchen Sie es in Kürze erneut.",
       scanNoActiveCompany:

@@ -1415,6 +1415,8 @@ const en = {
       aiFieldsMismatchType:
         "The filled fields object doesn't match the recognized document type. Try scanning again.",
       scanFailedGeneric: "AI processing of the document failed.",
+      aiUnavailable:
+        "AI document processing is temporarily unavailable in this environment. You can fill in the document manually.",
       scanRateLimited:
         "You've reached the technical limit for scans per hour. Please try again shortly.",
       scanNoActiveCompany:

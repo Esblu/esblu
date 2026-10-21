@@ -3,9 +3,10 @@ import { createClient } from "@supabase/supabase-js";
 import { normalizeSpz } from "@/lib/normalize-spz";
 import { normalizeAndValidateWeights } from "@/lib/weight-utils";
 import { getRequestLocale } from "@/lib/i18n/request-locale";
+import { translate } from "@/lib/i18n/translate";
 import { getUserScopedSupabaseClient } from "@/lib/server-supabase-user-client";
 import { finalizeAiProcessing, guardAiProcessing } from "@/lib/entitlements-server";
-import { safeAiErrorMeta } from "@/lib/ai/openai-runtime";
+import { isOpenAiConfigured, safeAiErrorMeta } from "@/lib/ai/openai-runtime";
 
 const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY!,
@@ -376,6 +377,16 @@ export async function POST(req: Request) {
       return Response.json(
         { success: false, error: "Prihlásenie vypršalo. Prihlás sa znova." },
         { status: 401 }
+      );
+    }
+
+    // AI zámerne vypnutá (Preview/staging: OPENAI_API_KEY = zástupná hodnota,
+    // nie kľúč „sk-…“) — fail-closed PRED kvótou, nahratím obsahu aj akýmkoľvek
+    // volaním OpenAI. Nič sa neodosiela, kvóta sa nespotrebuje.
+    if (!isOpenAiConfigured()) {
+      return Response.json(
+        { success: false, code: "AI_UNAVAILABLE", error: translate(getRequestLocale(req), "inbox.errors.aiUnavailable") },
+        { status: 503, headers: { "Cache-Control": "private, no-store" } }
       );
     }
 

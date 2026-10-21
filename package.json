@@ -59,6 +59,7 @@
     "test:ui-tokens": "node --experimental-strip-types --no-warnings scripts/ui-design-tokens-tests.ts",
     "test:voice-e2e": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/voice-e2e-contract-tests.ts",
     "test:voice-mic-gate": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/voice-mic-gate-tests.ts",
+    "test:ai-preview-disabled": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/ai-preview-disabled-tests.ts",
     "test:mobile-layering": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/mobile-layering-tests.ts",
     "test:mobile-platform": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/mobile-platform-tests.ts",
     "test:subscriptions": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/subscriptions-tests.ts",
