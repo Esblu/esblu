@@ -1,7 +1,7 @@
 # Esblu — MASTER PRE-LAUNCH CHECKLIST
 
 Kanonický zoznam všetkého, čo musí byť hotové pred verejným spustením. Aktualizovať pri každom bloku.
-Posledná aktualizácia: **2026-10-14** (branch `preprod-release-candidate` @ `48456f1` — reálny sandbox E2E eInvoice na RC Preview).
+Posledná aktualizácia: **2026-10-21** (branch `preprod-release-candidate` — Supabase explicit Data API grants, sekcia **J2**).
 
 Statusy: **PASS** · **READY** (pripravené, čaká na vykonanie/súhlas) · **BLOCKED LEGAL** · **BLOCKED EXTERNAL** ·
 **TODO** · **NOT YET RUN**
@@ -174,6 +174,20 @@ Statusy: **PASS** · **READY** (pripravené, čaká na vykonanie/súhlas) · **B
 | rollback plány | READY (rollback skripty v repe) |
 | observability | TODO |
 
+## J2. SUPABASE 2026-10-30 DATA API GRANTS CHANGE
+
+Od 30. 10. 2026 Supabase neudeľuje novým objektom v `public` Data API grants automaticky. Detail, inventár
+92 tabuliek, matica a rollout plán: `docs/supabase-explicit-grants-audit-2026-10-21.md`; pravidlo: `supabase/GRANTS.md`.
+
+| položka | status | poznámka |
+|---|---|---|
+| repo audit (92 tabuliek, A–E, staging + produkcia read-only) | PASS | 24 tabuliek appky a 57 service_role tabuliek záviselo od auto-grantov |
+| explicitný grant model (`20261021100000` + manifest) | PASS | least privilege; odobraté iba práva, ktoré RLS zamietala / appka nepoužíva |
+| čistý replay od nuly bez auto-grantov | PASS | `test:grants-replay-db` 33/33; baseline `20260720000000`; 2 zdokumentované presuny poradia |
+| statický guard pre budúce migrácie | PASS | `test:grants-guard` 9/9 |
+| staging validácia (`cjbdijbbcujvmrzezusd`) | PASS | ACL == replay (md5 t/c/f); rolová matica, tenant, billing owner-only, eInvoice, trial, deletion, media, push; PostgREST anon HTTP; advisors bez nového typu |
+| **production rollout** | ⛔ PENDING APPROVAL | aplikovať hneď po poslednej RC migrácii v tom istom okne (audit §7); **produkcia nie je PASS, kým nie je migrácia produkčne aplikovaná a overená** |
+
 ## K. FINAL FULL SMOKE — spustiť IBA keď finálny RC obsahuje multi-company + eInvoice + voice + billing + finálnu legal/store konfiguráciu
 
 Status: **NOT YET RUN.** Rozsah: mobil + desktop; auth, Google login, multi-company, roly, faktúry, e-Faktúra
@@ -188,6 +202,7 @@ reconnect, oprávnenia, notifikácie, aplikácia nainštalovaná z obchodu.
 4. schema fingerprint
 5. **výslovný súhlas**
 6. migrácie po jednej (poradie: `docs/einvoice-rc-integration-audit-2026-10-13.md` §3)
+   → hneď za poslednou RC migráciou `20261021100000_explicit_data_api_grants` (audit grants §7; ACL md5 kontrola po)
 7. merge / deploy
 8. ECB import (fx-rates)
 9. crony

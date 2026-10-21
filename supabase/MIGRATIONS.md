@@ -80,7 +80,12 @@ nothing and breaks the link between the repo file and the `name` in history.
   were renumbered from `20261001100000` / `20261001110000` before they were
   ever applied, so they sort after `20261001130000_push_devices_session_binding`).
 - New repo migrations must use a unique, monotonically higher version,
-  starting at **`20261002160000`** or later.
+  starting at **`20261021100001`** or later (highest reserved:
+  `20261021100000_explicit_data_api_grants`).
+- Single documented exception: `20260720000000_legacy_pre_migration_baseline`
+  sorts **before** the first migration on purpose — it creates the 9 tables that
+  were created in the Dashboard before `20260721000100` so a clean replay works.
+  It is a no-op on existing databases (staging applied it 2026-10-21 as a no-op).
 - Do not rely on `supabase migration new` for the prefix — it stamps the
   current time, which may be lower than the highest reserved version.
 
@@ -103,8 +108,11 @@ must:
 - **audit RLS**: RLS enabled, explicit `to authenticated` policies, company
   isolation via `esblu_my_active_company_id()`, finance gating via
   `esblu_my_finance_view()` / `esblu_my_finance_manage()` where relevant;
-- **audit grants**: explicit `revoke … from public, anon, authenticated`
-  followed by only the grants the app needs;
+- **audit grants**: explicit `revoke … from public, anon, authenticated, service_role`
+  followed by only the grants the app needs — since 2026-10-30 Supabase grants
+  nothing automatically; follow `supabase/GRANTS.md`, add the table to
+  `supabase/grants/public-data-api-grants.json`, and keep
+  `npm run test:grants-guard` / `npm run test:grants-replay-db` green;
 - **preserve client privilege hardening** (migration
   `20260923170000_harden_client_role_privileges.sql`): no `TRUNCATE`,
   `TRIGGER`, `REFERENCES` or `MAINTAIN` for client roles, no access for `anon`;
