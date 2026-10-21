@@ -1,7 +1,7 @@
 # Esblu — MASTER PRE-LAUNCH CHECKLIST
 
 Kanonický zoznam všetkého, čo musí byť hotové pred verejným spustením. Aktualizovať pri každom bloku.
-Posledná aktualizácia: **2026-10-22** (branch `preprod-release-candidate` — Supabase grants cleanup: settings.locale + policy hygiene, sekcia **J2**).
+Posledná aktualizácia: **2026-10-22** (branch `preprod-release-candidate` — produkt/positioning/onboarding, sekcia **J3**; predtým Supabase grants cleanup, sekcia **J2**).
 
 Statusy: **PASS** · **READY** (pripravené, čaká na vykonanie/súhlas) · **BLOCKED LEGAL** · **BLOCKED EXTERNAL** ·
 **TODO** · **NOT YET RUN**
@@ -191,6 +191,23 @@ Od 30. 10. 2026 Supabase neudeľuje novým objektom v `public` Data API grants a
 | settings.locale bug (tichý `42501`) | PASS | `20261022100000`: `grant update (locale)` iba tento stĺpec; LocaleProvider loguje `error`; regresné testy |
 | policy hygiene (27 politík `TO public` → `TO authenticated`) | PASS | podmienky bez zmeny (qual md5 =); v public schéme 0 `TO public`; legal_documents `{anon,authenticated}` nedotknuté |
 | **production migration** | ⛔ PENDING APPROVAL | poradie: audit grants §7; **produkcia nie je PASS, kým nie sú obe migrácie produkčne aplikované a overené** |
+
+## J3. PRODUCT / POSITIONING / ONBOARDING (2026-10-22)
+
+Detail: `docs/product-positioning-audit-2026-10-22.md`. Bez nového providera, dátového modelu, trackingu ani zmeny oprávnení — **GDPR IMPACT: NONE** pre všetky zmeny.
+
+| položka | status | poznámka |
+|---|---|---|
+| positioning clarity | PASS (RC) | landing: „Firma pod kontrolou.“ + „Faktúry, autá, stroje, sklad, dokumenty a termíny na jednom mieste.“; persona 2–15 ľudí; „namiesto Excelu, WhatsAppu a fakturačky“; eFaktúra ostáva „pripravujeme“ |
+| dashboard „Dnes“ | PASS (RC) | `lib/dashboard/today.ts` + `TodayPanel`: Urgentné / Dnes / Čoskoro / Info, každá položka s akciou; faktúry, prijaté/eFaktúry na kontrolu, STK/EK/známky/servis, sklad, Inbox, chat, koniec trialu (iba vlastník); `test:dashboard-today` 16/16 |
+| onboarding | PASS (RC) | „Prvé kroky“ (firma → firemné údaje → prvý záznam → pozvať kolegu/účtovníka, voliteľné) odvodené z existujúcich dát; skrytie iba lokálne na zariadení; žiadne falošné dáta |
+| empty states | PASS (RC) | vozidlá, stroje, sklad, faktúry, partneri, priečinky: čo modul robí + prvý krok; filter ≠ prvé spustenie |
+| role-aware UX | PASS (RC) | finančné položky iba s finance view, prevádzka iba owner/admin/employee, billing/aktivácia iba vlastník; asistent-tipy iba overené intenty povolené role (zamestnanec žiadne) |
+| multi-company clarity | PASS (RC) | prepínač firmy v desktop sidebari aj mobilnom webovom menu (natívna appka: „Viac“); „Dnes“ = iba aktívna firma (`company_id` z membershipu + RLS); po prepnutí hard reload |
+| mobile/web consistency | PASS (RC) | rovnaký obsah „Dnes“: mobil kompaktne nad valcom (2 položky + „Zobraziť všetko“), desktop bočný panel; navigácia „Dnes“ v oboch |
+| pricing UX (per firma, billing iba vlastník) | PASS (RC) | cenník: „Predplatné je za firmu, nie za prihlásenie… spravuje iba vlastník“; ne-vlastník nevidí výzvu na aktiváciu; cena / multi-company bundle / eFaktúra free-paid = **TBD** |
+| reálny device smoke | NOT YET RUN | patrí do **K** (až po CLIA/legal, billing/store, finálnom AAB) |
+| Turbopack build + `verify:mobile-bundle` na hoste | TODO | sandbox nemá prístup ku Google Fonts → overené `next build --webpack` (web + mobile export PASS); zopakovať štandardný build na hoste |
 
 ## K. FINAL FULL SMOKE — spustiť IBA keď finálny RC obsahuje multi-company + eInvoice + voice + billing + finálnu legal/store konfiguráciu
 
