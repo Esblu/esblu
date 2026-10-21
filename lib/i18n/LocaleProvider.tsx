@@ -122,15 +122,20 @@ export function LocaleProvider({ children }: { children: React.ReactNode }) {
     // Best-effort — ak nie je prihlásený, getSession() vráti null a appka
     // jednoducho pokračuje s localStorage perzistenciou (bod "neprihlásený
     // používateľ" zo zadania). Nikdy nič nevyhadzuje/neblokuje UI.
+    // supabase-js chybu NEVYHADZUJE — vracia ju v `error`. Bez kontroly by
+    // odmietnutý zápis (napr. chýbajúci grant, 42501) zlyhal potichu.
     supabase.auth
       .getSession()
-      .then(({ data: { session } }) => {
+      .then(async ({ data: { session } }) => {
         if (!session) return;
 
-        return supabase
+        const { error } = await supabase
           .from("settings")
           .update({ locale: normalized })
           .eq("user_id", session.user.id);
+        if (error) {
+          console.error("Uloženie jazykovej preferencie zlyhalo:", error.code ?? "", error.message);
+        }
       })
       .catch((error) => {
         console.error("Uloženie jazykovej preferencie zlyhalo:", error);

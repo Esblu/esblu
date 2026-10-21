@@ -655,7 +655,7 @@
       "anon": "",
       "authenticated": "SELECT",
       "service_role": "SELECT,INSERT,UPDATE,DELETE",
-      "note": "per-user; zapis iba stlpcovo (pozri column_grants); plan sa klientom nemeni",
+      "note": "per-user (1 riadok na auth používateľa); zápis iba stĺpcovo (pozri column_grants) — locale od 20261022100000; plan sa klientom nemení",
       "column_grants": {
         "authenticated": {
           "INSERT": [
@@ -665,7 +665,8 @@
           ],
           "UPDATE": [
             "company_name",
-            "logo_path"
+            "logo_path",
+            "locale"
           ]
         }
       }

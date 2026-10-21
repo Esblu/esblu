@@ -34,6 +34,14 @@ const MIGRATIONS = "supabase/migrations";
 const BASELINE = "20260720000000_legacy_pre_migration_baseline.sql";
 const RECONCILE = "20261021100000_explicit_data_api_grants.sql";
 const ROLLBACK = "supabase/rollback/20261021100000_explicit_data_api_grants_rollback.sql";
+// Cieľový stav = reconciliation + cleanup. Reconciliation robí revoke all → po jej (opätovnom) behu
+// musí VŽDY nasledovať aj cleanup migrácia (settings.locale grant), inak sa locale grant stratí.
+const HYGIENE = "20261022100000_grants_locale_and_policy_hygiene.sql";
+const HYGIENE_ROLLBACK = "supabase/rollback/20261022100000_grants_locale_and_policy_hygiene_rollback.sql";
+const reapplyTarget = async () => {
+  await db.exec(read(`${MIGRATIONS}/${RECONCILE}`));
+  await db.exec(read(`${MIGRATIONS}/${HYGIENE}`));
+};
 
 // Poradie replayu = poradie súborov, OKREM dvoch historických závislostí, kde
 // produkcia migrácie aplikovala v inom poradí, než je prefix súboru
@@ -111,6 +119,7 @@ await check("replay: všetky migrácie sa aplikujú od nuly bez auto-grantov", a
   assert.equal(replayError, null, replayError ?? "");
   assert.equal(applied.length, files.length);
   assert.equal(applied[0], BASELINE, "baseline musí byť prvá");
+  assert.ok(applied.indexOf(HYGIENE) > applied.indexOf(RECONCILE), "cleanup musí bežať po reconciliation");
   assert.ok(applied.includes(RECONCILE), "reconciliation migrácia chýba v replayi");
 });
 if (replayError) {
@@ -147,9 +156,10 @@ const tablePrivs = (snap: AclRow[], table: string, role: string) =>
 const snapshot = await aclSnapshot();
 
 // ----------------------------------------------------------------------------- replay idempotencia
-await check("replay: baseline a reconciliation sú idempotentné (2. beh = rovnaký stav)", async () => {
+await check("replay: baseline, reconciliation a cleanup sú idempotentné (2. beh = rovnaký stav)", async () => {
   await db.exec(read(`${MIGRATIONS}/${BASELINE}`));
-  await db.exec(read(`${MIGRATIONS}/${RECONCILE}`));
+  await reapplyTarget();
+  await db.exec(read(`${MIGRATIONS}/${HYGIENE}`));
   assert.deepEqual(await aclSnapshot(), snapshot);
 });
 
@@ -158,7 +168,16 @@ await check("replay: rollback sa aplikuje čisto a opätovná migrácia vráti p
   const rolled = await aclSnapshot();
   assert.equal(tablePrivs(rolled, "invoice_parties", "authenticated"), "DELETE,INSERT,SELECT,UPDATE");
   assert.ok(tablePrivs(rolled, "vehicles", "service_role").includes("TRUNCATE"));
-  await db.exec(read(`${MIGRATIONS}/${RECONCILE}`));
+  await reapplyTarget();
+  assert.deepEqual(await aclSnapshot(), snapshot);
+});
+
+await check("replay: cleanup rollback vráti TO public + locale grant preč; re-apply = cieľ", async () => {
+  await db.exec(read(HYGIENE_ROLLBACK));
+  const pub = (await db.query<{ n: number }>("select count(*)::int n from pg_policies where schemaname = 'public' and 'public' = any (roles)")).rows[0].n;
+  assert.equal(pub, 27);
+  assert.ok(!(await aclSnapshot()).some((r) => r.obj === "settings.locale"));
+  await db.exec(read(`${MIGRATIONS}/${HYGIENE}`));
   assert.deepEqual(await aclSnapshot(), snapshot);
 });
 
@@ -499,6 +518,98 @@ await check("push: push_devices / push_subscriptions iba cez RPC", async () => {
     await expectLayer(ownerA, `select 1 from public.${t}`, "privilege");
   await expectLayer(ownerA, "select * from public.esblu_push_my_devices()", "ok");
   await expectLayer(anon, "select * from public.esblu_push_my_devices()", "privilege");
+});
+
+// ----------------------------------------------------------------------------- locale
+async function commitAs(who: Who, sql: string): Promise<number> {
+  return (await (async () => {
+    await db.exec("begin");
+    try {
+      const claims = who.role === "authenticated" ? { sub: who.uid, role: "authenticated", session_id: who.session } : { role: who.role };
+      await db.query("select set_config('request.jwt.claims', $1, true)", [JSON.stringify(claims)]);
+      await db.exec(`set local role ${who.role}`);
+      const r = await db.query(sql);
+      await db.exec("commit");
+      return (r as { affectedRows?: number }).affectedRows ?? 0;
+    } catch (error) {
+      await db.exec("rollback");
+      throw error;
+    }
+  })());
+}
+await db.exec(`insert into public.settings (user_id) select id from auth.users where id in ('${U.ownerA}', '${U.adminA}', '${U.employeeA}', '${U.ownerB}') on conflict (user_id) do nothing`);
+const localeOf = async (uid: string) => (await db.query<{ l: string | null }>("select locale l from public.settings where user_id = $1", [uid])).rows[0]?.l ?? null;
+
+await check("locale: vlastník riadku uloží jazyk a po novom čítaní (nová transakcia) dostane novú hodnotu", async () => {
+  // presne to, čo robí LocaleProvider: update({ locale }).eq("user_id", session.user.id)
+  assert.equal(await commitAs(ownerA, `update public.settings set locale = 'de' where user_id = '${U.ownerA}'`), 1);
+  assert.equal(await localeOf(U.ownerA), "de");
+  const read = await svcRows<{ locale: string }>(ownerA, `select locale from public.settings where user_id = '${U.ownerA}'`);
+  assert.deepEqual(read.map((r) => r.locale), ["de"]);
+  assert.equal(await commitAs(ownerA, `update public.settings set locale = 'en' where user_id = '${U.ownerA}'`), 1);
+  assert.equal(await localeOf(U.ownerA), "en");
+});
+
+await check("locale: iný používateľ (iná firma) cudzí jazyk nezmení — RLS 0 riadkov", async () => {
+  assert.equal(await commitAs(ownerB, `update public.settings set locale = 'sk' where user_id = '${U.ownerA}'`), 0);
+  assert.equal(await localeOf(U.ownerA), "en");
+  await expectLayer(ownerB, `select 1 from public.settings where user_id = '${U.ownerA}'`, "ok", 0);
+});
+
+await check("locale: admin / employee menia iba vlastný riadok (per-user preferencia, nie firemná)", async () => {
+  assert.equal(await commitAs(employeeA, `update public.settings set locale = 'de' where user_id = '${U.employeeA}'`), 1);
+  assert.equal(await commitAs(adminA, `update public.settings set locale = 'sk' where user_id = '${U.employeeA}'`), 0);
+  assert.equal(await commitAs(employeeA, `update public.settings set locale = 'sk' where user_id = '${U.ownerA}'`), 0);
+  assert.equal(await localeOf(U.employeeA), "de");
+  assert.equal(await localeOf(U.ownerA), "en");
+});
+
+await check("locale: anon deny; grant je iba stĺpec locale (plan / user_id / mix nie); check constraint platí", async () => {
+  await expectLayer(anon, `update public.settings set locale = 'de'`, "privilege");
+  await expectLayer(ownerA, `update public.settings set plan = 'admin' where user_id = '${U.ownerA}'`, "privilege");
+  await expectLayer(ownerA, `update public.settings set user_id = '${U.ownerB}' where user_id = '${U.ownerA}'`, "privilege");
+  await expectLayer(ownerA, `update public.settings set locale = 'de', plan = 'pro' where user_id = '${U.ownerA}'`, "privilege");
+  const bad = await attempt(ownerA, `update public.settings set locale = 'xx' where user_id = '${U.ownerA}'`);
+  assert.ok(/23514/.test(bad.message), `neplatný jazyk musí zlyhať na settings_locale_check: ${bad.layer} ${bad.message}`);
+});
+
+await check("locale: LocaleProvider kontroluje `error` z supabase-js (žiadny tichý fail)", async () => {
+  const src = read("lib/i18n/LocaleProvider.tsx");
+  assert.match(src, /const \{ error \} = await supabase\s*\.from\("settings"\)\s*\.update\(\{ locale: normalized \}\)/);
+  assert.match(src, /if \(error\) \{\s*console\.error\(/);
+});
+
+// ----------------------------------------------------------------------------- hygiene
+await check("hygiene: v public schéme nie je žiadna politika TO public; 27 business politík je TO authenticated", async () => {
+  const pub = (await db.query<{ p: string }>("select tablename || '.' || policyname p from pg_policies where schemaname = 'public' and 'public' = any (roles)")).rows;
+  assert.deepEqual(pub, []);
+  const changed = (await db.query<{ n: number }>(`select count(*)::int n from pg_policies where schemaname = 'public'
+    and roles = '{authenticated}' and policyname = any($1)`, [["business_partners_select_finance", "company_billing_profile_select_finance",
+    "custom_document_categories_select_company", "document_attachments_select_company", "document_links_select_company", "documents_select_company",
+    "invoice_events_select_finance", "invoice_items_select_finance", "invoice_number_sequences_select_finance", "invoice_parties_select_finance",
+    "invoice_payments_select_finance", "invoice_tax_breakdowns_select_finance", "invoices_select_finance", "Users can manage own settings"]])).rows[0].n;
+  assert.equal(changed, 14);
+  const legal = (await db.query<{ r: string }>("select roles::text r from pg_policies where tablename = 'legal_documents'")).rows;
+  assert.deepEqual(legal.map((x) => x.r), ["{anon,authenticated}"]); // verejný flow nedotknutý
+});
+
+await check("hygiene: anon na business tabuľkách → čistý table privilege deny (už nie policy helper)", async () => {
+  for (const t of ["invoices", "invoice_items", "documents", "business_partners", "company_billing_profile", "settings"]) {
+    const o = await attempt(anon, `select 1 from public.${t}`);
+    assert.equal(o.layer, "privilege");
+    assert.match(o.message, new RegExp(`permission denied for table ${t}`), `${t}: ${o.message}`);
+  }
+});
+
+await check("hygiene: authenticated business flows po zmene role fungujú (finance owner / accountant / employee)", async () => {
+  await expectLayer(ownerA, "select id from public.invoices", "ok", 1);
+  await expectLayer(accountantA, "select id from public.invoices", "ok", 1);
+  await expectLayer(employeeA, "select id from public.invoices", "ok", 0); // forged permissions.finance
+  await expectLayer(ownerB, `select 1 from public.invoices where company_id = '${C.a}'`, "ok", 0);
+  await expectLayer(ownerA, `insert into public.business_partners (company_id, legal_name, kind) values ('${C.a}', 'Partner A', 'customer') returning id`, "ok", 1);
+  const cross = await attempt(ownerA, `insert into public.business_partners (company_id, legal_name, kind) values ('${C.b}', 'Partner X', 'customer') returning id`);
+  assert.equal(cross.layer, "rls", `cross-company partner insert: ${cross.layer} ${cross.message}`);
+  await expectLayer(as(U.multi, SESS.multiA), `select 1 from public.custom_document_categories where company_id = '${C.b}'`, "ok", 0);
 });
 
 async function svcRows<T = Row>(who: Who, sql: string): Promise<T[]> {

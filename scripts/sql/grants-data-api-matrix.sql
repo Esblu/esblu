@@ -156,6 +156,40 @@ begin
     'svc.rpc.einvoice_health', pg_temp.try_as('service_role', null, null, 'select 1 where public.esblu_einvoice_health(60, 24) is not null'),
     'svc.rpc.internal_helper(denied)', pg_temp.try_as('service_role', null, null, 'select 1 where public.esblu_my_active_company_id() is null'));
 
+  -- settings.locale (20261022100000) — per-user preferencia; zápis + čítanie späť v tej istej (zahodenej) transakcii
+  insert into public.settings (user_id) values (oA), (oB), (eA), (adA) on conflict (user_id) do nothing;
+  r := r || jsonb_build_object(
+    'locale.owner.update.own(1)', pg_temp.try_as('authenticated', oA, sA, format('update public.settings set locale = %L where user_id = %L', 'de', oA), true),
+    'locale.owner.readback(de=1)', pg_temp.try_as('authenticated', oA, sA, format('select 1 from public.settings where user_id = %L and locale = %L', oA, 'de')),
+    'locale.ownerB.update.foreign(0)', pg_temp.try_as('authenticated', oB, sB, format('update public.settings set locale = %L where user_id = %L', 'sk', oA), true),
+    'locale.employee.update.own(1)', pg_temp.try_as('authenticated', eA, sE, format('update public.settings set locale = %L where user_id = %L', 'en', eA), true),
+    'locale.admin.update.employee(0)', pg_temp.try_as('authenticated', adA, sAd, format('update public.settings set locale = %L where user_id = %L', 'sk', eA), true),
+    'locale.owner.update.plan(deny)', pg_temp.try_as('authenticated', oA, sA, format('update public.settings set plan = %L where user_id = %L', 'admin', oA), true),
+    'locale.owner.update.locale+plan(deny)', pg_temp.try_as('authenticated', oA, sA, format('update public.settings set locale = %L, plan = %L where user_id = %L', 'sk', 'pro', oA), true),
+    'locale.owner.invalid(23514)', pg_temp.try_as('authenticated', oA, sA, format('update public.settings set locale = %L where user_id = %L', 'xx', oA), true),
+    'locale.anon.update(deny)', pg_temp.try_as('anon', null, null, format('update public.settings set locale = %L', 'de'), true),
+    'locale.final.owner', (select locale from public.settings where user_id = oA),
+    'locale.final.employee', (select locale from public.settings where user_id = eA));
+  -- policy hygiene: anon dostane čistý table-privilege deny; finance flows nezmenené
+  r := r || jsonb_build_object(
+    'hygiene.public_role_policies', (select count(*)::text from pg_policies where schemaname = 'public' and 'public' = any (roles)),
+    'hygiene.legal_documents_roles', (select string_agg(roles::text, ';') from pg_policies where schemaname = 'public' and tablename = 'legal_documents'),
+    'hygiene.owner.insert.partner.own', pg_temp.try_as('authenticated', oA, sA, format('insert into public.business_partners (company_id, legal_name, kind) values (%L, %L, %L)', cA, 'Grants Partner', 'customer'), true),
+    'hygiene.owner.insert.partner.foreign', pg_temp.try_as('authenticated', oA, sA, format('insert into public.business_partners (company_id, legal_name, kind) values (%L, %L, %L)', cB, 'Grants Partner X', 'customer'), true),
+    'hygiene.accountant.invoices(1)', pg_temp.try_as('authenticated', acA, sAc, format('select 1 from public.invoices where company_id in (%L,%L)', cA, cB)),
+    'hygiene.employee.invoices(0)', pg_temp.try_as('authenticated', eA, sE, format('select 1 from public.invoices where company_id in (%L,%L)', cA, cB)));
+  declare m text; begin
+    foreach t in array array['invoices','invoice_items','documents','business_partners','company_billing_profile','settings'] loop
+      begin
+        perform set_config('request.jwt.claims', '{"role":"anon"}', true);
+        set local role anon;
+        execute format('select count(*) from public.%I', t);
+        reset role; m := 'ok';
+      exception when others then reset role; m := sqlstate || ' ' || sqlerrm; end;
+      r := r || jsonb_build_object('hygiene.anon.msg.' || t, m);
+    end loop;
+  end;
+
   raise exception using errcode = 'P0001', message = 'ESBLU_MATRIX_RESULT', detail = r::text;
 end
 $matrix$;

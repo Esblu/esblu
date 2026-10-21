@@ -14,6 +14,7 @@
 //   CREATE FUNCTION public.f
 //     - aspoň jeden `grant execute` / `revoke … on function public.f`
 //       (inak by RPC po čistom replayi nebolo dostupné, alebo by ostalo PUBLIC)
+//   CREATE/ALTER POLICY: explicitné TO <rola>, nikdy TO public (20261022100000).
 //   Zakázané: ALTER DEFAULT PRIVILEGES … GRANT, GRANT … ON ALL TABLES/FUNCTIONS
 //   IN SCHEMA public, GRANT ALL na tabuľku pre anon/authenticated.
 // Staršie migrácie sú pokryté reconciliation migráciou; guard iba overí, že
@@ -91,6 +92,10 @@ export function auditMigration(sql: string): string[] {
       problems.push(`public.${f}(): chýba explicitný GRANT/REVOKE EXECUTE`);
   }
   for (const st of stmts) {
+    if (/^create policy\b/.test(st) && !/\bto\s+[a-z_]/.test(st.replace(/\b(using|with check)\b[^]*$/, "")))
+      problems.push(`CREATE POLICY bez explicitného TO <rola>: ${st.slice(0, 100)}`);
+    if (/^(create|alter) policy\b/.test(st) && /\bto\s+([a-z_, ]*\b)?public\b/.test(st.replace(/\b(using|with check)\b[^]*$/, "")))
+      problems.push(`politika TO public je v public schéme zakázaná (použi TO authenticated / anon výslovne): ${st.slice(0, 100)}`);
     if (/^alter default privileges\b.*\bgrant\b/.test(st)) problems.push(`ALTER DEFAULT PRIVILEGES … GRANT je zakázaný: ${st.slice(0, 120)}`);
     if (/^grant\b.*\bon all (tables|functions|routines|sequences) in schema public\b/.test(st))
       problems.push(`plošný GRANT ON ALL … IN SCHEMA public je zakázaný: ${st.slice(0, 120)}`);
@@ -128,6 +133,13 @@ check("guard: neznáma tabuľka mimo manifestu, GRANT ALL, default privileges GR
   assert.ok(p.some((x) => /GRANT ALL pre klientsku rolu/.test(x)));
   assert.ok(p.some((x) => /ALTER DEFAULT PRIVILEGES/.test(x)));
   assert.ok(p.some((x) => /ON ALL/.test(x)));
+});
+check("guard: politika bez TO alebo TO public je zachytená; TO authenticated OK", () => {
+  assert.ok(auditMigration("create policy p on public.vehicles for select using (true);").some((x) => /bez explicitného TO/.test(x)));
+  assert.ok(auditMigration("create policy p on public.vehicles for select to public using (true);").some((x) => /TO public/.test(x)));
+  assert.ok(auditMigration("alter policy p on public.vehicles to anon, public;").some((x) => /TO public/.test(x)));
+  assert.deepEqual(auditMigration("create policy p on public.vehicles for select to authenticated using (company_id = public.esblu_my_active_company_id());"), []);
+  assert.deepEqual(auditMigration("alter policy p on public.vehicles to authenticated;"), []);
 });
 check("guard: nová funkcia bez GRANT/REVOKE EXECUTE je zachytená", () => {
   assert.equal(auditMigration("create or replace function public.esblu_x() returns int language sql as $$ select 1 $$;").length, 1);
