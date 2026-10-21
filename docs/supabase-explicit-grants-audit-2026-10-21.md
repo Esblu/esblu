@@ -21,7 +21,7 @@ produkcia `fkpgvgvsmbpieduoatrt` (assetpilot) **iba read-only**.
 | F7 | `anon` funkcie / PUBLIC: replay == staging (9 PUBLIC čistých helperov, anon iba `esblu_get_invite_preview`) | bez zmeny |
 | F8 | `supabase_admin` default privileges v produkcii stále udeľujú anon/authenticated/service_role (spravuje Supabase, `postgres` ich nemôže meniť); žiadna Esblu tabuľka/funkcia nemá vlastníka `supabase_admin` | iba informatívne |
 
-Nesúvisiace nálezy (neopravené, iba hlásené):
+Nesúvisiace nálezy (prvé dva **opravené 2026-10-22** migráciou `20261022100000`, §8):
 - `lib/i18n/LocaleProvider.tsx` zapisuje `settings.locale`, ale stĺpcový grant (od `20260721000100`) povoľuje UPDATE iba `company_name, logo_path` → uloženie jazyka do DB dnes ticho zlyháva (best-effort, chyba sa iba loguje). Oprava = `grant update (locale)` v samostatnej migrácii po rozhodnutí.
 - Politiky na `invoices`, `invoice_items`, `business_partners`, `documents`, `document_links`, … sú `TO public` (nie `TO authenticated`). Bez grantu je anon aj tak `42501`, ale anon dostane hlášku *permission denied for function esblu_…* (planner narazí na helper v politike skôr než na ACL tabuľky). Kozmetika / hygiena politík.
 - `npm run build` (Turbopack) v sandboxe nedosiahne Google Fonts; build overený `next build --webpack` s offline font mockom a placeholder env.
@@ -212,7 +212,19 @@ Vrstva: **privilege** = `42501 permission denied` (chýba GRANT) · **rls** = `4
 
 ## 7. PRODUCTION GRANTS ROLLOUT PLAN (⛔ vyžaduje samostatný výslovný súhlas)
 
-**Poradie.** `20261021100000_explicit_data_api_grants` sa aplikuje v rámci produkčného rolloutu RC **hneď po
+**Presné produkčné poradie (aktualizované 2026-10-22):**
+
+1. `20260720000000_legacy_pre_migration_baseline` — **voliteľne** (v produkcii no-op; iba záznam histórie).
+2. RC migrácie v správnom apply order (`docs/einvoice-rc-integration-audit-2026-10-13.md` §3), po poslednú
+   `20261013100000_einvoice_company_deletion_guard`.
+3. `20261021100000_explicit_data_api_grants` — reconciliation (precondition overí kompletnosť RC).
+4. `20261022100000_grants_locale_and_policy_hygiene` — **hneď po 3** (reconciliation robí `revoke all` na
+   `settings` → locale grant prichádza až v 4; politiky TO public → TO authenticated).
+5. Smoke testy (nižšie) + ACL / policy md5 kontrola proti stagingu.
+
+Kroky 2–4 v jednom okne bez prestávky (po 2026-10-30 by RC tabuľky bez kroku 3 nemali žiadne granty).
+
+**Poradie (detail).** `20261021100000_explicit_data_api_grants` sa aplikuje v rámci produkčného rolloutu RC **hneď po
 poslednej RC migrácii** (`20261013100000_einvoice_company_deletion_guard`) — precondition ju inak odmietne
 (chýbajúce RC tabuľky). Ak RC rollout prebehne **po 2026-10-30**, RC migrácie vytvoria tabuľky bez grantov a appka
 bude do aplikácie tejto migrácie v jednom kroku nefunkčná → aplikovať v tom istom okne, bez prestávky.
@@ -240,15 +252,62 @@ uložiť výstup precheck c). Dáta sa nemenia.
 - service_role: `arwdDxtm` → `arwd` všade; užšie: `einvoice_events`/`einvoice_ops_audit`/`fx_*` `ar`, `trial_claims`/`einvoice_event_cursors`/`account_deletion_cleanup_jobs` `arw`.
 - funkcie: service_role EXECUTE iba 109 allowlist RPC; authenticated / anon / PUBLIC bez zmeny.
 - default privileges (`postgres`, `public`): iba `postgres=…` — žiadny záznam pre anon/authenticated/service_role.
-- **Kontrola po:** md5 per `t`/`c`/`f` (dotaz §5) musí byť rovnaký ako staging: `t=938e3849…`, `c=8f76056d…`, `f=e90e2ad4…` (pri identickej množine tabuliek/funkcií).
+- po kroku 4: `settings.locale` UPDATE pre authenticated (stĺpcovo); 27 politík `TO authenticated`, v public 0 `TO public` (produkcia read-only 2026-10-22: dnes 27 `TO public`, rovnaké mená ako staging; locale grant chýba = rovnaký bug).
+- **Kontrola po (kroky 3+4):** md5 per `t`/`c`/`f` (dotaz §5) == staging: `t=938e3849…`, `c=10ad1012…`, `f=e90e2ad4…`; politiky (public+storage) full md5 `0aa3104e…`, qual md5 `0ec6e2c7…` (pri identickej množine tabuliek/funkcií/politík).
 
-**Rollback.** `supabase/rollback/20261021100000_explicit_data_api_grants_rollback.sql` (presný návrat ACL; overený
+**Rollback.** v opačnom poradí: `supabase/rollback/20261022100000_grants_locale_and_policy_hygiene_rollback.sql`, potom `supabase/rollback/20261021100000_explicit_data_api_grants_rollback.sql` (presný návrat ACL; overený
 v PGlite: rollback → re-apply = identický manifest). Cielená oprava (preferovaná): doplniť chýbajúci grant
 do manifestu + novej migrácie.
 
 **Smoke po aplikácii:**
 1. `scripts/sql/grants-data-api-matrix.sql` — **NIE na produkcii** (vkladá dočasné fixtures, hoci ich zahodí); v produkcii iba read-only: ACL md5 + `has_table_privilege`/`has_function_privilege` matica pre anon/authenticated/service_role.
-2. anon HTTP: `legal_documents` 200, `invoices` 401 `42501`.
+2. anon HTTP: `legal_documents` 200, `invoices` 401 `42501` *permission denied for table invoices*.
+2b. prihlásený používateľ: zmena jazyka v Nastaveniach → v DB `settings.locale` = nová hodnota, v konzole žiadna chyba.
 3. interná firma: prihlásenie, zoznam faktúr, vozidiel, strojov, skladu, dokumentov; vytvorenie a zmazanie testového vozidla; chat; nastavenia.
 4. server: cron `deadline-notifications`, `account-deletion-cleanup` (dry), billing `my_access` (owner), eInvoice health.
 5. Security advisors — iba 3 očakávané typy (§5).
+
+## 8. Cleanup 2026-10-22 — `settings.locale` + policy hygiene (`20261022100000`)
+
+**settings.locale.** Root cause: `lib/i18n/LocaleProvider.tsx` zapisuje `update settings set locale where
+user_id = auth.uid()` priamo cez Data API, ale stĺpcový grant (`20260721000100`) povoľoval UPDATE iba
+`company_name, logo_path`; `locale` (`20260819090000`) grant nikdy nedostal → `42501`, a kód výsledok
+supabase-js (`{ error }`) nekontroloval → tichá chyba (staging aj produkcia, read-only overené).
+`settings` je **per-user** tabuľka (unique `user_id`, bez `company_id`, politika `auth.uid() = user_id`,
+mimo company RLS) a jazyk je preferencia používateľa → miesto uloženia je správne (B v zmysle „user-level“,
+ale nie omylom vo firemných nastaveniach), redesign netreba. Oprava: `grant update (locale) on public.settings
+to authenticated` (iba tento stĺpec; `plan` a ostatné ostávajú zamknuté; hodnoty stráži `settings_locale_check`)
++ LocaleProvider loguje `error`. Poznámka: appka `settings.locale` zatiaľ nikde nečíta späť (obnova jazyka na
+inom zariadení nie je implementovaná) — mimo scope, nezmenené.
+
+**Policy hygiene — všetky `TO public` politiky v `public` schéme (27):**
+
+| tabuľka | politika | op | TO pred | anon grant | auth grant | zamýšľaný volajúci | odporúčané | zmena |
+|---|---|---|---|---|---|---|---|---|
+| business_partners | business_partners_{select,insert,update,delete}_finance | S/I/U/D | public | nie | áno | prihlásený člen (finance) | authenticated | áno (4) |
+| company_billing_profile | company_billing_profile_{select,insert,update}_finance | S/I/U | public | nie | áno | prihlásený člen (finance) | authenticated | áno (3) |
+| custom_document_categories | custom_document_categories_select_company | S | public | nie | áno | člen aktívnej firmy | authenticated | áno |
+| document_attachments | document_attachments_{select,insert}_company | S/I | public | nie | áno | člen aktívnej firmy | authenticated | áno (2) |
+| document_links | document_links_{select,insert}_company | S/I | public | nie | áno | člen aktívnej firmy | authenticated | áno (2) |
+| documents | documents_select_company | S | public | nie | áno | člen aktívnej firmy | authenticated | áno |
+| invoice_events | invoice_events_select_finance | S | public | nie | áno | finance view | authenticated | áno |
+| invoice_items | invoice_items_{select_finance,insert/update/delete_finance_draft} | S/I/U/D | public | nie | áno | finance | authenticated | áno (4) |
+| invoice_number_sequences | invoice_number_sequences_select_finance | S | public | nie | áno | finance view | authenticated | áno |
+| invoice_parties / invoice_payments / invoice_tax_breakdowns | *_select_finance | S | public | nie | áno | finance view | authenticated | áno (3) |
+| invoices | invoices_{select_finance,insert/update/delete_finance_draft} | S/I/U/D | public | nie | áno | finance | authenticated | áno (4) |
+| settings | Users can manage own settings | ALL | public | nie | áno | vlastník riadku | authenticated | áno |
+
+Zmenených **27/27** — každá stojí na `auth.uid()` / `esblu_my_active_company_id()` (pre anon vždy NULL), anon
+nemá na týchto tabuľkách grant a žiadna nepatrí verejnému flow. **Ponechané bez zmeny:** `legal_documents`
+(`TO anon, authenticated` — zámerný verejný flow; nebola `TO public`), pozvánky (SECURITY DEFINER RPC
+`esblu_get_invite_preview`, nie politika), `storage.objects` politiky (iná schéma, mimo scope). Service-only
+tabuľky sa nemenili. Mení sa iba zoznam rolí (`ALTER POLICY … TO authenticated`) — `USING`/`WITH CHECK`
+identické (qual md5 pred = po = `0ec6e2c7…`), počet politík 137 bez zmeny.
+
+**Výsledky:** replay 42/42 (negatívna kontrola bez migrácie 11 FAIL — bug reprodukovaný); guard 10/10;
+staging pred: owner `update settings set locale` = `42501 permission denied for table settings`; po: ok:1,
+spätné čítanie = nová hodnota, cudzí používateľ 0 riadkov, admin → employee 0, plan / locale+plan / anon =
+privilege, neplatný jazyk = 23514; anon na business tabuľkách teraz *permission denied for table X* (predtým
+*for function esblu_…*); finance flows (accountant 1, employee bez finance 0, cross-company partner insert =
+RLS) bez zmeny; billing owner-only, eInvoice, trial, deletion, media, push matica nezmenená; ACL / politiky
+staging == replay (md5); advisors: rovnaké 3 typy, rovnaký výstup (62 023 B) ako pred zmenou.

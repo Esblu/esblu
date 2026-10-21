@@ -80,8 +80,8 @@ nothing and breaks the link between the repo file and the `name` in history.
   were renumbered from `20261001100000` / `20261001110000` before they were
   ever applied, so they sort after `20261001130000_push_devices_session_binding`).
 - New repo migrations must use a unique, monotonically higher version,
-  starting at **`20261021100001`** or later (highest reserved:
-  `20261021100000_explicit_data_api_grants`).
+  starting at **`20261022100001`** or later (highest reserved:
+  `20261022100000_grants_locale_and_policy_hygiene`).
 - Single documented exception: `20260720000000_legacy_pre_migration_baseline`
   sorts **before** the first migration on purpose — it creates the 9 tables that
   were created in the Dashboard before `20260721000100` so a clean replay works.

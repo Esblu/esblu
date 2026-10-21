@@ -1,7 +1,7 @@
 # Esblu — MASTER PRE-LAUNCH CHECKLIST
 
 Kanonický zoznam všetkého, čo musí byť hotové pred verejným spustením. Aktualizovať pri každom bloku.
-Posledná aktualizácia: **2026-10-21** (branch `preprod-release-candidate` — Supabase explicit Data API grants, sekcia **J2**).
+Posledná aktualizácia: **2026-10-22** (branch `preprod-release-candidate` — Supabase grants cleanup: settings.locale + policy hygiene, sekcia **J2**).
 
 Statusy: **PASS** · **READY** (pripravené, čaká na vykonanie/súhlas) · **BLOCKED LEGAL** · **BLOCKED EXTERNAL** ·
 **TODO** · **NOT YET RUN**
@@ -182,11 +182,13 @@ Od 30. 10. 2026 Supabase neudeľuje novým objektom v `public` Data API grants a
 | položka | status | poznámka |
 |---|---|---|
 | repo audit (92 tabuliek, A–E, staging + produkcia read-only) | PASS | 24 tabuliek appky a 57 service_role tabuliek záviselo od auto-grantov |
-| explicitný grant model (`20261021100000` + manifest) | PASS | least privilege; odobraté iba práva, ktoré RLS zamietala / appka nepoužíva |
-| čistý replay od nuly bez auto-grantov | PASS | `test:grants-replay-db` 33/33; baseline `20260720000000`; 2 zdokumentované presuny poradia |
-| statický guard pre budúce migrácie | PASS | `test:grants-guard` 9/9 |
-| staging validácia (`cjbdijbbcujvmrzezusd`) | PASS | ACL == replay (md5 t/c/f); rolová matica, tenant, billing owner-only, eInvoice, trial, deletion, media, push; PostgREST anon HTTP; advisors bez nového typu |
-| **production rollout** | ⛔ PENDING APPROVAL | aplikovať hneď po poslednej RC migrácii v tom istom okne (audit §7); **produkcia nie je PASS, kým nie je migrácia produkčne aplikovaná a overená** |
+| explicit grants repo (`20261021100000` + manifest) | PASS | least privilege; odobraté iba práva, ktoré RLS zamietala / appka nepoužíva |
+| fresh replay od nuly bez auto-grantov | PASS | `test:grants-replay-db` 42/42 (baseline + reconciliation + cleanup); 2 zdokumentované presuny poradia |
+| statický guard pre budúce migrácie | PASS | `test:grants-guard` 10/10 (vrátane: politika bez `TO` / `TO public`) |
+| staging validation (`cjbdijbbcujvmrzezusd`) | PASS | ACL a politiky == replay (md5); rolová matica, tenant, billing owner-only, eInvoice, trial, deletion, media, push, locale; PostgREST anon HTTP; advisors bez zmeny |
+| settings.locale bug (tichý `42501`) | PASS | `20261022100000`: `grant update (locale)` iba tento stĺpec; LocaleProvider loguje `error`; regresné testy |
+| policy hygiene (27 politík `TO public` → `TO authenticated`) | PASS | podmienky bez zmeny (qual md5 =); v public schéme 0 `TO public`; legal_documents `{anon,authenticated}` nedotknuté |
+| **production migration** | ⛔ PENDING APPROVAL | poradie: audit grants §7; **produkcia nie je PASS, kým nie sú obe migrácie produkčne aplikované a overené** |
 
 ## K. FINAL FULL SMOKE — spustiť IBA keď finálny RC obsahuje multi-company + eInvoice + voice + billing + finálnu legal/store konfiguráciu
 
@@ -202,7 +204,7 @@ reconnect, oprávnenia, notifikácie, aplikácia nainštalovaná z obchodu.
 4. schema fingerprint
 5. **výslovný súhlas**
 6. migrácie po jednej (poradie: `docs/einvoice-rc-integration-audit-2026-10-13.md` §3)
-   → hneď za poslednou RC migráciou `20261021100000_explicit_data_api_grants` (audit grants §7; ACL md5 kontrola po)
+   → hneď za poslednou RC migráciou `20261021100000_explicit_data_api_grants` a `20261022100000_grants_locale_and_policy_hygiene` (audit grants §7; ACL + policy md5 kontrola po)
 7. merge / deploy
 8. ECB import (fx-rates)
 9. crony

@@ -13,7 +13,7 @@ RLS rozhoduje, ktoré riadky. Musí platiť oboje; jedno nenahrádza druhé.
 V tej istej migrácii:
 
 1. `alter table public.X enable row level security;` (+ `force`, ak má byť chránená aj pred vlastníkom)
-2. politiky (`to authenticated`, firma cez `esblu_my_active_company_id()`, finance cez `esblu_my_finance_view()` / `esblu_my_finance_manage()`)
+2. politiky s **explicitným `TO authenticated`** (alebo `TO anon, authenticated` iba pre skutočne verejný flow) — nikdy `TO public` ani bez `TO` (guard to odmietne; od `20261022100000` v public schéme nie je žiadna `TO public` politika); firma cez `esblu_my_active_company_id()`, finance cez `esblu_my_finance_view()` / `esblu_my_finance_manage()`
 3. `revoke all on table public.X from public, anon, authenticated, service_role;`
 4. iba potrebné granty — napr. `grant select on table public.X to authenticated;` /
    `grant select, insert, update, delete on table public.X to service_role;`
@@ -23,6 +23,10 @@ V tej istej migrácii:
 Nová funkcia `public.f(...)`: `revoke all on function public.f(...) from public, anon;` a výslovné
 `grant execute … to authenticated` / `service_role` podľa toho, kto ju volá. SECURITY DEFINER vždy
 `set search_path = ''` a overenie členstva/roly/session vo funkcii.
+
+Stĺpcový grant (napr. `settings`): pri novom klientsky zapisovanom stĺpci pridaj `grant update (stĺpec)` — inak zápis zlyhá s `42501` (príklad: `settings.locale`, oprava `20261022100000`). Klient pri zápise cez supabase-js vždy kontroluje `error`.
+
+Reconciliation `20261021100000` robí `revoke all` → ak by sa niekedy spúšťala znova, musí po nej nasledovať aj `20261022100000` (locale grant).
 
 Zakázané: `alter default privileges … grant`, `grant … on all tables/functions in schema public`,
 `grant all` pre `anon`/`authenticated`, plošné CRUD „aby prešli testy“. Billing autorita je **owner-only** cez RPC —
