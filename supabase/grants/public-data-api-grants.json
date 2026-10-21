@@ -1,0 +1,865 @@
+{
+  "_comment": "Explicitny Data API grant manifest pre schemu public. Zdroj pravdy pre 20261021100000_explicit_data_api_grants.sql a scripts/grants-replay-pglite-tests.ts. Prazdny retazec = ziadne opravnenie. Pozri supabase/GRANTS.md.",
+  "tables": {
+    "account_deletion_cleanup_jobs": {
+      "domain": "deletion",
+      "access": "D",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT,INSERT,UPDATE",
+      "note": "post-commit cleanup fronta — iba cron/service"
+    },
+    "accounting_handoff_export_items": {
+      "domain": "invoicing",
+      "access": "A",
+      "anon": "",
+      "authenticated": "SELECT,INSERT",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "immutable — bez UPDATE/DELETE"
+    },
+    "accounting_handoff_exports": {
+      "domain": "invoicing",
+      "access": "A",
+      "anon": "",
+      "authenticated": "SELECT,INSERT",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "immutable — bez UPDATE/DELETE"
+    },
+    "ai_evidence": {
+      "domain": "documents",
+      "access": "A",
+      "anon": "",
+      "authenticated": "SELECT,INSERT,UPDATE,DELETE",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": ""
+    },
+    "ai_evidence_review_log": {
+      "domain": "documents",
+      "access": "B",
+      "anon": "",
+      "authenticated": "SELECT",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "zapis cez intake RPC"
+    },
+    "ai_processing_usage": {
+      "domain": "ai",
+      "access": "C",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "kvota cez reserve/finalize_ai_processing"
+    },
+    "ai_scan_limits": {
+      "domain": "ai",
+      "access": "C",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "bez politik; kvota iba RPC — authenticated CRUD bol historicky auto-grant"
+    },
+    "ai_scan_usage": {
+      "domain": "ai",
+      "access": "C",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "bez politik; esblu_consume_ai_scan_quota — authenticated CRUD bol historicky auto-grant"
+    },
+    "assistant_action_confirmations": {
+      "domain": "ai",
+      "access": "C",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "potvrdenia akcii iba RPC"
+    },
+    "assistant_conversation_contexts": {
+      "domain": "ai",
+      "access": "C",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "kontext konverzacie iba RPC (FORCE RLS)"
+    },
+    "beta_allowlist": {
+      "domain": "auth",
+      "access": "D",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "closed beta gate — auth hook / service"
+    },
+    "billing_channel_rules": {
+      "domain": "billing",
+      "access": "D",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "billing interne — klient iba cez owner-only RPC (esblu_billing_*)"
+    },
+    "billing_checkout_sessions": {
+      "domain": "billing",
+      "access": "D",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "billing interne — klient iba cez owner-only RPC (esblu_billing_*)"
+    },
+    "billing_events": {
+      "domain": "billing",
+      "access": "D",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "billing interne — klient iba cez owner-only RPC (esblu_billing_*)"
+    },
+    "billing_provider_links": {
+      "domain": "billing",
+      "access": "D",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "billing interne — klient iba cez owner-only RPC (esblu_billing_*)"
+    },
+    "billing_provider_prices": {
+      "domain": "billing",
+      "access": "D",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "billing interne — klient iba cez owner-only RPC (esblu_billing_*)"
+    },
+    "billing_reconciliation": {
+      "domain": "billing",
+      "access": "D",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "billing interne — klient iba cez owner-only RPC (esblu_billing_*)"
+    },
+    "billing_region_groups": {
+      "domain": "billing",
+      "access": "D",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "billing interne — klient iba cez owner-only RPC (esblu_billing_*)"
+    },
+    "billing_runtime_config": {
+      "domain": "billing",
+      "access": "D",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "billing interne — klient iba cez owner-only RPC (esblu_billing_*)"
+    },
+    "billing_store_reports": {
+      "domain": "billing",
+      "access": "D",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "billing interne — klient iba cez owner-only RPC (esblu_billing_*)"
+    },
+    "business_partners": {
+      "domain": "company",
+      "access": "A",
+      "anon": "",
+      "authenticated": "SELECT,INSERT,UPDATE,DELETE",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": ""
+    },
+    "chat_attachments": {
+      "domain": "chat",
+      "access": "A",
+      "anon": "",
+      "authenticated": "SELECT,INSERT",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": ""
+    },
+    "chat_conversation_members": {
+      "domain": "chat",
+      "access": "B",
+      "anon": "",
+      "authenticated": "SELECT",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "clenstvo cez RPC"
+    },
+    "chat_conversations": {
+      "domain": "chat",
+      "access": "B",
+      "anon": "",
+      "authenticated": "SELECT",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "vznik cez RPC"
+    },
+    "chat_message_references": {
+      "domain": "chat",
+      "access": "B",
+      "anon": "",
+      "authenticated": "SELECT",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "zapis cez esblu_attach_chat_message_reference"
+    },
+    "chat_messages": {
+      "domain": "chat",
+      "access": "A",
+      "anon": "",
+      "authenticated": "SELECT,INSERT,UPDATE",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": ""
+    },
+    "companies": {
+      "domain": "membership",
+      "access": "B",
+      "anon": "",
+      "authenticated": "SELECT",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "zapis iba cez RPC (create_my_company, owner_delete_company)"
+    },
+    "company_billing_profile": {
+      "domain": "company",
+      "access": "A",
+      "anon": "",
+      "authenticated": "SELECT,INSERT,UPDATE",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "upsert; DELETE bez politiky → odobraty"
+    },
+    "company_dpa_acceptances": {
+      "domain": "legal",
+      "access": "B",
+      "anon": "",
+      "authenticated": "SELECT",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "zapis cez esblu_accept_company_dpa"
+    },
+    "company_entitlements": {
+      "domain": "billing",
+      "access": "C",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "naroky cez esblu_get_my_company_entitlements"
+    },
+    "company_invites": {
+      "domain": "membership",
+      "access": "C",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "pozvanky iba cez RPC"
+    },
+    "company_legal_identities": {
+      "domain": "trial",
+      "access": "B",
+      "anon": "",
+      "authenticated": "SELECT",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "owner-only SELECT policy na vlastnu aktivnu firmu; zapis server/RPC"
+    },
+    "company_members": {
+      "domain": "membership",
+      "access": "B",
+      "anon": "",
+      "authenticated": "SELECT",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "clenstvo meni iba RPC; legacy fallback read"
+    },
+    "custom_document_categories": {
+      "domain": "documents",
+      "access": "A",
+      "anon": "",
+      "authenticated": "SELECT,INSERT,UPDATE,DELETE",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": ""
+    },
+    "document_attachments": {
+      "domain": "documents",
+      "access": "A",
+      "anon": "",
+      "authenticated": "SELECT,INSERT,UPDATE,DELETE",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": ""
+    },
+    "document_download_events": {
+      "domain": "documents",
+      "access": "B",
+      "anon": "",
+      "authenticated": "SELECT",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "zapis cez esblu_confirm_package_download"
+    },
+    "document_export_package_items": {
+      "domain": "documents",
+      "access": "A",
+      "anon": "",
+      "authenticated": "SELECT,INSERT",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": ""
+    },
+    "document_export_packages": {
+      "domain": "documents",
+      "access": "A",
+      "anon": "",
+      "authenticated": "SELECT,INSERT",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": ""
+    },
+    "document_folder_items": {
+      "domain": "documents",
+      "access": "A",
+      "anon": "",
+      "authenticated": "SELECT,INSERT,DELETE",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": ""
+    },
+    "document_folders": {
+      "domain": "documents",
+      "access": "A",
+      "anon": "",
+      "authenticated": "SELECT,INSERT,UPDATE,DELETE",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": ""
+    },
+    "document_links": {
+      "domain": "documents",
+      "access": "A",
+      "anon": "",
+      "authenticated": "SELECT,INSERT,UPDATE,DELETE",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": ""
+    },
+    "document_review_log": {
+      "domain": "documents",
+      "access": "A",
+      "anon": "",
+      "authenticated": "SELECT,INSERT",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": ""
+    },
+    "documents": {
+      "domain": "documents",
+      "access": "A",
+      "anon": "",
+      "authenticated": "SELECT,INSERT,UPDATE,DELETE",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": ""
+    },
+    "einvoice_enroll_attempts": {
+      "domain": "einvoice",
+      "access": "D",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "limit enroll pokusov — iba service"
+    },
+    "einvoice_event_cursors": {
+      "domain": "einvoice",
+      "access": "D",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT,INSERT,UPDATE",
+      "note": "feed kurzory — iba service"
+    },
+    "einvoice_events": {
+      "domain": "einvoice",
+      "access": "B",
+      "anon": "",
+      "authenticated": "SELECT",
+      "service_role": "SELECT,INSERT",
+      "note": "append-only event feed"
+    },
+    "einvoice_inbound": {
+      "domain": "einvoice",
+      "access": "B",
+      "anon": "",
+      "authenticated": "SELECT",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "finance-gated SELECT; immutable XML metadata"
+    },
+    "einvoice_ops_audit": {
+      "domain": "einvoice",
+      "access": "D",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT,INSERT",
+      "note": "append-only ops audit"
+    },
+    "einvoice_organizations": {
+      "domain": "einvoice",
+      "access": "B",
+      "anon": "",
+      "authenticated": "SELECT",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "finance-gated SELECT; provider stav iba service/RPC"
+    },
+    "einvoice_outbound": {
+      "domain": "einvoice",
+      "access": "B",
+      "anon": "",
+      "authenticated": "SELECT",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "finance-gated SELECT"
+    },
+    "einvoice_rollout": {
+      "domain": "einvoice",
+      "access": "D",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "rollout allowlist (FORCE RLS) — klient iba esblu_einvoice_my_rollout"
+    },
+    "einvoice_webhook_events": {
+      "domain": "einvoice",
+      "access": "B",
+      "anon": "",
+      "authenticated": "SELECT",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "finance-gated SELECT; dedup/stav iba service"
+    },
+    "einvoice_webhook_rejections": {
+      "domain": "einvoice",
+      "access": "D",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "zamietnute webhooky — iba service"
+    },
+    "entitlement_catalog": {
+      "domain": "billing",
+      "access": "C",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "katalog naroku — citany iba RPC"
+    },
+    "esblu_intake_attestations_used": {
+      "domain": "ai",
+      "access": "D",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "jednorazove intake atestacie"
+    },
+    "fx_rate_import_batches": {
+      "domain": "invoicing",
+      "access": "B",
+      "anon": "",
+      "authenticated": "SELECT",
+      "service_role": "SELECT,INSERT",
+      "note": "append-only importy kurzov"
+    },
+    "fx_reference_rates": {
+      "domain": "invoicing",
+      "access": "B",
+      "anon": "",
+      "authenticated": "SELECT",
+      "service_role": "SELECT,INSERT",
+      "note": "oficialne kurzy — import cez esblu_fx_import_ecb_batch"
+    },
+    "inventory_items": {
+      "domain": "assets",
+      "access": "A",
+      "anon": "",
+      "authenticated": "SELECT,INSERT,UPDATE,DELETE",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": ""
+    },
+    "inventory_photos": {
+      "domain": "assets",
+      "access": "A",
+      "anon": "",
+      "authenticated": "SELECT,INSERT,UPDATE,DELETE",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": ""
+    },
+    "invoice_accounting_state": {
+      "domain": "invoicing",
+      "access": "A",
+      "anon": "",
+      "authenticated": "SELECT,INSERT,UPDATE",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": ""
+    },
+    "invoice_accounting_state_log": {
+      "domain": "invoicing",
+      "access": "B",
+      "anon": "",
+      "authenticated": "SELECT",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "append-only log (trigger)"
+    },
+    "invoice_advance_deductions": {
+      "domain": "invoicing",
+      "access": "B",
+      "anon": "",
+      "authenticated": "SELECT",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "zapis cez esblu_set_invoice_advance_deductions"
+    },
+    "invoice_events": {
+      "domain": "invoicing",
+      "access": "B",
+      "anon": "",
+      "authenticated": "SELECT",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "iba SELECT politika"
+    },
+    "invoice_items": {
+      "domain": "invoicing",
+      "access": "A",
+      "anon": "",
+      "authenticated": "SELECT,INSERT,UPDATE,DELETE",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "RLS finance gating"
+    },
+    "invoice_number_sequences": {
+      "domain": "invoicing",
+      "access": "B",
+      "anon": "",
+      "authenticated": "SELECT",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "cislovanie iba finalize RPC"
+    },
+    "invoice_parties": {
+      "domain": "invoicing",
+      "access": "B",
+      "anon": "",
+      "authenticated": "SELECT",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "snapshot pri finalizacii (RPC); iba SELECT politika"
+    },
+    "invoice_payments": {
+      "domain": "invoicing",
+      "access": "B",
+      "anon": "",
+      "authenticated": "SELECT",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "platby cez esblu_add/remove_invoice_payment"
+    },
+    "invoice_tax_breakdowns": {
+      "domain": "invoicing",
+      "access": "B",
+      "anon": "",
+      "authenticated": "SELECT",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "iba SELECT politika"
+    },
+    "invoices": {
+      "domain": "invoicing",
+      "access": "A",
+      "anon": "",
+      "authenticated": "SELECT,INSERT,UPDATE,DELETE",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "RLS finance gating; finalizovane immutable triggerom"
+    },
+    "legal_documents": {
+      "domain": "legal",
+      "access": "E",
+      "anon": "SELECT",
+      "authenticated": "SELECT",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "verejne znenia pravnych dokumentov — jediny anon SELECT"
+    },
+    "machine_photos": {
+      "domain": "assets",
+      "access": "A",
+      "anon": "",
+      "authenticated": "SELECT,INSERT,UPDATE,DELETE",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": ""
+    },
+    "machine_services": {
+      "domain": "assets",
+      "access": "A",
+      "anon": "",
+      "authenticated": "SELECT,INSERT,UPDATE,DELETE",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": ""
+    },
+    "machines": {
+      "domain": "assets",
+      "access": "A",
+      "anon": "",
+      "authenticated": "SELECT,INSERT,UPDATE,DELETE",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": ""
+    },
+    "media_deletion_queue": {
+      "domain": "media",
+      "access": "D",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "fronta mazania medii — iba esblu_media_deletion_sweep / service"
+    },
+    "notification_deliveries": {
+      "domain": "push",
+      "access": "D",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "log dorucenia — iba service"
+    },
+    "notification_preferences": {
+      "domain": "push",
+      "access": "C",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "preferencie cez esblu_push_*_preferences"
+    },
+    "plan_limits": {
+      "domain": "billing",
+      "access": "B",
+      "anon": "",
+      "authenticated": "SELECT",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "verejne limity planu pre prihlaseneho"
+    },
+    "push_devices": {
+      "domain": "push",
+      "access": "C",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "registracia cez esblu_push_register_* RPC"
+    },
+    "push_subscriptions": {
+      "domain": "push",
+      "access": "C",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "web push cez RPC"
+    },
+    "received_advance_links": {
+      "domain": "invoicing",
+      "access": "B",
+      "anon": "",
+      "authenticated": "SELECT",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "zapis cez received_advance_* RPC"
+    },
+    "session_active_company": {
+      "domain": "membership",
+      "access": "B",
+      "anon": "",
+      "authenticated": "SELECT",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "aktivna firma per session; zapis cez RPC"
+    },
+    "settings": {
+      "domain": "company",
+      "access": "A",
+      "anon": "",
+      "authenticated": "SELECT",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "per-user; zapis iba stlpcovo (pozri column_grants); plan sa klientom nemeni",
+      "column_grants": {
+        "authenticated": {
+          "INSERT": [
+            "user_id",
+            "company_name",
+            "logo_path"
+          ],
+          "UPDATE": [
+            "company_name",
+            "logo_path"
+          ]
+        }
+      }
+    },
+    "subscription_accounts": {
+      "domain": "billing",
+      "access": "D",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "billing interne — klient iba cez owner-only RPC (esblu_billing_*)"
+    },
+    "subscription_plan_entitlements": {
+      "domain": "billing",
+      "access": "D",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "billing interne — klient iba cez owner-only RPC (esblu_billing_*)"
+    },
+    "subscription_plans": {
+      "domain": "billing",
+      "access": "D",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "billing interne — klient iba cez owner-only RPC (esblu_billing_*)"
+    },
+    "trial_claims": {
+      "domain": "trial",
+      "access": "D",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT,INSERT,UPDATE",
+      "note": "trvala anti-abuse historia (hash) — nikdy klient"
+    },
+    "user_active_company": {
+      "domain": "membership",
+      "access": "B",
+      "anon": "",
+      "authenticated": "SELECT",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "zapis cez esblu_set_my_active_company"
+    },
+    "user_legal_acceptances": {
+      "domain": "legal",
+      "access": "B",
+      "anon": "",
+      "authenticated": "SELECT",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "zapis cez accept_legal_document_* RPC"
+    },
+    "vehicle_photos": {
+      "domain": "assets",
+      "access": "A",
+      "anon": "",
+      "authenticated": "SELECT,INSERT,UPDATE,DELETE",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": ""
+    },
+    "vehicle_services": {
+      "domain": "assets",
+      "access": "A",
+      "anon": "",
+      "authenticated": "SELECT,INSERT,UPDATE,DELETE",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": ""
+    },
+    "vehicle_vignettes": {
+      "domain": "assets",
+      "access": "A",
+      "anon": "",
+      "authenticated": "SELECT,INSERT,UPDATE,DELETE",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": ""
+    },
+    "vehicles": {
+      "domain": "assets",
+      "access": "A",
+      "anon": "",
+      "authenticated": "SELECT,INSERT,UPDATE,DELETE",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": ""
+    }
+  },
+  "service_role_functions": [
+    "esblu_accept_company_invite(text)",
+    "esblu_account_deletion_commit(text,uuid,uuid,boolean)",
+    "esblu_active_membership_for_user(uuid)",
+    "esblu_active_membership_for_user(uuid,uuid)",
+    "esblu_billing_apply_charge(uuid,text,jsonb)",
+    "esblu_billing_apply_event(uuid,jsonb)",
+    "esblu_billing_attach_checkout_session(uuid,text)",
+    "esblu_billing_authorize_manage()",
+    "esblu_billing_blocks_account_deletion(text,text,boolean)",
+    "esblu_billing_canonical_statuses()",
+    "esblu_billing_claim_store_reports(integer)",
+    "esblu_billing_close_event(uuid,text,text,jsonb)",
+    "esblu_billing_complete_store_report(uuid,boolean,text)",
+    "esblu_billing_create_checkout_intent(text,text)",
+    "esblu_billing_create_purchase_intent(text,text,text,text,text,text,text)",
+    "esblu_billing_explain_my_entitlements()",
+    "esblu_billing_issue_account_token(text)",
+    "esblu_billing_list_plans()",
+    "esblu_billing_manage_here(text,text)",
+    "esblu_billing_managed_via(text)",
+    "esblu_billing_method_info(text)",
+    "esblu_billing_my_access()",
+    "esblu_billing_my_intent(uuid)",
+    "esblu_billing_ops_status(uuid)",
+    "esblu_billing_purchase_options(text,text)",
+    "esblu_billing_queue_store_report(uuid,jsonb)",
+    "esblu_billing_reconcile_candidates(integer)",
+    "esblu_billing_reconcile_record(uuid,text,text)",
+    "esblu_billing_reconcile_requeue(uuid)",
+    "esblu_billing_record_event(text,text,text,text,timestamp with time zone,text)",
+    "esblu_billing_resolve_methods(text,text)",
+    "esblu_billing_resolve_price(text,text,text,text)",
+    "esblu_billing_status_is_entitling(text)",
+    "esblu_billing_status_is_open(text)",
+    "esblu_billing_status_is_terminal(text)",
+    "esblu_billing_sync_entitlements(uuid)",
+    "esblu_can_delete_media_object(text,text)",
+    "esblu_can_read_media_object(text,text)",
+    "esblu_can_upload_media_object(text,text)",
+    "esblu_claim_key(text,text)",
+    "esblu_company_deletion_retention_blocker(uuid)",
+    "esblu_company_plan(uuid)",
+    "esblu_create_company_invite(text,text)",
+    "esblu_create_my_company(text)",
+    "esblu_einvoice_claim_inbound(integer,integer)",
+    "esblu_einvoice_claim_outbound(text,integer,integer,integer)",
+    "esblu_einvoice_claim_outbound_by_submission(uuid,text,integer)",
+    "esblu_einvoice_enroll_attempt_begin(uuid,uuid)",
+    "esblu_einvoice_enroll_attempt_finish(uuid,text)",
+    "esblu_einvoice_event_cursor_advance(text,text,uuid,bigint,boolean,text)",
+    "esblu_einvoice_event_cursor_claim(text,text,integer)",
+    "esblu_einvoice_event_cursor_rewind(text,text,bigint,text,text)",
+    "esblu_einvoice_event_ops()",
+    "esblu_einvoice_event_requeue(uuid,text,text)",
+    "esblu_einvoice_event_resolve(uuid,text,text)",
+    "esblu_einvoice_health(integer,integer)",
+    "esblu_einvoice_inbound_create_draft(uuid,jsonb)",
+    "esblu_einvoice_inbound_register(text,text,text,text,text,jsonb)",
+    "esblu_einvoice_inbound_transition(uuid,text,text,text,text,jsonb)",
+    "esblu_einvoice_operator_begin(uuid,text,uuid,text,text,integer,integer)",
+    "esblu_einvoice_org_apply_enroll(text,text,text,text,text,text,text)",
+    "esblu_einvoice_org_participant_event(text,text,text,text,text,text,timestamp with time zone)",
+    "esblu_einvoice_org_upsert_provisioned(uuid,text,text,text,text,text,text,text,boolean,jsonb)",
+    "esblu_einvoice_outbound_record_transport(uuid,text,text,text)",
+    "esblu_einvoice_outbound_transition(uuid,text,text,text,text,jsonb)",
+    "esblu_einvoice_outcomes_24h()",
+    "esblu_einvoice_request_outbound(uuid,uuid,text,text,text,integer,text)",
+    "esblu_einvoice_rollout_allowed(uuid,text)",
+    "esblu_einvoice_storage_consistency()",
+    "esblu_einvoice_webhook_complete(uuid,text,text)",
+    "esblu_einvoice_webhook_record(text,text,text,text,text,text)",
+    "esblu_einvoice_webhook_rejection_record(text,text,text)",
+    "esblu_einvoice_webhook_retention(integer,integer)",
+    "esblu_einvoice_webhook_retry(uuid,integer)",
+    "esblu_ensure_my_owner_company()",
+    "esblu_finalize_ai_processing(uuid,boolean)",
+    "esblu_fx_import_ecb_batch(text,text,date,date,jsonb)",
+    "esblu_fx_official_rate(text,date)",
+    "esblu_get_my_checkout_status(uuid)",
+    "esblu_get_my_company_entitlements()",
+    "esblu_get_my_subscription()",
+    "esblu_legal_entity_key(text,text)",
+    "esblu_list_my_companies()",
+    "esblu_media_deletion_sweep(integer)",
+    "esblu_media_role_allows(text,text)",
+    "esblu_member_delete_self(uuid)",
+    "esblu_member_leave_company(uuid,uuid)",
+    "esblu_my_active_membership()",
+    "esblu_my_company_legal_identity()",
+    "esblu_my_company_trial_eligibility()",
+    "esblu_normalize_registration_id(text,text)",
+    "esblu_operator_grant_team_allowance(uuid,integer,text)",
+    "esblu_operator_override_company_trial(uuid)",
+    "esblu_owner_delete_company(uuid)",
+    "esblu_owner_delete_company(uuid,uuid)",
+    "esblu_push_chat_recipients(uuid)",
+    "esblu_push_companies_with_targets()",
+    "esblu_push_delivery_targets(uuid,uuid[])",
+    "esblu_push_record_outcome(text,uuid,text)",
+    "esblu_push_revoke_ended()",
+    "esblu_record_company_legal_identity(uuid,text,text,boolean,text)",
+    "esblu_record_company_legal_identity_attempt(uuid,text,text,text)",
+    "esblu_request_session_id()",
+    "esblu_require_my_entitlement(text)",
+    "esblu_reserve_ai_processing(text,text,text)",
+    "esblu_resolve_entitlement(uuid,text)",
+    "esblu_set_my_active_company(uuid)",
+    "esblu_try_claim_company_trial(uuid)",
+    "esblu_user_global_cleanup(uuid)"
+  ]
+}

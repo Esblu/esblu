@@ -51,6 +51,7 @@
     "test:google-oauth-db": "node --experimental-strip-types --no-warnings scripts/google-oauth-pglite-tests.ts",
     "test:storage-media": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/storage-media-tests.ts",
     "test:storage-media-db": "node --experimental-strip-types --no-warnings scripts/storage-media-privacy-pglite-tests.ts",
+    "test:grants-replay-db": "node --experimental-strip-types --no-warnings scripts/grants-replay-pglite-tests.ts",
     "test:idempotency-db": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/idempotency-pglite-tests.ts",
     "test:voice-hardening": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/voice-hardening-tests.ts",
     "test:dashboard-cylinder": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/dashboard-cylinder-tests.ts",
