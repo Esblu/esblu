@@ -1,10 +1,19 @@
 # Esblu — MASTER PRE-LAUNCH CHECKLIST
 
 Kanonický zoznam všetkého, čo musí byť hotové pred verejným spustením. Aktualizovať pri každom bloku.
-Posledná aktualizácia: **2026-10-22** (branch `preprod-release-candidate` — **PRE-LAUNCH TECHNICAL BLOCKERS: PASS**, sekcia **J5**; predtým GRANULAR TEAM PERMISSIONS: PASS, sekcia **J4**).
+Posledná aktualizácia: **2026-10-22** (branch `preprod-release-candidate` — **CHECKLIST RECONCILIATION** na RC `c3a8650`, sekcie **M–P**;
+predtým PRE-LAUNCH TECHNICAL BLOCKERS: PASS, sekcia **J5**; GRANULAR TEAM PERMISSIONS: PASS, sekcia **J4**).
 
-Statusy: **PASS** · **READY** (pripravené, čaká na vykonanie/súhlas) · **BLOCKED LEGAL** · **BLOCKED EXTERNAL** ·
-**TODO** · **NOT YET RUN**
+Statusy: **PASS** · **READY** (pripravené, čaká na vykonanie/súhlas) · **BLOCKED LEGAL** (CLIA) · **BLOCKED EXTERNAL** ·
+**TODO** · **NOT YET RUN** · **PENDING APPROVAL** · **PENDING DECISION** · **ALREADY DONE** (predtým vedené ako otvorené).
+
+Blocker štítky (kto blokuje ďalší krok): `OWNER DECISION` · `CLIA` · `ACCOUNTANT` · `GOOGLE PLAY` · `APPLE` ·
+`PRODUCTION APPROVAL` · `EXTERNAL PROVIDER` · `FINAL QA`.
+
+> **Reconciliation 2026-10-22:** statusy boli porovnané s históriou RC (`c3a8650`), dokumentáciou v `docs/` a
+> `release/play-submission/` a s potvrdeniami vlastníka. Stav Google Play Console nie je v Gite — položky F označené
+> „potvrdené vlastníkom“ vychádzajú z jeho potvrdenia z 2026-10-22 (Claude do Play Console nezasahoval ani ho nemenil).
+> Súhrn zmien a TOP blockery: sekcie **M–P** na konci.
 
 ## ⛔ PRODUCTION HARD STOPS — vyžadujú VÝSLOVNÝ súhlas majiteľa
 
@@ -52,113 +61,133 @@ Statusy: **PASS** · **READY** (pripravené, čaká na vykonanie/súhlas) · **B
 | eInvoice migrácie + `20261013100000` na stagingu | PASS (eInvoice cez 100011 už v histórii — nespúšťané znova; 20261013100000 aplikovaná) |
 | eInvoice multi-company / roly / RLS na stagingu (reálny Postgres) | PASS (SZČO 2 sessions, 5 rolí, cudzí owner; audit §13) |
 | eInvoice finálny staging QA (sandbox provider HTTP E2E) | PASS (2026-10-14, RC `48456f1`, eFaktura.sk sandbox × `esblu-test`; audit §14) |
-| subscriptions staging QA (fake/test provider) | NOT YET RUN (po integrácii) |
+| subscriptions staging QA (fake/test provider) | ALREADY DONE — `docs/subscriptions-production-readiness-2026-10-11.md` §15 (migrácie, RBAC, 10-backend concurrency, reconciliation, entitlement E2E); po integrácii owner-only billing PASS (A). E2E so skutočnými store produktmi patrí do **K** (`FINAL QA`) |
 | finálny staging schema fingerprint | PASS (pred/po v audite §13; dáta bez zmeny) |
 
 ## C. LEGAL / CLIA
 
-| položka | status |
-|---|---|
-| privacy policy (finálna) | BLOCKED LEGAL |
-| zoznam subprocesorov | BLOCKED LEGAL |
-| OpenAI (DPA, prenos) | BLOCKED LEGAL |
-| Firebase / FCM | BLOCKED LEGAL |
-| Stripe | BLOCKED LEGAL |
-| Google Play | BLOCKED LEGAL |
-| Apple | BLOCKED LEGAL |
-| e-Faktúra provider (zmluva, DPA) | BLOCKED LEGAL |
-| retencia (účtovné záznamy, e-faktúry, XML) | BLOCKED LEGAL |
-| texty zrušenia účtu / odchodu z firmy | BLOCKED LEGAL |
-| retencia hashovaných trial claimov | BLOCKED LEGAL |
-| obchodné podmienky predplatného | BLOCKED LEGAL |
-| refund policy | BLOCKED LEGAL |
-| merchant-of-record rozhodnutia | BLOCKED LEGAL |
-| B2B/B2C DPH / OSS | BLOCKED LEGAL |
-| Data Safety odpovede (Play) / App Privacy (Apple) | BLOCKED LEGAL |
-| autor účtovných záznamov pri zrušení loginu (pseudonymizácia) | BLOCKED LEGAL |
+CLIA očakáva prvé drafty v **prvej polovici novembra 2026** (ak nepríde ďalšia zásadná zmena scope). Claude nerobí právne
+rozhodnutia — všetko nižšie ostáva `CLIA`, kým nepríde schválený text / stanovisko.
+
+| položka | status | blocker |
+|---|---|---|
+| privacy policy (finálna) | BLOCKED LEGAL | `CLIA` |
+| zoznam subprocesorov | BLOCKED LEGAL | `CLIA` |
+| OpenAI (DPA, prenos) | BLOCKED LEGAL | `CLIA` |
+| Firebase / FCM | BLOCKED LEGAL | `CLIA` |
+| Stripe | BLOCKED LEGAL | `CLIA` |
+| Google Play (zmluvná rola, billing) | BLOCKED LEGAL | `CLIA` |
+| Apple (zmluvná rola, billing) | BLOCKED LEGAL | `CLIA` |
+| e-Faktúra provider — zmluva, DPA, **rola providera** (sprostredkovateľ vs. samostatný prevádzkovateľ) | BLOCKED LEGAL | `CLIA` · `EXTERNAL PROVIDER` |
+| retencia (účtovné záznamy, e-faktúry, XML, archív) | BLOCKED LEGAL | `CLIA` · `ACCOUNTANT` |
+| texty zrušenia účtu / odchodu z firmy (account deletion wording) | BLOCKED LEGAL | `CLIA` |
+| nevyčerpané predplatné / refund wording pri zrušení | BLOCKED LEGAL | `CLIA` |
+| retencia hashovaných trial claimov | BLOCKED LEGAL | `CLIA` |
+| obchodné podmienky predplatného | BLOCKED LEGAL | `CLIA` |
+| refund policy | BLOCKED LEGAL | `CLIA` |
+| merchant-of-record rozhodnutia | BLOCKED LEGAL | `CLIA` |
+| B2B/B2C DPH / OSS | BLOCKED LEGAL | `CLIA` · `ACCOUNTANT` |
+| finančné roly (účtovník / finance view — rozsah prístupu) | BLOCKED LEGAL | `CLIA` |
+| autor účtovných záznamov pri zrušení loginu (former-user attribution / história, pseudonymizácia) | BLOCKED LEGAL | `CLIA` |
+| Data Safety odpovede (Play) | BLOCKED LEGAL | `CLIA` → `GOOGLE PLAY` |
+| App Privacy (Apple) | BLOCKED LEGAL | `CLIA` → `APPLE` |
+| CLIA delta: granular internal role permissions (J4) — iba informatívne | READY (na odovzdanie) | `CLIA` |
 
 ## D. ACCOUNTING — ACCOUNTING DECISION REQUIRED
 
-| položka | status |
-|---|---|
-| ne-ECB kurzy (FX) | BLOCKED LEGAL (accountant) |
-| dátum prijatej zahraničnej faktúry | BLOCKED LEGAL (accountant) |
-| oprava DPH pri vrátenej zdanenej zálohe / bonuse | BLOCKED LEGAL (accountant) |
-| úloha e-Faktúry v archivácii (archív vs. kópia) | BLOCKED LEGAL (accountant) |
+Technicky sa nerozhoduje — kód ostáva pri aktuálnom správaní, kým účtovník/CLIA nerozhodne.
+
+| položka | status | blocker |
+|---|---|---|
+| ne-ECB kurzy (FX) | BLOCKED EXTERNAL / ACCOUNTANT-CLIA DECISION | `ACCOUNTANT` |
+| dátum prijatej zahraničnej faktúry | BLOCKED EXTERNAL / ACCOUNTANT-CLIA DECISION | `ACCOUNTANT` |
+| oprava DPH pri vrátenej zdanenej zálohe / bonuse | BLOCKED EXTERNAL / ACCOUNTANT-CLIA DECISION | `ACCOUNTANT` |
+| úloha e-Faktúry v archivácii / retencii (archív vs. kópia) | BLOCKED EXTERNAL / ACCOUNTANT-CLIA DECISION | `ACCOUNTANT` · `CLIA` |
 
 ## E. BILLING / SUBSCRIPTIONS
 
-| položka | status |
-|---|---|
-| rozhodnutie o cenách | TODO (biznis) |
-| cena per firma | TODO (biznis) |
-| multi-company zľava / balík | TODO (biznis) |
-| e-Faktúra free / platený addon / v pláne | TODO (biznis) |
-| Stripe test integrácia | READY (fake/test v kóde) |
-| Google Play test produkt | BLOCKED EXTERNAL |
-| license testers | BLOCKED EXTERNAL |
-| Play service account | BLOCKED EXTERNAL |
-| RTDN | BLOCKED EXTERNAL |
-| Apple IAP produkty | BLOCKED EXTERNAL |
-| Mac StoreKit compile | NOT YET RUN |
-| schválenie live aktivácie | ⛔ hard stop |
+Technická pripravenosť ≠ business rozhodnutie. Architektúra je READY; ceny, balíky a store produkty ostávajú otvorené.
+
+| položka | status | blocker |
+|---|---|---|
+| owner-only billing model | PASS | — (A; staging 5 rolí + cross-company) |
+| billing architektúra (platforma, entitlementy, lifecycle, reconciliation) | READY | — (`docs/subscriptions-production-readiness-2026-10-11.md`; staging §15) |
+| rozhodnutie o cenách | PENDING DECISION | `OWNER DECISION` |
+| cena per firma | PENDING DECISION | `OWNER DECISION` |
+| multi-company zľava / balík | PENDING DECISION | `OWNER DECISION` |
+| e-Faktúra free / platený addon / v pláne | PENDING DECISION | `OWNER DECISION` |
+| Stripe test integrácia | READY (fake/test v kóde) | — |
+| Google Play subscription produkty / base plany | TODO (Play app už existuje — čaká na ceny) | `OWNER DECISION` → `GOOGLE PLAY` |
+| license testers | TODO (už nie je blokované účtom) | `GOOGLE PLAY` |
+| Play service account (minimálne práva) | TODO (už nie je blokované účtom) | `GOOGLE PLAY` · `PRODUCTION APPROVAL` (secret) |
+| RTDN (Pub/Sub) | TODO (už nie je blokované účtom) | `GOOGLE PLAY` · `PRODUCTION APPROVAL` |
+| Apple IAP produkty | BLOCKED EXTERNAL (App Store Connect nie je nastavený) | `APPLE` · `OWNER DECISION` |
+| Mac StoreKit compile | NOT YET RUN | `APPLE` |
+| live Stripe aktivácia | ⛔ PENDING APPROVAL | `OWNER DECISION` · `PRODUCTION APPROVAL` |
+| store billing aktivácia (Play / Apple) | ⛔ PENDING APPROVAL | `OWNER DECISION` · `PRODUCTION APPROVAL` |
 
 ## F. GOOGLE PLAY
 
-| položka | status |
-|---|---|
-| developer účet overený | BLOCKED EXTERNAL |
-| app vytvorená | BLOCKED EXTERNAL |
-| content rating | TODO |
-| ads declaration | TODO |
-| financial features | TODO |
-| health | TODO |
-| government | TODO |
-| kategória | TODO |
-| privacy policy URL | BLOCKED LEGAL |
-| Data Safety | BLOCKED LEGAL |
-| target audience 18+ | TODO |
-| reviewer účet | ⛔ hard stop |
-| store listing, screenshoty, feature graphic | TODO |
-| Internal Testing AAB | NOT YET RUN |
-| Play App Signing + App Signing SHA-256 | BLOCKED EXTERNAL |
-| assetlinks produkčná aktualizácia | ⛔ hard stop |
-| closed / production rollout | TODO |
+Stav podľa potvrdenia vlastníka (2026-10-22). Žiadne nové store zmeny neboli v rámci reconciliation vykonané.
+
+| položka | status | blocker / poznámka |
+|---|---|---|
+| organizačný developer účet overený | ALREADY DONE (PASS) | potvrdené vlastníkom 2026-10-22 (pôvodne „BLOCKED EXTERNAL“) |
+| app vytvorená (`com.esblu.app`) | ALREADY DONE (PASS) | potvrdené vlastníkom 2026-10-22 (pôvodne „BLOCKED EXTERNAL“) |
+| ads declaration | ALREADY DONE (PASS) — **No** | merged manifest bez `AD_ID`, žiadne ads SDK |
+| content rating (IARC) | ALREADY DONE (PASS) — **PEGI 3** | |
+| kategória | ALREADY DONE (PASS) — **Business** | |
+| základný app setup (názov, jazyk, free app) | ALREADY DONE (PASS) | |
+| target audience 18+ | PENDING DECISION (finálne potvrdenie 18+) | `OWNER DECISION` |
+| financial features | TODO (návrh „no financial features“, `release/play-submission/05`) | `OWNER DECISION` |
+| health / government deklarácie | TODO (očakávané „nie“) | `OWNER DECISION` |
+| privacy policy URL | READY (URL existuje, 200) / finálny text BLOCKED LEGAL | `CLIA` |
+| Data Safety | BLOCKED LEGAL (draft `release/play-submission/04`) | `CLIA` → `GOOGLE PLAY` |
+| reviewer / demo účet | TODO — nevytvorený; zápis do produkcie ⛔ PENDING APPROVAL | `PRODUCTION APPROVAL` |
+| store listing SK/EN, ikona 512, feature graphic | READY (draft v `release/play-submission/`) | `OWNER DECISION` (schválenie textov / variantu grafiky) |
+| screenshoty | TODO (capture z demo účtu po finálnom AAB) | `FINAL QA` |
+| Internal Testing / finálny store release flow | NOT YET RUN / neuzavretý | `GOOGLE PLAY` · `FINAL QA` |
+| Play App Signing + App Signing SHA-256 | TODO (aktivuje sa / potvrdí pri prvom uploade AAB) | `GOOGLE PLAY` |
+| assetlinks produkčná aktualizácia (Play SHA-256) | ⛔ PENDING APPROVAL (po Play App Signing) | `GOOGLE PLAY` · `PRODUCTION APPROVAL` |
+| closed / production rollout | NOT YET RUN | `PRODUCTION APPROVAL` |
 
 ## G. APPLE
 
-| položka | status |
-|---|---|
-| App Store Connect setup | BLOCKED EXTERNAL |
-| privacy disclosures | BLOCKED LEGAL |
-| IAP produkty | BLOCKED EXTERNAL |
-| StoreKit compile / test | NOT YET RUN |
-| screenshoty / listing | TODO |
-| review účet | ⛔ hard stop |
-| TestFlight | NOT YET RUN |
-| production rollout | TODO |
+Nič z Apple nie je hotové — nič sa neoznačuje PASS.
+
+| položka | status | blocker |
+|---|---|---|
+| App Store Connect setup | BLOCKED EXTERNAL | `APPLE` |
+| privacy disclosures (App Privacy) | BLOCKED LEGAL | `CLIA` → `APPLE` |
+| IAP produkty | BLOCKED EXTERNAL | `APPLE` · `OWNER DECISION` (ceny) |
+| StoreKit compile / test | NOT YET RUN | `APPLE` |
+| screenshoty / listing | TODO | `APPLE` |
+| review účet | TODO; ⛔ PENDING APPROVAL (zápis do produkcie) | `PRODUCTION APPROVAL` |
+| TestFlight | NOT YET RUN | `APPLE` |
+| production rollout | NOT YET RUN | `PRODUCTION APPROVAL` |
 
 ## H. WEB
 
-| položka | status |
-|---|---|
-| nový dashboard — produkčný merge / deploy | ⛔ hard stop (READY v RC) |
-| `/zrusenie-uctu` v produkcii | READY (RC) |
-| privacy / legal stránky | BLOCKED LEGAL |
-| billing web (Stripe) | READY (test) / ⛔ live |
-| Vercel plán podporuje minútové crony (e-Faktúra) | VERCEL PLAN CONFIRMATION REQUIRED (plán nie je čitateľný cez API; preview READY nie je autoritatívny dôkaz) |
-| produkčný monitoring | TODO |
+| položka | status | blocker |
+|---|---|---|
+| nový dashboard — produkčný merge / deploy | ⛔ PENDING APPROVAL (READY v RC) | `PRODUCTION APPROVAL` |
+| `/zrusenie-uctu` v produkcii | READY (RC) — live až po deploy | `PRODUCTION APPROVAL` |
+| privacy / legal stránky (finálne texty) | BLOCKED LEGAL | `CLIA` |
+| billing web (Stripe) | READY (test) / ⛔ live | `OWNER DECISION` · `PRODUCTION APPROVAL` |
+| Vercel plán podporuje minútové crony (e-Faktúra) | ALREADY DONE (PASS) — **VERCEL 1-MINUTE CRON: SUPPORTED** (J5; Pro plán) | — |
+| produkčný monitoring | TODO (nie launch blocker — vedomé rozhodnutie v `docs/data-breach-procedure.md`; v rollout kroku L13) | `OWNER DECISION` |
 
 ## I. ANDROID
 
-| položka | status |
-|---|---|
-| finálny AAB build | NOT YET RUN |
-| signing | BLOCKED EXTERNAL |
-| billing ON/OFF matica | PASS (debug, RC kit) |
-| manifest / permissions / targetSdk | PASS (RC audit) |
-| secret scan produkčného bundlu | NOT YET RUN (finálny) |
-| reálny test inštalácie z Play | NOT YET RUN |
+| položka | status | blocker |
+|---|---|---|
+| finálny release AAB (z finálneho RC) | NOT YET RUN (`vc1` z 2026-10-10 je zastaraný — nie je finálny release build) | `FINAL QA` (po C/E/F) |
+| upload key signing | READY (upload key mimo repa, `scripts/verify-release-aab.py` PASS; `docs/android-release-aab-2026-10-10.md`) | — |
+| Play App Signing | TODO (pri prvom uploade) | `GOOGLE PLAY` |
+| billing ON/OFF matica | PASS (debug, RC kit) | — |
+| manifest / permissions / targetSdk | PASS (RC audit) | — |
+| secret scan produkčného bundlu | NOT YET RUN (finálny) | `FINAL QA` |
+| reálny test inštalácie z Play | NOT YET RUN | `FINAL QA` |
 
 ## J. SECURITY
 
@@ -169,10 +198,10 @@ Statusy: **PASS** · **READY** (pripravené, čaká na vykonanie/súhlas) · **B
 | secrets (žiadne v repe, server-only) | PASS (scan) |
 | signed URL / media model | PASS (staging DB politiky = produkcia; reálny HTTP smoke 25/0 — J5) |
 | poradie zrušenia účtu (DB → Storage → auth) | PASS |
-| logovanie / PII (webhook payloady) | TODO (audit pri integrácii) |
+| logovanie / PII (webhook payloady) | TODO (audit pri integrácii live providerov; billing token redakcia už PASS — subscriptions §15.6) |
 | zálohy | PASS — scheduled physical daily backups ACTIVE (overené vlastníkom v Dashboarde, najnovší 22 Oct 2026 02:38:07 UTC); PITR DISABLED / OPTIONAL ADD-ON (nie blocker); pred oknom znova potvrdiť čerstvý úspešný backup (J5) |
 | rollback plány | READY — per skupina v `docs/production-migration-runbook-2026-10-22.md` §G (vrátane „podmienečne“ / „STAGING ONLY“ výhrad) |
-| observability | TODO |
+| observability | TODO (spolu s produkčným monitoringom, H; nie launch blocker) |
 | Preview `OPENAI_API_KEY` Vercel warning „Needs Attention“ (`readable-secret`) | EXPECTED — Preview hodnota = nefunkčný sentinel `preview-disabled` (overené 2026-10-22 bez výpisu hodnoty), OpenAI v Preview zámerne vypnuté; Production `OPENAI_API_KEY` = samostatný Sensitive secret, len production target, nedotknutý; no action required before launch |
 | Preview AI fail-closed (voice, assistant, AI dokumenty) | PASS — všetky OpenAI routes vracajú 503 `AI_UNAVAILABLE` pred kvótou / nahratím / volaním OpenAI (`test:ai-preview-disabled`); scan routes doplnené 2026-10-22 |
 
@@ -259,7 +288,8 @@ Produkcia iba čítaná (read-only SELECT, Vercel GET) — žiadny zápis, migr�
 
 ## K. FINAL FULL SMOKE — spustiť IBA keď finálny RC obsahuje multi-company + eInvoice + voice + billing + finálnu legal/store konfiguráciu
 
-Status: **NOT YET RUN.** Rozsah: mobil + desktop; auth, Google login, multi-company, roly, faktúry, e-Faktúra
+Status: **NOT YET RUN** (`FINAL QA`) — zámerne sa nespúšťa teraz. Predpoklady: CLIA/legal texty, finálna billing/store
+konfigurácia, finálny AAB, release settings, production deployment candidate. Rozsah: mobil + desktop; auth, Google login, multi-company, roly, faktúry, e-Faktúra
 odoslanie/príjem, partneri, vozidlá, stroje, sklad, súbory, chat, hlas, push, billing, zrušenie účtu, offline,
 reconnect, oprávnenia, notifikácie, aplikácia nainštalovaná z obchodu.
 
@@ -284,3 +314,73 @@ Autoritatívny postup: `docs/production-migration-runbook-2026-10-22.md` (38 mig
 13. monitoring
 14. pilot
 15. širší rollout
+
+## M. QA FIXTURES (staging `cjbdijbbcujvmrzezusd`)
+
+| položka | status | poznámka |
+|---|---|---|
+| QA UX Firma A / B, účty `qa-ux-*@esblu-qa.invalid` (vrátane `qa-ux-a-signedurl@…`, `qa-ux-b-foreign@…`) | RETAINED FOR REGRESSION QA | iba staging; produkcia ich neobsahuje |
+| cleanup QA fixtures | TODO AFTER RELEASE VALIDATION | skript pripravený; spustí sa iba po výslovnom pokyne (vyžaduje súhlas s dočasným vypnutím triggerov pre syntetické finalizované faktúry) |
+
+## N. PRODUKTOVÝ SCOPE — NO FEATURE CREEP BEFORE LAUNCH
+
+Zásada: **do uzavretia legal / store / release bodov (C, D, E, F, G, K, L) sa nepridáva nový scope.** Nepridávať najmä:
+
+- bankovú integráciu,
+- CRM,
+- GPS / fleet tracking,
+- mzdy (payroll),
+- dochádzku (attendance),
+- nových externých providerov / subprocesorov,
+- nový väčší GDPR scope (nové kategórie údajov, účely, prenosy).
+
+Povolené pred launchom: opravy bugov, bezpečnostné opravy, zmeny vyžiadané CLIA / účtovníkom / store review a release
+konfigurácia. Každá výnimka = výslovné rozhodnutie vlastníka + CLIA delta.
+
+## O. RECONCILIATION LOG (2026-10-22, RC `c3a8650`)
+
+Docs-only audit; žiadny kód, DB, produkcia, secrets, legal texty ani billing konfigurácia sa nemenili.
+
+| sekcia | položka | pôvodne | teraz | dôvod |
+|---|---|---|---|---|
+| B | subscriptions staging QA | NOT YET RUN | ALREADY DONE | subscriptions readiness §15 (2026-10-11) + owner-only billing PASS v A |
+| E | Google Play test produkt | BLOCKED EXTERNAL | TODO (`OWNER DECISION` → `GOOGLE PLAY`) | Play app existuje; čaká na ceny |
+| E | license testers / service account / RTDN | BLOCKED EXTERNAL | TODO (`GOOGLE PLAY`) | developer účet + app už existujú |
+| E | ceny / per firma / bundle / e-Faktúra | TODO (biznis) | PENDING DECISION (`OWNER DECISION`) | oddelené od technickej pripravenosti |
+| F | organizačný developer účet | BLOCKED EXTERNAL | ALREADY DONE | potvrdené vlastníkom |
+| F | app vytvorená | BLOCKED EXTERNAL | ALREADY DONE | potvrdené vlastníkom |
+| F | ads declaration | TODO | ALREADY DONE (No) | potvrdené vlastníkom |
+| F | content rating | TODO | ALREADY DONE (PEGI 3) | potvrdené vlastníkom |
+| F | kategória | TODO | ALREADY DONE (Business) | potvrdené vlastníkom |
+| F | target audience 18+ | TODO | PENDING DECISION (`OWNER DECISION`) | čaká na finálne potvrdenie 18+ |
+| F | privacy policy URL | BLOCKED LEGAL | READY (URL) / text BLOCKED LEGAL | URL existuje, finálny text čaká na CLIA |
+| F | reviewer účet | ⛔ hard stop | TODO + ⛔ PENDING APPROVAL | nevytvorený; zápis do produkcie vyžaduje súhlas |
+| F | store listing / feature graphic | TODO | READY (draft) | `release/play-submission/` (01, 02) |
+| F | Play App Signing | BLOCKED EXTERNAL | TODO (`GOOGLE PLAY`) | účet overený; aktivuje sa pri prvom uploade |
+| H | Vercel minútové crony | VERCEL PLAN CONFIRMATION REQUIRED | ALREADY DONE (PASS) | J5: 1-MINUTE CRON SUPPORTED |
+| I | signing | BLOCKED EXTERNAL | READY (upload key) + TODO (Play App Signing) | upload key existuje a je overený |
+| C | — | — | doplnené: nevyčerpané predplatné/refund wording, rola e-Faktúra providera, finančné roly, Play Data Safety / Apple App Privacy rozdelené | podľa open points CLIA |
+| D | 4 účtovné body | BLOCKED LEGAL (accountant) | BLOCKED EXTERNAL / ACCOUNTANT-CLIA DECISION | správne priradenie blockera |
+
+Nezmenené (overené ako stále správne): A, J, J2–J5, K, L, G (Apple — nič nie je hotové), produkčné hard stops.
+
+## P. TOP REMAINING PRE-LAUNCH BLOCKERS
+
+Praktické poradie. Technické blokery (J5) sú PASS — zvyšok sú rozhodnutia, externé strany a schválenia.
+
+| # | blocker | štítok | závisí od |
+|---|---|---|---|
+| 1 | CLIA drafty: privacy policy, subprocesori, retencia, account deletion + nevyčerpané predplatné/refund wording, rola a archív e-Faktúra providera, finančné roly, former-user attribution (očakávané 1. polovica novembra 2026) | `CLIA` | — |
+| 2 | Účtovné rozhodnutia: ne-ECB FX, dátum prijatej zahraničnej faktúry, oprava DPH pri vrátenej zdanenej zálohe/bonuse, archív/retencia e-Faktúry | `ACCOUNTANT` · `CLIA` | — |
+| 3 | Ceny: cena za firmu, multi-company zľava/balík, e-Faktúra free/paid/included | `OWNER DECISION` | — |
+| 4 | Play target audience 18+, financial features / health / government deklarácie | `OWNER DECISION` · `GOOGLE PLAY` | — |
+| 5 | Play Data Safety + Apple App Privacy (vyplniť podľa CLIA) | `CLIA` · `GOOGLE PLAY` · `APPLE` | 1 |
+| 6 | Store billing produkty a konfigurácia: Play subscription produkty, license testers, service account, RTDN; Apple App Store Connect + IAP + StoreKit | `GOOGLE PLAY` · `APPLE` · `OWNER DECISION` | 3 |
+| 7 | Reviewer / demo účet v produkcii (allowlist + demo firma) | `PRODUCTION APPROVAL` | 8 |
+| 8 | Produkčná migrácia (38 migrácií, runbook READY, precheck 0 STOP / 0 WARN, backup potvrdiť znova pred oknom) | `PRODUCTION APPROVAL` | — |
+| 9 | Merge RC → `main` + produkčný deploy (dashboard, `/zrusenie-uctu`, crony) | `PRODUCTION APPROVAL` | 8 |
+| 10 | Live aktivácie: e-Faktúra live env + webhook, Stripe live, store billing | `PRODUCTION APPROVAL` · `EXTERNAL PROVIDER` · `OWNER DECISION` | 3, 6, 9 |
+| 11 | Finálny release AAB → Internal Testing → Play App Signing → produkčné `assetlinks.json` | `FINAL QA` · `GOOGLE PLAY` · `PRODUCTION APPROVAL` | 1–6, 9 |
+| 12 | Apple: TestFlight, listing/screenshoty (ak je iOS súčasťou launchu) | `APPLE` · `OWNER DECISION` | 5, 6 |
+| 13 | Finálny real-device + PC smoke (sekcia K), screenshoty z demo účtu | `FINAL QA` | 7, 9, 10, 11 |
+| 14 | Production rollout / sign-off (L, pilot → širší rollout) | `PRODUCTION APPROVAL` | 13 |
