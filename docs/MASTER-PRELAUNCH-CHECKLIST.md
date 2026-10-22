@@ -1,7 +1,7 @@
 # Esblu — MASTER PRE-LAUNCH CHECKLIST
 
 Kanonický zoznam všetkého, čo musí byť hotové pred verejným spustením. Aktualizovať pri každom bloku.
-Posledná aktualizácia: **2026-10-22** (branch `preprod-release-candidate` — produkt/positioning/onboarding, sekcia **J3**; predtým Supabase grants cleanup, sekcia **J2**).
+Posledná aktualizácia: **2026-10-22** (branch `preprod-release-candidate` — product RC finalization, sekcia **J3**; predtým Supabase grants cleanup, sekcia **J2**).
 
 Statusy: **PASS** · **READY** (pripravené, čaká na vykonanie/súhlas) · **BLOCKED LEGAL** · **BLOCKED EXTERNAL** ·
 **TODO** · **NOT YET RUN**
@@ -198,16 +198,20 @@ Detail: `docs/product-positioning-audit-2026-10-22.md`. Bez nového providera, d
 
 | položka | status | poznámka |
 |---|---|---|
-| positioning clarity | PASS (RC) | landing: „Firma pod kontrolou.“ + „Faktúry, autá, stroje, sklad, dokumenty a termíny na jednom mieste.“; persona 2–15 ľudí; „namiesto Excelu, WhatsAppu a fakturačky“; eFaktúra ostáva „pripravujeme“ |
-| dashboard „Dnes“ | PASS (RC) | `lib/dashboard/today.ts` + `TodayPanel`: Urgentné / Dnes / Čoskoro / Info, každá položka s akciou; faktúry, prijaté/eFaktúry na kontrolu, STK/EK/známky/servis, sklad, Inbox, chat, koniec trialu (iba vlastník); `test:dashboard-today` 16/16 |
-| onboarding | PASS (RC) | „Prvé kroky“ (firma → firemné údaje → prvý záznam → pozvať kolegu/účtovníka, voliteľné) odvodené z existujúcich dát; skrytie iba lokálne na zariadení; žiadne falošné dáta |
-| empty states | PASS (RC) | vozidlá, stroje, sklad, faktúry, partneri, priečinky: čo modul robí + prvý krok; filter ≠ prvé spustenie |
-| role-aware UX | PASS (RC) | finančné položky iba s finance view, prevádzka iba owner/admin/employee, billing/aktivácia iba vlastník; asistent-tipy iba overené intenty povolené role (zamestnanec žiadne) |
-| multi-company clarity | PASS (RC) | prepínač firmy v desktop sidebari aj mobilnom webovom menu (natívna appka: „Viac“); „Dnes“ = iba aktívna firma (`company_id` z membershipu + RLS); po prepnutí hard reload |
-| mobile/web consistency | PASS (RC) | rovnaký obsah „Dnes“: mobil kompaktne nad valcom (2 položky + „Zobraziť všetko“), desktop bočný panel; navigácia „Dnes“ v oboch |
-| pricing UX (per firma, billing iba vlastník) | PASS (RC) | cenník: „Predplatné je za firmu, nie za prihlásenie… spravuje iba vlastník“; ne-vlastník nevidí výzvu na aktiváciu; cena / multi-company bundle / eFaktúra free-paid = **TBD** |
+| positioning clarity | PASS | landing: „Firma pod kontrolou.“ + „Faktúry, autá, stroje, sklad, dokumenty a termíny na jednom mieste.“; persona 2–15 ľudí; „namiesto Excelu, WhatsAppu a fakturačky“; eFaktúra ostáva „pripravujeme“ |
+| dashboard „Dnes“ | PASS | `lib/dashboard/today.ts` + `TodayPanel`: Urgentné / Dnes / Čoskoro / Info, každá položka s akciou; faktúry, prijaté/eFaktúry na kontrolu, STK/EK/známky/servis, sklad, Inbox, chat, koniec trialu (iba vlastník); `test:dashboard-today` 16/16 |
+| onboarding | PASS | „Prvé kroky“ (firma → firemné údaje → prvý záznam → pozvať kolegu/účtovníka, voliteľné) odvodené z existujúcich dát; skrytie iba lokálne na zariadení; žiadne falošné dáta; krok „pozvať“ sa skryje, keď nárok `team_members` nedovolí ďalšieho používateľa (`55a5fe4`) |
+| empty states | PASS | vozidlá, stroje, sklad, faktúry, partneri, priečinky: čo modul robí + prvý krok; filter ≠ prvé spustenie |
+| role-aware UX | PASS | finančné položky iba s finance view, prevádzka iba owner/admin/employee, billing/aktivácia iba vlastník; asistent-tipy iba overené intenty povolené role (zamestnanec žiadne) |
+| multi-company clarity | PASS | prepínač firmy v desktop sidebari aj mobilnom webovom menu (natívna appka: „Viac“); „Dnes“ = iba aktívna firma (`company_id` z membershipu + RLS); po prepnutí hard reload |
+| mobile/web consistency | PASS | rovnaký obsah „Dnes“: mobil kompaktne nad valcom (2 položky + „Zobraziť všetko“), desktop bočný panel; navigácia „Dnes“ v oboch |
+| pricing UX (per firma, billing iba vlastník) | PASS | cenník: „Predplatné je za firmu, nie za prihlásenie… spravuje iba vlastník“; ne-vlastník nevidí výzvu na aktiváciu; cena / multi-company bundle / eFaktúra free-paid = **TBD** |
 | reálny device smoke | NOT YET RUN | patrí do **K** (až po CLIA/legal, billing/store, finálnom AAB) |
-| Turbopack build + `verify:mobile-bundle` na hoste | TODO | sandbox nemá prístup ku Google Fonts → overené `next build --webpack` (web + mobile export PASS); zopakovať štandardný build na hoste |
+| Turbopack web build (štandardný `next build`) | PASS | Vercel Preview pre presné SHA `a1d979d`, `fa4c800`, `55a5fe4`: `▲ Next.js 16.3.8 (Turbopack)`, TypeScript OK, 59/59 stránok, READY; v sandboxe blokuje proxy `fonts.googleapis.com` (403) |
+| mobile Turbopack build + `verify:mobile-bundle` | TODO (Windows host) | sandbox nemá Google Fonts a Vercel mobilný export nestavia; príkazy v reporte finalizácie (`npm run build -w mobile` → `npm run verify:mobile-bundle`) |
+| `test:invoicing-flow` / PGlite testy po čistom `npm ci` | PASS | `@electric-sql/pglite@0.5.8` ako exact devDependency (`fa4c800`); predtým iba `npm i --no-save` |
+| staging UX click-through — bez prihlásenia (landing desktop + 375 px, cenník, metadata) | PASS | Preview → staging Supabase `cjbdijbbcujvmrzezusd`; bez horizontálneho pretečenia; eFaktúra „pripravujeme“; cenník „za firmu, spravuje iba vlastník“ |
+| staging UX click-through — prihlásené roly (owner prázdny / s dátami / 2 firmy, employee, accountant) | TODO (používateľ) | prihlásenie heslom do Preview hostu agent nerobí; scenáre a kontrolný zoznam v reporte finalizácie |
 
 ## K. FINAL FULL SMOKE — spustiť IBA keď finálny RC obsahuje multi-company + eInvoice + voice + billing + finálnu legal/store konfiguráciu
 
