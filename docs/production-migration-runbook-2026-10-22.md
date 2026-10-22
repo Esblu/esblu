@@ -110,7 +110,9 @@ node --experimental-strip-types --no-warnings scripts/storage-signed-url-http-sm
 ```
 
 Očakávané: `PASS signed URL HTTP smoke: N ok, 0 fail`. Pokrýva: A owner A podpíše; B `GET` 200 `image/png` 67 B +
-`HEAD` 200; E TTL tokenu `exp − iat = 3600`, claims iba `exp,iat,url` (žiadny role/service_role), 5 s URL po
+`HEAD` 200; E TTL tokenu `exp − iat = 3600`, claims ⊆ allowlist Supabase Storage (`exp,iat,url,scope`
+[+ `transformations`, `versionId`]), `scope = "download"`, `url = <bucket>/<path>`, žiadny role/sub/aud/email/
+session/service_role claim, URL neobsahuje anon ani service kľúč; 5 s URL po
 expirácii ≥ 400; C používateľ cudzej firmy B: sign/batch/list/download DENY; D anon sign DENY, public URL ≠ 200; traversal varianty
 DENY, upload s `..` DENY; zamestnanec A nepodpíše cudzí rozpracovaný upload; G po `signOut({scope:"global"})` —
 zapíše sa reálne správanie (očakávané podľa Supabase: už vydaná URL platí do `exp`, starý access JWT platí do
@@ -124,15 +126,21 @@ súbor `qa-signed-url-*.png`).
 |---|---|
 | bucket nie je public | PASS (DB + HTTP, staging; produkcia DB read-only: 7/7 `public = false`) |
 | objekt nemá public URL | PASS (HTTP 400 pre všetky buckety) |
-| signed URL neobsahuje service-role secret | kód: klient podpisuje vlastným JWT (`lib/supabase`), nikdy service role; token claims overí S.2 |
+| signed URL neobsahuje service-role secret | PASS — klient podpisuje vlastným JWT (`lib/supabase`), nikdy service role; reálny token (staging): claims `exp,iat,scope,url`, bez anon/service kľúča v URL |
+| claim `scope` | legitímny, neprivilegovaný claim Supabase Storage (`supabase/storage` `src/internal/auth/jwt.ts`: `SIGNED_URL_SCOPE_DOWNLOAD = 'download'` / `'upload'`) — viaže token na jednu akciu; `GET /object/sign/…` overuje `verifyObjectSignature(token, path, 'download')`, takže download token nejde prehrať na upload endpoint. Nenesie identitu ani rolu. Smoke test vyžaduje `scope = "download"` a allowlist claimov |
 | logy neobsahujú celý signed token | kód nikde neloguje `signedUrl`; smoke skript má `redact()` + statický test |
 | TTL konzistentný s app configom | 3600 s (`SIGNED_MEDIA_TTL_SECONDS`); runtime overí S.2 (E) |
 | cross-company object path | DB politika PASS (predošlý audit); HTTP pre prihláseného cudzinca → S.2 (C) |
 | path normalization | upload politika odmieta `''`/`.`/`..`, vyžaduje entitu vlastnej firmy; klient `normalizeMediaPaths` odmieta URL a `/…` |
-| vydaná URL po revoke | platformové správanie — platí do `exp` (TTL 1 h); zdokumentuje S.2 (G), nemení sa |
+| vydaná URL po logout / revoke session | **zistené (staging):** už vydaná signed URL ostáva platná do svojho `exp` aj po `signOut({scope:"global"})` — token je samostatný, neviazaný na session (TTL 1 h ohraničuje okno). Platformové správanie, nemení sa |
+| access JWT po logout | **zistené (staging):** starý access JWT môže zostať použiteľný do vlastnej expirácie (bezstavový JWT); global sign-out ruší refresh tokeny, nie už vydané access JWT |
+| vydaná URL po zmazaní objektu | **zistené (staging):** po `remove()` už vydaná signed URL okamžite prestane vracať obsah (≠ 200) a nová URL sa nevydá — zmazanie objektu je okamžitý revoke obsahu |
 
-Výsledok: **signed URL HTTP — PARTIAL** (anon/public/forged/traversal HTTP PASS; prihlásené A/B/C/E/F/G
-čakajú na spustenie skriptu vlastníkom). Žiadny staging objekt nebol vytvorený ani zmazaný, QA fixtures nedotknuté.
+Výsledok (owner, Windows, staging × RC `cdc3ff3`, QA identity `qa-ux-a-signedurl@…` / `qa-ux-b-foreign@…`):
+**24 ok / 1 fail** — jediný FAIL bola príliš prísna assertion claimov (`exp,iat,url`), reálny token má navyše
+legitímny `scope`. Všetky bezpečnostné kontroly (A, B, C, D, E, F, G, traversal, employee, cleanup) PASS.
+Assertion opravená na allowlist + `scope = "download"` (bez zmeny storage/RLS); očakávaný rerun **25 ok / 0 fail**.
+Cleanup PASS — syntetický objekt odstránený, QA fixtures nedotknuté.
 
 ---
 

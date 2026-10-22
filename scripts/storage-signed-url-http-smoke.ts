@@ -76,14 +76,40 @@ export function signedUrlTtlSeconds(signedUrl: string): number | null {
   }
 }
 
-/** Podpísaná URL nesmie niesť service_role ani iný „role“ claim — iba url + exp/iat. */
-export function signedTokenClaims(signedUrl: string): string[] {
+/** Payload tokenu podpísanej URL (lokálne dekódovanie, nič sa nevypisuje); null pri chybe. */
+function signedTokenPayload(signedUrl: string): Record<string, unknown> | null {
   try {
     const token = new URL(signedUrl).searchParams.get("token") ?? "";
-    return Object.keys(JSON.parse(Buffer.from(token.split(".")[1] ?? "", "base64url").toString("utf8"))).sort();
+    const payload = JSON.parse(Buffer.from(token.split(".")[1] ?? "", "base64url").toString("utf8"));
+    return payload && typeof payload === "object" && !Array.isArray(payload) ? payload : null;
   } catch {
-    return [];
+    return null;
   }
+}
+
+export function signedTokenClaims(signedUrl: string): string[] {
+  return Object.keys(signedTokenPayload(signedUrl) ?? {}).sort();
+}
+
+/**
+ * Supabase Storage signed-URL token (supabase/storage `src/internal/auth/jwt.ts`, typ `SignedToken`):
+ * `url`, `exp`, `iat` (SignJWT.setIssuedAt), `scope` ('download' | 'upload' — viaže token na JEDNU
+ * akciu, aby download token nešiel prehrať na upload endpoint; legacy tokeny bez scope), voliteľne
+ * `transformations`, `versionId`. Žiadny z nich nenesie identitu ani oprávnenie.
+ * Allowlist — čokoľvek iné (role, sub, aud, email, session_id, owner, upsert, …) = FAIL.
+ */
+export const SIGNED_URL_ALLOWED_CLAIMS = ["exp", "iat", "scope", "transformations", "url", "versionId"] as const;
+
+/** Vráti dôvod zlyhania alebo null. Hodnoty claimov sa nevracajú (okrem bezpečného `scope`). */
+export function signedDownloadTokenError(signedUrl: string, expectedUrlClaim: string): string | null {
+  const p = signedTokenPayload(signedUrl);
+  if (!p) return "token payload not decodable";
+  const extra = Object.keys(p).filter((k) => !(SIGNED_URL_ALLOWED_CLAIMS as readonly string[]).includes(k));
+  if (extra.length) return `unexpected claims: ${extra.sort().join(",")}`;
+  for (const k of ["exp", "iat", "url"]) if (!(k in p)) return `missing claim: ${k}`;
+  if (p.scope !== "download") return `scope is not "download" (got ${typeof p.scope === "string" ? JSON.stringify(p.scope) : typeof p.scope})`;
+  if (p.url !== expectedUrlClaim) return "url claim does not match bucket/path";
+  return null;
 }
 
 export type CompanyMembership = { company_id: string; company_name: string | null };
@@ -218,8 +244,12 @@ async function main() {
     // E — TTL a obsah tokenu
     const ttl = signedUrlTtlSeconds(url1);
     check(`E TTL = ${EXPECTED_TTL_SECONDS} s (app SIGNED_MEDIA_TTL_SECONDS)`, ttl === EXPECTED_TTL_SECONDS, `ttl=${ttl}`);
-    const claims = signedTokenClaims(url1);
-    check("security: token claims = exp/iat/url only (no role / service_role)", claims.join(",") === "exp,iat,url", `claims=${claims.join(",")}`);
+    const claimErr = signedDownloadTokenError(url1, `${BUCKET}/${path}`);
+    check(
+      "security: token claims ⊆ Storage allowlist (exp,iat,url,scope[,transformations,versionId]), scope=download, url=bucket/path, no role/sub/identity",
+      claimErr === null,
+      claimErr ?? `claims=${signedTokenClaims(url1).join(",")}`
+    );
     check("security: signed URL does not contain anon/service key", !url1.includes(ANON) && !/service_role/i.test(url1));
 
     const short = await a.db.storage.from(BUCKET).createSignedUrl(path, 5);

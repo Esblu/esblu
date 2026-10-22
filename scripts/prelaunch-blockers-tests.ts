@@ -20,6 +20,8 @@ import {
   identityGuardError,
   PROD_REF,
   redact,
+  SIGNED_URL_ALLOWED_CLAIMS,
+  signedDownloadTokenError,
   signedTokenClaims,
   signedUrlTtlSeconds,
   STAGING_REF,
@@ -154,6 +156,27 @@ check("token helpers decode exp-iat and claims locally", () => {
   assert.equal(signedUrlTtlSeconds(url), 3600);
   assert.deepEqual(signedTokenClaims(url), ["exp", "iat", "url"]);
   assert.equal(signedUrlTtlSeconds("not a url"), null);
+});
+check("signed token claim allowlist: scope=download OK, privileged/identity claims FAIL", () => {
+  const b64 = (o: object) => Buffer.from(JSON.stringify(o)).toString("base64url");
+  const mk = (p: object) => `https://${STAGING_REF}.supabase.co/storage/v1/object/sign/b/p.png?token=${b64({ alg: "HS256" })}.${b64(p)}.sig`;
+  const base = { url: "b/p.png", iat: 100, exp: 3700, scope: "download" };
+  // reálny staging formát (2026-10-22 Windows smoke): exp,iat,scope,url
+  assert.equal(signedDownloadTokenError(mk(base), "b/p.png"), null);
+  assert.equal(signedDownloadTokenError(mk({ ...base, versionId: "v1", transformations: "width=10" }), "b/p.png"), null);
+  for (const bad of ["role", "sub", "aud", "email", "session_id", "service_role", "owner", "upsert", "is_anonymous"]) {
+    assert.match(String(signedDownloadTokenError(mk({ ...base, [bad]: "x" }), "b/p.png")), /unexpected claims/, bad);
+  }
+  assert.match(String(signedDownloadTokenError(mk({ ...base, scope: "upload" }), "b/p.png")), /scope is not/);
+  assert.match(String(signedDownloadTokenError(mk({ url: "b/p.png", iat: 1, exp: 2 }), "b/p.png")), /scope is not/);
+  assert.match(String(signedDownloadTokenError(mk(base), "b/other.png")), /url claim/);
+  assert.match(String(signedDownloadTokenError(mk({ url: "b/p.png", scope: "download", exp: 2 }), "b/p.png")), /missing claim: iat/);
+  assert.match(String(signedDownloadTokenError("garbage", "b/p.png")), /not decodable/);
+  assert.deepEqual([...SIGNED_URL_ALLOWED_CLAIMS].sort(), ["exp", "iat", "scope", "transformations", "url", "versionId"]);
+});
+check("smoke script still asserts signed URL carries no anon/service key", () => {
+  const src = read("scripts/storage-signed-url-http-smoke.ts");
+  assert.match(src, /!url1\.includes\(ANON\) && !\/service_role\/i\.test\(url1\)/);
 });
 check("redact() strips JWTs, token= and URLs", () => {
   const s = redact("x https://a.b/c?token=eyJa.eyJb.c eyJhbGc.eyJzdWI.sig token=abc");
