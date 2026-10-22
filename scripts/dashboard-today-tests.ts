@@ -206,6 +206,29 @@ await check("prvé kroky: iba vlastník/správca; povinné kroky riadia zobrazen
   assert.equal(today.isBillingProfileComplete(null), false);
 });
 
+await check("pozvanie: krok sa nezobrazí, keď nárok team_members nedovolí ďalšieho používateľa", () => {
+  assert.equal(today.canInviteWithinEntitlement({ active: true, limit: 1 }, 0), false, "trial s 1 používateľom");
+  assert.equal(today.canInviteWithinEntitlement({ active: true, limit: 3 }, 1), true);
+  assert.equal(today.canInviteWithinEntitlement({ active: true, limit: 3 }, 2), false);
+  assert.equal(today.canInviteWithinEntitlement({ active: true, limit: null }, 9), true);
+  assert.equal(today.canInviteWithinEntitlement({ active: false, limit: null }, 0), false);
+  assert.equal(today.canInviteWithinEntitlement(null, 0), true, "neznámy stav → rozhodne server");
+  const blocked = today.buildFirstSteps({ role: "owner", profileComplete: false, recordCount: 0, teamCount: 0, inviteAvailable: false });
+  assert.ok(!blocked.some((s) => s.key === "invite"));
+  const already = today.buildFirstSteps({ role: "owner", profileComplete: false, recordCount: 0, teamCount: 1, inviteAvailable: false });
+  assert.ok(already.some((s) => s.key === "invite" && s.done), "už pozvaný kolega ostáva ako hotový krok");
+  const dash = read("app/components/Dashboard.tsx");
+  assert.ok(dash.includes("inviteAvailable: canInviteWithinEntitlement(entitlements.snapshot?.items.team_members, todayData.teamCount)"));
+});
+
+await check("metadata stránky zodpovedajú positioningu a nesľubujú eFaktúru", () => {
+  const layout = read("app/layout.tsx");
+  assert.ok(layout.includes('const LANDING_SOCIAL_TITLE = "Esblu — firma pod kontrolou";'));
+  const desc = /LANDING_SOCIAL_DESCRIPTION =\s*"([^"]+)"/.exec(layout)?.[1] ?? "";
+  assert.ok(desc.includes("uzavretej beta"));
+  assert.ok(!/efakt|peppol/i.test(desc));
+});
+
 await check("každý generovaný i18n kľúč existuje v sk/en/de (bez fallbacku)", () => {
   const p = read("lib/dashboard/today.ts");
   const keys = new Set<string>([...p.matchAll(/"(today\.(?:items|cta)\.[A-Za-z]+)"/g)].map((m) => m[1]));

@@ -27,6 +27,7 @@ import type { MinimalServiceRecord } from "@/lib/deadlines";
 import {
   buildFirstSteps,
   buildTodayItems,
+  canInviteWithinEntitlement,
   firstStepsPending,
   isBillingProfileComplete,
   type TodayInvoice,
@@ -886,6 +887,7 @@ export default function Dashboard() {
     profileComplete: todayData.profileComplete,
     recordCount,
     teamCount: todayData.teamCount,
+    inviteAvailable: canInviteWithinEntitlement(entitlements.snapshot?.items.team_members, todayData.teamCount),
   });
   const firstSteps =
     !firstStepsDismissed && todayPanelState === "ready" && firstStepsPending(allFirstSteps) ? allFirstSteps : [];

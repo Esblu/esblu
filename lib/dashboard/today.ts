@@ -333,6 +333,12 @@ export type FirstStepsInput = {
   recordCount: number;
   /** Členovia + otvorené pozvánky okrem mňa; null = rola ich nevidí. */
   teamCount: number | null;
+  /**
+   * Smie firma ešte niekoho pozvať (nárok team_members a jeho limit)? false =
+   * krok sa nezobrazí — inak by viedol na istú chybu „vyčerpaný počet
+   * používateľov" (napr. skúšobná verzia s 1 používateľom).
+   */
+  inviteAvailable?: boolean;
 };
 
 /** Zoznam krokov pre vlastníka/správcu; iným rolám sa nezobrazuje. */
@@ -341,13 +347,29 @@ export function buildFirstSteps(input: FirstStepsInput): FirstStep[] {
   const steps: FirstStep[] = [{ key: "company", done: true, optional: false }];
   if (input.profileComplete !== null) steps.push({ key: "profile", done: input.profileComplete, optional: false });
   steps.push({ key: "firstRecord", done: input.recordCount > 0, optional: false });
-  if (input.teamCount !== null) steps.push({ key: "invite", done: input.teamCount > 0, optional: true });
+  if (input.teamCount !== null && (input.teamCount > 0 || input.inviteAvailable !== false)) {
+    steps.push({ key: "invite", done: input.teamCount > 0, optional: true });
+  }
   return steps;
 }
 
 /** Zoznam má zmysel, kým nie sú hotové povinné kroky. */
 export function firstStepsPending(steps: FirstStep[]): boolean {
   return steps.some((step) => !step.optional && !step.done);
+}
+
+/**
+ * Je pozvanie ďalšieho člena v rámci nároku? `limit` počíta všetkých
+ * používateľov firmy vrátane vlastníka; null = bez limitu.
+ */
+export function canInviteWithinEntitlement(
+  teamMembers: { active: boolean; limit: number | null } | null | undefined,
+  teamCount: number | null
+): boolean {
+  if (!teamMembers) return true; // nároky ešte nenačítané / neznáme — server rozhodne
+  if (!teamMembers.active) return false;
+  if (teamMembers.limit === null) return true;
+  return 1 + (teamCount ?? 0) < teamMembers.limit;
 }
 
 export function isBillingProfileComplete(profile: {

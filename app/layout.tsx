@@ -28,9 +28,9 @@ const geistMono = Geist_Mono({
 // musí odzrkadľovať uzavretú beta a NESMIE tvrdiť, že eFaktúra je hotová
 // (bod 10 zadania) — PDF faktúr (FÁZA 3A) tu tiež nie je prezentované ako
 // eFaktúra.
-const LANDING_SOCIAL_TITLE = "Esblu — firemná evidencia a fakturácia";
+const LANDING_SOCIAL_TITLE = "Esblu — firma pod kontrolou";
 const LANDING_SOCIAL_DESCRIPTION =
-  "Esblu spája firemnú evidenciu dokumentov, vozidiel, strojov, skladu, obchodných partnerov a faktúr v jednej aplikácii. Aktuálne v uzavretej beta verzii.";
+  "Faktúry, autá, stroje, sklad, dokumenty a termíny malej firmy na jednom mieste. Esblu ukáže, čo potrebuje pozornosť. Aktuálne v uzavretej beta verzii.";
 
 export const metadata: Metadata = {
   // metadataBase je potrebná na to, aby Next.js vedel relatívne cesty
