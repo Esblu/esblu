@@ -1,7 +1,7 @@
 # Esblu — MASTER PRE-LAUNCH CHECKLIST
 
 Kanonický zoznam všetkého, čo musí byť hotové pred verejným spustením. Aktualizovať pri každom bloku.
-Posledná aktualizácia: **2026-10-22** (branch `preprod-release-candidate` — product RC finalization, sekcia **J3**; predtým Supabase grants cleanup, sekcia **J2**).
+Posledná aktualizácia: **2026-10-22** (branch `preprod-release-candidate` — **PRODUCT RC FINALIZATION: PASS**, sekcia **J3**; predtým Supabase grants cleanup, sekcia **J2**).
 
 Statusy: **PASS** · **READY** (pripravené, čaká na vykonanie/súhlas) · **BLOCKED LEGAL** · **BLOCKED EXTERNAL** ·
 **TODO** · **NOT YET RUN**
@@ -194,6 +194,8 @@ Od 30. 10. 2026 Supabase neudeľuje novým objektom v `public` Data API grants a
 
 ## J3. PRODUCT / POSITIONING / ONBOARDING (2026-10-22)
 
+**PRODUCT RC FINALIZATION: PASS** (2026-10-22). Neoznačuje final real-device smoke, final AAB, Google review, CLIA ani production rollout — tie ostávajú v sekciách C, F, K, L.
+
 Detail: `docs/product-positioning-audit-2026-10-22.md`. Bez nového providera, dátového modelu, trackingu ani zmeny oprávnení — **GDPR IMPACT: NONE** pre všetky zmeny.
 
 | položka | status | poznámka |
@@ -208,10 +210,10 @@ Detail: `docs/product-positioning-audit-2026-10-22.md`. Bez nového providera, d
 | pricing UX (per firma, billing iba vlastník) | PASS | cenník: „Predplatné je za firmu, nie za prihlásenie… spravuje iba vlastník“; ne-vlastník nevidí výzvu na aktiváciu; cena / multi-company bundle / eFaktúra free-paid = **TBD** |
 | reálny device smoke | NOT YET RUN | patrí do **K** (až po CLIA/legal, billing/store, finálnom AAB) |
 | Turbopack web build (štandardný `next build`) | PASS | Vercel Preview pre presné SHA `a1d979d`, `fa4c800`, `55a5fe4`: `▲ Next.js 16.3.8 (Turbopack)`, TypeScript OK, 59/59 stránok, READY; v sandboxe blokuje proxy `fonts.googleapis.com` (403) |
-| mobile Turbopack build + `verify:mobile-bundle` | TODO (Windows host) | sandbox nemá Google Fonts a Vercel mobilný export nestavia; príkazy v reporte finalizácie (`npm run build -w mobile` → `npm run verify:mobile-bundle`) |
+| mobile Turbopack build + `verify:mobile-bundle` | PASS | overené vlastníkom na Windows hoste (štandardný `npm run build -w mobile` → `npm run verify:mobile-bundle`), 2026-10-22 |
 | `test:invoicing-flow` / PGlite testy po čistom `npm ci` | PASS | `@electric-sql/pglite@0.5.8` ako exact devDependency (`fa4c800`); predtým iba `npm i --no-save` |
 | staging UX click-through — bez prihlásenia (landing desktop + 375 px, cenník, metadata) | PASS | Preview → staging Supabase `cjbdijbbcujvmrzezusd`; bez horizontálneho pretečenia; eFaktúra „pripravujeme“; cenník „za firmu, spravuje iba vlastník“ |
-| staging UX click-through — prihlásené roly (owner prázdny / s dátami / 2 firmy, employee, accountant) | TODO (používateľ) | prihlásenie heslom do Preview hostu agent nerobí; scenáre a kontrolný zoznam v reporte finalizácie. Nález z manuálneho testu na `4e69812`: /faktury desktop — „Register dokladov“ stlačený na pár px (aside hlavičky `shrink-0` bez stropu šírky) → opravené. **QA fixtures ready for manual role click-through** (2026-10-22, iba staging `cjbdijbbcujvmrzezusd`: „QA UX Firma A“ + „QA UX Firma B“ pod staging ownerom, QA employee + QA accountant vo Firme A, syntetické dáta; cleanup skript pripravený, spustí sa až po pokyne). PASS nastaví používateľ po manuálnom overení. |
+| staging UX click-through — prihlásené roly (owner prázdny / s dátami / 2 firmy, employee, accountant) | PASS | manuálne overené vlastníkom na Preview × staging `cjbdijbbcujvmrzezusd` (2026-10-22): owner takmer prázdna firma + onboarding CTA, owner s dátami (QA UX Firma A) — Urgentné/Dnes/Čoskoro/Info + CTA z urgentnej položky, owner QA UX Firma B, multi-company prepnutie a izolácia dát, employee, accountant, mobile-width, /faktury desktop po oprave (`340a7c2`). QA fixtures (QA UX Firma A/B, `qa-ux-*@esblu-qa.invalid`) **ostávajú na stagingu**; cleanup skript pripravený, spustí sa iba po výslovnom pokyne (vyžaduje súhlas s dočasným vypnutím triggerov pre syntetické finalizované faktúry). |
 
 ## K. FINAL FULL SMOKE — spustiť IBA keď finálny RC obsahuje multi-company + eInvoice + voice + billing + finálnu legal/store konfiguráciu
 
