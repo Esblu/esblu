@@ -114,5 +114,14 @@ check("zdieľané tlačidlá dokumentovej vrstvy používajú výšku z tokenu",
   assert.ok(!layout.includes("min-h-11"));
 });
 
+check("hlavička dokumentu: bohaté aside nestlačí titulok (register faktúr na desktope)", () => {
+  // Regresia na Preview 4e69812: aside s akciami registra faktúr bolo shrink-0
+  // bez stropu šírky, zabralo celý riadok a „Register dokladov" sa lámal po písmenách.
+  const layout = readFileSync("app/components/document/DocumentLayout.tsx", "utf8");
+  assert.ok(layout.includes('{aside && <div className="shrink-0 sm:max-w-[65%] sm:text-right">{aside}</div>}'));
+  const faktury = readFileSync("app/faktury/page.tsx", "utf8");
+  assert.ok(faktury.includes('<div className="flex flex-wrap gap-2 sm:justify-end">'), "akcie registra sa zalamujú v rámci stropu");
+});
+
 console.log(`${passed} prešlo, ${failed} zlyhalo`);
 if (failed > 0) process.exit(1);

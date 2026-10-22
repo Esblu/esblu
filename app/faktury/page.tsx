@@ -634,7 +634,7 @@ export default function FakturyPage() {
         meta={t("invoices.subtitle")}
         aside={
           canView && canEdit ? (
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap gap-2 sm:justify-end">
               {/* Export ÚDAJOV, nie odovzdanie dokladov. Tlačidlo sa volá
                   tak, ako sa volá to, čo naozaj urobí — sľubovať prevzatie,
                   ktoré Esblu nevie overiť, by znamenalo neskôr z toho

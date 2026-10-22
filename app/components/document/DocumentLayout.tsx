@@ -100,7 +100,11 @@ export function DocumentHeader({
         {badges && <div className="mt-2 flex flex-wrap items-center gap-2">{badges}</div>}
         {meta && <div className="mt-1.5 text-sm text-secondary">{meta}</div>}
       </div>
-      {aside && <div className="shrink-0 sm:text-right">{aside}</div>}
+      {/* Strop šírky: bohaté `aside` (akcie registra faktúr) inak zabralo celý
+          riadok a titulok sa stlačil na pár pixelov — text sa lámal po
+          písmenách. Do 65 % sa akcie zalomia vlastným flex-wrap; malé
+          `aside` (jedno tlačidlo) sa správa ako doteraz. */}
+      {aside && <div className="shrink-0 sm:max-w-[65%] sm:text-right">{aside}</div>}
     </header>
   );
 }
