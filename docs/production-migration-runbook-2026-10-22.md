@@ -139,8 +139,9 @@ súbor `qa-signed-url-*.png`).
 Výsledok (owner, Windows, staging × RC `cdc3ff3`, QA identity `qa-ux-a-signedurl@…` / `qa-ux-b-foreign@…`):
 **24 ok / 1 fail** — jediný FAIL bola príliš prísna assertion claimov (`exp,iat,url`), reálny token má navyše
 legitímny `scope`. Všetky bezpečnostné kontroly (A, B, C, D, E, F, G, traversal, employee, cleanup) PASS.
-Assertion opravená na allowlist + `scope = "download"` (bez zmeny storage/RLS); očakávaný rerun **25 ok / 0 fail**.
-Cleanup PASS — syntetický objekt odstránený, QA fixtures nedotknuté.
+Assertion opravená na allowlist + `scope = "download"` (bez zmeny storage/RLS) v `9da058c`.
+**Rerun (owner, Windows, staging): `PASS signed URL HTTP smoke: 25 ok, 0 fail`** — signed URL HTTP test PASS,
+cross-company isolation PASS. Cleanup PASS — syntetický objekt odstránený, QA fixtures nedotknuté.
 
 ---
 
@@ -165,8 +166,9 @@ s viac ako 1 aktívnym členstvom (predpoklad backfillu `20261012140000`), 0 osi
 | položka | stav |
 |---|---|
 | Supabase organizácia `Esblu s.r.o.` | plán **Pro** (`get_organization`: `plan: pro`) → denné zálohy, prístupných posledných **7 dní** (Supabase docs „Database Backups“) |
-| PITR | **EXTERNAL CONFIRMATION REQUIRED** — platený add-on (vyžaduje min. Small compute); MCP/scoped token nevie čítať `/v1/projects/{ref}/database/backups` |
-| posledný recovery point | **EXTERNAL CONFIRMATION REQUIRED** — vlastník: Dashboard → `assetpilot` → Database → Backups (Scheduled / Point in Time): zapísať čas poslednej zálohy (< 24 h, „Completed“) alebo rozsah PITR |
+| scheduled backups | **PASS** — overené vlastníkom 2026-10-22 v Dashboarde (`fkpgvgvsmbpieduoatrt` → Database → Backups): scheduled **physical** daily backups ACTIVE, predchádzajúce denné dostupné |
+| PITR | **DISABLED / OPTIONAL ADD-ON** — nie blocker pre aktuálny RC; „Point in Time Recovery is available as an add-on“, neaktivované (platené, vyžaduje min. Small compute). Recovery point = posledná denná záloha (RPO až ~24 h) → preto povinný logický dump tesne pred oknom |
+| posledný recovery point | **22 Oct 2026 02:38:07 UTC** (najnovší viditeľný scheduled backup pri overení). **V okne (krok I.3) znova potvrdiť čerstvý úspešný scheduled backup** (< 24 h, „Completed“) — inak STOP |
 | logický dump tesne pred oknom | povinný (runbook eFaktúra B-2/B-3): `supabase db dump --db-url … -f prod-schema.sql` + `--data-only` → `sha256sum`, uložiť mimo repa |
 | Storage súbory | **nie sú v DB zálohe** (iba metadáta). RC migrácie Storage súbory nemažú; nový bucket `einvoice-documents` vznikne prázdny |
 
