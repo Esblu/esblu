@@ -935,6 +935,52 @@ const de = {
   },
 
   settings: {
+    // Granulárne oprávnenia zamestnancov (20261023100000).
+    permissions: {
+      title: "Berechtigungen",
+      summaryNone: "Grundrechte Mitarbeiter",
+      summaryCount: "Zusätzlich erlaubt: {{count}}",
+      intro: "Mitarbeiter sehen Fahrzeuge, Maschinen und Lager und dürfen Fahrzeugservice und Fotos erfassen. Hier können Sie weitere Änderungen erlauben — sie gelten nur in dieser Firma.",
+      presetsTitle: "Schnellauswahl",
+      presets: {
+        readOnly: "Nur lesen",
+        operations: "Betriebsmitarbeiter",
+        storekeeper: "Lagerist",
+        technician: "Techniker",
+      },
+      areas: {
+        vehicles: "Fahrzeuge",
+        machines: "Maschinen",
+        inventory: "Lager",
+      },
+      baseline: {
+        vehicles: "Immer: sieht Fahrzeuge, erfasst Service und Fotos.",
+        machines: "Immer: sieht Maschinen und deren Service.",
+        inventory: "Immer: sieht Lagerartikel.",
+      },
+      labels: {
+        vehicles_create: "Darf Fahrzeuge anlegen",
+        vehicles_edit: "Darf Fahrzeuge und Vignetten bearbeiten",
+        machines_create: "Darf Maschinen anlegen",
+        machines_edit: "Darf Maschinen und deren Fotos bearbeiten",
+        machines_manage_service: "Darf Maschinenservice erfassen",
+        inventory_create: "Darf Lagerartikel anlegen",
+        inventory_edit: "Darf Lagerartikel und deren Fotos bearbeiten",
+        inventory_adjust_stock: "Darf Lagermengen ändern",
+      },
+      notDelegated: "Löschen von Einträgen, Abonnement, Teamverwaltung und Firmeneinstellungen bleiben beim Inhaber und den Administratoren.",
+      save: "Berechtigungen speichern",
+      saving: "Speichere…",
+      saved: "Berechtigungen gespeichert.",
+      errors: {
+        own: "Eigene Berechtigungen können Sie nicht ändern.",
+        employeeOnly: "Berechtigungen gibt es nur für Mitarbeiter.",
+        forbidden: "Nur der Inhaber oder ein Administrator kann Berechtigungen ändern.",
+        ownerOnly: "Diese Berechtigung kann nur der Inhaber ändern.",
+        member: "Das Mitglied ist in dieser Firma nicht mehr aktiv.",
+        generic: "Berechtigungen konnten nicht gespeichert werden. Bitte erneut versuchen.",
+      },
+    },
     pageTitle: "Einstellungen",
     ui: {
       role: "Rolle",

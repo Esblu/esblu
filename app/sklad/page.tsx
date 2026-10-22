@@ -115,6 +115,7 @@ import {
 import { navigateHard } from "@/lib/app-navigation";
 import { confirmAction } from "@/app/components/ui/AppDialog";
 import { insertIdempotent, mutationKeyFor, resetMutationKey, type InsertDb, type MutationKeyRef } from "@/lib/idempotent-insert";
+import { useTeamPermissions } from "@/hooks/use-team-permissions";
 
 // Idempotency kľúče pre retry toho istého vytvorenia (lib/idempotent-insert.ts).
 const INVENTORY_CREATE_MUTATION: MutationKeyRef = { current: null };
@@ -149,6 +150,15 @@ export default function SkladPage() {
   // Sklad upravuje iba owner/admin. Zamestnanec ho vidí iba na čítanie —
   // rovnaké pravidlo drží RLS (inventory_items_*_manager). Toto je iba UI.
   const [canManageInventory, setCanManageInventory] = useState(false);
+  // Granulárne oprávnenia (20261023100000): pridanie / úprava / iba množstvo
+  // sú delegovateľné zamestnancovi, mazanie ostáva owner/admin. Autoritou je RLS
+  // + trigger (bez inventory.edit smie zamestnanec zmeniť iba množstvo).
+  const teamPermissions = useTeamPermissions();
+  const canCreateInventory = teamPermissions.can("inventory.create");
+  const canEditInventory = teamPermissions.can("inventory.edit");
+  const canAdjustStock = teamPermissions.can("inventory.adjust_stock");
+  // Úprava existujúcej položky iba v rozsahu „množstvo“ (ostatné polia zamknuté).
+  const stockOnly = Boolean(editingId) && !canEditInventory && canAdjustStock;
   const isItemCreationUnavailable =
     planUsageLoading || isPlanLimited || legalHold;
 
@@ -320,7 +330,7 @@ export default function SkladPage() {
   if (editingId) {
     const { error } = await supabase
       .from("inventory_items")
-      .update(payload)
+      .update(stockOnly ? { quantity: payload.quantity } : payload)
       .eq("id", editingId)
       .eq("company_id", companyId);
 
@@ -551,7 +561,7 @@ export default function SkladPage() {
         title={t("inventory.register.title")}
         meta={t("inventory.list.subtitle")}
         aside={
-          canManageInventory ? (
+          canCreateInventory ? (
             <button
               type="button"
               onClick={() => {
@@ -569,7 +579,7 @@ export default function SkladPage() {
         }
       />
 
-      {!canManageInventory && companyId && (
+      {!canCreateInventory && !canEditInventory && !canAdjustStock && companyId && (
         <div className="mt-4">
           <Notice>{t("assistant.inventory.readOnlyNotice")}</Notice>
         </div>
@@ -592,7 +602,7 @@ export default function SkladPage() {
         </div>
       )}
 
-      {showForm && canManageInventory && (
+      {showForm && (canCreateInventory || canEditInventory || canAdjustStock) && (
         <div className="mt-6">
           <SectionPanel
             title={
@@ -606,6 +616,7 @@ export default function SkladPage() {
                 </label>
                 <input
                   id="item-name"
+                  disabled={stockOnly}
                   className={docField}
                   value={item.name}
                   onChange={(event) => updateItem("name", event.target.value)}
@@ -618,6 +629,7 @@ export default function SkladPage() {
                 </label>
                 <input
                   id="item-category"
+                  disabled={stockOnly}
                   className={docField}
                   value={item.category}
                   onChange={(event) => updateItem("category", event.target.value)}
@@ -630,6 +642,7 @@ export default function SkladPage() {
                 </label>
                 <input
                   id="item-location"
+                  disabled={stockOnly}
                   className={docField}
                   value={item.location}
                   onChange={(event) => updateItem("location", event.target.value)}
@@ -656,6 +669,7 @@ export default function SkladPage() {
                 </label>
                 <input
                   id="item-unit"
+                  disabled={stockOnly}
                   className={docField}
                   value={item.unit}
                   onChange={(event) => updateItem("unit", event.target.value)}
@@ -668,6 +682,7 @@ export default function SkladPage() {
                 </label>
                 <input
                   id="item-min"
+                  disabled={stockOnly}
                   type="number"
                   inputMode="decimal"
                   className={docField}
@@ -685,6 +700,7 @@ export default function SkladPage() {
                 </label>
                 <textarea
                   id="item-notes"
+                  disabled={stockOnly}
                   rows={3}
                   className={docField}
                   value={item.notes}
@@ -693,6 +709,8 @@ export default function SkladPage() {
               </div>
             </div>
 
+            {/* Fotky položky = úprava položky (inventory.edit; storage to vynúti tiež). */}
+            {canEditInventory && (
             <div className="mt-4 flex flex-wrap gap-2">
               <label
                 className={`${docButtonSecondary} cursor-pointer gap-2 ${
@@ -724,6 +742,7 @@ export default function SkladPage() {
                 />
               </label>
             </div>
+            )}
 
             {photoPreview && (
               // eslint-disable-next-line @next/next/no-img-element
@@ -815,10 +834,10 @@ export default function SkladPage() {
           <EmptyState
             title={t("emptyStates.inventory.title")}
             description={
-              canManageInventory ? t("emptyStates.inventory.body") : `${t("emptyStates.inventory.body")} ${t("emptyStates.readOnly")}`
+              canCreateInventory ? t("emptyStates.inventory.body") : `${t("emptyStates.inventory.body")} ${t("emptyStates.readOnly")}`
             }
             action={
-              canManageInventory ? (
+              canCreateInventory ? (
                 <button
                   type="button"
                   onClick={() => setShowForm(true)}
@@ -850,8 +869,9 @@ export default function SkladPage() {
                   columns={INVENTORY_COLUMNS}
                   ariaLabel={row.name ?? t("dashboard.noName")}
                   trailing={
-                    canManageInventory ? (
+                    canEditInventory || canAdjustStock || canManageInventory ? (
                     <>
+                      {(canEditInventory || canAdjustStock) && (
                       <button
                         type="button"
                         onClick={() => editItem(row)}
@@ -860,6 +880,8 @@ export default function SkladPage() {
                       >
                         {t("common.buttons.edit")}
                       </button>
+                      )}
+                      {canManageInventory && (
                       <button
                         type="button"
                         onClick={() => deleteItem(row.id)}
@@ -868,6 +890,7 @@ export default function SkladPage() {
                       >
                         {t("common.buttons.delete")}
                       </button>
+                      )}
                     </>
                     ) : undefined
                   }

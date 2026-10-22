@@ -50,6 +50,7 @@ import { compressImage } from "@/lib/image-compress";
 import { navigateHard } from "@/lib/app-navigation";
 import { confirmAction } from "@/app/components/ui/AppDialog";
 import { insertIdempotent, mutationKeyFor, resetMutationKey, type InsertDb, type MutationKeyRef } from "@/lib/idempotent-insert";
+import { useTeamPermissions } from "@/hooks/use-team-permissions";
 
 // Idempotency kľúče pre retry toho istého vytvorenia (lib/idempotent-insert.ts).
 const MACHINE_CREATE_MUTATION: MutationKeyRef = { current: null };
@@ -76,7 +77,12 @@ export default function StrojePage() {
   const [showForm, setShowForm] = useState(false);
   // Kmeňové dáta strojov mení iba owner/admin (RLS machines_*_manager).
   // Zamestnanec a ostatní stroje iba čítajú — tlačidlá zápisu sa im nezobrazia.
+  // Granulárne oprávnenia (20261023100000): pridanie / úprava sú delegovateľné
+  // zamestnancovi, mazanie ostáva owner/admin. Autoritou je RLS.
   const [canManageMachines, setCanManageMachines] = useState(false);
+  const teamPermissions = useTeamPermissions();
+  const canCreateMachine = teamPermissions.can("machines.create");
+  const canEditMachine = teamPermissions.can("machines.edit");
   const [isSaving, setIsSaving] = useState(false);
   const [deletingMachineId, setDeletingMachineId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -653,7 +659,7 @@ export default function StrojePage() {
         title={t("machines.register.title")}
         meta={t("machines.list.subtitle")}
         aside={
-          canManageMachines ? (
+          canCreateMachine ? (
             <button
               type="button"
               onClick={() => {
@@ -695,7 +701,7 @@ export default function StrojePage() {
         </div>
       )}
 
-      {showForm && canManageMachines && (
+      {showForm && (canCreateMachine || canEditMachine) && (
         <div className="mt-6">
           <SectionPanel
             title={
@@ -823,7 +829,8 @@ export default function StrojePage() {
             {/* Fotografie priamo v create flow. Pri úprave sa neponúkajú —
                 existujúci stroj má plnohodnotnú galériu na svojom detaile a
                 dva rôzne spôsoby pridávania fotiek by si konkurovali. */}
-            {!editingId && (
+            {/* Fotka stroja = úprava stroja (machines.edit; storage to vynúti tiež). */}
+            {!editingId && canEditMachine && (
               <div className="mt-5 border-t border-doc-border pt-5">
                 <p className={docLabel}>{t("machines.detail.galleryTitle")}</p>
                 <UploadActions
@@ -940,10 +947,10 @@ export default function StrojePage() {
           <EmptyState
             title={t("emptyStates.machines.title")}
             description={
-              canManageMachines ? t("emptyStates.machines.body") : `${t("emptyStates.machines.body")} ${t("emptyStates.readOnly")}`
+              canCreateMachine ? t("emptyStates.machines.body") : `${t("emptyStates.machines.body")} ${t("emptyStates.readOnly")}`
             }
             action={
-              canManageMachines ? (
+              canCreateMachine ? (
                 <button
                   type="button"
                   onClick={() => setShowForm(true)}
@@ -977,8 +984,9 @@ export default function StrojePage() {
                     columns={MACHINE_COLUMNS}
                     ariaLabel={item.name ?? t("dashboard.noName")}
                     trailing={
-                      canManageMachines ? (
+                      canEditMachine || canManageMachines ? (
                       <>
+                        {canEditMachine && (
                         <button
                           type="button"
                           onClick={() => editMachine(item)}
@@ -987,6 +995,8 @@ export default function StrojePage() {
                         >
                           {t("common.buttons.edit")}
                         </button>
+                        )}
+                        {canManageMachines && (
                         <button
                           type="button"
                           onClick={() => deleteMachine(item.id)}
@@ -998,6 +1008,7 @@ export default function StrojePage() {
                             ? t("inbox.deleting")
                             : t("common.buttons.delete")}
                         </button>
+                        )}
                       </>
                       ) : undefined
                     }

@@ -65,6 +65,8 @@ import {
   SettingsSection,
 } from "@/app/components/ui/SettingsList";
 import { ImageIcon, TrashIcon } from "@/app/components/icons/AppIcons";
+import { MemberPermissionsEditor } from "@/app/components/team/MemberPermissionsEditor";
+import { listCompanyMemberPermissions } from "@/lib/team-permissions-client";
 import CompanySwitcher from "@/app/components/workspaces/CompanySwitcher";
 import CompanyLegalIdentityCard from "@/app/components/workspaces/CompanyLegalIdentityCard";
 import EinvoiceReceptionPanel from "@/app/components/einvoice/EinvoiceReceptionPanel";
@@ -202,6 +204,8 @@ export default function NastaveniaPage() {
   const [passwordLoading, setPasswordLoading] = useState(false);
 
   const [members, setMembers] = useState<CompanyMemberRow[]>([]);
+  const [memberPermissions, setMemberPermissions] = useState<Record<string, string[]>>({});
+  const [memberPermissionsReady, setMemberPermissionsReady] = useState(false);
   const [invites, setInvites] = useState<CompanyInviteRow[]>([]);
   const [usersLoading, setUsersLoading] = useState(false);
   const [myRole, setMyRole] = useState<CompanyMemberRole | null>(null);
@@ -302,9 +306,23 @@ export default function NastaveniaPage() {
 
         setMembers(memberRows);
         setInvites(inviteRows);
+        // Granulárne oprávnenia zamestnancov (20261023100000). Zlyhanie (napr.
+        // databáza bez migrácie) = editor sa nezobrazí; nič sa neudelí.
+        try {
+          const grants = await listCompanyMemberPermissions();
+          const byMember: Record<string, string[]> = {};
+          for (const row of grants) (byMember[row.member_id] ??= []).push(row.permission);
+          setMemberPermissions(byMember);
+          setMemberPermissionsReady(true);
+        } catch {
+          setMemberPermissions({});
+          setMemberPermissionsReady(false);
+        }
       } else {
         setMembers([]);
         setInvites([]);
+        setMemberPermissions({});
+        setMemberPermissionsReady(false);
       }
 
       if (role === null) {
@@ -1172,11 +1190,26 @@ export default function NastaveniaPage() {
               ) : (
                 <>
                   {members.map((member) => (
-                    <SettingsRow
-                      key={member.member_id}
-                      title={<span className="block truncate">{member.email}</span>}
-                      trailing={roleBadge(member.role)}
-                    />
+                    <div key={member.member_id}>
+                      <SettingsRow
+                        title={<span className="block truncate">{member.email}</span>}
+                        trailing={roleBadge(member.role)}
+                      />
+                      {/* Člen → Oprávnenia: iba zamestnanec, iba owner/admin, nikdy sám sebe. */}
+                      {memberPermissionsReady &&
+                        (myRole === "owner" || myRole === "admin") &&
+                        member.role === "employee" &&
+                        member.status === "active" &&
+                        member.user_id !== userId && (
+                          <MemberPermissionsEditor
+                            t={t}
+                            memberId={member.member_id}
+                            managerRole={myRole}
+                            initial={memberPermissions[member.member_id] ?? []}
+                            onSaved={(id, perms) => setMemberPermissions((current) => ({ ...current, [id]: perms }))}
+                          />
+                        )}
+                    </div>
                   ))}
 
                   {(myRole === "owner" || myRole === "admin") &&

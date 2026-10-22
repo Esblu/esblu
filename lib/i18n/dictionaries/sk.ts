@@ -948,6 +948,52 @@ const sk = {
   },
 
   settings: {
+    // Granulárne oprávnenia zamestnancov (20261023100000).
+    permissions: {
+      title: "Oprávnenia",
+      summaryNone: "Základ zamestnanca",
+      summaryCount: "Navyše povolené: {{count}}",
+      intro: "Zamestnanec vidí vozidlá, stroje a sklad a smie zapisovať servis a fotky vozidiel. Tu mu môžete povoliť ďalšie úpravy — platia iba v tejto firme.",
+      presetsTitle: "Rýchly výber",
+      presets: {
+        readOnly: "Len čítanie",
+        operations: "Prevádzkový pracovník",
+        storekeeper: "Skladník",
+        technician: "Technik",
+      },
+      areas: {
+        vehicles: "Vozidlá",
+        machines: "Stroje",
+        inventory: "Sklad",
+      },
+      baseline: {
+        vehicles: "Vždy: vidí vozidlá, zapisuje servis a fotky.",
+        machines: "Vždy: vidí stroje a ich servis.",
+        inventory: "Vždy: vidí skladové položky.",
+      },
+      labels: {
+        vehicles_create: "Môže pridávať vozidlá",
+        vehicles_edit: "Môže upravovať vozidlá a diaľničné známky",
+        machines_create: "Môže pridávať stroje",
+        machines_edit: "Môže upravovať stroje a ich fotky",
+        machines_manage_service: "Môže zapisovať servis strojov",
+        inventory_create: "Môže pridávať skladové položky",
+        inventory_edit: "Môže upravovať skladové položky a ich fotky",
+        inventory_adjust_stock: "Môže meniť množstvo na sklade",
+      },
+      notDelegated: "Mazanie záznamov, predplatné, správa tímu a nastavenia firmy ostávajú vlastníkovi a správcovi.",
+      save: "Uložiť oprávnenia",
+      saving: "Ukladám…",
+      saved: "Oprávnenia sú uložené.",
+      errors: {
+        own: "Vlastné oprávnenia si nemôžete meniť.",
+        employeeOnly: "Oprávnenia sa nastavujú iba zamestnancom.",
+        forbidden: "Oprávnenia môže meniť iba vlastník alebo správca firmy.",
+        ownerOnly: "Toto oprávnenie môže zmeniť iba vlastník firmy.",
+        member: "Člen už nie je aktívny v tejto firme.",
+        generic: "Oprávnenia sa nepodarilo uložiť. Skúste to znova.",
+      },
+    },
     pageTitle: "Nastavenia",
     ui: {
       role: "Rola",

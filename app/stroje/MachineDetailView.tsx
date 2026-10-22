@@ -58,6 +58,7 @@ import { navigateHard } from "@/lib/app-navigation";
 import { confirmAction } from "@/app/components/ui/AppDialog";
 import { ScrollTabs } from "@/app/components/ui/ScrollTabs";
 import { externalFileLinkProps } from "@/lib/file-actions";
+import { useTeamPermissions } from "@/hooks/use-team-permissions";
 
 type DetailTab = "overview" | "service" | "documents" | "photos";
 
@@ -215,6 +216,11 @@ export default function MachineDetailView({
   // Kmeňové dáta stroja (servisné záznamy, fotky) mení iba owner/admin
   // (RLS machine_services_*_manager, machine_photos_*_manager).
   const [canManageMachine, setCanManageMachine] = useState(false);
+  // Granulárne oprávnenia (20261023100000): servis a galéria sú delegovateľné,
+  // mazanie ostáva owner/admin. Autoritou je RLS + storage.
+  const teamPermissions = useTeamPermissions();
+  const canManageService = teamPermissions.can("machines.manage_service");
+  const canEditMachine = teamPermissions.can("machines.edit");
   const [editingServiceId, setEditingServiceId] = useState<string | null>(null);
   const [isServiceSaving, setIsServiceSaving] = useState(false);
   const [deletingServiceId, setDeletingServiceId] = useState<string | null>(null);
@@ -851,7 +857,7 @@ export default function MachineDetailView({
           <SectionPanel
             title={t("machines.detail.servicesTitle")}
             actions={
-              canManageMachine ? (
+              canManageService ? (
                 <button
                   type="button"
                   onClick={() => {
@@ -874,7 +880,7 @@ export default function MachineDetailView({
               </div>
             )}
 
-            {showServiceForm && canManageMachine && (
+            {showServiceForm && canManageService && (
               <div className="mb-4 rounded-doc border border-doc-border bg-surface-2 p-4">
                 <p className="mb-3 text-sm font-semibold text-primary">
                   {editingServiceId
@@ -1041,8 +1047,9 @@ export default function MachineDetailView({
                       </span>
                     }
                     actions={
-                      canManageMachine ? (
+                      canManageService || canManageMachine ? (
                       <>
+                        {canManageService && (
                         <button
                           type="button"
                           onClick={() => startEditService(item)}
@@ -1051,6 +1058,8 @@ export default function MachineDetailView({
                         >
                           {t("common.buttons.edit")}
                         </button>
+                        )}
+                        {canManageMachine && (
                         <button
                           type="button"
                           onClick={() => deleteService(item.id)}
@@ -1062,6 +1071,7 @@ export default function MachineDetailView({
                             ? t("inbox.deleting")
                             : t("common.buttons.delete")}
                         </button>
+                        )}
                       </>
                       ) : undefined
                     }
@@ -1123,7 +1133,7 @@ export default function MachineDetailView({
           <SectionPanel
             title={t("machines.detail.galleryTitle")}
             actions={
-              canManageMachine ? (
+              canEditMachine ? (
               <>
                 <label
                   className={`${docButtonSecondary} cursor-pointer gap-2 ${

@@ -51,7 +51,6 @@ type InspectionFilter = "all" | "attention" | "missing";
 import BackLink from "../components/BackLink";
 import {
   getMyActiveMembership,
-  canOperate,
   isOwnerOrAdmin,
   type CompanyMemberRole,
 } from "@/lib/company";
@@ -70,6 +69,7 @@ import {
 import { navigateHard } from "@/lib/app-navigation";
 import { confirmAction } from "@/app/components/ui/AppDialog";
 import { insertIdempotent, mutationKeyFor, resetMutationKey, type InsertDb, type MutationKeyRef } from "@/lib/idempotent-insert";
+import { useTeamPermissions } from "@/hooks/use-team-permissions";
 
 // Idempotency kľúče pre retry toho istého vytvorenia (lib/idempotent-insert.ts).
 const VEHICLE_REGISTRATION_MUTATION: MutationKeyRef = { current: null };
@@ -195,6 +195,12 @@ export default function VozidlaPage() {
   const [userId, setUserId] = useState("");
   const [companyId, setCompanyId] = useState("");
   const [role, setRole] = useState<CompanyMemberRole | null>(null);
+  // Granulárne oprávnenia (20261023100000): pridanie / úprava vozidla sú
+  // delegovateľné zamestnancovi (servis a fotky vozidiel sú jeho základ),
+  // mazanie ostáva owner/admin. Autoritou je RLS.
+  const teamPermissions = useTeamPermissions();
+  const canCreateVehicle = teamPermissions.can("vehicles.create");
+  const canEditVehicle = teamPermissions.can("vehicles.edit");
   const [isSaving, setIsSaving] = useState(false);
   const [vehicle, setVehicle] = useState<any | null>(null);
   const [vehicles, setVehicles] = useState<VehicleRow[]>([]);
@@ -1275,7 +1281,7 @@ export default function VozidlaPage() {
         title={t("vehicles.register.title")}
         meta={t("vehicles.list.subtitle")}
         aside={
-          canOperate(role) && !showRegistrationFlow && !vehicle ? (
+          canCreateVehicle && !showRegistrationFlow && !vehicle ? (
             <div className="flex flex-wrap gap-2">
               <button
                 type="button"
@@ -1311,7 +1317,7 @@ export default function VozidlaPage() {
         />
       )}
 
-      {legalHold && canOperate(role) && (
+      {legalHold && canCreateVehicle && (
         <div className="mt-4">
           <Notice tone="warning">{t("common.legalHoldMessage")}</Notice>
         </div>
@@ -1321,7 +1327,7 @@ export default function VozidlaPage() {
           zadania). Zdieľa presne rovnaké handlery/stav/uloženie ako predtým
           v Inbox, iba UI vstupný bod je teraz tu na hlavnej obrazovke
           Vozidlá namiesto samostatnej sekcie v Inboxe. */}
-      {canOperate(role) && showRegistrationFlow && (
+      {canCreateVehicle && showRegistrationFlow && (
         <div className="mt-4 rounded-doc border border-doc-border bg-doc-surface p-3 sm:p-4">
           <div className="flex items-start justify-between gap-3">
             <div>
@@ -1709,7 +1715,7 @@ export default function VozidlaPage() {
         </div>
       )}
 
-      {canOperate(role) && vehicle && (
+      {(canCreateVehicle || canEditVehicle) && vehicle && (
         <div className="mt-4 space-y-3">
           <SectionPanel
             title={
@@ -1886,10 +1892,10 @@ export default function VozidlaPage() {
             <EmptyState
               title={t("emptyStates.vehicles.title")}
               description={
-                canOperate(role) ? t("emptyStates.vehicles.body") : `${t("emptyStates.vehicles.body")} ${t("emptyStates.readOnly")}`
+                canCreateVehicle ? t("emptyStates.vehicles.body") : `${t("emptyStates.vehicles.body")} ${t("emptyStates.readOnly")}`
               }
               action={
-                canOperate(role) ? (
+                canCreateVehicle ? (
                   <button
                     type="button"
                     onClick={() => setVehicle({})}
@@ -1921,8 +1927,9 @@ export default function VozidlaPage() {
                     columns={VEHICLE_COLUMNS}
                     ariaLabel={`${car.spz} · ${vehicleTitle(car, t("dashboard.noName"))}`}
                     trailing={
-                      isOwnerOrAdmin(role) ? (
+                      canEditVehicle || isOwnerOrAdmin(role) ? (
                         <>
+                          {canEditVehicle && (
                           <button
                             type="button"
                             onClick={() => handleEdit(car)}
@@ -1931,6 +1938,8 @@ export default function VozidlaPage() {
                           >
                             {t("common.buttons.edit")}
                           </button>
+                          )}
+                          {isOwnerOrAdmin(role) && (
                           <button
                             type="button"
                             onClick={() => handleDeleteVehicle(car.id)}
@@ -1939,6 +1948,7 @@ export default function VozidlaPage() {
                           >
                             {t("common.buttons.delete")}
                           </button>
+                          )}
                         </>
                       ) : undefined
                     }

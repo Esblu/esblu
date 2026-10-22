@@ -54,6 +54,7 @@ import {
   deadlineTypeLabel,
 } from "@/lib/deadlines";
 import { confirmAction, notify } from "@/app/components/ui/AppDialog";
+import { useTeamPermissions } from "@/hooks/use-team-permissions";
 
 // Dokumenty priradené k vozidlu z AI Inboxu (PZP, technický preukaz) —
 // bod 2/3 zadania: po potvrdení v Inboxe majú tieto dokumenty "skončiť"
@@ -224,6 +225,10 @@ export default function VehicleDetailView({
   const [isSaving, setIsSaving] = useState(false);
   const [editingServiceId, setEditingServiceId] = useState<string | null>(null);
   const [role, setRole] = useState<CompanyMemberRole | null>(null);
+  // Granulárne oprávnenia (20261023100000): diaľničné známky = úprava vozidla
+  // (vehicles.edit); mazanie ostáva owner/admin. Autoritou je RLS.
+  const teamPermissions = useTeamPermissions();
+  const canEditVehicle = teamPermissions.can("vehicles.edit");
   const [userId, setUserId] = useState("");
   const [companyId, setCompanyId] = useState("");
   const [photos, setPhotos] = useState<any[]>([]);
@@ -1142,7 +1147,7 @@ export default function VehicleDetailView({
             </p>
           </div>
 
-          {isOwnerOrAdmin(role) && (
+          {canEditVehicle && (
             <button
               onClick={() => {
                 if (!editingVignetteId && legalHold) {
@@ -1163,11 +1168,11 @@ export default function VehicleDetailView({
           )}
         </div>
 
-        {isOwnerOrAdmin(role) && !editingVignetteId && legalHold && (
+        {canEditVehicle && !editingVignetteId && legalHold && (
           <div className="mt-3"><Notice tone="warning">{t("common.legalHoldMessage")}</Notice></div>
         )}
 
-        {isOwnerOrAdmin(role) && showVignetteForm && (
+        {canEditVehicle && showVignetteForm && (
           <div className="mt-3 rounded-doc border border-doc-border bg-surface-2 p-3 sm:p-4">
             <h3 className="mb-3 text-[15px] font-semibold text-primary">
               {editingVignetteId
@@ -1277,14 +1282,17 @@ export default function VehicleDetailView({
                   })}
                 </p>
 
-                {isOwnerOrAdmin(role) && (
+                {(canEditVehicle || isOwnerOrAdmin(role)) && (
                   <div className="flex gap-1.5">
+                    {canEditVehicle && (
                     <button
                       onClick={() => startEditVignette(item)}
                       className={`${docButtonSecondary} px-2.5 text-sm sm:text-xs`}
                     >
                       {t("vehicles.vignettes.edit")}
                     </button>
+                    )}
+                    {isOwnerOrAdmin(role) && (
                     <button
                       onClick={() => deleteVignette(item.id)}
                       disabled={deletingVignetteId !== null}
@@ -1294,6 +1302,7 @@ export default function VehicleDetailView({
                         ? t("inbox.deleting")
                         : t("vehicles.vignettes.remove")}
                     </button>
+                    )}
                   </div>
                 )}
               </li>

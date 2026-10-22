@@ -934,6 +934,52 @@ const en = {
   },
 
   settings: {
+    // Granulárne oprávnenia zamestnancov (20261023100000).
+    permissions: {
+      title: "Permissions",
+      summaryNone: "Employee baseline",
+      summaryCount: "Additionally allowed: {{count}}",
+      intro: "Employees can see vehicles, machines and stock and may record vehicle service and photos. Here you can allow more edits — they apply only in this company.",
+      presetsTitle: "Quick presets",
+      presets: {
+        readOnly: "Read only",
+        operations: "Operations worker",
+        storekeeper: "Storekeeper",
+        technician: "Technician",
+      },
+      areas: {
+        vehicles: "Vehicles",
+        machines: "Machines",
+        inventory: "Stock",
+      },
+      baseline: {
+        vehicles: "Always: sees vehicles, records service and photos.",
+        machines: "Always: sees machines and their service.",
+        inventory: "Always: sees stock items.",
+      },
+      labels: {
+        vehicles_create: "Can add vehicles",
+        vehicles_edit: "Can edit vehicles and vignettes",
+        machines_create: "Can add machines",
+        machines_edit: "Can edit machines and their photos",
+        machines_manage_service: "Can record machine service",
+        inventory_create: "Can add stock items",
+        inventory_edit: "Can edit stock items and their photos",
+        inventory_adjust_stock: "Can change stock quantities",
+      },
+      notDelegated: "Deleting records, the subscription, team management and company settings stay with the owner and admins.",
+      save: "Save permissions",
+      saving: "Saving…",
+      saved: "Permissions saved.",
+      errors: {
+        own: "You can't change your own permissions.",
+        employeeOnly: "Permissions can only be set for employees.",
+        forbidden: "Only the company owner or an admin can change permissions.",
+        ownerOnly: "Only the company owner can change this permission.",
+        member: "This member is no longer active in the company.",
+        generic: "Couldn't save permissions. Please try again.",
+      },
+    },
     pageTitle: "Settings",
     ui: {
       role: "Role",
