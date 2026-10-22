@@ -47,7 +47,9 @@ Zakázané: `alter default privileges … grant`, `grant … on all tables/funct
 - `npm run test:grants-guard` — statický guard: každá migrácia po `20261021100000` s `CREATE TABLE public.X`
   musí mať RLS + GRANT/REVOKE pre každú z rolí anon / authenticated / service_role + záznam v manifeste;
   nová funkcia musí mať GRANT/REVOKE EXECUTE. Nevyžaduje CRUD — vyžaduje rozhodnutie.
-- `npm run test:grants-replay-db` — čistý replay všetkých migrácií od nuly v PGlite **bez** auto-grantov
+- `npm run test:grants-replay-db` — čistý replay všetkých migrácií od nuly v PGlite **bez** auto-grantov; reconciliation
+  sa overuje v stave po `20261022100000`, každá neskoršia migrácia musí byť idempotentná a jej rollback → re-apply
+  musí vrátiť rovnaké ACL aj politiky (preto každá nová migrácia potrebuje `supabase/rollback/<názov>_rollback.sql`);
   (`scripts/sql/pglite/supabase-platform-stub.sql`), ACL každej tabuľky == manifest, rolová matica
   (anon / owner / admin / accountant / employee / service_role; privilege vs RLS).
 - Staging: `scripts/sql/grants-data-api-matrix.sql` (výsledok vo výnimke, nič nezostane). Nikdy nie produkcia.

@@ -1,7 +1,7 @@
 # Esblu — MASTER PRE-LAUNCH CHECKLIST
 
 Kanonický zoznam všetkého, čo musí byť hotové pred verejným spustením. Aktualizovať pri každom bloku.
-Posledná aktualizácia: **2026-10-22** (branch `preprod-release-candidate` — **PRODUCT RC FINALIZATION: PASS**, sekcia **J3**; predtým Supabase grants cleanup, sekcia **J2**).
+Posledná aktualizácia: **2026-10-23** (branch `preprod-release-candidate` — granulárne oprávnenia tímu, sekcia **J4**; predtým PRODUCT RC FINALIZATION, sekcia **J3**).
 
 Statusy: **PASS** · **READY** (pripravené, čaká na vykonanie/súhlas) · **BLOCKED LEGAL** · **BLOCKED EXTERNAL** ·
 **TODO** · **NOT YET RUN**
@@ -215,6 +215,27 @@ Detail: `docs/product-positioning-audit-2026-10-22.md`. Bez nového providera, d
 | staging UX click-through — bez prihlásenia (landing desktop + 375 px, cenník, metadata) | PASS | Preview → staging Supabase `cjbdijbbcujvmrzezusd`; bez horizontálneho pretečenia; eFaktúra „pripravujeme“; cenník „za firmu, spravuje iba vlastník“ |
 | staging UX click-through — prihlásené roly (owner prázdny / s dátami / 2 firmy, employee, accountant) | PASS | manuálne overené vlastníkom na Preview × staging `cjbdijbbcujvmrzezusd` (2026-10-22): owner takmer prázdna firma + onboarding CTA, owner s dátami (QA UX Firma A) — Urgentné/Dnes/Čoskoro/Info + CTA z urgentnej položky, owner QA UX Firma B, multi-company prepnutie a izolácia dát, employee, accountant, mobile-width, /faktury desktop po oprave (`340a7c2`). QA fixtures (QA UX Firma A/B, `qa-ux-*@esblu-qa.invalid`) **ostávajú na stagingu**; cleanup skript pripravený, spustí sa iba po výslovnom pokyne (vyžaduje súhlas s dočasným vypnutím triggerov pre syntetické finalizované faktúry). |
 
+## J4. TEAM GRANULAR PERMISSIONS (2026-10-23)
+
+Detail: `docs/team-granular-permissions-2026-10-23.md`. Migrácia `20261023100000_team_granular_permissions` (+ rollback).
+**GDPR IMPACT: NONE / ACCESS-CONTROL HARDENING** (rovnaké firemné dáta, rovnakí interní členovia, žiadny provider, typ údajov, účel ani retencia; informatívne do CLIA delta: „granular internal role permissions added“).
+
+| položka | status | poznámka |
+|---|---|---|
+| permission model | PASS | register `esblu_permission_registry()` + TS zrkadlo (parita testovaná); tabuľka viazaná na `company_members.id`; neznáme = deny |
+| DB/RLS enforcement | PASS | insert/update vozidiel, známok, strojov, servisu strojov, fotiek strojov/skladu, skladu cez `esblu_my_has_permission`; trigger „iba množstvo“; storage upload fotiek |
+| owner management | PASS | `esblu_set_member_permissions` — iba aktívny zamestnanec tej istej firmy, nikdy sám sebe; audit `company_member_permission_events` |
+| admin management | PASS | iba delegovateľné prevádzkové (`admin_may_grant`); nie owner/admin/účtovník; billing/vlastníctvo/zrušenie firmy nie sú v registri |
+| employee UI | PASS (RC) | Nastavenia → člen → Oprávnenia (skupiny, vety, predvoľby); CTA v Strojoch/Sklade/Vozidlách podľa oprávnení; mazanie owner/admin |
+| multi-company isolation | PASS | oprávnenie v A neplatí v B (PGlite F + staging) |
+| self-escalation guard | PASS | RPC, priamy zápis (42501 privilege), zmena roly, admin sám sebe, účtovník — DENY |
+| grants / fresh replay | PASS | trieda C, `anon` 0; manifest; `test:grants-guard` 10/10; `test:grants-replay-db` 43/43 vrátane idempotencie a rollback → re-apply |
+| staging validation | PASS | `cjbdijbbcujvmrzezusd`: aplikované; funkcie/politiky/ACL md5 == replay; matica s QA UX fixtures v rollbacknutej transakcii; advisors bez nového nálezu mimo očakávaných (RPC-only tabuľky, authenticated RPC) |
+| manuálny UX test (owner/admin → zamestnanec) | TODO (používateľ) | scenár v detaile §5 (stroje + sklad) na Preview × staging |
+| mobile Turbopack build + `verify:mobile-bundle` | TODO (Windows host) | zdieľané UI stroje/sklad/vozidlá/nastavenia sa zmenilo; webpack export v sandboxe PASS |
+| finance/doklady/partneri pre zamestnanca | NOT IN V1 | finančný model (`permissions.finance`, účtovník) bez zmeny |
+| **production rollout** | ⛔ NOT YET RUN / PENDING APPROVAL | poradie: hneď za `20261022100000` (sekcia L) |
+
 ## K. FINAL FULL SMOKE — spustiť IBA keď finálny RC obsahuje multi-company + eInvoice + voice + billing + finálnu legal/store konfiguráciu
 
 Status: **NOT YET RUN.** Rozsah: mobil + desktop; auth, Google login, multi-company, roly, faktúry, e-Faktúra
@@ -230,6 +251,7 @@ reconnect, oprávnenia, notifikácie, aplikácia nainštalovaná z obchodu.
 5. **výslovný súhlas**
 6. migrácie po jednej (poradie: `docs/einvoice-rc-integration-audit-2026-10-13.md` §3)
    → hneď za poslednou RC migráciou `20261021100000_explicit_data_api_grants` a `20261022100000_grants_locale_and_policy_hygiene` (audit grants §7; ACL + policy md5 kontrola po)
+   → potom `20261023100000_team_granular_permissions` (J4; po aplikovaní md5 funkcií/politík/ACL == replay)
 7. merge / deploy
 8. ECB import (fx-rates)
 9. crony
