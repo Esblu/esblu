@@ -18,8 +18,14 @@
 // Povinné env:
 //   SIGNED_URL_SUPABASE_URL       https://cjbdijbbcujvmrzezusd.supabase.co (iný ref = odmietnuté)
 //   SIGNED_URL_ANON_KEY           publishable/anon kľúč STAGINGU
-//   SIGNED_URL_OWNER_A_EMAIL / SIGNED_URL_OWNER_A_PASSWORD   vlastník QA UX Firma A
-//   SIGNED_URL_OWNER_B_EMAIL / SIGNED_URL_OWNER_B_PASSWORD   vlastník QA UX Firma B (iný tenant)
+//   SIGNED_URL_OWNER_A_EMAIL / SIGNED_URL_OWNER_A_PASSWORD   vlastník QA UX Firma A (aktívna firma = A)
+//   SIGNED_URL_OWNER_B_EMAIL / SIGNED_URL_OWNER_B_PASSWORD   „B“ = POUŽÍVATEĽ CUDZEJ FIRMY, nie nutne owner:
+//       ľubovoľná rola (owner/admin/employee) s členstvom IBA v inej firme než A. Odporúčaný
+//       staging účet: `qa-ux-b-foreign@esblu-qa.invalid` (employee, iba QA UX Firma B); heslo je iba
+//       lokálne v `Claude outputs/STAGING-QA-signed-url-credentials.txt` (gitignored), nikdy v repe.
+//       Alias: SIGNED_URL_FOREIGN_EMAIL / SIGNED_URL_FOREIGN_PASSWORD (má prednosť).
+//       Skript odmietne beh, ak „B“ je členom firmy A alebo ak A a B majú rovnakú aktívnu firmu
+//       (napr. vlastník oboch QA UX firiem — nie je to cross-company identita).
 // Voliteľné:
 //   SIGNED_URL_EMPLOYEE_A_EMAIL / SIGNED_URL_EMPLOYEE_A_PASSWORD  zamestnanec firmy A
 //
@@ -128,11 +134,21 @@ async function main() {
   }
 
   const a = await login("SIGNED_URL_OWNER_A");
-  const b = await login("SIGNED_URL_OWNER_B");
+  const b = (await login("SIGNED_URL_FOREIGN")) ?? (await login("SIGNED_URL_OWNER_B"));
   if (!a || !b) {
-    console.error("missing owner A/B credentials");
+    console.error("missing owner A / foreign-company user credentials");
     process.exit(2);
   }
+  // Cross-company identita: B nesmie byť členom aktívnej firmy A (inak by DENY testy nič nedokazovali).
+  const { data: activeA } = await a.db.rpc("esblu_my_active_company_id");
+  const { data: activeB } = await b.db.rpc("esblu_my_active_company_id");
+  const { data: companiesB } = await b.db.rpc("esblu_list_my_companies");
+  const bCompanyIds = JSON.stringify(companiesB ?? []);
+  if (!activeA || !activeB || activeA === activeB || (typeof activeA === "string" && bCompanyIds.includes(activeA))) {
+    console.error("REFUSED: user B is not a foreign-company identity (same or shared company as owner A's active company) — switch owner A to QA UX Firma A or use a user that belongs only to another company");
+    process.exit(2);
+  }
+  check("setup: B is a member of a different company only (cross-company identity)", true);
   const emp = await login("SIGNED_URL_EMPLOYEE_A");
   const anon = client();
 
@@ -180,13 +196,13 @@ async function main() {
 
     // C — cudzia firma
     const bSign = await b.db.storage.from(BUCKET).createSignedUrl(path, 60);
-    check("C owner of company B cannot get signed URL", !!bSign.error && !bSign.data?.signedUrl);
+    check("C foreign-company user B cannot get signed URL", !!bSign.error && !bSign.data?.signedUrl);
     const bList = await b.db.storage.from(BUCKET).list(`${a.uid}/${vehicles[0].id}`);
-    check("C owner B cannot list company A folder", !bList.error && (bList.data ?? []).length === 0, `rows=${bList.data?.length ?? "err"}`);
+    check("C foreign user B cannot list company A folder", !bList.error && (bList.data ?? []).length === 0, `rows=${bList.data?.length ?? "err"}`);
     const bDl = await b.db.storage.from(BUCKET).download(path);
-    check("C owner B cannot download via authenticated API", !!bDl.error);
+    check("C foreign user B cannot download via authenticated API", !!bDl.error);
     const bBatch = await b.db.storage.from(BUCKET).createSignedUrls([path], 60);
-    check("C owner B batch sign returns no URL", !(bBatch.data ?? []).some((x) => x.signedUrl));
+    check("C foreign user B batch sign returns no URL", !(bBatch.data ?? []).some((x) => x.signedUrl));
 
     // D — anonym
     const anSign = await anon.storage.from(BUCKET).createSignedUrl(path, 60);
@@ -197,7 +213,7 @@ async function main() {
     // Path normalization / traversal
     for (const evil of [`${b.uid}/../${path}`, `./${path}`, `${path}/..`, `/${path}`]) {
       const r = await b.db.storage.from(BUCKET).createSignedUrl(evil, 60);
-      check(`path: owner B cannot sign traversal variant (${evil.startsWith("/") ? "leading-slash" : evil.includes("..") ? "dotdot" : "dot"})`, !r.data?.signedUrl);
+      check(`path: foreign user B cannot sign traversal variant (${evil.startsWith("/") ? "leading-slash" : evil.includes("..") ? "dotdot" : "dot"})`, !r.data?.signedUrl);
     }
     const evilUp = await a.db.storage.from(BUCKET).upload(`${a.uid}/../${b.uid}/x.png`, PNG_1X1, { contentType: "image/png" });
     check("path: upload with '..' segment rejected", !!evilUp.error);

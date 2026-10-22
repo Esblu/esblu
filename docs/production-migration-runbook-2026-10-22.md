@@ -100,14 +100,17 @@ fixtures (bez zmeny), vytvorí 1 syntetický PNG 1×1 ako rozpracovaný upload v
 $env:SIGNED_URL_SUPABASE_URL = "https://cjbdijbbcujvmrzezusd.supabase.co"
 $env:SIGNED_URL_ANON_KEY = "<staging publishable key>"
 $env:SIGNED_URL_OWNER_A_EMAIL = "<QA UX Firma A owner>";  $env:SIGNED_URL_OWNER_A_PASSWORD = "<…>"
-$env:SIGNED_URL_OWNER_B_EMAIL = "<QA UX Firma B owner>";  $env:SIGNED_URL_OWNER_B_PASSWORD = "<…>"
+# „B“ = používateľ CUDZEJ firmy (nie nutne owner); vlastník oboch QA UX firiem NIE JE vhodný.
+# Staging účet qa-ux-b-foreign@esblu-qa.invalid (employee, iba QA UX Firma B) — heslo iba lokálne
+# v "Claude outputs/STAGING-QA-signed-url-credentials.txt" (gitignored). Owner A musí mať aktívnu firmu QA UX Firma A.
+$env:SIGNED_URL_OWNER_B_EMAIL = "qa-ux-b-foreign@esblu-qa.invalid";  $env:SIGNED_URL_OWNER_B_PASSWORD = "<zo súboru>"
 # voliteľne: $env:SIGNED_URL_EMPLOYEE_A_EMAIL / _PASSWORD
 node --experimental-strip-types --no-warnings scripts/storage-signed-url-http-smoke.ts
 ```
 
 Očakávané: `PASS signed URL HTTP smoke: N ok, 0 fail`. Pokrýva: A owner A podpíše; B `GET` 200 `image/png` 67 B +
 `HEAD` 200; E TTL tokenu `exp − iat = 3600`, claims iba `exp,iat,url` (žiadny role/service_role), 5 s URL po
-expirácii ≥ 400; C owner B: sign/batch/list/download DENY; D anon sign DENY, public URL ≠ 200; traversal varianty
+expirácii ≥ 400; C používateľ cudzej firmy B: sign/batch/list/download DENY; D anon sign DENY, public URL ≠ 200; traversal varianty
 DENY, upload s `..` DENY; zamestnanec A nepodpíše cudzí rozpracovaný upload; G po `signOut({scope:"global"})` —
 zapíše sa reálne správanie (očakávané podľa Supabase: už vydaná URL platí do `exp`, starý access JWT platí do
 svojej expirácie); F po `remove()` sa nová URL nevydá a stará vráti ≠ 200. Ak cleanup zlyhá, `finally` skúsi
