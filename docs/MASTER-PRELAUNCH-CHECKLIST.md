@@ -211,7 +211,7 @@ Detail: `docs/product-positioning-audit-2026-10-22.md`. Bez nového providera, d
 | mobile Turbopack build + `verify:mobile-bundle` | TODO (Windows host) | sandbox nemá Google Fonts a Vercel mobilný export nestavia; príkazy v reporte finalizácie (`npm run build -w mobile` → `npm run verify:mobile-bundle`) |
 | `test:invoicing-flow` / PGlite testy po čistom `npm ci` | PASS | `@electric-sql/pglite@0.5.8` ako exact devDependency (`fa4c800`); predtým iba `npm i --no-save` |
 | staging UX click-through — bez prihlásenia (landing desktop + 375 px, cenník, metadata) | PASS | Preview → staging Supabase `cjbdijbbcujvmrzezusd`; bez horizontálneho pretečenia; eFaktúra „pripravujeme“; cenník „za firmu, spravuje iba vlastník“ |
-| staging UX click-through — prihlásené roly (owner prázdny / s dátami / 2 firmy, employee, accountant) | TODO (používateľ) | prihlásenie heslom do Preview hostu agent nerobí; scenáre a kontrolný zoznam v reporte finalizácie |
+| staging UX click-through — prihlásené roly (owner prázdny / s dátami / 2 firmy, employee, accountant) | TODO (používateľ) | prihlásenie heslom do Preview hostu agent nerobí; scenáre a kontrolný zoznam v reporte finalizácie. Nález z manuálneho testu na `4e69812`: /faktury desktop — „Register dokladov“ stlačený na pár px (aside hlavičky `shrink-0` bez stropu šírky) → opravené, čaká na opätovné overenie |
 
 ## K. FINAL FULL SMOKE — spustiť IBA keď finálny RC obsahuje multi-company + eInvoice + voice + billing + finálnu legal/store konfiguráciu
 
