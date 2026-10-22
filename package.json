@@ -55,6 +55,7 @@
     "test:team-permissions-ui": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/team-permissions-ui-tests.ts",
     "test:team-permissions-db": "node --experimental-strip-types --no-warnings scripts/team-permissions-pglite-tests.ts",
     "test:grants-guard": "node --experimental-strip-types --no-warnings scripts/grants-migration-guard-tests.ts",
+    "test:prelaunch-blockers": "node --experimental-strip-types --no-warnings scripts/prelaunch-blockers-tests.ts",
     "test:idempotency-db": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/idempotency-pglite-tests.ts",
     "test:voice-hardening": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/voice-hardening-tests.ts",
     "test:dashboard-today": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/dashboard-today-tests.ts",
