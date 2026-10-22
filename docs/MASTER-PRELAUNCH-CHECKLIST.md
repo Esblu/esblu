@@ -1,7 +1,7 @@
 # Esblu — MASTER PRE-LAUNCH CHECKLIST
 
 Kanonický zoznam všetkého, čo musí byť hotové pred verejným spustením. Aktualizovať pri každom bloku.
-Posledná aktualizácia: **2026-10-23** (branch `preprod-release-candidate` — granulárne oprávnenia tímu, sekcia **J4**; predtým PRODUCT RC FINALIZATION, sekcia **J3**).
+Posledná aktualizácia: **2026-10-23** (branch `preprod-release-candidate` — **GRANULAR TEAM PERMISSIONS: PASS**, sekcia **J4**; predtým PRODUCT RC FINALIZATION, sekcia **J3**).
 
 Statusy: **PASS** · **READY** (pripravené, čaká na vykonanie/súhlas) · **BLOCKED LEGAL** · **BLOCKED EXTERNAL** ·
 **TODO** · **NOT YET RUN**
@@ -217,6 +217,8 @@ Detail: `docs/product-positioning-audit-2026-10-22.md`. Bez nového providera, d
 
 ## J4. TEAM GRANULAR PERMISSIONS (2026-10-23)
 
+**GRANULAR TEAM PERMISSIONS: PASS** (2026-10-23, RC `66c4db2`). Production rollout ostáva **NOT YET RUN / PENDING APPROVAL**. QA UX fixtures ostávajú na stagingu (cleanup iba po výslovnom pokyne).
+
 Detail: `docs/team-granular-permissions-2026-10-23.md`. Migrácia `20261023100000_team_granular_permissions` (+ rollback).
 **GDPR IMPACT: NONE / ACCESS-CONTROL HARDENING** (rovnaké firemné dáta, rovnakí interní členovia, žiadny provider, typ údajov, účel ani retencia; informatívne do CLIA delta: „granular internal role permissions added“).
 
@@ -226,13 +228,14 @@ Detail: `docs/team-granular-permissions-2026-10-23.md`. Migrácia `2026102310000
 | DB/RLS enforcement | PASS | insert/update vozidiel, známok, strojov, servisu strojov, fotiek strojov/skladu, skladu cez `esblu_my_has_permission`; trigger „iba množstvo“; storage upload fotiek |
 | owner management | PASS | `esblu_set_member_permissions` — iba aktívny zamestnanec tej istej firmy, nikdy sám sebe; audit `company_member_permission_events` |
 | admin management | PASS | iba delegovateľné prevádzkové (`admin_may_grant`); nie owner/admin/účtovník; billing/vlastníctvo/zrušenie firmy nie sú v registri |
-| employee UI | PASS (RC) | Nastavenia → člen → Oprávnenia (skupiny, vety, predvoľby); CTA v Strojoch/Sklade/Vozidlách podľa oprávnení; mazanie owner/admin |
+| employee UI | PASS | Nastavenia → člen → Oprávnenia (skupiny, vety, predvoľby); CTA v Strojoch/Sklade/Vozidlách podľa oprávnení; mazanie owner/admin |
 | multi-company isolation | PASS | oprávnenie v A neplatí v B (PGlite F + staging) |
 | self-escalation guard | PASS | RPC, priamy zápis (42501 privilege), zmena roly, admin sám sebe, účtovník — DENY |
 | grants / fresh replay | PASS | trieda C, `anon` 0; manifest; `test:grants-guard` 10/10; `test:grants-replay-db` 43/43 vrátane idempotencie a rollback → re-apply |
 | staging validation | PASS | `cjbdijbbcujvmrzezusd`: aplikované; funkcie/politiky/ACL md5 == replay; matica s QA UX fixtures v rollbacknutej transakcii; advisors bez nového nálezu mimo očakávaných (RPC-only tabuľky, authenticated RPC) |
-| manuálny UX test (owner/admin → zamestnanec) | TODO (používateľ) | scenár v detaile §5 (stroje + sklad) na Preview × staging |
-| mobile Turbopack build + `verify:mobile-bundle` | TODO (Windows host) | zdieľané UI stroje/sklad/vozidlá/nastavenia sa zmenilo; webpack export v sandboxe PASS |
+| manual UX validation (owner/admin → zamestnanec) | PASS | overené vlastníkom na Preview `66c4db2` (READY) × staging: owner otvoril oprávnenia QA zamestnanca, grant „Môže pridávať stroje“ → po refreshi „Pridať stroj“ + vytvorenie stroja, revoke → tlačidlo zmizlo; skladové oprávnenie podľa očakávania; owner/admin editor funkčný |
+| mobile Turbopack build | PASS | Windows host, presné RC `66c4db2`: `npm run build -w mobile` — Next.js 16.3.8 (Turbopack), TypeScript PASS, 34/34 statických stránok |
+| verify:mobile-bundle | PASS | Windows host, `66c4db2`: všetky kontroly bundlu PASS (73 chunkov, 7,2 MB) |
 | finance/doklady/partneri pre zamestnanca | NOT IN V1 | finančný model (`permissions.finance`, účtovník) bez zmeny |
 | **production rollout** | ⛔ NOT YET RUN / PENDING APPROVAL | poradie: hneď za `20261022100000` (sekcia L) |
 
