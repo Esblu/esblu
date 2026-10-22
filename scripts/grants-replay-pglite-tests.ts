@@ -105,7 +105,12 @@ await db.exec(read("scripts/sql/pglite/supabase-platform-stub.sql"));
 const files = replayOrder(readdirSync(path.join(ROOT, MIGRATIONS)).filter((f) => f.endsWith(".sql")));
 const applied: string[] = [];
 let replayError: string | null = null;
-for (const f of files) {
+// Fáza 1: od nuly po cleanup (20261022100000). Reconciliation má pevný zoznam
+// tabuliek (precondition), preto sa jej idempotencia a rollback overujú v stave
+// PRED neskoršími migráciami; tie sa aplikujú vo fáze 2 nižšie.
+const phase1 = files.slice(0, files.indexOf(HYGIENE) + 1);
+const laterFiles = files.slice(files.indexOf(HYGIENE) + 1);
+for (const f of phase1) {
   try {
     await db.exec(read(`${MIGRATIONS}/${f}`));
     applied.push(f);
@@ -117,7 +122,7 @@ for (const f of files) {
 
 await check("replay: všetky migrácie sa aplikujú od nuly bez auto-grantov", async () => {
   assert.equal(replayError, null, replayError ?? "");
-  assert.equal(applied.length, files.length);
+  assert.equal(applied.length, phase1.length);
   assert.equal(applied[0], BASELINE, "baseline musí byť prvá");
   assert.ok(applied.indexOf(HYGIENE) > applied.indexOf(RECONCILE), "cleanup musí bežať po reconciliation");
   assert.ok(applied.includes(RECONCILE), "reconciliation migrácia chýba v replayi");
@@ -153,7 +158,7 @@ const norm = (s: string) => s.split(",").map((x) => x.trim()).filter(Boolean).so
 const tablePrivs = (snap: AclRow[], table: string, role: string) =>
   norm(snap.find((r) => r.k === "t" && r.obj === table && r.g === role)?.privs ?? "");
 
-const snapshot = await aclSnapshot();
+let snapshot = await aclSnapshot();
 
 // ----------------------------------------------------------------------------- replay idempotencia
 await check("replay: baseline, reconciliation a cleanup sú idempotentné (2. beh = rovnaký stav)", async () => {
@@ -191,6 +196,41 @@ await check("replay: reconciliation precondition zlyhá na tabuľke bez rozhodnu
 });
 
 // ----------------------------------------------------------------------------- acl
+
+
+// Fáza 2: migrácie po cleanup — každá sa aplikuje, je idempotentná a jej
+// rollback + opätovné aplikovanie vráti presne rovnaký stav (ACL aj politiky).
+type PolicyRow = { t: string; p: string; cmd: string; roles: string; q: string; w: string };
+const policySnapshot = async () => (await db.query<PolicyRow>(
+  `select tablename t, policyname p, cmd, array_to_string(roles, ',') roles, coalesce(qual, '') q, coalesce(with_check, '') w
+   from pg_policies where schemaname = 'public' order by 1, 2`)).rows;
+let laterError: string | null = null;
+for (const f of laterFiles) {
+  try {
+    await db.exec(read(`${MIGRATIONS}/${f}`));
+    applied.push(f);
+  } catch (error) {
+    laterError = `${f}: ${error instanceof Error ? error.message : String(error)}`;
+    break;
+  }
+}
+await check("replay: migrácie po cleanup sa aplikujú, sú idempotentné a rollback → re-apply = rovnaký stav", async () => {
+  assert.equal(laterError, null, laterError ?? "");
+  assert.equal(applied.length, files.length);
+  for (const f of laterFiles) {
+    const acl = await aclSnapshot();
+    const pol = await policySnapshot();
+    await db.exec(read(`${MIGRATIONS}/${f}`));
+    assert.deepEqual(await aclSnapshot(), acl, `${f}: 2. beh zmenil ACL`);
+    assert.deepEqual(await policySnapshot(), pol, `${f}: 2. beh zmenil politiky`);
+    const rollback = `supabase/rollback/${f.replace(/\.sql$/, "_rollback.sql")}`;
+    await db.exec(read(rollback));
+    await db.exec(read(`${MIGRATIONS}/${f}`));
+    assert.deepEqual(await aclSnapshot(), acl, `${f}: rollback → re-apply zmenil ACL`);
+    assert.deepEqual(await policySnapshot(), pol, `${f}: rollback → re-apply zmenil politiky`);
+  }
+});
+snapshot = await aclSnapshot();
 const tables = (await db.query<{ t: string; rls: boolean }>(
   `select c.relname::text t, c.relrowsecurity rls from pg_class c join pg_namespace n on n.oid = c.relnamespace
    where n.nspname = 'public' and c.relkind in ('r','p') order by 1`)).rows;

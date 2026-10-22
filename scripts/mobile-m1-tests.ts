@@ -624,10 +624,15 @@ await check("finančné priame routy: gate hasFinanceView/Manage PRED prvým fin
   }
 });
 
-await check("detail vozidla: známky a mazanie servisu iba owner/admin (zrkadlí RLS vehicle_vignettes / vehicle_services_delete)", () => {
+await check("detail vozidla: známky podľa vehicles.edit, mazanie iba owner/admin (zrkadlí RLS vehicle_vignettes / *_delete)", () => {
   const src = read("app/vozidla/VehicleDetailView.tsx");
   assert.doesNotMatch(src, /canOperate\(role\) &&/, "zápisové ovládače nesmú byť za canOperate (zahŕňa zamestnanca)");
-  assert.ok((src.match(/isOwnerOrAdmin\(role\) &&/g) ?? []).length >= 5);
+  // 20261023100000: pridanie/úprava známky = delegovateľné vehicles.edit (RLS vehicle_vignettes_*_permitted),
+  // mazanie známky, PZP, fotky a servisu ostáva owner/admin.
+  assert.ok(src.includes('const canEditVehicle = teamPermissions.can("vehicles.edit");'));
+  assert.ok(src.includes("{canEditVehicle && showVignetteForm && ("));
+  assert.ok((src.match(/isOwnerOrAdmin\(role\) &&/g) ?? []).length >= 3);
+  assert.match(src, /isOwnerOrAdmin\(role\) && \(\s*<button\s+onClick=\{\(\) => deleteVignette\(item\.id\)\}/);
   assert.match(src, /isOwnerOrAdmin\(role\) && \(\s*<button\s+type="button"\s+onClick=\{\(\) => deleteService\(item\.id\)\}/);
 });
 
