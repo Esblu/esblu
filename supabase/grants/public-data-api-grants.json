@@ -257,6 +257,22 @@
       "service_role": "SELECT,INSERT,UPDATE,DELETE",
       "note": "owner-only SELECT policy na vlastnu aktivnu firmu; zapis server/RPC"
     },
+    "company_member_permission_events": {
+      "domain": "team",
+      "access": "C",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT,INSERT",
+      "note": "append-only audit zmien oprávnení (kto/komu/firma/oprávnenie/udelené) — zapisuje iba esblu_set_member_permissions"
+    },
+    "company_member_permissions": {
+      "domain": "team",
+      "access": "C",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "granulárne oprávnenia člena (FORCE RLS) — zápis iba esblu_set_member_permissions (owner/admin), čítanie esblu_my_permissions / esblu_list_company_member_permissions; vynútenie esblu_my_has_permission v RLS"
+    },
     "company_members": {
       "domain": "membership",
       "access": "B",
