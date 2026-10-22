@@ -99,11 +99,12 @@ fixtures (bez zmeny), vytvorí 1 syntetický PNG 1×1 ako rozpracovaný upload v
 ```powershell
 $env:SIGNED_URL_SUPABASE_URL = "https://cjbdijbbcujvmrzezusd.supabase.co"
 $env:SIGNED_URL_ANON_KEY = "<staging publishable key>"
-$env:SIGNED_URL_OWNER_A_EMAIL = "<QA UX Firma A owner>";  $env:SIGNED_URL_OWNER_A_PASSWORD = "<…>"
-# „B“ = používateľ CUDZEJ firmy (nie nutne owner); vlastník oboch QA UX firiem NIE JE vhodný.
-# Staging účet qa-ux-b-foreign@esblu-qa.invalid (employee, iba QA UX Firma B) — heslo iba lokálne
-# v "Claude outputs/STAGING-QA-signed-url-credentials.txt" (gitignored). Owner A musí mať aktívnu firmu QA UX Firma A.
-$env:SIGNED_URL_OWNER_B_EMAIL = "qa-ux-b-foreign@esblu-qa.invalid";  $env:SIGNED_URL_OWNER_B_PASSWORD = "<zo súboru>"
+# „A“ = zdrojový používateľ IBA z Firmy A s právom uploadu (nie nutne owner); „B“ = používateľ IBA z cudzej Firmy B.
+# Osobný účet vlastníka oboch QA UX firiem NIE JE vhodný. Heslá iba lokálne v
+# "Claude outputs/STAGING-QA-signed-url-credentials.txt" (gitignored).
+$env:SIGNED_URL_SOURCE_A_EMAIL = "qa-ux-a-signedurl@esblu-qa.invalid";  $env:SIGNED_URL_SOURCE_A_PASSWORD = "<zo súboru>"   # admin, iba QA UX Firma A
+$env:SIGNED_URL_FOREIGN_EMAIL = "qa-ux-b-foreign@esblu-qa.invalid";     $env:SIGNED_URL_FOREIGN_PASSWORD = "<zo súboru>"    # employee, iba QA UX Firma B
+# (staršie aliasy SIGNED_URL_OWNER_A_* / SIGNED_URL_OWNER_B_* stále fungujú)
 # voliteľne: $env:SIGNED_URL_EMPLOYEE_A_EMAIL / _PASSWORD
 node --experimental-strip-types --no-warnings scripts/storage-signed-url-http-smoke.ts
 ```

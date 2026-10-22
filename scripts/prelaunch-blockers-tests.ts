@@ -17,6 +17,7 @@ import { fileURLToPath } from "node:url";
 import {
   assertStagingTarget,
   EXPECTED_TTL_SECONDS,
+  identityGuardError,
   PROD_REF,
   redact,
   signedTokenClaims,
@@ -164,6 +165,24 @@ check("script never logs signed URLs / tokens / credentials", () => {
     assert.doesNotMatch(line, /\b(url1|urlShort|signedUrl|oldAccess|password|ANON)\b/, line.trim());
   }
   assert.doesNotMatch(src, /SUPABASE_SERVICE_ROLE_KEY|getSupabaseAdmin/);
+});
+
+check("identity guard: A only in Firma A, B only in Firma B, no shared membership", () => {
+  const A = { company_id: "a", company_name: "QA UX Firma A" };
+  const B = { company_id: "b", company_name: "QA UX Firma B" };
+  const X = { company_id: "x", company_name: "Iná firma" };
+  const g = (a: object, b: object) => identityGuardError(a as never, b as never, "QA UX Firma A", "QA UX Firma B");
+  assert.equal(g({ active: "a", companies: [A] }, { active: "b", companies: [B] }), null);
+  assert.match(String(g({ active: "b", companies: [A, B] }, { active: "b", companies: [B] })), /identity A: active/);
+  assert.match(String(g({ active: "a", companies: [A, B] }, { active: "b", companies: [B] })), /share a company/);
+  assert.match(String(g({ active: "a", companies: [A] }, { active: "b", companies: [B, A] })), /share a company/);
+  assert.match(String(g({ active: "a", companies: [A, X] }, { active: "b", companies: [B, X] })), /share a company/);
+  assert.match(String(g({ active: "a", companies: [A] }, { active: null, companies: [] })), /identity B: active/);
+});
+check("smoke script never calls process.exit() (Windows UV_HANDLE_CLOSING)", () => {
+  const code = read("scripts/storage-signed-url-http-smoke.ts").replace(/\/\/[^\n]*|\/\*\*[\s\S]*?\*\//g, "");
+  assert.doesNotMatch(code, /process\.exit\(/);
+  assert.match(code, /process\.exitCode = /);
 });
 
 console.log(`\n${failures.length === 0 ? "PASS" : "FAIL"} prelaunch-blockers: ${passed} ok, ${failures.length} fail`);

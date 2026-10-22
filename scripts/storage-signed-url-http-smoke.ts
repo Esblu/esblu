@@ -18,14 +18,18 @@
 // Povinné env:
 //   SIGNED_URL_SUPABASE_URL       https://cjbdijbbcujvmrzezusd.supabase.co (iný ref = odmietnuté)
 //   SIGNED_URL_ANON_KEY           publishable/anon kľúč STAGINGU
-//   SIGNED_URL_OWNER_A_EMAIL / SIGNED_URL_OWNER_A_PASSWORD   vlastník QA UX Firma A (aktívna firma = A)
-//   SIGNED_URL_OWNER_B_EMAIL / SIGNED_URL_OWNER_B_PASSWORD   „B“ = POUŽÍVATEĽ CUDZEJ FIRMY, nie nutne owner:
-//       ľubovoľná rola (owner/admin/employee) s členstvom IBA v inej firme než A. Odporúčaný
-//       staging účet: `qa-ux-b-foreign@esblu-qa.invalid` (employee, iba QA UX Firma B); heslo je iba
-//       lokálne v `Claude outputs/STAGING-QA-signed-url-credentials.txt` (gitignored), nikdy v repe.
-//       Alias: SIGNED_URL_FOREIGN_EMAIL / SIGNED_URL_FOREIGN_PASSWORD (má prednosť).
-//       Skript odmietne beh, ak „B“ je členom firmy A alebo ak A a B majú rovnakú aktívnu firmu
-//       (napr. vlastník oboch QA UX firiem — nie je to cross-company identita).
+//   SIGNED_URL_SOURCE_A_EMAIL / SIGNED_URL_SOURCE_A_PASSWORD  „A“ = ZDROJOVÝ POUŽÍVATEĽ IBA Z FIRMY A
+//       s právom setup uploadu do `vehicle-photos` (owner/admin/employee), NIE nutne skutočný owner.
+//       Odporúčaný staging účet: `qa-ux-a-signedurl@esblu-qa.invalid` (admin, iba QA UX Firma A).
+//       Starší alias: SIGNED_URL_OWNER_A_EMAIL / SIGNED_URL_OWNER_A_PASSWORD (SOURCE_A má prednosť).
+//   SIGNED_URL_FOREIGN_EMAIL / SIGNED_URL_FOREIGN_PASSWORD    „B“ = POUŽÍVATEĽ CUDZEJ FIRMY (iba Firma B),
+//       ľubovoľná rola, nie nutne owner. Odporúčaný staging účet: `qa-ux-b-foreign@esblu-qa.invalid`
+//       (employee, iba QA UX Firma B). Starší alias: SIGNED_URL_OWNER_B_* (FOREIGN má prednosť).
+//   Heslá sú iba lokálne v `Claude outputs/STAGING-QA-signed-url-credentials.txt` (gitignored), nikdy v repe.
+//   Guard (pred akýmkoľvek uploadom): A má aktívnu firmu SIGNED_URL_EXPECT_A_COMPANY (default
+//   „QA UX Firma A“), B má aktívnu firmu SIGNED_URL_EXPECT_B_COMPANY (default „QA UX Firma B“),
+//   A ani B nesmú zdieľať žiadne členstvo vo firme — inak beh skončí bez zápisu (napr. vlastník
+//   oboch QA UX firiem nie je cross-company identita).
 // Voliteľné:
 //   SIGNED_URL_EMPLOYEE_A_EMAIL / SIGNED_URL_EMPLOYEE_A_PASSWORD  zamestnanec firmy A
 //
@@ -82,6 +86,40 @@ export function signedTokenClaims(signedUrl: string): string[] {
   }
 }
 
+export type CompanyMembership = { company_id: string; company_name: string | null };
+
+/**
+ * Cross-company identita (čistá funkcia, testovaná): vráti dôvod odmietnutia alebo null.
+ * A musí mať aktívnu firmu `expectA` a byť v nej členom, B aktívnu `expectB`, žiadne spoločné členstvo.
+ */
+export function identityGuardError(
+  a: { active: string | null; companies: CompanyMembership[] },
+  b: { active: string | null; companies: CompanyMembership[] },
+  expectA: string,
+  expectB: string
+): string | null {
+  const nameOf = (list: CompanyMembership[], id: string | null) => list.find((c) => c.company_id === id)?.company_name ?? null;
+  if (!a.active || nameOf(a.companies, a.active) !== expectA) return `identity A: active company is not "${expectA}"`;
+  if (!b.active || nameOf(b.companies, b.active) !== expectB) return `identity B: active company is not "${expectB}"`;
+  const aIds = new Set(a.companies.map((c) => c.company_id));
+  if (b.companies.some((c) => aIds.has(c.company_id))) return "identities A and B share a company membership";
+  if (b.companies.some((c) => c.company_name === expectA)) return `identity B belongs to "${expectA}"`;
+  if (a.companies.some((c) => c.company_name === expectB)) return `identity A belongs to "${expectB}"`;
+  return null;
+}
+
+/** Riadený koniec bez process.exit() — na Windows inak hrozí `UV_HANDLE_CLOSING` pri zatváraní fetch socketov. */
+class SmokeExit extends Error {
+  readonly code: number;
+  constructor(code: number, message: string) {
+    super(message);
+    this.code = code;
+  }
+}
+function fatal(code: number, message: string): never {
+  throw new SmokeExit(code, message);
+}
+
 export function assertStagingTarget(url: string): void {
   if (url.includes(PROD_REF)) throw new Error("REFUSED: target is PRODUCTION");
   if (!url.startsWith(`https://${STAGING_REF}.supabase.co`)) throw new Error("REFUSED: target is not staging esblu-test");
@@ -89,10 +127,7 @@ export function assertStagingTarget(url: string): void {
 
 function env(name: string, optional = false): string {
   const v = process.env[name]?.trim() ?? "";
-  if (!v && !optional) {
-    console.error(`missing env ${name}`);
-    process.exit(2);
-  }
+  if (!v && !optional) fatal(2, `missing env ${name}`);
   return v;
 }
 
@@ -116,7 +151,11 @@ async function http(method: "GET" | "HEAD", url: string) {
 
 async function main() {
   const URL_ = env("SIGNED_URL_SUPABASE_URL").replace(/\/+$/, "");
-  assertStagingTarget(URL_);
+  try {
+    assertStagingTarget(URL_);
+  } catch (e) {
+    fatal(2, (e as Error).message);
+  }
   const ANON = env("SIGNED_URL_ANON_KEY");
   const client = () => createClient(URL_, ANON, { auth: { persistSession: false, autoRefreshToken: false } });
 
@@ -126,52 +165,49 @@ async function main() {
     if (!email || !password) return null;
     const db = client();
     const { data, error } = await db.auth.signInWithPassword({ email, password });
-    if (error || !data.user) {
-      console.error(`login failed for ${prefix} (${error?.status ?? "?"})`);
-      process.exit(2);
-    }
+    if (error || !data.user) fatal(2, `login failed for ${prefix} (${error?.status ?? "?"})`);
     return { db, uid: data.user.id };
   }
 
-  const a = await login("SIGNED_URL_OWNER_A");
+  // Zdrojová identita A (iba Firma A, smie uploadnúť) a cudzia identita B (iba Firma B).
+  const A_PREFIX = env("SIGNED_URL_SOURCE_A_EMAIL", true) ? "SIGNED_URL_SOURCE_A" : "SIGNED_URL_OWNER_A";
+  const a = await login(A_PREFIX);
   const b = (await login("SIGNED_URL_FOREIGN")) ?? (await login("SIGNED_URL_OWNER_B"));
-  if (!a || !b) {
-    console.error("missing owner A / foreign-company user credentials");
-    process.exit(2);
-  }
-  // Cross-company identita: B nesmie byť členom aktívnej firmy A (inak by DENY testy nič nedokazovali).
-  const { data: activeA } = await a.db.rpc("esblu_my_active_company_id");
-  const { data: activeB } = await b.db.rpc("esblu_my_active_company_id");
-  const { data: companiesB } = await b.db.rpc("esblu_list_my_companies");
-  const bCompanyIds = JSON.stringify(companiesB ?? []);
-  if (!activeA || !activeB || activeA === activeB || (typeof activeA === "string" && bCompanyIds.includes(activeA))) {
-    console.error("REFUSED: user B is not a foreign-company identity (same or shared company as owner A's active company) — switch owner A to QA UX Firma A or use a user that belongs only to another company");
-    process.exit(2);
-  }
-  check("setup: B is a member of a different company only (cross-company identity)", true);
+  if (!a || !b) fatal(2, "missing source A (SIGNED_URL_SOURCE_A_*) / foreign B (SIGNED_URL_FOREIGN_*) credentials");
+
+  const identity = async (db: SupabaseClient) => {
+    const { data: active } = await db.rpc("esblu_my_active_company_id");
+    const { data: companies } = await db.rpc("esblu_list_my_companies");
+    return { active: typeof active === "string" ? active : null, companies: (companies ?? []) as CompanyMembership[] };
+  };
+  const guard = identityGuardError(
+    await identity(a.db),
+    await identity(b.db),
+    env("SIGNED_URL_EXPECT_A_COMPANY", true) || "QA UX Firma A",
+    env("SIGNED_URL_EXPECT_B_COMPANY", true) || "QA UX Firma B"
+  );
+  if (guard) fatal(2, `REFUSED (no upload done): ${guard}`);
+  check("setup: A only in company A, B only in company B, no shared membership", true);
   const emp = await login("SIGNED_URL_EMPLOYEE_A");
   const anon = client();
 
   // Vozidlo aktívnej firmy A (RLS) → cesta `<uid>/<vehicleId>/qa-signed-url-<uuid>.png`.
   const { data: vehicles, error: vErr } = await a.db.from("vehicles").select("id").limit(1);
-  if (vErr || !vehicles?.length) {
-    console.error(`owner A has no readable vehicle in the active company (${vErr?.code ?? "none"}) — cannot build a media path`);
-    process.exit(2);
-  }
+  if (vErr || !vehicles?.length) fatal(2, `source A has no readable vehicle in the active company (${vErr?.code ?? "none"}) — cannot build a media path`);
   const path = `${a.uid}/${vehicles[0].id}/qa-signed-url-${randomUUID()}.png`;
   let uploaded = false;
 
   try {
     const up = await a.db.storage.from(BUCKET).upload(path, PNG_1X1, { contentType: "image/png", upsert: false });
     uploaded = !up.error;
-    check("setup: owner A uploads synthetic 1×1 PNG (draft, unreferenced)", uploaded, up.error?.message ?? "");
-    if (!uploaded) return;
+    check("setup: source A uploads synthetic 1×1 PNG (draft, unreferenced)", uploaded, up.error?.message ?? "");
+    if (!uploaded) return 1;
 
     // A — autorizovaný používateľ
     const signed = await a.db.storage.from(BUCKET).createSignedUrl(path, EXPECTED_TTL_SECONDS);
     const url1 = signed.data?.signedUrl ?? "";
-    check("A owner A gets signed URL", !signed.error && !!url1, signed.error?.message ?? "");
-    if (!url1) return;
+    check("A source user A (company A) gets signed URL", !signed.error && !!url1, signed.error?.message ?? "");
+    if (!url1) return 1;
 
     // B — reálny HTTP GET + HEAD
     const g = await http("GET", url1);
@@ -231,7 +267,7 @@ async function main() {
     const oldAccess = sess.session?.access_token ?? "";
     await a.db.auth.signOut({ scope: "global" });
     const gAfterLogout = await http("GET", url1);
-    info("G issued URL after owner A global sign-out", `status=${gAfterLogout.status} (Supabase: signed URL is a standalone token; it stays valid until exp)`);
+    info("G issued URL after source A global sign-out", `status=${gAfterLogout.status} (Supabase: signed URL is a standalone token; it stays valid until exp)`);
     const stale = createClient(URL_, ANON, {
       auth: { persistSession: false, autoRefreshToken: false },
       global: { headers: { Authorization: `Bearer ${oldAccess}` } },
@@ -240,31 +276,42 @@ async function main() {
     info("G new sign with revoked session's old access JWT", staleSign.data?.signedUrl ? "ISSUED (JWT valid until its exp — platform behavior)" : `denied (${staleSign.error?.message ?? "-"})`);
 
     // F — po zmazaní objektu (štandardný flow) sa nová URL nevydá; stará vráti chybu
-    const a2 = await login("SIGNED_URL_OWNER_A");
-    if (!a2) return;
+    const a2 = await login(A_PREFIX);
+    if (!a2) return 1;
     const rm = await a2.db.storage.from(BUCKET).remove([path]);
     const removed = !rm.error && (rm.data ?? []).length === 1;
     uploaded = !removed;
-    check("cleanup: owner A removes synthetic draft via standard remove()", !rm.error && (rm.data ?? []).length === 1, rm.error?.message ?? `removed=${rm.data?.length ?? 0}`);
+    check("cleanup: source A removes synthetic draft via standard remove()", !rm.error && (rm.data ?? []).length === 1, rm.error?.message ?? `removed=${rm.data?.length ?? 0}`);
     const fSign = await a2.db.storage.from(BUCKET).createSignedUrl(path, 60);
     check("F after removal no new signed URL is issued", !fSign.data?.signedUrl);
     const fOld = await http("GET", url1);
     check("F previously issued URL no longer returns the file after removal", fOld.status !== 200, `status=${fOld.status}`);
   } finally {
     if (uploaded) {
-      const again = await login("SIGNED_URL_OWNER_A");
+      const again = await login(A_PREFIX).catch(() => null);
       const rm = again ? await again.db.storage.from(BUCKET).remove([path]) : null;
       console.log(`${rm && !rm.error ? "ok  " : "FAIL"} cleanup (finally): synthetic object removed`);
     }
   }
 
   console.log(`\n${fails === 0 ? "PASS" : "FAIL"} signed URL HTTP smoke: ${passes} ok, ${fails} fail`);
-  process.exit(fails === 0 ? 0 : 1);
+  return fails === 0 ? 0 : 1;
 }
 
 if (process.argv[1]?.replace(/\\/g, "/").endsWith("scripts/storage-signed-url-http-smoke.ts")) {
-  main().catch((e) => {
-    console.error(`FAIL unexpected: ${redact(String(e?.message ?? e))}`);
-    process.exit(1);
-  });
+  // Žiadne process.exit(): exit code cez process.exitCode a prirodzené ukončenie event loopu
+  // (Windows: process.exit() počas zatvárania fetch socketov → `UV_HANDLE_CLOSING` assertion).
+  main()
+    .then((code) => {
+      process.exitCode = code;
+    })
+    .catch((e) => {
+      if (e instanceof SmokeExit) {
+        console.error(e.message);
+        process.exitCode = e.code;
+      } else {
+        console.error(`FAIL unexpected: ${redact(String(e?.message ?? e))}`);
+        process.exitCode = 1;
+      }
+    });
 }
