@@ -1,7 +1,7 @@
 # Esblu — MASTER PRE-LAUNCH CHECKLIST
 
 Kanonický zoznam všetkého, čo musí byť hotové pred verejným spustením. Aktualizovať pri každom bloku.
-Posledná aktualizácia: **2026-10-23** (branch `preprod-release-candidate` — **GRANULAR TEAM PERMISSIONS: PASS**, sekcia **J4**; predtým PRODUCT RC FINALIZATION, sekcia **J3**).
+Posledná aktualizácia: **2026-10-22** (branch `preprod-release-candidate` — **PRE-LAUNCH TECHNICAL BLOCKERS: PARTIAL**, sekcia **J5**; predtým GRANULAR TEAM PERMISSIONS: PASS, sekcia **J4**).
 
 Statusy: **PASS** · **READY** (pripravené, čaká na vykonanie/súhlas) · **BLOCKED LEGAL** · **BLOCKED EXTERNAL** ·
 **TODO** · **NOT YET RUN**
@@ -36,7 +36,7 @@ Statusy: **PASS** · **READY** (pripravené, čaká na vykonanie/súhlas) · **B
 | voice | PASS | RC sady; staging: návrh viazaný na firmu |
 | push | PASS (kód) | real-device NOT YET RUN |
 | chat | PASS | staging izolácia per session |
-| files / signed URL | PASS (DB politiky, autoritatívne) | media baseline = produkcia; role/odchod/cross-tenant/anon; HTTP podpis URL NOT YET RUN (E2E driver nemá akciu pre médiá; TTL 3600 s, vydaná URL platí do expirácie) |
+| files / signed URL | PASS (DB politiky, autoritatívne) · HTTP PARTIAL | media baseline = produkcia; role/odchod/cross-tenant/anon; HTTP anon/public/forged/traversal PASS (staging, 2026-10-22); prihlásené A/B/C/E/F/G čakajú na `scripts/storage-signed-url-http-smoke.ts` (vlastník) — sekcia J5 |
 | dashboard (nový) | READY | v RC; produkčný merge TODO |
 | auth (email, Google, session restore) | PASS (RC) | real-device NOT YET RUN |
 | web build / mobile static export | PASS (po integrácii) | offline font mock v sandboxe; `verify-mobile-bundle` PASS |
@@ -167,11 +167,11 @@ Statusy: **PASS** · **READY** (pripravené, čaká na vykonanie/súhlas) · **B
 | RLS / tenant izolácia (multi-company) | PASS (PGlite + staging) |
 | eInvoice RLS (SELECT iba aktívna firma + finance) | PASS (staging DB) |
 | secrets (žiadne v repe, server-only) | PASS (scan) |
-| signed URL / media model | PASS (staging DB politiky = produkcia; HTTP podpis NOT YET RUN) |
+| signed URL / media model | PASS (staging DB politiky = produkcia) · HTTP PARTIAL (J5) |
 | poradie zrušenia účtu (DB → Storage → auth) | PASS |
 | logovanie / PII (webhook payloady) | TODO (audit pri integrácii) |
-| zálohy | TODO (pred produkčnou migráciou) |
-| rollback plány | READY (rollback skripty v repe) |
+| zálohy | EXTERNAL CONFIRMATION REQUIRED — Supabase org plán Pro (denné zálohy 7 dní); PITR a posledný recovery point potvrdí vlastník v Dashboarde (J5) |
+| rollback plány | READY — per skupina v `docs/production-migration-runbook-2026-10-22.md` §G (vrátane „podmienečne“ / „STAGING ONLY“ výhrad) |
 | observability | TODO |
 | Preview `OPENAI_API_KEY` Vercel warning „Needs Attention“ (`readable-secret`) | EXPECTED — Preview hodnota = nefunkčný sentinel `preview-disabled` (overené 2026-10-22 bez výpisu hodnoty), OpenAI v Preview zámerne vypnuté; Production `OPENAI_API_KEY` = samostatný Sensitive secret, len production target, nedotknutý; no action required before launch |
 | Preview AI fail-closed (voice, assistant, AI dokumenty) | PASS — všetky OpenAI routes vracajú 503 `AI_UNAVAILABLE` pred kvótou / nahratím / volaním OpenAI (`test:ai-preview-disabled`); scan routes doplnené 2026-10-22 |
@@ -239,6 +239,23 @@ Detail: `docs/team-granular-permissions-2026-10-23.md`. Migrácia `2026102310000
 | finance/doklady/partneri pre zamestnanca | NOT IN V1 | finančný model (`permissions.finance`, účtovník) bez zmeny |
 | **production rollout** | ⛔ NOT YET RUN / PENDING APPROVAL | poradie: hneď za `20261022100000` (sekcia L) |
 
+## J5. PRE-LAUNCH TECHNICAL BLOCKERS (2026-10-22)
+
+**PRE-LAUNCH TECHNICAL BLOCKERS: PARTIAL** (RC `f06abe9`). Detail: `docs/production-migration-runbook-2026-10-22.md`.
+Produkcia iba čítaná (read-only SELECT, Vercel GET) — žiadny zápis, migrácia, deploy ani zmena env/plánu.
+
+| položka | status | poznámka |
+|---|---|---|
+| Vercel plan / cron capability | PASS | **VERCEL 1-MINUTE CRON: SUPPORTED** — Vercel API: produkčný aj RC Preview deployment `plan: "pro"`; billing ledger (Committed, Additional Team Seats, fakturované využitie); RC Preview s `* * * * *` READY; docs: Pro min. interval 1 min, 100 cronov |
+| cron inventory | PASS | 8 cronov (prod dnes 1); všetky `CRON_SECRET` + timingSafeEqual + 401; idempotentné / SKIP LOCKED + lease; eInvoice bez prod env = no-op; `CRON_SECRET` samostatné záznamy pre Production / Preview; crony bežia iba na produkcii; `test:prelaunch-blockers` |
+| signed URL HTTP test | PARTIAL | reálne HTTP (staging): public URL 400 pre všetky buckety, anon sign 400 aj pre existujúci objekt, forged token 400 InvalidJWT, traversal 400; prihlásené A/B/E/F/G → `scripts/storage-signed-url-http-smoke.ts` spustí vlastník (Claude sa heslom neprihlasuje) |
+| signed URL cross-company isolation | PARTIAL | DB politika PASS (predošlý audit); HTTP pre prihláseného cudzinca (C) v tom istom skripte |
+| production migration diff | PASS | presne **38** migrácií absent v produkcii (baseline + `20261002100000` … `20261023100000` okrem `20261005090000/091000`); repo × prod história (56) × staging história |
+| production migration runbook | PASS (READY) | precheck, backup, poradie, expected state, grants, smoke, rollback, STOP, okno, súhlasy; `scripts/sql/prod-migration-precheck.sql` — dry-run na produkcii 0 STOP / 0 WARN |
+| legacy baseline `20260720000000` | CONDITIONAL | no-op (9/9 tabuliek v produkcii); APPLY pre paritu histórie so stagingom, STOP ak ≠ 9 |
+| backup / recovery confirmation | EXTERNAL CONFIRMATION REQUIRED | Supabase Pro → denné zálohy 7 dní; PITR + posledný recovery point: vlastník, Dashboard → Database → Backups |
+| **production rollout** | ⛔ NOT YET RUN / PENDING APPROVAL | runbook §I |
+
 ## K. FINAL FULL SMOKE — spustiť IBA keď finálny RC obsahuje multi-company + eInvoice + voice + billing + finálnu legal/store konfiguráciu
 
 Status: **NOT YET RUN.** Rozsah: mobil + desktop; auth, Google login, multi-company, roly, faktúry, e-Faktúra
@@ -247,7 +264,9 @@ reconnect, oprávnenia, notifikácie, aplikácia nainštalovaná z obchodu.
 
 ## L. PRODUCTION ROLLOUT (všetko ⛔ až po súhlase)
 
-1. read-only produkčný precheck (owner invariant, multi-membership, drift)
+Autoritatívny postup: `docs/production-migration-runbook-2026-10-22.md` (38 migrácií, STOP podmienky, rollback per skupina).
+
+1. read-only produkčný precheck (`scripts/sql/prod-migration-precheck.sql` + `scripts/sql/einvoice-prod-precheck.sql`)
 2. skutočná história migrácií
 3. záloha / logický dump
 4. schema fingerprint
