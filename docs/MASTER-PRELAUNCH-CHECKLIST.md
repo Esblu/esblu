@@ -1,7 +1,7 @@
 # Esblu — MASTER PRE-LAUNCH CHECKLIST
 
 Kanonický zoznam všetkého, čo musí byť hotové pred verejným spustením. Aktualizovať pri každom bloku.
-Posledná aktualizácia: **2026-10-26** (branch `preprod-release-candidate` — **J7 BUSINESS RULE CORRECTIONS** + PRICING + ENTITLEMENTS ARCHITECTURE, sekcia **J7**; predtým COST CONTROL HARDENING, sekcia **J6**; predtým CHECKLIST RECONCILIATION na RC `c3a8650`, sekcie **M–P**;
+Posledná aktualizácia: **2026-10-25 J9 FINAL RC / PRE-PRODUCTION READINESS** (RC `85f800b`, sekcia **J9** — kanonický zoznam blockerov a poradie release); predtým **2026-10-26** (branch `preprod-release-candidate` — **J7 BUSINESS RULE CORRECTIONS** + PRICING + ENTITLEMENTS ARCHITECTURE, sekcia **J7**; predtým COST CONTROL HARDENING, sekcia **J6**; predtým CHECKLIST RECONCILIATION na RC `c3a8650`, sekcie **M–P**;
 predtým PRE-LAUNCH TECHNICAL BLOCKERS: PASS, sekcia **J5**; GRANULAR TEAM PERMISSIONS: PASS, sekcia **J4**).
 
 Statusy: **PASS** · **READY** (pripravené, čaká na vykonanie/súhlas) · **BLOCKED LEGAL** (CLIA) · **BLOCKED EXTERNAL** ·
@@ -278,7 +278,7 @@ Produkcia iba čítaná (read-only SELECT, Vercel GET) — žiadny zápis, migr�
 | položka | status | poznámka |
 |---|---|---|
 | Vercel plan / cron capability | PASS | **VERCEL 1-MINUTE CRON: SUPPORTED** — Vercel API: produkčný aj RC Preview deployment `plan: "pro"`; billing ledger (Committed, Additional Team Seats, fakturované využitie); RC Preview s `* * * * *` READY; docs: Pro min. interval 1 min, 100 cronov |
-| cron inventory | PASS | 8 cronov (prod dnes 1); všetky `CRON_SECRET` + timingSafeEqual + 401; idempotentné / SKIP LOCKED + lease; eInvoice bez prod env = no-op; `CRON_SECRET` samostatné záznamy pre Production / Preview; crony bežia iba na produkcii; `test:prelaunch-blockers` |
+| cron inventory | PASS | 8 cronov v čase J5 — **od J6 9** (`telemetry-maintenance`; prod dnes 1); všetky `CRON_SECRET` + timingSafeEqual + 401; idempotentné / SKIP LOCKED + lease; eInvoice bez prod env = no-op; `CRON_SECRET` samostatné záznamy pre Production / Preview; crony bežia iba na produkcii; `test:prelaunch-blockers` |
 | signed URL HTTP test | PASS | `scripts/storage-signed-url-http-smoke.ts` na Windows × staging: **25 ok / 0 fail** (vlastník, 2026-10-22; QA identity `qa-ux-a-signedurl@…` iba Firma A, `qa-ux-b-foreign@…` iba Firma B) — autorizovaná URL, GET/HEAD 200 `image/png`, TTL 3600, expirácia, token claims ⊆ Storage allowlist (`scope=download`), anon DENY, private bucket, traversal DENY, uploader-only draft, cleanup; po zmazaní objektu stará URL obsah neservuje. Predtým Claude: anon/public/forged/traversal HTTP 400 |
 | signed URL cross-company isolation | PASS | používateľ cudzej firmy: sign / batch sign / list / download DENY (reálne HTTP, smoke 25/0); guard v skripte vynúti A iba Firma A, B iba Firma B, bez spoločného členstva |
 | production migration diff | PASS | presne **38** migrácií absent v produkcii (baseline + `20261002100000` … `20261023100000` okrem `20261005090000/091000`); repo × prod história (56) × staging história |
@@ -367,10 +367,266 @@ Production rollout **NOT YET RUN / PENDING APPROVAL**. Detail a ekonomika: `docs
 | telemetry | PASS (repo + staging) | `ai_usage_monthly` flow `intent_command` (deterministic / ai-fallback / unsupported / ambiguous × success/failure, firma × mesiac); RPC `esblu_record_intent_command` service-only; žiadny text, prompt, odpoveď, prepis, entita, ŠPZ ani user_id; migrácia `20261027100000` + rollback |
 | heavy economics | PASS (model) | 20-členná HEAVY firma pri 15,90 €: −2,86 € → **+7,83 €** (oprava parsera) → +8,13 € (prompt) → **+9,49 €** (caching); intent náklad 13,54 → 1,19 €/mes.; baseline mix @100: 65,1 % → 79,3 % |
 | security regression | PASS | žiadna zmena rolí/oprávnení/RLS; zamestnanec bez asistenta; AI výstup ďalej cez `sanitizeAiIntent`, invarianty, bránu oprávnení a potvrdenie; žiadne AI SQL; multi-company izolácia (dedupe aj telemetria podľa firmy) |
-| testy | PASS | `test:intent-corpus` 14/14, `test:intent-fallback` 24/24, `test:cost-control-db` 16/16 (+3 J8), `test:grants-replay-db` 43/43, `test:grants-guard` 10/10, `test:prelaunch-blockers` 21/21; celá sada **108/108** skriptov; `tsc` 0; lint = baseline (33 errors / 31 warnings, žiadna nová) |
+| testy | PASS | `test:intent-corpus` 14/14, `test:intent-fallback` 24/24, `test:cost-control-db` 16/16 (+3 J8), `test:grants-replay-db` 43/43, `test:grants-guard` 10/10, `test:prelaunch-blockers` 21/21; celá sada **107/107** skriptov (opravený počet v J9); `tsc` 0; lint = baseline (33 errors / 31 warnings, žiadna nová) |
 | mobile / web regression | PASS | web `next build` (Turbopack) a mobile `npm run build -w mobile` (Turbopack) + `verify:mobile-bundle` PASS lokálne (Google Fonts mock + placeholder verejné env v sandboxe); mobile webpack build PASS; Vercel Preview pre RC SHA |
 | staging (`cjbdijbbcujvmrzezusd`) | PASS | `20261027100000` aplikovaná, md5 funkcie == repo (`54fb3ab4…`), matica `scripts/sql/intent-command-telemetry-staging-matrix.sql` (rolled back); bez OpenAI kľúča; Preview AI sentinel ostáva vypnutý (žiadna zmena env); `allow_mock_plans` false; advisors iba očakávané |
 | **production rollout** | ⛔ NOT YET RUN / PENDING APPROVAL | migrácia #43 v runbooku (sekcia L); prepnutie modelu iba po benchmarku a súhlase |
+
+## J9. FINAL RC / PRE-PRODUCTION READINESS (2026-10-25)
+
+**VERDIKT: READY EXCEPT EXTERNAL BLOCKERS.** Technicky je RC pripravený na kontrolované produkčné okno (migrácie +
+deploy) — všetky testy, buildy, precheck aj staging sú zelené a žiadny technický P0 nie je otvorený. Prvý produkčný
+release však nesmie ísť pred: (1) CLIA finálnymi textami (privacy, terms, subprocesori, retencia, zrušenie účtu) —
+web aj Android ich zverejňujú, (2) výslovným súhlasom vlastníka s oknom (backup, migrácie, merge, deploy).
+Billing, eFaktúra, Apple a Android produkcia ostávajú vypnuté / samostatné fázy. Audit bol **read-only** voči produkcii.
+
+### J9.1 Kanonický stav (overené z providerov, nie z checklistu)
+
+| položka | hodnota | zhoda |
+|---|---|---|
+| `origin/preprod-release-candidate` | `85f800b` (git fetch) | PASS — clean, 181 commitov nad `main`, `main` je predok (fast-forward možný), 0 commitov v `main` mimo RC |
+| `origin/main` | `901c46c` | PASS — nedotknutý |
+| produkčný deployment | `dpl_3She4DWLcGnehbkZQmgh6PMZqjUr` = `main` `901c46c`, READY | PASS — rollback kandidát |
+| Vercel Preview RC | `dpl_6bX8pEJTBB61FFRRDq1dHH9fRpGu` = `85f800b`, READY | PASS |
+| staging Supabase | `cjbdijbbcujvmrzezusd` (`esblu-test`) — **46** history riadkov, posledný `20261027100000_intent_command_telemetry` | PASS (43 RC + 3 už v produkcii) |
+| produkčný Supabase | `fkpgvgvsmbpieduoatrt` (`assetpilot`) — **56** riadkov, posledný `20261005091000_private_media_buckets` | PASS — bez zmeny od 2026-10-22 |
+| RC migrácie chýbajúce v produkcii | **43** (baseline `20260720000000` + `20261002100000` … `20261027100000`, okrem `20261001130000`, `20261005090000`, `20261005091000`) | PASS — runbook §C, precheck SQL a `test:prelaunch-blockers` súhlasia |
+| Vercel runtime errors produkcie (7 dní) | 0 | PASS |
+
+Git hygiena: žiadne netrackované release-kritické súbory, žiadne `.env`/kľúče/build výstupy v repe (iba `mobile/.env.*.example`
+bez tajomstiev), secret scan trackovaných súborov čistý, `git diff --check` čistý, bez force-push v histórii RC.
+Veľké mediálne súbory (`public/images/*.png` > 2 MB, `public/video/*.mp4`) sú zámerné assety landingu → POST-LAUNCH optimalizácia.
+
+### J9.2 Produkčný precheck (read-only, 2026-10-25)
+
+| skript | výsledok |
+|---|---|
+| `scripts/sql/prod-migration-precheck.sql` | **0 STOP / 0 WARN / 28 OK / 5 INFO** — 0 z 43 RC migrácií, 9/9 legacy, 61/61 pre-RC tabuliek, 0 RC tabuliek, 0 tabuliek bez RLS, politiky 114/11, anon iba `legal_documents:SELECT`, anon definer iba `esblu_get_invite_preview`, 7/7 privátnych bucketov, owner invariant OK, pgcrypto 1.3. INFO: 4 firmy / 6 aktívnych členov / 6 auth, plán admin 1 / free 2 / pro 1, 2 finalizované faktúry, 20 `company_entitlements`, 27 Storage objektov |
+| `scripts/sql/einvoice-prod-precheck.sql` | **0 STOP / 0 WARN** po oprave (35 OK/INFO). Nález: **falošný STOP** `migration_state` (porovnanie `max(version)` — produkcia eviduje čas aplikovania v `version`) → **opravené v J9** (version ALEBO prefix `name`), `test:einvoice-prod-precheck` 6/6 |
+
+### J9.3 Migrácie, záloha, rollback
+
+| položka | status | poznámka |
+|---|---|---|
+| poradie, závislosti, legacy baseline, rollback, idempotencia, grants, RLS | READY FOR PROD | runbook §C/§G (43 riadkov), `test:grants-replay-db` 43/43 (fresh replay + rollback → re-apply), `test:grants-guard` 10/10; baseline = CONDITIONAL no-op (9/9) |
+| extensions | READY | iba `pgcrypto` (v produkcii 1.3) |
+| lock / downtime / dátové riziko | LOW | malá DB (4 firmy, 2 faktúry); backfilly (multi-company, entitlementy, legacy plány) nad desiatkami riadkov; okno v jednej relácii kvôli Data API grantom (#36) |
+| scheduled backup | READY — **potvrdiť znova v okne** | posledné potvrdenie vlastníkom 22 Oct 2026 02:38 UTC (Pro, denné, 7 dní); Claude backupy nevie čítať (žiadny nástroj) → vlastník v Dashboarde |
+| PITR | DISABLED / OPTIONAL — **nie blocker** | RPO až ~24 h → povinný logický dump tesne pred oknom |
+| manuálny dump | READY (postup) | runbook §B: `supabase db dump` schéma + `--data-only`, sha256, mimo repa |
+| Storage | známe obmedzenie | súbory nie sú v DB zálohe; RC migrácie súbory nemažú |
+| rollback migrácie / app deployu | READY | SQL rollback per skupina (§G, s výhradami „podmienečne“) / Vercel Instant Rollback na `dpl_3She4…` (DB môže ostať — nové objekty bez provider env sú no-op) |
+
+### J9.4 Technické domény
+
+| oblasť | status | dôkaz / poznámka |
+|---|---|---|
+| DB / RLS / grants | PASS | grants guard/replay, RLS matice, `test:m1-authz-db` 47, `test:multi-company-db` 39, `test:storage-media-db` 33, `test:team-permissions-db` 17, `test:pricing-entitlements-db` 35, `test:cost-control-db` 16; 0 `TO public`, anon deny, billing/usage/permissions nepodvrhnuteľné klientom (service-only RPC) |
+| auth / closed beta / multi-company | PASS (RC) | Google OAuth + PKCE (`test:google-oauth` 17, `-db` 18), allowlist + invite bypass (`test:closed-beta-p0` 36), session-bound aktívna firma, 1 owner, odchod ≠ zrušenie, zrušenie účtu/firmy s guardmi (`test:account-deletion-*`); subscription/usage/permissions vždy firemné. Sign in with Apple: kód READY, fail closed, aktivácia = APPLE (Google na iOS iba spolu s Apple) |
+| storage / signed URL / deletion | PASS | privátne buckety, signed URL TTL 3600, cross-company/anon/traversal deny (HTTP smoke 25/0), delete queue + sweep, upload brány (trial 1 GB / platený 5 GB / po triale bez plánu 0 nových uploadov — J7) |
+| team permissions | PASS | bez regresie po J7/J8 (`test:team-permissions-*`, `test:intent-permissions` 44) |
+| pricing / entitlements | PASS — hodnoty = OWNER DECISION | Komplet 15,90 € / modul 3,90 € / ďalšia firma 12,90 € / trial 14 dní / Dokumenty 10 AI / Komplet 40 AI (+40 = 3,90 €) / hlas modulárny 0, Komplet 60 min (+60 = 3,90 €) / 25 používateľov (+25 = 4,90 €) / úložisko 1 GB · 5 GB · 0 / eFaktúra 20 tx, odoslaná 1, prijatá 0,5, +40 = 4,90 €, +100 = 9,90 €; TS↔SQL parita, stropy, downgrade bez mazania, billing iba owner (`test:pricing-engine` 19, `test:plan-entitlements` 47) |
+| OpenAI / hlas / intenty | PASS (repo + staging) | 5 flowov, retry guard, metering bez obsahu, dedupe, J8: deterministické pokrytie 98,4 % (holdout 94,9 %), fallback 1,1 % (5,3 %), heavy firma +7,83 €…+9,49 €; žiadne AI SQL, zápisy cez potvrdenie; **terra ostáva**, luna benchmark iba po samostatnom súhlase |
+| interný chat | PASS | kanál + 1:1, prílohy, referencie, realtime filtre (7 odberov), edit/soft delete, RLS, push, unread, dedupe retencia 7 dní; **OpenAI chat nepoužíva** (`test:cost-control`) |
+| crony (9) | PASS | tabuľka nižšie; všetky `CRON_SECRET` (≥ 16 zn., timingSafeEqual, 401); billing crony zámerne nenaplánované |
+| UX core flows | PASS (RC) | Dnes, onboarding, empty states, moduly, Chat, Nastavenia, Predplatné, Cenník, prepínač firiem — role-aware; manuálne prejdené vlastníkom 2026-10-22/23 (J3/J4); real-device smoke = K |
+| buildy | PASS | `tsc` 0; lint = baseline 33 errors / 31 warnings (bez novej); web `next build` + mobile Turbopack + `verify:mobile-bundle` + mobile webpack PASS na `85f800b` (J8; od vtedy iba SQL/docs → bez opakovania); Vercel Preview READY |
+| observability | PARTIAL — vedomé rozhodnutie | Vercel runtime logs/errors (0 za 7 dní), `console.error` bez PII, eInvoice health + kritický alert → HTTP 503 v `einvoice-maintenance`, telemetria `ai_usage_monthly`; **chýba**: alerting na zlyhané crony/webhooky (iba logy), dashboard pre `account_deletion_cleanup_jobs` / `media_deletion_queue` → P2 POST-LAUNCH (`docs/data-breach-procedure.md`) |
+
+Crony (`vercel.json`, produkcia dnes iba #1):
+
+| # | route | schedule | bez provider env / pred migráciou |
+|---|---|---|---|
+| 1 | `/api/cron/deadline-notifications` | `0 6 * * *` | beží (dedupe termín × okno) |
+| 2 | `/api/cron/account-deletion-cleanup` | `30 3 * * *` | `skipped: no_table` |
+| 3 | `/api/cron/fx-rates` | `0 5,16 * * *` | vyžaduje `20261008100004`; idempotentný (SHA-256) |
+| 4 | `/api/cron/einvoice-outbound?mode=send` | `* * * * *` | `configured: false` (no-op) |
+| 5 | `/api/cron/einvoice-outbound?mode=reconcile` | `*/5 * * * *` | no-op |
+| 6 | `/api/cron/einvoice-events` | `*/5 * * * *` | no-op |
+| 7 | `/api/cron/einvoice-inbound` | `*/10 * * * *` | no-op |
+| 8 | `/api/cron/einvoice-maintenance` | `17 * * * *` | no-op / health |
+| 9 | `/api/cron/telemetry-maintenance` | `40 3 * * *` | `skipped` bez migrácií |
+
+### J9.5 Production secrets / env matrix (iba názvy — žiadne hodnoty)
+
+| ENV | Production | Preview | base launch | billing | eFaktúra | OpenAI | status |
+|---|---|---|---|---|---|---|---|
+| `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` | áno | áno (staging) | áno | — | — | — | PASS |
+| `SUPABASE_SERVICE_ROLE_KEY` | áno (Sensitive) | áno (staging) | áno | áno | áno | — | PASS |
+| `OPENAI_API_KEY` | áno (Sensitive) | sentinel `preview-disabled` (Vercel „readable-secret“ upozornenie) | áno (skeny, hlas) | — | — | áno | PASS / P3: Preview záznam prepnúť na Sensitive |
+| `CRON_SECRET` | áno (Sensitive) | áno (oddelené) | áno | — | áno | — | PASS |
+| `ESBLU_ACTION_CONFIRMATION_SECRET`, `ESBLU_INTAKE_ATTEST_SECRET` | áno | iba vetva `einvoice-port` (confirmation) | áno | — | — | — | PASS |
+| `FCM_PROJECT_ID`, `FCM_CLIENT_EMAIL`, `FCM_PRIVATE_KEY` | áno | nie | áno (Android push) | — | — | — | PASS |
+| `VAPID_SUBJECT`, `VAPID_PRIVATE_KEY`, `NEXT_PUBLIC_VAPID_PUBLIC_KEY` | áno | nie | áno (web push) | — | — | — | PASS |
+| `NEXT_PUBLIC_ESBLU_OAUTH_PROVIDERS` | áno | nie | áno (Google) | — | — | — | PASS (`apple` až s Apple) |
+| `APNS_*` (iOS push) | nie | nie | iba iOS | — | — | — | DEFER (Apple fáza) |
+| `ESBLU_BILLING_MODE`, `ESBLU_BILLING_STORE_MODE`, `NEXT_PUBLIC_ESBLU_BILLING_UI` | nie (= billing OFF) | nie | — | áno | — | — | správne vypnuté |
+| `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_API_VERSION` | nie | nie | — | áno | — | — | BLOCKED OWNER APPROVAL |
+| `GOOGLE_PLAY_PACKAGE_NAME`, `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON`, `GOOGLE_RTDN_*` | nie | nie | — | áno (Play) | — | — | BLOCKED STORE |
+| `APPLE_BUNDLE_ID`, `APPLE_IAP_*`, `APPLE_ROOT_CA_SHA256` | nie | nie | — | áno (Apple) | — | — | BLOCKED STORE |
+| `ESBLU_EINVOICE_PROVIDER`, `ESBLU_EINVOICE_ENVIRONMENT`, `ESBLU_EFAKTURA_API_KEY`, `ESBLU_EFAKTURA_BASE_URL`, `ESBLU_EFAKTURA_WEBHOOK_SECRET(S)`, `ESBLU_EINVOICE_LIVE_ENABLED` | nie | iba RC/`einvoice-port` sandbox | — | — | áno | — | BLOCKED (live ⛔) — správne neprítomné |
+| `ESBLU_STAGING_E2E_*`, `ESBLU_FAKE_*` | nie | iba Preview | — | — | — | — | nikdy v produkcii (guard) |
+
+Base web launch nepotrebuje **žiadny nový** produkčný secret.
+
+### J9.6 Billing readiness
+
+| provider | ARCHITECTURE | PROVIDER CONFIG | STORE PRODUCT | LIVE ACTIVATION |
+|---|---|---|---|---|
+| Stripe (web) | READY (webhooky idempotentné, entitlement mapping, owner-only, reconciliation) | NOT READY (žiadne prod kľúče/produkty) | n/a | ⛔ OWNER APPROVAL + CLIA (obchodné podmienky, refund) |
+| Google Play | READY (RTDN, purchase verify, native bridge) | NOT READY (service account, RTDN, license testers) | NOT READY (subscription produkty podľa J7 cien) | ⛔ STORE + OWNER APPROVAL |
+| Apple | READY (StoreKit 2 server verify, kód) | NOT READY (App Store Connect) | NOT READY | ⛔ APPLE + OWNER APPROVAL |
+
+Customer-facing checkout je vypnutý (billing env neprítomné → `ESBLU_BILLING_DISABLED`). Launch bez platieb = trial + ručné nároky.
+
+### J9.7 eFaktúra readiness (NIE JE LIVE)
+
+Technicky: sandbox E2E PASS (2026-10-14), Agent API, enrollment, outbound/inbound, idempotencia, nemenné XML, platby,
+zálohy/finálne, opravy, provider flagy, firemná identita, deletion guard, tx účtovanie (half-units) — PASS.
+
+| otvorený bod | typ | blokuje |
+|---|---|---|
+| ne-ECB kurzy (FX) | ACCOUNTING | iba live eFaktúru / cudzie meny |
+| dátum prijatej zahraničnej faktúry | ACCOUNTING | iba live eFaktúru (prijaté zahraničné) |
+| oprava DPH pri vrátenej zdanenej zálohe / bonuse | ACCOUNTING | iba live eFaktúru (zálohy) |
+| archív / retencia (eFaktúra ako archív vs. kópia) | ACCOUNTING + LEGAL/CLIA | live eFaktúru |
+| rola providera (sprostredkovateľ / prevádzkovateľ), zmluva, DPA | LEGAL/CLIA + PROVIDER | live eFaktúru |
+| live cenník providera (náklad tx) | PROVIDER | live eFaktúru (cena add-onov už OWNER DECISION) |
+| live env + webhook + `ESBLU_EINVOICE_LIVE_ENABLED` | OWNER APPROVAL | live eFaktúru |
+
+Žiadny z týchto bodov **neblokuje base launch** — eFaktúra ostáva „pripravujeme“, crony no-op, `einvoice_rollout` prázdny.
+
+### J9.8 Store a Apple
+
+**Google Play** (stav podľa potvrdenia vlastníka 2026-10-22; Claude do Play Console nezasahoval):
+
+| položka | stav | blokuje |
+|---|---|---|
+| org. účet, app `com.esblu.app`, ads = No, PEGI 3, Business | DONE | — |
+| target audience 18+, financial/health/government deklarácie | BLOCKED OWNER APPROVAL | Internal test (deklarácie pred prvým releasom) |
+| finálny AAB z finálneho RC (`vc1` zastaraný) | NOT YET RUN | Internal test |
+| Play App Signing + SHA-256 | TODO (pri prvom uploade) | Internal test (vznikne) → produkčné `assetlinks` |
+| Internal Testing | NOT YET RUN | Closed test |
+| Data Safety, finálna privacy (text) | BLOCKED LEGAL (CLIA) | Closed test / produkcia (Data Safety povinné pred akýmkoľvek publikovaním mimo internal) |
+| reviewer / demo účet (produkcia) | BLOCKED OWNER APPROVAL | Closed test / produkcia |
+| listing SK/EN, ikona, feature graphic | READY (draft) — schválenie OWNER | produkcia |
+| screenshoty | TODO (z demo účtu po AAB) | produkcia |
+| subscription produkty, license testers, RTDN, service account | BLOCKED STORE / OWNER | iba billing v Androide |
+| produkčné `assetlinks.json` (Play SHA-256) | ⛔ OWNER APPROVAL (po App Signing) | Android produkcia (App Links / OAuth návrat) |
+| closed / production rollout | NOT YET RUN | — |
+
+**Apple:** Apple Developer / App Store Connect, app record, signing, IAP, StoreKit compile, TestFlight, App Privacy,
+screenshoty, reviewer účet, Sign in with Apple konfigurácia, release — **všetko NOT YET RUN / BLOCKED APPLE**.
+**Apple neblokuje prvý web ani Android launch** — samostatná neskoršia fáza (P1 iba pre iOS).
+
+### J9.9 CLIA / legal a účtovníctvo
+
+CLIA: zmluva podpísaná, balík odoslaný, CLIA email 21. 10. 2026 — prvé drafty predbežne **1. polovica novembra 2026**.
+Claude právne texty nemení.
+
+| bod | klasifikácia |
+|---|---|
+| Privacy policy, Terms, DPA (firma–Esblu), subprocesori (Supabase, Vercel, OpenAI, Google OAuth, Firebase FCM / Web Push) | **LEGAL HARD BLOCKER** pre verejný web launch aj Android (Play vyžaduje privacy URL + Data Safety) |
+| retencia, zrušenie účtu / odchod z firmy, former-user attribution, finančné roly | **LEGAL HARD BLOCKER** (texty v produkte a v privacy) |
+| trial (hash claimov, 14 dní), zrušenie predplatného, refund, obchodné podmienky predplatného, merchant-of-record, B2B/B2C DPH/OSS | **LEGAL HARD BLOCKER iba pre live billing**; base launch bez platieb → LEGAL INFORMATIVE UPDATE (cenník je informatívny) |
+| Stripe, Google Play / Apple billing (zmluvná rola) | LEGAL HARD BLOCKER iba pre live billing |
+| eFaktúra provider (rola, DPA, archív) | LEGAL HARD BLOCKER iba pre live eFaktúru |
+| usage telemetria (`ai_usage_monthly`, `intent_command`), granular permissions, chat retencia | **NO MATERIAL GDPR CHANGE** → LEGAL INFORMATIVE UPDATE (CLIA delta) |
+| Play Data Safety / Apple App Privacy | LEGAL HARD BLOCKER pre store publikovanie (vyplniť podľa CLIA) |
+
+Účtovníctvo: 4 body z J9.7 (FX, dátum zahraničnej faktúry, DPH oprava zálohy/bonusu, archív) = **BLOCKS LIVE EFAKTURA ONLY**;
+export pre účtovníka / rola účtovník (rozsah prístupu) = **LEGAL INFORMATIVE + ACCOUNTANT CONFIRM**, neblokuje base launch
+(existujúce správanie, finance view). **Nič z účtovníctva neblokuje base Esblu launch.**
+
+### J9.10 QA fixtures (staging) — iba plán, nič sa nemazalo
+
+Staging dnes: 15 auth používateľov (6 `@esblu-qa.invalid`), 9 firiem (2 „QA UX“), 52 finalizovaných faktúr (syntetické,
+vrátane eFaktúra sandbox E2E), 27 + 27 eFaktúra out/in, 3 riadky `einvoice_rollout`, 54 Storage objektov,
+`allow_mock_plans` = false.
+
+| skupina | ponechať do | cleanup |
+|---|---|---|
+| QA UX Firma A/B + `qa-ux-*` účty (signed-URL smoke, role matice, UX) | final release validation (K) | **POST-RELEASE VALIDATION ONLY**; skript treba najprv pripraviť (v repe nie je); finalizované faktúry sú nemenné → vyžaduje dočasné vypnutie triggerov = výslovný súhlas |
+| eFaktúra sandbox E2E dáta (`scripts/sql/einvoice-staging-e2e-cleanup.sql`) | eFaktúra live príprava | po live rozhodnutí; synthetic finalized accounting data |
+| `einvoice_rollout` (staging) | eFaktúra QA | spolu s E2E cleanupom |
+
+### J9.11 Blocker matrix
+
+| # | blocker | owner | typ | sev. | blokuje | ďalší krok |
+|---|---|---|---|---|---|---|
+| 1 | CLIA finálne texty: privacy, terms, DPA, subprocesori, retencia, zrušenie účtu | CLIA → vlastník | LEGAL | **P0** | BASE WEB, ANDROID (všetko verejné) | prijať drafty (1. pol. novembra), legal reconciliation v appke (texty, `legal_documents` verzie) |
+| 2 | Výslovný súhlas s produkčným oknom + čerstvý backup + dump | vlastník | OWNER APPROVAL | **P0** | BASE WEB | runbook §I kroky 1–3 |
+| 3 | Produkčné migrácie (43) + grants/smoke | vlastník (+ Claude so súhlasom) | TECH | **P0** | BASE WEB | runbook §C/§E/§F |
+| 4 | Merge RC → `main` + produkčný deploy + post-deploy smoke | vlastník | OWNER APPROVAL | **P0** | BASE WEB | runbook §I.7–9, §J |
+| 5 | Play deklarácie (18+, financial/health/government) | vlastník | STORE | P1 | ANDROID INTERNAL TEST | vyplniť v Play Console |
+| 6 | Finálny AAB z finálneho `main` + Play App Signing + Internal Testing | vlastník | STORE | P1 | ANDROID INTERNAL TEST | build na Windows, `verify-release-aab`, upload |
+| 7 | Data Safety + privacy URL text (podľa CLIA) | CLIA → vlastník | LEGAL / STORE | P1 | ANDROID CLOSED/PROD | po #1 |
+| 8 | Reviewer / demo účet v produkcii | vlastník | OWNER APPROVAL | P1 | ANDROID CLOSED/PROD | po #4, allowlist + demo firma |
+| 9 | Produkčné `assetlinks.json` (Play SHA-256) | vlastník | OWNER APPROVAL | P1 | ANDROID PROD | po #6 |
+| 10 | Listing schválenie + screenshoty z demo účtu | vlastník | STORE | P1 | ANDROID PROD | po #8 |
+| 11 | Final full smoke (K) — real-device + PC | vlastník + QA | TECH | P1 | ANDROID PROD | po #4, #6 |
+| 12 | Stripe live (kľúče, produkty, webhook) + obchodné podmienky/refund | vlastník + CLIA | OWNER APPROVAL / LEGAL | P1 | LIVE BILLING | po #1, #4 |
+| 13 | Play subscription produkty, RTDN, service account, license testers | vlastník | STORE | P1 | LIVE BILLING (Android) | po #12 rozhodnutí |
+| 14 | eFaktúra: 4 účtovné body, rola/DPA providera, live cenník, live env | účtovník + CLIA + provider + vlastník | ACCOUNTING / LEGAL / PROVIDER | P1 | LIVE EFAKTURA | podľa J9.7 |
+| 15 | Apple (ASC, signing, IAP, TestFlight, App Privacy, Sign in with Apple, APNS) | vlastník | STORE | P1 | APPLE | samostatná fáza |
+| 16 | Luna benchmark (voliteľná úspora) | vlastník | OWNER APPROVAL | P3 | — | iba so súhlasom a kľúčom |
+| 17 | Alerting crony/webhooky, dashboard deletion/media frontov | vlastník | TECH | P2 | — | POST-LAUNCH |
+| 18 | QA UX cleanup skript (chýba v repe) | Claude/vlastník | TECH | P3 | — | pripraviť pred post-release cleanupom |
+| 19 | Preview `OPENAI_API_KEY` → Sensitive (sentinel) | vlastník | COSMETIC | P3 | — | Vercel UI |
+| 20 | Unit economics: potvrdenie AI tokenov z produkčnej telemetrie | vlastník | OWNER APPROVAL | P2 | — | 30 dní po launchi z `ai_usage_monthly` |
+
+### J9.12 Release options a presné poradie
+
+| option | čo ešte treba | čo ostáva vypnuté | právne riziko | technické riziko | súhlasy |
+|---|---|---|---|---|---|
+| **A** base web launch bez billing/eFaktúry | #1–#4 | billing, eFaktúra, Apple, Android verejne | nízke po CLIA; bez CLIA **neprijateľné** (verejný web bez finálnej privacy) | nízke (precheck 0/0, runbook, rollback) | okno, merge/deploy |
+| **B** closed beta / kontrolovaná produkcia (allowlist) | #2–#4 + aspoň predbežné CLIA texty alebo výslovné rozhodnutie vlastníka o beta textoch | billing, eFaktúra, Apple, verejná registrácia (allowlist) | stredné — uzavretý okruh, ale stále spracúva osobné údaje → vyžaduje platnú privacy (existujúca verzia v produkcii) | nízke | okno, merge/deploy, rozhodnutie o beta textoch |
+| **C** Android internal / closed testing | B + #5, #6 (internal); #7, #8 (closed) | billing, eFaktúra, Apple, produkčný rollout | internal nízke; closed vyžaduje Data Safety (CLIA) | stredné (prvý AAB z nového RC, App Signing, assetlinks) | store kroky, demo účet |
+| **D** plný komerčný launch | všetko #1–#15 (Apple voliteľne neskôr) | — | vysoké bez CLIA + účtovníka | stredné | všetky |
+
+Odporúčanie: **B → A → C → D**. Presné poradie (každý live/deštruktívny krok = **OWNER APPROVAL REQUIRED**):
+
+1. prijať CLIA drafty → legal reconciliation (texty v appke, `legal_documents` verzie, Data Safety podklady) — docs/kód iba podľa CLIA
+2. účtovník potvrdí body pre live eFaktúru (paralelne, neblokuje 3–14)
+3. vlastník: rozhodnutie o variante (B/A) — **OWNER APPROVAL REQUIRED**
+4. read-only precheck oba skripty (runbook §A) → 0 STOP / 0 WARN
+5. potvrdiť čerstvý scheduled backup (< 24 h) v Dashboarde — **OWNER**
+6. logický dump schéma + dáta, sha256, mimo repa — **OWNER**
+7. výslovný súhlas s oknom — **OWNER APPROVAL REQUIRED**
+8. 43 migrácií po jednej (runbook §C), po každej kontrola histórie — **OWNER APPROVAL REQUIRED**
+9. grants verification + advisors (§E), targeted DB smoke (§F)
+10. merge RC → `main` (fast-forward) — **OWNER APPROVAL REQUIRED**
+11. produkčný deploy spárovaný podľa SHA, READY — **OWNER APPROVAL REQUIRED**
+12. post-deploy web smoke (§J), 9 cronov viditeľných, eFaktúra `configured: false`, fx-rates 200, 0 nových 5xx 30 min
+13. interná firma smoke → pilot (allowlist) — **OWNER**
+14. Android: finálny AAB z `main` → Internal Testing → Play App Signing → `assetlinks.json` — **OWNER APPROVAL REQUIRED** (assetlinks)
+15. Play deklarácie, Data Safety (CLIA), demo účet (**OWNER APPROVAL REQUIRED**), listing/screenshoty → closed testing
+16. final full smoke (K) → Android produkcia — **OWNER APPROVAL REQUIRED**
+17. billing (Stripe → Play) po CLIA podmienkach — **OWNER APPROVAL REQUIRED**
+18. live eFaktúra po účtovníkovi/CLIA/providerovi — **OWNER APPROVAL REQUIRED**
+19. Apple fáza — **OWNER APPROVAL REQUIRED**
+20. post-release: QA fixtures cleanup (súhlas), alerting, unit economics z telemetrie
+
+### J9.13 Reconciliation checklistu (J9)
+
+| sekcia | klasifikácia J9 | poznámka |
+|---|---|---|
+| A, B, J, J2–J8 (kód, staging, security, grants, permissions, pricing, cost, intent) | DONE (repo + staging) / production rollout BLOCKED OWNER APPROVAL | 107/107 testov; bez skrytých otvorených bodov |
+| C (legal) | BLOCKED LEGAL | J9.9 rozlišuje hard blocker / informative |
+| D (accounting) | BLOCKED ACCOUNTING | blokuje iba live eFaktúru |
+| E (billing) | ARCHITECTURE READY / BLOCKED OWNER APPROVAL + STORE | J9.6 |
+| F (Google Play) | BLOCKED STORE / OWNER APPROVAL / LEGAL | J9.8 |
+| G (Apple) | BLOCKED STORE (APPLE) | neblokuje web/Android |
+| H (web) | READY FOR PROD (po okne); monitoring DEFER POST-LAUNCH | |
+| I (Android) | BLOCKED STORE (finálny AAB) | |
+| K (final smoke) | NOT YET RUN | po deployi + AAB |
+| L (rollout) | READY (runbook, 43 migrácií) / BLOCKED OWNER APPROVAL | poradie J9.12 |
+| M (QA fixtures) | RETAINED / cleanup DEFER POST-RELEASE | skript chýba (J9.10) |
+| N (no feature creep) | platí | J9 nepridal žiadnu funkciu |
+
+Opravy počas J9 (docs/precheck, bez zmeny funkcionality): falošný STOP v `einvoice-prod-precheck.sql`; runbook — 9 cronov
+(chýbal `telemetry-maintenance`), dry-run 2026-10-25; checklist — 43 migrácií v L a P, 107 (nie 108) testovacích skriptov
+v J8, 9 cronov v J5, chýbajúci QA cleanup skript v M.
 
 ## K. FINAL FULL SMOKE — spustiť IBA keď finálny RC obsahuje multi-company + eInvoice + voice + billing + finálnu legal/store konfiguráciu
 
@@ -381,7 +637,7 @@ reconnect, oprávnenia, notifikácie, aplikácia nainštalovaná z obchodu.
 
 ## L. PRODUCTION ROLLOUT (všetko ⛔ až po súhlase)
 
-Autoritatívny postup: `docs/production-migration-runbook-2026-10-22.md` (42 migrácií, STOP podmienky, rollback per skupina).
+Autoritatívny postup: `docs/production-migration-runbook-2026-10-22.md` (**43** migrácií, STOP podmienky, rollback per skupina). Presné poradie release: **J9.12**.
 
 1. read-only produkčný precheck (`scripts/sql/prod-migration-precheck.sql` + `scripts/sql/einvoice-prod-precheck.sql`)
 2. skutočná história migrácií
@@ -409,7 +665,7 @@ Autoritatívny postup: `docs/production-migration-runbook-2026-10-22.md` (42 mig
 | položka | status | poznámka |
 |---|---|---|
 | QA UX Firma A / B, účty `qa-ux-*@esblu-qa.invalid` (vrátane `qa-ux-a-signedurl@…`, `qa-ux-b-foreign@…`) | RETAINED FOR REGRESSION QA | iba staging; produkcia ich neobsahuje |
-| cleanup QA fixtures | TODO AFTER RELEASE VALIDATION | skript pripravený; spustí sa iba po výslovnom pokyne (vyžaduje súhlas s dočasným vypnutím triggerov pre syntetické finalizované faktúry) |
+| cleanup QA fixtures | TODO AFTER RELEASE VALIDATION | **J9: cleanup skript pre QA UX fixtures v repe NIE JE** (v repe je iba `scripts/sql/einvoice-staging-e2e-cleanup.sql`) — pred cleanupom ho treba pripraviť a skontrolovať; spustí sa iba po výslovnom pokyne (vyžaduje súhlas s dočasným vypnutím triggerov pre syntetické finalizované faktúry). Plán: J9.10 |
 
 ## N. PRODUKTOVÝ SCOPE — NO FEATURE CREEP BEFORE LAUNCH
 
@@ -466,7 +722,7 @@ Praktické poradie. Technické blokery (J5) sú PASS — zvyšok sú rozhodnutia
 | 5 | Play Data Safety + Apple App Privacy (vyplniť podľa CLIA) | `CLIA` · `GOOGLE PLAY` · `APPLE` | 1 |
 | 6 | Store billing produkty a konfigurácia: Play subscription produkty, license testers, service account, RTDN; Apple App Store Connect + IAP + StoreKit | `GOOGLE PLAY` · `APPLE` · `OWNER DECISION` | 3 |
 | 7 | Reviewer / demo účet v produkcii (allowlist + demo firma) | `PRODUCTION APPROVAL` | 8 |
-| 8 | Produkčná migrácia (42 migrácií, runbook READY, precheck 0 STOP / 0 WARN, backup potvrdiť znova pred oknom) | `PRODUCTION APPROVAL` | — |
+| 8 | Produkčná migrácia (**43** migrácií, runbook READY, precheck 2026-10-25 0 STOP / 0 WARN, backup potvrdiť znova pred oknom) | `PRODUCTION APPROVAL` | — |
 | 9 | Merge RC → `main` + produkčný deploy (dashboard, `/zrusenie-uctu`, crony) | `PRODUCTION APPROVAL` | 8 |
 | 10 | Live aktivácie: e-Faktúra live env + webhook, Stripe live, store billing | `PRODUCTION APPROVAL` · `EXTERNAL PROVIDER` · `OWNER DECISION` | 3, 6, 9 |
 | 11 | Finálny release AAB → Internal Testing → Play App Signing → produkčné `assetlinks.json` | `FINAL QA` · `GOOGLE PLAY` · `PRODUCTION APPROVAL` | 1–6, 9 |
