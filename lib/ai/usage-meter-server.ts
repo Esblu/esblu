@@ -13,6 +13,7 @@
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { getUserScopedSupabaseClient } from "@/lib/server-supabase-user-client";
 import { recordAiUsageWith, type AiUsageRecord, type MeterScope, type UsageRpc } from "@/lib/ai/usage-meter";
+import { buildIntentCommandRpcArgs, type IntentTurnTelemetry } from "@/lib/intents/command-telemetry";
 
 export { reservationMeterScope, type MeterScope } from "@/lib/ai/usage-meter";
 
@@ -50,5 +51,25 @@ export async function meterScopeFromRequest(req: Request, userId: string): Promi
     return { kind: "member", companyId: data, userId };
   } catch {
     return null;
+  }
+}
+
+/**
+ * J8: +1 príkaz asistenta v triede (deterministic / ai-fallback /
+ * unsupported / ambiguous) pod aktívnu firmu z overeného členstva. Iba
+ * počítadlo — žiadny text, prepis ani user_id sa neukladá. Best-effort:
+ * nikdy nehádže a nemení odpoveď používateľovi.
+ */
+export async function recordIntentCommandInScope(
+  scope: { companyId: string; userId: string },
+  telemetry: IntentTurnTelemetry
+): Promise<boolean> {
+  const args = buildIntentCommandRpcArgs(scope, telemetry);
+  if (!args) return false;
+  try {
+    const { data, error } = await getSupabaseAdmin().rpc("esblu_record_intent_command", args);
+    return !error && data === true;
+  } catch {
+    return false;
   }
 }

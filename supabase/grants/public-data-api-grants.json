@@ -908,6 +908,7 @@
     "esblu_record_company_legal_identity(uuid,text,text,boolean,text)",
     "esblu_record_company_legal_identity_attempt(uuid,text,text,text)",
     "esblu_record_einvoice_tx(uuid,numeric)",
+    "esblu_record_intent_command(uuid,uuid,text,text)",
     "esblu_record_voice_usage(uuid,uuid,numeric)",
     "esblu_request_session_id()",
     "esblu_require_einvoice_tx_capacity(uuid,numeric)",

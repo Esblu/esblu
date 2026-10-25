@@ -3,7 +3,10 @@ import { getUserScopedSupabaseClient } from "@/lib/server-supabase-user-client";
 import { getRequestLocale } from "@/lib/i18n/request-locale";
 import { translate } from "@/lib/i18n/translate";
 import { classifyIntentWithAi } from "@/lib/intents/ai-fallback";
-import { recordAiUsageInScope } from "@/lib/ai/usage-meter-server";
+import { recordAiUsageInScope, recordIntentCommandInScope } from "@/lib/ai/usage-meter-server";
+import { classifyOnce } from "@/lib/intents/ai-fallback-dedupe";
+import { aiFallbackSkipReason } from "@/lib/intents/command-guards";
+import { classifyIntentTurn } from "@/lib/intents/command-telemetry";
 import type { ParseHints } from "@/lib/intents/parse";
 import type { FolderRef } from "@/lib/document-folders";
 import { isValidConversationId } from "@/lib/intents/conversation";
@@ -225,18 +228,26 @@ export async function POST(req: Request) {
     // firmu a oprávnenia z RPC; z klienta sa neberie nič z toho.
     // ------------------------------------------------------------------
     const selection = readSelectionContext(body?.selectionContext);
+    const companyId = membership.company_id as string;
+    let aiCalled = false;
     const output = await runAssistantTurn(
       {
         db: supabase,
         // Usage telemetria OpenAI fallbacku (iba čísla) pod AKTÍVNU firmu
-        // z overeného členstva — nikdy z tela požiadavky.
-        classifyWithAi: (text: string) =>
-          classifyIntentWithAi(text, (report) =>
-            recordAiUsageInScope(
-              { kind: "member", companyId: membership.company_id as string, userId: user.id },
-              { flow: "intent_classification_fallback", model: "gpt-5.6-terra", imageCount: 0, ...report }
+        // z overeného členstva — nikdy z tela požiadavky. J8: rovnaká veta
+        // tej istej firmy a používateľa sa v krátkom okne neklasifikuje
+        // dvakrát (lib/intents/ai-fallback-dedupe.ts — iba hash v pamäti).
+        classifyWithAi: (text: string) => {
+          aiCalled = true;
+          return classifyOnce({ companyId, userId: user.id }, text, () =>
+            classifyIntentWithAi(text, (report) =>
+              recordAiUsageInScope(
+                { kind: "member", companyId: membership.company_id as string, userId: user.id },
+                { flow: "intent_classification_fallback", model: "gpt-5.6-terra", imageCount: 0, ...report }
+              )
             )
-          ),
+          );
+        },
       },
       {
         rawText,
@@ -258,6 +269,18 @@ export async function POST(req: Request) {
         entitlementGate,
       }
     );
+    // J8 počítadlá príkazov (deterministic / ai-fallback / unsupported /
+    // ambiguous) pod aktívnu firmu — iba trieda a výsledok, žiadny obsah.
+    await recordIntentCommandInScope(
+      { companyId, userId: user.id },
+      classifyIntentTurn({
+        aiCalled,
+        recognized: output.recognized,
+        resultKind: output.result.kind,
+        pendingClarification: Boolean(output.pendingClarification),
+        refusedUnsupported: !aiCalled && aiFallbackSkipReason(rawText) === "unsupported",
+      })
+    ).catch(() => false);
     // Prevádzková diagnostika BEZ obsahu: žiadny prepis, meno, suma ani
     // identifikátor — iba to, ako sa veta spracovala. Stačí na rozlíšenie
     // zlyhania smerovania (recognized=false) od otázky na chýbajúci údaj
