@@ -2,6 +2,8 @@ import { normalizeSpz } from "@/lib/normalize-spz";
 import { DEADLINE_THRESHOLD_DAYS } from "@/lib/deadlines";
 import { findNumber } from "@/lib/intents/number-words";
 import { decomposeCommand, isWriteAction, stripActionWords, type CommandDecomposition } from "@/lib/intents/command-grammar";
+import { isNegatedCommand, startsWithWriteVerb, unsupportedActionReason } from "@/lib/intents/command-guards";
+import { INTENT_REGISTRY } from "@/lib/intents/registry";
 import type {
   DeadlineTypeFilter,
   DocumentTypeFilter,
@@ -111,7 +113,7 @@ function stripExactFillerWords(text: string, fillers: string[]): string {
   return kept.join(" ").trim();
 }
 
-const QUERY_FILLER_WORDS = ["v", "vo", "na", "pre", "in", "im", "fur", "je"];
+const QUERY_FILLER_WORDS = ["v", "vo", "na", "pre", "in", "im", "fur", "je", "the", "our", "der", "die", "das", "den", "dem", "mi", "me", "mir", "uns"];
 
 /** stripWholeWordsStartingWith() + stripExactFillerWords() v jednom kroku —
  * jediné miesto, cez ktoré prechádza extrakcia voľného `query` textu pre
@@ -138,6 +140,7 @@ const OPEN_VERB_STEMS = [
   "suche",
   "offne",
   "zeige",
+  "zeig",
   "show",
 ];
 
@@ -163,12 +166,13 @@ const OPEN_WORDS = [
   "zeige mir",
   "zeige",
   "offne",
+  "zeig",
 ];
 
 // "doklad" pokrýva "doklady"/"dokladu"/"dokladov" atď. ("ukáž doklady k
 // TT123AB" — jeden z explicitných príkladov v zadaní, sekcia A/C).
 const DOCUMENTS_WORDS = ["dokument", "document", "dokumenty", "doklad"];
-const SERVICE_WORDS = ["servis", "service", "wartung"];
+const SERVICE_WORDS = ["servis", "service", "wartung", "werkstatt"];
 const REPORT_WORDS = ["report", "bericht"];
 const COST_WORDS = [
   "kolko",
@@ -189,18 +193,42 @@ const VIGNETTE_WORDS = [
   "highway sticker",
   "maut",
 ];
+// J8 (2026-10-25): celé slová namiesto podreťazcov. „ek" ako podreťazec
+// chytalo „gekostet", „check" a pod. (DE „Wie viel hat uns BA123AB gekostet?"
+// → EK namiesto nákladov). Hovorové tvary: „technická (kontrola)" → STK
+// (okrem „technický preukaz", to je doklad), „emisná (kontrola)" → EK,
+// „MOT"/„TÜV"/„HU" → STK.
+function textTokens(text: string): string[] {
+  return text.replace(/[.?!,;:„“"()]+/g, " ").split(/\s+/).filter(Boolean);
+}
+function hasStkWord(text: string): boolean {
+  if (containsAny(text, STK_WORDS)) return true;
+  if (textTokens(text).some((t) => t === "stk" || t === "mot" || t === "tuv" || t === "hu")) return true;
+  return /(^|[^a-z])technick\w*/.test(text) && !/preukaz|registration|zulassung/.test(text);
+}
+function hasEkWord(text: string): boolean {
+  if (EK_WORDS.some((w) => w !== "ek" && text.includes(w))) return true;
+  return textTokens(text).includes("ek") || /(^|[^a-z])emisn\w*/.test(text);
+}
+
 // "bagr" je doplnkový kmeň k "bager" — slovenské skloňovanie mení "bager"
 // na "bagra"/"bagru"/"bagrom"/"bagre"/"bagrov" (vypadnuté "e"), takže samotné
 // "bager" tieto tvary vôbec nezachytí ("Ukáž servis bagra CAT 302." —
 // jeden z explicitných príkladov doplnenia zadania, bod 3).
-const MACHINE_CONTEXT_WORDS = ["stroj", "bager", "bagr", "machine", "maschine", "bagger"];
+const MACHINE_CONTEXT_WORDS = ["stroj", "bager", "bagr", "machine", "maschine", "bagger", "mechanizm", "excavator", "equipment", "gerat"];
+// Celé slová (nie kmene): „technika" ako súhrnné meno strojov; „technik"
+// (človek) ani „technická kontrola" sem nepatria.
+const MACHINE_NOUN_TOKENS = ["techniku", "technika", "techniky", "techniku"];
 // "vozidl" pokrýva "vozidlo"/"vozidlá"/"vozidiel"/"vozidlám" a pod. —
 // doteraz NEEXISTOVAL žiadny samostatný kontextový slovník pre vozidlá (na
 // rozdiel od strojov/skladu), takže vety typu "Ukáž všetky vozidlá."/"Aké
 // vozidlá máme?" nemali ako spustiť LIST vetvu nižšie (doplnenie zadania,
 // úloha 1).
-const VEHICLE_CONTEXT_WORDS = ["vozidl", "fahrzeug", "vehicle"];
-const INVENTORY_CONTEXT_WORDS = ["sklad", "inventory", "lager", "skladov"];
+const VEHICLE_CONTEXT_WORDS = ["vozidl", "vozidiel", "fahrzeug", "vehicle", "fuhrpark", "flotil"];
+// J8: hovorové a cudzojazyčné mená vozidiel — iba CELÉ slová („auto" nesmie
+// chytiť „automat", „car" nie „card").
+const VEHICLE_NOUN_TOKENS = ["auto", "auta", "aut", "autu", "autom", "aute", "autach", "autami", "fary", "fara", "faru", "faro", "car", "cars", "fleet", "autos", "vozovy", "park", "vozidla"];
+const INVENTORY_CONTEXT_WORDS = ["sklad", "inventory", "lager", "skladov", "zasob", "stock"];
 // Doplnkový kmeň pre generické podstatné meno "položka" ("skladová
 // položka spray", "položku spray") — TERAZ použitý AJ pri detekcii
 // hasInventoryContext (nie iba pri čistení voľného textu query ako
@@ -210,7 +238,7 @@ const INVENTORY_CONTEXT_WORDS = ["sklad", "inventory", "lager", "skladov"];
 // položku a padlo až na `return null` (TOTO bol koreňový bug 2 z
 // produkčného testu).
 const INVENTORY_ITEM_NOISE_WORDS = ["polozk"];
-const DOCUMENT_SEARCH_WORDS = ["faktur", "invoice", "rechnung", "blocek", "receipt", "beleg"];
+const DOCUMENT_SEARCH_WORDS = ["faktur", "invoice", "rechnung", "blocek", "receipt", "beleg", "quittung"];
 
 // "Aký máme zostatok pre položku sprej?", "Koľko máme spreja?", "Koľko
 // kusov spreja máme?", "Máme ešte sprej?", "Aký je stav položky sprej?" —
@@ -273,6 +301,9 @@ const OVERDUE_WORDS = [
   "nach frist",
 ];
 const DEADLINE_QUERY_WORDS = [
+  "treba riesit",
+  "treba vybavit",
+  "musime riesit",
   "co mi konci",
   "co konci",
   "ake terminy",
@@ -303,7 +334,7 @@ const DEADLINE_EXPIRY_WORDS = ["konci", "koncia", "expire", "expires", "lauft ab
 // query="všetky"/"" — presne koreňová príčina bugu 1 z produkčného testu
 // ("Ukáž všetky stroje." → predtým sa "všetky" bralo ako doslovný
 // vyhľadávací text, ktorý sa nikdy nezhoduje so žiadnym reálnym názvom).
-const LIST_ALL_QUANTIFIER_WORDS = ["vsetky", "vsetko", "vsetkych", "alle", "all"];
+const LIST_ALL_QUANTIFIER_WORDS = ["vsetky", "vsetko", "vsetkych", "vsechna", "vsechny", "alle", "all"];
 // "Aké stroje máme?"/"Was haben wir an Maschinen?"/"What machines do we
 // have?" — opytovacia forma, sémanticky rovnaká LIST požiadavka ako
 // "vsetky"/"alle" vyššie, bez explicitného kvantifikátora.
@@ -656,6 +687,10 @@ const NAVIGATION_DISQUALIFIERS = [
   "draft", "rozpracovan",
   // „otvor položku skrutky" je skladová položka, nie modul
   "polozk", "item", "artikel",
+  // „Open folder Complaints" je zložka s menom, nie modul (J8)
+  "folder", "ordner", "zlozk", "priecin",
+  // „otvor bager JCB" je konkrétny stroj, nie modul
+  "bager", "bagr", "bagger", "excavator",
 ];
 
 /**
@@ -754,7 +789,7 @@ const DOCUMENT_TYPE_KEYWORDS: { type: DocumentTypeFilter; words: string[] }[] = 
     words: ["dodaci list", "dodacie listy", "dodacich listov", "lieferschein", "delivery note"],
   },
   { type: "invoice", words: ["faktur", "rechnung", "invoice"] },
-  { type: "receipt", words: ["blocek", "blocky", "blockov", "bloceku", "beleg", "receipt"] },
+  { type: "receipt", words: ["blocek", "blocky", "blockov", "bloceku", "beleg", "receipt", "quittung"] },
   { type: "insurance", words: ["pzp", "poistn", "versicherung", "insurance"] },
   {
     type: "vehicle_registration",
@@ -801,8 +836,8 @@ function detectDocumentTypes(text: string): DocumentTypeFilter[] {
  */
 function detectDeadlineTypes(text: string, hasMachineContextFlag: boolean): DeadlineTypeFilter[] {
   const types: DeadlineTypeFilter[] = [];
-  if (containsAny(text, STK_WORDS)) types.push("STK");
-  if (containsAny(text, EK_WORDS)) types.push("EK");
+  if (hasStkWord(text)) types.push("STK");
+  if (hasEkWord(text)) types.push("EK");
   if (containsAny(text, VIGNETTE_WORDS)) types.push("VIGNETTE");
   if (containsAny(text, SERVICE_WORDS)) {
     types.push(hasMachineContextFlag ? "MACHINE_SERVICE" : "VEHICLE_SERVICE");
@@ -1147,7 +1182,12 @@ const OP_GENERIC_ITEM = ["polozk", "zaznam", "item", "artikel", "eintrag", "posi
 const OP_MACHINE = ["stroj", "bager", "bagr", "machine", "maschine", "bagger", "nakladac", "zeriav"];
 /** Triedne slová, ktoré nie sú súčasťou mena („stroj bager" → meno „bager"). */
 const OP_MACHINE_CLASS = ["stroj", "machine", "maschine"];
-const OP_LOW_STOCK = ["nizke zasoby", "nizky stav", "dochadza", "dochadzaju", "pod minimom", "low stock", "running low", "below minimum", "niedriger bestand", "geht aus", "unter minimum", "unter dem minimum"];
+const OP_LOW_STOCK = ["nizke zasoby", "nizky stav", "dochadza", "dochadzaju", "pod minimom", "low stock", "running low", "below minimum", "niedriger bestand", "geht aus", "unter minimum", "unter dem minimum",
+  // J8 synonymá (iba čítanie)
+  "doobjedna", "treba objednat", "sa mina", "minaju", "skoro nemame", "uz nemame", "mame malo", "co mame malo", "coho mame malo", "running out", "need to reorder", "to reorder",
+  "geht uns aus", "gehen uns aus", "nachbestell", "niedriger lagerbestand", "niedrige bestande"];
+// „Čo je vypredané?" — iba úplne vypredané (onlyOverdue v SHOW_LOW_STOCK).
+const OP_SOLD_OUT = ["vypredan", "out of stock", "ausverkauft", "nemame vobec", "nic nemame"];
 const OP_VEHICLE = ["vozidl", "auto", "auta", "fahrzeug", "vehicle", "car", "dodavk"];
 const OP_CREATE = ["vytvor", "pridaj", "zaloz", "zaeviduj", "zapis", "create", "add", "register", "erstelle", "lege", "fuge", "fuege", "anlegen", "erfasse", "hinzufug", "hinzufueg"];
 const OP_NEW = ["novy", "nova", "nove", "novu", "new", "neue", "neuen", "neues", "neuer"];
@@ -1158,7 +1198,7 @@ const OP_ADD_QTY = ["zvys", "zvacsi", "navys", "pridaj", "prihod", "naskladni", 
 const OP_SUB_QTY = ["zniz", "zmensi", "odober", "odstran", "uber", "odpis", "odpocitaj", "vydaj", "zober", "subtract", "remove", "take", "decrease", "reduziere", "verringere", "entnehm", "entferne", "abziehen"];
 const OP_SET_QTY = ["nastav", "zmen", "uprav", "set", "setze", "change"];
 const OP_CONTEXT = ["tento", "tejto", "toto", "tomuto", "tuto", "tohto", "this", "diese", "dieses", "diesem", "diesen", "dieser"];
-const OP_INTAKE = ["pridaj", "nahraj", "odfot", "naskenuj", "skenuj", "vloz", "prilož", "priloz", "upload", "scan", "photograph", "hochladen", "lade", "scanne", "fotografier", "hinzufug"];
+const OP_INTAKE = ["pridaj", "nahraj", "odfot", "naskenuj", "skenuj", "vloz", "prilož", "priloz", "upload", "scan", "photograph", "hochladen", "lade", "scanne", "fotografier", "hinzufug", "add"];
 const OP_UNITS = ["ks", "kus", "kusov", "kusy", "kg", "kilo", "g", "l", "litrov", "m", "metrov", "bal", "balenie", "baleni", "vrece", "vriec", "pcs", "pieces", "stuck", "stueck", "sack"];
 const OP_NEEDS_SERVICE = ["potrebuj", "need service", "needs service", "due for service", "brauchen wartung", "wartung fallig", "wartung faellig"];
 const OP_FILLERS = ["do", "zo", "z", "na", "v", "vo", "k", "ku", "pre", "a", "the", "to", "from", "into", "in", "zum", "zur", "vom", "den", "die", "der", "das", "ein", "eine", "einen", "ins", "im", "zu", "mi", "me", "o", "by", "um"];
@@ -1567,6 +1607,7 @@ export function parseOperationalIntent(rawText: string, hints: ParseHints = {}):
   if (mentionsFinanceDoc) return null;
 
   // --- Nízke zásoby (iba čítanie)
+  if (containsAny(text, OP_SOLD_OUT) && !isCreate && !isDelete) return build("SHOW_LOW_STOCK", { onlyOverdue: true });
   if (containsAny(text, OP_LOW_STOCK) && !isCreate && !isDelete) return build("SHOW_LOW_STOCK", {});
 
   // --- Fotka k stroju / vozidlu (iba navigácia)
@@ -1757,7 +1798,7 @@ export function parseOperationalIntent(rawText: string, hints: ParseHints = {}):
 // (lib/intents/inbox-intents.ts), parser iba rozpozná zámer a typy.
 // =============================================================================
 
-const UNASSIGNED_WORDS = ["nepriraden", "nezaraden", "unassigned", "not assigned", "nicht zugeordnet", "unzugeordnet", "ohne zuordnung"];
+const UNASSIGNED_WORDS = ["nepriraden", "nezaraden", "unassigned", "not assigned", "nicht zugeordnet", "unzugeordnet", "ohne zuordnung", "v inboxe", "in the inbox", "im inbox"];
 const INBOX_DELETE_VERBS = ["zmaz", "vymaz", "odstran", "delete", "remove", "losch", "loesch", "entfern"];
 
 export function parseInboxUnassignedIntent(rawText: string): ParsedIntent | null {
@@ -1816,6 +1857,17 @@ export function parseGrammarCommand(rawText: string, grammar: CommandDecompositi
     // „Vytvor (novú) zložku X", „Založ zložku X".
     return build("CREATE_DOCUMENT_CATEGORY", { categoryName: name });
   }
+  if (
+    (grammar.action === "open" || grammar.action === "show") &&
+    grammar.entityType === "folder" &&
+    name &&
+    /(^|[^a-z])(folder|ordner)([^a-z]|$)/.test(normalizeText(rawText)) &&
+    !/(priecin|belegordner|accounting|buchhaltung)/.test(normalizeText(rawText))
+  ) {
+    // J8: holé „folder"/„Ordner" je zložka dokumentov (rovnaké pravidlo ako
+    // prompt AI klasifikátora); účtovný priečinok má vlastné slovo.
+    return build("OPEN_DOCUMENT_FOLDER", { categoryName: name });
+  }
   if ((grammar.action === "open" || grammar.action === "show") && grammar.entityType === "category" && name) {
     // „Otvor/Ukáž zložku X" (predtým OPEN_MODULE / OPEN_VEHICLE „zlozku x").
     return build("OPEN_DOCUMENT_FOLDER", { categoryName: name });
@@ -1855,16 +1907,16 @@ export function parseGrammarCommand(rawText: string, grammar: CommandDecompositi
 // nedosiahnuteľné bežnou vetou.
 // =============================================================================
 
-const INVOICE_NOUN = /(^|[^a-z])(faktur|rechnung|invoice)/;
+const INVOICE_NOUN = /(^|[^a-z])(faktur|rechnung|invoice|ausgangsrechnung|eingangsrechnung)|rechnungen?(\s|$)/;
 const PARTNER_OR_DATE = /(^|\s)(od|pre|from|von|fur|fuer|za|in|im|v|vo|since|seit)\s+\S/;
 
 function invoiceStatusOf(words: string[], text: string): "unpaid" | "paid" | "overdue" | "issued" | "received" | "draft" | null {
   if (/(po (lehote )?splatnosti|overdue|uberfallig|ueberfaellig)/.test(text)) return "overdue";
   // Zápor pred stavom („nie sú zaplatené", „not paid", „nicht bezahlt") = neuhradené.
-  if (words.some((w) => /^(neuhraden|nezaplaten|neplaten|unpaid|offene?n?)/.test(w)) ||
+  if (words.some((w) => /^(neuhraden|nezaplaten|nezaplacen|neplaten|unpaid|unbezahlt|offene?n?)/.test(w)) ||
       /(nie (su|je)|not|nicht|noch nicht)\s+(\S+\s+)?(zaplat|uhrad|paid|bezahlt|beglichen)/.test(text)) return "unpaid";
-  if (words.some((w) => /^(uhraden|zaplaten|bezahlt|paid)$|^(uhraden|zaplaten)/.test(w))) return "paid";
-  if (words.some((w) => /^(rozpracovan|koncept|entwurf|entwurfe|draft)/.test(w))) return "draft";
+  if (words.some((w) => /^(uhraden|zaplaten|bezahlt|paid)$|^(uhraden|zaplaten|zaplacen|bezahlte)/.test(w))) return "paid";
+  if (words.some((w) => /^(rozpracovan|koncept|entwurf|entwurfe|draft)|entwurf/.test(w))) return "draft";
   if (words.some((w) => /^(vydan|vystaven|ausgangsrechnung|issued|outgoing)/.test(w))) return "issued";
   if (words.some((w) => /^(prijat|eingangsrechnung|received|incoming)/.test(w))) return "received";
   return null;
@@ -1884,7 +1936,7 @@ export function parseShadowedReadIntent(rawText: string): ParsedIntent | null {
   const readPrefix = /^(?:(?:pros[ií]m|uk[aá][zž]\S*|zobraz\S*|otvor\S*|show|open|zeige?|[öo]ffne)\s+)*(?:mi\s+|me\s+|the\s+|die\s+)?/i;
   const machineThing = new RegExp(
     readPrefix.source +
-      "(doklad\\S*|dokument\\S*|documents?|unterlagen|belege|fotk\\S*|fotograf\\S*|fotos?|photos?|bilder)\\s+(?:(?:k|ku|pre|for|of|the|zu|zum|zur|der|des|von)\\s+)*(?:stroj\\S*|machine|maschine)\\s+(.+?)\\s*[.!?]*$",
+      "(doklad\\S*|dokument\\S*|documents?|unterlagen|belege|fotk\\S*|fotograf\\S*|fotos?|photos?|bilder)\\s+(?:(?:k|ku|pre|for|of|the|zu|zum|zur|der|des|von)\\s+)*(?:stroj\\S*|bager|bagr\\S*|bagger\\S*|machine|maschine)\\s+(.+?)\\s*[.!?]*$",
     "i"
   ).exec(rawText.trim());
   // EN/DE poradie: „machine documents X", „Maschine Fotos X".
@@ -1971,8 +2023,42 @@ export function stripPoliteness(rawText: string): string {
   return stripped || rawText;
 }
 
+/**
+ * J8 — intenty, ktoré iba otvoria formulár / príjem / navigáciu (read-only
+ * v registri, ale „pridaj …" je pre ne prirodzená veta). Ostatné read-only
+ * intenty čítajú DÁTA a vetu so slovesom zápisu nikdy neobslúžia.
+ */
+const FORM_OR_NAVIGATION_READS = new Set<IntentName>([
+  "DOCUMENT_INTAKE",
+  "ENTITY_CREATE",
+  "PARTNER_CREATE",
+  "MACHINE_PHOTO_ADD",
+  "VEHICLE_PHOTO_ADD",
+  "PROCESS_CURRENT_DOCUMENT_AS_RECEIVED_INVOICE",
+]);
+
+function isDataRead(intent: ParsedIntent): boolean {
+  return INTENT_REGISTRY[intent.name]?.readOnly === true && !FORM_OR_NAVIGATION_READS.has(intent.name);
+}
+
+/**
+ * Poistky nad výsledkom parsera (J8, negatívne vety): žiadny tichý omyl.
+ *  - zápor („nechcem hľadať auto", „don't open …") → nič,
+ *  - nepodporovaný zápis („Označ faktúru ako zaplatenú", „Zmaž všetky
+ *    stroje", „Finalizuj faktúru") → nič (orchestrátor odpovie bez AI),
+ *  - veta so slovesom zápisu („Zaeviduj bager X") nikdy nedá čítanie dát.
+ */
+function guardParsedIntent(intent: ParsedIntent | null, rawText: string): ParsedIntent | null {
+  if (!intent) return null;
+  if (isNegatedCommand(rawText)) return null;
+  if (unsupportedActionReason(rawText)) return null;
+  if (isDataRead(intent) && startsWithWriteVerb(rawText)) return null;
+  return intent;
+}
+
 export function parseIntentDeterministic(rawText: string, hints: ParseHints = {}): ParsedIntent | null {
-  return withoutActionWords(parseIntentDeterministicInner(stripPoliteness(rawText), hints));
+  const polite = stripPoliteness(rawText);
+  return guardParsedIntent(withoutActionWords(parseIntentDeterministicInner(polite, hints)), polite);
 }
 
 function parseIntentDeterministicInner(rawText: string, hints: ParseHints = {}): ParsedIntent | null {
@@ -2033,8 +2119,16 @@ function parseIntentDeterministicInner(rawText: string, hints: ParseHints = {}):
   }
 
   const plate = extractPlateCandidate(rawText);
-  const hasMachineContext = containsAny(text, MACHINE_CONTEXT_WORDS);
-  const hasVehicleContext = containsAny(text, VEHICLE_CONTEXT_WORDS);
+  const tokensOfText = textTokens(text);
+  /** Text bez interpunkcie — pre celé-slovné vzory J8 („dlží?" → „dlzi"). */
+  const plain = tokensOfText.join(" ");
+  const hasMachineContext = containsAny(text, MACHINE_CONTEXT_WORDS) || tokensOfText.some((t) => MACHINE_NOUN_TOKENS.includes(t));
+  const hasVehicleContext =
+    containsAny(text, VEHICLE_CONTEXT_WORDS) ||
+    tokensOfText.some((t) => VEHICLE_NOUN_TOKENS.includes(t) && t !== "park") ||
+    /(^|\s)vozov\w* park/.test(text);
+  /** Voľný text bez mien vozidiel/strojov (celé slová). */
+  const withoutEntityNouns = (value: string) => stripExactFillerWords(value, [...VEHICLE_NOUN_TOKENS, ...MACHINE_NOUN_TOKENS]);
   const hasInventoryContext =
     containsAny(text, INVENTORY_CONTEXT_WORDS) || containsAny(text, INVENTORY_ITEM_NOISE_WORDS);
 
@@ -2093,7 +2187,7 @@ function parseIntentDeterministicInner(rawText: string, hints: ParseHints = {}):
   const expiryTrigger =
     containsAny(text, DEADLINE_EXPIRY_WORDS) &&
     !plate &&
-    (containsAny(text, STK_WORDS) || containsAny(text, EK_WORDS) || containsAny(text, VIGNETTE_WORDS));
+    (hasStkWord(text) || hasEkWord(text) || containsAny(text, VIGNETTE_WORDS));
   if (containsAny(text, DEADLINE_QUERY_WORDS) || containsAny(text, OVERDUE_WORDS) || expiryTrigger) {
     const deadlineTypes = detectDeadlineTypes(text, hasMachineContext);
     return build("UPCOMING_DEADLINES", {
@@ -2119,7 +2213,12 @@ function parseIntentDeterministicInner(rawText: string, hints: ParseHints = {}):
   if (countEntity === "vehicle") return build("SEARCH_VEHICLE", { listAll: true });
   if (countEntity === "machine") return build("SEARCH_MACHINE", { listAll: true });
   if (countEntity === "inventory") return build("SEARCH_INVENTORY_ITEM", { listAll: true });
-  const isListQuantified = containsAny(text, LIST_ALL_QUANTIFIER_WORDS) || matchesWhatDoWeHavePattern(text);
+  const isListQuantified =
+    containsAny(text, LIST_ALL_QUANTIFIER_WORDS) ||
+    matchesWhatDoWeHavePattern(text) ||
+    // J8: „zoznam vozidiel", „list our cars", „Liste der Autos", „Welche Fahrzeuge haben wir?"
+    tokensOfText.some((t) => t === "zoznam" || t === "list" || t === "liste") ||
+    /\bwhat\b.*\bdo we have\b|\bwelche\b.*\bhaben wir\b/.test(text);
   if (isListQuantified) {
     const matchedContexts = [hasVehicleContext && !plate, hasMachineContext, hasInventoryContext].filter(
       Boolean
@@ -2148,7 +2247,22 @@ function parseIntentDeterministicInner(rawText: string, hints: ParseHints = {}):
       ...INVENTORY_CONTEXT_WORDS,
       ...INVENTORY_ITEM_NOISE_WORDS,
     ]);
-    if (query) return build("INVENTORY_ITEM_STATUS", { query });
+    // J8: „Čo máme na sklade?" — bez mena položky je to zoznam, nie stav „čo".
+    const itemName = stripExactFillerWords(query, ["co", "what", "was", "sa", "is", "ist"]);
+    if (itemName) return build("INVENTORY_ITEM_STATUS", { query: itemName });
+    if (containsAny(text, INVENTORY_CONTEXT_WORDS)) return build("SEARCH_INVENTORY_ITEM", { listAll: true });
+  }
+  // J8: „How much cement do we have?", „Wie viel Zement haben wir?",
+  // „stock level of screws", „Lagerbestand von Schrauben", „stav skladu pre kábel".
+  if (!hasVehicleContext && !hasMachineContext && !plate) {
+    const statusMatch =
+      /^(?:how much|how many)\s+(.+?)\s+(?:do we (?:still )?have|have we got|is (?:left|in stock))\b/.exec(text) ||
+      /^wie viele?\s+(.+?)\s+haben wir\b/.exec(text) ||
+      /^(?:stock level|stock|lagerbestand|bestand|stav skladu|stav)\s+(?:of|von|vom|for|fur|pre|polozky)\s+(.+)$/.exec(text);
+    const statusName = statusMatch ? stripExactFillerWords(statusMatch[1].replace(/[.?!]+$/, ""), ["the", "der", "die", "das", "den"]) : "";
+    if (statusName && !containsAny(statusName, [...INVENTORY_CONTEXT_WORDS, "vehicle", "machine", "fahrzeug", "maschin"])) {
+      return build("INVENTORY_ITEM_STATUS", { query: statusName });
+    }
   }
 
   // 1d) Vytvorenie zložky dokumentov ("Vytvor zložku Reklamácie.") — WRITE
@@ -2210,6 +2324,24 @@ function parseIntentDeterministicInner(rawText: string, hints: ParseHints = {}):
         targetCategoryName,
       });
     }
+  }
+
+  // 2a) J8: „prehľad auta TT456CD", „Ako je na tom BA123AB?", „overview",
+  //     „Übersicht" — prehľad JEDNEJ entity = existujúci report (iba čítanie).
+  if (/(^|\s)(prehlad\w*|overview|ubersicht|uebersicht)(\s|$)|ako je na tom/.test(plain) && !containsAny(text, DOCUMENT_SEARCH_WORDS)) {
+    if (plate) return build("VEHICLE_REPORT", { query: plate });
+    if (hasMachineContext) {
+      const query = withoutEntityNouns(extractFreeQuery(text, [...MACHINE_CONTEXT_WORDS, "prehlad", "overview", "ubersicht", "uebersicht", ...OPEN_VERB_STEMS]));
+      if (query) return build("MACHINE_REPORT", { query });
+    }
+  }
+  // 2b) J8: náklady JEDNÉHO vozidla bez slova „servis" („Koľko nás stálo
+  //     BA123AB?", „costs for vehicle TT456CD", „Wie viel hat uns BA123AB
+  //     gekostet?") — jediný nákladový intent je súčet servisných nákladov
+  //     vozidla; odpoveď ich tak aj pomenúva. Holé „koľko" nestačí.
+  if (plate && /(^|\s)(stal[oa]?|stali|naklad\w*|minul\w*|costs?|spent|kosten|gekostet|ausgegeben)(\s|$)/.test(plain)) {
+    const yearMatch = text.match(/\b(20\d{2})\b/);
+    return build("VEHICLE_COST_SUMMARY", { query: plate, year: yearMatch ? Number(yearMatch[1]) : undefined });
   }
 
   // 2) Report ("urob report vozidla TT123AB", "report für Fahrzeug").
@@ -2322,10 +2454,13 @@ function parseIntentDeterministicInner(rawText: string, hints: ParseHints = {}):
   }
 
   // 6) STK / EK / diaľničná známka — vždy vozidlo, vyžaduje ŠPZ kandidáta.
-  if (plate && containsAny(text, STK_WORDS)) {
+  if (plate && hasEkWord(text) && !containsAny(text, STK_WORDS)) {
+    return build("VEHICLE_EK_STATUS", { query: plate });
+  }
+  if (plate && hasStkWord(text)) {
     return build("VEHICLE_STK_STATUS", { query: plate });
   }
-  if (plate && containsAny(text, EK_WORDS)) {
+  if (plate && hasEkWord(text)) {
     return build("VEHICLE_EK_STATUS", { query: plate });
   }
   if (plate && containsAny(text, VIGNETTE_WORDS)) {
@@ -2361,12 +2496,12 @@ function parseIntentDeterministicInner(rawText: string, hints: ParseHints = {}):
       return build("OPEN_INVENTORY_ITEM", { query: itemQuery });
     }
     if (hasMachineContext) {
-      const machineQuery = extractFreeQuery(query, MACHINE_CONTEXT_WORDS);
+      const machineQuery = withoutEntityNouns(extractFreeQuery(query, MACHINE_CONTEXT_WORDS));
       if (!machineQuery) return build("SEARCH_MACHINE", { listAll: true });
       return build("OPEN_MACHINE", { query: machineQuery });
     }
     if (hasVehicleContext && !plate) {
-      const vehicleQuery = extractFreeQuery(query, VEHICLE_CONTEXT_WORDS);
+      const vehicleQuery = withoutEntityNouns(extractFreeQuery(query, VEHICLE_CONTEXT_WORDS));
       if (!vehicleQuery) return build("SEARCH_VEHICLE", { listAll: true });
     }
     if (plate) return build("OPEN_VEHICLE", { query: plate });
@@ -2390,13 +2525,36 @@ function parseIntentDeterministicInner(rawText: string, hints: ParseHints = {}):
     return build("SEARCH_INVENTORY_ITEM", { listAll: true });
   }
   if (hasMachineContext) {
-    const query = extractFreeQuery(text, MACHINE_CONTEXT_WORDS);
+    const query = withoutEntityNouns(extractFreeQuery(text, MACHINE_CONTEXT_WORDS));
     if (query) return build("SEARCH_MACHINE", { query });
     return build("SEARCH_MACHINE", { listAll: true });
   }
   if (hasVehicleContext && !plate) {
-    const query = extractFreeQuery(text, VEHICLE_CONTEXT_WORDS);
+    const query = withoutEntityNouns(extractFreeQuery(text, VEHICLE_CONTEXT_WORDS));
     if (!query) return build("SEARCH_VEHICLE", { listAll: true });
+  }
+
+  // 8b) J8 — termíny celej firmy bez ŠPZ, ktoré vetva 1 nezachytila
+  //     („Čo nám končí tento mesiac?", „Čo mi čoskoro vyprší?", „termíny na
+  //     najbližší týždeň", „Ktoré vozidlá majú STK do 30 dní?", „anything
+  //     expiring soon?", „Was läuft bald ab?", „anstehende Termine").
+  if (!plate) {
+    const expiryVerb = /(^|\s)(konci|koncia|skonci|vyprsi|vyprsia|vyprsal\w*|prepada\w*|expir\w*|ablauf\w*|ablaufen)(\s|$)|\blauf\w* .*\bab\b|\b(treba|musime|musim)\b.*\b(riesit|vybavit)\b/.test(plain);
+    const deadlineNoun = /(^|\s)(terminy|terminov|termine|deadlines?|fristen|due)(\s|$)/.test(plain);
+    const typedWindow = (hasStkWord(text) || hasEkWord(text) || containsAny(text, VIGNETTE_WORDS)) && parseWithinDays(text) !== undefined;
+    if (expiryVerb || deadlineNoun || typedWindow) {
+      const deadlineTypes = detectDeadlineTypes(text, hasMachineContext);
+      return build("UPCOMING_DEADLINES", {
+        onlyOverdue: containsAny(text, OVERDUE_WORDS),
+        withinDays: parseWithinDays(text),
+        deadlineTypes: deadlineTypes.length > 0 ? deadlineTypes : undefined,
+      });
+    }
+  }
+  // 8c) J8 — kto nám nezaplatil / dlží („Kto nám ešte nezaplatil?", „Kto
+  //     nám dlží?", „Who hasn't paid us yet?", „Wer hat noch nicht bezahlt?").
+  if (!plate && /(^|\s)(nezaplatil\w*|neuhradil\w*|dlzi|dlzia|dluzi|owes?|hasn'?t paid|has not paid|haven'?t paid|nicht bezahlt|schuldet|schulden)(\s|$)/.test(plain)) {
+    return build("SHOW_UNPAID_INVOICES", {});
   }
 
   // 9) Samostatná ŠPZ bez ďalších slov ("TT123AB") → priamo OPEN_VEHICLE.
