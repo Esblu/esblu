@@ -153,7 +153,7 @@ await check("company scoping: skeny cez AI rezerváciu, hlas cez aktívnu firmu 
   for (const f of ["app/api/scan-document/route.ts", "app/api/scan-vehicle-doc/route.ts", "app/api/scan-vehicle-registration/route.ts"]) {
     assert.match(read(f), /reservationMeterScope\((reservation|guard)\.usageId\)/, f);
   }
-  assert.match(read("app/api/assistant/transcribe/route.ts"), /meterScopeFromRequest\(req, user\.id\)/);
+  assert.match(read("app/api/assistant/transcribe/route.ts"), /kind: "member", companyId: voiceCapacity\.companyId, userId: user\.id/);
   assert.match(read("lib/ai/usage-meter-server.ts"), /rpc\("esblu_my_active_company_id"\)/);
   assert.match(read("app/api/assistant/intent/route.ts"), /kind: "member", companyId: membership\.company_id as string, userId: user\.id/);
   for (const f of OPENAI_FILES) assert.doesNotMatch(read(f), /companyId:\s*(body|formData|req\.)/, f);

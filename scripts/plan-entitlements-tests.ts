@@ -331,43 +331,58 @@ await check("AI reservation keyed by client Idempotency-Key + server-computed co
   assert.match(src, /crypto\.subtle\.digest\("SHA-256"/);
 });
 
-// ============================================================ 5. pricing
-await check("pricing: modules additive; eFaktura + Voice = 12.80 € excl. VAT; no double counting", () => {
-  assert.equal(P.monthlyTotalExclVat(["invoicing", "voice"]), 12.8);
-  assert.equal(P.monthlyTotalExclVat(["invoicing", "invoicing"]), 5.9);
-  assert.equal(P.monthlyTotalExclVat([]), 0);
-  assert.equal(P.monthlyTotalExclVat(P.PRICING_MODULES.map((m) => m.id)), 5.9 * 4 + 9.9 + 6.9);
+// ============================================================ 5. pricing (canonical launch pricing, 2026-10-26)
+const PRICING_MIGRATION = readFileSync(path.join(ROOT, "supabase/migrations/20261026100000_pricing_entitlements.sql"), "utf8");
+const eur = (cents: number) => cents / 100;
+
+await check("pricing: Komplet 15.90; modules 3.90 each; 1/2/3/4 modules = 3.90/7.80/11.70/15.60; 5 => Komplet 15.90", () => {
+  assert.equal(P.COMPLETE_PRICE_CENTS, 1590);
+  assert.equal(P.MODULE_PRICE_CENTS, 390);
+  const mods = ["vehicles", "machines", "inventory", "invoicing", "documents"] as const;
+  const totals = [1, 2, 3, 4, 5].map((n) => P.quote({ modules: mods.slice(0, n), tier: "primary" }));
+  assert.deepEqual(totals.map((q) => eur(q.totalCents)), [3.9, 7.8, 11.7, 15.6, 15.9]);
+  assert.deepEqual(totals.map((q) => q.plan), ["modular", "modular", "modular", "modular", "complete"]);
+  assert.equal(totals[4].upgradeToCompleteRecommended, true);
+  assert.equal(P.quote({ modules: ["invoicing", "invoicing"] as never, tier: "primary" }).totalCents, 390, "no double counting");
 });
 
-await check("pricing: customer-facing module name is Fakturácia (not eFaktúra) in sk; en/de equivalents", () => {
-  assert.equal(translate("sk", "pricing.modules.items.invoicing.name"), "Fakturácia");
-  assert.equal(translate("sk", "entitlements.modules.invoicing"), "Fakturácia");
-  assert.equal(translate("en", "pricing.modules.items.invoicing.name"), "Invoicing");
-  assert.equal(translate("de", "pricing.modules.items.invoicing.name"), "Rechnungsstellung");
+await check("pricing: invoicing module customer name is Faktúry (no eFaktúra wording) in sk; en/de equivalents", () => {
+  assert.equal(translate("sk", "pricing.modules.items.invoicing.name"), "Faktúry");
+  assert.equal(translate("en", "pricing.modules.items.invoicing.name"), "Invoices");
+  assert.equal(translate("de", "pricing.modules.items.invoicing.name"), "Rechnungen");
   for (const locale of ["sk", "en", "de"] as const) {
-    for (const key of ["pricing.metaDescription", "pricing.modules.example", "pricing.faq.q3", "pricing.faq.a3", "pricing.modules.items.invoicing.name", "entitlements.modules.invoicing"]) {
+    for (const key of ["pricing.faq.q3", "pricing.faq.a3", "pricing.modules.items.invoicing.name", "pricing.modules.items.invoicing.description"]) {
       assert.doesNotMatch(translate(locale, key), /eFakt|eInvoic|E-Rechnung/, `${locale}:${key}`);
     }
   }
   assert.doesNotMatch(read("app/cennik/page.tsx"), /eFakt/);
 });
 
-await check("pricing: AI paid allowance on the site = central provisional 50; trial AI stays 5", () => {
-  assert.equal(P.AI_DOCUMENTS_MONTHLY_ALLOWANCE, 50);
-  assert.equal(P.PRICING_MODULES.find((m) => m.id === "ai_documents")?.includedMonthlyUsage, P.AI_DOCUMENTS_MONTHLY_ALLOWANCE);
-  assert.equal(P.TRIAL_OFFER.limits.aiProcessings, 5);
-  assert.match(read("app/cennik/PricingPageClient.tsx"), /module\.includedMonthlyUsage/);
+await check("pricing: Komplet allowances 25 users / 40 AI / 60 voice min / 5 GB / 20 eInvoice tx; same in DB targets", () => {
+  assert.deepEqual(P.COMPLETE_ALLOWANCES, { users: 25, aiProcessingsPerMonth: 40, voiceMinutesPerMonth: 60, storageMb: 5120, einvoiceTransactionsPerMonth: 20 });
+  assert.match(PRICING_MIGRATION, /limit_value := 40 \+ 40 \* least/);
+  assert.match(PRICING_MIGRATION, /case when p_plan_kind = 'complete' then 60 else 0 end/);
+  assert.match(PRICING_MIGRATION, /limit_value := 25 \+ 25 \* least/);
+  assert.match(PRICING_MIGRATION, /'storage_mb'; limit_value := 5120/);
+  assert.match(PRICING_MIGRATION, /limit_value := 20 \+ 40 \* least/);
 });
 
-await check("pricing: trial includes Fakturácia; wording 'Vyberiete si iba moduly, ktoré používate.'; no checkout", () => {
-  assert.equal(P.TRIAL_OFFER.includesInvoicing, true);
-  assert.match(translate("sk", "pricing.trial.after"), /Vyberiete si iba moduly, ktoré používate\./);
+await check("pricing: trial 14 days; all modules; 25 users; 10 AI; 15 voice min; 1 GB; no live eInvoice; no data deletion", () => {
+  assert.equal(P.TRIAL_OFFER.days, 14);
+  assert.deepEqual(P.TRIAL_OFFER.limits, { users: 25, aiProcessings: 10, voiceMinutes: 15, storageMb: 1024 });
+  assert.equal(P.TRIAL_OFFER.includesAllModules, true);
+  assert.equal(P.TRIAL_OFFER.includesVoice, true);
+  assert.equal(P.TRIAL_OFFER.einvoiceLiveTransactions, false);
+  assert.equal(P.TRIAL_OFFER.dataDeletedAfterTrial, false);
   assert.equal(translate("sk", "pricing.trial.title", { days: 14 }), "14 dní zadarmo");
+  assert.match(translate("sk", "pricing.trial.keepData"), /nikdy nemažú/);
 });
 
-await check("voice stays paid-only: not in trial (config + DB catalog)", () => {
-  assert.equal(P.TRIAL_OFFER.includesVoice, false);
-  assert.match(MIGRATION_CODE, /\('voice',\s*'capability',\s*false,/);
+await check("trial voice: included with 15 min (DB catalog); eInvoice not in trial", () => {
+  assert.match(PRICING_MIGRATION, /\('voice',\s*'capability',\s*true,/);
+  assert.match(PRICING_MIGRATION, /\('voice_minutes',\s*'quota',\s*true,\s*15,/);
+  assert.match(PRICING_MIGRATION, /\('einvoice',\s*'module',\s*false,/);
+  assert.match(PRICING_MIGRATION, /\('einvoice_transactions',\s*'quota',\s*false,/);
 });
 
 await check("entitlement snapshot: pre-entitlement company (null trial, beta_compat grants) parses", () => {
@@ -389,40 +404,49 @@ await check("migration: pre-entitlement companies get no fabricated trial; expli
   assert.match(MIGRATION_CODE, /where c\.trial_started_at is null/);
 });
 
-await check("pricing: provisional status flagged; every module maps to a DB entitlement key", () => {
-  assert.equal(P.PRICING_APPROVAL_STATUS, "provisional");
-  for (const m of P.PRICING_MODULES) {
-    assert.ok(E.isEntitlementKey(m.entitlementKey));
-    assert.match(MIGRATION_CODE, new RegExp(`\\('${m.entitlementKey}',`));
+await check("pricing: owner-approved, not live; every sellable module maps to a DB entitlement key", () => {
+  assert.equal(P.PRICING_STATUS, "owner_approved_not_live");
+  for (const m of P.BASE_MODULE_IDS) {
+    const key = P.MODULE_ENTITLEMENT[m];
+    assert.ok(E.isEntitlementKey(key), key);
+    assert.match(PRICING_MIGRATION, new RegExp(`\\('${key}',`));
   }
+  assert.equal(P.sellableModules(false).includes("einvoice"), false, "eFaktúra nie je predajná, kým nie je live");
+  assert.equal(P.EINVOICE_LIVE_STATUS, "blocked_pending_external_and_owner_approval");
 });
 
 await check("pricing: trial limits on the website == DB entitlement catalog", () => {
   const row = (key: string) => {
-    const m = new RegExp(`\\('${key}',\\s*'\\w+',\\s*(true|false),\\s*(null|\\d+),`).exec(MIGRATION_CODE);
+    const m = new RegExp(`\\('${key}',\\s*'\\w+',\\s*(true|false),\\s*(null|\\d+),`).exec(PRICING_MIGRATION);
     assert.ok(m, key);
     return { inTrial: m[1] === "true", limit: m[2] === "null" ? null : Number(m[2]) };
   };
   assert.deepEqual(row("team_members"), { inTrial: true, limit: P.TRIAL_OFFER.limits.users });
-  assert.deepEqual(row("vehicles"), { inTrial: true, limit: P.TRIAL_OFFER.limits.vehicles });
-  assert.deepEqual(row("machines"), { inTrial: true, limit: P.TRIAL_OFFER.limits.machines });
-  assert.deepEqual(row("inventory"), { inTrial: true, limit: P.TRIAL_OFFER.limits.inventoryItems });
   assert.deepEqual(row("ai_documents"), { inTrial: true, limit: P.TRIAL_OFFER.limits.aiProcessings });
+  assert.deepEqual(row("voice_minutes"), { inTrial: true, limit: P.TRIAL_OFFER.limits.voiceMinutes });
+  assert.deepEqual(row("storage_mb"), { inTrial: true, limit: P.TRIAL_OFFER.limits.storageMb });
+  for (const k of ["vehicles", "machines", "inventory", "invoicing"]) assert.deepEqual(row(k), { inTrial: true, limit: null }, k);
   assert.equal(row("voice").inTrial, P.TRIAL_OFFER.includesVoice);
-  assert.equal(row("invoicing").inTrial, P.TRIAL_OFFER.includesInvoicing);
   assert.match(MIGRATION_CODE, /interval '14 days'/);
-  assert.equal(P.TRIAL_OFFER.days, 14);
 });
 
-await check("pricing: no hard-coded prices in pricing UI components", () => {
-  for (const f of ["app/cennik/PricingPageClient.tsx", "app/components/pricing/TrialOfferList.tsx", "app/components/PublicLandingPage.tsx"]) {
+await check("pricing: no hard-coded prices in pricing UI components (all from lib/pricing.ts); no VAT wording", () => {
+  for (const f of ["app/cennik/PricingPageClient.tsx", "app/components/pricing/TrialOfferList.tsx", "app/components/PublicLandingPage.tsx", "app/components/billing/PlanOverviewPanel.tsx"]) {
     assert.equal(/\b\d+[.,]\d{2}\s*€|€\s*\d/.test(read(f)), false, f);
+  }
+  for (const locale of ["sk", "en", "de"] as const) {
+    for (const key of ["pricing.modules.perMonth", "pricing.summary.total", "pricing.complete.perMonth", "pricing.addons.perMonth", "pricing.metaDescription"]) {
+      assert.doesNotMatch(translate(locale, key, { amount: "x", price: "x" }), /DPH|MwSt|VAT/, `${locale}:${key}`);
+    }
   }
 });
 
-await check("pricing page: no checkout / buy button while billing does not exist", () => {
+await check("pricing page: no checkout / buy button while billing is not live", () => {
   const src = read("app/cennik/PricingPageClient.tsx");
   assert.equal(/checkout|stripe|kúpiť|buy now/i.test(src), false);
+  const panel = read("app/components/billing/PlanOverviewPanel.tsx");
+  assert.equal(/fetch\(|\/api\/billing|checkout_id|createCheckout/.test(panel), false, "panel nič neaktivuje");
+  assert.match(panel, /disabled className="ui-btn ui-btn-primary w-full opacity-60"/);
 });
 
 // ============================================================ i18n
@@ -430,12 +454,14 @@ await check("i18n: entitlement reasons, module names and pricing copy exist in s
   const keys = [
     ...E.ENTITLEMENT_REASONS.map((r) => `entitlements.reasons.${r}`),
     ...E.ENTITLEMENT_KEYS.map((k) => `entitlements.modules.${k}`),
-    ...P.PRICING_MODULES.flatMap((m) => [`pricing.modules.items.${m.id}.name`, `pricing.modules.items.${m.id}.description`]),
+    ...P.BASE_MODULE_IDS.flatMap((m) => [`pricing.modules.items.${m}.name`, `pricing.modules.items.${m}.description`]),
+    ...P.ADDON_IDS.map((a) => `pricing.addons.${a}`),
+    "entitlements.limitReached.title", "entitlements.limitReached.usage", "entitlements.limitReached.offer",
     "pricing.headline", "pricing.trial.cta", "pricing.summary.total", "pricing.faq.q5", "pricing.faq.a5",
     "auth.invite.createErrors.ENTITLEMENT_USER_LIMIT", "auth.invite.errors.ENTITLEMENT_USER_LIMIT",
   ];
   for (const locale of ["sk", "en", "de"] as const) for (const key of keys) assert.ok(hasTranslation(locale, key), `${locale}:${key}`);
-  assert.equal(translate("sk", "pricing.headline"), "Plaťte iba za to, čo vaša firma používa.");
+  assert.equal(translate("sk", "pricing.headline"), "Jedna cena za celú firmu.");
 });
 
 // ============================================================ 6. plan / storage / migration safety

@@ -55,6 +55,8 @@
     "test:team-permissions-ui": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/team-permissions-ui-tests.ts",
     "test:team-permissions-db": "node --experimental-strip-types --no-warnings scripts/team-permissions-pglite-tests.ts",
     "test:cost-control": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/cost-control-tests.ts",
+    "test:pricing-engine": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/pricing-engine-tests.ts",
+    "test:pricing-entitlements-db": "node --experimental-strip-types --no-warnings scripts/pricing-entitlements-pglite-tests.ts",
     "test:cost-control-db": "node --experimental-strip-types --no-warnings scripts/cost-control-pglite-tests.ts",
     "test:grants-guard": "node --experimental-strip-types --no-warnings scripts/grants-migration-guard-tests.ts",
     "test:prelaunch-blockers": "node --experimental-strip-types --no-warnings scripts/prelaunch-blockers-tests.ts",

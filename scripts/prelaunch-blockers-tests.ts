@@ -73,17 +73,17 @@ check("no DML / DDL / privilege statements", () => {
   assert.doesNotMatch(code, /\b(insert\s+into|update\s+\w+\s+set|delete\s+from|truncate|create\s+(table|function|policy|index|or)|alter\s+(table|function|policy|role)|drop\s+\w+|grant\s+\w+|revoke\s+\w+|set\s+role|copy\s+)/i);
   assert.doesNotMatch(code, /pg_read_file|lo_import|dblink|pg_terminate/i);
 });
-check("rc_versions == repo migrations absent in production (40, ordered)", () => {
+check("rc_versions == repo migrations absent in production (41, ordered)", () => {
   const v = [...BODY.matchAll(/\('(\d{14})'\)/g)].map((m) => m[1]);
   assert.deepEqual(v, RC_ABSENT.map((b) => b.slice(0, 14)));
-  assert.equal(v.length, 40);
+  assert.equal(v.length, 41);
 });
-check("pre_rc (61) ∪ rc_tables (34) == grants manifest, disjoint", () => {
+check("pre_rc (61) ∪ rc_tables (36) == grants manifest, disjoint", () => {
   const manifest = Object.keys(JSON.parse(read("supabase/grants/public-data-api-grants.json")).tables).sort();
   const pre = listCte("pre_rc");
   const rc = listCte("rc_tables");
   assert.equal(pre.length, 61);
-  assert.equal(rc.length, 34);
+  assert.equal(rc.length, 36);
   assert.deepEqual(pre.filter((t) => rc.includes(t)), []);
   assert.deepEqual([...pre, ...rc].sort(), manifest);
 });
