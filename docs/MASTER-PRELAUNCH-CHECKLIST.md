@@ -1,7 +1,7 @@
 # Esblu — MASTER PRE-LAUNCH CHECKLIST
 
 Kanonický zoznam všetkého, čo musí byť hotové pred verejným spustením. Aktualizovať pri každom bloku.
-Posledná aktualizácia: **2026-10-22** (branch `preprod-release-candidate` — **CHECKLIST RECONCILIATION** na RC `c3a8650`, sekcie **M–P**;
+Posledná aktualizácia: **2026-10-25** (branch `preprod-release-candidate` — **COST CONTROL HARDENING**, sekcia **J6**; predtým CHECKLIST RECONCILIATION na RC `c3a8650`, sekcie **M–P**;
 predtým PRE-LAUNCH TECHNICAL BLOCKERS: PASS, sekcia **J5**; GRANULAR TEAM PERMISSIONS: PASS, sekcia **J4**).
 
 Statusy: **PASS** · **READY** (pripravené, čaká na vykonanie/súhlas) · **BLOCKED LEGAL** (CLIA) · **BLOCKED EXTERNAL** ·
@@ -288,6 +288,30 @@ Produkcia iba čítaná (read-only SELECT, Vercel GET) — žiadny zápis, migr�
 | PITR | DISABLED / OPTIONAL ADD-ON | nie blocker pre aktuálny RC; add-on neaktivovaný (rozhodnutie vlastníka, platený) |
 | **production rollout** | ⛔ NOT YET RUN / PENDING APPROVAL | runbook §I |
 
+## J6. COST CONTROL HARDENING (2026-10-25)
+
+**COST CONTROL HARDENING: PASS (repo + staging)**. Production rollout **NOT YET RUN / PENDING APPROVAL**. Bez nového providera,
+bez nového AI modulu, bez zmeny pricing UI / billingu / limitov zákazníkov. Detail: `docs/esblu-unit-economics-2026-10-22.md`
+§5.3–5.4, §6, §21. **GDPR IMPACT: ACCESS / COST TELEMETRY ONLY — NO CONTENT LOGGING** (informatívne do CLIA delta: nová
+technická tabuľka `ai_usage_monthly` bez osobných údajov a obsahu; skrátenie retencie chat dedupe riadkov).
+
+| položka | status | poznámka |
+|---|---|---|
+| OpenAI flow inventory | PASS | 5 flowov: document scan (+ plate fallback), vehicle document scan (+ plate fallback), vehicle registration scan, voice transcription, intent classification fallback; **žiadny samostatný AI chatbot/asistent**; interný chat AI nevolá (`test:cost-control`) |
+| usage metering | PASS (repo + staging) | `ai_usage_monthly` mesačné počítadlá (tokeny, cache, audio, obrázky, retry); iba čísla z `usage`; zápis iba service_role RPC; migrácia `20261025100000` (+ rollback) |
+| company scoping | PASS | skeny z AI rezervácie, hlas z aktívnej firmy session, intent fallback z overeného členstva; DB overí aktívne členstvo, inak nič (fail closed); multi-company A ≠ B (PGlite + staging) |
+| retry guard | PASS | SDK `maxRetries: 0` + explicitné timeouty; retry iba 429/500/502/503 (max. 1 pri skenoch a prepise, 0 pri fallbackoch); timeout / 4xx sa nikdy neopakujú |
+| chat realtime scoping | PASS | všetkých 7 chat `postgres_changes` odberov s filtrom firma/konverzácia; RLS bez zmeny; funkčné správanie chatu bez zmeny (unread je aj tak iba aktívna firma) |
+| notification retention | PASS (chat) / OWNER/CLIA NOTE (deadline) | `esblu_purge_chat_notification_deliveries` — iba `chat` riadky > 7 dní, po dávkach; `deadline` sa nemažú (kľúč `overdue`); migrácia `20261025110000` |
+| push optimization | PASS | paralelné dávky po 5 príjemcov, jeden zdieľaný FCM OAuth token; deduplikácia bez zmeny; FCM HTTP v1 nemá multicast (zdokumentované) |
+| telemetry-maintenance cron | PASS (repo) | `/api/cron/telemetry-maintenance` denne 03:40, CRON_SECRET; v produkcii až po deploy (9 cronov) |
+| grants / RLS / replay | PASS | manifest + `test:grants-guard` 10/10, `test:grants-replay-db` 43/43 (idempotencia + rollback → re-apply), `test:cost-control-db` 13/13 |
+| staging (`cjbdijbbcujvmrzezusd`) | PASS | obe migrácie aplikované; md5 4 funkcií == PGlite replay; matica `scripts/sql/cost-control-staging-matrix.sql` (owner/employee/iná firma/anon = privilege, service zápis + scoping + fail closed, purge iba starých chat riadkov); fixtures zahodené; advisors: iba očakávané INFO `rls_enabled_no_policy` |
+| synthetic OpenAI usage na stagingu | N/A — OpenAI na Preview/stagingu zámerne vypnutá (sentinel); overené mock `usage` testami (`test:cost-control`) a DB zápisom na stagingu |
+| unit economics refresh | PASS | terminológia (písané/hlasové príkazy namiesto „AI asistent“), chat po fixoch (20 ľudí HEAVY ≈ 1,6 €/mes.), retry riziko, telemetria; pricing **OWNER DECISION PENDING** |
+| mobile Turbopack build + `verify:mobile-bundle` | PENDING OWNER (Windows) | zmenený zdieľaný `MobileChatFab`; v sandboxe mobile webpack build 34/34 PASS, Turbopack blokuje Google Fonts proxy |
+| **production rollout** | ⛔ NOT YET RUN / PENDING APPROVAL | migrácie #39–#40 v runbooku (sekcia L), potom deploy |
+
 ## K. FINAL FULL SMOKE — spustiť IBA keď finálny RC obsahuje multi-company + eInvoice + voice + billing + finálnu legal/store konfiguráciu
 
 Status: **NOT YET RUN** (`FINAL QA`) — zámerne sa nespúšťa teraz. Predpoklady: CLIA/legal texty, finálna billing/store
@@ -297,7 +321,7 @@ reconnect, oprávnenia, notifikácie, aplikácia nainštalovaná z obchodu.
 
 ## L. PRODUCTION ROLLOUT (všetko ⛔ až po súhlase)
 
-Autoritatívny postup: `docs/production-migration-runbook-2026-10-22.md` (38 migrácií, STOP podmienky, rollback per skupina).
+Autoritatívny postup: `docs/production-migration-runbook-2026-10-22.md` (40 migrácií, STOP podmienky, rollback per skupina).
 
 1. read-only produkčný precheck (`scripts/sql/prod-migration-precheck.sql` + `scripts/sql/einvoice-prod-precheck.sql`)
 2. skutočná história migrácií
@@ -307,6 +331,7 @@ Autoritatívny postup: `docs/production-migration-runbook-2026-10-22.md` (38 mig
 6. migrácie po jednej (poradie: `docs/einvoice-rc-integration-audit-2026-10-13.md` §3)
    → hneď za poslednou RC migráciou `20261021100000_explicit_data_api_grants` a `20261022100000_grants_locale_and_policy_hygiene` (audit grants §7; ACL + policy md5 kontrola po)
    → potom `20261023100000_team_granular_permissions` (J4; po aplikovaní md5 funkcií/politík/ACL == replay)
+   → potom `20261025100000_ai_usage_metering` a `20261025110000_notification_deliveries_chat_retention` (J6; md5 4 funkcií == replay/staging)
 7. merge / deploy
 8. ECB import (fx-rates)
 9. crony
@@ -379,7 +404,7 @@ Praktické poradie. Technické blokery (J5) sú PASS — zvyšok sú rozhodnutia
 | 5 | Play Data Safety + Apple App Privacy (vyplniť podľa CLIA) | `CLIA` · `GOOGLE PLAY` · `APPLE` | 1 |
 | 6 | Store billing produkty a konfigurácia: Play subscription produkty, license testers, service account, RTDN; Apple App Store Connect + IAP + StoreKit | `GOOGLE PLAY` · `APPLE` · `OWNER DECISION` | 3 |
 | 7 | Reviewer / demo účet v produkcii (allowlist + demo firma) | `PRODUCTION APPROVAL` | 8 |
-| 8 | Produkčná migrácia (38 migrácií, runbook READY, precheck 0 STOP / 0 WARN, backup potvrdiť znova pred oknom) | `PRODUCTION APPROVAL` | — |
+| 8 | Produkčná migrácia (40 migrácií, runbook READY, precheck 0 STOP / 0 WARN, backup potvrdiť znova pred oknom) | `PRODUCTION APPROVAL` | — |
 | 9 | Merge RC → `main` + produkčný deploy (dashboard, `/zrusenie-uctu`, crony) | `PRODUCTION APPROVAL` | 8 |
 | 10 | Live aktivácie: e-Faktúra live env + webhook, Stripe live, store billing | `PRODUCTION APPROVAL` · `EXTERNAL PROVIDER` · `OWNER DECISION` | 3, 6, 9 |
 | 11 | Finálny release AAB → Internal Testing → Play App Signing → produkčné `assetlinks.json` | `FINAL QA` · `GOOGLE PLAY` · `PRODUCTION APPROVAL` | 1–6, 9 |

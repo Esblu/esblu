@@ -21,8 +21,10 @@ SB = A["supabase"]; VC = A["vercel"]; EI = A["einvoice_efaktura"]; PAY = A["paym
 def scan_blend(level):
     return 0.85 * OA["scan_document"][level] + 0.10 * OA["scan_vehicle_doc"][level] + 0.05 * OA["scan_vehicle_registration"][level]
 
-def assistant_req(level):
-    return OA["assistant_fallback_share"][level] * OA["intent_fallback_call"][level]
+def text_command(level):
+    """1 písaný príkaz do Intent Engine: deterministický parser je zadarmo; OpenAI
+    sa volá iba pri fallbacku (podiel × cena jedného klasifikačného volania)."""
+    return OA["text_command_fallback_share"][level] * OA["intent_fallback_call"][level]
 
 def voice_min(level):
     t = A["openai_prices_usd_per_1m"]["gpt-4o-transcribe_per_min"]
@@ -38,18 +40,22 @@ def chat(users, rate):
     rt_msgs = msgs * fan
     recipients = CH["company_channel_share"] * (users - 1) + (1 - CH["company_channel_share"]) * 1
     deliveries = msgs * recipients
-    db_gb = (msgs * CH["msg_row_kb_incl_indexes"] + deliveries * CH["notification_delivery_row_kb"]) / 1024 / 1024
+    msg_gb = msgs * CH["msg_row_kb_incl_indexes"] / 1024 / 1024
+    # notification_deliveries: chat dedupe riadky sa po CH["dedupe_retention_days"] dňoch mažú (telemetry-maintenance)
+    dedupe_steady_gb = deliveries * min(1.0, CH["dedupe_retention_days"] / 30) * CH["notification_delivery_row_kb"] / 1024 / 1024
+    db_gb = msg_gb + deliveries * CH["notification_delivery_row_kb"] / 1024 / 1024
     rt_egress_gb = rt_msgs * CH["realtime_payload_kb"] / 1024 / 1024
-    wall = CH["push_wall_s_base"] + recipients * CH["push_wall_s_per_recipient"]
+    # push: príjemcovia v paralelných dávkach (lib/push/dispatch.ts, PUSH_USER_CONCURRENCY)
+    wall = CH["push_wall_s_base"] + math.ceil(recipients / CH["push_concurrency"]) * CH["push_wall_s_per_recipient"]
     cpu = CH["push_cpu_s_base"] + recipients * CH["push_cpu_s_per_recipient"]
     push_usd = msgs * (wall * VC["function_memory_gb"] / 3600 * VC["provisioned_memory_usd_per_gb_h"]
                        + cpu / 3600 * VC["active_cpu_usd_per_h"]) + msgs / 1e6 * VC["invocations_usd_per_m"]
     o = SB["overage_usd"]
     rt_usd = rt_msgs / 1e6 * o["realtime_per_m_msgs"]
-    db_usd = db_gb * o["disk_per_gb"]
+    db_usd = (msg_gb + dedupe_steady_gb) * o["disk_per_gb"]
     eg_usd = rt_egress_gb * o["egress_per_gb"]
     att_gb = msgs * CH["attachment_share"] * CH["attachment_mb"] / 1024
-    return dict(msgs=msgs, rt_msgs=rt_msgs, deliveries=deliveries, db_gb=db_gb, rt_egress_gb=rt_egress_gb,
+    return dict(msgs=msgs, rt_msgs=rt_msgs, deliveries=deliveries, db_gb=db_gb, msg_gb=msg_gb, dedupe_steady_gb=dedupe_steady_gb, rt_egress_gb=rt_egress_gb,
                 att_gb=att_gb, rt_eur=eur(rt_usd), db_eur=eur(db_usd), egress_eur=eur(eg_usd), push_eur=eur(push_usd),
                 total_eur=eur(rt_usd + db_usd + eg_usd + push_usd))
 
@@ -58,13 +64,13 @@ def profile_cost(p, level="typical", einv_case="worst"):
     o = SB["overage_usd"]
     c = chat(p["users"], p["chat_rate"])
     ai = eur(p["ai_scans"] * scan_blend(level))
-    asst = eur(p["assistant"] * assistant_req(level))
+    asst = eur(p["text_commands"] * text_command(level))
     voice = eur(p["voice_min"] * voice_min(level))
     storage = eur(p["storage_gb"] * o["storage_per_gb"])
     egress = eur(p["storage_gb"] * p["egress_ratio"] * o["egress_per_gb"])
     einv = p["einvoice_tx"] * einv_tx_price(einv_case)
     vercel = eur(p["vercel_usd"])
-    parts = dict(ai_scans=ai, assistant=asst, voice=voice, chat=c["total_eur"], storage=storage, egress=egress,
+    parts = dict(ai_scans=ai, text_commands=asst, voice=voice, chat=c["total_eur"], storage=storage, egress=egress,
                  einvoice=einv, vercel=vercel)
     parts["total"] = sum(parts.values())
     return parts
@@ -99,21 +105,21 @@ def apply_caps(p, caps):
 def fleet(n, price, mix_name="baseline", level="typical", einv_case="worst", overhead=0.0, users_override=None, ai_mult=1.0, einv_mult=1.0, caps=None):
     mix = A["mixes"][mix_name]
     o = SB["overage_usd"]; inc = SB["included"]
-    tot = dict(ai=0, voice_asst=0, einv_var=0, storage_gb=0, egress_gb=0, rt_msgs=0, db_gb=0, push=0, vercel=0, peak_conn=0)
+    tot = dict(ai=0, cmds_voice=0, einv_var=0, storage_gb=0, egress_gb=0, rt_msgs=0, db_gb=0, push=0, vercel=0, peak_conn=0)
     for pname, share in mix.items():
         p = dict(A["profiles"][pname]); k = n * share
         if users_override: p["users"] = users_override
-        p["ai_scans"] *= ai_mult; p["assistant"] *= ai_mult; p["voice_min"] *= ai_mult
+        p["ai_scans"] *= ai_mult; p["text_commands"] *= ai_mult; p["voice_min"] *= ai_mult
         p["einvoice_tx"] *= einv_mult
         p = apply_caps(p, caps)
         c = chat(p["users"], p["chat_rate"])
         tot["ai"] += k * eur(p["ai_scans"] * scan_blend(level))
-        tot["voice_asst"] += k * eur(p["assistant"] * assistant_req(level) + p["voice_min"] * voice_min(level))
+        tot["cmds_voice"] += k * eur(p["text_commands"] * text_command(level) + p["voice_min"] * voice_min(level))
         tot["einv_var"] += k * p["einvoice_tx"] * einv_tx_price(einv_case)
         tot["storage_gb"] += k * p["storage_gb"]
         tot["egress_gb"] += k * (p["storage_gb"] * p["egress_ratio"] + c["rt_egress_gb"])
         tot["rt_msgs"] += k * c["rt_msgs"]
-        tot["db_gb"] += k * c["db_gb"] * 12  # one year of accumulated chat/push rows (no retention)
+        tot["db_gb"] += k * (c["msg_gb"] * 12 + c["dedupe_steady_gb"])  # 1 rok správ chatu (bez retencie) + ustálený stav dedupe riadkov (7 dní)
         tot["push"] += k * c["push_eur"]
         tot["vercel"] += k * eur(p["vercel_usd"])
         tot["peak_conn"] += k * p["users"] * CH["connected_share_during_workday"]
@@ -129,11 +135,11 @@ def fleet(n, price, mix_name="baseline", level="typical", einv_case="worst", ove
     vc_fixed = eur(VC["pro_usd"] * VC["seats"])
     mrr = n * price
     pay = n * blended_fee(price)
-    variable = tot["ai"] + tot["voice_asst"] + storage + egress + realtime + disk + vercel_usage
+    variable = tot["ai"] + tot["cmds_voice"] + storage + egress + realtime + disk + vercel_usage
     cogs = variable + einv + pay
     fixed = sb_fixed + vc_fixed
     contribution = mrr - cogs - fixed - overhead
-    return dict(n=n, mrr=mrr, fixed=fixed, tier=tier, ai=tot["ai"], voice_asst=tot["voice_asst"], einv=einv,
+    return dict(n=n, mrr=mrr, fixed=fixed, tier=tier, ai=tot["ai"], cmds_voice=tot["cmds_voice"], einv=einv,
                 storage_egress=storage + egress + disk, realtime=realtime, vercel_usage=vercel_usage, pay=pay,
                 variable=variable, contribution=contribution, margin=contribution / mrr if mrr else 0)
 
@@ -151,7 +157,7 @@ def main():
     out.append("### OpenAI cost per action (USD / EUR)\n")
     out.append("| action | low USD | typical USD | high USD | typical EUR |\n|---|---|---|---|---|")
     rows = [("AI scan blended (85 % doc / 10 % vehicle doc / 5 % TP)", scan_blend),
-            ("assistant request (fallback share × call)", assistant_req),
+            ("text command (intent fallback share × call)", text_command),
             ("voice: 1 audio min full chain (transcribe + intents)", voice_min)]
     for name, f in rows:
         out.append(f"| {name} | {f('low'):.4f} | {f('typical'):.4f} | {f('high'):.4f} | {eur(f('typical')):.4f} |")
@@ -160,14 +166,27 @@ def main():
     out.append(f"| voice 5 min full chain | {5*voice_min('low'):.3f} | {5*voice_min('typical'):.3f} | {5*voice_min('high'):.3f} | {eur(5*voice_min('typical')):.3f} |")
 
     out.append("\n### Internal company chat — monthly cost per company (EUR)\n")
-    out.append("| users | usage | msgs/mo | Realtime msgs | push deliveries | DB growth MB/mo | Realtime € | DB € | egress € | push fn € | **total €** |\n|---|---|---|---|---|---|---|---|---|---|---|")
+    out.append("| users | usage | msgs/mo | Realtime msgs | push deliveries | message rows MB/mo | dedupe rows steady MB (7 d) | Realtime € | DB € | egress € | push fn € | **total €** |\n|---|---|---|---|---|---|---|---|---|---|---|---|")
     for u in [5, 10, 20]:
         for lbl, r in [("LIGHT 10", 10), ("NORMAL 30", 30), ("HEAVY 100", 100)]:
             c = chat(u, r)
-            out.append(f"| {u} | {lbl} | {fmt(c['msgs'],0)} | {fmt(c['rt_msgs'],0)} | {fmt(c['deliveries'],0)} | {c['db_gb']*1024:.1f} | {c['rt_eur']:.3f} | {c['db_eur']:.3f} | {c['egress_eur']:.3f} | {c['push_eur']:.3f} | **{c['total_eur']:.2f}** |")
+            out.append(f"| {u} | {lbl} | {fmt(c['msgs'],0)} | {fmt(c['rt_msgs'],0)} | {fmt(c['deliveries'],0)} | {c['msg_gb']*1024:.1f} | {c['dedupe_steady_gb']*1024:.1f} | {c['rt_eur']:.3f} | {c['db_eur']:.3f} | {c['egress_eur']:.3f} | {c['push_eur']:.3f} | **{c['total_eur']:.2f}** |")
+
+
+    out.append("\n### Realtime authorization fan-out — before vs after company filter (platform-wide, per month)\n")
+    out.append("Before: every INSERT into chat_messages was evaluated for EVERY connected subscriber of the platform (RLS decided at the end). After: only subscribers of the same company (filter company_id=eq.<active company>).\n")
+    out.append("| companies | platform msgs/mo | peak connected | checks before (msgs × all connected) | checks after (Σ company msgs × company connected) | reduction |\n|---|---|---|---|---|---|")
+    for n in A["company_counts"]:
+        msgs = conn = after = 0.0
+        for pname, share in A["mixes"]["baseline"].items():
+            p = A["profiles"][pname]; k = n * share
+            c = chat(p["users"], p["chat_rate"]); cc = p["users"] * CH["connected_share_during_workday"]
+            msgs += k * c["msgs"]; conn += k * cc; after += k * c["msgs"] * cc
+        before = msgs * conn
+        out.append(f"| {n} | {fmt(msgs,0)} | {fmt(conn,0)} | {before:,.0f} | {after:,.0f} | {before/after:,.0f}× |".replace(",", " "))
 
     out.append("\n### Profile cost per company / month (EUR, marginal above included pools, typical level, eInvoice worst price)\n")
-    keys = ["ai_scans", "assistant", "voice", "chat", "storage", "egress", "einvoice", "vercel", "total"]
+    keys = ["ai_scans", "text_commands", "voice", "chat", "storage", "egress", "einvoice", "vercel", "total"]
     out.append("| profile | " + " | ".join(keys) + " | total HIGH level |\n|" + "---|" * (len(keys) + 2))
     for pn, p in A["profiles"].items():
         c = profile_cost(p); h = profile_cost(p, "high")
@@ -184,16 +203,16 @@ def main():
 
     out.append("\n### 20-person company (EUR / month)\n")
     variants = {
-        "20 users LIGHT":  dict(users=20, ai_scans=25,  assistant=440,  voice_min=30,  storage_gb=2,  chat_rate=10,  einvoice_tx=10,  egress_ratio=0.3, vercel_usd=0.40),
-        "20 users NORMAL": dict(users=20, ai_scans=100, assistant=1320, voice_min=120, storage_gb=5,  chat_rate=30,  einvoice_tx=50,  egress_ratio=0.3, vercel_usd=0.80),
-        "20 users HEAVY":  dict(users=20, ai_scans=300, assistant=4400, voice_min=500, storage_gb=10, chat_rate=100, einvoice_tx=250, egress_ratio=0.3, vercel_usd=1.20),
+        "20 users LIGHT":  dict(users=20, ai_scans=25,  text_commands=440,  voice_min=30,  storage_gb=2,  chat_rate=10,  einvoice_tx=10,  egress_ratio=0.3, vercel_usd=0.40),
+        "20 users NORMAL": dict(users=20, ai_scans=100, text_commands=1320, voice_min=120, storage_gb=5,  chat_rate=30,  einvoice_tx=50,  egress_ratio=0.3, vercel_usd=0.80),
+        "20 users HEAVY":  dict(users=20, ai_scans=300, text_commands=4400, voice_min=500, storage_gb=10, chat_rate=100, einvoice_tx=250, egress_ratio=0.3, vercel_usd=1.20),
     }
     out.append("| variant | cost typical € | cost high € | margin @14.90 web (typ) | @16.90 | @19.90 |\n|---|---|---|---|---|---|")
     for name, p in variants.items():
         c = profile_cost(p)["total"]; h = profile_cost(p, "high")["total"]
         cells = [f"{pr - c - fees(pr,'web'):.2f}" for pr in P]
         out.append(f"| {name} | {c:.2f} | {h:.2f} | " + " | ".join(cells) + " |")
-    out.append("\nSame 20-user variants without voice and without eInvoice (core + AI scans + assistant + chat):\n")
+    out.append("\nSame 20-user variants without voice and without eInvoice (core + AI scans + text commands + chat):\n")
     out.append("| variant | cost typical € | margin @14.90 web |\n|---|---|---|")
     for name, p in variants.items():
         q = dict(p, voice_min=0, einvoice_tx=0); c = profile_cost(q)["total"]
@@ -212,10 +231,10 @@ def main():
     for mix in ["baseline", "conservative"]:
         for pr in P:
             out.append(f"\n### Fleet model — price {pr:.2f} €, mix {mix} ({A['mixes'][mix]}) — EUR / month, overhead excluded\n")
-            out.append("| companies | MRR | fixed infra | AI scans | assistant+voice | eInvoice | storage/egress/disk | realtime | Vercel usage | payment fees | contribution | margin |\n|---|---|---|---|---|---|---|---|---|---|---|---|")
+            out.append("| companies | MRR | fixed infra | AI scans | text cmds + voice | eInvoice | storage/egress/disk | realtime | Vercel usage | payment fees | contribution | margin |\n|---|---|---|---|---|---|---|---|---|---|---|---|")
             for n in A["company_counts"]:
                 f = fleet(n, pr, mix)
-                out.append(f"| {n} | {fmt(f['mrr'])} | {fmt(f['fixed'])} ({f['tier']}) | {fmt(f['ai'])} | {fmt(f['voice_asst'])} | {fmt(f['einv'])} | {fmt(f['storage_egress'])} | {fmt(f['realtime'])} | {fmt(f['vercel_usage'])} | {fmt(f['pay'])} | {fmt(f['contribution'])} | {f['margin']*100:.1f} % |")
+                out.append(f"| {n} | {fmt(f['mrr'])} | {fmt(f['fixed'])} ({f['tier']}) | {fmt(f['ai'])} | {fmt(f['cmds_voice'])} | {fmt(f['einv'])} | {fmt(f['storage_egress'])} | {fmt(f['realtime'])} | {fmt(f['vercel_usage'])} | {fmt(f['pay'])} | {fmt(f['contribution'])} | {f['margin']*100:.1f} % |")
 
     out.append("\n### Price comparison summary (baseline mix, typical; overhead 0)\n")
     out.append("| price | break-even (infra) | BE +50 € overhead | BE +150 € overhead | margin @50 | @100 | @500 | @1000 | @100 conservative mix |\n|---|---|---|---|---|---|---|---|---|")
@@ -227,7 +246,7 @@ def main():
     out.append("| scenario | 14.90 | 16.90 | 19.90 |\n|---|---|---|---|")
     scen = [("base (typical)", {}),
             ("AI at HIGH cost per action", dict(level="high")),
-            ("AI usage ×2 (scans, assistant, voice)", dict(ai_mult=2.0)),
+            ("AI usage ×2 (scans, text commands, voice)", dict(ai_mult=2.0)),
             ("AI usage ×2 at HIGH cost", dict(ai_mult=2.0, level="high")),
             ("every company has 20 users", dict(users_override=20)),
             ("eInvoice usage ×3", dict(einv_mult=3.0)),
