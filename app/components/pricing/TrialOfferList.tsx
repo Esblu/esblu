@@ -24,17 +24,16 @@ function Cross() {
 }
 
 export function TrialOfferList({ showExcluded = true }: { showExcluded?: boolean }) {
-  const { t, tCount } = useLocale();
+  const { t } = useLocale();
   const { limits } = TRIAL_OFFER;
 
   const included = [
-    tCount("pricing.trial.users", limits.users),
-    tCount("pricing.trial.vehicles", limits.vehicles),
-    tCount("pricing.trial.machines", limits.machines),
-    tCount("pricing.trial.inventory", limits.inventoryItems),
-    tCount("pricing.trial.ai", limits.aiProcessings),
-    ...(TRIAL_OFFER.includesInvoicing ? [t("pricing.trial.invoicing")] : []),
-    t("pricing.trial.manual"),
+    t("pricing.trial.allModules"),
+    t("pricing.trial.users", { count: limits.users }),
+    t("pricing.trial.ai", { count: limits.aiProcessings }),
+    t("pricing.trial.voice", { count: limits.voiceMinutes }),
+    t("pricing.trial.storage", { gb: limits.storageMb / 1024 }),
+    t("pricing.trial.chat"),
   ];
 
   return (
@@ -48,16 +47,13 @@ export function TrialOfferList({ showExcluded = true }: { showExcluded?: boolean
           </li>
         ))}
       </ul>
-      {showExcluded && !TRIAL_OFFER.includesVoice && (
-        <>
-          <p className="mt-5 text-sm font-bold uppercase tracking-[0.14em] text-muted-esblu">{t("pricing.trial.excludedTitle")}</p>
-          <ul className="mt-2.5 space-y-2 sm:mt-3 sm:space-y-3">
-            <li className="flex items-start gap-3 text-secondary">
-              <Cross />
-              <span>{t("pricing.trial.voice")}</span>
-            </li>
-          </ul>
-        </>
+      {showExcluded && !TRIAL_OFFER.einvoiceLiveTransactions && (
+        <ul className="mt-3 space-y-2 sm:space-y-3">
+          <li className="flex items-start gap-3 text-secondary">
+            <Cross />
+            <span>{t("pricing.trial.einvoiceNotLive")}</span>
+          </li>
+        </ul>
       )}
     </div>
   );
