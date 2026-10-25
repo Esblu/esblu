@@ -534,7 +534,12 @@ await check("privacy: zvuk ani prepis sa nelogujú, žiadne object URL ani súbo
 
 await check("server: OpenAI prepis má časový limit a obmedzené opakovanie; SK prompt pozná IČO/DIČ/IČ DPH/IBAN", () => {
   const route = readFileSync("app/api/assistant/transcribe/route.ts", "utf8");
-  assert.match(route, /timeout: \d+_?\d*,\s*\n\s*maxRetries: 1/);
+  // Cost control (2026-10-25): SDK retry 0, timeout z politiky; jedno opakovanie
+  // iba pri 429/5xx cez callOpenAiWithCostGuard (nie po timeoute).
+  assert.match(route, /timeout: AI_CALL_POLICY\.voiceTranscription\.timeoutMs,[\s\S]*?maxRetries: 0,/);
+  assert.match(route, /callOpenAiWithCostGuard\([\s\S]*?maxRetries: AI_CALL_POLICY\.voiceTranscription\.maxRetries/);
+  const policy = readFileSync("lib/ai/openai-guard.ts", "utf8");
+  assert.match(policy, /voiceTranscription: \{ timeoutMs: 18_000, maxRetries: 1 \}/);
   assert.match(route, /export const maxDuration = \d+;/);
   for (const term of ["IČO", "DIČ", "IČ DPH", "IBAN", "číslo faktúry", "splatnosť"]) assert.ok(route.includes(term), term);
 });
