@@ -175,7 +175,7 @@ s viac ako 1 aktívnym členstvom (predpoklad backfillu `20261012140000`), 0 osi
 Restore (Dashboard → Backups → Restore) = celá DB do bodu zálohy, projekt nedostupný počas obnovy, stratia sa
 všetky zápisy po bode zálohy → iba `[SÚHLAS]` a iba ak SQL rollback nestačí.
 
-## C. Presné poradie migrácií (41) — absent v produkcii
+## C. Presné poradie migrácií (42) — absent v produkcii
 
 Zdroj: repo `supabase/migrations` × produkčná história (56 riadkov, read-only) × staging história (40 riadkov).
 Aplikovať **po jednej** cez MCP `apply_migration` (`project_id = fkpgvgvsmbpieduoatrt`, `name` = názov súboru bez
@@ -226,6 +226,7 @@ HDR = postup v hlavičke migrácie, FN = predchádzajúca definícia funkcie (ul
 | 39 | `20261025100000_ai_usage_metering` | G9 cost control | S | RB | áno (iba technická telemetria) | nová service-only tabuľka `ai_usage_monthly` + RPC; rollback zmaže počítadlá |
 | 40 | `20261025110000_notification_deliveries_chat_retention` | G9 cost control | S | RB | áno | iba funkcia čistenia chat dedupe riadkov; nič nemaže sama |
 | 41 | `20261026100000_pricing_entitlements` | G10 pricing + entitlements | N | RB | áno **kým nie je žiadny platený plán** | katalóg (trial limity), kanonické plány, výber plánu, usage počítadlá, storage RESTRICTIVE politika, backfill legacy ručných nárokov; `allow_mock_plans` = false |
+| 42 | `20261026110000_pricing_entitlement_corrections` | G10 pricing + entitlements | S | RB | áno | J7 korekcie: Dokumenty 10 AI, 0 nových uploadov bez plánu (+ RESTRICTIVE UPDATE), eFaktúra half-units, rezervované miesta v prehľade |
 
 Mimo zoznamu (už v produkcii, nespúšťať): `20261001130000`, `20261005090000`, `20261005091000`. 37 legacy súborov
 `20260721000100 … 20260830090000` nemá v produkcii history riadok (aplikované mimo trackera, MIGRATIONS.md §3) —
@@ -233,7 +234,7 @@ Mimo zoznamu (už v produkcii, nespúšťať): `20261001130000`, `20261005090000
 `harden_accounting_handoff_grants`, `harden_client_role_privileges_anon_select_default`) — známy historický stav.
 
 Dôležité: od **2026-10-30** Supabase neudeľuje novým tabuľkám v `public` Data API grants. Tabuľky z #2–#35
-dostanú granty až v #36 → celé okno #1–#41 vykonať **v jednej relácii** a aplikačný deploy až po #41 + E.
+dostanú granty až v #36 → celé okno #1–#42 vykonať **v jednej relácii** a aplikačný deploy až po #42 + E.
 
 ### J0. Legacy baseline `20260720000000` — **CONDITIONAL (odporúčané APPLY ako no-op)**
 
@@ -243,9 +244,9 @@ dostanú granty až v #36 → celé okno #1–#41 vykonať **v jednej relácii**
 - Riziko konfliktu: žiadne, pokiaľ 9/9 existuje. **Ak precheck `legacy_baseline_tables_present ≠ 9` → STOP**
   (nespúšťať baseline — vytvoril by tabuľku v legacy tvare do zrelej schémy).
 
-## D. Expected schema state po #41
+## D. Expected schema state po #42
 
-- História: 56 + 41 = **97** riadkov; posledný `name = 20261026100000_pricing_entitlements`.
+- História: 56 + 42 = **98** riadkov; posledný `name = 20261026110000_pricing_entitlement_corrections`.
 - Tabuľky `public`: **97** = presne `supabase/grants/public-data-api-grants.json` (61 + 36), všetky RLS.
 - Bucket `einvoice-documents` (private) navyše → 8 bucketov, všetky `public = false`.
 - Funkcie / politiky / ACL: md5 == PGlite replay (`npm run test:grants-replay-db`) a == staging
@@ -253,7 +254,7 @@ dostanú granty až v #36 → celé okno #1–#41 vykonať **v jednej relácii**
 - `user_active_company`: 1 riadok na používateľa s aktívnym členstvom (dnes 6); `companies.trial_policy = 'legacy'` pre 4 existujúce firmy.
 - `einvoice_rollout`: prázdne (fail-closed). `subscription_*`: iba katalóg; billing OFF.
 
-## E. Grants verification (hneď po #41)
+## E. Grants verification (hneď po #42)
 
 1. `scripts/sql/grants-data-api-matrix.sql` (read-only) → zhoda s manifestom; `anon` iba `legal_documents:SELECT`.
 2. 0 TRUNCATE/TRIGGER/REFERENCES pre `anon`/`authenticated`; 0 SECURITY DEFINER bez `search_path`; anon EXECUTE iba
@@ -272,7 +273,7 @@ billing owner-only; `esblu_my_has_permission` default deny; zrušenie účtu gua
 
 | skupina | rollback | lossless? | maže dáta? | kedy namiesto toho restore / forward-fix |
 |---|---|---|---|---|
-| G10 #41 | RB | áno, kým žiadna firma nemá kanonický platený plán | kompozícia plánov, hlasové počítadlá (staging mock) | po prvom platenom pláne: forward-fix |
+| G10 #42 → #41 | RB ×2 | áno, kým žiadna firma nemá kanonický platený plán | kompozícia plánov, hlasové počítadlá (staging mock) | po prvom platenom pláne: forward-fix |
 | G9 #40 → #39 | RB ×2 | áno | iba technická AI usage telemetria (počítadlá) | kedykoľvek; počítadlá sa stratia |
 | G8 #38 | RB | áno, kým nie sú udelené oprávnenia | áno — granty + audit oprávnení | po udelení oprávnení: forward-fix |
 | G7 #37 → #36 | RB, RB | áno (ACL presne späť) | nie | preferovaný cielený grant fix namiesto rollbacku |
@@ -311,7 +312,7 @@ STOP (nepokračovať, nič neopravovať „za behu“) ak:
 | 1 | read-only precheck (A) — oba skripty, protokol | — |
 | 2 | výslovný súhlas vlastníka s oknom a týmto runbookom | **[SÚHLAS vlastníka]** |
 | 3 | backup/recovery potvrdenie (B) + logický dump + uloženie FN definícií (#14, #15, #19) | vlastník potvrdí |
-| 4 | migrácie #1–#41 po jednej (C), po každej kontrola `schema_migrations` | **[SÚHLAS]** (krok 2) |
+| 4 | migrácie #1–#42 po jednej (C), po každej kontrola `schema_migrations` | **[SÚHLAS]** (krok 2) |
 | 5 | grants verification (E) + advisors | — |
 | 6 | targeted DB smoke (F) | — |
 | 7 | aplikačný deploy: merge RC → `main` až teraz, deployment spárovaný podľa SHA, READY | **[SÚHLAS — merge/deploy]** |
