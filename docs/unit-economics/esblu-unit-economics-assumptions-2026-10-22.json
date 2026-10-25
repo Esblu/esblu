@@ -1,0 +1,293 @@
+{
+  "_meta": {
+    "purpose": "Esblu unit economics model — assumptions only. No secrets. Recalculate with: python3 scripts/unit-economics-model.py",
+    "verified_on": "2026-10-25",
+    "currency": "EUR, excl. VAT unless noted",
+    "status": "AUDIT / NOT A PRICING DECISION",
+    "labels": "MEASURED = from repo or account data; OFFICIAL = official price page verified 2026-10-25; ESTIMATE = transparent assumption; TBD = owner input required"
+  },
+  "fx": {
+    "usd_per_eur": 1.1,
+    "_note": "Conservative (ECB 2026-10-06 = 1.1269 USD/EUR, staging fx_reference_rates). Lower = higher USD costs in EUR."
+  },
+  "openai_prices_usd_per_1m": {
+    "_source": "OFFICIAL developers.openai.com/api/docs/pricing (Standard, short context), 2026-10-25",
+    "gpt-5.6-terra": {
+      "input": 2.0,
+      "cached_input": 0.2,
+      "cache_write_30m": 2.5,
+      "output": 12.0
+    },
+    "gpt-4.1": {
+      "input": 2.0,
+      "cached_input": 0.5,
+      "output": 8.0
+    },
+    "gpt-4.1-mini": {
+      "input": 0.4,
+      "cached_input": 0.1,
+      "output": 1.6
+    },
+    "gpt-4o-transcribe_per_min": 0.006
+  },
+  "openai_cost_per_action_usd": {
+    "_basis": "ESTIMATE from token counts derived from prompt/schema sizes in repo (chars/3.2) + image tokens (internal 2026-09-26 estimate, not re-measured). No live calls made. No usage telemetry exists (response.usage not logged).",
+    "scan_document": {
+      "low": 0.022,
+      "typical": 0.036,
+      "high": 0.071
+    },
+    "scan_vehicle_doc": {
+      "low": 0.012,
+      "typical": 0.02,
+      "high": 0.035
+    },
+    "scan_vehicle_registration": {
+      "low": 0.002,
+      "typical": 0.003,
+      "high": 0.005
+    },
+    "intent_fallback_call": {
+      "low": 0.0025,
+      "typical": 0.0097,
+      "high": 0.011,
+      "_note": "low = prompt cache hit; typical = no cache; high = +1 retry share"
+    },
+    "assistant_fallback_share": {
+      "low": 0.1,
+      "typical": 0.3,
+      "high": 1.0
+    },
+    "voice_commands_per_audio_min": {
+      "low": 6,
+      "typical": 12,
+      "high": 12
+    },
+    "voice_fallback_share": {
+      "low": 0.2,
+      "typical": 0.3,
+      "high": 0.6
+    }
+  },
+  "supabase": {
+    "_source": "OFFICIAL supabase.com/pricing + docs compute-and-disk, 2026-10-25; plan MEASURED via Supabase API (org Esblu s.r.o. = pro)",
+    "pro_plan_usd": 25,
+    "compute_credit_usd": 10,
+    "active_projects": 2,
+    "_projects": "assetpilot (prod) + esblu-test (staging); skitze-protokoly INACTIVE",
+    "compute_size_assumed": "Micro (MANUAL CONFIRMATION — size not readable via API)",
+    "compute_usd": {
+      "micro": 10,
+      "small": 15,
+      "medium": 60,
+      "large": 110,
+      "xl": 210
+    },
+    "included": {
+      "disk_gb": 8,
+      "storage_gb": 100,
+      "egress_gb": 250,
+      "cached_egress_gb": 250,
+      "mau": 100000,
+      "realtime_peak_conn": 500,
+      "realtime_msgs_m": 5,
+      "edge_fn_invocations_m": 2
+    },
+    "overage_usd": {
+      "disk_per_gb": 0.125,
+      "storage_per_gb": 0.0213,
+      "egress_per_gb": 0.09,
+      "cached_egress_per_gb": 0.03,
+      "mau": 0.00325,
+      "realtime_per_1000_peak_conn": 10,
+      "realtime_per_m_msgs": 2.5,
+      "edge_fn_per_m": 2
+    }
+  },
+  "vercel": {
+    "_source": "OFFICIAL vercel.com/pricing 2026-10-25 (Pro $20/mo, $20 usage credit); MEASURED billing ledger 2026-10-22: subscription license ~$0.645/day (~$20/mo, 1 seat), usage ~$0.001/day billed",
+    "pro_usd": 20,
+    "seats": 1,
+    "included_credit_usd": 20,
+    "provisioned_memory_usd_per_gb_h": 0.0152,
+    "_mem_note": "MEASURED from ledger (fra1)",
+    "active_cpu_usd_per_h": 0.18,
+    "_cpu_note": "ESTIMATE (not on public page; confirm in Usage)",
+    "invocations_usd_per_m": 0.6,
+    "_inv_note": "ESTIMATE",
+    "function_memory_gb": 2
+  },
+  "einvoice_efaktura": {
+    "_source": "Provider documentation as recorded in docs/einvoice-production-provider-checklist.md (2026-10-02). NOT re-verified — provider pricing answer not on file.",
+    "promo_until": "2026-11-30 (EUR 0 up to 1000 tx/month)",
+    "price_per_tx_eur": {
+      "best": 0.0194,
+      "worst": 0.055
+    },
+    "monthly_program_multiplier": 1.2,
+    "received_doc_tx": 0.5,
+    "minimum_eur_month": 10,
+    "minimum_scope": "ASSUMED per partner account (Esblu). MANUAL CONFIRMATION — if per client organization, see sensitivity."
+  },
+  "payments": {
+    "_source": "OFFICIAL stripe.com/en-sk/pricing, support.google.com/googleplay/android-developer/answer/112622, developer.apple.com/support/apps-in-the-eu — 2026-10-25",
+    "stripe": {
+      "eea_standard_pct": 0.015,
+      "eea_premium_pct": 0.028,
+      "fixed_eur": 0.25,
+      "billing_pct": 0.007,
+      "b2b_premium_card_share": 0.5,
+      "gross_vat_factor": 1.23,
+      "_vat_note": "SK B2B customer pays 23% VAT on top; card fee is charged on the gross amount (conservative). EU reverse-charge customers: factor 1.0"
+    },
+    "google_play_eea_subscription_pct": 0.15,
+    "_gp": "10% service fee + 5% billing fee (EEA, auto-renewing subscriptions, first $1M)",
+    "apple_eu_iap_subscription_pct": {
+      "small_business_program_or_after_year1": 0.15,
+      "standard_year1": 0.26
+    }
+  },
+  "chat": {
+    "_basis": "ESTIMATE from implementation (app/components/chat/*, app/api/push/chat-message, lib/push/dispatch.ts). Production has 16 messages — too few to measure.",
+    "workdays": 22,
+    "msg_row_kb_incl_indexes": 0.5,
+    "notification_delivery_row_kb": 0.25,
+    "company_channel_share": 0.5,
+    "connected_share_during_workday": 0.5,
+    "open_conversation_views_per_msg": 2,
+    "realtime_payload_kb": 1.0,
+    "push_wall_s_base": 0.15,
+    "push_wall_s_per_recipient": 0.15,
+    "push_cpu_s_base": 0.03,
+    "push_cpu_s_per_recipient": 0.005,
+    "attachment_share": 0.02,
+    "attachment_mb": 1.0
+  },
+  "profiles": {
+    "A_LIGHT": {
+      "users": 5,
+      "ai_scans": 25,
+      "assistant": 100,
+      "voice_min": 30,
+      "storage_gb": 1,
+      "chat_rate": 10,
+      "einvoice_tx": 10,
+      "egress_ratio": 0.3,
+      "vercel_usd": 0.1
+    },
+    "B_NORMAL": {
+      "users": 10,
+      "ai_scans": 100,
+      "assistant": 500,
+      "voice_min": 120,
+      "storage_gb": 5,
+      "chat_rate": 30,
+      "einvoice_tx": 50,
+      "egress_ratio": 0.3,
+      "vercel_usd": 0.3
+    },
+    "C_HEAVY": {
+      "users": 20,
+      "ai_scans": 300,
+      "assistant": 2000,
+      "voice_min": 500,
+      "storage_gb": 10,
+      "chat_rate": 100,
+      "einvoice_tx": 250,
+      "egress_ratio": 0.3,
+      "vercel_usd": 1.2
+    },
+    "D_EXTREME": {
+      "users": 20,
+      "ai_scans": 1000,
+      "assistant": 4400,
+      "voice_min": 2000,
+      "storage_gb": 25,
+      "chat_rate": 100,
+      "einvoice_tx": 1000,
+      "egress_ratio": 0.5,
+      "vercel_usd": 2.5
+    }
+  },
+  "mixes": {
+    "baseline": {
+      "A_LIGHT": 0.6,
+      "B_NORMAL": 0.3,
+      "C_HEAVY": 0.09,
+      "D_EXTREME": 0.01
+    },
+    "conservative": {
+      "A_LIGHT": 0.4,
+      "B_NORMAL": 0.4,
+      "C_HEAVY": 0.15,
+      "D_EXTREME": 0.05
+    }
+  },
+  "channel_mix": {
+    "web": 0.8,
+    "google_play": 0.15,
+    "apple": 0.05
+  },
+  "prices_eur": [
+    14.9,
+    16.9,
+    19.9
+  ],
+  "second_company_price_eur": 9.9,
+  "company_counts": [
+    10,
+    50,
+    100,
+    500,
+    1000
+  ],
+  "fixed_scaling_supabase_compute": [
+    [
+      100,
+      "micro"
+    ],
+    [
+      300,
+      "small"
+    ],
+    [
+      700,
+      "medium"
+    ],
+    [
+      100000,
+      "large"
+    ]
+  ],
+  "_fixed_scaling_note": "ESTIMATE: prod compute tier needed by paying-company count. Realtime postgres_changes fan-out (see doc §6) may require a larger tier earlier.",
+  "overhead_eur_month": {
+    "github": "TBD",
+    "github_actions": 0,
+    "_actions": "no .github/workflows in repo",
+    "github_packages_lfs": 0,
+    "copilot": "TBD",
+    "claude_cowork": "TBD",
+    "apple_developer_program": "TBD (public list price USD 99/yr — MANUAL CONFIRMATION)",
+    "google_play_registration": 0,
+    "_gp": "one-time fee, already paid",
+    "domain_esblu_com": "TBD (external registrar, Namecheap DNS)",
+    "company_mailbox": "TBD (Namecheap Private Email per subprocessor doc)",
+    "monitoring": 0,
+    "_mon": "no paid monitoring (docs/data-breach-procedure.md)",
+    "scenarios_for_break_even": [
+      0,
+      50,
+      150
+    ]
+  },
+  "recommended_caps": {
+    "ai_scans": 50,
+    "voice_min": 60,
+    "einvoice_tx": 25,
+    "storage_gb": 10,
+    "assistant": null,
+    "chat_rate": null,
+    "users": null
+  },
+  "_recommended_caps_note": "PROPOSAL for owner decision: included fair-use per company/month. Usage above cap = add-on or blocked (no revenue counted in model)."
+}

@@ -125,6 +125,8 @@ Technická pripravenosť ≠ business rozhodnutie. Architektúra je READY; ceny,
 | Mac StoreKit compile | NOT YET RUN | `APPLE` |
 | live Stripe aktivácia | ⛔ PENDING APPROVAL | `OWNER DECISION` · `PRODUCTION APPROVAL` |
 | store billing aktivácia (Play / Apple) | ⛔ PENDING APPROVAL | `OWNER DECISION` · `PRODUCTION APPROVAL` |
+| COST / UNIT ECONOMICS AUDIT | PARTIAL — `docs/esblu-unit-economics-2026-10-22.md` (model + `scripts/unit-economics-model.py`); čaká na potvrdenie AI tokenov, eFaktúra cenníka a dev overheadu | `OWNER DECISION` · `EXTERNAL PROVIDER` |
+| Pricing (cena, limity, add-ony, ďalšia firma) | OWNER DECISION PENDING — audit nenavrhuje finálnu cenu bez rozhodnutia vlastníka | `OWNER DECISION` |
 
 ## F. GOOGLE PLAY
 
