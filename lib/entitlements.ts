@@ -16,6 +16,7 @@
 // =============================================================================
 
 import type { IntentName } from "@/lib/intents/types";
+import { ADDONS, LIMIT_ADDON_OFFER, type AddonId } from "@/lib/pricing";
 
 export const ENTITLEMENT_KEYS = [
   "invoicing",
@@ -28,6 +29,10 @@ export const ENTITLEMENT_KEYS = [
   "inventory",
   "voice",
   "team_members",
+  // Kvóty z pricing + entitlements architektúry (20261026100000).
+  "voice_minutes",
+  "storage_mb",
+  "einvoice_transactions",
 ] as const;
 
 export type EntitlementKey = (typeof ENTITLEMENT_KEYS)[number];
@@ -42,6 +47,9 @@ export const ENTITLEMENT_REASONS = [
   "INVENTORY_LIMIT_REACHED",
   "AI_PROCESSING_LIMIT_REACHED",
   "ENTITLEMENT_LIMIT_REACHED",
+  "VOICE_LIMIT_REACHED",
+  "STORAGE_LIMIT_REACHED",
+  "EINVOICE_LIMIT_REACHED",
 ] as const;
 
 export type EntitlementReason = (typeof ENTITLEMENT_REASONS)[number];
@@ -50,6 +58,9 @@ export type EntitlementDenial = {
   code: "ENTITLEMENT_DENIED";
   reason: EntitlementReason;
   key: EntitlementKey;
+  /** Z DB detailu chyby (iba pri limitoch): zahrnuté množstvo a aktuálne čerpanie. */
+  limit?: number | null;
+  current?: number | null;
 };
 
 export type EntitlementState = {
@@ -94,7 +105,67 @@ export function parseEntitlementDenial(error: unknown): EntitlementDenial | null
   if (!match) return null;
   const [, reason, key] = match;
   if (!isEntitlementReason(reason) || !isEntitlementKey(key)) return null;
-  return { code: "ENTITLEMENT_DENIED", reason, key };
+  const denial: EntitlementDenial = { code: "ENTITLEMENT_DENIED", reason, key };
+  const detail = parseDenialDetail(error);
+  if (detail) {
+    denial.limit = detail.limit;
+    denial.current = detail.current;
+  }
+  return denial;
+}
+
+function finiteOrNull(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+/** DB detail `{"reason","key","limit","current"}` (esblu_raise_entitlement_denial). */
+function parseDenialDetail(error: unknown): { limit: number | null; current: number | null } | null {
+  if (!error || typeof error !== "object") return null;
+  const raw = (error as Record<string, unknown>).details;
+  if (typeof raw !== "string" || raw.length > 500) return null;
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    return { limit: finiteOrNull(parsed.limit), current: finiteOrNull(parsed.current) };
+  } catch {
+    return null;
+  }
+}
+
+// -----------------------------------------------------------------------------
+// LIMIT_REACHED — jednoznačný stav pre UI (nikdy tiché zlyhanie). Server
+// zlyhá fail closed; UI dostane čerpanie, zahrnuté množstvo a ponuku
+// add-onu z kanonického cenníka (lib/pricing.ts). Add-on sa NIKDY neaktivuje
+// bez potvrdeného billing eventu (zatiaľ žiadny live billing).
+// -----------------------------------------------------------------------------
+export const LIMIT_REASONS: readonly EntitlementReason[] = [
+  "AI_PROCESSING_LIMIT_REACHED",
+  "VOICE_LIMIT_REACHED",
+  "USER_LIMIT_REACHED",
+  "STORAGE_LIMIT_REACHED",
+  "EINVOICE_LIMIT_REACHED",
+];
+
+export type LimitReached = {
+  code: "LIMIT_REACHED";
+  reason: EntitlementReason;
+  key: EntitlementKey;
+  used: number | null;
+  included: number | null;
+  addon: { id: AddonId; units: number; priceCents: number } | null;
+};
+
+export function limitReachedFrom(denial: EntitlementDenial | null): LimitReached | null {
+  if (!denial || !LIMIT_REASONS.includes(denial.reason)) return null;
+  const addonId = LIMIT_ADDON_OFFER[denial.key];
+  const addon = addonId ? ADDONS[addonId] : null;
+  return {
+    code: "LIMIT_REACHED",
+    reason: denial.reason,
+    key: denial.key,
+    used: denial.current ?? null,
+    included: denial.limit ?? null,
+    addon: addon ? { id: addon.id, units: addon.units, priceCents: addon.priceCents } : null,
+  };
 }
 
 function denied(key: EntitlementKey, reason: EntitlementReason = "ENTITLEMENT_REQUIRED"): EntitlementState {

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { assertStorageCapacity } from "@/lib/storage/capacity-client";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { chatCompanyFilter, chatConversationFilter } from "@/lib/chat-realtime";
@@ -451,6 +452,7 @@ export default function ChatMessageView({
           pendingFile.type
         );
 
+        await assertStorageCapacity();
         const { error: uploadError } = await supabase.storage
           .from("chat-attachments")
           .upload(path, pendingFile, { contentType: pendingFile.type });

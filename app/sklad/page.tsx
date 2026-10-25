@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { assertStorageCapacity } from "@/lib/storage/capacity-client";
 import { useEffect, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { flushMediaDeletions } from "@/lib/storage/media-deletion";
@@ -363,6 +364,7 @@ export default function SkladPage() {
     const filePath =
       `${userId}/${savedItemId}/${Date.now()}.${fileExtension}`;
 
+    await assertStorageCapacity();
     const { error: uploadError } = await supabase.storage
       .from("inventory-photos")
       .upload(filePath, photoFile, {

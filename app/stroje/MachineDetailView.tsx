@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { assertStorageCapacity } from "@/lib/storage/capacity-client";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 import { flushMediaDeletions } from "@/lib/storage/media-deletion";
@@ -542,6 +543,7 @@ export default function MachineDetailView({
     const filePath =
       `${userId}/${machineId}/${Date.now()}-${compressedFile.name}`;
 
+    await assertStorageCapacity();
     const { error: uploadError } = await supabase.storage
       .from("machine-photos")
       .upload(filePath, compressedFile, {

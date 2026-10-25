@@ -1,6 +1,7 @@
 "use client";
 
 import { idempotencyKeyFor } from "@/lib/idempotency-key";
+import { assertStorageCapacity } from "@/lib/storage/capacity-client";
 import { Suspense, useEffect, useRef, useState, type ReactNode } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
@@ -1568,6 +1569,7 @@ const openCustomCategoryDocuments = openCustomCategoryId
           ? "ai-evidence-documents"
           : "ai-inbox-documents";
       const storagePath = `${session.user.id}/${documentId}/${crypto.randomUUID()}.webp`;
+      await assertStorageCapacity();
       const { error: uploadError } = await supabase.storage.from(bucket).upload(storagePath, file, {
         contentType: file.type || "image/webp",
         cacheControl: "3600",
@@ -1945,6 +1947,7 @@ if (selectedFile) {
 
   photoPath = `${session.user.id}/${storageSpz}/${uniqueName}`;
 
+  await assertStorageCapacity();
   const { error: uploadError } = await supabase.storage
     .from("ai-evidence-documents")
     .upload(photoPath, selectedFile, {
@@ -2157,6 +2160,7 @@ review_status: reviewStatus,
         const uniqueName = `${Date.now()}-${crypto.randomUUID()}.webp`;
         storagePath = `${session.user.id}/${documentId}/${uniqueName}`;
 
+        await assertStorageCapacity();
         const { error: uploadError } = await supabase.storage
           .from("ai-inbox-documents")
           .upload(storagePath, selectedFile, {
@@ -2371,6 +2375,7 @@ review_status: reviewStatus,
         const uniqueName = `${Date.now()}-${crypto.randomUUID()}.webp`;
         storagePath = `${session.user.id}/${documentId}/${uniqueName}`;
 
+        await assertStorageCapacity();
         const { error: uploadError } = await supabase.storage
           .from("ai-inbox-documents")
           .upload(storagePath, selectedFile, {
@@ -2568,6 +2573,7 @@ review_status: reviewStatus,
       const uniqueName = `${Date.now()}-${crypto.randomUUID()}-${file.name}`;
       const storagePath = `${session.user.id}/${selectedOtherDocument.id}/attachments/${uniqueName}`;
 
+      await assertStorageCapacity();
       const { error: uploadError } = await supabase.storage
         .from("ai-inbox-documents")
         .upload(storagePath, file, {

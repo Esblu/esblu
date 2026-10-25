@@ -11,6 +11,7 @@ import type { Locale } from "@/lib/i18n/locales";
 import {
   entitlementMessageKey,
   entitlementModuleKey,
+  limitReachedFrom,
   parseCompanyEntitlements,
   parseEntitlementDenial,
   type CompanyEntitlements,
@@ -141,6 +142,7 @@ export function entitlementDenialMessage(locale: Locale, denial: EntitlementDeni
 }
 
 export function entitlementDenialResponse(locale: Locale, denial: EntitlementDenial): Response {
+  const limitReached = limitReachedFrom(denial);
   return Response.json(
     {
       success: false,
@@ -148,6 +150,8 @@ export function entitlementDenialResponse(locale: Locale, denial: EntitlementDen
       reason: denial.reason,
       key: denial.key,
       error: entitlementDenialMessage(locale, denial),
+      // LIMIT_REACHED detail (čerpanie / zahrnuté / ponuka add-onu) — iba pri limitoch.
+      ...(limitReached ? { limitReached } : {}),
     },
     { status: 403, headers: { "Cache-Control": "private, no-store" } }
   );

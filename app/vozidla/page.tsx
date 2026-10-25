@@ -1,6 +1,7 @@
 "use client";
 
 import { idempotencyKeyFor } from "@/lib/idempotency-key";
+import { assertStorageCapacity } from "@/lib/storage/capacity-client";
 import { useRef, useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
 import { flushMediaDeletions } from "@/lib/storage/media-deletion";
@@ -670,6 +671,7 @@ export default function VozidlaPage() {
       const frontUniqueName = `${Date.now()}-${crypto.randomUUID()}.webp`;
       const frontPath = `${session.user.id}/${documentId}/${frontUniqueName}`;
 
+      await assertStorageCapacity();
       const { error: frontUploadError } = await supabase.storage
         .from("ai-inbox-documents")
         .upload(frontPath, regFrontFile as File, {
@@ -692,6 +694,7 @@ export default function VozidlaPage() {
         const backUniqueName = `${Date.now()}-${crypto.randomUUID()}.webp`;
         backPath = `${session.user.id}/${documentId}/${backUniqueName}`;
 
+        await assertStorageCapacity();
         const { error: backUploadError } = await supabase.storage
           .from("ai-inbox-documents")
           .upload(backPath, regBackFile, {
@@ -964,6 +967,7 @@ export default function VozidlaPage() {
           const compressedFile = await compressVehiclePhoto(originalFile, t);
           const filePath = `${userId}/${photoTargetVehicleId}/${Date.now()}-${crypto.randomUUID()}-${compressedFile.name}`;
 
+          await assertStorageCapacity();
           const { error: uploadError } = await supabase.storage
             .from("vehicle-photos")
             .upload(filePath, compressedFile, {

@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { assertStorageCapacity } from "@/lib/storage/capacity-client";
 import { useEffect, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { flushMediaDeletions } from "@/lib/storage/media-deletion";
@@ -304,6 +305,7 @@ export default function StrojePage() {
     for (const file of pendingPhotos) {
       const path = `${userId}/${machineId}/${Date.now()}-${crypto.randomUUID()}-${file.name}`;
 
+      await assertStorageCapacity();
       const { error: uploadError } = await supabase.storage
         .from("machine-photos")
         .upload(path, file, { contentType: file.type || "image/webp" });

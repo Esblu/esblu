@@ -1,6 +1,7 @@
 "use client";
 
 import { Suspense, useEffect, useState } from "react";
+import { assertStorageCapacity } from "@/lib/storage/capacity-client";
 import { useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { flushMediaDeletions } from "@/lib/storage/media-deletion";
@@ -555,6 +556,7 @@ export default function VehicleDetailView({
           const compressedFile = await compressVehiclePhoto(originalFile, t);
           const filePath = `${userId}/${vehicleId}/${Date.now()}-${crypto.randomUUID()}-${compressedFile.name}`;
 
+          await assertStorageCapacity();
           const { error: uploadError } = await supabase.storage
             .from("vehicle-photos")
             .upload(filePath, compressedFile, {

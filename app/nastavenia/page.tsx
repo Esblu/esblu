@@ -1,6 +1,7 @@
 "use client";
 
 import { ChangeEvent, useEffect, useState } from "react";
+import { assertStorageCapacity } from "@/lib/storage/capacity-client";
 import { supabase } from "@/lib/supabase";
 import { flushMediaDeletions } from "@/lib/storage/media-deletion";
 import { signMediaUrl } from "@/lib/storage/signed-media";
@@ -624,6 +625,7 @@ export default function NastaveniaPage() {
 
       uploadedPath = `${userId}/${Date.now()}-company-logo.webp`;
 
+      await assertStorageCapacity();
       const { error: uploadError } = await supabase.storage
         .from("company-logos")
         .upload(uploadedPath, compressedLogo, {

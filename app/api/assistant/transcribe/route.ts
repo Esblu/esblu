@@ -1,7 +1,9 @@
 import OpenAI from "openai";
 import { AI_CALL_POLICY, callOpenAiWithCostGuard } from "@/lib/ai/openai-guard";
 import { usageFromTranscription, ZERO_USAGE } from "@/lib/ai/usage-meter";
-import { meterScopeFromRequest, recordAiUsageInScope } from "@/lib/ai/usage-meter-server";
+import { recordAiUsageInScope, type MeterScope } from "@/lib/ai/usage-meter-server";
+import { recordVoiceUsage, requireVoiceCapacity } from "@/lib/usage-enforcement-server";
+import { billableVoiceSeconds } from "@/lib/voice/billable-seconds";
 import { verifyRequestUser } from "@/lib/server-auth";
 import { getRequestLocale } from "@/lib/i18n/request-locale";
 import { translate } from "@/lib/i18n/translate";
@@ -202,6 +204,19 @@ export async function POST(req: Request) {
       );
     }
 
+    // 1c) Kvóta minút hlasu aktívnej firmy (pricing + entitlements, 2026-10-26).
+    //     Vyčerpané → 403 s LIMIT_REACHED detailom (čerpanie / zahrnuté /
+    //     ponuka add-onu); nečitateľný stav → fail closed. Pred čítaním audia
+    //     aj pred OpenAI.
+    const voiceCapacity = await requireVoiceCapacity(req);
+    if (!voiceCapacity.ok) {
+      if (voiceCapacity.denial) return entitlementDenialResponse(locale, voiceCapacity.denial);
+      return Response.json(
+        { success: false, error: translate(locale, "search.voice.errors.transcriptionFailed") },
+        { status: 503, headers: { "Cache-Control": "private, no-store" } }
+      );
+    }
+
     // 2) Validácia vstupu — až po overení používateľa.
     const formData = await req.formData().catch(() => null);
     const audioValue = formData?.get("audio");
@@ -263,7 +278,7 @@ export async function POST(req: Request) {
 
     // Usage telemetria (iba čísla z `usage`, nikdy transcript/audio):
     // firma = aktívna firma session (fail closed — bez firmy sa nemeria).
-    const meterScope = await meterScopeFromRequest(req, user.id);
+    const meterScope: MeterScope = { kind: "member", companyId: voiceCapacity.companyId, userId: user.id };
     const guarded = await callOpenAiWithCostGuard(
       () =>
         client.audio.transcriptions.create({
@@ -287,6 +302,12 @@ export async function POST(req: Request) {
     let transcription: { text: string };
     if (guarded.ok) {
       transcription = guarded.value;
+      // Kvóta minút: OpenAI prepis prebehol (a je zaúčtovaný) → započítať.
+      await recordVoiceUsage(
+        voiceCapacity.companyId,
+        user.id,
+        billableVoiceSeconds({ usageSeconds: usageFromTranscription(guarded.value).audioSeconds || null, audioBytes: audioValue.size })
+      );
     } else {
       const transcriptionError = guarded.error;
       // Iba bezpečná metadáta — message OpenAI môže niesť fragment kľúča.
