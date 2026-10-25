@@ -53,7 +53,7 @@ export type IntentAiUsageReporter = (report: {
   retryCount: number;
 }) => Promise<unknown>;
 
-const INTENT_CLASSIFICATION_SCHEMA = {
+export const INTENT_CLASSIFICATION_SCHEMA = {
   type: "object",
   additionalProperties: false,
   properties: {
@@ -161,24 +161,25 @@ const INTENT_CLASSIFICATION_SCHEMA = {
   ],
 } as const;
 
-const INTENT_CLASSIFICATION_PROMPT = `
+// J8 (2026-10-25) — prompt v2: zoznamy povolených intentov a hodnôt
+// documentTypes / deadlineTypes / invoiceStatus sa už NEOPAKUJÚ v texte —
+// model ich dostáva ako `enum` v strict JSON schéme (INTENT_CLASSIFICATION_
+// SCHEMA vyššie), ktorá je pre výstup záväzná. Ušetrí ~520 vstupných
+// tokenov na volanie bez zmeny pravidiel. Text promptu je STATICKÝ (žiadne
+// dáta firmy, žiadny dátum) → stabilný prefix pre prompt caching.
+const INTENT_CLASSIFICATION_PROMPT_SOURCE = `
 Si klasifikátor príkazov pre firemnú aplikáciu Esblu (vozidlá, stroje,
 sklad, dokumenty). Dostaneš krátky text v slovenčine, češtine, nemčine
-alebo angličtine a MUSÍŠ ho priradiť k JEDNÉMU z povolených intentov, alebo
-vrátiť null, ak text jednoznačne nezodpovedá žiadnemu z nich.
+alebo angličtine a MUSÍŠ ho priradiť k JEDNÉMU z povolených intentov
+(enum "intent" v JSON schéme), alebo vrátiť null, ak text jednoznačne
+nezodpovedá žiadnemu z nich.
 
-Povolené intenty:
-${INTENT_NAMES.map((n) => `- ${n}`).join("\n")}
-
-Povolené hodnoty pre "documentTypes" (pole, presne ako v databáze, nič iné):
-${DOCUMENT_TYPE_FILTERS.map((t) => `- ${t}`).join("\n")}
-
-Povolené hodnoty pre "deadlineTypes" (pole, nič iné — PZP tu zámerne
-chýba, appka nemá štruktúrovaný dátum platnosti PZP):
-${DEADLINE_TYPE_FILTERS.map((t) => `- ${t}`).join("\n")}
+Povolené hodnoty polí "intent", "documentTypes", "deadlineTypes",
+"invoiceStatus" sú PRESNE hodnoty enum v JSON schéme, nič iné. Pri
+"deadlineTypes" PZP zámerne chýba (appka nemá štruktúrovaný dátum PZP).
 
 Pravidlá:
-- NIKDY nevracaj intent mimo tohto zoznamu.
+- NIKDY nevracaj intent mimo enumu.
 - NIKDY si nevymýšľaj ŠPZ, názov vozidla/stroja, typ dokumentu, dátum ani
   sumu — žiadnu hodnotu, ktorá sa v texte doslova nenachádza alebo z neho
   jednoznačne nevyplýva. "query" je vždy iba to, čo je v texte skutočne
@@ -217,10 +218,8 @@ Pravidlá:
   zložky" bez cieľa, nechaj targetCategoryName null. Keď sa dokumenty
   vyberajú FILTROM (typ, dátum), a nie zdrojovou zložkou, použi
   ASSIGN_DOCUMENTS_TO_CATEGORY.
-- SHOW_INVOICES_BY_STATUS je pre otázky na faktúry podľa STAVU. Povolené
-  hodnoty "invoiceStatus" (nič iné):
-${INVOICE_STATUS_FILTERS.map((s) => `  - ${s}`).join("\n")}
-  Mapovanie: "uhradené"/"zaplatené"/"bezahlte"/"paid" → paid;
+- SHOW_INVOICES_BY_STATUS je pre otázky na faktúry podľa STAVU
+  ("invoiceStatus" z enumu). Mapovanie: "uhradené"/"zaplatené"/"bezahlte"/"paid" → paid;
   "neuhradené"/"offene"/"unpaid" → unpaid; "po splatnosti"/"überfällig"/
   "overdue" → overdue; "vydané"/"Ausgangsrechnungen"/"issued" → issued;
   "prijaté"/"Eingangsrechnungen"/"received" → received;
@@ -329,17 +328,41 @@ ${INVOICE_STATUS_FILTERS.map((s) => `  - ${s}`).join("\n")}
   intent vrátiš, iba ktoré slová v ňom hľadáš.
 `;
 
+/** Bez odsadenia na začiatku riadkov (iba formátovanie zdrojáku, nie význam). */
+export const INTENT_CLASSIFICATION_PROMPT = INTENT_CLASSIFICATION_PROMPT_SOURCE.split("\n").map((line) => line.trim()).join("\n").trim();
+
+/**
+ * Modely, ktoré smie klasifikátor použiť. Produkcia volá VÝHRADNE default
+ * (gpt-5.6-terra, nezmenené). gpt-5.6-luna je iba kandidát pre benchmark
+ * (scripts/intent-model-benchmark.ts) — prepnutie až po živom porovnaní
+ * presnosti a schválení vlastníkom (J8: PENDING APPROVAL).
+ */
+export const INTENT_FALLBACK_MODELS = ["gpt-5.6-terra", "gpt-5.6-luna"] as const;
+export type IntentFallbackModel = (typeof INTENT_FALLBACK_MODELS)[number];
+export const INTENT_FALLBACK_DEFAULT_MODEL: IntentFallbackModel = "gpt-5.6-terra";
+/** Statický kľúč cache (verzia promptu) — nikdy nič o firme ani používateľovi. */
+export const INTENT_PROMPT_CACHE_KEY = "esblu-intent-classifier-v2";
+/**
+ * Strop výstupu: celý JSON (28 polí, väčšinou null) má ~140–220 tokenov.
+ * Pri prekročení je výstup neúplný → JSON.parse zlyhá → null (fail closed).
+ */
+export const INTENT_MAX_OUTPUT_TOKENS = 400;
+
 export async function classifyIntentWithAi(
   rawText: string,
-  reportUsage?: IntentAiUsageReporter
+  reportUsage?: IntentAiUsageReporter,
+  options: { model?: IntentFallbackModel } = {}
 ): Promise<ParsedIntent | null> {
+  const model = options.model && (INTENT_FALLBACK_MODELS as readonly string[]).includes(options.model) ? options.model : INTENT_FALLBACK_DEFAULT_MODEL;
   const client = getClient();
   if (!client) return null;
   try {
     const guarded = await callOpenAiWithCostGuard(() => client.responses.create({
-      model: "gpt-5.6-terra",
+      model,
       store: false,
       reasoning: { effort: "none" },
+      max_output_tokens: INTENT_MAX_OUTPUT_TOKENS,
+      prompt_cache_key: INTENT_PROMPT_CACHE_KEY,
       text: {
         format: {
           type: "json_schema",
