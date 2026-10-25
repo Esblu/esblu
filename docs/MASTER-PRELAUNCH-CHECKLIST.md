@@ -1,7 +1,7 @@
 # Esblu — MASTER PRE-LAUNCH CHECKLIST
 
 Kanonický zoznam všetkého, čo musí byť hotové pred verejným spustením. Aktualizovať pri každom bloku.
-Posledná aktualizácia: **2026-10-25** (branch `preprod-release-candidate` — **COST CONTROL HARDENING**, sekcia **J6**; predtým CHECKLIST RECONCILIATION na RC `c3a8650`, sekcie **M–P**;
+Posledná aktualizácia: **2026-10-26** (branch `preprod-release-candidate` — **PRICING + ENTITLEMENTS ARCHITECTURE**, sekcia **J7**; predtým COST CONTROL HARDENING, sekcia **J6**; predtým CHECKLIST RECONCILIATION na RC `c3a8650`, sekcie **M–P**;
 predtým PRE-LAUNCH TECHNICAL BLOCKERS: PASS, sekcia **J5**; GRANULAR TEAM PERMISSIONS: PASS, sekcia **J4**).
 
 Statusy: **PASS** · **READY** (pripravené, čaká na vykonanie/súhlas) · **BLOCKED LEGAL** (CLIA) · **BLOCKED EXTERNAL** ·
@@ -112,10 +112,10 @@ Technická pripravenosť ≠ business rozhodnutie. Architektúra je READY; ceny,
 |---|---|---|
 | owner-only billing model | PASS | — (A; staging 5 rolí + cross-company) |
 | billing architektúra (platforma, entitlementy, lifecycle, reconciliation) | READY | — (`docs/subscriptions-production-readiness-2026-10-11.md`; staging §15) |
-| rozhodnutie o cenách | PENDING DECISION | `OWNER DECISION` |
-| cena per firma | PENDING DECISION | `OWNER DECISION` |
-| multi-company zľava / balík | PENDING DECISION | `OWNER DECISION` |
-| e-Faktúra free / platený addon / v pláne | PENDING DECISION | `OWNER DECISION` |
+| rozhodnutie o cenách | DECIDED — Komplet 15,90 € (J7) | — |
+| cena per firma | DECIDED — 15,90 € / firma / mesiac, bez textu „+ DPH“ (J7) | — |
+| multi-company zľava / balík | DECIDED — ďalšia firma 12,90 € s vlastnými limitmi (J7) | — |
+| e-Faktúra free / platený addon / v pláne | DECIDED (architektúra) — 20 tx v Komplete, +40 / 4,90 €, +100 / 9,90 €, modul 3,90 € placeholder; live ⛔ BLOCKED (J7) | `EXTERNAL PROVIDER` · `CLIA` · `OWNER DECISION` |
 | Stripe test integrácia | READY (fake/test v kóde) | — |
 | Google Play subscription produkty / base plany | TODO (Play app už existuje — čaká na ceny) | `OWNER DECISION` → `GOOGLE PLAY` |
 | license testers | TODO (už nie je blokované účtom) | `GOOGLE PLAY` |
@@ -126,7 +126,7 @@ Technická pripravenosť ≠ business rozhodnutie. Architektúra je READY; ceny,
 | live Stripe aktivácia | ⛔ PENDING APPROVAL | `OWNER DECISION` · `PRODUCTION APPROVAL` |
 | store billing aktivácia (Play / Apple) | ⛔ PENDING APPROVAL | `OWNER DECISION` · `PRODUCTION APPROVAL` |
 | COST / UNIT ECONOMICS AUDIT | PARTIAL — `docs/esblu-unit-economics-2026-10-22.md` (model + `scripts/unit-economics-model.py`); čaká na potvrdenie AI tokenov, eFaktúra cenníka a dev overheadu | `OWNER DECISION` · `EXTERNAL PROVIDER` |
-| Pricing (cena, limity, add-ony, ďalšia firma) | OWNER DECISION PENDING — audit nenavrhuje finálnu cenu bez rozhodnutia vlastníka | `OWNER DECISION` |
+| Pricing (cena, limity, add-ony, ďalšia firma) | DECIDED (OWNER DECISION 2026-10-25) — Esblu Komplet 15,90 €, modul 3,90 €, ďalšia firma 12,90 € — sekcia J7; live billing ⛔ PENDING | `OWNER DECISION` (zverejnenie) · `PRODUCTION APPROVAL` |
 
 ## F. GOOGLE PLAY
 
@@ -312,6 +312,33 @@ technická tabuľka `ai_usage_monthly` bez osobných údajov a obsahu; skráteni
 | mobile Turbopack build + `verify:mobile-bundle` | PENDING OWNER (Windows) | zmenený zdieľaný `MobileChatFab`; v sandboxe mobile webpack build 34/34 PASS, Turbopack blokuje Google Fonts proxy |
 | **production rollout** | ⛔ NOT YET RUN / PENDING APPROVAL | migrácie #39–#40 v runbooku (sekcia L), potom deploy |
 
+## J7. PRICING + ENTITLEMENTS ARCHITECTURE (2026-10-26)
+
+**PRICING + ENTITLEMENTS: PASS (repo + staging)**. Nič nie je live: billing ⛔ PENDING, eFaktúra ⛔ BLOCKED, production rollout
+**NOT YET RUN / PENDING APPROVAL**. Kanonický engine `lib/pricing.ts`; DB `20261026100000_pricing_entitlements` (+ rollback).
+Zverejnenie cenníka v produkcii = až schválený produkčný deploy (`/cennik` v RC už ukazuje novú cenu).
+
+| položka | status | poznámka |
+|---|---|---|
+| Esblu Komplet 15,90 € / firma / mesiac | PASS (engine + DB) | 25 používateľov, všetky moduly, firemný chat, 40 AI / mes., 60 min hlasu / mes., 5 GB, 20 eFaktúra tx / mes. až po live eFaktúre; bez textu „+ DPH“ (Esblu s.r.o. nie je platiteľ DPH) |
+| samostatný modul 3,90 € | PASS | moduly: Vozidlá, Stroje, Sklad, Faktúry, Dokumenty a AI evidencia (+ eFaktúra placeholder, nepredajná) |
+| cenový strop modulov | PASS | 1/2/3/4 moduly = 3,90/7,80/11,70/15,60; 5 → Komplet 15,90; zákazník nikdy neplatí viac (test všetkých kombinácií); odporúčanie Kompletu pred potvrdením, nič sa neprepína samo |
+| ďalšia firma 12,90 € | PASS | tier `secondary` (owner už má inú firmu s plánom); strop modulov 12,90; vlastné limity, nič sa nezdieľa |
+| 14-dňový trial | PASS | všetky hlavné moduly, 25 používateľov, 10 AI, 15 min hlasu, 1 GB, chat; eFaktúra bez živých transakcií; trial z overeného právneho subjektu (nereštartuje sa novým účtom); dáta sa nikdy nemažú |
+| usage limity + add-ony | PASS | AI 40 (+40 / 3,90 €), hlas 60 min (+60 / 3,90 €), používatelia 25 (+25 / 4,90 €), úložisko 5 GB, eFaktúra 20 tx (+40 / 4,90 €, +100 / 9,90 €); add-ony mimo stropu; aktivácia iba potvrdeným billing eventom (staging: mock) |
+| hard stop + LIMIT_REACHED | PASS | AI (rezervácia), hlas (pred prepisom, minúty), používatelia (pozvánka/prijatie), úložisko (RESTRICTIVE politika + predkontrola pri všetkých 14 uploadoch); UI dostane čerpanie / zahrnuté / ponuku add-onu; existujúce dáta ostávajú |
+| downgrade / koniec predplatného | PASS | nároky odvolané, dáta ostávajú čitateľné, opätovná aktivácia vráti zápis (PGlite + staging) |
+| multi-company izolácia | PASS | nároky, počítadlá, úložisko a plán vždy pre AKTÍVNU firmu; firma A ≠ A2 ≠ B |
+| billing authority | PASS | iba owner (`esblu_billing_my_access`); admin (aj s billing.manage), účtovník, zamestnanec nie; plán a tier vidí iba owner |
+| provider abstraction | PASS (architektúra) | provider = zdroj stavu (`subscription_accounts`), `company_plan_selection` = kompozícia, jedno pravidlo `esblu_plan_entitlement_targets` pre Stripe / Google Play / Apple |
+| RLS / grants | PASS | 2 nové service-only tabuľky (FORCE RLS), manifest, `test:grants-guard` 10/10, `test:grants-replay-db` 43/43 (idempotencia + rollback) |
+| testy | PASS | `test:pricing-engine` 16/16, `test:pricing-entitlements-db` 20/20 (TS↔SQL parita 196 kombinácií), `test:plan-entitlements` 47/47; celá sada 87/87 |
+| staging (`cjbdijbbcujvmrzezusd`) | PASS | migrácia aplikovaná; md5 18 funkcií == replay; matica `scripts/sql/pricing-entitlements-staging-matrix.sql` (rolled back); `allow_mock_plans` ostáva **false**; advisors iba očakávané |
+| eFaktúra live | ⛔ BLOCKED / PENDING EXTERNAL + OWNER APPROVAL | provider pricing, live API, právny režim, CLIA, účtovné flowy, produkčná aktivácia |
+| live billing (Stripe / Google Play / Apple) | ⛔ PENDING APPROVAL | žiadne produkčné produkty ani checkout |
+| mobile Turbopack build + `verify:mobile-bundle` | PENDING OWNER (Windows) | zmenené zdieľané upload obrazovky |
+| **production rollout** | ⛔ NOT YET RUN / PENDING APPROVAL | migrácia #41 v runbooku (sekcia L) |
+
 ## K. FINAL FULL SMOKE — spustiť IBA keď finálny RC obsahuje multi-company + eInvoice + voice + billing + finálnu legal/store konfiguráciu
 
 Status: **NOT YET RUN** (`FINAL QA`) — zámerne sa nespúšťa teraz. Predpoklady: CLIA/legal texty, finálna billing/store
@@ -321,7 +348,7 @@ reconnect, oprávnenia, notifikácie, aplikácia nainštalovaná z obchodu.
 
 ## L. PRODUCTION ROLLOUT (všetko ⛔ až po súhlase)
 
-Autoritatívny postup: `docs/production-migration-runbook-2026-10-22.md` (40 migrácií, STOP podmienky, rollback per skupina).
+Autoritatívny postup: `docs/production-migration-runbook-2026-10-22.md` (41 migrácií, STOP podmienky, rollback per skupina).
 
 1. read-only produkčný precheck (`scripts/sql/prod-migration-precheck.sql` + `scripts/sql/einvoice-prod-precheck.sql`)
 2. skutočná história migrácií
@@ -332,6 +359,7 @@ Autoritatívny postup: `docs/production-migration-runbook-2026-10-22.md` (40 mig
    → hneď za poslednou RC migráciou `20261021100000_explicit_data_api_grants` a `20261022100000_grants_locale_and_policy_hygiene` (audit grants §7; ACL + policy md5 kontrola po)
    → potom `20261023100000_team_granular_permissions` (J4; po aplikovaní md5 funkcií/politík/ACL == replay)
    → potom `20261025100000_ai_usage_metering` a `20261025110000_notification_deliveries_chat_retention` (J6; md5 4 funkcií == replay/staging)
+   → potom `20261026100000_pricing_entitlements` (J7; `allow_mock_plans` musí ostať false)
 7. merge / deploy
 8. ECB import (fx-rates)
 9. crony
@@ -399,12 +427,12 @@ Praktické poradie. Technické blokery (J5) sú PASS — zvyšok sú rozhodnutia
 |---|---|---|---|
 | 1 | CLIA drafty: privacy policy, subprocesori, retencia, account deletion + nevyčerpané predplatné/refund wording, rola a archív e-Faktúra providera, finančné roly, former-user attribution (očakávané 1. polovica novembra 2026) | `CLIA` | — |
 | 2 | Účtovné rozhodnutia: ne-ECB FX, dátum prijatej zahraničnej faktúry, oprava DPH pri vrátenej zdanenej zálohe/bonuse, archív/retencia e-Faktúry | `ACCOUNTANT` · `CLIA` | — |
-| 3 | Ceny: cena za firmu, multi-company zľava/balík, e-Faktúra free/paid/included | `OWNER DECISION` | — |
+| 3 | ~~Ceny~~ — rozhodnuté 2026-10-25 (Komplet 15,90 €, J7); zostáva zverejnenie s produkčným deployom | `OWNER DECISION` | 9 |
 | 4 | Play target audience 18+, financial features / health / government deklarácie | `OWNER DECISION` · `GOOGLE PLAY` | — |
 | 5 | Play Data Safety + Apple App Privacy (vyplniť podľa CLIA) | `CLIA` · `GOOGLE PLAY` · `APPLE` | 1 |
 | 6 | Store billing produkty a konfigurácia: Play subscription produkty, license testers, service account, RTDN; Apple App Store Connect + IAP + StoreKit | `GOOGLE PLAY` · `APPLE` · `OWNER DECISION` | 3 |
 | 7 | Reviewer / demo účet v produkcii (allowlist + demo firma) | `PRODUCTION APPROVAL` | 8 |
-| 8 | Produkčná migrácia (40 migrácií, runbook READY, precheck 0 STOP / 0 WARN, backup potvrdiť znova pred oknom) | `PRODUCTION APPROVAL` | — |
+| 8 | Produkčná migrácia (41 migrácií, runbook READY, precheck 0 STOP / 0 WARN, backup potvrdiť znova pred oknom) | `PRODUCTION APPROVAL` | — |
 | 9 | Merge RC → `main` + produkčný deploy (dashboard, `/zrusenie-uctu`, crony) | `PRODUCTION APPROVAL` | 8 |
 | 10 | Live aktivácie: e-Faktúra live env + webhook, Stripe live, store billing | `PRODUCTION APPROVAL` · `EXTERNAL PROVIDER` · `OWNER DECISION` | 3, 6, 9 |
 | 11 | Finálny release AAB → Internal Testing → Play App Signing → produkčné `assetlinks.json` | `FINAL QA` · `GOOGLE PLAY` · `PRODUCTION APPROVAL` | 1–6, 9 |

@@ -1,9 +1,15 @@
 # Esblu — Cost & Unit Economics Audit (reálne náklady na 1 firmu)
 
+> **Aktualizácia 2026-10-26 — CANONICAL LAUNCH PRICING (OWNER DECISION):** Esblu Komplet **15,90 €** / firma / mesiac
+> (25 používateľov, všetky moduly, chat, 40 AI spracovaní, 60 min hlasu, 5 GB, 20 eFaktúra tx po spustení eFaktúry),
+> ďalšia firma **12,90 €**, samostatný modul **3,90 €** so stropom na cenu Kompletu, add-ony AI +40 / 3,90 €, hlas +60 min / 3,90 €,
+> používatelia +25 / 4,90 €, eFaktúra +40 / 4,90 € a +100 / 9,90 €. Bez textu „+ DPH“ (Esblu s.r.o. nie je platiteľ DPH).
+> Prepočet pri nových limitoch: **§22**. Billing ani eFaktúra nie sú live.
+
 > **Aktualizácia 2026-10-25 — COST CONTROL HARDENING** (RC po `4d9af40`): terminológia opravená podľa reálnych flowov
 > (Esblu **nemá** samostatný AI chatbot/asistent — iba Intent Engine pre písané a hlasové príkazy s OpenAI
 > *intent classification fallbackom*), interný chat prepočítaný po Realtime scope fixe, retry cost guard a usage
-> telemetria zavedené v repe + na stagingu (§5.3–5.4, §6, §21). Produkcia nezmenená. Pricing: **OWNER DECISION PENDING**.
+> telemetria zavedené v repe + na stagingu (§5.3–5.4, §6, §21). Produkcia nezmenená. Pricing: **CANONICAL LAUNCH PRICING 15,90 € (OWNER DECISION 2026-10-25) — billing / eFaktúra NOT LIVE**.
 
 Dátum auditu: **2026-10-25** (súbor pomenovaný podľa zadania 2026-10-22) · RC `preprod-release-candidate` @ `28af0e3` · ceny overené 2026-10-25.
 Typ: **iba audit**. Žiadny kód produktu, pricing UI, billing, subscriptions, produkčná DB, secrets, limity ani `main` sa nemenili.
@@ -561,6 +567,9 @@ Návrh (OWNER DECISION, ceny pracovné): **+100 AI skenov 6,90 €** (53 % typ.;
 
 ## 18. Recommended launch price (návrh — OWNER DECISION)
 
+> **Prekonané 2026-10-25 rozhodnutím vlastníka:** kanonická launch cena je **Esblu Komplet 15,90 €** s limitmi a add-onmi
+> (prepočet §22). Nižšie je pôvodná analýza pre úplnosť.
+
 - **16,90 € bez DPH / firma / mes. s fair-use limitmi z §15** — rezerva na Play/Apple poplatky, neistú eFaktúra cenu a
   heavy 20-členné firmy; marža s limitmi ~60 % (baseline) / ~49 % (konzervatívny mix).
 - **14,90 € je obhájiteľné iba ak** sú limity zavedené **a** zapne sa prompt caching intent fallbacku (alebo fair-use písaných príkazov) —
@@ -619,7 +628,56 @@ Customer-facing limity, UI ani nové balíky sa v tomto kroku **nezavádzali**.
 
 ---
 
+## 22. Launch pricing 15,90 € (canonical, 2026-10-26)
+
+Kanonický engine: `lib/pricing.ts`; nároky: migrácia `20261026100000_pricing_entitlements` (repo + staging). Model:
+`docs/unit-economics/esblu-unit-economics-assumptions-2026-10-22.json` → `launch_pricing`. eFaktúra nie je live, preto sa
+jej tx do kompletu zatiaľ nepočítajú (0 v cene; plánovaných 20 tx po spustení). Režim A = nad zahrnuté množstvo hard stop
+(žiadny príjem z add-onov), režim B = firma si nad limit dokúpi add-on balíky.
+
+#### Launch pricing — Esblu Komplet 15.90 € (included: {'ai_scans': 40, 'voice_min': 60, 'storage_gb': 5, 'users': 25, 'einvoice_tx': 0}) — margin by mix
+
+A) excess usage blocked (hard stop, no add-on revenue); B) excess bought as add-on packs (AI 40 / 3,90 €, voice 60 min / 3,90 €, users 25 / 4,90 €). eFaktúra not live → 0 tx.
+
+| mix | mode | margin @50 | @100 | @500 | @1000 | break-even (infra) | BE +150 € overhead | @100 AI HIGH cost |
+|---|---|---|---|---|---|---|---|---|
+| baseline | A hard stop | 62.5 % | 65.1 % | 65.5 % | 65.6 % | 6 | 19 | 28.8 % |
+| baseline | B add-ons bought | 59.0 % | 60.6 % | 60.8 % | 60.8 % | 4 | 13 | 22.2 % |
+| conservative | A hard stop | 53.7 % | 55.5 % | 55.7 % | 55.7 % | 7 | 22 | 2.1 % |
+| conservative | B add-ons bought | 52.7 % | 53.4 % | 53.4 % | 53.4 % | 3 | 10 | 6.0 % |
+
+Per profile at 15,90 € (web, typical): cost with hard stop vs. with add-ons bought (revenue includes add-ons)
+
+| profile | cost hard-stop € | margin hard-stop € | add-on packs (AI/voice/users) | add-on revenue € | cost full usage € | margin with add-ons € |
+|---|---|---|---|---|---|---|
+| A_LIGHT | 2.28 | 12.82 | 0/0/0 | 0.00 | 2.28 | 12.82 |
+| B_NORMAL | 5.38 | 9.71 | 2/1/0 | 11.70 | 9.40 | 16.98 |
+| C_HEAVY | 11.61 | 3.49 | 7/8/0 | 58.50 | 35.94 | 35.61 |
+| D_EXTREME | 19.22 | -4.13 | 24/33/0 | 222.30 | 121.17 | 108.43 |
+| 20 users LIGHT | 3.63 | 11.46 | 0/0/0 | 0.00 | 3.63 | 11.46 |
+| 20 users NORMAL | 8.34 | 6.76 | 2/1/0 | 11.70 | 12.35 | 14.03 |
+| 20 users HEAVY | 17.96 | -2.86 | 7/8/0 | 58.50 | 42.28 | 29.26 |
+
+Secondary company at 12.90 € (web, typical, hard stop):
+
+| profile | cost € | margin € | margin % |
+|---|---|---|---|
+| A_LIGHT | 2.28 | 9.92 | 77 % |
+| B_NORMAL | 5.38 | 6.82 | 53 % |
+| C_HEAVY | 11.61 | 0.59 | 5 % |
+| D_EXTREME | 19.22 | -7.02 | -54 % |
+
+Závery pri 15,90 €:
+- Baseline mix: **~65 %** hrubá marža (hard stop) / **~61 %** (add-ony kupované — vyšší absolútny príspevok), break-even infra
+  **4–6 firiem**, s 150 € overheadom **13–19 firiem**. Konzervatívny mix: **~56 % / ~53 %**.
+- LIGHT a NORMAL firmy (aj 20-členné NORMAL) sú pri 15,90 € ziskové; HEAVY / EXTREME firmy sú pri hard stope okolo nuly
+  alebo mierne stratové (hlavne písané príkazy s OpenAI fallbackom bez prompt cachingu) a výrazne ziskové, ak si dokupujú add-ony.
+- Ďalšia firma za 12,90 € s vlastnými limitmi: LIGHT 77 %, NORMAL 53 %, HEAVY ~5 %, EXTREME strata pri hard stope.
+- Najväčšia páka ostáva prompt caching intent fallbacku (§15) a fair-use písaných príkazov.
+
+---
+
 COST / UNIT ECONOMICS AUDIT: **PARTIAL** (model hotový; AI tokeny, eFaktúra cenník a development overhead čakajú na manuálne potvrdenie)
-Pricing: **OWNER DECISION PENDING**
+Pricing: **CANONICAL LAUNCH PRICING 15,90 € (OWNER DECISION 2026-10-25) — billing / eFaktúra NOT LIVE**
 INTERNAL COMPANY CHAT INCLUDED IN MODEL: **YES** (5 / 10 / 20 ľudí: §6)
 COST CONTROL HARDENING: repo + staging **PASS**, production rollout **NOT YET RUN / PENDING APPROVAL**

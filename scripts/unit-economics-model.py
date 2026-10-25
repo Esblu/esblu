@@ -102,7 +102,16 @@ def apply_caps(p, caps):
         if v is not None and k in q: q[k] = min(q[k], v)
     return q
 
-def fleet(n, price, mix_name="baseline", level="typical", einv_case="worst", overhead=0.0, users_override=None, ai_mult=1.0, einv_mult=1.0, caps=None):
+def addon_packs(p, lp):
+    """Koľko add-on balíkov firma potrebuje, ak čerpá nad zahrnuté množstvo (Komplet)."""
+    inc = lp["included"]; ad = lp["addons"]
+    out = {}
+    for key, usage_key in (("ai_scans", "ai_scans"), ("voice_min", "voice_min"), ("users", "users")):
+        over = max(0, p[usage_key] - inc[usage_key])
+        out[key] = math.ceil(over / ad[key]["units"]) if over > 0 else 0
+    return out
+
+def fleet(n, price, mix_name="baseline", level="typical", einv_case="worst", overhead=0.0, users_override=None, ai_mult=1.0, einv_mult=1.0, caps=None, buy_addons=False):
     mix = A["mixes"][mix_name]
     o = SB["overage_usd"]; inc = SB["included"]
     tot = dict(ai=0, cmds_voice=0, einv_var=0, storage_gb=0, egress_gb=0, rt_msgs=0, db_gb=0, push=0, vercel=0, peak_conn=0)
@@ -111,6 +120,12 @@ def fleet(n, price, mix_name="baseline", level="typical", einv_case="worst", ove
         if users_override: p["users"] = users_override
         p["ai_scans"] *= ai_mult; p["text_commands"] *= ai_mult; p["voice_min"] *= ai_mult
         p["einvoice_tx"] *= einv_mult
+        if buy_addons:
+            lp = A["launch_pricing"]
+            packs = addon_packs(p, lp)
+            addon_rev = sum(packs[k] * lp["addons"][k]["eur"] for k in packs)
+            tot["addon_rev"] = tot.get("addon_rev", 0) + k * addon_rev
+            # eFaktúra nie je live: tx sa do kompletu nepočítajú (0 v cene) — modelujeme ich mimo (einv_mult=0 pri launch)
         p = apply_caps(p, caps)
         c = chat(p["users"], p["chat_rate"])
         tot["ai"] += k * eur(p["ai_scans"] * scan_blend(level))
@@ -133,8 +148,8 @@ def fleet(n, price, mix_name="baseline", level="typical", einv_case="worst", ove
     tier = compute_tier(n)
     sb_fixed = eur(SB["pro_plan_usd"] + SB["compute_usd"][tier] + SB["compute_usd"]["micro"] - SB["compute_credit_usd"])
     vc_fixed = eur(VC["pro_usd"] * VC["seats"])
-    mrr = n * price
-    pay = n * blended_fee(price)
+    mrr = n * price + tot.get("addon_rev", 0)
+    pay = n * blended_fee(price) + tot.get("addon_rev", 0) * 0.06
     variable = tot["ai"] + tot["cmds_voice"] + storage + egress + realtime + disk + vercel_usage
     cogs = variable + einv + pay
     fixed = sb_fixed + vc_fixed
@@ -294,6 +309,39 @@ def main():
             c1 = profile_cost(apply_caps(variants["20 users HEAVY"], caps))["total"]
             OA["intent_fallback_call"].update(saved)
             out.append(f"| {pr:.2f} | {mixn} | {a:.1f} % | {b:.1f} % | {c0:.2f} → {c1:.2f} |")
+
+
+    # ------------------------------------------------------------------ launch pricing 15.90 (2026-10-26)
+    lp = A["launch_pricing"]
+    inc = lp["included"]
+    launch_caps = {"ai_scans": inc["ai_scans"], "voice_min": inc["voice_min"], "storage_gb": inc["storage_gb"], "einvoice_tx": inc["einvoice_tx"], "users": None, "chat_rate": None, "text_commands": None}
+    out.append(f"\n### Launch pricing — Esblu Komplet {lp['complete_eur']:.2f} € (included: {inc}) — margin by mix\n")
+    out.append("A) excess usage blocked (hard stop, no add-on revenue); B) excess bought as add-on packs (AI 40 / 3,90 €, voice 60 min / 3,90 €, users 25 / 4,90 €). eFaktúra not live → 0 tx.\n")
+    out.append("| mix | mode | margin @50 | @100 | @500 | @1000 | break-even (infra) | BE +150 € overhead | @100 AI HIGH cost |\n|---|---|---|---|---|---|---|---|---|")
+    for mixn in ["baseline", "conservative"]:
+        for mode, kw in (("A hard stop", dict(caps=launch_caps)), ("B add-ons bought", dict(caps=None, buy_addons=True))):
+            m = [fleet(n, lp["complete_eur"], mixn, einv_mult=0.0, **kw)["margin"]*100 for n in [50, 100, 500, 1000]]
+            be = next((n for n in range(1, 3001) if fleet(n, lp["complete_eur"], mixn, einv_mult=0.0, **kw)["contribution"] >= 0), None)
+            be150 = next((n for n in range(1, 3001) if fleet(n, lp["complete_eur"], mixn, einv_mult=0.0, overhead=150, **kw)["contribution"] >= 0), None)
+            hi = fleet(100, lp["complete_eur"], mixn, level="high", einv_mult=0.0, **kw)["margin"]*100
+            out.append(f"| {mixn} | {mode} | " + " | ".join(f"{x:.1f} %" for x in m) + f" | {be} | {be150} | {hi:.1f} % |")
+    out.append("\nPer profile at 15,90 € (web, typical): cost with hard stop vs. with add-ons bought (revenue includes add-ons)\n")
+    out.append("| profile | cost hard-stop € | margin hard-stop € | add-on packs (AI/voice/users) | add-on revenue € | cost full usage € | margin with add-ons € |\n|---|---|---|---|---|---|---|")
+    for pn, p in list(A["profiles"].items()) + [(k, dict(v)) for k, v in variants.items()]:
+        q = dict(p, einvoice_tx=0)
+        capped = profile_cost(apply_caps(q, launch_caps))["total"]
+        packs = addon_packs(q, lp)
+        rev = sum(packs[k] * lp["addons"][k]["eur"] for k in packs)
+        full = profile_cost(q)["total"]
+        price = lp["complete_eur"]
+        m_cap = price - capped - fees(price, "web")
+        m_add = price + rev - full - fees(price + rev, "web")
+        out.append(f"| {pn} | {capped:.2f} | {m_cap:.2f} | {packs['ai_scans']}/{packs['voice_min']}/{packs['users']} | {rev:.2f} | {full:.2f} | {m_add:.2f} |")
+    out.append(f"\nSecondary company at {lp['secondary_complete_eur']:.2f} € (web, typical, hard stop):\n")
+    out.append("| profile | cost € | margin € | margin % |\n|---|---|---|---|")
+    for pn, p in A["profiles"].items():
+        c = profile_cost(apply_caps(dict(p, einvoice_tx=0), launch_caps))["total"]; pr = lp["secondary_complete_eur"]
+        out.append(f"| {pn} | {c:.2f} | {pr - c - fees(pr, 'web'):.2f} | {(pr - c - fees(pr, 'web'))/pr*100:.0f} % |")
 
     out.append("\n### Add-on economics (EUR, typical / high cost)\n")
     out.append("| add-on | unit | cost typical | cost high | proposed price | margin typical | margin high |\n|---|---|---|---|---|---|---|")

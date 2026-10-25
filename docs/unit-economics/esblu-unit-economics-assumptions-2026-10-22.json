@@ -294,5 +294,33 @@
     "users": null,
     "text_commands": null
   },
-  "_recommended_caps_note": "PROPOSAL for owner decision: included fair-use per company/month. Usage above cap = add-on or blocked (no revenue counted in model)."
+  "_recommended_caps_note": "PROPOSAL for owner decision: included fair-use per company/month. Usage above cap = add-on or blocked (no revenue counted in model).",
+  "launch_pricing": {
+    "_source": "OWNER DECISION 2026-10-25 (task PRICING + ENTITLEMENTS); canonical engine lib/pricing.ts",
+    "complete_eur": 15.9,
+    "secondary_complete_eur": 12.9,
+    "module_eur": 3.9,
+    "included": {
+      "ai_scans": 40,
+      "voice_min": 60,
+      "storage_gb": 5,
+      "users": 25,
+      "einvoice_tx": 0
+    },
+    "_einvoice_note": "eFaktúra nie je live → 0 tx v cene do spustenia (plánovaných 20 tx / mes. sa započíta až po live)",
+    "addons": {
+      "ai_scans": {
+        "units": 40,
+        "eur": 3.9
+      },
+      "voice_min": {
+        "units": 60,
+        "eur": 3.9
+      },
+      "users": {
+        "units": 25,
+        "eur": 4.9
+      }
+    }
+  }
 }
