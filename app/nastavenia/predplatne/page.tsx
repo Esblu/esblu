@@ -16,6 +16,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import BackLink from "@/app/components/BackLink";
+import PlanOverviewPanel from "@/app/components/billing/PlanOverviewPanel";
 import { supabase } from "@/lib/supabase";
 import { apiUrl } from "@/lib/api-url";
 import { IS_MOBILE_BUILD } from "@/lib/build-target";
@@ -480,6 +481,9 @@ export default function SubscriptionPage() {
 
       <div className="mt-8 max-w-2xl space-y-6">
         <p className="rounded-2xl border border-amber-400/40 bg-amber-400/10 p-4 text-sm text-primary">{t("subscription.stagingNotice")}</p>
+
+        {/* Pricing + entitlements (2026-10-26): čerpanie aktívnej firmy + simulácia plánu (owner). */}
+        <PlanOverviewPanel />
 
         {state === "loading" && <p className="text-sm text-muted-esblu">{t("subscription.loading")}</p>}
         {state === "disabled" && <p className="text-sm text-muted-esblu">{t("subscription.disabled")}</p>}
