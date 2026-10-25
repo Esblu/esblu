@@ -21,7 +21,11 @@ set transaction read only;
 -- A) SÚHRN -------------------------------------------------------------------------------------
 with
 mig as (
-  select max(version) as last_version, count(*) filter (where name like '2026100%' and name like '%einvoice%') as einvoice_applied
+  -- J9 (2026-10-25): produkcia eviduje version = čas aplikovania (napr. 20261004212350) a pôvodnú verziu
+  -- súboru v `name` (20261005091000_private_media_buckets) — porovnáva sa preto version ALEBO prefix name.
+  select max(version) as last_version,
+         (select name from supabase_migrations.schema_migrations order by version desc limit 1) as last_name,
+         count(*) filter (where name like '2026100%' and name like '%einvoice%') as einvoice_applied
   from supabase_migrations.schema_migrations
 ),
 -- Očakávané signatúry existujúcich funkcií, ktoré reťazec mení cez CREATE OR REPLACE
@@ -138,7 +142,7 @@ num as (
 )
 select * from (
   select 1 as ord, 'migration_state' as check_name,
-         case when (select last_version from mig) = '20261005091000' and (select einvoice_applied from mig) = 0 then 'OK' else 'STOP' end as status,
+         case when ((select last_version from mig) = '20261005091000' or (select last_name from mig) like '20261005091000%') and (select einvoice_applied from mig) = 0 then 'OK' else 'STOP' end as status,
          (select format('posledná=%s, eFaktúra aplikované=%s (očakávané 20261005091000 / 0)', last_version, einvoice_applied) from mig) as detail
   union all
   select 2, 'einvoice_objects_absent',

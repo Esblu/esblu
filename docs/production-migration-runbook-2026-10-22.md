@@ -36,7 +36,7 @@ dlhom behu môže štartovať ďalšia inštancia súbežne → každý častý 
 
 ### V.2 Cron inventory (`vercel.json` na RC)
 
-Produkcia (`main`) má dnes iba `deadline-notifications`. Ďalších 7 sa aktivuje až produkčným deployom RC.
+Produkcia (`main`) má dnes iba `deadline-notifications`. Ďalších **8** sa aktivuje až produkčným deployom RC (spolu **9** v `vercel.json`).
 
 | route | schedule | účel | env | CRON_SECRET | idempotentný | retry / súbeh |
 |---|---|---|---|---|---|---|
@@ -47,6 +47,7 @@ Produkcia (`main`) má dnes iba `deadline-notifications`. Ďalších 7 sa aktivu
 | `/api/cron/einvoice-outbound?mode=reconcile` | `*/5 * * * *` | doťahovanie stavu odoslaných | prod po RC deployi | áno | áno — rovnaký claim/lease | bezpečný; no-op bez env |
 | `/api/cron/einvoice-events` | `*/5 * * * *` | fallback k webhookom (event feed s kurzorom) | prod po RC deployi | áno | áno — kurzor + lease, dedupe udalostí | bezpečný; no-op bez env |
 | `/api/cron/einvoice-inbound` | `*/10 * * * *` | príjem nepotvrdených dokladov | prod po RC deployi | áno | áno — idempotentná registrácia, claim + lease | bezpečný; no-op bez env |
+| `/api/cron/telemetry-maintenance` | `40 3 * * *` | retencia: `ai_usage_monthly` (25 mes., DB minimum 13) + chat dedupe riadky `notification_deliveries` > 7 dní (deadline sa nemažú) | prod po RC deployi | áno | áno — mazanie podľa veku, po dávkach (max 20 × 5 000) | bezpečný; bez migrácií `20261025100000/110000` → `skipped` (no-op) |
 | `/api/cron/einvoice-maintenance` | `17 * * * *` | health, alert kandidáti, retencia webhook metadát 90 dní | prod po RC deployi | áno | áno — maže iba uzavreté webhook metadáta po retencii | bezpečný; kritický alert → HTTP 503 (viditeľné v monitoringu) |
 
 Zámerne **nenaplánované**: `/api/cron/billing-reconcile`, `/api/cron/billing-store-reports` (billing OFF).
@@ -160,6 +161,14 @@ tabuliek, 0 neznámych tabuliek, 0 tabuliek bez RLS, politiky public 114 / stora
 0 definer bez `search_path`, 7/7 bucketov privátnych, každá firma presne 1 aktívny owner = `owner_id`, 0 používateľov
 s viac ako 1 aktívnym členstvom (predpoklad backfillu `20261012140000`), 0 osirelých členstiev; INFO: 4 firmy /
 6 aktívnych členov / 6 auth používateľov, 2 finalizované faktúry, 20 riadkov `company_entitlements`, 27 Storage objektov.
+
+**Opakovaný dry-run 2026-10-25 (J9, RC `85f800b`, read-only `execute_sql`): `prod-migration-precheck.sql` 0 STOP /
+0 WARN / 28 OK / 5 INFO — produkcia bez zmeny oproti 2026-10-22** (56 riadkov histórie, 0 zo 43 RC migrácií, rovnaké
+počty politík, grantov, bucketov, firiem a objektov). `einvoice-prod-precheck.sql`: 35 OK/INFO + **1 falošný STOP**
+v `migration_state` — skript porovnával `max(version)` s `20261005091000`, produkcia však eviduje `version` = čas
+aplikovania (`20261004212350`) a pôvodnú verziu v `name`. **Opravené v J9** (porovnáva `version` ALEBO prefix `name`;
+`test:einvoice-prod-precheck` 6/6); po oprave na produkcii OK → **0 STOP / 0 WARN**. INFO: 2 faktúry (obe
+finalizované, 1 prijatá), 0 konceptov, 0 v cudzej mene.
 
 ## B. Backup / recovery point
 
@@ -340,7 +349,7 @@ ostať (nové objekty bez provider env sú no-op; starý `main` nové tabuľky n
 - [ ] eFaktúra readiness: stav „pripravujeme“/neaktivované, `einvoice_rollout` prázdne — **žiadne odoslanie**
 - [ ] granular permissions: zamestnanec bez grantov nevidí „Pridať stroj“; owner vidí editor oprávnení (bez uloženia)
 - [ ] account deletion guard: dialóg zrušenia sa otvorí a pri aktívnom predplatnom/eFaktúre blokuje (bez potvrdenia)
-- [ ] Vercel Crons (Settings → Cron Jobs): 8 záznamov; prvé behy eInvoice → `configured: false`; fx-rates 200
+- [ ] Vercel Crons (Settings → Cron Jobs): 9 záznamov; prvé behy eInvoice → `configured: false`; fx-rates 200
 - [ ] runtime errors (Vercel `get_runtime_errors`) bez nových 5xx 30 min po deployi
 
 ## K. Kto čo schvaľuje
