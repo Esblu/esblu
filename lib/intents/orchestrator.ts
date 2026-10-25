@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Locale } from "@/lib/i18n/locales";
 import { translate } from "@/lib/i18n/translate";
+import { aiFallbackSkipReason } from "@/lib/intents/command-guards";
 import {
   hasExplicitCreateWording,
   isIntentCompatibleWithUtterance,
@@ -568,6 +569,25 @@ export async function runAssistantTurnDetailed(
         pendingClarification: null,
       });
     }
+  }
+
+  // 3d. J8 — brána pred AI (lib/intents/command-guards.ts): vetu, pre ktorú
+  //     by model podľa vlastného promptu aj tak vrátil null, mu neposielame.
+  //     Nepodporovaný zápis („Pošli faktúru", „Zmaž všetky stroje") dostane
+  //     rovnakú jasnú vetu ako 3c; zápor, pozdrav a veta mimo appky rovnaké
+  //     „Nerozumel som" ako pri null z AI — bez sieťového volania.
+  if (!intent) {
+    const skip = aiFallbackSkipReason(rawText);
+    if (skip === "unsupported") {
+      return done({
+        success: true,
+        recognized: true,
+        source: "deterministic",
+        result: { kind: "answer", text: t("assistant.clarify.actionNotSupported") },
+        pendingClarification: null,
+      });
+    }
+    if (skip) return { output: notUnderstood(locale), finalIntent: null };
   }
 
   // 4. AI iba interpretuje — nemaže, nezakladá bez výslovných slov.
