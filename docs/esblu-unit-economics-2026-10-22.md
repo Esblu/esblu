@@ -5,6 +5,9 @@
 > ďalšia firma **12,90 €**, samostatný modul **3,90 €** so stropom na cenu Kompletu, add-ony AI +40 / 3,90 €, hlas +60 min / 3,90 €,
 > používatelia +25 / 4,90 €, eFaktúra +40 / 4,90 € a +100 / 9,90 €. Bez textu „+ DPH“ (Esblu s.r.o. nie je platiteľ DPH).
 > Prepočet pri nových limitoch: **§22**. Billing ani eFaktúra nie sú live.
+> **J7 korekcie (OWNER-CONFIRMED 2026-10-26):** samostatný modul Dokumenty = **10 AI** (Komplet 40), hlas v moduloch iba
+> add-on, každá platená firma 25 používateľov + 5 GB, po triale bez plánu **0 nových uploadov**, čakajúce pozvánky rezervujú
+> miesto, eFaktúra odoslaná 1 tx / prijatá 0,5 tx (integer half-units). Dopad: **§22.1**.
 
 > **Aktualizácia 2026-10-25 — COST CONTROL HARDENING** (RC po `4d9af40`): terminológia opravená podľa reálnych flowov
 > (Esblu **nemá** samostatný AI chatbot/asistent — iba Intent Engine pre písané a hlasové príkazy s OpenAI
@@ -674,6 +677,36 @@ Závery pri 15,90 €:
   alebo mierne stratové (hlavne písané príkazy s OpenAI fallbackom bez prompt cachingu) a výrazne ziskové, ak si dokupujú add-ony.
 - Ďalšia firma za 12,90 € s vlastnými limitmi: LIGHT 77 %, NORMAL 53 %, HEAVY ~5 %, EXTREME strata pri hard stope.
 - Najväčšia páka ostáva prompt caching intent fallbacku (§15) a fair-use písaných príkazov.
+
+### 22.1 J7 korekcie (2026-10-26) — dopad
+
+#### J7 corrections — Documents-only customer (3,90 €, 10 AI included, +40 AI / 3,90 €)
+
+Cost = AI scans (typical / high) + storage/egress pool share + Stripe fee. Users 25 / 5 GB like every paid plan; no voice.
+
+| AI scans / month | mode | AI packs | revenue € | cost typ € | margin typ € | margin high € |
+|---|---|---|---|---|---|---|
+| 5 | hard stop | 0 | 3.90 | 0.38 | 3.13 | 2.99 |
+| 5 | add-ons bought | 0 | 3.90 | 0.38 | 3.13 | 2.99 |
+| 10 | hard stop | 0 | 3.90 | 0.53 | 2.99 | 2.70 |
+| 10 | add-ons bought | 0 | 3.90 | 0.53 | 2.99 | 2.70 |
+| 25 | hard stop | 0 | 3.90 | 0.53 | 2.99 | 2.70 |
+| 25 | add-ons bought | 1 | 7.80 | 0.97 | 6.30 | 5.59 |
+| 50 | hard stop | 0 | 3.90 | 0.53 | 2.99 | 2.70 |
+| 50 | add-ons bought | 1 | 7.80 | 1.72 | 5.56 | 4.13 |
+| 100 | hard stop | 0 | 3.90 | 0.53 | 2.99 | 2.70 |
+| 100 | add-ons bought | 3 | 15.60 | 3.21 | 11.60 | 8.75 |
+
+Complete 15,90 € / secondary 12,90 € allowances are unchanged by the J7 corrections (Komplet 40 AI, 60 min); the launch tables above still apply. Modular plans carry no voice cost (voice only via paid add-on). Expired-trial companies without a plan generate no new storage (0 new uploads).
+
+- Komplet 15,90 € a ďalšia firma 12,90 € majú nezmenené limity (40 AI, 60 min) → marže a break-even z tabuliek vyššie
+  **platia bez zmeny** (baseline ~65 % / ~61 %, konzervatívny ~56 % / ~53 %, break-even 4–6 firiem).
+- Zákazník iba s modulom Dokumenty (3,90 €): pri 10 zahrnutých AI je marža **~3,0 € (≈ 77 %)** aj pri plnom čerpaní;
+  pri pôvodných 40 AI by bol náklad ~1,42 € typ. / ~2,56 € high (marža ≈ 54 % / 24 %). Nad 10 AI = hard stop alebo AI
+  balík (+3,90 €; náklad balíka 1,19 € typ. / 2,33 € high → marža ~69 % / ~40 %).
+- Modulárne plány nenesú náklad na hlas (iba platený add-on). Firmy po triale bez plánu negenerujú nové úložisko.
+- eFaktúra: prijaté doklady sa účtujú 0,5 tx (zhodne s cenníkom providera) — pri 20 tx v Komplete = napr. 10 odoslaných
+  + 20 prijatých; náklad providera ostáva v §8 (nie je live).
 
 ---
 

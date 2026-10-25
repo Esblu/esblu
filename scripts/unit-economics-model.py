@@ -343,6 +343,22 @@ def main():
         c = profile_cost(apply_caps(dict(p, einvoice_tx=0), launch_caps))["total"]; pr = lp["secondary_complete_eur"]
         out.append(f"| {pn} | {c:.2f} | {pr - c - fees(pr, 'web'):.2f} | {(pr - c - fees(pr, 'web'))/pr*100:.0f} % |")
 
+
+    # ------------------------------------------------------------------ J7 corrections (2026-10-26)
+    out.append("\n### J7 corrections — Documents-only customer (3,90 €, 10 AI included, +40 AI / 3,90 €)\n")
+    out.append("Cost = AI scans (typical / high) + storage/egress pool share + Stripe fee. Users 25 / 5 GB like every paid plan; no voice.\n")
+    out.append("| AI scans / month | mode | AI packs | revenue € | cost typ € | margin typ € | margin high € |\n|---|---|---|---|---|---|---|")
+    for scans in [5, 10, 25, 50, 100]:
+        for mode in ("hard stop", "add-ons bought"):
+            packs = 0 if mode == "hard stop" else (math.ceil(max(0, scans - 10) / 40))
+            used = min(scans, 10) if mode == "hard stop" else scans
+            rev = 3.90 + packs * 3.90
+            base = profile_cost(dict(users=3, ai_scans=0, text_commands=50, voice_min=0, storage_gb=1, chat_rate=10, einvoice_tx=0, egress_ratio=0.3, vercel_usd=0.05))["total"]
+            ct = base + eur(used * scan_blend("typical")); ch = base + eur(used * scan_blend("high"))
+            fee = fees(rev, "web")
+            out.append(f"| {scans} | {mode} | {packs} | {rev:.2f} | {ct:.2f} | {rev - ct - fee:.2f} | {rev - ch - fee:.2f} |")
+    out.append("\nComplete 15,90 € / secondary 12,90 € allowances are unchanged by the J7 corrections (Komplet 40 AI, 60 min); the launch tables above still apply. Modular plans carry no voice cost (voice only via paid add-on). Expired-trial companies without a plan generate no new storage (0 new uploads).\n")
+
     out.append("\n### Add-on economics (EUR, typical / high cost)\n")
     out.append("| add-on | unit | cost typical | cost high | proposed price | margin typical | margin high |\n|---|---|---|---|---|---|---|")
     addons = [("+100 AI scans", eur(100*scan_blend('typical')), eur(100*scan_blend('high')), 6.90),
