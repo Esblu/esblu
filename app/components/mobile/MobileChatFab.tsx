@@ -28,6 +28,7 @@ import {
 } from "@/lib/mobile/chat-fab";
 import { getMyUnreadCounts } from "@/lib/chat";
 import { supabase } from "@/lib/supabase";
+import { chatCompanyFilter } from "@/lib/chat-realtime";
 import ChatBubbleIcon from "@/app/components/icons/ChatBubbleIcon";
 
 // =============================================================================
@@ -90,6 +91,7 @@ export default function MobileChatFab() {
   const pathname = usePathname() ?? "/";
   const { t } = useLocale();
   const { loading, signedIn, membership } = useActiveMembership();
+  const activeCompanyId = membership?.company_id ?? null;
   const humanChat = mobileNavModel(membership ? { role: membership.role, permissions: membership.permissions } : null).humanChat;
   const chatHref = resolveAppHref("/chat") ? "/chat" : null;
 
@@ -141,11 +143,13 @@ export default function MobileChatFab() {
   }, [visible]);
 
   useEffect(() => {
-    if (!visible || !userId) return;
+    // Iba správy AKTÍVNEJ firmy (lib/chat-realtime.ts) — nie celá platforma.
+    const companyFilter = chatCompanyFilter(activeCompanyId);
+    if (!visible || !userId || !companyFilter) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const channel = supabase
       .channel(`mobile-chat-fab-${userId}`)
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "chat_messages" }, () => {
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "chat_messages", filter: companyFilter }, () => {
         clearTimeout(timer);
         timer = setTimeout(() => {
           getMyUnreadCounts()
@@ -158,7 +162,7 @@ export default function MobileChatFab() {
       clearTimeout(timer);
       void supabase.removeChannel(channel);
     };
-  }, [visible, userId]);
+  }, [visible, userId, activeCompanyId]);
 
   // ----------------------------------------------------------------- drag & snap
   const [pos, setPos] = useState<{ x: number; y: number; side: FabSide } | null>(null);

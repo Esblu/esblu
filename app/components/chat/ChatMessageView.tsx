@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import { chatCompanyFilter, chatConversationFilter } from "@/lib/chat-realtime";
 import { openExternalUrl } from "@/lib/file-actions";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import {
@@ -290,7 +291,13 @@ export default function ChatMessageView({
 
   // Realtime: nové/upravené správy tejto konverzácie + nové prílohy/referencie
   // patriace k už načítaným správam.
+  // Cost control: každý odber má filter (konverzácia / firma konverzácie) —
+  // prílohy a referencie predtým počúvali celú platformu.
+  const conversationCompanyId = conversation?.company_id ?? null;
   useEffect(() => {
+    const conversationFilter = chatConversationFilter(conversationId);
+    const companyFilter = chatCompanyFilter(conversationCompanyId);
+    if (!conversationFilter || !companyFilter) return;
     const channel = supabase
       .channel(`chat-conversation-${conversationId}`)
       .on(
@@ -299,7 +306,7 @@ export default function ChatMessageView({
           event: "INSERT",
           schema: "public",
           table: "chat_messages",
-          filter: `conversation_id=eq.${conversationId}`,
+          filter: conversationFilter,
         },
         async (payload) => {
           const message = payload.new as ChatMessage;
@@ -334,7 +341,7 @@ export default function ChatMessageView({
           event: "UPDATE",
           schema: "public",
           table: "chat_messages",
-          filter: `conversation_id=eq.${conversationId}`,
+          filter: conversationFilter,
         },
         (payload) => {
           const message = payload.new as ChatMessage;
@@ -345,7 +352,7 @@ export default function ChatMessageView({
       )
       .on(
         "postgres_changes",
-        { event: "INSERT", schema: "public", table: "chat_attachments" },
+        { event: "INSERT", schema: "public", table: "chat_attachments", filter: companyFilter },
         (payload) => {
           const attachment = payload.new as ChatAttachment;
           if (!messageIdsRef.current.has(attachment.message_id)) return;
@@ -361,7 +368,7 @@ export default function ChatMessageView({
       )
       .on(
         "postgres_changes",
-        { event: "INSERT", schema: "public", table: "chat_message_references" },
+        { event: "INSERT", schema: "public", table: "chat_message_references", filter: companyFilter },
         (payload) => {
           const reference = payload.new as ChatMessageReference;
           if (!messageIdsRef.current.has(reference.message_id)) return;
@@ -380,7 +387,7 @@ export default function ChatMessageView({
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [conversationId, myUserId]);
+  }, [conversationId, conversationCompanyId, myUserId]);
 
   function handleFilePick(file: File | null) {
     setComposerError(null);

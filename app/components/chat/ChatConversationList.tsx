@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
+import { chatCompanyFilter } from "@/lib/chat-realtime";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import { getMyActiveMembership } from "@/lib/company";
 import { chatConversationHref } from "@/lib/entity-links";
@@ -63,6 +64,7 @@ export default function ChatConversationList({
   const [unreadMap, setUnreadMap] = useState<Record<string, number>>({});
   const [members, setMembers] = useState<CompanyMemberForChat[]>([]);
   const [myUserId, setMyUserId] = useState<string | null>(null);
+  const [activeCompanyId, setActiveCompanyId] = useState<string | null>(null);
   const [showNewConversation, setShowNewConversation] = useState(false);
   const [creatingWith, setCreatingWith] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -101,6 +103,7 @@ export default function ChatConversationList({
         setLoading(false);
         return;
       }
+      setActiveCompanyId(membership.company_id);
 
       const [companyId, memberRows, unreadRows] = await Promise.all([
         ensureCompanyChatChannel(),
@@ -167,13 +170,15 @@ export default function ChatConversationList({
   // otvorená, zvýš lokálny unread counter. RLS platí aj tu — appka dostane
   // iba eventy pre správy, ktoré by aj tak videla cez SELECT.
   useEffect(() => {
-    if (!myUserId) return;
+    // Iba správy AKTÍVNEJ firmy (lib/chat-realtime.ts) — nie celá platforma.
+    const companyFilter = chatCompanyFilter(activeCompanyId);
+    if (!myUserId || !companyFilter) return;
 
     const channel = supabase
       .channel(`chat-unread-${myUserId}`)
       .on(
         "postgres_changes",
-        { event: "INSERT", schema: "public", table: "chat_messages" },
+        { event: "INSERT", schema: "public", table: "chat_messages", filter: companyFilter },
         (payload) => {
           const message = payload.new as {
             conversation_id: string;
@@ -194,7 +199,7 @@ export default function ChatConversationList({
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [myUserId]);
+  }, [myUserId, activeCompanyId]);
 
   async function startConversationWith(otherUserId: string) {
     setCreatingWith(otherUserId);

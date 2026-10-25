@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import { chatCompanyFilter } from "@/lib/chat-realtime";
 import { IS_MOBILE_BUILD } from "@/lib/build-target";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import { getMyActiveMembership } from "@/lib/company";
@@ -105,6 +106,7 @@ function FloatingChatWidgetInner() {
   const [mounted, setMounted] = useState(false);
   const [authorized, setAuthorized] = useState(false);
   const [myUserId, setMyUserId] = useState<string | null>(null);
+  const [activeCompanyId, setActiveCompanyId] = useState<string | null>(null);
 
   const [position, setPosition] = useState<Position>({ x: MARGIN, y: MARGIN });
   const [open, setOpen] = useState(false);
@@ -140,6 +142,7 @@ function FloatingChatWidgetInner() {
         if (!cancelled) {
           setAuthorized(false);
           setMyUserId(null);
+          setActiveCompanyId(null);
         }
         return;
       }
@@ -149,6 +152,7 @@ function FloatingChatWidgetInner() {
       if (!cancelled) {
         setAuthorized(!!membership);
         setMyUserId(session.user.id);
+        setActiveCompanyId(membership?.company_id ?? null);
       }
     }
 
@@ -245,13 +249,15 @@ function FloatingChatWidgetInner() {
   }, [authorized, open]);
 
   useEffect(() => {
-    if (!authorized || !myUserId) return;
+    // Iba správy AKTÍVNEJ firmy (lib/chat-realtime.ts) — nie celá platforma.
+    const companyFilter = chatCompanyFilter(activeCompanyId);
+    if (!authorized || !myUserId || !companyFilter) return;
 
     const channel = supabase
       .channel(`chat-widget-unread-${myUserId}`)
       .on(
         "postgres_changes",
-        { event: "INSERT", schema: "public", table: "chat_messages" },
+        { event: "INSERT", schema: "public", table: "chat_messages", filter: companyFilter },
         (payload) => {
           const message = payload.new as {
             conversation_id: string;
@@ -271,7 +277,7 @@ function FloatingChatWidgetInner() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [authorized, myUserId, open, selectedConversationId]);
+  }, [authorized, myUserId, activeCompanyId, open, selectedConversationId]);
 
   // ---------------------------------------------------------------------
   // Drag & drop (pointer events — funguje pre myš aj dotyk). Malý pohybový
