@@ -1,4 +1,7 @@
 import OpenAI from "openai";
+import { AI_CALL_POLICY, callOpenAiWithCostGuard } from "@/lib/ai/openai-guard";
+import { usageFromTranscription, ZERO_USAGE } from "@/lib/ai/usage-meter";
+import { meterScopeFromRequest, recordAiUsageInScope } from "@/lib/ai/usage-meter-server";
 import { verifyRequestUser } from "@/lib/server-auth";
 import { getRequestLocale } from "@/lib/i18n/request-locale";
 import { translate } from "@/lib/i18n/translate";
@@ -76,8 +79,10 @@ const getClient = lazyAiClient(
   () =>
     new OpenAI({
       apiKey: process.env.OPENAI_API_KEY,
-      timeout: 18_000,
-      maxRetries: 1,
+      timeout: AI_CALL_POLICY.voiceTranscription.timeoutMs,
+      // Cost control (2026-10-25): SDK neopakuje (ani timeout — mohol byť
+      // zaúčtovaný); jedno opakovanie iba pri 429/5xx cez callOpenAiWithCostGuard.
+      maxRetries: 0,
     })
 );
 
@@ -256,17 +261,34 @@ export async function POST(req: Request) {
       );
     }
 
+    // Usage telemetria (iba čísla z `usage`, nikdy transcript/audio):
+    // firma = aktívna firma session (fail closed — bez firmy sa nemeria).
+    const meterScope = await meterScopeFromRequest(req, user.id);
+    const guarded = await callOpenAiWithCostGuard(
+      () =>
+        client.audio.transcriptions.create({
+          file: audioValue,
+          model: "gpt-4o-transcribe",
+          language: locale,
+          prompt: formData?.get("context") === "invoice"
+            ? `${DOMAIN_CONTEXT_PROMPT_BY_LOCALE[locale]} ${TASK_CONTEXT_PROMPT_BY_LOCALE.invoice[locale]}`
+            : DOMAIN_CONTEXT_PROMPT_BY_LOCALE[locale],
+        }),
+      { maxRetries: AI_CALL_POLICY.voiceTranscription.maxRetries }
+    );
+    await recordAiUsageInScope(meterScope, {
+      flow: "voice_transcription",
+      model: "gpt-4o-transcribe",
+      outcome: guarded.ok ? "success" : "failure",
+      usage: guarded.ok ? usageFromTranscription(guarded.value) : { ...ZERO_USAGE },
+      imageCount: 0,
+      retryCount: guarded.attempts - 1,
+    });
     let transcription: { text: string };
-    try {
-      transcription = await client.audio.transcriptions.create({
-        file: audioValue,
-        model: "gpt-4o-transcribe",
-        language: locale,
-        prompt: formData?.get("context") === "invoice"
-          ? `${DOMAIN_CONTEXT_PROMPT_BY_LOCALE[locale]} ${TASK_CONTEXT_PROMPT_BY_LOCALE.invoice[locale]}`
-          : DOMAIN_CONTEXT_PROMPT_BY_LOCALE[locale],
-      });
-    } catch (transcriptionError) {
+    if (guarded.ok) {
+      transcription = guarded.value;
+    } else {
+      const transcriptionError = guarded.error;
       // Iba bezpečná metadáta — message OpenAI môže niesť fragment kľúča.
       console.error("api/assistant/transcribe: OpenAI volanie zlyhalo:", safeAiErrorMeta(transcriptionError));
       return Response.json(

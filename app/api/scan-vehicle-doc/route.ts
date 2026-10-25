@@ -1,4 +1,7 @@
 import OpenAI from "openai";
+import { AI_CALL_POLICY, callOpenAiWithCostGuard } from "@/lib/ai/openai-guard";
+import { usageFromResponse, ZERO_USAGE } from "@/lib/ai/usage-meter";
+import { recordAiUsageInScope, reservationMeterScope } from "@/lib/ai/usage-meter-server";
 import { createClient } from "@supabase/supabase-js";
 import { normalizeSpz } from "@/lib/normalize-spz";
 import { normalizeAndValidateWeights } from "@/lib/weight-utils";
@@ -8,8 +11,11 @@ import { getUserScopedSupabaseClient } from "@/lib/server-supabase-user-client";
 import { finalizeAiProcessing, guardAiProcessing } from "@/lib/entitlements-server";
 import { isOpenAiConfigured, safeAiErrorMeta } from "@/lib/ai/openai-runtime";
 
+// Cost control (2026-10-25): SDK neopakuje nič sám; retry iba guard (429/5xx).
 const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY!,
+  maxRetries: 0,
+  timeout: AI_CALL_POLICY.documentScan.timeoutMs,
 });
 
 const supabaseAuth = createClient(
@@ -442,9 +448,8 @@ export async function POST(req: Request) {
     const guard = await guardAiProcessing(db, req, getRequestLocale(req), "scan-vehicle-doc", fileBytes);
     if (!guard.ok) return guard.response;
 
-    let response;
-    try {
-      response = await client.responses.create({
+    const meterScope = reservationMeterScope(guard.usageId);
+    const guarded = await callOpenAiWithCostGuard(() => client.responses.create({
       model: "gpt-5.6-terra",
       store: false,
       reasoning: { effort: "none" },
@@ -465,11 +470,20 @@ export async function POST(req: Request) {
           ],
         },
       ],
+    }), { maxRetries: AI_CALL_POLICY.documentScan.maxRetries });
+    await recordAiUsageInScope(meterScope, {
+      flow: "vehicle_document_scan",
+      model: "gpt-5.6-terra",
+      outcome: guarded.ok ? "success" : "failure",
+      usage: guarded.ok ? usageFromResponse(guarded.value) : { ...ZERO_USAGE },
+      imageCount: 1,
+      retryCount: guarded.attempts - 1,
     });
-    } catch (aiError) {
+    if (!guarded.ok) {
       await finalizeAiProcessing(db, guard.usageId, false);
-      throw aiError;
+      throw guarded.error;
     }
+    const response = guarded.value;
     await finalizeAiProcessing(db, guard.usageId, true);
 
     if (!response.output_text) {
@@ -493,7 +507,7 @@ export async function POST(req: Request) {
       fallbackTriggered = true;
       vehicleData.reviewStatus = "needs_review";
 
-      const spzResponse = await client.responses.create({
+      const spzGuarded = await callOpenAiWithCostGuard(() => client.responses.create({
         model: "gpt-4.1",
         store: false,
         text: {
@@ -534,7 +548,17 @@ značka viazaná na explicitný label, nie iba istotu OCR čitateľnosti.`,
             ],
           },
         ],
+      }, { timeout: AI_CALL_POLICY.plateFallback.timeoutMs }), { maxRetries: AI_CALL_POLICY.plateFallback.maxRetries });
+      await recordAiUsageInScope(meterScope, {
+        flow: "vehicle_document_plate_fallback",
+        model: "gpt-4.1",
+        outcome: spzGuarded.ok ? "success" : "failure",
+        usage: spzGuarded.ok ? usageFromResponse(spzGuarded.value) : { ...ZERO_USAGE },
+        imageCount: 1,
+        retryCount: spzGuarded.attempts - 1,
       });
+      if (!spzGuarded.ok) throw spzGuarded.error;
+      const spzResponse = spzGuarded.value;
 
       try {
         const spzData = parseStructuredOutput(spzResponse.output_text);

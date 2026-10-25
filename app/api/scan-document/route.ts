@@ -1,4 +1,7 @@
 import OpenAI from "openai";
+import { AI_CALL_POLICY, callOpenAiWithCostGuard } from "@/lib/ai/openai-guard";
+import { usageFromResponse, ZERO_USAGE } from "@/lib/ai/usage-meter";
+import { recordAiUsageInScope, reservationMeterScope, type MeterScope } from "@/lib/ai/usage-meter-server";
 import { isIntakeDocumentType, sealIntakeExtraction } from "@/lib/intake-seal";
 import { createClient } from "@supabase/supabase-js";
 import { normalizeSpz } from "@/lib/normalize-spz";
@@ -30,8 +33,12 @@ import { isOpenAiConfigured, safeAiErrorMeta } from "@/lib/ai/openai-runtime";
 // document_review_log — to je práca budúceho, samostatného save flow.
 // -----------------------------------------------------------------------------
 
+// Cost control (2026-10-25): SDK neopakuje nič sám (maxRetries 0); prechodné
+// chyby opakuje iba callOpenAiWithCostGuard (429/5xx, nie timeout).
 const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY!,
+  maxRetries: 0,
+  timeout: AI_CALL_POLICY.documentScan.timeoutMs,
 });
 
 const supabaseAuth = createClient(
@@ -762,11 +769,11 @@ function hasExplicitSpzEvidence(
   return hasExplicitLabel && containsCandidate;
 }
 
-async function resolveSpzFallback(imageUrl: string): Promise<{
+async function resolveSpzFallback(imageUrl: string, meter: MeterScope | null): Promise<{
   spz: string | null;
   source: SpzSource;
 }> {
-  const spzResponse = await client.responses.create({
+  const guarded = await callOpenAiWithCostGuard(() => client.responses.create({
     model: "gpt-4.1",
     store: false,
     text: {
@@ -807,7 +814,17 @@ značka viazaná na explicitný label, nie iba istotu OCR čitateľnosti.`,
         ],
       },
     ],
+  }, { timeout: AI_CALL_POLICY.plateFallback.timeoutMs }), { maxRetries: AI_CALL_POLICY.plateFallback.maxRetries });
+  await recordAiUsageInScope(meter, {
+    flow: "document_scan_plate_fallback",
+    model: "gpt-4.1",
+    outcome: guarded.ok ? "success" : "failure",
+    usage: guarded.ok ? usageFromResponse(guarded.value) : { ...ZERO_USAGE },
+    imageCount: 1,
+    retryCount: guarded.attempts - 1,
   });
+  if (!guarded.ok) throw guarded.error;
+  const spzResponse = guarded.value;
 
   try {
     const spzData = parseStructuredOutput(spzResponse.output_text ?? "");
@@ -1264,9 +1281,11 @@ export async function POST(req: Request) {
     // 3) Hlavné AI volanie — klasifikácia + extrakcia v jednom kroku.
     //    Zlyhanie modelu (bez odpovede) sa neúčtuje; odpoveď modelu sa
     //    účtuje aj vtedy, ak ju ďalej odmietne validácia (AI už prebehlo).
-    let response: Awaited<ReturnType<typeof client.responses.create>>;
-    try {
-      response = await client.responses.create({
+    // Usage telemetria: firmu + používateľa odvodí DB z AI rezervácie (fail closed).
+    const meterScope = reservationMeterScope(reservation.usageId);
+    const guarded = await callOpenAiWithCostGuard(
+      () =>
+        client.responses.create({
         model: "gpt-5.6-terra",
         store: false,
         reasoning: { effort: "none" },
@@ -1287,11 +1306,22 @@ export async function POST(req: Request) {
             ],
           },
         ],
-      });
-    } catch (aiError) {
+      }),
+      { maxRetries: AI_CALL_POLICY.documentScan.maxRetries }
+    );
+    await recordAiUsageInScope(meterScope, {
+      flow: "document_scan",
+      model: "gpt-5.6-terra",
+      outcome: guarded.ok ? "success" : "failure",
+      usage: guarded.ok ? usageFromResponse(guarded.value) : { ...ZERO_USAGE },
+      imageCount: 1,
+      retryCount: guarded.attempts - 1,
+    });
+    if (!guarded.ok) {
       await finalizeAiProcessing(userClient, reservation.usageId, false);
-      throw aiError;
+      throw guarded.error;
     }
+    const response = guarded.value;
     await finalizeAiProcessing(userClient, reservation.usageId, true);
 
     if (!response.output_text) {
@@ -1463,7 +1493,7 @@ export async function POST(req: Request) {
       spzSource = weighTicketFields.spz ? "main" : "none";
 
       if (!weighTicketFields.spz) {
-        const fallback = await resolveSpzFallback(imageUrl);
+        const fallback = await resolveSpzFallback(imageUrl, meterScope);
         weighTicketFields = { ...weighTicketFields, spz: fallback.spz };
         spzSource = fallback.source;
       }
@@ -1473,7 +1503,7 @@ export async function POST(req: Request) {
       spzSource = deliveryNoteFields.spz ? "main" : "none";
 
       if (!deliveryNoteFields.spz) {
-        const fallback = await resolveSpzFallback(imageUrl);
+        const fallback = await resolveSpzFallback(imageUrl, meterScope);
         deliveryNoteFields = { ...deliveryNoteFields, spz: fallback.spz };
         spzSource = fallback.source;
       }

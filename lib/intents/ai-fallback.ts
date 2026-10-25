@@ -1,5 +1,7 @@
 import OpenAI from "openai";
 import { lazyAiClient, safeAiErrorMeta } from "@/lib/ai/openai-runtime";
+import { AI_CALL_POLICY, callOpenAiWithCostGuard } from "@/lib/ai/openai-guard";
+import { usageFromResponse, ZERO_USAGE, type AiUsageNumbers } from "@/lib/ai/usage-meter";
 import {
   DEADLINE_TYPE_FILTERS,
   DOCUMENT_TYPE_FILTERS,
@@ -35,7 +37,21 @@ import {
 
 // Lenivo (lib/ai/openai-runtime.ts): bez OPENAI_API_KEY sa modul načíta
 // a klasifikátor vráti null — deterministický parser funguje ďalej.
-const getClient = lazyAiClient(() => new OpenAI({ apiKey: process.env.OPENAI_API_KEY }));
+// Cost control (2026-10-25): SDK neopakuje nič sám a má krátky timeout —
+// fallback je iba klasifikácia jednej vety a hlasový klient čaká max. 20 s.
+// Predtým SDK default (10 min, 2 opakovania vrátane timeoutu).
+const getClient = lazyAiClient(() => new OpenAI({ apiKey: process.env.OPENAI_API_KEY, maxRetries: 0, timeout: AI_CALL_POLICY.intentClassification.timeoutMs }));
+
+/**
+ * Callback pre usage telemetriu — dostane IBA čísla z `usage` (nikdy text
+ * vstupu ani výstupu). Firmu/používateľa doplní volajúci route zo serverom
+ * overeného členstva.
+ */
+export type IntentAiUsageReporter = (report: {
+  outcome: "success" | "failure";
+  usage: AiUsageNumbers;
+  retryCount: number;
+}) => Promise<unknown>;
 
 const INTENT_CLASSIFICATION_SCHEMA = {
   type: "object",
@@ -314,12 +330,13 @@ ${INVOICE_STATUS_FILTERS.map((s) => `  - ${s}`).join("\n")}
 `;
 
 export async function classifyIntentWithAi(
-  rawText: string
+  rawText: string,
+  reportUsage?: IntentAiUsageReporter
 ): Promise<ParsedIntent | null> {
   const client = getClient();
   if (!client) return null;
   try {
-    const response = await client.responses.create({
+    const guarded = await callOpenAiWithCostGuard(() => client.responses.create({
       model: "gpt-5.6-terra",
       store: false,
       reasoning: { effort: "none" },
@@ -340,7 +357,16 @@ export async function classifyIntentWithAi(
           ],
         },
       ],
-    });
+    }), { maxRetries: AI_CALL_POLICY.intentClassification.maxRetries });
+    if (reportUsage) {
+      await reportUsage({
+        outcome: guarded.ok ? "success" : "failure",
+        usage: guarded.ok ? usageFromResponse(guarded.value) : { ...ZERO_USAGE },
+        retryCount: guarded.attempts - 1,
+      }).catch(() => undefined);
+    }
+    if (!guarded.ok) throw guarded.error;
+    const response = guarded.value;
 
     if (!response.output_text) return null;
 

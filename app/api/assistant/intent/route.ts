@@ -3,6 +3,7 @@ import { getUserScopedSupabaseClient } from "@/lib/server-supabase-user-client";
 import { getRequestLocale } from "@/lib/i18n/request-locale";
 import { translate } from "@/lib/i18n/translate";
 import { classifyIntentWithAi } from "@/lib/intents/ai-fallback";
+import { recordAiUsageInScope } from "@/lib/ai/usage-meter-server";
 import type { ParseHints } from "@/lib/intents/parse";
 import type { FolderRef } from "@/lib/document-folders";
 import { isValidConversationId } from "@/lib/intents/conversation";
@@ -225,7 +226,18 @@ export async function POST(req: Request) {
     // ------------------------------------------------------------------
     const selection = readSelectionContext(body?.selectionContext);
     const output = await runAssistantTurn(
-      { db: supabase, classifyWithAi: classifyIntentWithAi },
+      {
+        db: supabase,
+        // Usage telemetria OpenAI fallbacku (iba čísla) pod AKTÍVNU firmu
+        // z overeného členstva — nikdy z tela požiadavky.
+        classifyWithAi: (text: string) =>
+          classifyIntentWithAi(text, (report) =>
+            recordAiUsageInScope(
+              { kind: "member", companyId: membership.company_id as string, userId: user.id },
+              { flow: "intent_classification_fallback", model: "gpt-5.6-terra", imageCount: 0, ...report }
+            )
+          ),
+      },
       {
         rawText,
         locale,

@@ -1,4 +1,7 @@
 import OpenAI from "openai";
+import { AI_CALL_POLICY, callOpenAiWithCostGuard } from "@/lib/ai/openai-guard";
+import { usageFromResponse, ZERO_USAGE } from "@/lib/ai/usage-meter";
+import { recordAiUsageInScope, reservationMeterScope } from "@/lib/ai/usage-meter-server";
 import { createClient } from "@supabase/supabase-js";
 import { normalizeSpz } from "@/lib/normalize-spz";
 import { getRequestLocale } from "@/lib/i18n/request-locale";
@@ -8,8 +11,11 @@ import { getUserScopedSupabaseClient } from "@/lib/server-supabase-user-client";
 import { finalizeAiProcessing, guardAiProcessing } from "@/lib/entitlements-server";
 import { isOpenAiConfigured, safeAiErrorMeta } from "@/lib/ai/openai-runtime";
 
+// Cost control (2026-10-25): SDK neopakuje nič sám; retry iba guard (429/5xx).
 const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY!,
+  maxRetries: 0,
+  timeout: AI_CALL_POLICY.vehicleRegistrationScan.timeoutMs,
 });
 
 const supabaseAuth = createClient(
@@ -281,9 +287,8 @@ obrázok, je to zadná strana toho istého technického preukazu.
     );
     if (!guard.ok) return guard.response;
 
-    let response;
-    try {
-      response = await client.responses.create({
+    const meterScope = reservationMeterScope(guard.usageId);
+    const guarded = await callOpenAiWithCostGuard(() => client.responses.create({
       model: "gpt-4.1-mini",
       store: false,
       input: [{ role: "user", content }],
@@ -307,11 +312,20 @@ obrázok, je to zadná strana toho istého technického preukazu.
           },
         },
       },
+    }), { maxRetries: AI_CALL_POLICY.vehicleRegistrationScan.maxRetries });
+    await recordAiUsageInScope(meterScope, {
+      flow: "vehicle_registration_scan",
+      model: "gpt-4.1-mini",
+      outcome: guarded.ok ? "success" : "failure",
+      usage: guarded.ok ? usageFromResponse(guarded.value) : { ...ZERO_USAGE },
+      imageCount: backImage ? 2 : 1,
+      retryCount: guarded.attempts - 1,
     });
-    } catch (aiError) {
+    if (!guarded.ok) {
       await finalizeAiProcessing(db, guard.usageId, false);
-      throw aiError;
+      throw guarded.error;
     }
+    const response = guarded.value;
     await finalizeAiProcessing(db, guard.usageId, true);
 
     if (!response.output_text) {
