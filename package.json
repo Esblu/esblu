@@ -36,6 +36,7 @@
     "test:assistant-orchestrator": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/assistant-orchestrator-tests.ts",
     "test:master-control": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/master-control-tests.ts",
     "test:continuous-voice": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/continuous-voice-tests.ts",
+    "test:intent-fallback": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/intent-fallback-tests.ts",
     "test:intent-corpus": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/intent-corpus-tests.ts",
     "test:assistant-grammar": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/assistant-grammar-tests.ts",
     "test:plan-entitlements": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/plan-entitlements-tests.ts",

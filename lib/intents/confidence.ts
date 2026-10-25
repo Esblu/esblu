@@ -27,7 +27,7 @@ export type IntentConfidence = "HIGH" | "MEDIUM" | "LOW";
 const PLATE = /^[A-Z]{2,3}\d{3}[A-Z]{2}$/;
 const FREE_TEXT_ARGS = ["query", "entityName", "folderName", "categoryName", "partnerQuery"] as const;
 
-export function intentConfidence(intent: ParsedIntent | null, _rawText?: string): IntentConfidence {
+export function intentConfidence(intent: ParsedIntent | null): IntentConfidence {
   if (!intent) return "LOW";
   if (intent.source === "ai") return "MEDIUM";
   const free = FREE_TEXT_ARGS.map((key) => intent.args[key]).filter((v): v is string => typeof v === "string" && v.trim() !== "");

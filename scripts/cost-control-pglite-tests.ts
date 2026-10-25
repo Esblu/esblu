@@ -233,6 +233,32 @@ await check("retencia: purge zachová min. 13 mesiacov aj pri chybnom parametri;
   assert.equal(months.length, 4); // aktuálny mesiac (3 flowy) + 12 mesiacov starý
 });
 
+// ----------------------------------------------------------------------------- J8 intent command počítadlá
+const CMD = "select public.esblu_record_intent_command($1, $2, $3, $4) r";
+await check("J8 intent_command: +1 v triede (deterministic / ai-fallback / unsupported / ambiguous), žiadne tokeny ani obsah", async () => {
+  for (const cls of ["deterministic", "deterministic", "ai-fallback", "unsupported", "ambiguous"]) {
+    assert.equal((await commitAs(service, CMD, [C.a, U.ownerA, cls, "success"])).data[0].r, true);
+  }
+  const rows = (await usage(C.a)).filter((r) => r.flow_type === "intent_command");
+  assert.deepEqual(rows.map((r) => [r.model, r.requests, r.input_tokens, r.output_tokens]),
+    [["ai-fallback", "1", "0", "0"], ["ambiguous", "1", "0", "0"], ["deterministic", "2", "0", "0"], ["unsupported", "1", "0", "0"]]);
+});
+await check("J8 intent_command: fail closed (cudzia firma, neaktívny, neznáma trieda/výsledok) a starý RPC flow nepustí", async () => {
+  const before = (await su("select count(*)::int n from public.ai_usage_monthly"))[0].n;
+  assert.equal((await commitAs(service, CMD, [C.b, U.ownerA, "deterministic", "success"])).data[0].r, false);
+  assert.equal((await commitAs(service, CMD, [C.a, U.disabledA, "deterministic", "success"])).data[0].r, false);
+  assert.equal((await commitAs(service, CMD, [C.a, U.ownerA, "chat", "success"])).data[0].r, false);
+  assert.equal((await commitAs(service, CMD, [C.a, U.ownerA, "deterministic", "maybe"])).data[0].r, false);
+  assert.equal((await rec(C.a, U.ownerA, "intent_command", "deterministic", "success", [0, 0, 0, 0, 0, 0, 0])).data[0].r, false);
+  assert.equal((await su("select count(*)::int n from public.ai_usage_monthly"))[0].n, before);
+});
+await check("J8 intent_command: klient (owner / employee / anon) nevie zapisovať počítadlá", async () => {
+  for (const who of [ownerA, employeeA, anon]) {
+    const o = await attempt(who, `select public.esblu_record_intent_command('${C.a}', '${U.ownerA}', 'deterministic', 'success')`);
+    assert.equal(o.layer, "privilege");
+  }
+});
+
 // ----------------------------------------------------------------------------- notification_deliveries retencia
 await check("notification retencia: maže iba 'chat' staršie ako N dní, 'deadline' (vrátane overdue) nikdy, po dávkach", async () => {
   await su(`insert into public.notification_deliveries (user_id, company_id, kind, dedupe_key, sent_at)
