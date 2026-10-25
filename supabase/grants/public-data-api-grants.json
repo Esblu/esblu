@@ -65,6 +65,14 @@
       "service_role": "SELECT,INSERT,UPDATE,DELETE",
       "note": "bez politik; esblu_consume_ai_scan_quota — authenticated CRUD bol historicky auto-grant"
     },
+    "ai_usage_monthly": {
+      "domain": "ai",
+      "access": "D",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "AI cost telemetria — mesačné počítadlá na firmu (bez obsahu, bez user_id); zápis iba esblu_record_ai_usage (service_role), FORCE RLS, žiadny klientsky prístup"
+    },
     "assistant_action_confirmations": {
       "domain": "ai",
       "access": "C",
@@ -864,11 +872,15 @@
     "esblu_operator_override_company_trial(uuid)",
     "esblu_owner_delete_company(uuid)",
     "esblu_owner_delete_company(uuid,uuid)",
+    "esblu_purge_ai_usage_monthly(integer)",
+    "esblu_purge_chat_notification_deliveries(integer,integer)",
     "esblu_push_chat_recipients(uuid)",
     "esblu_push_companies_with_targets()",
     "esblu_push_delivery_targets(uuid,uuid[])",
     "esblu_push_record_outcome(text,uuid,text)",
     "esblu_push_revoke_ended()",
+    "esblu_record_ai_usage(uuid,uuid,text,text,text,bigint,bigint,bigint,bigint,numeric,integer,integer)",
+    "esblu_record_ai_usage_for_reservation(uuid,text,text,text,bigint,bigint,bigint,integer,integer)",
     "esblu_record_company_legal_identity(uuid,text,text,boolean,text)",
     "esblu_record_company_legal_identity_attempt(uuid,text,text,text)",
     "esblu_request_session_id()",
