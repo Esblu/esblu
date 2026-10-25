@@ -345,6 +345,33 @@ Zverejnenie cenníka v produkcii = až schválený produkčný deploy (`/cennik`
 | mobile Turbopack build + `verify:mobile-bundle` | PENDING OWNER (Windows) | zmenené zdieľané upload obrazovky |
 | **production rollout** | ⛔ NOT YET RUN / PENDING APPROVAL | migrácie #41–#42 v runbooku (sekcia L) |
 
+## J8. INTENT FALLBACK COST OPTIMIZATION (2026-10-25)
+
+**INTENT FALLBACK OPTIMIZATION: PASS (repo + staging)**. Iba existujúce intenty; žiadna zmena oprávnení, cien, allowances,
+trialu ani write intentov; žiadny nový AI provider ani embeddingy; OpenAI iba klasifikuje (allowlist + strict schéma).
+Production rollout **NOT YET RUN / PENDING APPROVAL**. Detail a ekonomika: `docs/esblu-unit-economics-2026-10-22.md` §23.
+
+| položka | status | poznámka |
+|---|---|---|
+| parser inventory | PASS | text aj hlas → `/api/assistant/intent` → `runAssistantTurn` → `parseIntentDeterministic` → (brána) → `classifyIntentWithAi`; prepis (`/api/assistant/transcribe`) nič neinterpretuje; 64 intentov v registri: 38 read-only (z toho 6 iba otvorí formulár / príjem / navigáciu), 25 write s potvrdením, 1 reviewable draft; zápis bez potvrdenia neexistuje |
+| command corpus | PASS | `tests/fixtures/intent-command-corpus.json` v2: 367 viet (184 SK, 3 CS, 89 EN, 91 DE) + 75 holdout; syntetické, žiadne reálne dáta |
+| baseline fallback rate | PASS (zmerané) | dab5e85: pokrytie 71,4 %, AI fallback 21,3 % viet, 60 FP, 15× read intent na zápis/zápor (holdout: 78,0 % / 25,3 % / 10 FP) — `docs/intent-fallback/baseline-2026-10-25*.{json,txt}` |
+| deterministic coverage | PASS | **98,4 %** (cieľ ≥ 90 %), AI fallback **1,1 %** (cieľ ≤ 10 %, ideál ≤ 5 %), FP **0**; holdout 94,9 % / 5,3 % / 1 FP (neladené) |
+| normalizácia + synonymá | PASS | diakritika, interpunkcia, zdvorilosť, ŠPZ (priorita), celé slová (oprava „ek" ⊂ „gekostet"); slovník SK/CS/EN/DE iba pre existujúce intenty; bez fuzzy |
+| entity extraction + confidence | PASS | ŠPZ (company-scoped až pri lookupe), HIGH / MEDIUM / LOW (`lib/intents/confidence.ts`); MEDIUM meno sa vždy overí proti dátam firmy, pri viacerých zhodách otázka |
+| negative intent guard | PASS | zápor („nemám STK", „nechcem hľadať auto", „don't …", „… nicht"), nepodporovaný zápis (pošli, zmaž všetky, finalizuj, označ ako zaplatenú, zmeň VIN) a sloveso zápisu nikdy nedajú read intent; podporované zápisy s potvrdením bez zmeny |
+| prompt optimization | PASS | prompt v2 3 880 → 3 291 tokenov (−15 %), enumy iba v strict schéme, `max_output_tokens` 400, bez dát firmy |
+| model benchmark | PENDING (owner + kľúč) | terra 2,00/0,20/12,00 vs luna 0,20/0,02/1,20 USD za 1M (oficiálne 2026-10-25); harness `scripts/intent-model-benchmark.ts` (opt-in, mimo CI); **model sa NEPREPOL** |
+| caching decision | PASS (implementované) | statický `prompt_cache_key`, stabilný prefix (prompt + schéma, text používateľa až na konci); OpenAI prompt caching, žiadny nový cache provider; hit rate meria `cached_input_tokens` |
+| duplicate-call guard | PASS | `lib/intents/ai-fallback-dedupe.ts`: SHA-256(firma, používateľ, veta) v pamäti, 10 s, in-flight zdieľanie; chyba sa necacheuje; text sa neukladá |
+| telemetry | PASS (repo + staging) | `ai_usage_monthly` flow `intent_command` (deterministic / ai-fallback / unsupported / ambiguous × success/failure, firma × mesiac); RPC `esblu_record_intent_command` service-only; žiadny text, prompt, odpoveď, prepis, entita, ŠPZ ani user_id; migrácia `20261027100000` + rollback |
+| heavy economics | PASS (model) | 20-členná HEAVY firma pri 15,90 €: −2,86 € → **+7,83 €** (oprava parsera) → +8,13 € (prompt) → **+9,49 €** (caching); intent náklad 13,54 → 1,19 €/mes.; baseline mix @100: 65,1 % → 79,3 % |
+| security regression | PASS | žiadna zmena rolí/oprávnení/RLS; zamestnanec bez asistenta; AI výstup ďalej cez `sanitizeAiIntent`, invarianty, bránu oprávnení a potvrdenie; žiadne AI SQL; multi-company izolácia (dedupe aj telemetria podľa firmy) |
+| testy | PASS | `test:intent-corpus` 14/14, `test:intent-fallback` 24/24, `test:cost-control-db` 16/16 (+3 J8), `test:grants-replay-db` 43/43, `test:grants-guard` 10/10, `test:prelaunch-blockers` 21/21; celá sada **108/108** skriptov; `tsc` 0; lint = baseline (33 errors / 31 warnings, žiadna nová) |
+| mobile / web regression | PASS | web `next build` (Turbopack) a mobile `npm run build -w mobile` (Turbopack) + `verify:mobile-bundle` PASS lokálne (Google Fonts mock + placeholder verejné env v sandboxe); mobile webpack build PASS; Vercel Preview pre RC SHA |
+| staging (`cjbdijbbcujvmrzezusd`) | PASS | `20261027100000` aplikovaná, md5 funkcie == repo (`54fb3ab4…`), matica `scripts/sql/intent-command-telemetry-staging-matrix.sql` (rolled back); bez OpenAI kľúča; Preview AI sentinel ostáva vypnutý (žiadna zmena env); `allow_mock_plans` false; advisors iba očakávané |
+| **production rollout** | ⛔ NOT YET RUN / PENDING APPROVAL | migrácia #43 v runbooku (sekcia L); prepnutie modelu iba po benchmarku a súhlase |
+
 ## K. FINAL FULL SMOKE — spustiť IBA keď finálny RC obsahuje multi-company + eInvoice + voice + billing + finálnu legal/store konfiguráciu
 
 Status: **NOT YET RUN** (`FINAL QA`) — zámerne sa nespúšťa teraz. Predpoklady: CLIA/legal texty, finálna billing/store
@@ -366,6 +393,7 @@ Autoritatívny postup: `docs/production-migration-runbook-2026-10-22.md` (42 mig
    → potom `20261023100000_team_granular_permissions` (J4; po aplikovaní md5 funkcií/politík/ACL == replay)
    → potom `20261025100000_ai_usage_metering` a `20261025110000_notification_deliveries_chat_retention` (J6; md5 4 funkcií == replay/staging)
    → potom `20261026100000_pricing_entitlements` a `20261026110000_pricing_entitlement_corrections` (J7; `allow_mock_plans` musí ostať false)
+   → potom `20261027100000_intent_command_telemetry` (J8; iba technické počítadlá, md5 funkcie == staging)
 7. merge / deploy
 8. ECB import (fx-rates)
 9. crony

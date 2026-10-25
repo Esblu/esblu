@@ -322,5 +322,38 @@
         "eur": 4.9
       }
     }
+  },
+  "intent_fallback_j8": {
+    "_source": "MEASURED 2026-10-25 (J8): fallback share from tests/fixtures/intent-command-corpus.json via scripts/intent-corpus-tests.ts (orchestrator with counting AI mock); token counts = o200k tokenizer over the real prompt + JSON schema; OFFICIAL OpenAI prices developers.openai.com (terra pricing page / luna model page) 2026-10-25. cache_hit_rate and luna cache-write price = ESTIMATE.",
+    "fallback_share": {
+      "A_model_assumption_2026_10_25": 0.3,
+      "A_measured_corpus": 0.213,
+      "A_measured_holdout": 0.253,
+      "B_measured_corpus": 0.011,
+      "B_measured_holdout": 0.053
+    },
+    "tokens_per_call": {
+      "input_prompt_v1": 4750,
+      "input_prompt_v2": 4160,
+      "cacheable_prefix_v2": 4130,
+      "output": 170,
+      "_note": "v1 = prompt 3880 + schema 833 + text/overhead; v2 = prompt 3291 + schema 833 + text/overhead; output JSON 28 fields ≈ 140–220"
+    },
+    "cache_hit_rate_estimate": 0.8,
+    "prices_usd_per_1m": {
+      "gpt-5.6-terra": {
+        "input": 2.0,
+        "cached_input": 0.2,
+        "cache_write_30m": 2.5,
+        "output": 12.0
+      },
+      "gpt-5.6-luna": {
+        "input": 0.2,
+        "cached_input": 0.02,
+        "cache_write_30m": 0.25,
+        "output": 1.2,
+        "_cache_write_note": "ESTIMATE (1.25 × input, same ratio as terra) — not listed on the luna page"
+      }
+    }
   }
 }

@@ -359,6 +359,45 @@ def main():
             out.append(f"| {scans} | {mode} | {packs} | {rev:.2f} | {ct:.2f} | {rev - ct - fee:.2f} | {rev - ch - fee:.2f} |")
     out.append("\nComplete 15,90 € / secondary 12,90 € allowances are unchanged by the J7 corrections (Komplet 40 AI, 60 min); the launch tables above still apply. Modular plans carry no voice cost (voice only via paid add-on). Expired-trial companies without a plan generate no new storage (0 new uploads).\n")
 
+    # ------------------------------------------------------------------ J8 intent fallback optimization (2026-10-25)
+    J = A["intent_fallback_j8"]
+    tk = J["tokens_per_call"]; hit = J["cache_hit_rate_estimate"]
+    def call_usd(model, inp, cached_hit_rate=0.0, prefix=0):
+        pr = J["prices_usd_per_1m"][model]
+        out_c = tk["output"] * pr["output"]
+        miss = (prefix * pr["cache_write_30m"] + (inp - prefix) * pr["input"]) if cached_hit_rate > 0 else inp * pr["input"]
+        hitc = prefix * pr["cached_input"] + (inp - prefix) * pr["input"]
+        return (cached_hit_rate * (hitc + out_c) + (1 - cached_hit_rate) * (miss + out_c)) / 1e6
+    fs = J["fallback_share"]
+    scen = [
+        ("A  baseline (model assumption 2026-10-25)", fs["A_model_assumption_2026_10_25"], OA["intent_fallback_call"]["typical"]),
+        ("A* baseline re-measured (holdout share, v1 tokens)", fs["A_measured_holdout"], call_usd("gpt-5.6-terra", tk["input_prompt_v1"])),
+        ("B  parser fix (holdout share)", fs["B_measured_holdout"], call_usd("gpt-5.6-terra", tk["input_prompt_v1"])),
+        ("C  + prompt v2 / output cap", fs["B_measured_holdout"], call_usd("gpt-5.6-terra", tk["input_prompt_v2"])),
+        ("D  + prompt caching (80 % hit, write premium on miss)", fs["B_measured_holdout"], call_usd("gpt-5.6-terra", tk["input_prompt_v2"], hit, tk["cacheable_prefix_v2"])),
+        ("E  option: gpt-5.6-luna + caching (NOT adopted, benchmark pending)", fs["B_measured_holdout"], call_usd("gpt-5.6-luna", tk["input_prompt_v2"], hit, tk["cacheable_prefix_v2"])),
+    ]
+    out.append("\n### J8 intent fallback optimization — scenarios (Komplet 15,90 €, web, typical, hard stop)\n")
+    out.append("Fallback share applies to written commands AND voice commands (same parser). Heavy = 20 users HEAVY (4 400 written commands, voice capped at 60 min × 12 commands).\n")
+    out.append("| scenario | fallback share | USD / call | fallback calls / mo (heavy) | intent cost € / mo (heavy) | heavy total cost € | heavy margin € | C_HEAVY margin € | baseline mix margin @100 |\n|---|---|---|---|---|---|---|---|---|")
+    saved_call = dict(OA["intent_fallback_call"]); saved_t = dict(OA["text_command_fallback_share"]); saved_v = dict(OA["voice_fallback_share"])
+    heavy = dict(variants["20 users HEAVY"], einvoice_tx=0)
+    price = lp["complete_eur"]
+    for name, share, call in scen:
+        OA["intent_fallback_call"]["typical"] = call
+        OA["text_command_fallback_share"]["typical"] = share
+        OA["voice_fallback_share"]["typical"] = share
+        q = apply_caps(heavy, launch_caps)
+        calls = q["text_commands"] * share + q["voice_min"] * OA["voice_commands_per_audio_min"]["typical"] * share
+        cost = profile_cost(q)["total"]
+        m = price - cost - fees(price, "web")
+        ch = profile_cost(apply_caps(dict(A["profiles"]["C_HEAVY"], einvoice_tx=0), launch_caps))["total"]
+        fm = fleet(100, price, "baseline", einv_mult=0.0, caps=launch_caps)["margin"] * 100
+        out.append(f"| {name} | {share*100:.1f} % | {call:.5f} | {calls:.0f} | {eur(calls*call):.2f} | {cost:.2f} | {m:.2f} | {price - ch - fees(price, 'web'):.2f} | {fm:.1f} % |")
+        OA["intent_fallback_call"].update(saved_call); OA["text_command_fallback_share"].update(saved_t); OA["voice_fallback_share"].update(saved_v)
+    rest = profile_cost(dict(apply_caps(heavy, launch_caps), text_commands=0, voice_min=0))["total"]
+    out.append(f"\nHeavy 20-user cost without written commands and voice: {rest:.2f} € (AI scans 40, chat, storage, egress, Vercel) — the floor no intent optimization can remove.\n")
+
     out.append("\n### Add-on economics (EUR, typical / high cost)\n")
     out.append("| add-on | unit | cost typical | cost high | proposed price | margin typical | margin high |\n|---|---|---|---|---|---|---|")
     addons = [("+100 AI scans", eur(100*scan_blend('typical')), eur(100*scan_blend('high')), 6.90),

@@ -253,5 +253,5 @@ check("istota: HIGH/MEDIUM iba pri deterministickom intente, LOW iba bez neho", 
   for (const o of outcomes) assert.equal(o.confidence === "LOW", o.det === null, o.row.id);
 });
 
-console.log(`\nintent-corpus: ${passed} passed, ${failed} failed`);
+(args.has("--json") ? console.error : console.log)(`\nintent-corpus: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

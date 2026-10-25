@@ -708,9 +708,76 @@ Complete 15,90 € / secondary 12,90 € allowances are unchanged by the J7 corr
 - eFaktúra: prijaté doklady sa účtujú 0,5 tx (zhodne s cenníkom providera) — pri 20 tx v Komplete = napr. 10 odoslaných
   + 20 prijatých; náklad providera ostáva v §8 (nie je live).
 
+## 23. INTENT FALLBACK OPTIMIZATION (J8, 2026-10-25)
+
+Cieľ: znížiť počet platených OpenAI volaní intent fallbacku (`lib/intents/ai-fallback.ts`, `gpt-5.6-terra`) bez straty
+funkcií. Iba repo + staging; produkcia **NOT YET RUN / PENDING APPROVAL**. Žiadny nový provider, žiadna zmena cien,
+allowances, trialu ani oprávnení.
+
+**Meranie (MEASURED, bez živého OpenAI):** syntetický korpus `tests/fixtures/intent-command-corpus.json` — 367 viet
+(184 SK, 3 CS, 89 EN, 91 DE; exact / natural / negative / unsupported / write) + **75 holdout viet** napísaných až po
+ladení a na ladenie nepoužitých. Každá veta prejde parserom aj celým orchestrátorom (`scripts/intent-corpus-tests.ts`,
+AI náhrada iba počíta volania). Výsledky: `docs/intent-fallback/baseline-2026-10-25.json` → `after-2026-10-25.json`.
+
+| metrika | baseline (dab5e85) | po J8 | holdout baseline | holdout po J8 |
+|---|---|---|---|---|
+| deterministické pokrytie podporovaných príkazov | 71,4 % (227/318) | **98,4 %** (313/318) | 78,0 % | **94,9 %** |
+| AI fallback volania / všetky vety | 21,3 % (78/367) | **1,1 %** (4/367) | 25,3 % | **5,3 %** |
+| falošne pozitívny intent | 60 | **0** | 10 | **1** („Geh zum Lager" → zoznam skladu namiesto modulu Sklad) |
+| read intent na zápis / zápor / nepodporovaný príkaz | 15 | **0** | 2 | **0** |
+| nepodporovaný zápis odmietnutý bez AI | 1 / 20 | **20 / 20** | — | 6 / 6 |
+| SK / EN / DE pokrytie | 74,8 / 75,3 / 62,0 % | 98,7 / 98,7 / 97,5 % | | |
+
+Zostávajúce AI volania v korpuse: 4 zápisy bez deterministického pravidla („Zaeviduj bager CAT 320", „Odober 5 cementu",
+EN/DE registrácia stroja) — zámerne nerozšírené (žiadna aktivácia nových zápisových ciest).
+
+**Čo sa zmenilo (iba existujúce intenty):** bezpečná normalizácia (diakritika, interpunkcia, zdvorilosť, ŠPZ, celé slová
+namiesto podreťazcov — napr. „ek" už nechytá „gekostet"), slovníkové synonymá SK/CS/EN/DE (auto/fáry/vozový park/fleet/
+Fuhrpark, technická/MOT/TÜV, emisná, mechanizmy/technika/Geräte, zásoby/stock, dochádza/vypredané/nachbestellen, kto dlží,
+termíny/expiring/läuft ab, Ausgangs-/Eingangsrechnungen, Quittung …), entita ŠPZ s prioritou, úrovne istoty
+HIGH/MEDIUM/LOW (`lib/intents/confidence.ts`), poistky proti záporu / nepodporovanému zápisu / slovesu zápisu a brána
+pred AI (`lib/intents/command-guards.ts`): zápor, pozdrav, veta mimo domény a nepodporovaný zápis už model nevolajú —
+odpoveď je rovnaká ako pri `null` z AI. Žiadne fuzzy porovnávanie, žiadne embeddingy.
+
+**Prompt a volanie:** prompt v2 — zoznamy enumov sa neopakujú v texte (sú v strict JSON schéme): **3 880 → 3 291 tokenov
+(−15 %)**, celý vstup ~4 750 → ~4 160 tokenov; `max_output_tokens: 400` (výstup ~140–220); statický `prompt_cache_key`
+(žiadne dáta firmy, stabilný prefix pre prompt caching); `store: false`, 0 retry, 12 s timeout ostávajú.
+**Model:** produkcia ostáva `gpt-5.6-terra` (2,00 / 0,20 cached / 12,00 USD za 1M). `gpt-5.6-luna` (0,20 / 0,02 / 1,20 USD,
+nano tier, structured outputs + `reasoning: none`) je ~10× lacnejšia, ale **neprepnutá** — živý benchmark presnosti
+`scripts/intent-model-benchmark.ts` (vyžaduje kľúč + súhlas) je PENDING, rollout PENDING APPROVAL.
+**Duplicitné volanie:** rovnaká veta tej istej firmy a používateľa sa do 10 s neklasifikuje dvakrát (iba SHA-256 kľúč
+v pamäti). **Telemetria:** `ai_usage_monthly` flow `intent_command` (deterministic / ai-fallback / unsupported / ambiguous,
+firma × mesiac, bez obsahu) — migrácia `20261027100000` (staging aplikovaná).
+
+#### J8 intent fallback optimization — scenarios (Komplet 15,90 €, web, typical, hard stop)
+
+Fallback share applies to written commands AND voice commands (same parser). Heavy = 20 users HEAVY (4 400 written commands, voice capped at 60 min × 12 commands).
+
+| scenario | fallback share | USD / call | fallback calls / mo (heavy) | intent cost € / mo (heavy) | heavy total cost € | heavy margin € | C_HEAVY margin € | baseline mix margin @100 |
+|---|---|---|---|---|---|---|---|---|
+| A  baseline (model assumption 2026-10-25) | 30.0 % | 0.00970 | 1536 | 13.54 | 17.96 | -2.86 | 3.49 | 65.1 % |
+| A* baseline re-measured (holdout share, v1 tokens) | 25.3 % | 0.01154 | 1295 | 13.59 | 18.00 | -2.91 | 3.46 | 65.0 % |
+| B  parser fix (holdout share) | 5.3 % | 0.01154 | 271 | 2.85 | 7.26 | 7.83 | 9.17 | 77.4 % |
+| C  + prompt v2 / output cap | 5.3 % | 0.01036 | 271 | 2.56 | 6.97 | 8.13 | 9.32 | 77.7 % |
+| D  + prompt caching (80 % hit, write premium on miss) | 5.3 % | 0.00483 | 271 | 1.19 | 5.60 | 9.49 | 10.05 | 79.3 % |
+| E  option: gpt-5.6-luna + caching (NOT adopted, benchmark pending) | 5.3 % | 0.00048 | 271 | 0.12 | 4.53 | 10.56 | 10.62 | 80.5 % |
+
+Heavy 20-user cost without written commands and voice: 4.08 € (AI scans 40, chat, storage, egress, Vercel) — the floor no intent optimization can remove.
+
+Závery (Komplet 15,90 €, hard stop, typicky):
+- **Strata HEAVY 20-člennej firmy −2,86 € je odstránená** už samotnou opravou parsera (B: **+7,83 €**, konzervatívne
+  s holdout podielom 5,3 %; s korpusovým 1,1 % by bol výsledok ešte lepší). Prompt v2 pridá +0,30 €, prompt caching
+  (odhad 80 % zásahov vrátane prirážky za zápis cache) ďalších +1,36 € → **D: +9,49 €** (C_HEAVY +10,05 €).
+- Intent náklad HEAVY firmy: **13,54 € → 1,19 €/mes.** (1 536 → 271 AI volaní); baseline mix @100 firiem: 65,1 % → **79,3 %**.
+- Pôvodný odhad ceny volania (0,0097 USD) bol podhodnotený — re-meranie tokenov dáva 0,0115 USD (A*); záver sa nemení.
+- Podlaha 4,08 € (AI skeny, chat, úložisko, Vercel) ostáva — HEAVY firma je pri 15,90 € **zisková vo všetkých scenároch B–E**.
+- Čo ostáva odhadom: podiel fallbacku v reálnej prevádzke (meria nová telemetria `intent_command`), cache hit rate (meria
+  `cached_input_tokens`), presnosť luna (benchmark). Produkčné čísla potvrdí až telemetria po schválenom rollout-e.
+
 ---
 
 COST / UNIT ECONOMICS AUDIT: **PARTIAL** (model hotový; AI tokeny, eFaktúra cenník a development overhead čakajú na manuálne potvrdenie)
 Pricing: **CANONICAL LAUNCH PRICING 15,90 € (OWNER DECISION 2026-10-25) — billing / eFaktúra NOT LIVE**
 INTERNAL COMPANY CHAT INCLUDED IN MODEL: **YES** (5 / 10 / 20 ľudí: §6)
 COST CONTROL HARDENING: repo + staging **PASS**, production rollout **NOT YET RUN / PENDING APPROVAL**
+INTENT FALLBACK OPTIMIZATION (J8): repo + staging **PASS**, model switch / production rollout **NOT YET RUN / PENDING APPROVAL**

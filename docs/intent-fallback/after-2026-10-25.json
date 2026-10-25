@@ -1,0 +1,127 @@
+{
+ "corpusVersion": 2,
+ "total": 367,
+ "supportedCommands": 318,
+ "deterministicHits": 313,
+ "deterministicCoverage": 0.9842767295597484,
+ "aiFallbackCalls": 4,
+ "aiFallbackRate": 0.010899182561307902,
+ "falsePositives": 0,
+ "falseNegatives": 5,
+ "readIntentOnWriteOrNegative": 0,
+ "clarifications": 21,
+ "unsupportedRefusedBeforeAi": 20,
+ "orchestratorErrors": 0,
+ "confidence": {
+  "HIGH": 214,
+  "MEDIUM": 99,
+  "LOW": 54
+ },
+ "holdout": {
+  "total": 75,
+  "supported": 59,
+  "detHit": 56,
+  "fallback": 4,
+  "fp": 1,
+  "fn": 2,
+  "readOnWrite": 0,
+  "clar": 3,
+  "falsePositiveIds": [
+   "ho-de-012 → SEARCH_INVENTORY_ITEM"
+  ]
+ },
+ "byLanguage": {
+  "sk": {
+   "total": 184,
+   "supported": 159,
+   "detHit": 157,
+   "fallback": 2,
+   "fp": 0,
+   "fn": 2,
+   "readOnWrite": 0,
+   "clar": 13
+  },
+  "cs": {
+   "total": 3,
+   "supported": 3,
+   "detHit": 3,
+   "fallback": 0,
+   "fp": 0,
+   "fn": 0,
+   "readOnWrite": 0,
+   "clar": 0
+  },
+  "en": {
+   "total": 89,
+   "supported": 77,
+   "detHit": 76,
+   "fallback": 1,
+   "fp": 0,
+   "fn": 1,
+   "readOnWrite": 0,
+   "clar": 4
+  },
+  "de": {
+   "total": 91,
+   "supported": 79,
+   "detHit": 77,
+   "fallback": 1,
+   "fp": 0,
+   "fn": 2,
+   "readOnWrite": 0,
+   "clar": 4
+  }
+ },
+ "byKind": {
+  "exact": {
+   "total": 102,
+   "supported": 102,
+   "detHit": 102,
+   "fallback": 0,
+   "fp": 0,
+   "fn": 0,
+   "readOnWrite": 0,
+   "clar": 4
+  },
+  "natural": {
+   "total": 173,
+   "supported": 173,
+   "detHit": 173,
+   "fallback": 0,
+   "fp": 0,
+   "fn": 0,
+   "readOnWrite": 0,
+   "clar": 0
+  },
+  "negative": {
+   "total": 29,
+   "supported": 0,
+   "detHit": 0,
+   "fallback": 0,
+   "fp": 0,
+   "fn": 0,
+   "readOnWrite": 0,
+   "clar": 0
+  },
+  "unsupported": {
+   "total": 20,
+   "supported": 0,
+   "detHit": 0,
+   "fallback": 0,
+   "fp": 0,
+   "fn": 0,
+   "readOnWrite": 0,
+   "clar": 0
+  },
+  "write": {
+   "total": 43,
+   "supported": 43,
+   "detHit": 38,
+   "fallback": 4,
+   "fp": 0,
+   "fn": 5,
+   "readOnWrite": 0,
+   "clar": 17
+  }
+ }
+}
