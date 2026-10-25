@@ -26,7 +26,7 @@ import {
 //   („Platby pripravujeme“). Aktivácia = iba potvrdený billing event.
 // =============================================================================
 
-type UsageItem = { active?: boolean; used?: number; limit?: number | null };
+type UsageItem = { active?: boolean; used?: number; reserved?: number; limit?: number | null };
 type Overview = {
   role: string;
   trial: { active: boolean; ends_at: string | null };
@@ -115,7 +115,7 @@ export default function PlanOverviewPanel() {
           limit={u.voice.active ? u.voice.limit_minutes ?? null : 0}
           unit="min"
         />
-        <Meter label={t("subscription.planPanel.users")} used={u.users.used ?? 0} limit={u.users.active ? u.users.limit ?? null : null} unit="" />
+        <Meter label={t("subscription.planPanel.users")} used={u.users.reserved ?? u.users.used ?? 0} limit={u.users.active ? u.users.limit ?? null : null} unit="" />
         <Meter
           label={t("subscription.planPanel.storage")}
           used={Math.round((u.storage.used_bytes ?? 0) / 1048576)}

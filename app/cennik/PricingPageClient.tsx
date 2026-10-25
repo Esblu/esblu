@@ -9,6 +9,7 @@ import {
   ADDON_IDS,
   ADDONS,
   COMPLETE_ALLOWANCES,
+  MODULAR_ALLOWANCES,
   COMPLETE_PRICE_CENTS,
   MODULE_PRICE_CENTS,
   SECONDARY_COMPLETE_PRICE_CENTS,
@@ -163,6 +164,12 @@ export function PricingPageClient() {
               <p className="mt-2 text-[0.95rem] leading-6 text-secondary sm:mt-4 sm:text-base sm:leading-7">
                 {t("pricing.modules.intro", { price: formatEurCents(MODULE_PRICE_CENTS, locale) })}
               </p>
+              <p className="mt-2 text-sm text-secondary">
+                {t("pricing.modules.paidBase", { users: MODULAR_ALLOWANCES.users, gb: MODULAR_ALLOWANCES.storageMb / 1024 })}
+              </p>
+              <p className="mt-1 text-sm text-muted-esblu">
+                {t("pricing.modules.voiceNote", { units: ADDONS.voice_60.units, price: formatEurCents(ADDONS.voice_60.priceCents, locale) })}
+              </p>
             </div>
 
             <div className="mt-6 grid gap-3 sm:mt-10 sm:grid-cols-2 sm:gap-4 lg:grid-cols-3">
@@ -179,7 +186,7 @@ export function PricingPageClient() {
                     </div>
                     <p className="mt-1 flex-1 text-sm leading-[1.35rem] text-secondary sm:mt-2 sm:leading-6">{t(`pricing.modules.items.${module}.description`)}</p>
                     {module === "documents" && (
-                      <p className="mt-2 text-sm font-semibold text-accent-teal sm:mt-3">{t("pricing.modules.includedAi", { count: COMPLETE_ALLOWANCES.aiProcessingsPerMonth })}</p>
+                      <p className="mt-2 text-sm font-semibold text-accent-teal sm:mt-3">{t("pricing.modules.includedAi", { count: MODULAR_ALLOWANCES.aiProcessingsPerMonthWithDocuments })}</p>
                     )}
                     <div className="mt-3 flex items-center justify-between gap-3 sm:mt-4 sm:block">
                       <p className="min-w-0">
@@ -233,7 +240,10 @@ export function PricingPageClient() {
             <ul className="mt-5 divide-y divide-white/10 surface-card">
               {ADDON_IDS.map((id) => (
                 <li key={id} className="flex items-center justify-between gap-3 p-4">
-                  <span className="text-primary">{t(`pricing.addons.${id}`, { units: ADDONS[id].units })}</span>
+                  <span className="text-primary">
+                    {t(`pricing.addons.${id}`, { units: ADDONS[id].units })}
+                    {ADDONS[id].requiresModule === "einvoice" && <span className="ml-2 text-xs text-accent-orange">{t("pricing.modules.comingSoon")}</span>}
+                  </span>
                   <span className="whitespace-nowrap font-bold text-primary">{t("pricing.addons.perMonth", { price: formatEurCents(ADDONS[id].priceCents, locale) })}</span>
                 </li>
               ))}

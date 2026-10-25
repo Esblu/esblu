@@ -55,6 +55,7 @@ export function TrialOfferList({ showExcluded = true }: { showExcluded?: boolean
           </li>
         </ul>
       )}
+      <p className="mt-3 text-xs text-muted-esblu">{t("pricing.trial.afterStorage")}</p>
     </div>
   );
 }
