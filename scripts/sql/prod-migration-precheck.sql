@@ -37,7 +37,7 @@ rc_versions(v) as (values
   ('20261008100008'), ('20261008100009'), ('20261008100010'), ('20261008100011'), ('20261008120000'),
   ('20261008130000'), ('20261011120000'), ('20261012090000'), ('20261012091000'), ('20261012120000'),
   ('20261012130000'), ('20261012140000'), ('20261012150000'), ('20261012160000'), ('20261013100000'),
-  ('20261021100000'), ('20261022100000'), ('20261023100000'), ('20261025100000'), ('20261025110000')
+  ('20261021100000'), ('20261022100000'), ('20261023100000'), ('20261025100000'), ('20261025110000'), ('20261026100000')
 ),
 legacy(t) as (values
   ('settings'), ('vehicles'), ('vehicle_services'), ('machines'), ('machine_services'),
@@ -57,11 +57,11 @@ pre_rc(t) as (select unnest(string_to_array(
   'machine_photos,machine_services,machines,media_deletion_queue,notification_deliveries,'
   'notification_preferences,plan_limits,push_devices,push_subscriptions,settings,user_legal_acceptances,'
   'vehicle_photos,vehicle_services,vehicle_vignettes,vehicles', ','))),
--- 34 tabuliek, ktoré vytvárajú RC migrácie — PRED oknom NESMÚ existovať
+-- 36 tabuliek, ktoré vytvárajú RC migrácie — PRED oknom NESMÚ existovať
 rc_tables(t) as (select unnest(string_to_array(
   'account_deletion_cleanup_jobs,ai_usage_monthly,billing_channel_rules,billing_checkout_sessions,billing_events,'
   'billing_provider_links,billing_provider_prices,billing_reconciliation,billing_region_groups,'
-  'billing_runtime_config,billing_store_reports,company_legal_identities,company_member_permission_events,'
+  'billing_runtime_config,billing_store_reports,company_legal_identities,company_plan_selection,company_usage_counters,company_member_permission_events,'
   'company_member_permissions,einvoice_enroll_attempts,einvoice_event_cursors,einvoice_events,einvoice_inbound,'
   'einvoice_ops_audit,einvoice_organizations,einvoice_outbound,einvoice_rollout,einvoice_webhook_events,'
   'einvoice_webhook_rejections,fx_rate_import_batches,fx_reference_rates,invoice_advance_deductions,'
