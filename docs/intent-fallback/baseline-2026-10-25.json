@@ -1,0 +1,111 @@
+{
+ "corpusVersion": 1,
+ "total": 367,
+ "supportedCommands": 318,
+ "deterministicHits": 227,
+ "deterministicCoverage": 0.7138364779874213,
+ "aiFallbackCalls": 78,
+ "aiFallbackRate": 0.2125340599455041,
+ "falsePositives": 60,
+ "falseNegatives": 45,
+ "readIntentOnWriteOrNegative": 15,
+ "clarifications": 22,
+ "unsupportedRefusedBeforeAi": 1,
+ "orchestratorErrors": 0,
+ "byLanguage": {
+  "sk": {
+   "total": 184,
+   "supported": 159,
+   "detHit": 119,
+   "fallback": 36,
+   "fp": 28,
+   "fn": 19,
+   "readOnWrite": 7,
+   "clar": 14
+  },
+  "cs": {
+   "total": 3,
+   "supported": 3,
+   "detHit": 1,
+   "fallback": 0,
+   "fp": 2,
+   "fn": 0,
+   "readOnWrite": 0,
+   "clar": 0
+  },
+  "en": {
+   "total": 89,
+   "supported": 77,
+   "detHit": 58,
+   "fallback": 20,
+   "fp": 11,
+   "fn": 11,
+   "readOnWrite": 3,
+   "clar": 4
+  },
+  "de": {
+   "total": 91,
+   "supported": 79,
+   "detHit": 49,
+   "fallback": 22,
+   "fp": 19,
+   "fn": 15,
+   "readOnWrite": 5,
+   "clar": 4
+  }
+ },
+ "byKind": {
+  "exact": {
+   "total": 102,
+   "supported": 102,
+   "detHit": 86,
+   "fallback": 5,
+   "fp": 11,
+   "fn": 5,
+   "readOnWrite": 0,
+   "clar": 4
+  },
+  "natural": {
+   "total": 173,
+   "supported": 173,
+   "detHit": 103,
+   "fallback": 37,
+   "fp": 33,
+   "fn": 37,
+   "readOnWrite": 0,
+   "clar": 0
+  },
+  "negative": {
+   "total": 29,
+   "supported": 0,
+   "detHit": 0,
+   "fallback": 23,
+   "fp": 6,
+   "fn": 0,
+   "readOnWrite": 6,
+   "clar": 0
+  },
+  "unsupported": {
+   "total": 20,
+   "supported": 0,
+   "detHit": 0,
+   "fallback": 11,
+   "fp": 8,
+   "fn": 0,
+   "readOnWrite": 7,
+   "clar": 1
+  },
+  "write": {
+   "total": 43,
+   "supported": 43,
+   "detHit": 38,
+   "fallback": 2,
+   "fp": 2,
+   "fn": 3,
+   "readOnWrite": 2,
+   "clar": 17
+  }
+ }
+}
+
+intent-corpus: 4 passed, 0 failed

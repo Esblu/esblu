@@ -1,0 +1,204 @@
+SPOLU                      n=367  det.pokrytie  71.4 %  fallback  21.3 % (78)  FP 60  FN 45  read-na-zápis 15  otázka 22
+  jazyk sk                 n=184  det.pokrytie  74.8 %  fallback  19.6 % (36)  FP 28  FN 19  read-na-zápis 7  otázka 14
+  jazyk cs                 n=  3  det.pokrytie  33.3 %  fallback   0.0 % (0)  FP 2  FN 0  read-na-zápis 0  otázka 0
+  jazyk en                 n= 89  det.pokrytie  75.3 %  fallback  22.5 % (20)  FP 11  FN 11  read-na-zápis 3  otázka 4
+  jazyk de                 n= 91  det.pokrytie  62.0 %  fallback  24.2 % (22)  FP 19  FN 15  read-na-zápis 5  otázka 4
+  druh exact               n=102  det.pokrytie  84.3 %  fallback   4.9 % (5)  FP 11  FN 5  read-na-zápis 0  otázka 4
+  druh natural             n=173  det.pokrytie  59.5 %  fallback  21.4 % (37)  FP 33  FN 37  read-na-zápis 0  otázka 0
+  druh negative            n= 29  det.pokrytie       —  fallback  79.3 % (23)  FP 6  FN 0  read-na-zápis 6  otázka 0
+  druh unsupported         n= 20  det.pokrytie       —  fallback  55.0 % (11)  FP 8  FN 0  read-na-zápis 7  otázka 1
+  druh write               n= 43  det.pokrytie  88.4 %  fallback   4.7 % (2)  FP 2  FN 3  read-na-zápis 2  otázka 17
+  CREATE_DOCUMENT_CATEGORY n=  3  det.pokrytie  66.7 %  fallback   0.0 % (0)  FP 0  FN 1  read-na-zápis 0  otázka 1
+  CREATE_INVOICE_DRAFT     n=  3  det.pokrytie 100.0 %  fallback   0.0 % (0)  FP 0  FN 0  read-na-zápis 0  otázka 0
+  DOCUMENTS_DOWNLOAD_STATUS n=  1  det.pokrytie 100.0 %  fallback   0.0 % (0)  FP 0  FN 0  read-na-zápis 0  otázka 0
+  DOCUMENTS_EXPORT         n=  1  det.pokrytie 100.0 %  fallback   0.0 % (0)  FP 0  FN 0  read-na-zápis 0  otázka 0
+  DOCUMENTS_LIST_UNDOWNLOADED n=  1  det.pokrytie 100.0 %  fallback   0.0 % (0)  FP 0  FN 0  read-na-zápis 0  otázka 0
+  DOCUMENT_INTAKE          n=  7  det.pokrytie  85.7 %  fallback   0.0 % (0)  FP 1  FN 0  read-na-zápis 0  otázka 0
+  EXPORT_DOCUMENTS         n=  1  det.pokrytie 100.0 %  fallback   0.0 % (0)  FP 0  FN 0  read-na-zápis 0  otázka 0
+  FOLDER_CREATE            n=  3  det.pokrytie 100.0 %  fallback   0.0 % (0)  FP 0  FN 0  read-na-zápis 0  otázka 0
+  FOLDER_DELETE            n=  1  det.pokrytie 100.0 %  fallback   0.0 % (0)  FP 0  FN 0  read-na-zápis 0  otázka 1
+  FOLDER_LIST_ITEMS        n=  1  det.pokrytie 100.0 %  fallback   0.0 % (0)  FP 0  FN 0  read-na-zápis 0  otázka 1
+  FOLDER_OPEN              n=  3  det.pokrytie 100.0 %  fallback   0.0 % (0)  FP 0  FN 0  read-na-zápis 0  otázka 3
+  FOLDER_RENAME            n=  1  det.pokrytie 100.0 %  fallback   0.0 % (0)  FP 0  FN 0  read-na-zápis 0  otázka 1
+  INBOX_LIST_UNASSIGNED    n=  4  det.pokrytie  75.0 %  fallback  25.0 % (1)  FP 0  FN 1  read-na-zápis 0  otázka 0
+  INVENTORY_ITEM_CREATE    n=  3  det.pokrytie 100.0 %  fallback   0.0 % (0)  FP 0  FN 0  read-na-zápis 0  otázka 0
+  INVENTORY_ITEM_DELETE    n=  1  det.pokrytie 100.0 %  fallback   0.0 % (0)  FP 0  FN 0  read-na-zápis 0  otázka 1
+  INVENTORY_ITEM_RENAME    n=  1  det.pokrytie 100.0 %  fallback   0.0 % (0)  FP 0  FN 0  read-na-zápis 0  otázka 1
+  INVENTORY_ITEM_STATUS    n= 12  det.pokrytie  66.7 %  fallback  25.0 % (3)  FP 1  FN 3  read-na-zápis 0  otázka 0
+  INVENTORY_QUANTITY_ADJUST n=  5  det.pokrytie  80.0 %  fallback  20.0 % (1)  FP 0  FN 1  read-na-zápis 0  otázka 1
+  MACHINE_CREATE           n=  3  det.pokrytie   0.0 %  fallback  33.3 % (1)  FP 2  FN 1  read-na-zápis 2  otázka 0
+  MACHINE_DELETE           n=  3  det.pokrytie 100.0 %  fallback   0.0 % (0)  FP 0  FN 0  read-na-zápis 0  otázka 3
+  MACHINE_REPORT           n=  4  det.pokrytie  75.0 %  fallback   0.0 % (0)  FP 1  FN 0  read-na-zápis 0  otázka 0
+  MACHINE_SERVICE_ADD      n=  3  det.pokrytie 100.0 %  fallback   0.0 % (0)  FP 0  FN 0  read-na-zápis 0  otázka 3
+  OPEN_DOCUMENT_FOLDER     n=  3  det.pokrytie  33.3 %  fallback   0.0 % (0)  FP 2  FN 0  read-na-zápis 0  otázka 0
+  OPEN_INVENTORY_ITEM      n=  1  det.pokrytie 100.0 %  fallback   0.0 % (0)  FP 0  FN 0  read-na-zápis 0  otázka 0
+  OPEN_MACHINE             n=  4  det.pokrytie  75.0 %  fallback   0.0 % (0)  FP 1  FN 0  read-na-zápis 0  otázka 0
+  OPEN_MODULE              n= 11  det.pokrytie 100.0 %  fallback   0.0 % (0)  FP 0  FN 0  read-na-zápis 0  otázka 0
+  OPEN_VEHICLE             n=  9  det.pokrytie 100.0 %  fallback   0.0 % (0)  FP 0  FN 0  read-na-zápis 0  otázka 0
+  PARTNER_CREATE           n=  1  det.pokrytie 100.0 %  fallback   0.0 % (0)  FP 0  FN 0  read-na-zápis 0  otázka 0
+  RENAME_DOCUMENT_CATEGORY n=  1  det.pokrytie 100.0 %  fallback   0.0 % (0)  FP 0  FN 0  read-na-zápis 0  otázka 0
+  SEARCH_DOCUMENTS         n= 16  det.pokrytie  93.8 %  fallback   0.0 % (0)  FP 1  FN 0  read-na-zápis 0  otázka 0
+  SEARCH_INVENTORY_ITEM    n= 12  det.pokrytie  66.7 %  fallback   8.3 % (1)  FP 3  FN 1  read-na-zápis 0  otázka 0
+  SEARCH_INVOICE           n=  4  det.pokrytie 100.0 %  fallback   0.0 % (0)  FP 0  FN 0  read-na-zápis 0  otázka 0
+  SEARCH_MACHINE           n= 17  det.pokrytie  70.6 %  fallback  17.6 % (3)  FP 2  FN 3  read-na-zápis 0  otázka 0
+  SEARCH_PARTNER           n=  4  det.pokrytie 100.0 %  fallback   0.0 % (0)  FP 0  FN 0  read-na-zápis 0  otázka 0
+  SEARCH_VEHICLE           n= 27  det.pokrytie  55.6 %  fallback  25.9 % (7)  FP 5  FN 7  read-na-zápis 0  otázka 0
+  SHOW_INVOICES_BY_STATUS  n= 14  det.pokrytie  71.4 %  fallback   0.0 % (0)  FP 4  FN 0  read-na-zápis 0  otázka 0
+  SHOW_LOW_STOCK           n= 18  det.pokrytie  33.3 %  fallback  55.6 % (10)  FP 2  FN 10  read-na-zápis 0  otázka 0
+  SHOW_MACHINE_DOCUMENTS   n=  4  det.pokrytie  75.0 %  fallback   0.0 % (0)  FP 1  FN 0  read-na-zápis 0  otázka 0
+  SHOW_MACHINE_PHOTOS      n=  4  det.pokrytie  75.0 %  fallback   0.0 % (0)  FP 1  FN 0  read-na-zápis 0  otázka 0
+  SHOW_MACHINE_SERVICE     n=  5  det.pokrytie 100.0 %  fallback   0.0 % (0)  FP 0  FN 0  read-na-zápis 0  otázka 0
+  SHOW_UNPAID_INVOICES     n= 12  det.pokrytie  50.0 %  fallback  33.3 % (4)  FP 2  FN 4  read-na-zápis 0  otázka 0
+  SHOW_VEHICLE_DOCUMENTS   n=  5  det.pokrytie 100.0 %  fallback   0.0 % (0)  FP 0  FN 0  read-na-zápis 0  otázka 0
+  SHOW_VEHICLE_SERVICE     n=  7  det.pokrytie  85.7 %  fallback   0.0 % (0)  FP 1  FN 0  read-na-zápis 0  otázka 0
+  UPCOMING_DEADLINES       n= 22  det.pokrytie  40.9 %  fallback  59.1 % (13)  FP 0  FN 13  read-na-zápis 0  otázka 0
+  VEHICLE_COST_SUMMARY     n=  7  det.pokrytie   0.0 %  fallback   0.0 % (0)  FP 7  FN 0  read-na-zápis 0  otázka 0
+  VEHICLE_CREATE           n=  4  det.pokrytie 100.0 %  fallback   0.0 % (0)  FP 0  FN 0  read-na-zápis 0  otázka 0
+  VEHICLE_DELETE           n=  4  det.pokrytie 100.0 %  fallback   0.0 % (0)  FP 0  FN 0  read-na-zápis 0  otázka 4
+  VEHICLE_EK_STATUS        n=  5  det.pokrytie  60.0 %  fallback   0.0 % (0)  FP 2  FN 0  read-na-zápis 0  otázka 0
+  VEHICLE_REPORT           n=  5  det.pokrytie  60.0 %  fallback   0.0 % (0)  FP 2  FN 0  read-na-zápis 0  otázka 0
+  VEHICLE_SERVICE_ADD      n=  1  det.pokrytie 100.0 %  fallback   0.0 % (0)  FP 0  FN 0  read-na-zápis 0  otázka 1
+  VEHICLE_STK_STATUS       n= 19  det.pokrytie  73.7 %  fallback   0.0 % (0)  FP 5  FN 0  read-na-zápis 0  otázka 0
+  VEHICLE_VIGNETTE_STATUS  n=  7  det.pokrytie 100.0 %  fallback   0.0 % (0)  FP 0  FN 0  read-na-zápis 0  otázka 0
+
+--- chyby (FP / FN / AI fallback) ---
+FP            sk-006  natural     det=SEARCH_VEHICLE             ai=nie  čakal=VEHICLE_STK_STATUS  „Má BA123AB platnú technickú?"
+FP            sk-007  exact       det=SEARCH_VEHICLE             ai=nie  čakal=VEHICLE_EK_STATUS  „Kedy má BA123AB emisnú kontrolu?"
+FP            sk-009  natural     det=SEARCH_VEHICLE             ai=nie  čakal=VEHICLE_EK_STATUS  „Dokedy platí emisná na KE789EF?"
+FN            sk-020  natural     det=null                       ai=áno  čakal=SEARCH_VEHICLE  „Aké autá máme?"
+FN            sk-021  natural     det=null                       ai=áno  čakal=SEARCH_VEHICLE  „zoznam vozidiel"
+FP            sk-029  exact       det=SEARCH_VEHICLE             ai=nie  čakal=VEHICLE_COST_SUMMARY  „Koľko nás stálo BA123AB tento rok?"
+FP            sk-030  natural     det=SEARCH_VEHICLE             ai=nie  čakal=VEHICLE_COST_SUMMARY  „náklady na auto TT456CD"
+FP            sk-031  natural     det=SEARCH_VEHICLE             ai=nie  čakal=VEHICLE_COST_SUMMARY  „Koľko sme minuli na KE789EF v roku 2025?"
+FP            sk-033  natural     det=SEARCH_VEHICLE             ai=nie  čakal=VEHICLE_REPORT  „prehľad auta TT456CD"
+FP            sk-034  natural     det=SEARCH_VEHICLE             ai=nie  čakal=VEHICLE_REPORT|OPEN_VEHICLE  „Ako je na tom BA123AB?"
+FN            sk-035  exact       det=null                       ai=áno  čakal=UPCOMING_DEADLINES  „Čo nám končí tento mesiac?"
+FN            sk-038  natural     det=null                       ai=áno  čakal=UPCOMING_DEADLINES  „Ktoré vozidlá majú STK do 30 dní?"
+FN            sk-040  natural     det=null                       ai=áno  čakal=UPCOMING_DEADLINES  „Čo mi čoskoro vyprší?"
+FN            sk-042  natural     det=null                       ai=áno  čakal=UPCOMING_DEADLINES  „termíny na najbližší týždeň"
+FP            sk-045  natural     det=OPEN_MODULE                ai=nie  čakal=OPEN_MACHINE|SEARCH_MACHINE  „otvor bager JCB"
+FP            sk-055  natural     det=SEARCH_MACHINE             ai=nie  čakal=MACHINE_REPORT  „prehľad stroja JCB 3CX"
+FP            sk-056  exact       det=SEARCH_DOCUMENTS           ai=nie  čakal=SHOW_MACHINE_DOCUMENTS  „Ukáž dokumenty k bagru CAT 302"
+FP            sk-059  natural     det=SEARCH_MACHINE             ai=nie  čakal=SHOW_MACHINE_PHOTOS  „fotky bagra JCB"
+FP            sk-067  natural     det=INVENTORY_ITEM_STATUS      ai=nie  čakal=SEARCH_INVENTORY_ITEM  „Čo máme na sklade?"
+FN            sk-072  natural     det=null                       ai=áno  čakal=SHOW_LOW_STOCK  „Čo je vypredané?"
+FN            sk-073  natural     det=null                       ai=áno  čakal=SHOW_LOW_STOCK  „Čo treba doobjednať?"
+FN            sk-074  natural     det=null                       ai=áno  čakal=SHOW_LOW_STOCK  „čoho máme málo"
+FN            sk-083  natural     det=null                       ai=áno  čakal=SHOW_UNPAID_INVOICES|SHOW_INVOICES_BY_STATUS  „Kto nám ešte nezaplatil?"
+FN            sk-105  natural     det=null                       ai=áno  čakal=INBOX_LIST_UNASSIGNED  „čo je v inboxe"
+FN            sk-113  natural     det=null                       ai=áno  čakal=UPCOMING_DEADLINES  „co nam konci tento mesiac"
+FP            sk-119  natural     det=OPEN_VEHICLE               ai=nie  čakal=SEARCH_VEHICLE  „Ukáž mi, prosím, všetky autá."
+FN            sk-122  natural     det=null                       ai=áno  čakal=SEARCH_VEHICLE  „Aké máme fáry?"
+FP            sk-123  natural     det=OPEN_VEHICLE               ai=nie  čakal=SEARCH_VEHICLE  „Ukáž vozový park"
+FP            sk-124  natural     det=OPEN_VEHICLE               ai=nie  čakal=SEARCH_VEHICLE  „Ukáž flotilu"
+FP            sk-125  natural     det=SEARCH_VEHICLE             ai=nie  čakal=VEHICLE_STK_STATUS  „Kedy ide BA123AB na technickú?"
+FN            sk-127  natural     det=null                       ai=áno  čakal=SEARCH_MACHINE  „Aké mechanizmy máme?"
+FP            sk-128  natural     det=OPEN_VEHICLE               ai=nie  čakal=SEARCH_MACHINE  „Ukáž techniku"
+FP            sk-129  natural     det=SEARCH_INVENTORY_ITEM      ai=nie  čakal=SHOW_LOW_STOCK  „Čo sa míňa na sklade?"
+FN            sk-130  natural     det=null                       ai=áno  čakal=SHOW_LOW_STOCK  „Čo už skoro nemáme?"
+FN            sk-132  natural     det=null                       ai=áno  čakal=SHOW_UNPAID_INVOICES|SHOW_INVOICES_BY_STATUS  „Kto nám dlží?"
+FN            sk-133  natural     det=null                       ai=áno  čakal=UPCOMING_DEADLINES  „Čo nám prepadá?"
+FN            sk-134  natural     det=null                       ai=áno  čakal=UPCOMING_DEADLINES  „čo treba tento mesiac riešiť s autami"
+FP            sk-135  natural     det=OPEN_VEHICLE               ai=nie  čakal=SEARCH_INVENTORY_ITEM  „Ukáž zásoby"
+FP            cs-002  natural     det=OPEN_VEHICLE               ai=nie  čakal=SEARCH_VEHICLE  „Ukaž všechna vozidla"
+FP            cs-003  natural     det=SEARCH_DOCUMENTS           ai=nie  čakal=SHOW_UNPAID_INVOICES|SHOW_INVOICES_BY_STATUS  „Ukaž nezaplacené faktury"
+AI            sk-137  negative    det=null                       ai=áno  čakal=∅  „nemám STK"
+AI            sk-138  negative    det=null                       ai=áno  čakal=∅  „nechcem hľadať auto"
+READ-NA-ZÁPIS sk-139  negative    det=SEARCH_DOCUMENTS           ai=nie  čakal=∅  „Nechcem vidieť faktúry"
+READ-NA-ZÁPIS sk-140  negative    det=SEARCH_VEHICLE             ai=nie  čakal=∅  „neotváraj vozidlo BA123AB"
+AI            sk-141  negative    det=null                       ai=áno  čakal=∅  „Nie, ďakujem"
+AI            sk-142  negative    det=null                       ai=áno  čakal=∅  „To je všetko"
+AI            sk-143  negative    det=null                       ai=áno  čakal=∅  „Ahoj"
+AI            sk-144  negative    det=null                       ai=áno  čakal=∅  „Aké je počasie?"
+AI            sk-145  negative    det=null                       ai=áno  čakal=∅  „Kto vyhral včera zápas?"
+AI            sk-146  negative    det=null                       ai=áno  čakal=∅  „Napíš mi básničku"
+READ-NA-ZÁPIS sk-147  negative    det=SEARCH_MACHINE             ai=nie  čakal=∅  „Nehľadaj stroje"
+READ-NA-ZÁPIS sk-148  negative    det=SEARCH_INVENTORY_ITEM      ai=nie  čakal=∅  „Nepotrebujem sklad"
+AI            sk-149  negative    det=null                       ai=áno  čakal=∅  „Netreba nič"
+AI            sk-150  negative    det=null                       ai=áno  čakal=∅  „blabla"
+AI            sk-151  negative    det=null                       ai=áno  čakal=∅  „?"
+AI            sk-152  unsupported det=null                       ai=áno  čakal=∅  „Vymaž všetky faktúry"
+AI            sk-153  unsupported det=null                       ai=áno  čakal=∅  „Pošli faktúru zákazníkovi"
+FP            sk-154  unsupported det=MACHINE_DELETE             ai=nie  čakal=∅  „Zmaž všetky stroje"
+READ-NA-ZÁPIS sk-155  unsupported det=SHOW_INVOICES_BY_STATUS    ai=nie  čakal=∅  „Označ faktúru ako zaplatenú"
+AI            sk-156  unsupported det=null                       ai=áno  čakal=∅  „Vystav tú faktúru"
+READ-NA-ZÁPIS sk-157  unsupported det=SEARCH_DOCUMENTS           ai=nie  čakal=∅  „Finalizuj faktúru"
+AI            sk-158  unsupported det=null                       ai=áno  čakal=∅  „Zmeň VIN vozidla BA123AB"
+AI            sk-160  unsupported det=null                       ai=áno  čakal=∅  „Pošli bločky účtovníčke emailom"
+AI            sk-161  unsupported det=null                       ai=áno  čakal=∅  „Zmaž všetky doklady"
+READ-NA-ZÁPIS sk-165  write       det=SEARCH_MACHINE             ai=nie  čakal=MACHINE_CREATE  „Zaeviduj bager CAT 320"
+AI            sk-171  write       det=null                       ai=áno  čakal=INVENTORY_QUANTITY_ADJUST  „Odober 5 cementu"
+FP            en-001  exact       det=SEARCH_VEHICLE             ai=nie  čakal=VEHICLE_STK_STATUS  „When is the MOT for BA123AB?"
+FN            en-012  natural     det=null                       ai=áno  čakal=SEARCH_VEHICLE  „list our cars"
+FP            en-013  natural     det=OPEN_VEHICLE               ai=nie  čakal=SEARCH_VEHICLE  „Show me the fleet"
+FP            en-017  exact       det=SEARCH_VEHICLE             ai=nie  čakal=VEHICLE_COST_SUMMARY  „How much did BA123AB cost us this year?"
+FP            en-018  natural     det=SEARCH_VEHICLE             ai=nie  čakal=VEHICLE_COST_SUMMARY  „costs for vehicle TT456CD"
+FN            en-023  natural     det=null                       ai=áno  čakal=UPCOMING_DEADLINES  „Which vehicles have inspection due in 30 days?"
+FN            en-024  natural     det=null                       ai=áno  čakal=UPCOMING_DEADLINES  „anything expiring soon?"
+FP            en-028  natural     det=OPEN_VEHICLE               ai=nie  čakal=SEARCH_MACHINE|OPEN_MACHINE  „find excavator JCB"
+FN            en-029  natural     det=null                       ai=áno  čakal=SEARCH_MACHINE  „list equipment"
+FN            en-034  exact       det=null                       ai=áno  čakal=INVENTORY_ITEM_STATUS  „How much cement do we have?"
+FN            en-036  natural     det=null                       ai=áno  čakal=INVENTORY_ITEM_STATUS  „stock level of screws"
+FN            en-039  natural     det=null                       ai=áno  čakal=SEARCH_INVENTORY_ITEM  „What do we have in stock?"
+FN            en-042  natural     det=null                       ai=áno  čakal=SHOW_LOW_STOCK  „What is out of stock?"
+FN            en-043  natural     det=null                       ai=áno  čakal=SHOW_LOW_STOCK  „what do we need to reorder"
+FN            en-049  natural     det=null                       ai=áno  čakal=SHOW_UNPAID_INVOICES|SHOW_INVOICES_BY_STATUS  „Who hasn't paid us yet?"
+FP            en-059  exact       det=OPEN_MODULE                ai=nie  čakal=OPEN_DOCUMENT_FOLDER  „Open folder Complaints"
+FP            en-062  exact       det=SEARCH_DOCUMENTS           ai=nie  čakal=DOCUMENT_INTAKE  „Add a receipt"
+FP            en-064  natural     det=SEARCH_VEHICLE             ai=nie  čakal=VEHICLE_STK_STATUS  „Please, when is the MOT for BA123AB?"
+AI            en-068  negative    det=null                       ai=áno  čakal=∅  „I don't have an inspection"
+AI            en-069  negative    det=null                       ai=áno  čakal=∅  „don't search for the car"
+AI            en-070  negative    det=null                       ai=áno  čakal=∅  „No, thanks"
+AI            en-071  negative    det=null                       ai=áno  čakal=∅  „Hello"
+AI            en-072  negative    det=null                       ai=áno  čakal=∅  „What's the weather like?"
+AI            en-073  negative    det=null                       ai=áno  čakal=∅  „Tell me a joke"
+READ-NA-ZÁPIS en-074  negative    det=OPEN_VEHICLE               ai=nie  čakal=∅  „do not open the vehicle"
+AI            en-075  unsupported det=null                       ai=áno  čakal=∅  „Delete all invoices"
+AI            en-076  unsupported det=null                       ai=áno  čakal=∅  „Send the invoice to the customer"
+READ-NA-ZÁPIS en-077  unsupported det=SHOW_INVOICES_BY_STATUS    ai=nie  čakal=∅  „Mark the invoice as paid"
+READ-NA-ZÁPIS en-078  unsupported det=SEARCH_DOCUMENTS           ai=nie  čakal=∅  „Finalize the invoice"
+AI            en-079  unsupported det=null                       ai=áno  čakal=∅  „Change the VIN of BA123AB"
+AI            en-082  write       det=null                       ai=áno  čakal=MACHINE_CREATE  „Register excavator CAT 320"
+FP            de-003  natural     det=SEARCH_VEHICLE             ai=nie  čakal=VEHICLE_STK_STATUS  „TÜV BA123AB"
+FN            de-011  natural     det=null                       ai=áno  čakal=SEARCH_VEHICLE  „Welche Fahrzeuge haben wir?"
+FN            de-012  natural     det=null                       ai=áno  čakal=SEARCH_VEHICLE  „Liste der Autos"
+FN            de-013  natural     det=null                       ai=áno  čakal=SEARCH_VEHICLE  „Zeig mir den Fuhrpark"
+FP            de-016  natural     det=SEARCH_VEHICLE             ai=nie  čakal=SHOW_VEHICLE_SERVICE  „Wann war BA123AB zuletzt in der Werkstatt?"
+FP            de-017  exact       det=VEHICLE_EK_STATUS          ai=nie  čakal=VEHICLE_COST_SUMMARY  „Wie viel hat uns BA123AB dieses Jahr gekostet?"
+FP            de-018  natural     det=SEARCH_VEHICLE             ai=nie  čakal=VEHICLE_COST_SUMMARY  „Kosten für Fahrzeug TT456CD"
+FN            de-020  exact       det=null                       ai=áno  čakal=UPCOMING_DEADLINES  „Was läuft diesen Monat ab?"
+FN            de-021  natural     det=null                       ai=áno  čakal=UPCOMING_DEADLINES  „anstehende Termine"
+FN            de-023  natural     det=null                       ai=áno  čakal=UPCOMING_DEADLINES  „Welche Fahrzeuge haben TÜV in 30 Tagen?"
+FN            de-024  natural     det=null                       ai=áno  čakal=UPCOMING_DEADLINES  „Was läuft bald ab?"
+FN            de-029  natural     det=null                       ai=áno  čakal=SEARCH_MACHINE  „Liste der Geräte"
+FN            de-034  exact       det=null                       ai=áno  čakal=INVENTORY_ITEM_STATUS  „Wie viel Zement haben wir?"
+FP            de-036  natural     det=SEARCH_INVENTORY_ITEM      ai=nie  čakal=INVENTORY_ITEM_STATUS  „Lagerbestand von Schrauben"
+FP            de-038  exact       det=OPEN_INVENTORY_ITEM        ai=nie  čakal=SEARCH_INVENTORY_ITEM  „Zeige das Lager"
+FN            de-040  exact       det=null                       ai=áno  čakal=SHOW_LOW_STOCK  „Was geht uns aus?"
+FP            de-041  natural     det=SEARCH_INVENTORY_ITEM      ai=nie  čakal=SHOW_LOW_STOCK  „niedriger Lagerbestand"
+FN            de-042  natural     det=null                       ai=áno  čakal=SHOW_LOW_STOCK  „Was ist ausverkauft?"
+FN            de-043  natural     det=null                       ai=áno  čakal=SHOW_LOW_STOCK  „Was müssen wir nachbestellen?"
+FP            de-044  exact       det=OPEN_VEHICLE               ai=nie  čakal=SEARCH_DOCUMENTS  „Zeige Quittungen für August"
+FN            de-049  natural     det=null                       ai=áno  čakal=SHOW_UNPAID_INVOICES|SHOW_INVOICES_BY_STATUS  „Wer hat noch nicht bezahlt?"
+FP            de-050  natural     det=SEARCH_DOCUMENTS           ai=nie  čakal=SHOW_UNPAID_INVOICES|SHOW_INVOICES_BY_STATUS  „unbezahlte Rechnungen"
+FP            de-052  natural     det=SEARCH_DOCUMENTS           ai=nie  čakal=SHOW_INVOICES_BY_STATUS  „bezahlte Rechnungen"
+FP            de-053  natural     det=SEARCH_DOCUMENTS           ai=nie  čakal=SHOW_INVOICES_BY_STATUS  „Ausgangsrechnungen"
+FP            de-054  natural     det=SEARCH_DOCUMENTS           ai=nie  čakal=SHOW_INVOICES_BY_STATUS  „Eingangsrechnungen"
+FP            de-055  natural     det=SEARCH_DOCUMENTS           ai=nie  čakal=SHOW_INVOICES_BY_STATUS  „Rechnungsentwürfe"
+FP            de-061  exact       det=OPEN_MODULE                ai=nie  čakal=OPEN_DOCUMENT_FOLDER  „Öffne den Ordner Reklamationen"
+FN            de-069  natural     det=null                       ai=áno  čakal=SHOW_LOW_STOCK  „Hey Esblu, was geht uns aus?"
+AI            de-070  negative    det=null                       ai=áno  čakal=∅  „Ich habe keinen TÜV"
+AI            de-071  negative    det=null                       ai=áno  čakal=∅  „such nicht nach dem Auto"
+AI            de-072  negative    det=null                       ai=áno  čakal=∅  „Nein, danke"
+AI            de-073  negative    det=null                       ai=áno  čakal=∅  „Hallo"
+AI            de-074  negative    det=null                       ai=áno  čakal=∅  „Wie ist das Wetter?"
+AI            de-075  negative    det=null                       ai=áno  čakal=∅  „Erzähl mir einen Witz"
+READ-NA-ZÁPIS de-076  negative    det=SEARCH_VEHICLE             ai=nie  čakal=∅  „öffne das Fahrzeug nicht"
+READ-NA-ZÁPIS de-077  unsupported det=SEARCH_DOCUMENTS           ai=nie  čakal=∅  „Lösche alle Rechnungen"
+AI            de-078  unsupported det=null                       ai=áno  čakal=∅  „Sende die Rechnung an den Kunden"
+READ-NA-ZÁPIS de-079  unsupported det=SHOW_INVOICES_BY_STATUS    ai=nie  čakal=∅  „Markiere die Rechnung als bezahlt"
+READ-NA-ZÁPIS de-080  unsupported det=SEARCH_DOCUMENTS           ai=nie  čakal=∅  „Finalisiere die Rechnung"
+AI            de-081  unsupported det=null                       ai=áno  čakal=∅  „Ändere die FIN von BA123AB"
+READ-NA-ZÁPIS de-084  write       det=SEARCH_MACHINE             ai=nie  čakal=MACHINE_CREATE  „Registriere Bagger CAT 320"
+
+intent-corpus: 4 passed, 0 failed
