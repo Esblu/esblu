@@ -98,18 +98,51 @@ export const COMPLETE_ALLOWANCES = {
 } as const;
 
 /**
- * Modulárny plán (rozhodnutie pre architektúru, OWNER CONFIRM):
- *  - používatelia 25 a úložisko 5 GB sú firemné (core), nie viazané na modul,
- *  - modul Dokumenty obsahuje 40 AI spracovaní / mesiac,
- *  - hlas nie je v module — iba cez add-on balík (60 min),
- *  - modul eFaktúra (placeholder) obsahuje 20 tx / mesiac.
+ * Modulárny plán — OWNER CONFIRMED 2026-10-26:
+ *  - každá firma s AKÝMKOĽVEK plateným plánom má 25 používateľov a 5 GB
+ *    (aj pri jedinom module za 3,90 €; aj ďalšia firma za 12,90 €),
+ *  - samostatný modul Dokumenty / AI evidencia obsahuje 10 AI spracovaní /
+ *    obdobie (Komplet 40); AI balík +40 / 3,90 €,
+ *  - hlas NIE JE súčasťou žiadneho modulu — iba add-on +60 min / 3,90 €
+ *    (Komplet 60 min, trial 15 min),
+ *  - modul eFaktúra (placeholder, nie je live) obsahuje 20 tx / obdobie.
  */
 export const MODULAR_ALLOWANCES = {
   users: 25,
   storageMb: 5 * 1024,
-  aiProcessingsPerMonthWithDocuments: 40,
+  aiProcessingsPerMonthWithDocuments: 10,
+  voiceMinutesPerMonth: 0,
   einvoiceTransactionsPerMonthWithEinvoice: 20,
 } as const;
+
+/** Po skončení trialu bez plateného plánu: 0 nových uploadov (existujúce súbory ostávajú). */
+export const NO_PLAN_STORAGE_MB = 0;
+
+// ----------------------------------------------------------------------------- eFaktúra účtovanie
+/**
+ * Odoslaná eFaktúra = 1,0 tx, prijatá = 0,5 tx. Interne celé half-units
+ * (odoslaná 2, prijatá 1) — žiadna float aritmetika; zrkadlo DB
+ * (company_usage_counters.metric = 'einvoice_half_units').
+ */
+export const EINVOICE_HALF_UNITS = { sent: 2, received: 1 } as const;
+
+export function einvoiceHalfUnits(sent: number, received: number): number {
+  const n = (x: number) => (Number.isInteger(x) && x > 0 ? x : 0);
+  return n(sent) * EINVOICE_HALF_UNITS.sent + n(received) * EINVOICE_HALF_UNITS.received;
+}
+
+/** Limit v tx → half-units (20 tx = 40). */
+export function einvoiceLimitHalfUnits(transactions: number): number {
+  return Math.max(0, Math.floor(transactions)) * 2;
+}
+
+/** Zobrazenie tx z half-units bez floatov: 39 → „19,5“ (sk/de) / „19.5“ (en). */
+export function formatEinvoiceTx(halfUnits: number, locale: string): string {
+  const whole = Math.floor(halfUnits / 2);
+  const half = halfUnits % 2 === 1;
+  if (!half) return String(whole);
+  return `${whole}${locale === "en" ? "." : ","}5`;
+}
 
 export type AddonId = "ai_40" | "voice_60" | "users_25" | "einvoice_40" | "einvoice_100";
 
@@ -311,16 +344,19 @@ export function entitlementTargets(input: { plan: PlanKind; modules: readonly Ba
   for (const m of modules) if (m !== "documents") out.push({ key: MODULE_ENTITLEMENT[m], limit: null, period: null });
 
   const hasDocs = modules.includes("documents");
-  if (hasDocs) out.push({ key: "ai_documents", limit: COMPLETE_ALLOWANCES.aiProcessingsPerMonth + 40 * a("ai_40"), period: "month" });
+  const includedAi = input.plan === "complete" ? COMPLETE_ALLOWANCES.aiProcessingsPerMonth : MODULAR_ALLOWANCES.aiProcessingsPerMonthWithDocuments;
+  if (hasDocs) out.push({ key: "ai_documents", limit: includedAi + 40 * a("ai_40"), period: "month" });
 
-  const voiceMinutes = (input.plan === "complete" ? COMPLETE_ALLOWANCES.voiceMinutesPerMonth : 0) + 60 * a("voice_60");
+  const includedVoice = input.plan === "complete" ? COMPLETE_ALLOWANCES.voiceMinutesPerMonth : MODULAR_ALLOWANCES.voiceMinutesPerMonth;
+  const voiceMinutes = includedVoice + 60 * a("voice_60");
   if (voiceMinutes > 0) {
     out.push({ key: "voice", limit: null, period: null });
     out.push({ key: "voice_minutes", limit: voiceMinutes, period: "month" });
   }
 
-  out.push({ key: "team_members", limit: COMPLETE_ALLOWANCES.users + 25 * a("users_25"), period: null });
-  out.push({ key: "storage_mb", limit: COMPLETE_ALLOWANCES.storageMb, period: null });
+  // Každá platená firma (Komplet aj moduly): 25 používateľov + 5 GB.
+  out.push({ key: "team_members", limit: MODULAR_ALLOWANCES.users + 25 * a("users_25"), period: null });
+  out.push({ key: "storage_mb", limit: MODULAR_ALLOWANCES.storageMb, period: null });
 
   if (modules.includes("einvoice")) {
     out.push({ key: "einvoice_transactions", limit: COMPLETE_ALLOWANCES.einvoiceTransactionsPerMonth + 40 * a("einvoice_40") + 100 * a("einvoice_100"), period: "month" });
