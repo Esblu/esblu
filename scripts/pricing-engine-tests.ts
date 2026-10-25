@@ -106,6 +106,45 @@ await check("limity per firma: Komplet 25 / 40 / 60 / 5 GB; modulárny plán bez
   assert.deepEqual(m, { storage_mb: 5120, team_members: 25, vehicles: null });
 });
 
+await check("OWNER CONFIRMED (J7 korekcie): Dokumenty 10 AI (+40/balík), Komplet 40 (+40), modul bez Dokumentov 0, hlas v moduloch iba add-on", () => {
+  const lim = (plan: "complete" | "modular", modules: string[], addons = {}) =>
+    Object.fromEntries(P.entitlementTargets({ plan, modules: modules as never, addons }).map((x) => [x.key, x.limit]));
+  assert.equal(lim("modular", ["documents"]).ai_documents, 10);
+  assert.equal(lim("modular", ["documents"], { ai_40: 1 }).ai_documents, 50);
+  assert.equal(lim("complete", []).ai_documents, 40);
+  assert.equal(lim("complete", [], { ai_40: 1 }).ai_documents, 80);
+  assert.equal(lim("modular", ["vehicles", "machines", "inventory", "invoicing"]).ai_documents, undefined);
+  for (const mods of [["documents"], ["vehicles", "machines", "inventory", "invoicing"]]) {
+    assert.equal(lim("modular", mods).voice_minutes, undefined, mods.join("+"));
+    assert.equal(lim("modular", mods).voice, undefined);
+  }
+  assert.equal(lim("modular", ["documents"], { voice_60: 1 }).voice_minutes, 60);
+  assert.equal(lim("complete", []).voice_minutes, 60);
+  for (const mods of [["vehicles"], ["documents"], ["vehicles", "machines", "inventory", "invoicing"]]) {
+    assert.equal(lim("modular", mods).team_members, 25);
+    assert.equal(lim("modular", mods).storage_mb, 5120);
+  }
+  assert.equal(lim("modular", ["vehicles"], { users_25: 1 }).team_members, 50);
+  assert.equal(P.NO_PLAN_STORAGE_MB, 0);
+  assert.equal(P.TRIAL_OFFER.limits.storageMb, 1024);
+});
+
+await check("eFaktúra half-units: odoslaná 2, prijatá 1; 20 tx = 40; 10+20 = 20 tx; 40 prijatých = 20 tx; zobrazenie 19,5", () => {
+  assert.equal(P.einvoiceHalfUnits(1, 0), 2);
+  assert.equal(P.einvoiceHalfUnits(0, 1), 1);
+  assert.equal(P.einvoiceHalfUnits(0, 2), 2);
+  assert.equal(P.einvoiceHalfUnits(10, 20), P.einvoiceLimitHalfUnits(20));
+  assert.equal(P.einvoiceHalfUnits(20, 0), 40);
+  assert.equal(P.einvoiceHalfUnits(0, 40), 40);
+  assert.equal(P.einvoiceLimitHalfUnits(20 + 40), 120);
+  assert.equal(P.einvoiceLimitHalfUnits(20 + 100), 240);
+  assert.equal(P.formatEinvoiceTx(39, "sk"), "19,5");
+  assert.equal(P.formatEinvoiceTx(39, "en"), "19.5");
+  assert.equal(P.formatEinvoiceTx(40, "sk"), "20");
+  assert.equal(P.einvoiceHalfUnits(0.5 as never, 0), 0, "neceločíselný počet dokladov sa odmietne");
+  for (let n = 0; n <= 1000; n++) assert.equal(P.einvoiceHalfUnits(0, n) % 1, 0);
+});
+
 await check("registry: A (5 predajných + eFaktúra), B (súčasti), C (kvóty), D (core: chat, …); chat nie je predajný modul", () => {
   const byCat = (c: string) => P.MODULE_REGISTRY.filter((r) => r.category === c).map((r) => r.id);
   assert.deepEqual(byCat("A_base_module"), ["vehicles", "machines", "inventory", "invoicing", "documents", "einvoice"]);
@@ -198,6 +237,33 @@ await check("úložisko: každý klientsky upload do firemného bucketu má pred
     }
   }
   assert.equal(uploads, 14);
+});
+
+await check("upload audit: v app/, lib/, hooks/, mobile/ existuje iba 14 klientskych uploadov (všetky s predkontrolou) + 2 serverové eFaktúra (service role, nie live); žiadne iné zápisy do Storage", () => {
+  const walk = (dir: string, out: string[] = []): string[] => {
+    for (const n of readdirSync(dir)) {
+      if (n === "node_modules" || n.startsWith(".") || n === "out") continue;
+      const f = path.join(dir, n);
+      if (statSync(f).isDirectory()) walk(f, out);
+      else if (/\.(ts|tsx|js|mjs)$/.test(n)) out.push(f);
+    }
+    return out;
+  };
+  const files = ["app", "lib", "hooks", "mobile"].flatMap((d) => walk(d));
+  const uploadSites: string[] = [];
+  for (const f of files) {
+    const src = readFileSync(f, "utf8");
+    assert.doesNotMatch(src, /uploadToSignedUrl|createSignedUploadUrl|storage\s*\.from\([^)]*\)\s*\.(update|copy|move)\(/, `${f}: iný zápis do Storage`);
+    for (const m of src.matchAll(/\.upload\(/g)) uploadSites.push(`${f}@${m.index}`);
+  }
+  const server = uploadSites.filter((x) => x.startsWith(path.join("lib", "einvoice")));
+  assert.equal(server.length, 2, server.join(","));
+  assert.equal(uploadSites.length - server.length, 14, uploadSites.join("\n"));
+  for (const f of ["lib/einvoice/outbound/supabase-store.ts", "lib/einvoice/inbound/supabase-store.ts"]) {
+    assert.match(readFileSync(f, "utf8"), /admin\.storage\.from\(EINVOICE_BUCKET\)\.upload/);
+  }
+  const mig = readFileSync("supabase/migrations/20261026110000_pricing_entitlement_corrections.sql", "utf8");
+  assert.match(mig, /as restrictive\s+for update to authenticated/);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

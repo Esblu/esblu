@@ -236,7 +236,7 @@ await check("eFaktúra readiness: po einvoice_sellable=true Komplet dostane eFak
   assert.equal((await ents(C.a)).einvoice, "off");
 });
 
-await check("moduly: 2 moduly = iba tie nároky (+ firemné users/storage), AI iba s modulom Dokumenty, hlas iba s add-onom", async () => {
+await check("moduly: 2 moduly = iba tie nároky (+ firemné 25 users / 5 GB), AI iba s modulom Dokumenty (10), hlas iba s add-onom", async () => {
   await mock(C.b, "modular", ["vehicles", "invoicing"]);
   let e = await ents(C.b);
   assert.equal(e.vehicles, null);
@@ -248,7 +248,7 @@ await check("moduly: 2 moduly = iba tie nároky (+ firemné users/storage), AI i
   assert.equal(e.storage_mb, 5120);
   await mock(C.b, "modular", ["documents"], [0, 1, 0, 0, 0]);
   e = await ents(C.b);
-  assert.equal(e.ai_documents, 40);
+  assert.equal(e.ai_documents, 10, "samostatný modul Dokumenty = 10 AI");
   assert.equal(e.voice_minutes, 60);
   assert.equal(e.vehicles, "off", "downgrade: modul odvolaný");
 });
@@ -403,6 +403,222 @@ await check("anon: žiadny prístup k prehľadu ani kapacitám", async () => {
   for (const sql of ["select public.esblu_my_plan_overview()", "select public.esblu_require_my_voice_capacity()", "select public.esblu_require_my_storage_capacity()"]) {
     assert.equal((await attempt(anon, sql)).layer, "privilege", sql);
   }
+});
+
+// ============================================================================= J7 corrections (2026-10-26)
+// ----------------------------------------------------------------------------- AI allowance
+await check("AI: Dokumenty samostatne = 10; Dokumenty + 1 balík = 50; Komplet = 40; Komplet + balík = 80; modul bez Dokumentov = 0 (bez nároku)", async () => {
+  await mock(C.b, "modular", ["documents"]);
+  assert.equal((await ents(C.b)).ai_documents, 10);
+  await mock(C.b, "modular", ["documents"], [1, 0, 0, 0, 0]);
+  assert.equal((await ents(C.b)).ai_documents, 50);
+  await mock(C.b, "modular", ["vehicles", "invoicing"]);
+  assert.equal((await ents(C.b)).ai_documents, "off");
+  await mock(C.b, "complete");
+  assert.equal((await ents(C.b)).ai_documents, 40);
+  await mock(C.b, "complete", [], [1, 0, 0, 0, 0]);
+  assert.equal((await ents(C.b)).ai_documents, 80);
+  assert.equal((await ents(C.t)).ai_documents, 10, "trial");
+});
+
+await check("AI hard stop pri module Dokumenty: 10 rezervácií OK, 11. AI_PROCESSING_LIMIT_REACHED; firma A nezasiahnutá", async () => {
+  await mock(C.b, "modular", ["documents"]);
+  for (let i = 1; i <= 10; i++) {
+    const o = await commitAs(ownerB, "select public.esblu_reserve_ai_processing('scan-document', $1, $2) r",
+      [`docs_only_key_${String(i).padStart(6, "0")}`, "f".repeat(63) + (i % 10)]);
+    assert.equal(o.layer, "ok", `${i}: ${o.message}`);
+  }
+  const over = await attempt(ownerB, "select public.esblu_reserve_ai_processing('scan-document', 'docs_only_key_000011', repeat('a', 64))");
+  assert.match(over.message, /ENTITLEMENT_DENIED:AI_PROCESSING_LIMIT_REACHED:ai_documents/);
+  const ov = await overview(ownerB);
+  assert.equal(ov.usage.ai_processings.used, 10);
+  assert.equal(ov.usage.ai_processings.limit, 10);
+});
+
+// ----------------------------------------------------------------------------- voice
+await check("hlas: modulárny plán bez add-onu = žiadny hlas (aj s Dokumentmi); s add-onom 60 min; Komplet 60; trial 15", async () => {
+  await mock(C.b, "modular", ["documents", "vehicles", "machines", "inventory"]);
+  let e = await ents(C.b);
+  assert.equal(e.voice, "off");
+  assert.equal(e.voice_minutes, "off");
+  const denied = await attempt(ownerB, "select public.esblu_require_my_voice_capacity()");
+  assert.match(denied.message, /ENTITLEMENT_DENIED:VOICE_ENTITLEMENT_REQUIRED:voice/);
+  await mock(C.b, "modular", ["documents"], [0, 1, 0, 0, 0]);
+  e = await ents(C.b);
+  assert.equal(e.voice_minutes, 60);
+  await mock(C.b, "complete");
+  assert.equal((await ents(C.b)).voice_minutes, 60);
+  assert.equal((await ents(C.t)).voice_minutes, 15);
+});
+
+// ----------------------------------------------------------------------------- users / pending invites
+const extraUser = (i: number) => `ca000000-0000-4000-8000-${String(i).padStart(12, "0")}`;
+await db.exec(`insert into auth.users (id, email) select ('ca000000-0000-4000-8000-' || lpad(g::text, 12, '0'))::uuid, 'seat' || g || '@example.invalid' from generate_series(1, 40) g`);
+const setActiveMembersB = async (n: number) => {
+  // owner B + (n - 1) zamestnancov
+  await db.exec(`set session_replication_role = replica;
+    delete from public.company_members where company_id = '${C.b}' and user_id <> '${U.ownerB}';
+    insert into public.company_members (company_id, user_id, role, status, permissions)
+      select '${C.b}', ('ca000000-0000-4000-8000-' || lpad(g::text, 12, '0'))::uuid, 'employee', 'active', '{}' from generate_series(1, ${n - 1}) g;
+    delete from public.company_invites where company_id = '${C.b}';
+    set session_replication_role = origin;`);
+};
+let inviteSeq = 0;
+const invite = (who: Who) => attempt(who, "select * from public.esblu_create_company_invite($1, 'employee')", [`invitee${++inviteSeq}@example.invalid`]);
+const inviteCommit = (who: Who) => commitAs(who, "select * from public.esblu_create_company_invite($1, 'employee')", [`invitee${++inviteSeq}@example.invalid`]);
+
+await check("users: 24 aktívnych + 1 čakajúca = plno (owner sa počíta); 25. miesto nemožno rezervovať", async () => {
+  await mock(C.b, "complete");
+  await setActiveMembersB(24);
+  assert.equal((await inviteCommit(ownerB)).layer, "ok");
+  const full = await invite(ownerB);
+  assert.match(full.message, /ENTITLEMENT_DENIED:USER_LIMIT_REACHED:team_members/);
+  const ov = await overview(ownerB);
+  assert.deepEqual([ov.usage.users.used, ov.usage.users.pending, ov.usage.users.reserved, ov.usage.users.limit], [24, 1, 25, 25]);
+});
+
+await check("users: zrušená (revoked) pozvánka uvoľní miesto; expirovaná pozvánka uvoľní miesto", async () => {
+  await su(`update public.company_invites set status = 'revoked' where company_id = '${C.b}' and status = 'pending'`);
+  assert.equal((await inviteCommit(ownerB)).layer, "ok", "po zrušení");
+  await su(`update public.company_invites set created_at = now() - interval '8 days', expires_at = now() - interval '1 minute' where company_id = '${C.b}' and status = 'pending'`);
+  assert.equal((await inviteCommit(ownerB)).layer, "ok", "po expirácii");
+});
+
+await check("users: 23 aktívnych + 2 čakajúce = plno; 25 aktívnych = žiadna nová pozvánka", async () => {
+  await setActiveMembersB(23);
+  assert.equal((await inviteCommit(ownerB)).layer, "ok");
+  assert.equal((await inviteCommit(ownerB)).layer, "ok");
+  assert.match((await invite(ownerB)).message, /USER_LIMIT_REACHED/);
+  await setActiveMembersB(25);
+  assert.match((await invite(ownerB)).message, /USER_LIMIT_REACHED/);
+});
+
+await check("users: čakajúce pozvánky inej firmy sa nezapočítajú; +25 add-on → limit 50", async () => {
+  // B je plná (25 aktívnych); firma A2 (owner A) má vlastné miesta
+  assert.equal((await inviteCommit(ownerAinA2)).layer, "ok", "A2 nie je ovplyvnená plnou firmou B");
+  await mock(C.b, "complete", [], [0, 0, 1, 0, 0]);
+  assert.equal((await ents(C.b)).team_members, 50);
+  assert.equal((await inviteCommit(ownerB)).layer, "ok", "s add-onom je miesto");
+  await setActiveMembersB(1);
+});
+
+await check("users: aktivácia členstva ostáva chránená (accept počíta aktívnych voči limitu)", async () => {
+  const src = (await su<{ s: string }>("select prosrc s from pg_proc where proname = 'esblu_accept_company_invite'"))[0].s;
+  assert.match(src, /esblu_require_entitlement_capacity\(v_invite\.company_id, 'team_members', v_active_members\)/);
+  const create = (await su<{ s: string }>("select prosrc s from pg_proc where proname = 'esblu_create_company_invite'"))[0].s;
+  assert.match(create, /ci\.status = 'pending' and ci\.expires_at > now\(\)/);
+});
+
+// ----------------------------------------------------------------------------- storage
+const storageOf = async (company: string) => (await su<{ v: Json }>(`select public.esblu_company_storage_status('${company}') v`))[0].v;
+await check("storage: trial 1 GB; platený 1 modul 5 GB; Komplet 5 GB; ďalšia firma 5 GB", async () => {
+  assert.equal((await storageOf(C.t)).limit_mb, 1024);
+  assert.equal((await attempt(ownerT, "select public.esblu_storage_upload_allowed('vehicle-photos') v")).data[0].v, true);
+  await mock(C.b, "modular", ["invoicing"]);
+  assert.equal((await storageOf(C.b)).limit_mb, 5120);
+  assert.equal((await attempt(ownerB, "select public.esblu_storage_upload_allowed('chat-attachments') v")).data[0].v, true);
+  await mock(C.a2, "complete");
+  assert.equal((await storageOf(C.a2)).limit_mb, 5120);
+  await mock(C.b, "complete");
+  assert.equal((await storageOf(C.b)).limit_mb, 5120);
+});
+
+await check("storage: trial skončil bez plánu → 0 nových uploadov (každý firemný bucket), existujúce objekty ostávajú", async () => {
+  await db.exec(`set session_replication_role = replica;
+    insert into public.vehicles (id, spz, user_id, company_id) values ('cb000000-0000-4000-8000-0000000000e1', 'TE-1', '${U.ownerT}', '${C.t}');
+    insert into storage.objects (bucket_id, name, metadata) values ('vehicle-photos', '${U.ownerT}/cb000000-0000-4000-8000-0000000000e1/old.webp', '{"size": 1000}');
+    insert into public.vehicle_photos (company_id, vehicle_id, user_id, storage_path) values ('${C.t}', 'cb000000-0000-4000-8000-0000000000e1', '${U.ownerT}', '${U.ownerT}/cb000000-0000-4000-8000-0000000000e1/old.webp');
+    update public.companies set trial_started_at = now() - interval '20 days', trial_ends_at = now() - interval '6 days' where id = '${C.t}';
+    set session_replication_role = origin;`);
+  const st = await storageOf(C.t);
+  assert.equal(st.limit_mb, 0);
+  assert.equal(st.exhausted, true);
+  for (const b of ["vehicle-photos", "machine-photos", "inventory-photos", "company-logos", "ai-inbox-documents", "ai-evidence-documents", "chat-attachments"]) {
+    assert.equal((await attempt(ownerT, "select public.esblu_storage_upload_allowed($1) v", [b])).data[0].v, false, b);
+  }
+  assert.match((await attempt(ownerT, "select public.esblu_require_my_storage_capacity()")).message, /STORAGE_LIMIT_REACHED:storage_mb/);
+  const up = await attempt(ownerT, `insert into storage.objects (bucket_id, name, metadata) values ('vehicle-photos', '${U.ownerT}/cb000000-0000-4000-8000-0000000000e1/new.webp', '{"size": 1}')`);
+  assert.notEqual(up.layer, "ok");
+  const ow = await attempt(ownerT, `update storage.objects set metadata = '{"size": 2}' where name = '${U.ownerT}/cb000000-0000-4000-8000-0000000000e1/old.webp'`);
+  assert.notEqual(ow.layer === "ok" && ow.rows > 0, true, "prepis existujúceho objektu tiež zablokovaný");
+  assert.equal((await su<{ n: number }>("select count(*)::int n from storage.objects where name like '%/old.webp'"))[0].n, 1, "existujúci súbor ostáva");
+  await db.exec(`set session_replication_role = replica;
+    update public.companies set trial_started_at = now() - interval '1 day', trial_ends_at = now() + interval '13 days' where id = '${C.t}';
+    set session_replication_role = origin;`);
+});
+
+await check("storage: zrušený platený plán → nové uploady zablokované, existujúce objekty ostávajú; RESTRICTIVE INSERT aj UPDATE", async () => {
+  await mock(C.b, "modular", ["invoicing"], [0, 0, 0, 0, 0], false);
+  const st = await storageOf(C.b);
+  assert.equal(st.limit_mb, 0);
+  assert.equal((await attempt(ownerB, "select public.esblu_storage_upload_allowed('chat-attachments') v")).data[0].v, false);
+  const pol = (await su<{ n: string; c: string; p: string }>(
+    "select policyname n, cmd c, permissive p from pg_policies where schemaname = 'storage' and tablename = 'objects' and policyname like 'esblu_storage_company_capacity%' order by 1"));
+  assert.deepEqual(pol.map((r) => `${r.n}:${r.c}:${r.p}`), ["esblu_storage_company_capacity:INSERT:RESTRICTIVE", "esblu_storage_company_capacity_update:UPDATE:RESTRICTIVE"]);
+  await mock(C.b, "complete");
+});
+
+// ----------------------------------------------------------------------------- eInvoice accounting (half-units)
+const einv = {
+  reset: () => su(`delete from public.company_usage_counters where company_id = '${C.a}' and metric = 'einvoice_half_units'`),
+  rec: async (units: number, times = 1) => {
+    for (let i = 0; i < times; i++) {
+      const o = await commitAs(service, "select public.esblu_record_einvoice_tx($1, $2::numeric) r", [C.a, String(units)]);
+      assert.equal(o.data[0].r, true, o.message);
+    }
+  },
+  half: async () => Number((await su<{ v: Json }>(`select public.esblu_einvoice_tx_status('${C.a}') v`))[0].v.used_half_units),
+  can: async (units: number) => attempt(service, "select public.esblu_require_einvoice_tx_capacity($1, $2::numeric) s", [C.a, String(units)]),
+};
+await check("eFaktúra: odoslaná 1,0 tx (2 half), prijatá 0,5 tx (1 half), 2 prijaté = 1,0 tx; integer half-units", async () => {
+  await su("update public.billing_runtime_config set einvoice_sellable = true");
+  await mock(C.a, "complete");
+  await einv.reset();
+  await einv.rec(1);
+  assert.equal(await einv.half(), 2);
+  await einv.reset(); await einv.rec(0.5);
+  assert.equal(await einv.half(), 1);
+  await einv.rec(0.5);
+  assert.equal(await einv.half(), 2);
+  const cols = await su<{ t: string }>("select data_type t from information_schema.columns where table_name = 'company_usage_counters' and column_name = 'used'");
+  assert.equal(cols[0].t, "numeric");
+  assert.equal(P.einvoiceHalfUnits(1, 0), 2);
+  assert.equal(P.einvoiceHalfUnits(0, 1), 1);
+  assert.equal(P.formatEinvoiceTx(39, "sk"), "19,5");
+});
+
+await check("eFaktúra: 10 odoslaných + 20 prijatých = 20 tx = plno; ďalšia prijatá fail closed", async () => {
+  await einv.reset();
+  await einv.rec(1, 10); await einv.rec(0.5, 20);
+  assert.equal(await einv.half(), 40);
+  assert.match((await einv.can(0.5)).message, /ENTITLEMENT_DENIED:EINVOICE_LIMIT_REACHED:einvoice_transactions/);
+});
+
+await check("eFaktúra: 20 odoslaných = plno; 40 prijatých = plno; 19 odoslaných + 1 prijatá → ešte 0,5 tx voľné", async () => {
+  await einv.reset(); await einv.rec(1, 20);
+  assert.match((await einv.can(1)).message, /EINVOICE_LIMIT_REACHED/);
+  assert.match((await einv.can(0.5)).message, /EINVOICE_LIMIT_REACHED/);
+  await einv.reset(); await einv.rec(0.5, 40);
+  assert.match((await einv.can(0.5)).message, /EINVOICE_LIMIT_REACHED/);
+  await einv.reset(); await einv.rec(1, 19); await einv.rec(0.5, 1);
+  assert.equal((await einv.can(0.5)).layer, "ok");
+  assert.match((await einv.can(1)).message, /EINVOICE_LIMIT_REACHED/);
+});
+
+await check("eFaktúra add-ony: 20 + 40 = 60 tx (120 half); 20 + 100 = 120 tx (240 half); neplatná váha odmietnutá", async () => {
+  await mock(C.a, "complete", [], [0, 0, 0, 1, 0]);
+  let s = (await su<{ v: Json }>(`select public.esblu_einvoice_tx_status('${C.a}') v`))[0].v;
+  assert.equal(s.limit_half_units, 120);
+  await mock(C.a, "complete", [], [0, 0, 0, 0, 1]);
+  s = (await su<{ v: Json }>(`select public.esblu_einvoice_tx_status('${C.a}') v`))[0].v;
+  assert.equal(s.limit_half_units, 240);
+  const bad = await commitAs(service, "select public.esblu_record_einvoice_tx($1, 0.3) r", [C.a]);
+  assert.equal(bad.data[0].r, false);
+  assert.match((await einv.can(0.3)).message, /ESBLU_EINVOICE_UNITS_INVALID/);
+  await einv.reset();
+  await su("update public.billing_runtime_config set einvoice_sellable = false");
+  await mock(C.a, "complete");
+  assert.equal((await ents(C.a)).einvoice_transactions, "off", "eFaktúra späť nedostupná (nie je live)");
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
