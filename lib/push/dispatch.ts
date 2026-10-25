@@ -32,6 +32,9 @@ export type DeliveryInput = {
   messageFor: (userId: string, locale: string) => PushMessage;
 };
 
+/** Koľko príjemcov sa spracúva súbežne (malé dávky). */
+export const PUSH_USER_CONCURRENCY = 5;
+
 export type DeliveryResult = { sent: number; invalid: number; failed: number; users: number };
 
 export async function deliver(store: DeliveryStore, providers: PushProviders, input: DeliveryInput): Promise<DeliveryResult> {
@@ -49,12 +52,19 @@ export async function deliver(store: DeliveryStore, providers: PushProviders, in
     byUser.set(target.userId, list);
   }
 
-  for (const userId of userIds) {
+  // Cost control (2026-10-25): príjemcovia sa spracúvajú paralelne v malých
+  // dávkach (PUSH_USER_CONCURRENCY), nie po jednom — funkcia pri 20-člennom
+  // firemnom kanáli nebeží ~20 × (claim + send + record) sekvenčne. Pre
+  // jedného používateľa ostáva poradie claim → zariadenia (max. 20) → record
+  // nezmenené; deduplikácia je naďalej unikátny claim v DB. FCM HTTP v1 nemá
+  // multicast (1 správa = 1 request); limit projektu je rádovo 600 000/min,
+  // dávka 5 je hlboko pod ním. Výsledok „retry“ sa ani teraz neopakuje.
+  async function deliverToUser(userId: string): Promise<void> {
     const targets = byUser.get(userId);
-    if (!targets || targets.length === 0) continue;
+    if (!targets || targets.length === 0) return;
     if (input.dedupeKey) {
       const fresh = await store.claim({ companyId: input.companyId, userId, kind: input.kind, dedupeKey: input.dedupeKey });
-      if (!fresh) continue;
+      if (!fresh) return;
     }
     result.users++;
     for (const target of targets.slice(0, 20)) {
@@ -79,6 +89,10 @@ export async function deliver(store: DeliveryStore, providers: PushProviders, in
         result.failed++;
       }
     }
+  }
+
+  for (let i = 0; i < userIds.length; i += PUSH_USER_CONCURRENCY) {
+    await Promise.all(userIds.slice(i, i + PUSH_USER_CONCURRENCY).map((userId) => deliverToUser(userId)));
   }
   return result;
 }

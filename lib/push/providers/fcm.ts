@@ -60,9 +60,20 @@ type TokenCache = { token: string; expiresAt: number } | null;
 
 export function createFcmProvider(config: FcmConfig, fetchImpl: typeof fetch = fetch, now: () => number = Date.now): PushProvider {
   let cache: TokenCache = null;
+  // Paralelné doručenie (lib/push/dispatch.ts) → súbežné odoslania zdieľajú
+  // JEDNO prebiehajúce získanie OAuth tokenu (nie N požiadaviek na Google).
+  let pending: Promise<string | null> | null = null;
 
   async function accessToken(): Promise<string | null> {
     if (cache && cache.expiresAt - 60_000 > now()) return cache.token;
+    if (pending) return pending;
+    pending = fetchAccessToken().finally(() => {
+      pending = null;
+    });
+    return pending;
+  }
+
+  async function fetchAccessToken(): Promise<string | null> {
     const iat = Math.floor(now() / 1000);
     const assertion = signJwt(
       "RS256",
