@@ -782,6 +782,8 @@ const de = {
       agreeTermsLink: "Nutzungsbedingungen",
       agreePrivacyPrefix: "Ich bestätige, die",
       agreePrivacyLink: "Datenschutzerklärung",
+      agreePrivacySuffix: "von Esblu s. r. o. gelesen zu haben",
+      agreeTermsSuffix: "zu",
       accountCreatedImmediate: "Das Konto wurde erstellt. Sie sind jetzt angemeldet.",
       accountCreatedPendingConfirm:
         "Die Registrierung war erfolgreich. Bitte prüfen Sie Ihre E-Mail und bestätigen Sie die Registrierung.",
@@ -894,7 +896,7 @@ const de = {
     termsVersionSuffix: "zu (Version {{version}}).",
     agreePrivacyPrefix: "Ich bestätige, die",
     agreePrivacyLink: "Datenschutzerklärung",
-    privacyVersionSuffix: "gelesen zu haben (Version {{version}}).",
+    privacyVersionSuffix: "von Esblu s. r. o. gelesen zu haben (Version {{version}}).",
     submitError: "Die Bestätigung konnte nicht gespeichert werden. Bitte versuchen Sie es erneut.",
     confirmButton: "Bestätigen und fortfahren",
     saving: "Wird gespeichert...",
@@ -917,6 +919,8 @@ const de = {
       "Der Auftragsverarbeitungsvertrag muss im Namen der Firma von deren Inhaber (Owner) bestätigt werden — Administrator- oder andere Berechtigungen in der App reichen dafür nicht aus. Bis dies geschieht, sind einige Funktionen (z. B. Hochladen neuer Dokumente, KI-Inbox, Fahrzeuge, Maschinen oder Lagerartikel) vorübergehend nicht verfügbar; bestehende Daten können Sie weiterhin einsehen.",
     employeeNoticeDismiss: "Verstanden",
     viewDpa: "AVV anzeigen",
+    aiBlocked:
+      "Die KI-Verarbeitung ist erst verfügbar, nachdem der Firmeninhaber den Auftragsverarbeitungsvertrag (AVV) angenommen hat. Es wurde nichts gesendet.",
     errors: {
       ESBLU_NOT_ACTIVE_OWNER:
         "Den AVV kann im Namen der Firma nur deren Inhaber (Owner) annehmen.",
@@ -2214,11 +2218,13 @@ const de = {
 
   legal: {
     updatedAtPrefix: "Letzte Aktualisierung:",
+    slovakOnlyNotice:
+      "Dieses Dokument ist derzeit nur in der slowakischen Originalfassung verfügbar. Eine offizielle deutsche Übersetzung wurde noch nicht veröffentlicht.",
     backToLogin: "Zurück zur Anmeldung",
     titles: {
       terms: "Nutzungsbedingungen",
       privacy: "Datenschutz",
-      cookies: "Cookies",
+      cookies: "Informationen zu Cookies",
       dpa: "AVV",
       subprocessors: "Unterauftragsverarbeiter",
       contact: "Kontakt",
@@ -2240,15 +2246,21 @@ const de = {
       supabaseLocation:
         "EU — Frankfurt (AWS eu-central-1)",
       openaiPurpose:
-        "KI-Erkennung von Daten aus hochgeladenen Dokumenten und Fotos",
+        "Automatisierte Erkennung, Extraktion und Strukturierung von Daten aus Dokumenten, Transkription von Spracheingaben und Interpretation von Textbefehlen im Rahmen der Funktionen von Esblu",
       openaiDataCategories:
-        "Inhalt des zur Verarbeitung übermittelten Dokuments/Fotos",
+        "Fotos und Bilder von Dokumenten und die darin enthaltenen Daten (z. B. Namen, Adressen, Kontakt-, Rechnungs- und Bankdaten, Daten aus Fahrzeug- und Versicherungsdokumenten), kurze Sprachaufnahmen zur Transkription, Textbefehle und Ergebnisse der automatisierten Verarbeitung",
       openaiLocation:
-        "Verarbeitungsstandort in dieser Liste noch nicht rechtlich bestätigt — Einzelheiten auf Anfrage unter privacy@esblu.com",
+        "Vertragspartner: OpenAI Ireland Ltd., Irland. Weiterübermittlungen außerhalb des EWR gemäß OpenAI Data Processing Addendum (Standardvertragsklauseln oder Angemessenheitsbeschlüsse)",
       vercelPurpose: "Hosting und Betrieb der Anwendung",
       vercelDataCategories:
         "Für die Bereitstellung der Anwendung erforderliche technische Verbindungsdaten",
       vercelLocation: "Serverfunktionen: EU — Frankfurt (fra1) laut Projektkonfiguration; weitere Einzelheiten auf Anfrage unter privacy@esblu.com",
+      fcmPurpose:
+        "Zustellung von Push-Benachrichtigungen an die mobile Android-App (Firebase Cloud Messaging)",
+      fcmDataCategories:
+        "Registrierungstoken und Installationskennungen der App, technische Zustelldaten und der Benachrichtigungstext (allgemeiner Hinweis auf eine neue Nachricht oder eine bevorstehende Frist)",
+      fcmLocation:
+        "Globale Google-Infrastruktur einschließlich USA und EU; Übermittlungen gemäß Firebase Data Processing and Security Terms",
       namecheapPurpose:
         "Hosting der geschäftlichen E-Mail-Kommunikation (Postfächer info@esblu.com und privacy@esblu.com — privacy@esblu.com ist ein Alias, das auf dasselbe Postfach verweist) und Empfang von E-Mail-Nachrichten von Nutzern, einschließlich Anliegen zu personenbezogenen Daten",
       namecheapDataCategories:

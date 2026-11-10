@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import { signOutOnThisDevice } from "@/lib/sign-out";
+import { AuthLegalLinks } from "@/app/components/AuthLegalLinks";
 
 export default function ResetHeslaPage() {
   const router = useRouter();
@@ -141,6 +142,8 @@ export default function ResetHeslaPage() {
             {t("auth.resetPassword.waitingForLink")}
           </p>
         )}
+
+        <AuthLegalLinks />
       </div>
     </main>
   );

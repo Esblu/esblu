@@ -11,6 +11,7 @@ import { AppLink } from "@/app/components/AppLink";
 //
 // Podporovaná syntax (presne to, čo sa reálne používa v legal/*/*.md):
 //   ## Nadpis            -> nová LegalSection (title = zvyšok riadku)
+//   ### Podnadpis        -> <h3> v rámci sekcie (J10 — štruktúra Zásad CLIA)
 //   - položka             -> <ul><li>
 //   > citácia             -> zvýraznený "aside" box (napr. upozornenie)
 //   prázdny riadok         -> oddeľovač blokov
@@ -21,6 +22,7 @@ import { AppLink } from "@/app/components/AppLink";
 
 type Block =
   | { type: "heading"; text: string }
+  | { type: "subheading"; text: string }
   | { type: "paragraph"; text: string }
   | { type: "list"; items: string[] }
   | { type: "quote"; text: string };
@@ -34,6 +36,12 @@ function parseBlocks(markdown: string): Block[] {
     const line = lines[i];
 
     if (line.trim() === "") {
+      i++;
+      continue;
+    }
+
+    if (line.startsWith("### ")) {
+      blocks.push({ type: "subheading", text: line.slice(4).trim() });
       i++;
       continue;
     }
@@ -69,6 +77,7 @@ function parseBlocks(markdown: string): Block[] {
       i < lines.length &&
       lines[i].trim() !== "" &&
       !lines[i].startsWith("## ") &&
+      !lines[i].startsWith("### ") &&
       !lines[i].startsWith("- ") &&
       !lines[i].startsWith("> ")
     ) {
@@ -183,7 +192,13 @@ export function LegalMarkdown({ markdown }: { markdown: string }) {
     const key = `block-${blockKey++}`;
     let rendered: ReactNode;
 
-    if (block.type === "paragraph") {
+    if (block.type === "subheading") {
+      rendered = (
+        <h3 key={key} className="pt-2 text-[15px] font-semibold text-primary">
+          {renderInline(block.text, key)}
+        </h3>
+      );
+    } else if (block.type === "paragraph") {
       rendered = <p key={key}>{renderInline(block.text, key)}</p>;
     } else if (block.type === "list") {
       rendered = (

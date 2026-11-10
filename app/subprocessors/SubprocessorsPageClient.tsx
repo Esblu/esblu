@@ -118,6 +118,30 @@ export function SubprocessorsPageClient() {
               </tr>
               <tr className="border-b border-subtle align-top">
                 <td className="py-2 pr-4 font-semibold">
+                  Google (Firebase Cloud Messaging)
+                </td>
+                <td className="py-2 pr-4">
+                  {t("legal.subprocessors.fcmPurpose")}
+                </td>
+                <td className="py-2 pr-4">
+                  {t("legal.subprocessors.fcmDataCategories")}
+                </td>
+                <td className="py-2 pr-4">
+                  {t("legal.subprocessors.fcmLocation")}
+                </td>
+                <td className="py-2">
+                  <a
+                    href="https://firebase.google.com/terms/data-processing-terms"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className={linkClass}
+                  >
+                    firebase.google.com/terms/data-processing-terms
+                  </a>
+                </td>
+              </tr>
+              <tr className="border-b border-subtle align-top">
+                <td className="py-2 pr-4 font-semibold">
                   Namecheap (Private Email)
                 </td>
                 <td className="py-2 pr-4">

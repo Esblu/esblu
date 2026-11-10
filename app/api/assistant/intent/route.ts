@@ -1,5 +1,6 @@
 import { verifyRequestUser } from "@/lib/server-auth";
 import { getUserScopedSupabaseClient } from "@/lib/server-supabase-user-client";
+import { checkCompanyDpaForAi } from "@/lib/ai/company-dpa-guard";
 import { getRequestLocale } from "@/lib/i18n/request-locale";
 import { translate } from "@/lib/i18n/translate";
 import { classifyIntentWithAi } from "@/lib/intents/ai-fallback";
@@ -227,6 +228,12 @@ export async function POST(req: Request) {
     // (lib/intents/orchestrator.ts). Route iba dodá overenú totožnosť,
     // firmu a oprávnenia z RPC; z klienta sa neberie nič z toho.
     // ------------------------------------------------------------------
+    // DPA aktívnej firmy (CLIA manuál 3.1.2): bez prijatej DPA sa text
+    // príkazu NIKDY neodošle do AI fallbacku (OpenAI). Deterministický
+    // parser na vlastnom serveri funguje ďalej; AI vetva vráti null
+    // (= „Nerozumel som“). Fail closed — chyba stavu = bez AI.
+    const dpaForAi = await checkCompanyDpaForAi(supabase);
+
     const selection = readSelectionContext(body?.selectionContext);
     const companyId = membership.company_id as string;
     let aiCalled = false;
@@ -238,6 +245,7 @@ export async function POST(req: Request) {
         // tej istej firmy a používateľa sa v krátkom okne neklasifikuje
         // dvakrát (lib/intents/ai-fallback-dedupe.ts — iba hash v pamäti).
         classifyWithAi: (text: string) => {
+          if (!dpaForAi.ok) return Promise.resolve(null);
           aiCalled = true;
           return classifyOnce({ companyId, userId: user.id }, text, () =>
             classifyIntentWithAi(text, (report) =>

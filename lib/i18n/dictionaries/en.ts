@@ -781,6 +781,8 @@ const en = {
       agreeTermsLink: "Terms of Use",
       agreePrivacyPrefix: "I confirm that I have read the",
       agreePrivacyLink: "Privacy Policy",
+      agreePrivacySuffix: "of Esblu s. r. o.",
+      agreeTermsSuffix: "",
       accountCreatedImmediate: "Your account has been created. You are now logged in.",
       accountCreatedPendingConfirm:
         "Registration was successful. Please check your email and confirm your registration.",
@@ -893,7 +895,7 @@ const en = {
     termsVersionSuffix: "(version {{version}}).",
     agreePrivacyPrefix: "I confirm that I have read the",
     agreePrivacyLink: "Privacy Policy",
-    privacyVersionSuffix: "(version {{version}}).",
+    privacyVersionSuffix: "of Esblu s. r. o. (version {{version}}).",
     submitError: "The confirmation could not be saved. Please try again.",
     confirmButton: "Confirm and continue",
     saving: "Saving...",
@@ -916,6 +918,8 @@ const en = {
       "The Data Processing Agreement must be confirmed on the company's behalf by its owner — administrator or other app permissions are not sufficient. Until this happens, some features (e.g. uploading new documents, AI inbox, vehicles, machines, or inventory items) are temporarily unavailable; you can still view existing data.",
     employeeNoticeDismiss: "Got it",
     viewDpa: "View DPA",
+    aiBlocked:
+      "AI processing is available only after the company owner accepts the Data Processing Agreement (DPA). Nothing was sent.",
     errors: {
       ESBLU_NOT_ACTIVE_OWNER:
         "Only the company's owner can accept the DPA on the company's behalf.",
@@ -2194,11 +2198,13 @@ const en = {
 
   legal: {
     updatedAtPrefix: "Last updated:",
+    slovakOnlyNotice:
+      "This document is currently available only in its original Slovak version. An official English translation has not been published yet.",
     backToLogin: "Back to login",
     titles: {
       terms: "Terms of Use",
       privacy: "Privacy Policy",
-      cookies: "Cookies",
+      cookies: "Cookie information",
       dpa: "DPA",
       subprocessors: "Subprocessors",
       contact: "Contact",
@@ -2220,15 +2226,21 @@ const en = {
       supabaseLocation:
         "EU — Frankfurt (AWS eu-central-1)",
       openaiPurpose:
-        "AI recognition of data from uploaded documents and photos",
+        "Automated recognition, extraction and structuring of data from documents, transcription of voice input and interpretation of text commands within Esblu features",
       openaiDataCategories:
-        "Content of the document/photo submitted for processing",
+        "Photos and images of documents and the data in them (e.g. names, addresses, contact, billing and bank details, data from vehicle registration and insurance documents), short voice recordings for transcription, text commands and the results of automated processing",
       openaiLocation:
-        "Processing location not yet legally confirmed in this list — details available on request at privacy@esblu.com",
+        "Contracting provider: OpenAI Ireland Ltd., Ireland. Onward transfers outside the EEA under the OpenAI Data Processing Addendum (standard contractual clauses or adequacy decisions)",
       vercelPurpose: "Hosting and operation of the application",
       vercelDataCategories:
         "Technical connection data required to deliver the application",
       vercelLocation: "Server functions: EU — Frankfurt (fra1) per project configuration; further details available on request at privacy@esblu.com",
+      fcmPurpose:
+        "Delivery of push notifications to the Android mobile app (Firebase Cloud Messaging)",
+      fcmDataCategories:
+        "App registration tokens and installation identifiers, technical delivery data and the notification text (a general notice of a new message or an upcoming deadline)",
+      fcmLocation:
+        "Google global infrastructure including the USA and the EU; transfers under the Firebase Data Processing and Security Terms",
       namecheapPurpose:
         "Hosting of business email communication (the info@esblu.com and privacy@esblu.com mailboxes — privacy@esblu.com is an alias pointing to the same mailbox) and receipt of email messages from users, including requests concerning personal data",
       namecheapDataCategories:

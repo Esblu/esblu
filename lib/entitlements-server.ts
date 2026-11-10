@@ -18,6 +18,7 @@ import {
   type EntitlementDenial,
   type EntitlementKey,
 } from "@/lib/entitlements";
+import { checkCompanyDpaForAi, companyDpaGuardMessageKey } from "@/lib/ai/company-dpa-guard";
 
 export async function getCompanyEntitlements(db: SupabaseClient): Promise<CompanyEntitlements | null> {
   try {
@@ -174,6 +175,18 @@ export async function guardAiProcessing(
     ok: false as const,
     response: Response.json({ success: false, error: translate(locale, key) }, { status }),
   });
+
+  // DPA aktívnej firmy (CLIA manuál 3.1.2) — pred kvótou aj pred prenosom do AI. Fail closed.
+  const dpa = await checkCompanyDpaForAi(db);
+  if (!dpa.ok) {
+    return {
+      ok: false as const,
+      response: Response.json(
+        { success: false, code: dpa.code, error: translate(locale, companyDpaGuardMessageKey(dpa)) },
+        { status: dpa.status, headers: { "Cache-Control": "private, no-store" } }
+      ),
+    };
+  }
 
   const { error: quotaError } = await db.rpc("esblu_consume_ai_scan_quota", { p_endpoint: endpoint });
   if (quotaError) {

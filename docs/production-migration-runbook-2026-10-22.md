@@ -237,6 +237,8 @@ HDR = postup v hlavičke migrácie, FN = predchádzajúca definícia funkcie (ul
 | 41 | `20261026100000_pricing_entitlements` | G10 pricing + entitlements | N | RB | áno **kým nie je žiadny platený plán** | katalóg (trial limity), kanonické plány, výber plánu, usage počítadlá, storage RESTRICTIVE politika, backfill legacy ručných nárokov; `allow_mock_plans` = false |
 | 42 | `20261026110000_pricing_entitlement_corrections` | G10 pricing + entitlements | S | RB | áno | J7 korekcie: Dokumenty 10 AI, 0 nových uploadov bez plánu (+ RESTRICTIVE UPDATE), eFaktúra half-units, rezervované miesta v prehľade |
 | 43 | `20261027100000_intent_command_telemetry` | G11 intent fallback (J8) | S | RB | áno (iba technická telemetria) | `ai_usage_monthly` flow `intent_command` + service-only RPC `esblu_record_intent_command`; bez obsahu príkazov; rollback zmaže iba tieto počítadlá |
+| 44 | `20261110100000_clia_gdpr_retention_alignment` | G12 CLIA GDPR (J10) | S | RB | áno (funkcie; mazanie robí až cron) | service-only `esblu_purge_gdpr_technical_retention` + `esblu_list_stale_unconfirmed_auth_users`; `esblu_account_deletion_commit` + zber `chat-attachments`. Prvý beh cronu po deployi zmaže historické riadky nad maximom CLIA — **OWNER APPROVAL** pred prvým produkčným behom |
+| 45 | `20261110110000_clia_privacy_1_4_cookies_1_1` | G12 CLIA GDPR (J10) | N | RB | áno kým nikto nepotvrdil 1.4 | seed `legal_documents`: privacy_policy 1.4 (required → LegalAcceptanceGate pre všetkých), cookie_policy 1.1; **aplikovať spolu s kódom** |
 
 Mimo zoznamu (už v produkcii, nespúšťať): `20261001130000`, `20261005090000`, `20261005091000`. 37 legacy súborov
 `20260721000100 … 20260830090000` nemá v produkcii history riadok (aplikované mimo trackera, MIGRATIONS.md §3) —
@@ -244,7 +246,7 @@ Mimo zoznamu (už v produkcii, nespúšťať): `20261001130000`, `20261005090000
 `harden_accounting_handoff_grants`, `harden_client_role_privileges_anon_select_default`) — známy historický stav.
 
 Dôležité: od **2026-10-30** Supabase neudeľuje novým tabuľkám v `public` Data API grants. Tabuľky z #2–#35
-dostanú granty až v #36 → celé okno #1–#43 vykonať **v jednej relácii** a aplikačný deploy až po #43 + E.
+dostanú granty až v #36 → celé okno #1–#45 vykonať **v jednej relácii** a aplikačný deploy až po #45 + E.
 
 ### J0. Legacy baseline `20260720000000` — **CONDITIONAL (odporúčané APPLY ako no-op)**
 
@@ -254,9 +256,9 @@ dostanú granty až v #36 → celé okno #1–#43 vykonať **v jednej relácii**
 - Riziko konfliktu: žiadne, pokiaľ 9/9 existuje. **Ak precheck `legacy_baseline_tables_present ≠ 9` → STOP**
   (nespúšťať baseline — vytvoril by tabuľku v legacy tvare do zrelej schémy).
 
-## D. Expected schema state po #43
+## D. Expected schema state po #45
 
-- História: 56 + 43 = **99** riadkov; posledný `name = 20261027100000_intent_command_telemetry`.
+- História: 56 + 45 = **101** riadkov; posledný `name = 20261110110000_clia_privacy_1_4_cookies_1_1`.
 - Tabuľky `public`: **97** = presne `supabase/grants/public-data-api-grants.json` (61 + 36), všetky RLS.
 - Bucket `einvoice-documents` (private) navyše → 8 bucketov, všetky `public = false`.
 - Funkcie / politiky / ACL: md5 == PGlite replay (`npm run test:grants-replay-db`) a == staging
@@ -264,7 +266,7 @@ dostanú granty až v #36 → celé okno #1–#43 vykonať **v jednej relácii**
 - `user_active_company`: 1 riadok na používateľa s aktívnym členstvom (dnes 6); `companies.trial_policy = 'legacy'` pre 4 existujúce firmy.
 - `einvoice_rollout`: prázdne (fail-closed). `subscription_*`: iba katalóg; billing OFF.
 
-## E. Grants verification (hneď po #43)
+## E. Grants verification (hneď po #45)
 
 1. `scripts/sql/grants-data-api-matrix.sql` (read-only) → zhoda s manifestom; `anon` iba `legal_documents:SELECT`.
 2. 0 TRUNCATE/TRIGGER/REFERENCES pre `anon`/`authenticated`; 0 SECURITY DEFINER bez `search_path`; anon EXECUTE iba
@@ -283,6 +285,8 @@ billing owner-only; `esblu_my_has_permission` default deny; zrušenie účtu gua
 
 | skupina | rollback | lossless? | maže dáta? | kedy namiesto toho restore / forward-fix |
 |---|---|---|---|---|
+| G12 #45 | RB | áno kým nikto nepotvrdil 1.4 | legal seed privacy 1.4 / cookies 1.1 (fail closed, ak existuje potvrdenie 1.4) | iba spolu s vrátením kódu |
+| G12 #44 | RB | áno | J10 retenčné funkcie + zber chat príloh; vráti definíciu commit funkcie z 20261013100000 | kedykoľvek; už zmazané retenčné riadky sa neobnovia |
 | G11 #43 | RB | áno | iba technické počítadlá príkazov (flow `intent_command`) | kedykoľvek; počítadlá sa stratia |
 | G10 #42 → #41 | RB ×2 | áno, kým žiadna firma nemá kanonický platený plán | kompozícia plánov, hlasové počítadlá (staging mock) | po prvom platenom pláne: forward-fix |
 | G9 #40 → #39 | RB ×2 | áno | iba technická AI usage telemetria (počítadlá) | kedykoľvek; počítadlá sa stratia |
@@ -323,7 +327,7 @@ STOP (nepokračovať, nič neopravovať „za behu“) ak:
 | 1 | read-only precheck (A) — oba skripty, protokol | — |
 | 2 | výslovný súhlas vlastníka s oknom a týmto runbookom | **[SÚHLAS vlastníka]** |
 | 3 | backup/recovery potvrdenie (B) + logický dump + uloženie FN definícií (#14, #15, #19) | vlastník potvrdí |
-| 4 | migrácie #1–#43 po jednej (C), po každej kontrola `schema_migrations` | **[SÚHLAS]** (krok 2) |
+| 4 | migrácie #1–#45 po jednej (C), po každej kontrola `schema_migrations` | **[SÚHLAS]** (krok 2) |
 | 5 | grants verification (E) + advisors | — |
 | 6 | targeted DB smoke (F) | — |
 | 7 | aplikačný deploy: merge RC → `main` až teraz, deployment spárovaný podľa SHA, READY | **[SÚHLAS — merge/deploy]** |

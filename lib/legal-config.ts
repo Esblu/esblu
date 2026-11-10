@@ -48,7 +48,13 @@ export const legalConfig = {
   // fyzickej osoby Jaroslav Juriš na Esblu s. r. o. v sekcii A — jediná
   // obsahová zmena, zvyšok dokumentu bezo zmeny). Pozri legal/privacy/1.3.md
   // a supabase/migrations/20260909100000_add_esblu_sro_identity_legal_versions.sql.
-  privacyPolicyVersion: "1.3",
+  // → 1.4 (J10, 2026-11-10: finálne znenie CLIA „Zásady spracúvania osobných
+  // údajov“ z 09.11.2026 prevzaté doslovne zo slovenského originálu; jediný
+  // doplnok je odkaz na sekciu „Informácie o cookies“ v mieste prázdneho
+  // zástupného riadku CLIA. EN/DE preklad 1.4 zámerne NEEXISTUJE — CLIA
+  // dodala iba SK právny originál; EN/DE zobrazí SK text s upozornením.
+  // LEGAL CONFIRMATION REQUIRED pre finálne preklady.)
+  privacyPolicyVersion: "1.4",
   // Podmienky používania idú vo verzii 1.1 — história: 1.0 (21. júla 2026)
   // → 1.1 (9. septembra 2026, prechod identifikácie prevádzkovateľa z
   // fyzickej osoby Jaroslav Juriš na Esblu s. r. o. v úvodnej vete — jediná
@@ -66,7 +72,11 @@ export const legalConfig = {
   // ZRUŠENÉ (nikdy neaplikované v produkcii): pôvodná migrácia
   // supabase/migrations/20260819100000_add_cookie_policy_v1_1_locale.sql
   // a súbory legal/cookies/1.1*.md boli odstránené v rámci tejto revízie.
-  cookiePolicyVersion: "1.0",
+  // → 1.1 (J10, 2026-11-10): reálny inventár technológií podľa CLIA manuálu
+  // čl. VI (sekcia „Informácie o cookies“) — localStorage/sessionStorage
+  // kľúče, service worker, web push, Firebase (Android). Žiadne nové
+  // technológie; 1.0 bola neúplná. Cookies stále žiadne.
+  cookiePolicyVersion: "1.1",
   // DPA ide vo verzii 1.2 — história: 1.0 (nikdy verejne nasadená) → 1.1
   // (plné pokrytie čl. 28, pozri docs/gdpr-compliance-review-2026-08-15.md)
   // → 1.2 (9. septembra 2026, prechod identifikácie prevádzkovateľa z
@@ -90,7 +100,7 @@ export const REQUIRED_ACCEPTANCE_DOCUMENTS = [
   {
     type: "privacy_policy" as const,
     version: legalConfig.privacyPolicyVersion,
-    label: "Zásady ochrany osobných údajov",
+    label: "Zásady spracúvania osobných údajov",
     href: "/ochrana-osobnych-udajov",
   },
 ] as const;

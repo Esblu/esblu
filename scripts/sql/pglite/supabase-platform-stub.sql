@@ -55,6 +55,7 @@ create table auth.users (
   raw_user_meta_data jsonb default '{}'::jsonb,
   raw_app_meta_data jsonb default '{}'::jsonb,
   email_confirmed_at timestamptz,
+  phone_confirmed_at timestamptz,
   last_sign_in_at timestamptz,
   is_anonymous boolean not null default false,
   created_at timestamptz default now(),

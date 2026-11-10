@@ -12,6 +12,7 @@ import {
   type InvitePreview,
 } from "@/lib/company";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
+import { AuthLegalLinks } from "@/app/components/AuthLegalLinks";
 import LanguageSwitcher from "@/app/components/LanguageSwitcher";
 import { SocialAuthButtons } from "@/app/components/auth/SocialAuthButtons";
 import { signOutOnThisDevice } from "@/lib/sign-out";
@@ -482,6 +483,7 @@ function Centered({ children }: { children: React.ReactNode }) {
     <main className="app-shell-bg flex min-h-screen items-center justify-center px-4 py-6">
       <div className="w-full max-w-sm rounded-doc border border-doc-border bg-surface-1 p-4 sm:p-6">
         {children}
+        <AuthLegalLinks />
       </div>
     </main>
   );

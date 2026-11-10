@@ -705,7 +705,7 @@ const sk = {
         "Esblu nepoužíva túto funkciu na autonómne rozhodovanie s právnymi alebo obdobne významnými účinkami.",
       warning:
         "AI výstup môže obsahovať chyby. Používateľ musí všetky údaje pred uložením alebo ďalším použitím skontrolovať.",
-      privacyLink: "Zásady ochrany osobných údajov →",
+      privacyLink: "Zásady spracúvania osobných údajov →",
       termsLink: "Podmienky používania →",
       step1: "Nahrajte alebo odfoťte dokument.",
       step2: "Skontrolujte rozpoznané údaje.",
@@ -794,7 +794,9 @@ const sk = {
       agreeTermsPrefix: "Súhlasím s",
       agreeTermsLink: "Podmienkami používania",
       agreePrivacyPrefix: "Potvrdzujem, že som sa oboznámil/a so",
-      agreePrivacyLink: "Zásadami ochrany osobných údajov",
+      agreePrivacyLink: "Zásadami spracúvania osobných údajov",
+      agreePrivacySuffix: "spoločnosti Esblu s. r. o.",
+      agreeTermsSuffix: "",
       accountCreatedImmediate: "Účet bol vytvorený. Teraz si prihlásený.",
       accountCreatedPendingConfirm:
         "Registrácia prebehla úspešne. Skontroluj svoj e-mail a potvrď registráciu.",
@@ -803,7 +805,7 @@ const sk = {
       validationPasswordTooShort: "Heslo musí mať minimálne 8 znakov.",
       validationPasswordMismatch: "Heslá sa nezhodujú.",
       validationMustAgreeLegal:
-        "Pred registráciou musíš súhlasiť s Podmienkami používania a potvrdiť oboznámenie sa so Zásadami ochrany osobných údajov.",
+        "Pred registráciou musíš súhlasiť s Podmienkami používania a potvrdiť oboznámenie sa so Zásadami spracúvania osobných údajov.",
       loginFailed: "Prihlásenie sa nepodarilo. Skontroluj e-mail a heslo.",
       registrationFailedPrefix: "Registrácia sa nepodarila: ",
     },
@@ -906,8 +908,8 @@ const sk = {
     agreeTermsLink: "Podmienkami používania",
     termsVersionSuffix: "(verzia {{version}}).",
     agreePrivacyPrefix: "Potvrdzujem, že som sa oboznámil/a so",
-    agreePrivacyLink: "Zásadami ochrany osobných údajov",
-    privacyVersionSuffix: "(verzia {{version}}).",
+    agreePrivacyLink: "Zásadami spracúvania osobných údajov",
+    privacyVersionSuffix: "spoločnosti Esblu s. r. o. (verzia {{version}}).",
     submitError: "Potvrdenie sa nepodarilo uložiť. Skús to prosím znova.",
     confirmButton: "Potvrdiť a pokračovať",
     saving: "Ukladám...",
@@ -930,6 +932,8 @@ const sk = {
       "Zmluvu o spracúvaní osobných údajov musí v mene firmy potvrdiť jej vlastník (owner) — administrátorské ani iné oprávnenia v appke na to nestačia. Kým sa tak nestane, niektoré funkcie (napr. nahrávanie nových dokumentov, AI evidencie, vozidiel, strojov alebo skladových položiek) sú dočasne nedostupné; existujúce dáta si môžete naďalej prezerať.",
     employeeNoticeDismiss: "Rozumiem",
     viewDpa: "Zobraziť DPA",
+    aiBlocked:
+      "AI spracovanie je dostupné až po prijatí Zmluvy o spracúvaní osobných údajov (DPA) vlastníkom firmy. Nič nebolo odoslané.",
     errors: {
       ESBLU_NOT_ACTIVE_OWNER:
         "DPA môže v mene firmy prijať iba jej vlastník (owner).",
@@ -1149,7 +1153,7 @@ const sk = {
       description:
         "Verejné informácie o pravidlách používania služby a spracúvaní osobných údajov.",
       navAriaLabel: "Právne a kontaktné informácie",
-      privacyLink: "Zásady ochrany osobných údajov",
+      privacyLink: "Zásady spracúvania osobných údajov",
       termsLink: "Podmienky používania Esblu",
       cookiesLink: "Cookies",
       dpaLink: "Zmluva o spracúvaní osobných údajov (DPA)",
@@ -1167,12 +1171,12 @@ const sk = {
       noAcceptancesYet:
         "Zatiaľ nemáme záznam o potvrdení žiadneho dokumentu (alebo ešte nebola nasadená databázová funkcia na ich evidenciu).",
       currentVersions:
-        "Aktuálne platné verzie: Podmienky používania v {{terms}}, Zásady ochrany osobných údajov v {{privacy}}.",
+        "Aktuálne platné verzie: Podmienky používania v {{terms}}, Zásady spracúvania osobných údajov v {{privacy}}.",
       requestExport: "Požiadať o export mojich údajov",
       requestCorrection: "Požiadať o opravu mojich údajov",
       docTypes: {
         terms: "Podmienky používania",
-        privacy_policy: "Zásady ochrany osobných údajov",
+        privacy_policy: "Zásady spracúvania osobných údajov",
         dpa: "Zmluva o spracúvaní osobných údajov (DPA)",
         cookie_policy: "Cookies",
       },
@@ -2222,11 +2226,13 @@ const sk = {
 
   legal: {
     updatedAtPrefix: "Posledná aktualizácia:",
+    slovakOnlyNotice:
+      "Tento dokument je k dispozícii v slovenskom pôvodnom znení.",
     backToLogin: "Späť na prihlásenie",
     titles: {
       terms: "Podmienky používania",
       privacy: "Ochrana osobných údajov",
-      cookies: "Cookies",
+      cookies: "Informácie o cookies",
       dpa: "DPA",
       subprocessors: "Sprostredkovatelia",
       contact: "Kontakt",
@@ -2246,15 +2252,22 @@ const sk = {
         "Databáza, autentifikácia, úložisko súborov (fotografie, dokumenty)",
       supabaseDataCategories: "Všetky údaje spracúvané v aplikácii",
       supabaseLocation: "EÚ — Frankfurt (AWS eu-central-1)",
-      openaiPurpose: "AI rozpoznávanie údajov z nahraných dokumentov a fotografií",
+      openaiPurpose:
+        "Automatizované rozpoznávanie, extrakcia a štruktúrovanie údajov z dokumentov, prepis hlasových vstupov a interpretácia textových príkazov v rámci funkcionalít Aplikácie Esblu",
       openaiDataCategories:
-        "Obsah nahraného dokumentu/fotografie odoslaný na spracovanie",
+        "Fotografie a obrazy dokumentov a údaje v nich (napr. mená, adresy, kontaktné, fakturačné a bankové údaje, údaje z technických preukazov a poistných dokumentov), krátke hlasové nahrávky určené na prepis, textové príkazy a výsledky automatizovaného spracúvania",
       openaiLocation:
-        "Lokalita spracovania zatiaľ v tomto zozname nie je právne potvrdená — podrobnosti na vyžiadanie na privacy@esblu.com",
+        "Zmluvný poskytovateľ: OpenAI Ireland Ltd., Írsko. Ďalšie prenosy mimo EHP podľa OpenAI Data Processing Addendum (štandardné zmluvné doložky alebo rozhodnutia o primeranosti)",
       vercelPurpose: "Hosting a prevádzka aplikácie",
       vercelDataCategories:
         "Technické dáta spojenia potrebné na doručenie aplikácie",
       vercelLocation: "Serverové funkcie: EÚ — Frankfurt (fra1) podľa konfigurácie projektu; ďalšie podrobnosti na vyžiadanie na privacy@esblu.com",
+      fcmPurpose:
+        "Doručovanie push notifikácií do mobilnej aplikácie pre Android (Firebase Cloud Messaging)",
+      fcmDataCategories:
+        "Registračné tokeny a identifikátory inštalácií aplikácie, technické údaje o doručení a text notifikácie (všeobecné oznámenie o novej správe alebo blížiacom sa termíne)",
+      fcmLocation:
+        "Globálna infraštruktúra Google vrátane USA a EÚ; prenosy podľa Firebase Data Processing and Security Terms",
       namecheapPurpose:
         "Hosting firemnej e-mailovej komunikácie (schránky info@esblu.com a privacy@esblu.com — privacy@esblu.com je alias smerujúci do tej istej schránky) a prijímanie e-mailových správ od používateľov, vrátane žiadostí týkajúcich sa osobných údajov",
       namecheapDataCategories:

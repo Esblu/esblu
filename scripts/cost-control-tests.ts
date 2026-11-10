@@ -315,11 +315,18 @@ await check("FCM: súbežné odoslania zdieľajú jedno získanie OAuth tokenu",
 });
 
 // ----------------------------------------------------------------------------- cron
-await check("telemetry-maintenance: CRON_SECRET, iba dve purge RPC, žiadny priamy DELETE, denne", () => {
+await check("telemetry-maintenance: CRON_SECRET, iba schválené purge RPC (+ J10 CLIA), žiadny priamy DELETE, denne", () => {
   const src = read("app/api/cron/telemetry-maintenance/route.ts");
   assert.match(src, /timingSafeEqual/);
   const rpcs = [...src.matchAll(/rpc\("([a-z_]+)"/g)].map((m) => m[1]).sort();
-  assert.deepEqual(rpcs, ["esblu_purge_ai_usage_monthly", "esblu_purge_chat_notification_deliveries"]);
+  assert.deepEqual(rpcs, [
+    "esblu_list_stale_unconfirmed_auth_users",
+    "esblu_purge_ai_usage_monthly",
+    "esblu_purge_chat_notification_deliveries",
+    "esblu_purge_gdpr_technical_retention",
+  ]);
+  // J10: jediné mazanie mimo RPC = auth.admin.deleteUser pre ID vrátené DB výberom neúspešných registrácií.
+  assert.equal([...src.matchAll(/auth\.admin\.deleteUser\(/g)].length, 1);
   assert.doesNotMatch(src, /\.delete\(|admin\.from\(|\)\.from\(/);
   const cron = JSON.parse(read("vercel.json")).crons.find((c: { path: string }) => c.path === "/api/cron/telemetry-maintenance");
   assert.match(cron.schedule, /^\d+ \d+ \* \* \*$/);

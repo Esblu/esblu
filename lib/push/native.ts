@@ -238,9 +238,13 @@ export async function disableNativePush(): Promise<void> {
   storageSet(ENABLED_KEY, null);
   if (!nativePlatform()) return;
   try {
-    const headers = await authHeaders();
-    if (headers) {
-      await fetch(apiUrl("/api/push/devices"), { method: "DELETE", headers, body: JSON.stringify({ installationId: installationId() }) }).catch(() => undefined);
+    // J10 CLIA (minimalizácia): pri odhlásení sa NEVYTVÁRA nové ID inštalácie.
+    // Ak ešte žiadne neexistuje, táto inštalácia nikdy push neregistrovala →
+    // na serveri nie je čo zneplatniť a nič sa neodosiela.
+    const existingInstallation = storageGet(INSTALLATION_KEY);
+    const headers = existingInstallation && UUID.test(existingInstallation) ? await authHeaders() : null;
+    if (headers && existingInstallation) {
+      await fetch(apiUrl("/api/push/devices"), { method: "DELETE", headers, body: JSON.stringify({ installationId: existingInstallation }) }).catch(() => undefined);
     }
     if (wasEnabled) await PushNotifications.unregister();
   } catch {

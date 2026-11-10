@@ -29,11 +29,14 @@ function authorized(req: Request): boolean {
 
 export async function GET(req: Request) {
   if (!authorized(req)) return Response.json({ success: false }, { status: 401 });
+  const admin = getSupabaseAdmin();
+  // J10 CLIA: zneplatnenie identifikátorov po skončení session/členstva beží
+  // VŽDY — aj keď nie je nakonfigurovaný žiadny push provider (predtým sa
+  // sweep pri chýbajúcom provideri preskočil a identifikátory ostávali aktívne).
+  await admin.rpc("esblu_push_revoke_ended");
+
   const providers = configuredProviders();
   if (!hasAnyProvider(providers)) return Response.json({ success: true, configured: false, sent: 0 });
-
-  const admin = getSupabaseAdmin();
-  await admin.rpc("esblu_push_revoke_ended");
 
   // Iba firmy, ktoré majú aspoň jedno aktívne zariadenie — ostatné netreba čítať.
   const { data: companies } = await admin.rpc("esblu_push_companies_with_targets");

@@ -3,7 +3,7 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 
 // -----------------------------------------------------------------------------
 // GET /api/cron/telemetry-maintenance — technická údržba (cost control,
-// 2026-10-25). Nič iné nemaže.
+// 2026-10-25; J10 CLIA retencia 2026-11-10). Nič iné nemaže.
 //
 //   1. notification_deliveries: iba 'chat' dedupe riadky staršie ako
 //      CHAT_DEDUPE_KEEP_DAYS (push na chat sa posiela len ≤ 5 min po správe,
@@ -12,6 +12,14 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 //      Po dávkach, najviec MAX_BATCHES za beh.
 //   2. ai_usage_monthly: mesiace staršie ako AI_USAGE_KEEP_MONTHS (DB vynúti
 //      minimum 13). Technický default — OWNER/CLIA INFORMATIVE NOTE.
+//   3. J10 CLIA (09.11.2026) technická retencia — esblu_purge_gdpr_technical_retention
+//      (migrácia 20261110100000): revoked push identifikátory > 30 d, doručenia
+//      notifikácií > 90 d, neprijaté pozvánky > 30 d po expirácii/zrušení,
+//      dokončené deletion joby > 90 d, expirované asistent záznamy > 1 d,
+//      dokončená media fronta > 90 d.
+//   4. J10 CLIA: neúspešné registrácie — nepotvrdené auth účty bez členstva
+//      a bez firmy staršie ako 30 dní (esblu_list_stale_unconfirmed_auth_users)
+//      → auth.admin.deleteUser, najviac STALE_USERS_PER_RUN za beh.
 //
 // Chránené CRON_SECRET. Odpoveď = iba počty.
 // -----------------------------------------------------------------------------
@@ -24,6 +32,8 @@ const CHAT_DEDUPE_KEEP_DAYS = 7;
 const AI_USAGE_KEEP_MONTHS = 25;
 const BATCH_SIZE = 5_000;
 const MAX_BATCHES = 20;
+const FAILED_REGISTRATION_KEEP_DAYS = 30;
+const STALE_USERS_PER_RUN = 50;
 
 function authorized(req: Request): boolean {
   const secret = process.env.CRON_SECRET?.trim();
@@ -69,9 +79,56 @@ export async function GET(req: Request) {
     aiUsageDeleted = typeof purged === "number" ? purged : 0;
   }
 
-  const ok = chatStatus !== "error" && aiUsageStatus !== "error";
+  let gdprRetention: Record<string, number> = {};
+  let gdprStatus: "ok" | "skipped" | "error" = "ok";
+  for (let batch = 0; batch < MAX_BATCHES; batch++) {
+    const { data, error } = await admin.rpc("esblu_purge_gdpr_technical_retention", { p_batch_size: BATCH_SIZE });
+    if (error) {
+      gdprStatus = missingFunction(error.code) ? "skipped" : "error";
+      if (gdprStatus === "error") console.error("cron/telemetry-maintenance: gdpr retention purge zlyhal:", error.code ?? "unknown");
+      break;
+    }
+    const counts = (data && typeof data === "object" ? data : {}) as Record<string, unknown>;
+    let maxInBatch = 0;
+    for (const [key, value] of Object.entries(counts)) {
+      const n = typeof value === "number" ? value : 0;
+      gdprRetention[key] = (gdprRetention[key] ?? 0) + n;
+      maxInBatch = Math.max(maxInBatch, n);
+    }
+    if (maxInBatch < BATCH_SIZE) break;
+  }
+  if (gdprStatus !== "ok") gdprRetention = {};
+
+  let staleUsersDeleted = 0;
+  let staleUsersStatus: "ok" | "skipped" | "error" = "ok";
+  const { data: staleIds, error: staleError } = await admin.rpc("esblu_list_stale_unconfirmed_auth_users", {
+    p_older_than_days: FAILED_REGISTRATION_KEEP_DAYS,
+    p_limit: STALE_USERS_PER_RUN,
+  });
+  if (staleError) {
+    staleUsersStatus = missingFunction(staleError.code) ? "skipped" : "error";
+    if (staleUsersStatus === "error") console.error("cron/telemetry-maintenance: stale registrations list zlyhal:", staleError.code ?? "unknown");
+  } else {
+    for (const id of ((staleIds as unknown[] | null) ?? []).filter((v): v is string => typeof v === "string")) {
+      const { error } = await admin.auth.admin.deleteUser(id);
+      if (!error) staleUsersDeleted += 1;
+      else console.error("cron/telemetry-maintenance: stale registration delete zlyhal:", error.status ?? "unknown");
+    }
+  }
+
+  const ok = chatStatus !== "error" && aiUsageStatus !== "error" && gdprStatus !== "error" && staleUsersStatus !== "error";
   return Response.json(
-    { success: ok, chatDedupeDeleted: chatDeleted, chatDedupe: chatStatus, aiUsageMonthsDeleted: aiUsageDeleted, aiUsage: aiUsageStatus },
+    {
+      success: ok,
+      chatDedupeDeleted: chatDeleted,
+      chatDedupe: chatStatus,
+      aiUsageMonthsDeleted: aiUsageDeleted,
+      aiUsage: aiUsageStatus,
+      gdprRetention,
+      gdprRetentionStatus: gdprStatus,
+      failedRegistrationsDeleted: staleUsersDeleted,
+      failedRegistrations: staleUsersStatus,
+    },
     { status: ok ? 200 : 500 }
   );
 }

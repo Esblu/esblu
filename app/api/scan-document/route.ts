@@ -16,6 +16,7 @@ import {
 import { getRequestLocale } from "@/lib/i18n/request-locale";
 import { translate } from "@/lib/i18n/translate";
 import { isOpenAiConfigured, safeAiErrorMeta } from "@/lib/ai/openai-runtime";
+import { checkCompanyDpaForAi, companyDpaGuardMessageKey } from "@/lib/ai/company-dpa-guard";
 
 // -----------------------------------------------------------------------------
 // Univerzálny AI Inbox scan endpoint.
@@ -1170,6 +1171,16 @@ export async function POST(req: Request) {
         global: { headers: { Authorization: `Bearer ${accessToken}` } },
       }
     );
+
+    // 1a) DPA aktívnej firmy (CLIA manuál 3.1.2) — pred kvótou aj pred
+    //     akýmkoľvek prenosom obsahu do OpenAI. Fail closed.
+    const dpa = await checkCompanyDpaForAi(userClient);
+    if (!dpa.ok) {
+      return Response.json(
+        { success: false, code: dpa.code, error: translate(locale, companyDpaGuardMessageKey(dpa)) },
+        { status: dpa.status, headers: { "Cache-Control": "private, no-store" } }
+      );
+    }
 
     const { error: quotaError } = await userClient.rpc("esblu_consume_ai_scan_quota", {
       p_endpoint: "scan-document",

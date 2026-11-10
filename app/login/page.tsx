@@ -1,5 +1,6 @@
 "use client";
 
+import { currentLegalAckMetadata, LEGAL_ACK_METADATA_KEY } from "@/lib/legal-ack-versions";
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -207,6 +208,9 @@ export default function LoginPage() {
     // nepoužije, pokiaľ je template nastavená podľa vyššie — pozri
     // komentár v app/auth/callback/page.tsx pre presný text template).
     emailRedirectTo: canonicalWebUrl("/auth/callback"),
+    // J10 CLIA 2.2.4: verzie dokumentov zobrazené pri odškrtnutí — onboarding
+    // ich zapíše presne (lib/legal-ack-versions.ts).
+    data: { [LEGAL_ACK_METADATA_KEY]: currentLegalAckMetadata() },
   },
 });
 
@@ -425,7 +429,7 @@ async function resetPassword() {
                 <LegalDocLink path="/podmienky-pouzivania" className="font-medium text-brand-300 hover:underline">
                   {t("auth.login.agreeTermsLink")}
                 </LegalDocLink>
-                .
+                {t("auth.login.agreeTermsSuffix") ? ` ${t("auth.login.agreeTermsSuffix")}` : ""}.
               </span>
             </label>
 
@@ -441,8 +445,8 @@ async function resetPassword() {
                 {t("auth.login.agreePrivacyPrefix")}{" "}
                 <LegalDocLink path="/ochrana-osobnych-udajov" className="font-medium text-brand-300 hover:underline">
                   {t("auth.login.agreePrivacyLink")}
-                </LegalDocLink>
-                .
+                </LegalDocLink>{" "}
+                {t("auth.login.agreePrivacySuffix")}.
               </span>
             </label>
           </div>

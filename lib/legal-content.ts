@@ -153,3 +153,26 @@ export function readLegalMarkdownAllLocales(
 
   return result;
 }
+
+/**
+ * J10 CLIA (2026-11-10): ktoré jazykové mutácie majú VLASTNÝ preklad.
+ * `false` = pre daný jazyk sa zobrazuje slovenský originál (fallback).
+ * Stránka to klientovi oznámi (LegalMarkdownLocalized → upozornenie), aby
+ * sa slovenský text bez prekladu nevydával za preklad a naopak — CLIA dodala
+ * iba slovenský právny originál; neautorizovaný preklad sa nezverejňuje
+ * ako rovnocenné znenie (LEGAL CONFIRMATION REQUIRED pre finálne preklady).
+ */
+export function legalTranslationAvailability(
+  documentType: LegalDocumentType,
+  version: string
+): Record<Locale, boolean> {
+  const result = {} as Record<Locale, boolean>;
+
+  for (const locale of SUPPORTED_LOCALES) {
+    result[locale] =
+      locale === "sk" ||
+      fs.existsSync(legalContentFilePathForLocale(documentType, version, locale));
+  }
+
+  return result;
+}

@@ -5,17 +5,14 @@ import { readLegalMarkdownAllLocales } from "@/lib/legal-content";
 import { legalConfig } from "@/lib/legal-config";
 
 export const metadata: Metadata = {
-  title: "Cookies | Esblu",
+  title: "Informácie o cookies | Esblu",
   description:
-    "Informácie o tom, ako Esblu pristupuje k cookies a podobným technológiám.",
+    "Prehľad cookies a obdobných technológií, ktoré Esblu skutočne používa.",
 };
 
 // Rendering shell — pozri komentár v app/podmienky-pouzivania/page.tsx.
-// Cookies zostáva na verzii 1.0 (pozri legalConfig.cookiePolicyVersion) —
-// appka i18n funkciu implementuje bez akejkoľvek novej cookie (jazyk sa
-// ukladá do localStorage, pozri lib/i18n/locales.ts), takže právny obsah
-// "Esblu nepoužíva žiadne cookies" zostáva pravdivý a nevyžaduje si novú
-// verziu tohto dokumentu.
+// Sekcia „Informácie o cookies“ (CLIA manuál čl. VI, J10 2026-11-10) —
+// verzia 1.1 = reálny inventár (pozri legalConfig.cookiePolicyVersion).
 export default function CookiesPage() {
   const markdownByLocale = readLegalMarkdownAllLocales(
     "cookie_policy",
@@ -25,7 +22,7 @@ export default function CookiesPage() {
   return (
     <PublicLegalLayout
       titleKey="legal.titles.cookies"
-      updatedAt={`15. augusta 2026 (verzia ${legalConfig.cookiePolicyVersion})`}
+      updatedAt={`10. novembra 2026 (verzia ${legalConfig.cookiePolicyVersion})`}
     >
       <LegalMarkdownLocalized variants={markdownByLocale} />
     </PublicLegalLayout>

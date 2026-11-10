@@ -12,7 +12,7 @@ import {
   isBetaAccessRequiredError,
 } from "@/lib/company";
 import { acceptLegalDocumentAtRegistration } from "@/lib/legal-acceptance";
-import { REQUIRED_ACCEPTANCE_DOCUMENTS } from "@/lib/legal-config";
+import { registrationAckVersions } from "@/lib/legal-ack-versions";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import { takeOAuthPending } from "@/lib/auth/oauth-client";
 import { mayRecordRegistrationConsent } from "@/lib/auth/oauth-routing";
@@ -104,8 +104,9 @@ export default function OnboardingCompanyPage() {
       // (nikdy sa nezapíše súhlas, ktorý nezaznel). E-mailová registrácia
       // (bez OAuth záznamu) ostáva bez zmeny.
       if (mayRecordRegistrationConsent(takeOAuthPending(), session.user.app_metadata?.provider ?? null)) {
+        // J10 CLIA 2.2.4: zapíše verzie zobrazené pri odškrtnutí (user_metadata).
         await Promise.all(
-          REQUIRED_ACCEPTANCE_DOCUMENTS.map((doc) =>
+          registrationAckVersions(session.user.user_metadata).map((doc) =>
             acceptLegalDocumentAtRegistration(doc.type, doc.version)
           )
         );

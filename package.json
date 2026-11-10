@@ -60,6 +60,8 @@
     "test:pricing-engine": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/pricing-engine-tests.ts",
     "test:pricing-entitlements-db": "node --experimental-strip-types --no-warnings scripts/pricing-entitlements-pglite-tests.ts",
     "test:cost-control-db": "node --experimental-strip-types --no-warnings scripts/cost-control-pglite-tests.ts",
+    "test:clia-gdpr": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/clia-gdpr-tests.ts",
+    "test:clia-gdpr-db": "node --experimental-strip-types --no-warnings scripts/clia-gdpr-retention-pglite-tests.ts",
     "test:grants-guard": "node --experimental-strip-types --no-warnings scripts/grants-migration-guard-tests.ts",
     "test:prelaunch-blockers": "node --experimental-strip-types --no-warnings scripts/prelaunch-blockers-tests.ts",
     "test:idempotency-db": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/idempotency-pglite-tests.ts",
