@@ -111,7 +111,9 @@ function renderInline(text: string, keyPrefix: string): ReactNode[] {
     }
 
     if (match[1]) {
-      nodes.push(<strong key={`${keyPrefix}-b${idx++}`}>{match[2]}</strong>);
+      // J10: vnorený inline (napr. **`kľúč`**) — tučný text môže obsahovať kód/odkaz.
+      const boldKey = `${keyPrefix}-b${idx++}`;
+      nodes.push(<strong key={boldKey}>{renderInline(match[2], boldKey)}</strong>);
     } else if (match[3]) {
       nodes.push(
         <code
