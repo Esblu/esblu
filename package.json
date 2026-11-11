@@ -63,6 +63,8 @@
     "test:clia-gdpr": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/clia-gdpr-tests.ts",
     "test:clia-gdpr-db": "node --experimental-strip-types --no-warnings scripts/clia-gdpr-retention-pglite-tests.ts",
     "test:clia-j10-1-db": "node --experimental-strip-types --no-warnings scripts/clia-j10-1-pglite-tests.ts",
+    "test:b2b-terms-db": "node --experimental-strip-types --no-warnings scripts/b2b-terms-pglite-tests.ts",
+    "test:b2b-terms": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/b2b-terms-tests.ts",
     "test:grants-guard": "node --experimental-strip-types --no-warnings scripts/grants-migration-guard-tests.ts",
     "test:prelaunch-blockers": "node --experimental-strip-types --no-warnings scripts/prelaunch-blockers-tests.ts",
     "test:idempotency-db": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/idempotency-pglite-tests.ts",

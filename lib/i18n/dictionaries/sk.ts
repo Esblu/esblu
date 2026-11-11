@@ -55,7 +55,7 @@ const sk = {
     },
     legalLinks: {
       privacy: "Ochrana osobných údajov",
-      terms: "Podmienky používania",
+      terms: "Všeobecné obchodné podmienky",
       cookies: "Cookies",
       dpa: "DPA (spracúvanie pre firmy)",
       subprocessors: "Sprostredkovatelia",
@@ -706,7 +706,7 @@ const sk = {
       warning:
         "AI výstup môže obsahovať chyby. Používateľ musí všetky údaje pred uložením alebo ďalším použitím skontrolovať.",
       privacyLink: "Zásady spracúvania osobných údajov →",
-      termsLink: "Podmienky používania →",
+      termsLink: "Všeobecné obchodné podmienky →",
       step1: "Nahrajte alebo odfoťte dokument.",
       step2: "Skontrolujte rozpoznané údaje.",
       step3: "Uložte dokument do evidencie alebo ho exportujte.",
@@ -750,7 +750,7 @@ const sk = {
     footer: {
       tagline: "Uzavretá beta — firma pod kontrolou",
       privacy: "Ochrana osobných údajov",
-      terms: "Podmienky používania",
+      terms: "Všeobecné obchodné podmienky",
       cookies: "Cookies",
       dpa: "DPA",
       subprocessors: "Sprostredkovatelia",
@@ -792,7 +792,7 @@ const sk = {
       accountDeletedPartialNotice:
         "Zrušenie účtu sa nepodarilo úplne dokončiť. Odhlásili sme ťa z bezpečnostných dôvodov — kontaktuj prosím podporu na info@esblu.com, overíme a dokončíme zrušenie účtu.",
       agreeTermsPrefix: "Súhlasím s",
-      agreeTermsLink: "Podmienkami používania",
+      agreeTermsLink: "Všeobecnými obchodnými podmienkami",
       agreePrivacyPrefix: "Potvrdzujem, že som sa oboznámil/a so",
       agreePrivacyLink: "Zásadami spracúvania osobných údajov",
       agreePrivacySuffix: "spoločnosti Esblu s. r. o.",
@@ -805,7 +805,7 @@ const sk = {
       validationPasswordTooShort: "Heslo musí mať minimálne 8 znakov.",
       validationPasswordMismatch: "Heslá sa nezhodujú.",
       validationMustAgreeLegal:
-        "Pred registráciou musíš súhlasiť s Podmienkami používania a potvrdiť oboznámenie sa so Zásadami spracúvania osobných údajov.",
+        "Pred registráciou musíš súhlasiť s Všeobecnými obchodnými podmienkami a potvrdiť oboznámenie sa so Zásadami spracúvania osobných údajov.",
       loginFailed: "Prihlásenie sa nepodarilo. Skontroluj e-mail a heslo.",
       registrationFailedPrefix: "Registrácia sa nepodarila: ",
     },
@@ -905,7 +905,7 @@ const sk = {
     description:
       "Aby ste mohli pokračovať v používaní Esblu, potvrďte prosím nasledujúce aktuálne dokumenty. Toto potvrdenie je potrebné iba raz a je viazané na váš účet.",
     agreeTermsPrefix: "Súhlasím s",
-    agreeTermsLink: "Podmienkami používania",
+    agreeTermsLink: "Všeobecnými obchodnými podmienkami",
     termsVersionSuffix: "(verzia {{version}}).",
     agreePrivacyPrefix: "Potvrdzujem, že som sa oboznámil/a so",
     agreePrivacyLink: "Zásadami spracúvania osobných údajov",
@@ -914,6 +914,32 @@ const sk = {
     confirmButton: "Potvrdiť a pokračovať",
     saving: "Ukladám...",
     logout: "Odhlásiť sa",
+  },
+
+  companyTermsGate: {
+    title: "Všeobecné obchodné podmienky",
+    description:
+      "Esblu je určené výlučne podnikateľom na podnikateľské alebo profesijné účely. Ako vlastník firmy prijmite v jej mene aktuálne Všeobecné obchodné podmienky — tým sa uzatvára zmluva medzi vašou firmou a Esblu s. r. o. Potvrdenie je potrebné raz za verziu a viaže sa na firmu.",
+    readCurrentTerms: "Prečítať si Všeobecné obchodné podmienky (verzia {{version}})",
+    confirmB2bLabel:
+      "Potvrdzujem, že firma je podnikateľom (právnická osoba alebo fyzická osoba – podnikateľ) a Esblu využíva na podnikateľské alebo profesijné účely, nie ako spotrebiteľ.",
+    confirmAuthorityLabel:
+      "Potvrdzujem, že som oprávnený/á konať za túto firmu a v jej mene prijímam Všeobecné obchodné podmienky, verzia {{version}}.",
+    confirmButton: "Prijať VOP v mene firmy",
+    employeeNoticeTitle: "Firma čaká na prijatie Všeobecných obchodných podmienok vlastníkom.",
+    employeeNoticeDescription:
+      "Aktuálne Všeobecné obchodné podmienky musí v mene firmy prijať jej vlastník (owner). Existujúce dáta si môžete naďalej prezerať.",
+    viewTerms: "Zobraziť VOP",
+    errors: {
+      ESBLU_NOT_ACTIVE_OWNER: "VOP môže v mene firmy prijať iba jej vlastník (owner).",
+      ESBLU_NO_ACTIVE_MEMBERSHIP: "Nie ste aktívnym členom žiadnej firmy.",
+      ESBLU_TERMS_B2B_NOT_CONFIRMED: "Potvrďte prosím, že firma používa Esblu na podnikateľské účely.",
+      ESBLU_TERMS_AUTHORITY_NOT_CONFIRMED: "Potvrďte prosím, že ste oprávnený/á konať za túto firmu.",
+      ESBLU_NOT_CURRENT_TERMS_VERSION: "Zobrazená verzia VOP už nie je aktuálna. Obnovte stránku a skúste to znova.",
+      ESBLU_NO_CURRENT_TERMS: "Aktuálne nie je publikovaná platná verzia VOP. Skúste to prosím neskôr.",
+      NOT_AUTHENTICATED: "Najprv sa prihláste.",
+      generic: "VOP sa nepodarilo prijať. Skúste to prosím znova.",
+    },
   },
 
   companyDpaGate: {
@@ -944,6 +970,8 @@ const sk = {
         "Zobrazená verzia DPA už nie je aktuálna. Obnovte stránku a skúste to znova.",
       ESBLU_NO_CURRENT_DPA:
         "Aktuálne nie je publikovaná žiadna platná verzia DPA. Skúste to prosím neskôr alebo kontaktujte podporu.",
+      ESBLU_COMPANY_TERMS_NOT_ACCEPTED:
+        "Najprv prijmite v mene firmy aktuálne Všeobecné obchodné podmienky.",
       NOT_AUTHENTICATED: "Najprv sa prihláste.",
       generic: "DPA sa nepodarilo potvrdiť. Skúste to prosím znova.",
     },
@@ -1156,7 +1184,7 @@ const sk = {
         "Verejné informácie o pravidlách používania služby a spracúvaní osobných údajov.",
       navAriaLabel: "Právne a kontaktné informácie",
       privacyLink: "Zásady spracúvania osobných údajov",
-      termsLink: "Podmienky používania Esblu",
+      termsLink: "Všeobecné obchodné podmienky Esblu",
       cookiesLink: "Cookies",
       dpaLink: "Zmluva o spracúvaní osobných údajov (DPA)",
       subprocessorsLink: "Zoznam sprostredkovateľov",
@@ -1173,11 +1201,11 @@ const sk = {
       noAcceptancesYet:
         "Zatiaľ nemáme záznam o potvrdení žiadneho dokumentu (alebo ešte nebola nasadená databázová funkcia na ich evidenciu).",
       currentVersions:
-        "Aktuálne platné verzie: Podmienky používania v {{terms}}, Zásady spracúvania osobných údajov v {{privacy}}.",
+        "Aktuálne platné verzie: Všeobecné obchodné podmienky v {{terms}}, Zásady spracúvania osobných údajov v {{privacy}}.",
       requestExport: "Požiadať o export mojich údajov",
       requestCorrection: "Požiadať o opravu mojich údajov",
       docTypes: {
-        terms: "Podmienky používania",
+        terms: "Všeobecné obchodné podmienky",
         privacy_policy: "Zásady spracúvania osobných údajov",
         dpa: "Zmluva o spracúvaní osobných údajov (DPA)",
         cookie_policy: "Cookies",
@@ -1200,7 +1228,7 @@ const sk = {
       button: "Zrušiť účet",
     },
     deleteModal: {
-      ownerBlockedRetention: "Firmu nie je možné zrušiť samoobslužne, pretože obsahuje finalizované účtovné doklady (faktúry), ktoré je Esblu povinné archivovať podľa zákona o účtovníctve. Nič sa nezmazalo. Kontaktujte nás na info@esblu.com — pomôžeme s exportom údajov a ukončením používania.",
+      ownerBlockedRetention: "Firmu nie je možné zrušiť samoobslužne, pretože obsahuje finalizované účtovné doklady (faktúry). Esblu nie je zákonným archívom — za uchovávanie účtovných dokladov zodpovedá vaša firma, preto si ich pred ukončením exportujte. Nič sa nezmazalo. Kontaktujte nás na info@esblu.com — pomôžeme s exportom údajov a ukončením používania.",
       // LEGAL/CLIA REVIEW REQUIRED (eInvoice ↔ zrušenie firmy, audit 2026-10-13 §5).
       ownerBlockedEinvoiceEnrolled: "Firmu nie je možné zrušiť samoobslužne, pretože je zaregistrovaná na príjem a odosielanie e-faktúr u poskytovateľa e-Faktúry. Nič sa nezmazalo. Kontaktujte nás na info@esblu.com — registráciu u poskytovateľa ukončíme spolu s vami.",
       ownerTitle: "Naozaj chcete zrušiť účet?",
@@ -2227,12 +2255,14 @@ const sk = {
   },
 
   legal: {
+    previousVersions: "Predchádzajúce verzie",
+    versionLabel: "Verzia {{version}}",
     updatedAtPrefix: "Posledná aktualizácia:",
     slovakOnlyNotice:
       "Tento dokument je k dispozícii v slovenskom pôvodnom znení.",
     backToLogin: "Späť na prihlásenie",
     titles: {
-      terms: "Podmienky používania",
+      terms: "Všeobecné obchodné podmienky",
       privacy: "Ochrana osobných údajov",
       cookies: "Informácie o cookies",
       dpa: "DPA",
@@ -2308,7 +2338,7 @@ const sk = {
     },
     contactPage: {
       intro:
-        "Esblu je bezplatná testovacia verzia služby na firemnú evidenciu. Prevádzkovateľom je spoločnosť Esblu s. r. o., so sídlom Karpatské námestie 10A, 831 06 Bratislava – mestská časť Rača, Slovenská republika, IČO: 57 815 941.",
+        "Esblu je služba na firemnú evidenciu určená podnikateľom na podnikateľské účely. Prevádzkovateľom je spoločnosť Esblu s. r. o., so sídlom Karpatské námestie 10A, 831 06 Bratislava – mestská časť Rača, Slovenská republika, IČO: 57 815 941.",
       generalTitle: "Všeobecné otázky a podpora",
       generalText: "Napíšte nám na",
       privacyTitle: "Ochrana osobných údajov",

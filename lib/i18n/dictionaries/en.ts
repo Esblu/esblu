@@ -53,7 +53,7 @@ const en = {
     },
     legalLinks: {
       privacy: "Privacy Policy",
-      terms: "Terms of Use",
+      terms: "Terms and Conditions",
       cookies: "Cookies",
       dpa: "DPA (processing for companies)",
       subprocessors: "Subprocessors",
@@ -692,7 +692,7 @@ const en = {
       warning:
         "AI output may contain errors. The user must review all data before saving or further use.",
       privacyLink: "Privacy Policy →",
-      termsLink: "Terms of Use →",
+      termsLink: "Terms and Conditions →",
       step1: "Upload or photograph the document.",
       step2: "Review the recognized data.",
       step3: "Save the document to your records or export it.",
@@ -736,7 +736,7 @@ const en = {
     footer: {
       tagline: "Closed beta — your company under control",
       privacy: "Privacy Policy",
-      terms: "Terms of Use",
+      terms: "Terms and Conditions",
       cookies: "Cookies",
       dpa: "DPA",
       subprocessors: "Subprocessors",
@@ -778,7 +778,7 @@ const en = {
       accountDeletedPartialNotice:
         "Deleting the account could not be fully completed. You have been logged out for security reasons — please contact our support at info@esblu.com, we will verify and complete the deletion.",
       agreeTermsPrefix: "I agree to the",
-      agreeTermsLink: "Terms of Use",
+      agreeTermsLink: "Terms and Conditions",
       agreePrivacyPrefix: "I confirm that I have read the",
       agreePrivacyLink: "Privacy Policy",
       agreePrivacySuffix: "of Esblu s. r. o.",
@@ -791,7 +791,7 @@ const en = {
       validationPasswordTooShort: "The password must be at least 8 characters long.",
       validationPasswordMismatch: "The passwords do not match.",
       validationMustAgreeLegal:
-        "Before registering, you must agree to the Terms of Use and confirm that you have read the Privacy Policy.",
+        "Before registering, you must agree to the Terms and Conditions and confirm that you have read the Privacy Policy.",
       loginFailed: "Login failed. Check your email and password.",
       registrationFailedPrefix: "Registration failed: ",
     },
@@ -891,7 +891,7 @@ const en = {
     description:
       "To continue using Esblu, please confirm the following current documents. This confirmation is only needed once and is tied to your account.",
     agreeTermsPrefix: "I agree to the",
-    agreeTermsLink: "Terms of Use",
+    agreeTermsLink: "Terms and Conditions",
     termsVersionSuffix: "(version {{version}}).",
     agreePrivacyPrefix: "I confirm that I have read the",
     agreePrivacyLink: "Privacy Policy",
@@ -900,6 +900,32 @@ const en = {
     confirmButton: "Confirm and continue",
     saving: "Saving...",
     logout: "Log out",
+  },
+
+  companyTermsGate: {
+    title: "Terms and Conditions",
+    description:
+      "Esblu is intended exclusively for businesses for business or professional purposes. As the company owner, accept the current Terms and Conditions on the company's behalf — this concludes the agreement between your company and Esblu s. r. o. The confirmation is needed once per version and is tied to the company.",
+    readCurrentTerms: "Read the Terms and Conditions (version {{version}})",
+    confirmB2bLabel:
+      "I confirm that the company is a business (a legal entity or a self-employed natural person) and uses Esblu for business or professional purposes, not as a consumer.",
+    confirmAuthorityLabel:
+      "I confirm that I am authorized to act on behalf of this company and accept the Terms and Conditions, version {{version}}, on its behalf.",
+    confirmButton: "Accept the Terms on behalf of the company",
+    employeeNoticeTitle: "Your company is waiting for the owner to accept the Terms and Conditions.",
+    employeeNoticeDescription:
+      "The current Terms and Conditions must be accepted on the company's behalf by its owner. You can still view existing data.",
+    viewTerms: "View Terms",
+    errors: {
+      ESBLU_NOT_ACTIVE_OWNER: "Only the company's owner can accept the Terms on the company's behalf.",
+      ESBLU_NO_ACTIVE_MEMBERSHIP: "You aren't an active member of any company.",
+      ESBLU_TERMS_B2B_NOT_CONFIRMED: "Please confirm that the company uses Esblu for business purposes.",
+      ESBLU_TERMS_AUTHORITY_NOT_CONFIRMED: "Please confirm that you are authorized to act on behalf of this company.",
+      ESBLU_NOT_CURRENT_TERMS_VERSION: "The displayed version of the Terms is no longer current. Refresh the page and try again.",
+      ESBLU_NO_CURRENT_TERMS: "No valid version of the Terms is currently published. Please try again later.",
+      NOT_AUTHENTICATED: "Please log in first.",
+      generic: "The Terms could not be accepted. Please try again.",
+    },
   },
 
   companyDpaGate: {
@@ -930,6 +956,8 @@ const en = {
         "The displayed DPA version is no longer current. Refresh the page and try again.",
       ESBLU_NO_CURRENT_DPA:
         "No valid DPA version is currently published. Please try again later or contact support.",
+      ESBLU_COMPANY_TERMS_NOT_ACCEPTED:
+        "First accept the current Terms and Conditions on the company's behalf.",
       NOT_AUTHENTICATED: "Please log in first.",
       generic: "The DPA could not be confirmed. Please try again.",
     },
@@ -1142,7 +1170,7 @@ const en = {
         "Public information about the terms of use and processing of personal data.",
       navAriaLabel: "Legal and contact information",
       privacyLink: "Privacy Policy",
-      termsLink: "Esblu Terms of Use",
+      termsLink: "Esblu Terms and Conditions",
       cookiesLink: "Cookies",
       dpaLink: "Data Processing Agreement (DPA)",
       subprocessorsLink: "List of subprocessors",
@@ -1159,11 +1187,11 @@ const en = {
       noAcceptancesYet:
         "We don't have a record of any accepted document yet (or the database function for recording them hasn't been deployed yet).",
       currentVersions:
-        "Currently valid versions: Terms of Use v{{terms}}, Privacy Policy v{{privacy}}.",
+        "Currently valid versions: Terms and Conditions v{{terms}}, Privacy Policy v{{privacy}}.",
       requestExport: "Request an export of my data",
       requestCorrection: "Request a correction of my data",
       docTypes: {
-        terms: "Terms of Use",
+        terms: "Terms and Conditions",
         privacy_policy: "Privacy Policy",
         dpa: "Data Processing Agreement (DPA)",
         cookie_policy: "Cookies",
@@ -1186,7 +1214,7 @@ const en = {
       button: "Delete account",
     },
     deleteModal: {
-      ownerBlockedRetention: "The company cannot be deleted self-service because it contains finalized accounting documents (invoices) that must be retained under accounting law. Nothing was deleted. Contact info@esblu.com — we will help you export your data and close the account.",
+      ownerBlockedRetention: "The company cannot be deleted self-service because it contains finalized accounting documents (invoices). Esblu is not a statutory archive — your company is responsible for retaining accounting documents, so please export them before closing. Nothing was deleted. Contact info@esblu.com — we will help you export your data and close the account.",
       // LEGAL/CLIA REVIEW REQUIRED (eInvoice ↔ zrušenie firmy, audit 2026-10-13 §5).
       ownerBlockedEinvoiceEnrolled: "The company cannot be deleted self-service because it is registered with the e-invoicing provider. Nothing was deleted. Contact info@esblu.com — we will close the provider registration together with you.",
       ownerTitle: "Are you sure you want to delete the account?",
@@ -2199,12 +2227,14 @@ const en = {
   },
 
   legal: {
+    previousVersions: "Previous versions",
+    versionLabel: "Version {{version}}",
     updatedAtPrefix: "Last updated:",
     slovakOnlyNotice:
       "This document is currently available only in its original Slovak version. An official English translation has not been published yet.",
     backToLogin: "Back to login",
     titles: {
-      terms: "Terms of Use",
+      terms: "Terms and Conditions",
       privacy: "Privacy Policy",
       cookies: "Cookie information",
       dpa: "DPA",
@@ -2281,7 +2311,7 @@ const en = {
     },
     contactPage: {
       intro:
-        "Esblu is a free trial version of a business record-keeping service. The controller is Esblu s. r. o., with its registered seat at Karpatské námestie 10A, 831 06 Bratislava – Rača, Slovak Republic, Company ID (IČO): 57 815 941.",
+        "Esblu is a business record-keeping service intended for businesses for business purposes. The controller is Esblu s. r. o., with its registered seat at Karpatské námestie 10A, 831 06 Bratislava – Rača, Slovak Republic, Company ID (IČO): 57 815 941.",
       generalTitle: "General questions and support",
       generalText: "Write to us at",
       privacyTitle: "Privacy",

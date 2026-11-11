@@ -74,6 +74,7 @@ const ACCEPT_COMPANY_DPA_ERROR_CODES = [
   "ESBLU_NOT_CURRENT_DPA_VERSION",
   "ESBLU_DPA_AUTHORITY_NOT_CONFIRMED",
   "ESBLU_NO_CURRENT_DPA",
+  "ESBLU_COMPANY_TERMS_NOT_ACCEPTED",
   "NOT_AUTHENTICATED",
 ] as const;
 
@@ -106,4 +107,79 @@ export function getAcceptCompanyDpaErrorMessage(
   }
 
   return t("companyDpaGate.errors.generic");
+}
+
+// ---------------------------------------------------------------------------
+// B2B VOP 1.2 — firemné prijatie Všeobecných obchodných podmienok (VOP čl. 8).
+// Rovnaká evidencia ako DPA (company_dpa_acceptances, document_type 'terms'),
+// žiadny paralelný systém. Server: esblu_accept_company_terms /
+// esblu_get_my_company_terms_status
+// (supabase/migrations/20261112100000_b2b_terms_1_2_company_acceptance.sql).
+// ---------------------------------------------------------------------------
+export type CompanyTermsStatus = {
+  company_id: string;
+  current_terms_version: string;
+  has_current_acceptance: boolean;
+  accepted_at: string | null;
+  my_role: "owner" | "admin" | "accountant" | "employee";
+};
+
+/** Stav firemného prijatia aktuálnych VOP; null = nič neblokovať (bez session / migrácie). */
+export async function getMyCompanyTermsStatus(): Promise<CompanyTermsStatus | null> {
+  const { data, error } = await supabase.rpc("esblu_get_my_company_terms_status");
+
+  if (error) {
+    console.error("getMyCompanyTermsStatus zlyhalo:", error.message);
+    return null;
+  }
+
+  const row = Array.isArray(data) ? data[0] : data;
+  return (row as CompanyTermsStatus) ?? null;
+}
+
+/**
+ * Owner aktívnej firmy prijíma VOP v mene Zákazníka: vyhlásenie o B2B
+ * charaktere (VOP 4.3) + o oprávnení konať za Zákazníka (VOP 6.1). Server
+ * eviduje osobu, rolu, verziu + hash, čas, jazyk a identitu firmy.
+ */
+export async function acceptCompanyTerms(
+  version: string,
+  b2bConfirmed: boolean,
+  authorityConfirmed: boolean
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const { error } = await supabase.rpc("esblu_accept_company_terms", {
+    p_version: version,
+    p_b2b_confirmed: b2bConfirmed,
+    p_authority_confirmed: authorityConfirmed,
+    p_locale: currentDisplayLocale(),
+  });
+
+  if (error) {
+    console.error("acceptCompanyTerms zlyhalo:", error.message);
+    return { ok: false, error: error.message };
+  }
+
+  return { ok: true };
+}
+
+export const ACCEPT_COMPANY_TERMS_ERROR_CODES = [
+  "ESBLU_NOT_ACTIVE_OWNER",
+  "ESBLU_NO_ACTIVE_MEMBERSHIP",
+  "ESBLU_TERMS_B2B_NOT_CONFIRMED",
+  "ESBLU_TERMS_AUTHORITY_NOT_CONFIRMED",
+  "ESBLU_NOT_CURRENT_TERMS_VERSION",
+  "ESBLU_NO_CURRENT_TERMS",
+  "NOT_AUTHENTICATED",
+] as const;
+
+export function getAcceptCompanyTermsErrorMessage(
+  error: string,
+  t: (key: string) => string
+): string {
+  for (const code of ACCEPT_COMPANY_TERMS_ERROR_CODES) {
+    if (error.includes(code)) {
+      return t(`companyTermsGate.errors.${code}`);
+    }
+  }
+  return t("companyTermsGate.errors.generic");
 }

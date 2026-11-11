@@ -61,7 +61,14 @@ export const legalConfig = {
   // → 1.1 (9. septembra 2026, prechod identifikácie prevádzkovateľa z
   // fyzickej osoby Jaroslav Juriš na Esblu s. r. o. v úvodnej vete — jediná
   // obsahová zmena). Pozri legal/terms/1.1.md.
-  termsVersion: "1.1",
+  // B2B VOP 1.2 (2026-11-12): Všeobecné obchodné podmienky pre podnikateľov
+  // (legal/terms/1.2.md + .en/.de preklady). Okrem osobného potvrdenia
+  // (LegalAcceptanceGate) ich v mene firmy prijíma owner s vyhlásením o B2B
+  // charaktere a oprávnení (CompanyDpaGate → esblu_accept_company_terms).
+  // STAV: návrh na finálny právny audit — NEdeployovať do produkcie pred
+  // schválením (hard stop úlohy).
+  termsVersion: "1.2",
+  termsUpdatedAt: "12. novembra 2026",
   // Cookie Policy ostáva na v1.0 (revidované 2026-08-19). Prvý pokus pri
   // implementácii viacjazyčnej podpory (SK/DE/EN) ukladal zvolený jazyk do
   // nového cookie `esblu_locale`, čo by bolo v rozpore s tvrdením v1.0
@@ -101,7 +108,7 @@ export const REQUIRED_ACCEPTANCE_DOCUMENTS = [
   {
     type: "terms" as const,
     version: legalConfig.termsVersion,
-    label: "Podmienky používania",
+    label: "Všeobecné obchodné podmienky",
     href: "/podmienky-pouzivania",
   },
   {
@@ -114,3 +121,7 @@ export const REQUIRED_ACCEPTANCE_DOCUMENTS = [
 
 export type LegalDocumentType =
   (typeof REQUIRED_ACCEPTANCE_DOCUMENTS)[number]["type"];
+
+// VOP 1.2 čl. 8.3: predchádzajúce verzie zverejnené na /podmienky-pouzivania
+// (nemenné súbory legal/terms/<verzia>.md), od najnovšej.
+export const PREVIOUS_TERMS_VERSIONS = ["1.1", "1.0"] as const;

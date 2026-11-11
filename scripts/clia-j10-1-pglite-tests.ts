@@ -157,6 +157,11 @@ await check("DPA prijatie: iba owner, iba s vyhlásením o oprávnení, iba aktu
   }
   const noAuth = await run(owner, "select public.esblu_accept_company_dpa($1)", [currentDpa]);
   assert.match(noAuth.message, /ESBLU_DPA_AUTHORITY_NOT_CONFIRMED/);
+  // B2B VOP 1.2 (20261112100000): DPA sa potvrdzuje až po firemnom prijatí VOP.
+  const noTerms = await run(owner, "select public.esblu_accept_company_dpa($1, true, 'de')", [currentDpa]);
+  assert.match(noTerms.message, /ESBLU_COMPANY_TERMS_NOT_ACCEPTED/);
+  const terms = await run(owner, "select public.esblu_accept_company_terms('1.2', true, true, 'de')", [], true);
+  assert.equal(terms.layer, "ok", terms.message);
   const old = await run(owner, "select public.esblu_accept_company_dpa('1.2', true, 'sk')");
   assert.match(old.message, /ESBLU_NOT_CURRENT_DPA_VERSION/);
   const ok = await run(owner, "select (public.esblu_accept_company_dpa($1, true, 'de')).*", [currentDpa], true);
@@ -223,7 +228,8 @@ await check("dôkaz prijatia sa pri výmaze archivuje (user aj firma), service-o
   await su("update public.legal_acceptance_evidence set archived_at = now() - interval '5 years 1 day' where scope = 'company_dpa'");
   const p = await run({ role: "service_role" }, "select public.esblu_purge_gdpr_technical_retention(1000) r", [], true);
   assert.equal((p.data[0].r as Record<string, number>).legal_acceptance_evidence, 1);
-  assert.equal((await su("select 1 from public.legal_acceptance_evidence")).length, 2, "čerstvé dôkazy ostávajú");
+  // čerstvé dôkazy ostávajú: 2× user (employee) + 1× company_terms (VOP 1.2, 20261112100000)
+  assert.equal((await su("select 1 from public.legal_acceptance_evidence")).length, 3, "čerstvé dôkazy ostávajú");
 });
 
 await check("retencia J10.1: trial_claims > 5 r., ai_scan_usage > 90 d, pseudonymizácia ai_processing_usage > 90 d", async () => {

@@ -53,7 +53,7 @@ const de = {
     },
     legalLinks: {
       privacy: "Datenschutz",
-      terms: "Nutzungsbedingungen",
+      terms: "Allgemeine Geschäftsbedingungen",
       cookies: "Cookies",
       dpa: "AVV (Auftragsverarbeitung für Firmen)",
       subprocessors: "Unterauftragsverarbeiter",
@@ -692,7 +692,7 @@ const de = {
       warning:
         "Die KI-Ausgabe kann Fehler enthalten. Der Nutzer muss alle Daten vor dem Speichern oder der weiteren Verwendung prüfen.",
       privacyLink: "Datenschutzerklärung →",
-      termsLink: "Nutzungsbedingungen →",
+      termsLink: "Allgemeine Geschäftsbedingungen →",
       step1: "Dokument hochladen oder fotografieren.",
       step2: "Erkannte Daten überprüfen.",
       step3: "Dokument in der Verwaltung speichern oder exportieren.",
@@ -737,7 +737,7 @@ const de = {
     footer: {
       tagline: "Geschlossene Beta — Ihre Firma im Griff",
       privacy: "Datenschutz",
-      terms: "Nutzungsbedingungen",
+      terms: "Allgemeine Geschäftsbedingungen",
       cookies: "Cookies",
       dpa: "AVV",
       subprocessors: "Unterauftragsverarbeiter",
@@ -779,7 +779,7 @@ const de = {
       accountDeletedPartialNotice:
         "Die Löschung des Kontos konnte nicht vollständig abgeschlossen werden. Sie wurden aus Sicherheitsgründen abgemeldet — kontaktieren Sie bitte unseren Support unter info@esblu.com, wir prüfen und schließen die Löschung ab.",
       agreeTermsPrefix: "Ich stimme den",
-      agreeTermsLink: "Nutzungsbedingungen",
+      agreeTermsLink: "Allgemeinen Geschäftsbedingungen",
       agreePrivacyPrefix: "Ich bestätige, die",
       agreePrivacyLink: "Datenschutzerklärung",
       agreePrivacySuffix: "von Esblu s. r. o. gelesen zu haben",
@@ -792,7 +792,7 @@ const de = {
       validationPasswordTooShort: "Das Passwort muss mindestens 8 Zeichen haben.",
       validationPasswordMismatch: "Die Passwörter stimmen nicht überein.",
       validationMustAgreeLegal:
-        "Vor der Registrierung müssen Sie den Nutzungsbedingungen zustimmen und bestätigen, dass Sie die Datenschutzerklärung gelesen haben.",
+        "Vor der Registrierung müssen Sie den Allgemeinen Geschäftsbedingungen zustimmen und bestätigen, dass Sie die Datenschutzerklärung gelesen haben.",
       loginFailed: "Die Anmeldung ist fehlgeschlagen. Überprüfen Sie E-Mail und Passwort.",
       registrationFailedPrefix: "Die Registrierung ist fehlgeschlagen: ",
     },
@@ -892,7 +892,7 @@ const de = {
     description:
       "Um Esblu weiter nutzen zu können, bestätigen Sie bitte die folgenden aktuellen Dokumente. Diese Bestätigung ist nur einmal erforderlich und ist an Ihr Konto gebunden.",
     agreeTermsPrefix: "Ich stimme den",
-    agreeTermsLink: "Nutzungsbedingungen",
+    agreeTermsLink: "Allgemeinen Geschäftsbedingungen",
     termsVersionSuffix: "zu (Version {{version}}).",
     agreePrivacyPrefix: "Ich bestätige, die",
     agreePrivacyLink: "Datenschutzerklärung",
@@ -901,6 +901,32 @@ const de = {
     confirmButton: "Bestätigen und fortfahren",
     saving: "Wird gespeichert...",
     logout: "Abmelden",
+  },
+
+  companyTermsGate: {
+    title: "Allgemeine Geschäftsbedingungen",
+    description:
+      "Esblu ist ausschließlich für Unternehmer zu geschäftlichen oder beruflichen Zwecken bestimmt. Nehmen Sie als Firmeninhaber im Namen der Firma die aktuellen Allgemeinen Geschäftsbedingungen an — damit wird der Vertrag zwischen Ihrer Firma und Esblu s. r. o. geschlossen. Die Bestätigung ist einmal pro Version erforderlich und an die Firma gebunden.",
+    readCurrentTerms: "Allgemeine Geschäftsbedingungen lesen (Version {{version}})",
+    confirmB2bLabel:
+      "Ich bestätige, dass die Firma Unternehmer ist (juristische Person oder natürliche Person als Unternehmer) und Esblu zu geschäftlichen oder beruflichen Zwecken nutzt, nicht als Verbraucher.",
+    confirmAuthorityLabel:
+      "Ich bestätige, dass ich befugt bin, im Namen dieser Firma zu handeln, und nehme in ihrem Namen die Allgemeinen Geschäftsbedingungen, Version {{version}}, an.",
+    confirmButton: "AGB im Namen der Firma annehmen",
+    employeeNoticeTitle: "Ihre Firma wartet auf die Annahme der AGB durch den Inhaber.",
+    employeeNoticeDescription:
+      "Die aktuellen Allgemeinen Geschäftsbedingungen muss der Inhaber (Owner) im Namen der Firma annehmen. Bestehende Daten können Sie weiterhin einsehen.",
+    viewTerms: "AGB anzeigen",
+    errors: {
+      ESBLU_NOT_ACTIVE_OWNER: "Die AGB kann im Namen der Firma nur deren Inhaber (Owner) annehmen.",
+      ESBLU_NO_ACTIVE_MEMBERSHIP: "Sie sind kein aktives Mitglied einer Firma.",
+      ESBLU_TERMS_B2B_NOT_CONFIRMED: "Bitte bestätigen Sie, dass die Firma Esblu zu geschäftlichen Zwecken nutzt.",
+      ESBLU_TERMS_AUTHORITY_NOT_CONFIRMED: "Bitte bestätigen Sie, dass Sie berechtigt sind, im Namen dieser Firma zu handeln.",
+      ESBLU_NOT_CURRENT_TERMS_VERSION: "Die angezeigte AGB-Version ist nicht mehr aktuell. Laden Sie die Seite neu und versuchen Sie es erneut.",
+      ESBLU_NO_CURRENT_TERMS: "Derzeit ist keine gültige AGB-Version veröffentlicht. Bitte versuchen Sie es später erneut.",
+      NOT_AUTHENTICATED: "Bitte melden Sie sich zuerst an.",
+      generic: "Die AGB konnten nicht angenommen werden. Bitte versuchen Sie es erneut.",
+    },
   },
 
   companyDpaGate: {
@@ -931,6 +957,8 @@ const de = {
         "Die angezeigte AVV-Version ist nicht mehr aktuell. Laden Sie die Seite neu und versuchen Sie es erneut.",
       ESBLU_NO_CURRENT_DPA:
         "Derzeit ist keine gültige AVV-Version veröffentlicht. Bitte versuchen Sie es später erneut oder kontaktieren Sie den Support.",
+      ESBLU_COMPANY_TERMS_NOT_ACCEPTED:
+        "Nehmen Sie zuerst im Namen der Firma die aktuellen Allgemeinen Geschäftsbedingungen an.",
       NOT_AUTHENTICATED: "Bitte melden Sie sich zuerst an.",
       generic: "Der AVV konnte nicht bestätigt werden. Bitte versuchen Sie es erneut.",
     },
@@ -1140,10 +1168,10 @@ const de = {
     legal: {
       title: "Rechtliche Informationen",
       description:
-        "Öffentliche Informationen zu den Nutzungsbedingungen und zur Verarbeitung personenbezogener Daten.",
+        "Öffentliche Informationen zu den Allgemeinen Geschäftsbedingungen und zur Verarbeitung personenbezogener Daten.",
       navAriaLabel: "Rechtliche Informationen und Kontakt",
       privacyLink: "Datenschutzerklärung",
-      termsLink: "Nutzungsbedingungen von Esblu",
+      termsLink: "Allgemeine Geschäftsbedingungen von Esblu",
       cookiesLink: "Cookies",
       dpaLink: "Auftragsverarbeitungsvertrag (AVV)",
       subprocessorsLink: "Liste der Unterauftragsverarbeiter",
@@ -1160,11 +1188,11 @@ const de = {
       noAcceptancesYet:
         "Es liegt noch kein Nachweis über die Bestätigung eines Dokuments vor (oder die Datenbankfunktion zu deren Erfassung wurde noch nicht bereitgestellt).",
       currentVersions:
-        "Aktuell gültige Versionen: Nutzungsbedingungen v{{terms}}, Datenschutzerklärung v{{privacy}}.",
+        "Aktuell gültige Versionen: Allgemeine Geschäftsbedingungen v{{terms}}, Datenschutzerklärung v{{privacy}}.",
       requestExport: "Export meiner Daten anfordern",
       requestCorrection: "Korrektur meiner Daten anfordern",
       docTypes: {
-        terms: "Nutzungsbedingungen",
+        terms: "Allgemeine Geschäftsbedingungen",
         privacy_policy: "Datenschutzerklärung",
         dpa: "Auftragsverarbeitungsvertrag (AVV)",
         cookie_policy: "Cookies",
@@ -1187,7 +1215,7 @@ const de = {
       button: "Konto löschen",
     },
     deleteModal: {
-      ownerBlockedRetention: "Die Firma kann nicht selbst gelöscht werden, da sie abgeschlossene Buchhaltungsbelege (Rechnungen) enthält, die gesetzlich aufbewahrt werden müssen. Es wurde nichts gelöscht. Kontaktieren Sie info@esblu.com — wir helfen beim Datenexport und bei der Kontoschließung.",
+      ownerBlockedRetention: "Die Firma kann nicht selbst gelöscht werden, da sie abgeschlossene Buchhaltungsbelege (Rechnungen) enthält. Esblu ist kein gesetzliches Archiv — für die Aufbewahrung der Buchhaltungsbelege ist Ihre Firma verantwortlich; exportieren Sie diese bitte vor der Beendigung. Es wurde nichts gelöscht. Kontaktieren Sie info@esblu.com — wir helfen beim Datenexport und bei der Kontoschließung.",
       // LEGAL/CLIA REVIEW REQUIRED (eInvoice ↔ zrušenie firmy, audit 2026-10-13 §5).
       ownerBlockedEinvoiceEnrolled: "Die Firma kann nicht selbst gelöscht werden, da sie beim E-Rechnungs-Anbieter registriert ist. Es wurde nichts gelöscht. Kontaktieren Sie info@esblu.com — wir beenden die Registrierung beim Anbieter gemeinsam mit Ihnen.",
       ownerTitle: "Möchten Sie das Konto wirklich löschen?",
@@ -2219,12 +2247,14 @@ const de = {
   },
 
   legal: {
+    previousVersions: "Frühere Versionen",
+    versionLabel: "Version {{version}}",
     updatedAtPrefix: "Letzte Aktualisierung:",
     slovakOnlyNotice:
       "Dieses Dokument ist derzeit nur in der slowakischen Originalfassung verfügbar. Eine offizielle deutsche Übersetzung wurde noch nicht veröffentlicht.",
     backToLogin: "Zurück zur Anmeldung",
     titles: {
-      terms: "Nutzungsbedingungen",
+      terms: "Allgemeine Geschäftsbedingungen",
       privacy: "Datenschutz",
       cookies: "Informationen zu Cookies",
       dpa: "AVV",
@@ -2301,7 +2331,7 @@ const de = {
     },
     contactPage: {
       intro:
-        "Esblu ist eine kostenlose Testversion eines Dienstes zur Firmenerfassung. Verantwortlicher ist die Gesellschaft Esblu s. r. o. mit Sitz in Karpatské námestie 10A, 831 06 Bratislava – Stadtteil Rača, Slowakische Republik, Handelsregisternummer (IČO): 57 815 941.",
+        "Esblu ist ein Dienst zur Firmenerfassung für Unternehmer zu geschäftlichen Zwecken. Verantwortlicher ist die Gesellschaft Esblu s. r. o. mit Sitz in Karpatské námestie 10A, 831 06 Bratislava – Stadtteil Rača, Slowakische Republik, Handelsregisternummer (IČO): 57 815 941.",
       generalTitle: "Allgemeine Fragen und Support",
       generalText: "Schreiben Sie uns an",
       privacyTitle: "Datenschutz",

@@ -58,7 +58,9 @@ const MIGRATIONS = readdirSync(path.join(ROOT, "supabase/migrations")).filter((f
 const PROD_HAS = new Set(["20261001130000", "20261005090000", "20261005091000"]);
 const RC_ABSENT = MIGRATIONS.map((f) => f.replace(/\.sql$/, "")).filter((b) => {
   const v = b.slice(0, 14);
-  return v === "20260720000000" || (v >= "20261002100000" && !PROD_HAS.has(v));
+  // Release 2026-11-11 (#1–#47) je uzavretý; migrácie po 20261111110000
+  // (napr. B2B VOP 1.2) idú do samostatného, nového release runbooku.
+  return v === "20260720000000" || (v >= "20261002100000" && v <= "20261111110000" && !PROD_HAS.has(v));
 });
 
 console.log("precheck SQL");

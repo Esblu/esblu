@@ -823,3 +823,13 @@ Praktické poradie. Technické blokery (J5) sú PASS — zvyšok sú rozhodnutia
 | 12 | Apple: TestFlight, listing/screenshoty (ak je iOS súčasťou launchu) | `APPLE` · `OWNER DECISION` | 5, 6 |
 | 13 | Finálny real-device + PC smoke (sekcia K), screenshoty z demo účtu | `FINAL QA` | 7, 9, 10, 11 |
 | 14 | Production rollout / sign-off (L, pilot → širší rollout) | `PRODUCTION APPROVAL` | 13 |
+
+## J11 — B2B VOP 1.2 (2026-11-12)
+
+- [x] Návrh VOP 1.2 (SK záväzné, EN/DE preklady), 44 článkov — `legal/terms/1.2*.md`
+- [x] Firemné prijatie VOP (owner, B2B + oprávnenie, verzia/hash/čas/jazyk/firma) — migrácia `20261112100000` (staging)
+- [x] Testy `test:b2b-terms`, `test:b2b-terms-db` + plná regresia
+- [x] Interný audit: `docs/b2b-vop-1-2-audit-2026-11-12.md`
+- [ ] **HARD STOP:** externý právny/technický audit textu (ChatGPT/právnik) — bez schválenia NEdeployovať do produkcie
+- [ ] Vlastník: telefónne číslo (22/2004 § 4), výška predvídateľnej škody (čl. 36)
+- [ ] Produkcia: samostatný release migrácie `20261112100000` + merge do main po schválení

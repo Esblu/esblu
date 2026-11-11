@@ -5,8 +5,12 @@ import { usePathname } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import {
   acceptCompanyDpa,
+  acceptCompanyTerms,
+  getAcceptCompanyTermsErrorMessage,
   getMyCompanyDpaStatus,
+  getMyCompanyTermsStatus,
   type CompanyDpaStatus,
+  type CompanyTermsStatus,
 } from "@/lib/company-dpa";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import { navigateHard } from "@/lib/app-navigation";
@@ -80,6 +84,10 @@ export default function CompanyDpaGate({
   );
 
   const [status, setStatus] = useState<CompanyDpaStatus | null>(null);
+  // B2B VOP 1.2: firemné prijatie VOP (krok pred DPA, rovnaká evidencia).
+  const [termsStatus, setTermsStatus] = useState<CompanyTermsStatus | null>(null);
+  const [confirmedB2b, setConfirmedB2b] = useState(false);
+  const [confirmedTermsAuthority, setConfirmedTermsAuthority] = useState(false);
   const [checked, setChecked] = useState(false);
   const [confirmedAuthority, setConfirmedAuthority] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -102,15 +110,20 @@ export default function CompanyDpaGate({
       if (!session) {
         if (!cancelled) {
           setStatus(null);
+          setTermsStatus(null);
           setChecked(true);
         }
         return;
       }
 
-      const result = await getMyCompanyDpaStatus();
+      const [result, terms] = await Promise.all([
+        getMyCompanyDpaStatus(),
+        getMyCompanyTermsStatus(),
+      ]);
 
       if (!cancelled) {
         setStatus(result);
+        setTermsStatus(terms);
         setChecked(true);
       }
     }
@@ -139,6 +152,30 @@ export default function CompanyDpaGate({
     navigateHard("/login");
   }
 
+  async function handleConfirmTerms() {
+    if (!confirmedB2b || !confirmedTermsAuthority || !termsStatus) {
+      return;
+    }
+
+    setSubmitting(true);
+    setSubmitError("");
+
+    const result = await acceptCompanyTerms(
+      termsStatus.current_terms_version,
+      confirmedB2b,
+      confirmedTermsAuthority
+    );
+
+    if (!result.ok) {
+      setSubmitError(getAcceptCompanyTermsErrorMessage(result.error, t));
+      setSubmitting(false);
+      return;
+    }
+
+    setTermsStatus({ ...termsStatus, has_current_acceptance: true });
+    setSubmitting(false);
+  }
+
   async function handleConfirm() {
     if (!confirmedAuthority || !status) {
       return;
@@ -159,7 +196,10 @@ export default function CompanyDpaGate({
     setSubmitting(false);
   }
 
-  if (!checked || skip || !status || status.has_current_acceptance) {
+  const termsPending = !!termsStatus && !termsStatus.has_current_acceptance;
+  const dpaPending = !!status && !status.has_current_acceptance;
+
+  if (!checked || skip || (!termsPending && !dpaPending)) {
     return <>{children}</>;
   }
 
@@ -170,7 +210,7 @@ export default function CompanyDpaGate({
   // vyžaduje role='owner'). Admin je pre účely tohto gate v rovnakej
   // situácii ako employee: nesmie dostať možnosť DPA podpísať, iba
   // informáciu, že potvrdenie musí vykonať vlastník účtu.
-  const isOwner = status.my_role === "owner";
+  const isOwner = (status?.my_role ?? termsStatus?.my_role) === "owner";
 
   // Kým firma nemá platnú DPA acceptance, sme vždy v legal-hold režime —
   // táto vetva kódu (za skoro-return vyššie) sa vykoná IBA vtedy, keď
@@ -179,10 +219,89 @@ export default function CompanyDpaGate({
   // evidencie mohli deaktivovať/skryť svoje "pridať nové" akcie —
   // pozri komentár pri CompanyDpaLegalHoldContext vyššie.
   return (
-    <CompanyDpaLegalHoldContext.Provider value={{ legalHold: true }}>
+    <CompanyDpaLegalHoldContext.Provider value={{ legalHold: dpaPending }}>
       {children}
 
-      {isOwner && (
+      {isOwner && termsPending && termsStatus && (
+        <div
+          className="fixed inset-0 flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm"
+          style={{ zIndex: Z_INDEX }}
+        >
+          <div className="max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-y-auto rounded-doc border border-doc-border bg-surface-1 p-4 shadow-2xl sm:p-6">
+            <h2 className="text-lg font-semibold tracking-tight text-primary sm:text-xl">
+              {t("companyTermsGate.title")}
+            </h2>
+
+            <p className="mt-2 text-sm leading-6 text-secondary">
+              {t("companyTermsGate.description")}
+            </p>
+
+            <p className="mt-2 text-[13px]">
+              <LegalDocLink path="/podmienky-pouzivania" className="font-medium text-brand-300 hover:underline">
+                {t("companyTermsGate.readCurrentTerms", {
+                  version: termsStatus.current_terms_version,
+                })}
+              </LegalDocLink>
+            </p>
+
+            <label className="mt-4 flex items-start gap-2.5 rounded-doc-sm border border-subtle bg-surface-2 p-3 text-[13px] leading-5 text-secondary">
+              <input
+                type="checkbox"
+                className="mt-0.5 h-4 w-4 shrink-0"
+                checked={confirmedB2b}
+                onChange={(event) => setConfirmedB2b(event.target.checked)}
+                disabled={submitting}
+                data-testid="company-terms-b2b"
+              />
+              <span>{t("companyTermsGate.confirmB2bLabel")}</span>
+            </label>
+
+            <label className="mt-2 flex items-start gap-2.5 rounded-doc-sm border border-subtle bg-surface-2 p-3 text-[13px] leading-5 text-secondary">
+              <input
+                type="checkbox"
+                className="mt-0.5 h-4 w-4 shrink-0"
+                checked={confirmedTermsAuthority}
+                onChange={(event) =>
+                  setConfirmedTermsAuthority(event.target.checked)
+                }
+                disabled={submitting}
+                data-testid="company-terms-authority"
+              />
+              <span>
+                {t("companyTermsGate.confirmAuthorityLabel", {
+                  version: termsStatus.current_terms_version,
+                })}
+              </span>
+            </label>
+
+            {submitError && (
+              <p className="ui-error-text mt-3 text-[13px]">{submitError}</p>
+            )}
+
+            <button
+              type="button"
+              onClick={handleConfirmTerms}
+              disabled={!confirmedB2b || !confirmedTermsAuthority || submitting}
+              className="ui-btn ui-btn-primary mt-4 w-full"
+            >
+              {submitting
+                ? t("legalGate.saving")
+                : t("companyTermsGate.confirmButton")}
+            </button>
+
+            <button
+              type="button"
+              onClick={handleLogout}
+              disabled={submitting}
+              className="ui-btn ui-btn-ghost mt-2 w-full"
+            >
+              {t("legalGate.logout")}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {isOwner && !termsPending && dpaPending && status && (
         <div
           className="fixed inset-0 flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm"
           style={{ zIndex: Z_INDEX }}
@@ -250,7 +369,35 @@ export default function CompanyDpaGate({
         </div>
       )}
 
-      {!isOwner && !employeeNoticeDismissed && (
+      {!isOwner && !employeeNoticeDismissed && termsPending && (
+        <div
+          className="fixed inset-x-0 bottom-0 flex justify-center p-4"
+          style={{ zIndex: Z_INDEX }}
+        >
+          <div className="w-full max-w-md rounded-doc border border-amber-300/30 bg-warning-soft p-3 shadow-2xl backdrop-blur-sm sm:p-4">
+            <p className="text-sm font-semibold text-amber-300">
+              {t("companyTermsGate.employeeNoticeTitle")}
+            </p>
+            <p className="mt-1 text-[13px] leading-5 text-amber-400">
+              {t("companyTermsGate.employeeNoticeDescription")}
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => setEmployeeNoticeDismissed(true)}
+                className="ui-btn ui-btn-sm bg-amber-900 text-white hover:bg-amber-800"
+              >
+                {t("companyDpaGate.employeeNoticeDismiss")}
+              </button>
+              <LegalDocLink path="/podmienky-pouzivania" className="ui-btn ui-btn-sm border-amber-300/40 bg-surface-1 text-amber-400 hover:bg-surface-hover">
+                {t("companyTermsGate.viewTerms")}
+              </LegalDocLink>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {!isOwner && !employeeNoticeDismissed && !termsPending && dpaPending && (
         <div
           className="fixed inset-x-0 bottom-0 flex justify-center p-4"
           style={{ zIndex: Z_INDEX }}
