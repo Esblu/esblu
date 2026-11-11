@@ -693,7 +693,7 @@ Staging (`esblu-test`): `20261111100000`, `20261111110000` aplikované (50 histo
 po typografických opravách (iba staging, 0 potvrdení 1.4). Produkcia: iba read-only agregátny precheck (zapísaný v logu zásahov).
 
 **OWNER ACTIONS:** (1) schváliť Smernicu v1.0 + dátum účinnosti; (2) po produkčnom release schváliť prvý beh retenčnej
-purge (precheck §18.6); (3) po release prijať DPA 1.3 vo vlastnej firme a informovať firmy (gate); (4) overiť, že
+purge (precheck §18.6) — technicky = nastaviť `ESBLU_GDPR_RETENTION_PURGE_ENABLED=true` (default vypnuté, release guard); (3) po release prijať DPA 1.3 vo vlastnej firme a informovať firmy (gate); (4) overiť, že
 info@/privacy@ nie sú presmerované na Gmail; (5) pravidelne preverovať prístupy AI nástroja k produkcii;
 (6) po skončení uzavretej bety vyprázdniť `beta_allowlist`.
 

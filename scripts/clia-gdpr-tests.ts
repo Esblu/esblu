@@ -21,6 +21,7 @@ import { decideCompanyDpaGuard, companyDpaGuardMessageKey } from "@/lib/ai/compa
 import { registrationAckVersions, currentLegalAckMetadata, LEGAL_ACK_METADATA_KEY } from "@/lib/legal-ack-versions";
 import { legalConfig, REQUIRED_ACCEPTANCE_DOCUMENTS } from "@/lib/legal-config";
 import { legalTranslationAvailability } from "@/lib/legal-content";
+import { gdprRetentionPurgeEnabled } from "@/lib/retention/gdpr-purge-flag";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (p: string) => readFileSync(path.join(ROOT, p), "utf8");
@@ -211,6 +212,20 @@ check("J10.1 Anthropic: uvedený na /subprocessors (vývoj, diagnostika, servisn
   const page = read("app/subprocessors/SubprocessorsPageClient.tsx");
   assert.match(page, /Anthropic \(Claude\)/);
   for (const loc of ["sk", "en", "de"]) assert.match(read(`lib/i18n/dictionaries/${loc}.ts`), /anthropicPurpose:/);
+});
+
+check("Release guard: flag default false, iba presne \"true\" zapína", () => {
+  assert.equal(gdprRetentionPurgeEnabled({}), false);
+  for (const v of ["", "1", "TRUE", "yes", "false"]) assert.equal(gdprRetentionPurgeEnabled({ ESBLU_GDPR_RETENTION_PURGE_ENABLED: v }), false, v);
+  assert.equal(gdprRetentionPurgeEnabled({ ESBLU_GDPR_RETENTION_PURGE_ENABLED: "true" }), true);
+});
+check("Release guard: J10 CLIA purge v crone beží iba s ESBLU_GDPR_RETENTION_PURGE_ENABLED=true (default vypnuté)", () => {
+  const src = read("app/api/cron/telemetry-maintenance/route.ts");
+  assert.match(src, /const gdprEnabled = gdprRetentionPurgeEnabled\(\);/);
+  assert.match(src, /for \(let batch = 0; gdprEnabled && batch < MAX_BATCHES; batch\+\+\)/);
+  assert.match(src, /const \{ data: staleIds, error: staleError \} = gdprEnabled\n\s+\? await admin\.rpc\("esblu_list_stale_unconfirmed_auth_users"/);
+  const flag = read("lib/retention/gdpr-purge-flag.ts");
+  assert.match(flag, /ESBLU_GDPR_RETENTION_PURGE_ENABLED\?\.trim\(\) === "true"/);
 });
 
 check("Anthropic: žiadna produkčná integrácia (deps, env, runtime kód)", () => {

@@ -76,6 +76,10 @@ CMP / lišta **iba ak je súhlas potrebný** (nepovinné technológie sa nesmú 
 **DPIA (CLIA 11.11.2026: nie je prekážkou spustenia).** Povinnosť primárne na Zákazníkoch; Esblu poskytuje súčinnosť
 technickým podkladom (`docs/clia-gdpr-reconciliation-2026-11-10.md` §14). Re-review pri podstatnej zmene AI / dát.
 
+**Retenčná purge (J10/J10.1):** cron `telemetry-maintenance` maže údaje nad maximom CLIA iba ak je vo Vercel
+production env nastavené `ESBLU_GDPR_RETENTION_PURGE_ENABLED=true`. Pred zapnutím: read-only precheck
+`scripts/sql/prod-gdpr-retention-precheck.sql` → súhlas vlastníka → nastaviť env (zmena env = rozhodnutie vlastníka).
+
 **Uzavretá beta:** po ukončení uzavretej bety vlastník vyprázdni `beta_allowlist` (e-maily schválených záujemcov).
 
 

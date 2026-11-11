@@ -1,5 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
+import { gdprRetentionPurgeEnabled } from "@/lib/retention/gdpr-purge-flag";
 
 // -----------------------------------------------------------------------------
 // GET /api/cron/telemetry-maintenance — technická údržba (cost control,
@@ -20,6 +21,11 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 //   4. J10 CLIA: neúspešné registrácie — nepotvrdené auth účty bez členstva
 //      a bez firmy staršie ako 30 dní (esblu_list_stale_unconfirmed_auth_users)
 //      → auth.admin.deleteUser, najviac STALE_USERS_PER_RUN za beh.
+//
+//   Body 3 a 4 bežia IBA ak ESBLU_GDPR_RETENTION_PURGE_ENABLED === "true"
+//   (OWNER APPROVAL — prvý produkčný beh zmaže historické riadky nad maximom
+//   CLIA, pozri read-only precheck scripts/sql/prod-gdpr-retention-precheck.sql).
+//   Bez flagu = "disabled", nič sa nemaže (fail safe).
 //
 // Chránené CRON_SECRET. Odpoveď = iba počty.
 // -----------------------------------------------------------------------------
@@ -79,9 +85,10 @@ export async function GET(req: Request) {
     aiUsageDeleted = typeof purged === "number" ? purged : 0;
   }
 
+  const gdprEnabled = gdprRetentionPurgeEnabled();
   let gdprRetention: Record<string, number> = {};
-  let gdprStatus: "ok" | "skipped" | "error" = "ok";
-  for (let batch = 0; batch < MAX_BATCHES; batch++) {
+  let gdprStatus: "ok" | "skipped" | "error" | "disabled" = gdprEnabled ? "ok" : "disabled";
+  for (let batch = 0; gdprEnabled && batch < MAX_BATCHES; batch++) {
     const { data, error } = await admin.rpc("esblu_purge_gdpr_technical_retention", { p_batch_size: BATCH_SIZE });
     if (error) {
       gdprStatus = missingFunction(error.code) ? "skipped" : "error";
@@ -100,11 +107,13 @@ export async function GET(req: Request) {
   if (gdprStatus !== "ok") gdprRetention = {};
 
   let staleUsersDeleted = 0;
-  let staleUsersStatus: "ok" | "skipped" | "error" = "ok";
-  const { data: staleIds, error: staleError } = await admin.rpc("esblu_list_stale_unconfirmed_auth_users", {
-    p_older_than_days: FAILED_REGISTRATION_KEEP_DAYS,
-    p_limit: STALE_USERS_PER_RUN,
-  });
+  let staleUsersStatus: "ok" | "skipped" | "error" | "disabled" = gdprEnabled ? "ok" : "disabled";
+  const { data: staleIds, error: staleError } = gdprEnabled
+    ? await admin.rpc("esblu_list_stale_unconfirmed_auth_users", {
+        p_older_than_days: FAILED_REGISTRATION_KEEP_DAYS,
+        p_limit: STALE_USERS_PER_RUN,
+      })
+    : { data: [] as unknown[], error: null };
   if (staleError) {
     staleUsersStatus = missingFunction(staleError.code) ? "skipped" : "error";
     if (staleUsersStatus === "error") console.error("cron/telemetry-maintenance: stale registrations list zlyhal:", staleError.code ?? "unknown");
