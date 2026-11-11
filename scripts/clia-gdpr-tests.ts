@@ -81,8 +81,8 @@ check("AI routes: DPA brána je volaná pred OpenAI (scan-document, transcribe, 
   assert.ok(scan.indexOf("checkCompanyDpaForAi(userClient)") < scan.search(/extract[A-Za-z]*\(|callOpenAiWithCostGuard\(|responses\.create/));
   const trFull = read("app/api/assistant/transcribe/route.ts");
   const tr = trFull.slice(trFull.indexOf("export async function POST"));
-  assert.ok(tr.indexOf("checkCompanyDpaForAi(") > 0 && tr.indexOf("checkCompanyDpaForAi(") < tr.indexOf("audio.transcriptions.create"));
-  assert.ok(tr.indexOf("checkCompanyDpaForAi(") < tr.indexOf("req.formData()"), "DPA pred čítaním audia");
+  assert.ok(tr.indexOf("checkCompanyDpaForRequest(") > 0 && tr.indexOf("checkCompanyDpaForRequest(") < tr.indexOf("audio.transcriptions.create"));
+  assert.ok(tr.indexOf("checkCompanyDpaForRequest(") < tr.indexOf("req.formData()"), "DPA pred čítaním audia");
   const intent = read("app/api/assistant/intent/route.ts");
   assert.match(intent, /if \(!dpaForAi\.ok\) return Promise\.resolve\(null\);/);
   const ent = read("lib/entitlements-server.ts");
@@ -137,7 +137,8 @@ check("privacy 1.4: CLIA text, zástupný riadok nahradený odkazom na /cookies,
   assert.match(md, /sú uvedené:\n\n\[Informácie o cookies\]\(\/cookies\)\n/);
   assert.match(md, /Posledná aktualizácia:\n\n09\.11\.2026/);
   assert.ok(!/Anthropic/.test(md), "Privacy Policy (prevádzkovateľ) neuvádza Anthropic");
-  assert.deepEqual(legalTranslationAvailability("privacy_policy", "1.4"), { sk: true, de: false, en: false });
+  // J10.1 (CLIA 11.11.2026): EN/DE preklady sú povinné → existujú.
+  assert.deepEqual(legalTranslationAvailability("privacy_policy", "1.4"), { sk: true, de: true, en: true });
 });
 
 // ----------------------------------------------------------------------------- cookies inventár
@@ -171,6 +172,47 @@ check("cookies: kód nenastavuje cookies a nevkladá analytické / 3rd-party skr
 });
 
 // ----------------------------------------------------------------------------- Anthropic
+// ----------------------------------------------------------------------------- J10.1
+const LINE_MARKERS = (line: string) => [line.startsWith("## "), line.startsWith("### "), line.startsWith("- "), line === "", (line.match(/\*\*/g) ?? []).length, [...line.matchAll(/\]\(([^)]+)\)/g)].map((m) => m[1]).join("|")];
+const NUMS = (line: string) => (line.match(/\d+/g) ?? []).sort().join(",");
+check("J10.1 preklady PP 1.4 a DPA 1.3 (EN/DE): úplné, riadok po riadku, rovnaké značky, odkazy a čísla", () => {
+  for (const [base, label] of [["legal/privacy/1.4", "1.4"], ["legal/dpa/1.3", "1.3"]] as const) {
+    const sk = read(`${base}.md`).split("\n");
+    for (const loc of ["en", "de"]) {
+      const lines = read(`${base}.${loc}.md`).split("\n");
+      assert.match(lines[0], loc === "en" ? /^> English translation of the Slovak original/ : /^> Deutsche Übersetzung des slowakischen Originals/);
+      assert.ok(lines[0].includes(label), `${base}.${loc}: verzia v označení`);
+      assert.equal(lines[1], "");
+      const tr = lines.slice(2);
+      assert.equal(tr.length, sk.length, `${base}.${loc}: počet riadkov`);
+      for (let i = 0; i < sk.length; i++) {
+        assert.deepEqual(LINE_MARKERS(tr[i]), LINE_MARKERS(sk[i]), `${base}.${loc}:${i + 3} štruktúra`);
+        assert.equal(NUMS(tr[i]), NUMS(sk[i]), `${base}.${loc}:${i + 3} čísla/lehoty`);
+      }
+    }
+  }
+});
+check("J10.1 DPA 1.3: CLIA text s elektronickým uzatvorením (10.1, 11.4, 11.7), bez povinného podpisu/rovnopisov, Anthropic v prílohe 3", () => {
+  const md = read("legal/dpa/1.3.md");
+  assert.match(md, /\*\*10\.1\*\* .*Zmluva sa uzatvára elektronicky tak, že osoba oprávnená konať za Prevádzkovateľa potvrdí jej aktuálnu verziu v Aplikácii Esblu\./);
+  assert.match(md, /Sprostredkovateľ eviduje identitu osoby, ktorá Zmluvu potvrdila, jej vyhlásenie o oprávnení konať za Prevádzkovateľa, potvrdenú verziu Zmluvy a dátum a čas potvrdenia\./);
+  assert.match(md, /Zmluvu možno uzatvoriť aj podpisom oboch Zmluvných strán/);
+  assert.match(md, /\*\*11\.7\*\* Zmluva uzatvorená elektronicky podľa bodu 10\.1 sa nevyhotovuje v listinných rovnopisoch/);
+  assert.match(md, /elektronickým potvrdením novej verzie Zmluvy v Aplikácii Esblu postupom podľa bodu 10\.1/);
+  assert.ok(!/\.{10,}|…{3,}/.test(md), "prázdne podpisové / identifikačné polia ostali");
+  assert.match(md, /### 5\. Anthropic PBC, USA/);
+  assert.equal(legalConfig.dpaVersion, "1.3");
+  const gate = read("app/components/CompanyDpaGate.tsx");
+  assert.match(gate, /acceptCompanyDpa\(status\.current_dpa_version, confirmedAuthority\)/);
+  assert.match(read("lib/company-dpa.ts"), /p_authority_confirmed: authorityConfirmed,/);
+  assert.match(read("lib/legal-acceptance.ts"), /p_locale: currentDisplayLocale\(\)/);
+});
+check("J10.1 Anthropic: uvedený na /subprocessors (vývoj, diagnostika, servisné zásahy), nie runtime AI", () => {
+  const page = read("app/subprocessors/SubprocessorsPageClient.tsx");
+  assert.match(page, /Anthropic \(Claude\)/);
+  for (const loc of ["sk", "en", "de"]) assert.match(read(`lib/i18n/dictionaries/${loc}.ts`), /anthropicPurpose:/);
+});
+
 check("Anthropic: žiadna produkčná integrácia (deps, env, runtime kód)", () => {
   assert.ok(!/anthropic/i.test(read("package.json")));
   for (const f of SOURCES) assert.ok(!/@anthropic-ai|api\.anthropic\.com|ANTHROPIC_API_KEY/.test(read(f)), f);

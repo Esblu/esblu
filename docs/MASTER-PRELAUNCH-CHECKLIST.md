@@ -1,7 +1,7 @@
 # Esblu — MASTER PRE-LAUNCH CHECKLIST
 
 Kanonický zoznam všetkého, čo musí byť hotové pred verejným spustením. Aktualizovať pri každom bloku.
-Posledná aktualizácia: **2026-11-10 J10 CLIA GDPR RECONCILIATION** (RC `e855664` + J10, sekcia **J10**; balík CLIA 09.11.2026); predtým **2026-10-25 J9 FINAL RC / PRE-PRODUCTION READINESS** (RC `85f800b`, sekcia **J9** — kanonický zoznam blockerov a poradie release); predtým **2026-10-26** (branch `preprod-release-candidate` — **J7 BUSINESS RULE CORRECTIONS** + PRICING + ENTITLEMENTS ARCHITECTURE, sekcia **J7**; predtým COST CONTROL HARDENING, sekcia **J6**; predtým CHECKLIST RECONCILIATION na RC `c3a8650`, sekcie **M–P**;
+Posledná aktualizácia: **2026-11-11 J10.1 CLIA FOLLOW-UP** (RC `d50d8ba` + J10.1, sekcia **J10.1**; stanovisko CLIA 11.11.2026); predtým **2026-11-10 J10 CLIA GDPR RECONCILIATION** (sekcia **J10**); predtým **2026-10-25 J9 FINAL RC / PRE-PRODUCTION READINESS** (RC `85f800b`, sekcia **J9** — kanonický zoznam blockerov a poradie release); predtým **2026-10-26** (branch `preprod-release-candidate` — **J7 BUSINESS RULE CORRECTIONS** + PRICING + ENTITLEMENTS ARCHITECTURE, sekcia **J7**; predtým COST CONTROL HARDENING, sekcia **J6**; predtým CHECKLIST RECONCILIATION na RC `c3a8650`, sekcie **M–P**;
 predtým PRE-LAUNCH TECHNICAL BLOCKERS: PASS, sekcia **J5**; GRANULAR TEAM PERMISSIONS: PASS, sekcia **J4**).
 
 Statusy: **PASS** · **READY** (pripravené, čaká na vykonanie/súhlas) · **BLOCKED LEGAL** (CLIA) · **BLOCKED EXTERNAL** ·
@@ -71,8 +71,8 @@ rozhodnutia — všetko nižšie ostáva `CLIA`, kým nepríde schválený text 
 
 | položka | status | blocker |
 |---|---|---|
-| privacy policy (finálna) | READY (J10: CLIA 1.4 SK implementovaná; preklady EN/DE = LCR Q5) | `CLIA` (Q4, Q5) |
-| zoznam subprocesorov | PARTIAL (J10: `/subprocessors` = Supabase, Vercel, OpenAI, Google FCM, Namecheap; Anthropic = LCR Q2) | `CLIA` |
+| privacy policy (finálna) | PASS (CLIA 1.4 SK + EN/DE preklady, J10.1) | — |
+| zoznam subprocesorov | PASS (Supabase, Vercel, OpenAI, Google FCM, Anthropic, Namecheap — CLIA 11.11.2026) | — |
 | OpenAI (DPA, prenos) | PASS v CLIA DPA p3 (OpenAI Ireland); OWNER CONFIRM podpis OpenAI DPA | `OWNER DECISION` |
 | Firebase / FCM | PASS (CLIA PP + DPA p3; J10 retencia identifikátorov) | — |
 | Stripe | BLOCKED LEGAL | `CLIA` |
@@ -630,7 +630,7 @@ v J8, 9 cronov v J5, chýbajúci QA cleanup skript v M.
 
 ## J10. CLIA GDPR RECONCILIATION (2026-11-10)
 
-**VERDIKT: READY EXCEPT LEGAL CONFIRMATIONS.** Zdroj: balík CLIA „GDPR Esblu“ **09.11.2026** (Manuál v1.0, Zásady
+**VERDIKT (aktualizované J10.1): READY EXCEPT OWNER ACTIONS** — právne otázky uzavreté stanoviskom CLIA z 11.11.2026 (pozri **J10.1**). Pôvodný J10 verdikt: READY EXCEPT LEGAL CONFIRMATIONS. Zdroj: balík CLIA „GDPR Esblu“ **09.11.2026** (Manuál v1.0, Zásady
 spracúvania OÚ, Smernica v1.0, DPA + prílohy 1–3, 2 registre XLSX, 6 testov proporcionality) — uložený iba
 lokálne (`legal-inbox/`, mimo gitu); interné dokumenty sa nezverejňujú. Plný audit (matrix R1–R35, inventáre,
 delta pre CLIA, otázky Q1–Q14): **`docs/clia-gdpr-reconciliation-2026-11-10.md`**. Organizačné kroky:
@@ -639,20 +639,20 @@ delta pre CLIA, otázky Q1–Q14): **`docs/clia-gdpr-reconciliation-2026-11-10.m
 | bod | stav | blocker |
 |---|---|---|
 | Privacy Policy 1.4 = CLIA SK text (doslovne; tokenový diff = iba odkaz na cookies), verejná bez loginu, päta / login / registrácia / invite / reset hesla / nastavenia / mobil | PASS (J10) | Q4 (forma doplnenia), Q5 (preklady), Q10 (preklepy CLIA) |
-| EN/DE PP 1.4 | iba SK originál + upozornenie, žiadny neautorizovaný preklad | `CLIA` Q5 |
+| EN/DE PP 1.4 | PASS (J10.1) — úplné preklady, štruktúra/čísla overené testom | — |
 | potvrdenie pri registrácii (CLIA 2.2.2–2.2.4): text CLIA, informačné (nie súhlas), dátum/čas/verzia zobrazená pri odškrtnutí, re-accept cez gate | PASS (J10) | — |
-| DPA: in-app owner-only acceptance (verzia/čas/user/firma), DB triggre; **J10: DPA brána pred OpenAI** (scan, vozidlá, hlas, intent) | PASS technicky | **LCR Q1** (je click-through dostatočné uzatvorenie CLIA šablóny?) |
-| CLIA DPA šablóna v appke | NEPUBLIKOVANÁ (čaká Q1, Q2) | `CLIA` |
+| DPA: elektronické uzatvorenie (CLIA 11.11.2026), DPA 1.3, evidencia osoby/oprávnenia/verzie/času/súhlasu Esblu; server-side guard na všetkom zákazníckom obsahu | PASS (J10.1) | — |
+| CLIA DPA v appke | PASS — DPA 1.3 (SK + EN/DE) | — |
 | cookie inventár `/cookies` 1.1 „Informácie o cookies“ — žiadne cookies, žiadna analytika, iba localStorage/sessionStorage/SW/push | PASS (J10) | Q6 (preferenčné kľúče) |
-| cookie lišta / CMP | **NETREBA** (manuál 6.2.2) — nepridané | — |
+| cookie lišta / CMP | **COOKIE BANNER NOT REQUIRED CURRENTLY** (CLIA 11.11.2026) — nepridané | — |
 | retencia parity (CLIA vs. reálne) | PASS po J10 (push 30 d, doručenia 90 d, pozvánky 30 d, neúspešné registrácie 30 d, technické joby 90 d) | Q3, Q9 |
 | technický výmaz — chat prílohy pri zrušení firmy | FIXED (J10) | — |
 | subprocesori (Supabase, Vercel, OpenAI, Google OAuth/FCM, Web Push, Namecheap) | PASS; `/subprocessors` doplnené FCM + OpenAI rozsah | — |
-| **Anthropic** | žiadny produktový tok (overené + test); dev nástroj má technický MCP prístup k prod Supabase → CLIA p3 bod 5 je podmienene presný | **LCR Q2** + `OWNER ACTION` (odobrať AI nástroju prod prístup) |
+| **Anthropic** | SUBPROCESSOR CONFIRMED (CLIA 11.11.2026): vývoj/diagnostika/servisné zásahy, nie runtime AI; pravidlá `docs/ai-dev-tool-access-policy.md`, log `docs/ops/service-intervention-log.md` | — |
 | OpenAI | `store:false`, bez Files/Threads/Vector Stores, bez firemného kontextu, žiadny obsah v logoch | `OWNER CONFIRM` podpis OpenAI DPA / org nastavenia |
 | Namecheap / e-mail | info@ + privacy@ (Namecheap) = PASS; auth = Supabase mailer; `esblu.office@gmail.com` v repe nie je | `OWNER CONFIRM` Q11 (custom SMTP? Gmail?) |
 | eFaktura.sk / Stripe / Play+Apple billing / APNs / Sign in with Apple | NOT LIVE / NOT CONFIGURED — v CLIA správne neuvedené; pred aktiváciou GDPR re-review | — |
-| DPIA | technický podklad pripravený (§14 auditu); nie zákonný P0 | **LCR Q7** |
+| DPIA | **NOT A RELEASE BLOCKER – CLIA CONFIRMED 2026-11-11**; technický support package §14 | — |
 | interná Smernica — schválenie konateľom, dátum účinnosti, verzia, interné uloženie | PENDING OWNER (runbook §1; Claude nepodpisuje ani nedatuje) | `OWNER DECISION` |
 | admin zásahy / GDPR žiadosti / podpora — evidencia | ORG GAP → manuálne logy (runbook §4–§6) | `OWNER DECISION` |
 | registre XLSX | originál nemenený; delta návrh §15 auditu | `CLIA` |
@@ -671,6 +671,31 @@ Validácia: `test:clia-gdpr` 12/12, `test:clia-gdpr-db` 8/8, `test:grants-replay
 `test:prelaunch-blockers` 21/21, `test:cost-control` 18/18, multi-company / deletion / storage / push / AI / auth
 sady PASS; `tsc` 0; lint = baseline 33/31 (bez novej); web `next build` PASS; mobile Turbopack build 34/34 +
 `verify:mobile-bundle` PASS (sandbox: Google Fonts nahradené lokálnym stubom iba pre build, necommitnuté).
+
+## J10.1. CLIA FOLLOW-UP — STANOVISKO 11.11.2026 (2026-11-11)
+
+**VERDIKT: READY EXCEPT OWNER ACTIONS.** Žiadny skutočný právny blocker. Detail: `docs/clia-gdpr-reconciliation-2026-11-10.md` §18.
+
+| bod | stav |
+|---|---|
+| DPA electronic acceptance | **CONFIRMED** — DPA 1.3 (CLIA + 5 minimálnych úprav: čl. I, 10.1, 11.4, 11.7, podpisová časť; diff §18.3); evidencia osoby, oprávnenia (owner + vyhlásenie), verzie + hash, času, jazyka, firmy a súhlasu Esblu |
+| DPA server-side parita | **PASS** — DB guard aj na invoices, business_partners, einvoice_organizations; Storage RESTRICTIVE politika; AI brána (J10); matica §18.4 |
+| Anthropic subprocessor | **CONFIRMED** — ostáva v DPA p3 a registri, doplnený na `/subprocessors`; access policy + service intervention log |
+| DPIA | **NOT A RELEASE BLOCKER – CLIA CONFIRMED 2026-11-11** |
+| Cookies | **COOKIE BANNER NOT REQUIRED CURRENTLY** — `/cookies` 1.1 bez zmeny, trigger na review v runbooku §7 |
+| EN/DE Privacy Policy | **DONE** — 1.4.en / 1.4.de (+ DPA 1.3 EN/DE); preklad = tá istá verzia, bez re-accept; jazyk sa eviduje |
+| dôkaz prijatia dokumentov (Q3) | archív `legal_acceptance_evidence` (5 r.) — nič sa nemaže predčasne |
+| Q4–Q14 | uzavreté (§18.1) bez nových otázok na CLIA |
+| interná Smernica | **READY FOR OWNER APPROVAL** (runbook §1) |
+| produkčný purge | read-only precheck hotový (§18.6): 36 technických riadkov, 0 zákazníckych/účtovných; **nespustené** |
+
+Staging (`esblu-test`): `20261111100000`, `20261111110000` aplikované (50 history riadkov); privacy 1.4 hash zosúladený
+po typografických opravách (iba staging, 0 potvrdení 1.4). Produkcia: iba read-only agregátny precheck (zapísaný v logu zásahov).
+
+**OWNER ACTIONS:** (1) schváliť Smernicu v1.0 + dátum účinnosti; (2) po produkčnom release schváliť prvý beh retenčnej
+purge (precheck §18.6); (3) po release prijať DPA 1.3 vo vlastnej firme a informovať firmy (gate); (4) overiť, že
+info@/privacy@ nie sú presmerované na Gmail; (5) pravidelne preverovať prístupy AI nástroja k produkcii;
+(6) po skončení uzavretej bety vyprázdniť `beta_allowlist`.
 
 ## K. FINAL FULL SMOKE — spustiť IBA keď finálny RC obsahuje multi-company + eInvoice + voice + billing + finálnu legal/store konfiguráciu
 

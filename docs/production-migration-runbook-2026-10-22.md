@@ -239,6 +239,8 @@ HDR = postup v hlavičke migrácie, FN = predchádzajúca definícia funkcie (ul
 | 43 | `20261027100000_intent_command_telemetry` | G11 intent fallback (J8) | S | RB | áno (iba technická telemetria) | `ai_usage_monthly` flow `intent_command` + service-only RPC `esblu_record_intent_command`; bez obsahu príkazov; rollback zmaže iba tieto počítadlá |
 | 44 | `20261110100000_clia_gdpr_retention_alignment` | G12 CLIA GDPR (J10) | S | RB | áno (funkcie; mazanie robí až cron) | service-only `esblu_purge_gdpr_technical_retention` + `esblu_list_stale_unconfirmed_auth_users`; `esblu_account_deletion_commit` + zber `chat-attachments`. Prvý beh cronu po deployi zmaže historické riadky nad maximom CLIA — **OWNER APPROVAL** pred prvým produkčným behom |
 | 45 | `20261110110000_clia_privacy_1_4_cookies_1_1` | G12 CLIA GDPR (J10) | N | RB | áno kým nikto nepotvrdil 1.4 | seed `legal_documents`: privacy_policy 1.4 (required → LegalAcceptanceGate pre všetkých), cookie_policy 1.1; **aplikovať spolu s kódom** |
+| 46 | `20261111100000_clia_j10_1_dpa_electronic_evidence` | G12 CLIA GDPR (J10.1) | S | RB | áno kým `legal_acceptance_evidence` je prázdna | DPA elektronická evidencia (owner + vyhlásenie o oprávnení, hash, jazyk, firma); DPA guard na invoices / business_partners / einvoice_organizations + Storage RESTRICTIVE politika; archív dôkazov prijatia (5 r.); locale v legal acceptance; rozšírená retenčná purge. **Po nasadení musia owneri firiem bez DPA prijať DPA pred novými faktúrami/partnermi/súbormi** |
+| 47 | `20261111110000_clia_j10_1_dpa_1_3` | G12 CLIA GDPR (J10.1) | N | RB | áno kým nikto neprijal DPA 1.3 | seed `legal_documents` dpa 1.3 → CompanyDpaGate pre všetky firmy; aplikovať spolu s kódom |
 
 Mimo zoznamu (už v produkcii, nespúšťať): `20261001130000`, `20261005090000`, `20261005091000`. 37 legacy súborov
 `20260721000100 … 20260830090000` nemá v produkcii history riadok (aplikované mimo trackera, MIGRATIONS.md §3) —
@@ -246,7 +248,7 @@ Mimo zoznamu (už v produkcii, nespúšťať): `20261001130000`, `20261005090000
 `harden_accounting_handoff_grants`, `harden_client_role_privileges_anon_select_default`) — známy historický stav.
 
 Dôležité: od **2026-10-30** Supabase neudeľuje novým tabuľkám v `public` Data API grants. Tabuľky z #2–#35
-dostanú granty až v #36 → celé okno #1–#45 vykonať **v jednej relácii** a aplikačný deploy až po #45 + E.
+dostanú granty až v #36 → celé okno #1–#47 vykonať **v jednej relácii** a aplikačný deploy až po #47 + E.
 
 ### J0. Legacy baseline `20260720000000` — **CONDITIONAL (odporúčané APPLY ako no-op)**
 
@@ -256,17 +258,17 @@ dostanú granty až v #36 → celé okno #1–#45 vykonať **v jednej relácii**
 - Riziko konfliktu: žiadne, pokiaľ 9/9 existuje. **Ak precheck `legacy_baseline_tables_present ≠ 9` → STOP**
   (nespúšťať baseline — vytvoril by tabuľku v legacy tvare do zrelej schémy).
 
-## D. Expected schema state po #45
+## D. Expected schema state po #47
 
-- História: 56 + 45 = **101** riadkov; posledný `name = 20261110110000_clia_privacy_1_4_cookies_1_1`.
-- Tabuľky `public`: **97** = presne `supabase/grants/public-data-api-grants.json` (61 + 36), všetky RLS.
+- História: 56 + 47 = **103** riadkov; posledný `name = 20261111110000_clia_j10_1_dpa_1_3`.
+- Tabuľky `public`: **98** = presne `supabase/grants/public-data-api-grants.json` (61 + 37), všetky RLS.
 - Bucket `einvoice-documents` (private) navyše → 8 bucketov, všetky `public = false`.
 - Funkcie / politiky / ACL: md5 == PGlite replay (`npm run test:grants-replay-db`) a == staging
   (`cjbdijbbcujvmrzezusd`, rovnaký postup ako J2/J4: `select proname, md5(replace(prosrc, E'\r','')) …`).
 - `user_active_company`: 1 riadok na používateľa s aktívnym členstvom (dnes 6); `companies.trial_policy = 'legacy'` pre 4 existujúce firmy.
 - `einvoice_rollout`: prázdne (fail-closed). `subscription_*`: iba katalóg; billing OFF.
 
-## E. Grants verification (hneď po #45)
+## E. Grants verification (hneď po #47)
 
 1. `scripts/sql/grants-data-api-matrix.sql` (read-only) → zhoda s manifestom; `anon` iba `legal_documents:SELECT`.
 2. 0 TRUNCATE/TRIGGER/REFERENCES pre `anon`/`authenticated`; 0 SECURITY DEFINER bez `search_path`; anon EXECUTE iba
@@ -285,6 +287,8 @@ billing owner-only; `esblu_my_has_permission` default deny; zrušenie účtu gua
 
 | skupina | rollback | lossless? | maže dáta? | kedy namiesto toho restore / forward-fix |
 |---|---|---|---|---|
+| G12 #47 | RB | áno kým nikto neprijal DPA 1.3 | legal seed dpa 1.3 (fail closed pri prijatí) | iba spolu s vrátením kódu |
+| G12 #46 | RB | áno kým nie sú archivované dôkazy | DPA guardy, archív, evidencia DPA, locale, purge (fail closed, ak archív nie je prázdny) | inak forward-fix |
 | G12 #45 | RB | áno kým nikto nepotvrdil 1.4 | legal seed privacy 1.4 / cookies 1.1 (fail closed, ak existuje potvrdenie 1.4) | iba spolu s vrátením kódu |
 | G12 #44 | RB | áno | J10 retenčné funkcie + zber chat príloh; vráti definíciu commit funkcie z 20261013100000 | kedykoľvek; už zmazané retenčné riadky sa neobnovia |
 | G11 #43 | RB | áno | iba technické počítadlá príkazov (flow `intent_command`) | kedykoľvek; počítadlá sa stratia |
@@ -327,7 +331,7 @@ STOP (nepokračovať, nič neopravovať „za behu“) ak:
 | 1 | read-only precheck (A) — oba skripty, protokol | — |
 | 2 | výslovný súhlas vlastníka s oknom a týmto runbookom | **[SÚHLAS vlastníka]** |
 | 3 | backup/recovery potvrdenie (B) + logický dump + uloženie FN definícií (#14, #15, #19) | vlastník potvrdí |
-| 4 | migrácie #1–#45 po jednej (C), po každej kontrola `schema_migrations` | **[SÚHLAS]** (krok 2) |
+| 4 | migrácie #1–#47 po jednej (C), po každej kontrola `schema_migrations` | **[SÚHLAS]** (krok 2) |
 | 5 | grants verification (E) + advisors | — |
 | 6 | targeted DB smoke (F) | — |
 | 7 | aplikačný deploy: merge RC → `main` až teraz, deployment spárovaný podľa SHA, READY | **[SÚHLAS — merge/deploy]** |

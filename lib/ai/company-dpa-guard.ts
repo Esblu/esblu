@@ -17,6 +17,7 @@
 // =============================================================================
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { getUserScopedSupabaseClient } from "@/lib/server-supabase-user-client";
 
 export type CompanyDpaGuardDecision =
   | { ok: true }
@@ -40,6 +41,14 @@ export async function checkCompanyDpaForAi(db: SupabaseClient): Promise<CompanyD
   } catch (error) {
     return decideCompanyDpaGuard(null, error ?? new Error("rpc_failed"));
   }
+}
+
+/** Varianta pre routy bez vlastného user-scoped klienta (napr. hlas): token z hlavičky. */
+export async function checkCompanyDpaForRequest(req: Request): Promise<CompanyDpaGuardDecision> {
+  const bearer = req.headers.get("authorization") || "";
+  const token = bearer.startsWith("Bearer ") ? bearer.slice("Bearer ".length).trim() : "";
+  if (!token) return { ok: false, status: 403, code: "ESBLU_NO_ACTIVE_COMPANY" };
+  return checkCompanyDpaForAi(getUserScopedSupabaseClient(token));
 }
 
 /** Prekladový kľúč pre odmietnutie (sk/en/de slovníky). */

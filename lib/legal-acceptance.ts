@@ -1,4 +1,18 @@
 import { supabase } from "@/lib/supabase";
+import { LOCALE_STORAGE_KEY, normalizeLocale, type Locale } from "@/lib/i18n/locales";
+
+/**
+ * J10.1 (CLIA 11.11.2026): jazyk, v ktorom bol dokument zobrazený. Eviduje
+ * sa ako metadata (display_locale + source_version) — EN/DE sú preklady tej
+ * istej SK právnej verzie, nie nová verzia (žiadny re-accept kvôli prekladu).
+ */
+export function currentDisplayLocale(): Locale {
+  try {
+    return normalizeLocale(typeof window === "undefined" ? null : window.localStorage.getItem(LOCALE_STORAGE_KEY));
+  } catch {
+    return normalizeLocale(null);
+  }
+}
 
 export type PendingLegalAcceptance = {
   document_type: "terms" | "privacy_policy" | "dpa" | "cookie_policy";
@@ -48,6 +62,7 @@ export async function acceptLegalDocumentAtRegistration(
     {
       p_document_type: documentType,
       p_version: version,
+      p_locale: currentDisplayLocale(),
     }
   );
 
@@ -76,6 +91,7 @@ export async function acceptLegalDocumentAtGate(
   const { error } = await supabase.rpc("esblu_accept_legal_document_at_gate", {
     p_document_type: documentType,
     p_version: version,
+    p_locale: currentDisplayLocale(),
   });
 
   if (error) {

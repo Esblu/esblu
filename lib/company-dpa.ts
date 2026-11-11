@@ -1,4 +1,5 @@
 import { supabase } from "@/lib/supabase";
+import { currentDisplayLocale } from "@/lib/legal-acceptance";
 
 export type CompanyDpaStatus = {
   company_id: string;
@@ -39,9 +40,13 @@ export async function getMyCompanyDpaStatus(): Promise<CompanyDpaStatus | null> 
  * pre admina aj employee vráti chybu ESBLU_NOT_ACTIVE_OWNER a appka to
  * nemá tichcky prehltnúť (pozri getAcceptCompanyDpaErrorMessage nižšie).
  */
-export async function acceptCompanyDpa(version: string): Promise<boolean> {
+export async function acceptCompanyDpa(version: string, authorityConfirmed: boolean): Promise<boolean> {
+  // J10.1 (CLIA 11.11.2026): elektronické uzatvorenie DPA — server eviduje
+  // osobu, rolu, výslovné vyhlásenie o oprávnení, verziu + hash, čas, jazyk.
   const { error } = await supabase.rpc("esblu_accept_company_dpa", {
     p_version: version,
+    p_authority_confirmed: authorityConfirmed,
+    p_locale: currentDisplayLocale(),
   });
 
   if (error) {
@@ -67,6 +72,7 @@ const ACCEPT_COMPANY_DPA_ERROR_CODES = [
   "ESBLU_NOT_ACTIVE_OWNER",
   "ESBLU_NO_ACTIVE_MEMBERSHIP",
   "ESBLU_NOT_CURRENT_DPA_VERSION",
+  "ESBLU_DPA_AUTHORITY_NOT_CONFIRMED",
   "ESBLU_NO_CURRENT_DPA",
   "NOT_AUTHENTICATED",
 ] as const;

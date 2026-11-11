@@ -1,6 +1,6 @@
 # GDPR — interný compliance runbook (organizačné opatrenia)
 
-Vznik: J10 CLIA GDPR reconciliation (2026-11-10), podľa Manuálu implementácie Nariadenia GDPR CLIA v1.0
+Vznik: J10 CLIA GDPR reconciliation (2026-11-10), aktualizované J10.1 (2026-11-11, stanovisko CLIA), podľa Manuálu implementácie Nariadenia GDPR CLIA v1.0
 (09.11.2026), čl. IV, V a VII. Tento runbook **neobsahuje** text internej Smernice, testov proporcionality ani
 záznamov o spracovateľských činnostiach — tie sú interné a do repa ani na web sa nekopírujú.
 
@@ -8,6 +8,10 @@ záznamov o spracovateľských činnostiach — tie sú interné a do repa ani n
 > označené **[KONATEĽ]** vykonáva výlučne štatutárny orgán Esblu s. r. o.
 
 ## 1. Schválenie internej Smernice o ochrane osobných údajov
+
+> **FINAL OWNER ACTION (pripravené po J10.1):** „Schváliť internú smernicu o ochrane osobných údajov, verzia 1.0,
+> dátum účinnosti [vlastník doplní].“ Obsah smernice je zosúladený s realitou (J10/J10.1) — technicky nič nebráni
+> schváleniu. Claude/Cowork smernicu nepodpisuje, nedatuje ani neoznačuje ako schválenú.
 
 1. **[KONATEĽ]** prečíta finálnu verziu CLIA (v1.0, 09.11.2026) a rozhodne o schválení.
 2. **[KONATEĽ]** doplní do histórie verzií: dátum schválenia, verziu, autora a do čl. 13 dátum + podpis.
@@ -21,9 +25,10 @@ záznamov o spracovateľských činnostiach — tie sú interné a do repa ani n
 - Dnes k OÚ pristupuje iba konateľ. Pri prvej ďalšej osobe (zamestnanec, externista, účtovník s prístupom do
   produkcie) **[KONATEĽ]**: oboznámenie so Smernicou (prístupy, vývoj a testovanie, podpora, exporty, incidenty),
   záväzok mlčanlivosti, záznam „kto / kedy / verzia“ v internej zložke.
-- AI vývojové nástroje (Claude/Cowork): iba repo + staging so syntetickými dátami. Prístup k produkčným osobným
-  údajom Zákazníkov sa nepoužíva (podmienka alternatívy A pre Anthropic — `docs/clia-gdpr-reconciliation-2026-11-10.md`
-  §8); produkčné operácie iba read-only metadáta / schéma a iba s výslovným súhlasom vlastníka.
+- AI vývojové nástroje (Anthropic / Claude / Cowork) sú podľa stanoviska CLIA z 11.11.2026 **ďalší sprostredkovateľ**
+  (DPA 1.3 príloha 3). Záväzné pravidlá minimalizácie: `docs/ai-dev-tool-access-policy.md` (staging a syntetické
+  údaje najprv, produkcia iba nevyhnutne a v minimálnom rozsahu, žiadne dumpy ani kopírovanie osobných údajov,
+  evidencia zásahov). Pravidlá sú referencované aj v `AGENTS.md`.
 
 ## 3. Interné úložisko GDPR dokumentácie
 
@@ -35,7 +40,9 @@ záznamov o spracovateľských činnostiach — tie sú interné a do repa ani n
 
 ## 4. Log administrátorských zásahov a exportov (Smernica 6.3.2, 9.2.2)
 
-Technický audit log neexistuje → manuálny záznam (tabuľka v internej zložke), uchovávať **najviac 12 mesiacov**:
+Technický audit log read-only prístupov neexistuje → evidencia v **`docs/ops/service-intervention-log.md`**
+(append-only cez git, bez osobných údajov; zmeny schémy/kódu dokladá git + `schema_migrations` + Vercel deploy logy),
+uchovávať **najviac 12 mesiacov**. Polia (rovnaké ako v logu):
 
 | dátum a čas | kto | systém (Supabase / Vercel / Storage) | Zákazník | dôvod | rozsah (aké dáta) | výsledok | export? príjemca |
 |---|---|---|---|---|---|---|---|
@@ -60,6 +67,17 @@ Storage objekty, ručné úpravy, exporty). Ak sa dá úkon vykonať bez obsahu 
   nedoplní do PP a registra.
 
 ## 7. Kedy znovu preveriť dokumentáciu (Manuál 7.3, Smernica 12.5)
+
+**Cookies (CLIA 11.11.2026: lišta dnes netreba).** Ak pribudne analytika, marketingový pixel, reklamné meranie,
+nepovinné SDK, meranie tretej strany alebo obdobná nepovinná technológia, **pred produkčným nasadením**: GDPR/cookie
+review → aktualizácia `/cookies` inventára (test `test:clia-gdpr` stráži kľúče v kóde) → posúdenie súhlasu →
+CMP / lišta **iba ak je súhlas potrebný** (nepovinné technológie sa nesmú aktivovať pred súhlasom, manuál 6.2.4).
+
+**DPIA (CLIA 11.11.2026: nie je prekážkou spustenia).** Povinnosť primárne na Zákazníkoch; Esblu poskytuje súčinnosť
+technickým podkladom (`docs/clia-gdpr-reconciliation-2026-11-10.md` §14). Re-review pri podstatnej zmene AI / dát.
+
+**Uzavretá beta:** po ukončení uzavretej bety vlastník vyprázdni `beta_allowlist` (e-maily schválených záujemcov).
+
 
 Povinný GDPR re-review (PP, DPA príloha 3 + 15-dňová notifikácia Zákazníkom, registre, LIA, DPIA potreba) pred:
 

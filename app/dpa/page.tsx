@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { PublicLegalLayout } from "@/app/components/PublicLegalLayout";
 import { LegalMarkdownLocalized } from "@/app/components/LegalMarkdownLocalized";
-import { readLegalMarkdownAllLocales } from "@/lib/legal-content";
+import { legalTranslationAvailability, readLegalMarkdownAllLocales } from "@/lib/legal-content";
 import { legalConfig } from "@/lib/legal-config";
 
 export const metadata: Metadata = {
@@ -20,9 +20,12 @@ export default function DpaPage() {
   return (
     <PublicLegalLayout
       titleKey="legal.titles.dpa"
-      updatedAt={`9. septembra 2026 (verzia ${legalConfig.dpaVersion})`}
+      updatedAt={`11. novembra 2026 (verzia ${legalConfig.dpaVersion})`}
     >
-      <LegalMarkdownLocalized variants={markdownByLocale} />
+      <LegalMarkdownLocalized
+        variants={markdownByLocale}
+        translated={legalTranslationAvailability("dpa", legalConfig.dpaVersion)}
+      />
     </PublicLegalLayout>
   );
 }

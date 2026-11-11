@@ -925,6 +925,8 @@ const de = {
       ESBLU_NOT_ACTIVE_OWNER:
         "Den AVV kann im Namen der Firma nur deren Inhaber (Owner) annehmen.",
       ESBLU_NO_ACTIVE_MEMBERSHIP: "Sie sind kein aktives Mitglied einer Firma.",
+      ESBLU_DPA_AUTHORITY_NOT_CONFIRMED:
+        "Bitte bestätigen Sie, dass Sie berechtigt sind, im Namen dieser Firma zu handeln.",
       ESBLU_NOT_CURRENT_DPA_VERSION:
         "Die angezeigte AVV-Version ist nicht mehr aktuell. Laden Sie die Seite neu und versuchen Sie es erneut.",
       ESBLU_NO_CURRENT_DPA:
@@ -2261,6 +2263,12 @@ const de = {
         "Registrierungstoken und Installationskennungen der App, technische Zustelldaten und der Benachrichtigungstext (allgemeiner Hinweis auf eine neue Nachricht oder eine bevorstehende Frist)",
       fcmLocation:
         "Globale Google-Infrastruktur einschließlich USA und EU; Übermittlungen gemäß Firebase Data Processing and Security Terms",
+      anthropicPurpose:
+        "Werkzeuge der künstlichen Intelligenz (Claude) für Entwicklung, Wartung, technische Prüfung, Diagnose und genehmigte Serviceeingriffe in der Anwendung Esblu — nicht als KI-Funktion der Anwendung für Kunden",
+      anthropicDataCategories:
+        "Technische Aufzeichnungen und Diagnoseausgaben; personenbezogene Daten in zugänglich gemachten Produktionsdaten nur bei einem notwendigen Serviceeingriff in begrenztem Umfang (vorrangig werden Test- oder anonymisierte Daten verwendet)",
+      anthropicLocation:
+        "Vertraglicher Anbieter: Anthropic PBC, USA; Übermittlungen auf Grundlage des Anthropic Data Processing Addendum einschließlich Standardvertragsklauseln",
       namecheapPurpose:
         "Hosting der geschäftlichen E-Mail-Kommunikation (Postfächer info@esblu.com und privacy@esblu.com — privacy@esblu.com ist ein Alias, das auf dasselbe Postfach verweist) und Empfang von E-Mail-Nachrichten von Nutzern, einschließlich Anliegen zu personenbezogenen Daten",
       namecheapDataCategories:

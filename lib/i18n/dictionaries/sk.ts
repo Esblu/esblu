@@ -938,6 +938,8 @@ const sk = {
       ESBLU_NOT_ACTIVE_OWNER:
         "DPA môže v mene firmy prijať iba jej vlastník (owner).",
       ESBLU_NO_ACTIVE_MEMBERSHIP: "Nie ste aktívnym členom žiadnej firmy.",
+      ESBLU_DPA_AUTHORITY_NOT_CONFIRMED:
+        "Potvrďte prosím, že ste oprávnený/á konať za túto firmu.",
       ESBLU_NOT_CURRENT_DPA_VERSION:
         "Zobrazená verzia DPA už nie je aktuálna. Obnovte stránku a skúste to znova.",
       ESBLU_NO_CURRENT_DPA:
@@ -2268,6 +2270,12 @@ const sk = {
         "Registračné tokeny a identifikátory inštalácií aplikácie, technické údaje o doručení a text notifikácie (všeobecné oznámenie o novej správe alebo blížiacom sa termíne)",
       fcmLocation:
         "Globálna infraštruktúra Google vrátane USA a EÚ; prenosy podľa Firebase Data Processing and Security Terms",
+      anthropicPurpose:
+        "Nástroje umelej inteligencie (Claude) využívané pri vývoji, údržbe, technickom audite, diagnostike a schválených servisných zásahoch do Aplikácie Esblu — nie ako AI funkcia Aplikácie pre Zákazníkov",
+      anthropicDataCategories:
+        "Technické záznamy a výstupy diagnostiky; osobné údaje obsiahnuté v sprístupnených produkčných záznamoch iba pri nevyhnutnom servisnom zásahu v obmedzenom rozsahu (prednostne sa používajú testovacie alebo anonymizované údaje)",
+      anthropicLocation:
+        "Zmluvný poskytovateľ: Anthropic PBC, USA; prenosy na základe Anthropic Data Processing Addendum vrátane štandardných zmluvných doložiek",
       namecheapPurpose:
         "Hosting firemnej e-mailovej komunikácie (schránky info@esblu.com a privacy@esblu.com — privacy@esblu.com je alias smerujúci do tej istej schránky) a prijímanie e-mailových správ od používateľov, vrátane žiadostí týkajúcich sa osobných údajov",
       namecheapDataCategories:

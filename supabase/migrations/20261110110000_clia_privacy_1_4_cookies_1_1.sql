@@ -1,7 +1,7 @@
 -- =============================================================================
 -- J10 CLIA GDPR reconciliation — nové verzie informačných dokumentov
 -- =============================================================================
--- privacy_policy 1.4 = finálne znenie CLIA „Zásady spracúvania osobných
+-- privacy_policy 1.4 = finálne znenie CLIA (J10.1: 4 jednoznačné typografické opravy, hash aktualizovaný pred produkciou) „Zásady spracúvania osobných
 --   údajov“ (09.11.2026), slovenský originál prevzatý doslovne
 --   (legal/privacy/1.4.md); jediný doplnok je odkaz na sekciu „Informácie
 --   o cookies“ v mieste zástupného riadku CLIA. required = true → existujúci
@@ -25,7 +25,7 @@ insert into public.legal_documents (type, version, effective_at, required, conte
 values
   (
     'privacy_policy', '1.4', now(), true,
-    'fc8197f0f60e4759b6557b0b491358a046cc85b840b2a710178fc9bd3b7667cf',
+    'a7ad0f3f7330c5ff2c4f06ecfde995cc7bf20abc60b87586d2841d607ed5b87d',
     '/ochrana-osobnych-udajov'
   ),
   (

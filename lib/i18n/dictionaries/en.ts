@@ -924,6 +924,8 @@ const en = {
       ESBLU_NOT_ACTIVE_OWNER:
         "Only the company's owner can accept the DPA on the company's behalf.",
       ESBLU_NO_ACTIVE_MEMBERSHIP: "You aren't an active member of any company.",
+      ESBLU_DPA_AUTHORITY_NOT_CONFIRMED:
+        "Please confirm that you are authorized to act on behalf of this company.",
       ESBLU_NOT_CURRENT_DPA_VERSION:
         "The displayed DPA version is no longer current. Refresh the page and try again.",
       ESBLU_NO_CURRENT_DPA:
@@ -2241,6 +2243,12 @@ const en = {
         "App registration tokens and installation identifiers, technical delivery data and the notification text (a general notice of a new message or an upcoming deadline)",
       fcmLocation:
         "Google global infrastructure including the USA and the EU; transfers under the Firebase Data Processing and Security Terms",
+      anthropicPurpose:
+        "Artificial intelligence tools (Claude) used for development, maintenance, technical audit, diagnostics and approved service interventions in the Esblu Application — not as an AI feature of the Application for Customers",
+      anthropicDataCategories:
+        "Technical records and diagnostic output; personal data contained in disclosed production records only during a necessary service intervention, in a limited scope (test or anonymised data are used preferentially)",
+      anthropicLocation:
+        "Contracting provider: Anthropic PBC, USA; transfers under the Anthropic Data Processing Addendum including standard contractual clauses",
       namecheapPurpose:
         "Hosting of business email communication (the info@esblu.com and privacy@esblu.com mailboxes — privacy@esblu.com is an alias pointing to the same mailbox) and receipt of email messages from users, including requests concerning personal data",
       namecheapDataCategories:

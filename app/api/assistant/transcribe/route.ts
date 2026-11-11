@@ -12,8 +12,7 @@ import { entitlementDenialResponse, getActiveRoleForRequest, requireVoiceEntitle
 import { guardTranscription } from "@/lib/voice/transcribe-guard";
 import { lazyAiClient, safeAiErrorMeta } from "@/lib/ai/openai-runtime";
 import type { EntitlementDenial } from "@/lib/entitlements";
-import { checkCompanyDpaForAi, companyDpaGuardMessageKey } from "@/lib/ai/company-dpa-guard";
-import { getUserScopedSupabaseClient } from "@/lib/server-supabase-user-client";
+import { checkCompanyDpaForRequest, companyDpaGuardMessageKey } from "@/lib/ai/company-dpa-guard";
 
 // -----------------------------------------------------------------------------
 // POST /api/assistant/transcribe
@@ -209,10 +208,7 @@ export async function POST(req: Request) {
     // 1b') DPA aktívnej firmy (CLIA manuál 3.1.2) — hlasová nahrávka je
     //      obsah spracúvaný v mene Zákazníka (DPA príloha č. 1 písm. g).
     //      Pred čítaním audia aj pred OpenAI. Fail closed.
-    const bearer = req.headers.get("authorization") || "";
-    const dpa = await checkCompanyDpaForAi(
-      getUserScopedSupabaseClient(bearer.startsWith("Bearer ") ? bearer.slice("Bearer ".length).trim() : "")
-    );
+    const dpa = await checkCompanyDpaForRequest(req);
     if (!dpa.ok) {
       return Response.json(
         { success: false, code: dpa.code, error: translate(locale, companyDpaGuardMessageKey(dpa)) },

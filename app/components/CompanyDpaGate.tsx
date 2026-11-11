@@ -147,7 +147,7 @@ export default function CompanyDpaGate({
     setSubmitting(true);
     setSubmitError("");
 
-    const ok = await acceptCompanyDpa(status.current_dpa_version);
+    const ok = await acceptCompanyDpa(status.current_dpa_version, confirmedAuthority);
 
     if (!ok) {
       setSubmitError(t("companyDpaGate.submitError"));

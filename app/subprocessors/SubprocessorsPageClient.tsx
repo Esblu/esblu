@@ -141,6 +141,28 @@ export function SubprocessorsPageClient() {
                 </td>
               </tr>
               <tr className="border-b border-subtle align-top">
+                <td className="py-2 pr-4 font-semibold">Anthropic (Claude)</td>
+                <td className="py-2 pr-4">
+                  {t("legal.subprocessors.anthropicPurpose")}
+                </td>
+                <td className="py-2 pr-4">
+                  {t("legal.subprocessors.anthropicDataCategories")}
+                </td>
+                <td className="py-2 pr-4">
+                  {t("legal.subprocessors.anthropicLocation")}
+                </td>
+                <td className="py-2">
+                  <a
+                    href="https://www.anthropic.com/legal/privacy"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className={linkClass}
+                  >
+                    anthropic.com/legal/privacy
+                  </a>
+                </td>
+              </tr>
+              <tr className="border-b border-subtle align-top">
                 <td className="py-2 pr-4 font-semibold">
                   Namecheap (Private Email)
                 </td>

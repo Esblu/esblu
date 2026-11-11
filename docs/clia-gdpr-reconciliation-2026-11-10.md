@@ -1,4 +1,7 @@
-# J10 — CLIA GDPR reconciliation (2026-11-10)
+# J10 — CLIA GDPR reconciliation (2026-11-10, follow-up J10.1 2026-11-11)
+
+> **Aktuálny stav po stanovisku CLIA z 11.11.2026: pozri §18.** Otázky v §16 sú uzavreté (§18.1). Sekcia §8 (Anthropic
+> alternatíva A) je prekonaná — CLIA potvrdila Anthropic ako ďalšieho sprostredkovateľa.
 
 Zdroj: balík CLIA **„GDPR Esblu“ z 09.11.2026** (Manuál implementácie Nariadenia GDPR v1.0, Zásady spracúvania
 osobných údajov, Smernica o ochrane osobných údajov v1.0, Zmluva o spracúvaní osobných údajov + prílohy 1–3,
@@ -374,3 +377,146 @@ alternatíva A; F13 doplniť „DPA brána pred AI“; doplniť web push služby
 - Push: revoke sweep aj bez providera; odhlásenie nevytvára nové ID inštalácie.
 - Testy `test:clia-gdpr` (12), `test:clia-gdpr-db` (8, vrátane rollback + re-apply).
 - Staging: obe migrácie aplikované na `esblu-test`; rollback overený v transakcii (ROLLBACK); granty service-only.
+
+---
+
+## 18. CLIA follow-up 2026-11-11 (J10.1)
+
+Stanovisko CLIA z 11.11.2026 (záväzné):
+
+| bod | stanovisko | stav v Esblu |
+|---|---|---|
+| DPA elektronicky | **CONFIRMED** — DPA možno uzatvoriť elektronicky; preukázať identitu, oprávnenie, verziu, dátum, čas, súhlas oboch strán; upraviť ustanovenia o podpise a listinných vyhotoveniach | DPA 1.3 + rozšírená evidencia (§18.2–18.3) |
+| Anthropic | **SUBPROCESSOR CONFIRMED** — zaradenie v DPA a dokumentácii je opodstatnené (servisné/diagnostické zásahy) | ostáva v DPA p3 a registri; doplnený na `/subprocessors`; pravidlá prístupu (§18.5) |
+| DPIA | **NOT A RELEASE BLOCKER** — povinnosť primárne na Zákazníkoch; Esblu poskytuje súčinnosť | technický podklad §14 ostáva ako support package |
+| Cookies | **COOKIE BANNER NOT REQUIRED CURRENTLY** — stačí reálny a úplný prehľad | `/cookies` 1.1 bez zmeny; inventár znovu overený (test) |
+| EN/DE Privacy Policy | **TRANSLATIONS REQUIRED** — slovenská verzia ako rozhodujúca nenahrádza zrozumiteľnú informáciu | `legal/privacy/1.4.en.md`, `1.4.de.md` (úplné preklady) |
+
+### 18.1 Otázky Q1–Q14 — uzavretie
+
+| Q | téma | rozhodnutie | stav |
+|---|---|---|---|
+| Q1 | DPA elektronicky | CLIA potvrdila → DPA 1.3 + evidencia | **CLOSED** |
+| Q2 | Anthropic | CLIA: ponechať ako sprostredkovateľa → pravidlá minimalizácie a evidencia zásahov | **CLOSED** |
+| Q3 | dôkaz prijatia po zrušení účtu | pred výmazom acceptance riadku sa uloží dôkaz (`legal_acceptance_evidence`: osoba, e-mail, verzia, čas, metóda, rola, firma) — retencia max. 5 r. (PP „Správa zmluvného vzťahu“), potom purge | **CLOSED (J10.1 tech)** |
+| Q4 | odkaz na cookies v PP | CLIA potvrdila stránku cookies ako postačujúcu | **CLOSED** |
+| Q5 | preklady | CLIA rozhodla → EN/DE implementované | **CLOSED** |
+| Q6 | preferenčné localStorage | iba nastavenia zvolené používateľom, bez sledovania, bez prenosu tretím stranám; CLIA potvrdila súčasný model bez lišty | **CLOSED (covered)** |
+| Q7 | DPIA | nie je blocker | **CLOSED** |
+| Q8 | AI intake pred potvrdením | spracúvanie iniciuje Zákazník po prijatí DPA (DB guard na `documents`, DPA brána pred OpenAI); návrh sa ukladá šifrovaný so stavom `needs_review`, do evidencie (faktúra/ai_evidence) ide až po ľudskom potvrdení — v súlade s DPA p2 („pred definitívnym uložením“) a minimalizáciou | **CLOSED (documented)** |
+| Q9 | trial / beta / AI telemetria | `trial_claims` ≤ 5 r. (evidencia skúšobného obdobia), `ai_scan_usage` ≤ 90 d (technický log), `ai_processing_usage` user_id pseudonymizovaný po 90 d (počty kvót ostávajú), `ai_usage_monthly` bez osobných údajov 25 mes.; `beta_allowlist` = vlastníkom spravovaný zoznam uzavretej bety → vyprázdni sa pri ukončení bety (OWNER ACTION, runbook §7) | **CLOSED** |
+| Q10 | preklepy PP | opravené iba jednoznačné: „Hlavýnm“→„Hlavným“, „(USA môže“→„(USA) môže“, „k dispozícií“→„k dispozícii“, „incidentov..“→„incidentov.“ (hash 1.4 aktualizovaný pred produkciou; staging opravený) | **CLOSED** |
+| Q11 | SMTP / Gmail | repo: žiadny custom SMTP, žiadna e-mailová knižnica, `esblu.office@gmail.com` nikde; auth e-maily = Supabase (v PP uvedené); podpora = Namecheap (uvedené). Gmail sa nepridáva. Ak vlastník zistí presmerovanie na Gmail → zaradiť ako sprostredkovateľa podľa existujúceho modelu (runbook §6) | **CLOSED (OWNER verify)** |
+| Q12 | RPO / RÚZ | verejné registre = zdroj verejných údajov o firme (IČO, obchodné meno; pri SZČO meno) na overenie Zákazníka; nie profilovanie, nie nový typ údajov → doplnené do internej dokumentácie (§15 register delta), PP text sa nemení | **CLOSED (doc)** |
+| Q13 | syntéza reči | Web Speech API (`speechSynthesis`) v prehliadači/zariadení; Esblu neposiela text na server ani tretej strane; niektoré prehliadače môžu použiť cloudové hlasy výrobcu prehliadača podľa nastavení používateľa → nie je to sprostredkovateľ Esblu, zdokumentované technicky | **CLOSED (doc)** |
+| Q14 | Google login mobil | Google OAuth beží na webe aj v mobilnej aplikácii (Capacitor Browser, PKCE, `NEXT_PUBLIC_ESBLU_OAUTH_PROVIDERS=google` v mobilnom builde); PP tvrdenie „dostupné vo webovom rozhraní“ je pravdivé, nie úplné → interné dokumenty zosúladené, pri najbližšej revízii PP navrhnúť „vo webovom a mobilnom rozhraní“ (bez samostatnej CLIA otázky) | **CLOSED (doc)** |
+
+### 18.2 DPA — elektronický model (finálny stav)
+
+| požiadavka CLIA | implementácia |
+|---|---|
+| identita osoby | `company_dpa_acceptances.accepted_by` (auth user, FK RESTRICT); e-mail sa pri archivácii uloží do `legal_acceptance_evidence` |
+| oprávnenie konať za Zákazníka | server: iba **owner** aktívnej firmy (`accepted_role`); osoba: výslovné vyhlásenie v checkboxe „Potvrdzujem, že som oprávnený/á konať za túto firmu…“ → `authority_confirmed = true` (bez neho `ESBLU_DPA_AUTHORITY_NOT_CONFIRMED`) |
+| prijatá verzia | `version` + `document_content_hash` (sha256 SK textu) — iba aktuálna účinná verzia |
+| dátum a čas | `accepted_at` (DB `now()`, nie klient) |
+| metóda | `acceptance_method = company_dpa_gate`; jazyk zobrazenia `display_locale` |
+| súhlas oboch strán | Esblu: DPA 1.3 bod 10.1 (sprístupnenie Zmluvy na elektronické potvrdenie = súhlas Sprostredkovateľa) + `processor_acceptance = esblu_electronic_offer_dpa_10_1` |
+| identita Zákazníka | `company_name_snapshot`, `company_registration_id_snapshot` (IČO z overenej identity / fakturačného profilu) |
+| dôkaz po zrušení firmy | `legal_acceptance_evidence` (5 r.) |
+| zobrazenie | verejná `/dpa` (SK + EN/DE preklad 1.3); podpisový workflow, PDF podpis ani KEP sa nezavádzajú |
+
+### 18.3 DPA 1.3 — presný diff voči textu CLIA (09.11.2026)
+
+Všetky ostatné ustanovenia a prílohy 1–3 (vrátane Anthropic PBC v prílohe 3) sú doslovne CLIA (tokenový diff
+mimo týchto 5 miest = 0).
+
+1. **Čl. I — Prevádzkovateľ** (prázdne polia šablóny) → „**Prevádzkovateľ:** Zákazník, ktorého obchodné meno,
+   sídlo, IČO, prípadne DIČ, IČ DPH a údaj o zápise sú evidované v jeho účte v Aplikácii Esblu v čase
+   elektronického potvrdenia tejto Zmluvy / **V zastúpení:** osoba, ktorá Zmluvu v mene Prevádzkovateľa elektronicky
+   potvrdila podľa bodu 10.1 / **Kontakt:** e-mailová adresa evidovaná v účte Prevádzkovateľa v Aplikácii Esblu“.
+   (Pôvodné polia Sídlo/IČO/DIČ/IČ DPH/Zapísaný v so znakmi „……“ odstránené.)
+2. **10.1** pôvodne: „…nadobúda platnosť a účinnosť dňom jej podpisu oboma Zmluvnými stranami.“ → „…nadobúda platnosť
+   a účinnosť dňom jej uzatvorenia. Zmluva sa uzatvára elektronicky tak, že osoba oprávnená konať za
+   Prevádzkovateľa potvrdí jej aktuálnu verziu v Aplikácii Esblu. Sprostredkovateľ sprístupnením Zmluvy na
+   elektronické potvrdenie v Aplikácii Esblu vyjadruje súhlas s jej obsahom a s jej uzatvorením týmto spôsobom.
+   Sprostredkovateľ eviduje identitu osoby, ktorá Zmluvu potvrdila, jej vyhlásenie o oprávnení konať za
+   Prevádzkovateľa, potvrdenú verziu Zmluvy a dátum a čas potvrdenia. Zmluvu možno uzatvoriť aj podpisom oboch
+   Zmluvných strán; v takom prípade nadobúda platnosť a účinnosť dňom jej podpisu oboma Zmluvnými stranami.“
+3. **11.4** doplnené „…, prípadne elektronickým potvrdením novej verzie Zmluvy v Aplikácii Esblu postupom podľa
+   bodu 10.1, ak táto Zmluva neustanovuje inak.“
+4. **11.7** pôvodne: „Táto Zmluva je vyhotovená v dvoch rovnopisoch, z ktorých každá Zmluvná strana obdrží jeden
+   rovnopis Zmluvy.“ → „Zmluva uzatvorená elektronicky podľa bodu 10.1 sa nevyhotovuje v listinných rovnopisoch;
+   jej potvrdená verzia je Prevádzkovateľovi trvalo dostupná v Aplikácii Esblu. Ak sa Zmluva uzatvára podpisom v
+   listinnej podobe, je vyhotovená v dvoch rovnopisoch, z ktorých každá Zmluvná strana obdrží jeden rovnopis Zmluvy.“
+5. **Podpisová časť** („V …, dňa … / Za Prevádzkovateľa / Za Sprostredkovateľa / ……“) → „Za Prevádzkovateľa:
+   elektronické potvrdenie v Aplikácii Esblu podľa bodu 10.1 (záznam o potvrdení eviduje Sprostredkovateľ). /
+   Za Sprostredkovateľa: Esblu s. r. o., sprístupnením Zmluvy na elektronické potvrdenie podľa bodu 10.1.“
+
+Klasický podpis ostáva ako **alternatíva** (10.1 posledná veta, 11.7 druhá veta), nie povinnosť.
+
+### 18.4 DPA server-side enforcement matrix
+
+| oblasť | vstup | vynútenie pred DPA | stav |
+|---|---|---|---|
+| dokumenty / Inbox / AI intake | `documents`, `document_attachments`, `ai_evidence` | DB BEFORE INSERT guard (všetky roly vrátane service_role) | PASS (J0) |
+| vozidlá, stroje, sklad, fotky, servis, známky | 9 tabuliek | DB guard | PASS |
+| chat správy a prílohy | `chat_messages`, `chat_attachments` | DB guard | PASS |
+| **faktúry** | `invoices` (+ položky cez faktúru) | DB guard | **FIXED J10.1** (predtým iba UI) |
+| **obchodní partneri** | `business_partners` | DB guard | **FIXED J10.1** (predtým iba UI) |
+| **eFaktúra** | `einvoice_organizations` (registrácia firmy u providera → inbound/outbound) | DB guard | **FIXED J10.1** (NOT LIVE) |
+| **súbory (Storage)** | buckety ai-inbox-documents, ai-evidence-documents, chat-attachments, vehicle/machine/inventory-photos | RESTRICTIVE insert politika `esblu_storage_company_dpa` | **FIXED J10.1** (predtým mohol vzniknúť osirelý súbor) |
+| AI sken / technický preukaz / legacy sken | OpenAI | server DPA brána pred kvótou a prenosom | PASS (J10) |
+| hlas | OpenAI transcribe | server DPA brána pred čítaním audia | PASS (J10) |
+| intent AI fallback | OpenAI | bez DPA sa text neodošle (deterministický parser ostáva) | PASS (J10) |
+| **povolené pred DPA** (založenie firmy/účtu) | `companies`, `company_members`, `company_invites`, `company_billing_profile`, `company_legal_identities`, logo firmy (`company-logos`), nastavenia, push identifikátory, legal acceptance | bez DPA guardu — údaje prevádzkovateľa Esblu / nastavenie firmy | zámerne |
+| odvodené záznamy | folders, kategórie, export balíky, handoff, linky | z existujúceho obsahu (ten už vyžadoval DPA) | N/A |
+
+Testy: `test:clia-j10-1-db` (business_partners, Storage, triggery, owner/admin/employee, cudzia firma),
+`test:multi-company-db`, `test:einvoice-db`, `test:storage-media-db` PASS.
+
+### 18.5 Anthropic — finálny stav a kontroly
+
+- Ostáva v DPA 1.3 prílohe 3 (text CLIA) a v zázname sprostredkovateľa; doplnený na `/subprocessors`
+  (vývoj, údržba, technický audit, diagnostika, schválené servisné zásahy — nie AI funkcia pre Zákazníkov).
+- Pravidlá: `docs/ai-dev-tool-access-policy.md` (staging/syntetické najprv, produkcia iba nevyhnutne, minimálny
+  rozsah, agregáty pred riadkami, žiadne dumpy, žiadne osobné údaje v promptoch/dokumentoch/commitoch, žiadne
+  tajomstvá, žiadne dlhodobé lokálne kópie, zápis/mazanie iba so súhlasom) + odkaz v `AGENTS.md` (čítajú ho AI
+  nástroje v repe).
+- Evidencia zásahov: `docs/ops/service-intervention-log.md` (append-only cez git, bez osobných údajov, ≤ 12 mes.).
+  Existujúce mechanizmy (git história migrácií, Supabase `schema_migrations`, Vercel deployment logy, checklist)
+  zachytávajú zmeny, ale nie read-only prístupy → doplnený manuálny log.
+- Runtime kód: žiadna Anthropic integrácia (test).
+
+### 18.6 Produkčný purge — read-only precheck (2026-11-11)
+
+`scripts/sql/prod-gdpr-retention-precheck.sql` (BEGIN READ ONLY … ROLLBACK, iba agregáty). Výsledok na produkcii:
+
+| kategória | riadkov | najstarší | najnovší | typ údajov | legal hold |
+|---|---|---|---|---|---|
+| push_devices revoked > 30 d | 1 | 2026-10-12 | 2026-10-12 | technický identifikátor | nie |
+| push_subscriptions revoked > 30 d | 2 | 2026-09-30 | 2026-10-01 | technický identifikátor | nie |
+| notification_deliveries > 90 d | 0 | — | — | metadáta doručenia | nie |
+| company_invites neprijaté > 30 d | 1 | exp. 2026-08-21 | 2026-08-21 | pozvánka (e-mail) | nie |
+| account_deletion_cleanup_jobs | — | tabuľka v prod ešte neexistuje (RC) | | | |
+| assistant_action_confirmations expirované > 1 d | 30 | 2026-09-15 | 2026-09-25 | technické (args príkazu) | nie |
+| assistant_conversation_contexts expirované > 1 d | 2 | 2026-09-25 | 2026-09-25 | technické | nie |
+| media_deletion_queue dokončené > 90 d | 0 | — | — | technické | nie |
+| nepotvrdené registrácie > 30 d | 0 | — | — | registrácia | nie |
+| trial_claims > 5 r. | — | tabuľka v prod ešte neexistuje (RC) | | | |
+| ai_scan_usage > 90 d | 0 | — | — | technický log | nie |
+| ai_processing_usage na pseudonymizáciu | 0 | — | — | kvótový záznam | nie (riadky ostávajú) |
+| legal_acceptance_evidence > 5 r. | — | tabuľka v prod ešte neexistuje (J10.1) | | | |
+| INFO user_legal_acceptances (ostávajú) | 19 | 2026-08-15 | 2026-09-30 | dôkaz prijatia | nemaže sa |
+| INFO company_dpa_acceptances (ostávajú) | 5 | 2026-08-15 | 2026-09-30 | dôkaz prijatia | nemaže sa |
+| INFO invoices (nikdy) | 2 | 2026-09-16 | 2026-09-20 | **účtovníctvo** | 10 r. — mimo purge |
+
+Prvý produkčný beh by zmazal **36 technických riadkov**, žiadne zákaznícke, obchodné ani účtovné údaje.
+**Purge sa nespúšťa** — po nasadení RC je potrebný výslovný súhlas vlastníka (OWNER ACTION).
+
+### 18.7 Verzovanie po prekladoch
+
+- Privacy Policy: právna verzia ostáva **1.4** (SK hash v `legal_documents`); EN/DE sú preklady tej istej verzie
+  → žiadny nový riadok, žiadny re-accept kvôli prekladu. Potvrdenie eviduje `metadata.display_locale` +
+  `source_version`.
+- DPA: **1.3** je nová právna verzia (zmena textu podľa CLIA) → každá firma ju prijme cez CompanyDpaGate (owner).
+- Cookies 1.1 bez zmeny. Re-accept PP 1.4 nastane raz (nová CLIA verzia oproti 1.3), nie kvôli prekladom.

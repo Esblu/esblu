@@ -53,7 +53,9 @@ export const legalConfig = {
   // doplnok je odkaz na sekciu „Informácie o cookies“ v mieste prázdneho
   // zástupného riadku CLIA. EN/DE preklad 1.4 zámerne NEEXISTUJE — CLIA
   // dodala iba SK právny originál; EN/DE zobrazí SK text s upozornením.
-  // LEGAL CONFIRMATION REQUIRED pre finálne preklady.)
+  // J10.1 (2026-11-11, CLIA): EN/DE preklady 1.4 doplnené (1.4.en.md,
+  // 1.4.de.md) — preklad tej istej verzie, bez nového legal_documents riadku
+  // a bez re-accept; jazyk zobrazenia sa eviduje v metadata potvrdenia.)
   privacyPolicyVersion: "1.4",
   // Podmienky používania idú vo verzii 1.1 — história: 1.0 (21. júla 2026)
   // → 1.1 (9. septembra 2026, prechod identifikácie prevádzkovateľa z
@@ -83,7 +85,12 @@ export const legalConfig = {
   // fyzickej osoby Jaroslav Juriš na Esblu s. r. o. v úvodnom odseku —
   // jediná obsahová zmena, zvyšok dokumentu bezo zmeny). Pozri
   // legal/dpa/1.2.md.
-  dpaVersion: "1.2",
+  // → 1.3 (J10.1, 2026-11-11): Zmluva o spracúvaní osobných údajov CLIA
+  // (09.11.2026) s minimálnymi úpravami pre elektronické uzatvorenie podľa
+  // stanoviska CLIA z 11.11.2026 (čl. I, 10.1, 11.4, 11.7, podpisová časť);
+  // EN/DE = preklady tej istej verzie. Pozri legal/dpa/1.3*.md a
+  // supabase/migrations/20261111110000_clia_j10_1_dpa_1_3.sql.
+  dpaVersion: "1.3",
 } as const;
 
 // Dokumenty, ktoré musí AKTÍVNY používateľ (owner/admin/employee) akceptovať
