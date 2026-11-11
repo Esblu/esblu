@@ -1,7 +1,7 @@
 # Esblu — MASTER PRE-LAUNCH CHECKLIST
 
 Kanonický zoznam všetkého, čo musí byť hotové pred verejným spustením. Aktualizovať pri každom bloku.
-Posledná aktualizácia: **2026-11-11 J10.1 CLIA FOLLOW-UP** (RC `d50d8ba` + J10.1, sekcia **J10.1**; stanovisko CLIA 11.11.2026); predtým **2026-11-10 J10 CLIA GDPR RECONCILIATION** (sekcia **J10**); predtým **2026-10-25 J9 FINAL RC / PRE-PRODUCTION READINESS** (RC `85f800b`, sekcia **J9** — kanonický zoznam blockerov a poradie release); predtým **2026-10-26** (branch `preprod-release-candidate` — **J7 BUSINESS RULE CORRECTIONS** + PRICING + ENTITLEMENTS ARCHITECTURE, sekcia **J7**; predtým COST CONTROL HARDENING, sekcia **J6**; predtým CHECKLIST RECONCILIATION na RC `c3a8650`, sekcie **M–P**;
+Posledná aktualizácia: **2026-11-11 J10.2 FINAL CLIA VERIFY + RELEASE PREFLIGHT** (sekcia **J10.2**); predtým **2026-11-11 J10.1 CLIA FOLLOW-UP** (RC `d50d8ba` + J10.1, sekcia **J10.1**; stanovisko CLIA 11.11.2026); predtým **2026-11-10 J10 CLIA GDPR RECONCILIATION** (sekcia **J10**); predtým **2026-10-25 J9 FINAL RC / PRE-PRODUCTION READINESS** (RC `85f800b`, sekcia **J9** — kanonický zoznam blockerov a poradie release); predtým **2026-10-26** (branch `preprod-release-candidate` — **J7 BUSINESS RULE CORRECTIONS** + PRICING + ENTITLEMENTS ARCHITECTURE, sekcia **J7**; predtým COST CONTROL HARDENING, sekcia **J6**; predtým CHECKLIST RECONCILIATION na RC `c3a8650`, sekcie **M–P**;
 predtým PRE-LAUNCH TECHNICAL BLOCKERS: PASS, sekcia **J5**; GRANULAR TEAM PERMISSIONS: PASS, sekcia **J4**).
 
 Statusy: **PASS** · **READY** (pripravené, čaká na vykonanie/súhlas) · **BLOCKED LEGAL** (CLIA) · **BLOCKED EXTERNAL** ·
@@ -696,6 +696,23 @@ po typografických opravách (iba staging, 0 potvrdení 1.4). Produkcia: iba rea
 purge (precheck §18.6) — technicky = nastaviť `ESBLU_GDPR_RETENTION_PURGE_ENABLED=true` (default vypnuté, release guard); (3) po release prijať DPA 1.3 vo vlastnej firme a informovať firmy (gate); (4) overiť, že
 info@/privacy@ nie sú presmerované na Gmail; (5) pravidelne preverovať prístupy AI nástroja k produkcii;
 (6) po skončení uzavretej bety vyprázdniť `beta_allowlist`.
+
+## J10.2. FINAL CLIA VERIFY + PRODUCTION RELEASE PREFLIGHT (2026-11-11)
+
+**CLIA: CLIA IMPLEMENTATION VERIFIED – READY FOR PRODUCTION** (RC `0d4b18d`). Pri verify nájdený 1 BLOCKER — opravený
+pred akýmkoľvek produkčným zápisom: cron `telemetry-maintenance` by po deployi automaticky spustil J10 retenčnú purge
+(36 riadkov + neúspešné registrácie) → teraz iba s `ESBLU_GDPR_RETENTION_PURGE_ENABLED=true` (v produkcii nenastavené).
+
+| preflight | výsledok |
+|---|---|
+| git | `origin/preprod-release-candidate` = RC, clean, `main` `901c46c` je predok (fast-forward), 187 commitov, secret scan / raw CLIA / generované súbory: čisté |
+| prod DB precheck (read-only) | **0 STOP / 0 WARN** — 56 history, posledná `20261005091000_private_media_buckets`, 0 RC migrácií, 61/61 pre-RC, 0/37 RC tabuliek, 114/11 politík, granty 139/427, anon iba `legal_documents:SELECT`, 0 definer bez search_path, 7/7 privátnych bucketov, owner invarianty OK |
+| chýbajúce migrácie | **47** (`20260720000000` + `20261002100000` … `20261111110000`, okrem 3 už aplikovaných) — runbook §C #1–#47 |
+| Vercel prod env | prítomné: Supabase, OpenAI, FCM, VAPID, CRON, OAuth, action/intake secrets; **neprítomné**: eFaktúra, billing, purge flag |
+| rollback | Vercel Instant Rollback kandidát `dpl_3She4DWLcGnehbkZQmgh6PMZqjUr` (`901c46c`, READY); SQL rollback súbory #1–#47 podľa runbooku |
+| managed backup | **potvrdené vlastníkom** (Supabase daily backup 11.11.2026) |
+| logický dump | **BLOCKED — USER ACTION**: produkčné DB heslo nie je dostupné (žiadna env ho nepoužíva), sieť sandboxu nepovoľuje spojenie na Supabase; dump vykoná vlastník lokálne (pg_dump 17.11) |
+| FN definície pred oknom | uložené mimo repa (`release-backups/2026-11-11-prod-window/`) |
 
 ## K. FINAL FULL SMOKE — spustiť IBA keď finálny RC obsahuje multi-company + eInvoice + voice + billing + finálnu legal/store konfiguráciu
 
