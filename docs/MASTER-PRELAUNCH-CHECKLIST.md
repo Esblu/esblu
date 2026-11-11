@@ -714,6 +714,14 @@ pred akýmkoľvek produkčným zápisom: cron `telemetry-maintenance` by po depl
 | logický dump | **BLOCKED — USER ACTION**: produkčné DB heslo nie je dostupné (žiadna env ho nepoužíva), sieť sandboxu nepovoľuje spojenie na Supabase; dump vykoná vlastník lokálne (pg_dump 17.11) |
 | FN definície pred oknom | uložené mimo repa (`release-backups/2026-11-11-prod-window/`) |
 
+**RELEASE 2026-11-11: PRODUCTION RELEASE SUCCESSFUL (DB + web).** Dump vlastníka `esblu-prod-2026-11-11.dump` (1 345 933 B,
+18:18:25, mimo repa) + managed backup 11.11. Migrácie #1–#47 aplikované (history 56 → 103, 0 chýb). Fingerprint: politiky,
+triggre, ACL/RLS, stĺpce, indexy a granty = staging; funkcie z okna = súbory repa (115/115); jediný rozdiel mimo okna je
+kozmetický (pre-RC `esblu_block_finalized_invoice_mutation` bez komentárov). Advisors: 0 ERROR. Izolácia firiem 4/4,
+anon zamietnutý. `main` 901c46c → **7dbb386** (fast-forward), Vercel prod `dpl_2xX7bkncbQ3J38m4KEsta3ZgphsX` READY, 0 runtime
+errors. Purge flag nenastavený (vypnuté), orphan Storage nedotknutý, eFaktúra/billing vypnuté. Rollback app:
+`dpl_3She4DWLcGnehbkZQmgh6PMZqjUr`; DB: forward-fix / runbook G + dump.
+
 ## K. FINAL FULL SMOKE — spustiť IBA keď finálny RC obsahuje multi-company + eInvoice + voice + billing + finálnu legal/store konfiguráciu
 
 Status: **NOT YET RUN** (`FINAL QA`) — zámerne sa nespúšťa teraz. Predpoklady: CLIA/legal texty, finálna billing/store
