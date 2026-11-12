@@ -835,5 +835,6 @@ Praktické poradie. Technické blokery (J5) sú PASS — zvyšok sú rozhodnutia
 - [x] Telefón `legalConfig.publicPhone` + dostupnosť na `/kontakt` — `npm run check:b2b-terms-release` OK
 - [x] VOP 20.6: termination / DPA delete workflow (`20261112110000`) + export údajov firmy
 - [x] Lehota 30 dní od preukázateľného oznámenia (`company_terms_notices`)
-- [ ] Finálny release check → produkčný release (nový runbook)
-- [ ] Produkcia: samostatný release migrácie `20261112100000` + merge do main po schválení
+- [x] Finálny release check → GO (2026-11-12)
+- [x] Produkcia 2026-11-12: managed backup 00:33:59 UTC + logický dump (2 258 415 B, 20:29:50); migrácie `20261112100000`, `20261112110000` (history 105); fingerprint 12/12 = staging; main `360128c`; deploy `dpl_5qVws56uodUn7fxM4HtArJaXtTNY` READY; smoke PASS (/kontakt, VOP 1.2 SK/EN/DE, export a delete bez auth → 401, owner-only accept/notice); žiadne dáta nezmazané
+- [ ] Pred platenou prevádzkou: záloha Storage objektov (nie sú v DB zálohách), retencia `company_terminations`, uptime monitoring
