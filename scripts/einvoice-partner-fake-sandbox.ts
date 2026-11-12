@@ -15,6 +15,20 @@
 import { createHash, randomUUID } from "node:crypto";
 
 type Org = { id: string; ico: string; dic: string | null; name: string; participant: string | null; reception: "none" | "active" | "send_only" };
+/** Peppol SBDH obálka okolo UBL (tvar podľa reálneho sandbox doručenia; XML deklarácia vnoreného UBL sa odstráni). */
+export function wrapSbdh(ubl: Uint8Array, sender: string, receiver: string, instance: string): Uint8Array {
+  const inner = new TextDecoder().decode(ubl).replace(/^\s*<\?xml[^>]*\?>\s*/, "");
+  const head =
+    `<?xml version="1.0" encoding="UTF-8"?><sh:StandardBusinessDocument xmlns:sh="http://www.unece.org/cefact/namespaces/StandardBusinessDocumentHeader">` +
+    `<sh:StandardBusinessDocumentHeader><sh:HeaderVersion>1.0</sh:HeaderVersion>` +
+    `<sh:Sender><sh:Identifier Authority="iso6523-actorid-upis">${sender}</sh:Identifier></sh:Sender>` +
+    `<sh:Receiver><sh:Identifier Authority="iso6523-actorid-upis">${receiver}</sh:Identifier></sh:Receiver>` +
+    `<sh:DocumentIdentification><sh:Standard>urn:oasis:names:specification:ubl:schema:xsd:Invoice-2</sh:Standard><sh:TypeVersion>2.1</sh:TypeVersion>` +
+    `<sh:InstanceIdentifier>${instance}</sh:InstanceIdentifier><sh:Type>Invoice</sh:Type><sh:CreationDateAndTime>2026-11-12T00:00:00Z</sh:CreationDateAndTime></sh:DocumentIdentification>` +
+    `</sh:StandardBusinessDocumentHeader>`;
+  return new TextEncoder().encode(head + inner + "</sh:StandardBusinessDocument>");
+}
+
 type Received = { id: string; orgId: string; xml: Uint8Array; senderParticipant: string; number: string; acknowledgedAt: string | null };
 
 export type FakeSandboxOptions = { failSendTimes?: number };
@@ -127,7 +141,8 @@ export function createFakeSandbox(options: FakeSandboxOptions = {}) {
         emit("peppol.document.sent", org.id, { invoiceId, invoiceNumber: number, documentType: "invoice", mode: "test", state: "SENT", messageId: "m", transactionId: "t" }, `peppol.document.sent:${invoiceId}`);
         if (target) {
           const rid = randomUUID();
-          received.push({ id: rid, orgId: target.id, xml, senderParticipant: org.participant, number, acknowledgedAt: null });
+          // Reálny sandbox (overené 12. 11. 2026): GET /received/:id/xml vracia Peppol SBDH obálku + vnorený UBL.
+          received.push({ id: rid, orgId: target.id, xml: wrapSbdh(xml, org.participant, target.participant, rid), senderParticipant: org.participant, number, acknowledgedAt: null });
           emit("peppol.document.delivered", org.id, { invoiceId, invoiceNumber: number, documentType: "invoice", mode: "test", state: "DELIVERED", messageId: "m", transactionId: "t" }, `peppol.document.delivered:${invoiceId}`);
           emit("peppol.document.received", target.id, { senderName: org.name, senderParticipantId: org.participant, documentNumber: number, documentType: "invoice", total: "12.30", currency: "EUR" }, `peppol.document.received:${rid}`);
         }
@@ -144,7 +159,7 @@ export function createFakeSandbox(options: FakeSandboxOptions = {}) {
       const inv = p.split("/")[5];
       const s = sent.get(inv);
       if (!s || s.orgId !== org.id) return json(404, { error: { code: "NOT_FOUND", message: "Not found" } });
-      const delivered = received.some((r) => r.xml === s.xml);
+      const delivered = received.some((r) => r.number === s.number);
       return json(200, { data: { invoice_id: inv, document_id: "d", ubl_sha256: sha(s.xml), delivery_status: delivered ? { state: "delivered", at: new Date().toISOString() } : null, transactions: [{ state: "SENT", mode: "test" }] } });
     }
     if (method === "GET" && p === "/v1/agent/peppol/received") {

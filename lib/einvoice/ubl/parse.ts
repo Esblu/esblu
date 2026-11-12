@@ -81,6 +81,12 @@ export type ParsedInboundUbl = {
     payable: string | null;
   };
   lines: ParsedLine[];
+  /**
+   * Peppol obálka (SBDH), ak doklad prišiel zabalený v StandardBusinessDocument
+   * (eFaktura.sk GET /received/:id/xml vracia SBDH + UBL). Originál sa ukladá
+   * NEZMENENÝ (vrátane obálky); parsuje sa iba vnorený UBL.
+   */
+  envelope?: { type: "sbdh"; receiver: string | null; sender: string | null; instanceIdentifier: string | null } | null;
 };
 
 export type InboundParseResult =
@@ -88,6 +94,7 @@ export type InboundParseResult =
   | { ok: false; error: string };
 
 const AMOUNT = /^-?\d+(\.\d+)?$/;
+const SBDH_NS = "http://www.unece.org/cefact/namespaces/StandardBusinessDocumentHeader";
 
 function children(el: Element, ns: string, local: string): Element[] {
   const out: Element[] = [];
@@ -154,6 +161,23 @@ export function parseInboundUbl(input: string | Uint8Array): InboundParseResult 
   }
   if (!root) return { ok: false, error: "UBL_MALFORMED" };
 
+  // Peppol SBDH obálka → vnorený UBL dokument (presne jeden Invoice / CreditNote).
+  let envelope: ParsedInboundUbl["envelope"] = null;
+  if (root.namespaceURI === SBDH_NS && root.localName === "StandardBusinessDocument") {
+    const header = first(root, SBDH_NS, "StandardBusinessDocumentHeader");
+    const ident = (role: "Receiver" | "Sender") => text(first(first(header, SBDH_NS, role), SBDH_NS, "Identifier"));
+    const docInfo = first(header, SBDH_NS, "DocumentIdentification");
+    envelope = { type: "sbdh", receiver: ident("Receiver"), sender: ident("Sender"), instanceIdentifier: text(first(docInfo, SBDH_NS, "InstanceIdentifier")) };
+    const payloads: Element[] = [];
+    for (let n = root.firstChild; n; n = n.nextSibling) {
+      if (n.nodeType !== 1) continue;
+      const e = n as Element;
+      if ((e.namespaceURI === NS.invoice && e.localName === "Invoice") || (e.namespaceURI === NS.creditNote && e.localName === "CreditNote")) payloads.push(e);
+    }
+    if (payloads.length !== 1) return { ok: false, error: "UBL_SBDH_PAYLOAD_INVALID" };
+    root = payloads[0];
+  }
+
   let documentType: "Invoice" | "CreditNote";
   if (root.namespaceURI === NS.invoice && root.localName === "Invoice") documentType = "Invoice";
   else if (root.namespaceURI === NS.creditNote && root.localName === "CreditNote") documentType = "CreditNote";
@@ -195,6 +219,7 @@ export function parseInboundUbl(input: string | Uint8Array): InboundParseResult 
   });
 
   const document: ParsedInboundUbl = {
+    envelope,
     documentType,
     customizationId: cbc(root, "CustomizationID"),
     profileId: cbc(root, "ProfileID"),

@@ -151,11 +151,15 @@ export function normalizeParticipantId(value: string | null | undefined): string
  * = žiadny koncept, žiadny ACK, nič sa nepriradí „aktívnej" ani inej firme.
  */
 export function verifyInboundRecipient(
-  doc: Pick<ParsedInboundUbl, "customer">,
+  doc: Pick<ParsedInboundUbl, "customer" | "envelope">,
   orgParticipantId: string | null | undefined
-): { ok: true } | { ok: false; code: "RECIPIENT_MISMATCH"; detail: "RECIPIENT_UNVERIFIED" | "RECIPIENT_MISSING" | "RECIPIENT_ENDPOINT_MISMATCH" } {
+): { ok: true } | { ok: false; code: "RECIPIENT_MISMATCH"; detail: "RECIPIENT_UNVERIFIED" | "RECIPIENT_MISSING" | "RECIPIENT_ENDPOINT_MISMATCH" | "RECIPIENT_ENVELOPE_MISMATCH" } {
   const expected = normalizeParticipantId(orgParticipantId);
   if (!expected) return { ok: false, code: "RECIPIENT_MISMATCH", detail: "RECIPIENT_UNVERIFIED" };
+  // Peppol smerovanie (SBDH Receiver) — ak je obálka prítomná, musí tiež sedieť (aj chýbajúci = nesúlad).
+  if (doc.envelope) {
+    if (normalizeParticipantId(doc.envelope.receiver) !== expected) return { ok: false, code: "RECIPIENT_MISMATCH", detail: "RECIPIENT_ENVELOPE_MISMATCH" };
+  }
   const c = doc.customer;
   const actual = c.endpointId && c.endpointScheme ? normalizeParticipantId(`${c.endpointScheme}:${c.endpointId}`) : null;
   if (!actual) return { ok: false, code: "RECIPIENT_MISMATCH", detail: "RECIPIENT_MISSING" };

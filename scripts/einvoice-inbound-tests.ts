@@ -19,6 +19,7 @@ import { handleEinvoiceWebhook, classifyWebhookEvent, WEBHOOK_MAX_BODY_BYTES } f
 import { processInboundRow, runInboundPoll, runInboundProcessBatch } from "../lib/einvoice/inbound/processor.ts";
 import { InboundStoreError, inboundXmlPath, type InboundRow, type InboundStore } from "../lib/einvoice/inbound/store.ts";
 import { mapInboundDraft, verifyInboundRecipient } from "../lib/einvoice/inbound/mapping.ts";
+import { wrapSbdh } from "./einvoice-partner-fake-sandbox.ts";
 import { dbErrorCode, OutboundStoreError, type OutboundRow, type OutboundStore } from "../lib/einvoice/outbound/store.ts";
 import {
   EinvoiceProviderError,
@@ -989,17 +990,50 @@ await check("organizácia bez overeného participant_id → RECIPIENT_MISMATCH (
   }
 });
 
-await check("webhook replay: to isté podpísané telo pod NOVÝM X-Webhook-Id → 409 REPLAYED_WEBHOOK, nič sa nezaznamená ani nenačíta", async () => {
+await check("webhook replay: to isté podpísané telo pod NOVÝM X-Webhook-Id → 200 DUPLICATE (bez retry u poskytovateľa), nič sa nezaznamená ani nenačíta", async () => {
   const body = { event: "peppol.document.received", organization_id: "org-a", company_id: CB, data: { company_id: CB, received_id: "rcv-FAKE" } };
   provider.calls = [];
   const before = (await sql<{ n: number }>("select count(*)::int n from public.einvoice_webhook_events")).rows[0].n;
   const r = await webhook(body, "dlv-1-forged-new-id");
-  assert.deepEqual(r, { status: 409, body: { code: "REPLAYED_WEBHOOK" } });
+  assert.deepEqual(r, { status: 200, body: { code: "DUPLICATE" } });
   assert.deepEqual(provider.calls, []);
   assert.equal((await sql<{ n: number }>("select count(*)::int n from public.einvoice_webhook_events")).rows[0].n, before);
   // legitímna nová udalosť (iné telo — iný timestamp obálky) prejde
   const fresh = await webhook({ ...body, timestamp: "2026-11-12T10:00:00Z" }, "dlv-1-legit-new");
   assert.equal(fresh.status, 200);
+});
+
+await check("SBDH obálka (reálny eFaktura.sk sandbox): parse vnoreného UBL, envelope receiver/sender; 0 alebo 2 payloady → UBL_SBDH_PAYLOAD_INVALID", () => {
+  const ubl = inboundXml("FA-SBDH-1");
+  const wrapped = wrapSbdh(ubl, "9915:2055555555", "9915:2020000000", "inst-1");
+  const p = parseInboundUbl(wrapped);
+  assert.ok(p.ok);
+  if (!p.ok) return;
+  assert.equal(p.document.invoiceNumber, "FA-SBDH-1");
+  assert.deepEqual(p.document.envelope, { type: "sbdh", receiver: "9915:2020000000", sender: "9915:2055555555", instanceIdentifier: "inst-1" });
+  assert.deepEqual(verifyInboundRecipient(p.document, "9915:2020000000"), { ok: true });
+  const other = parseInboundUbl(wrapSbdh(ubl, "9915:2055555555", "9915:2030000000", "inst-2"));
+  assert.ok(other.ok);
+  if (other.ok) assert.deepEqual(verifyInboundRecipient(other.document, "9915:2020000000"), { ok: false, code: "RECIPIENT_MISMATCH", detail: "RECIPIENT_ENVELOPE_MISMATCH" });
+  const inner = new TextDecoder().decode(ubl).replace(/^\s*<\?xml[^>]*\?>\s*/, "");
+  const two = new TextDecoder().decode(wrapped).replace("</sh:StandardBusinessDocument>", inner + "</sh:StandardBusinessDocument>");
+  assert.deepEqual(parseInboundUbl(two), { ok: false, error: "UBL_SBDH_PAYLOAD_INVALID" });
+  const none = new TextDecoder().decode(wrapped).replace(inner, "");
+  assert.deepEqual(parseInboundUbl(none), { ok: false, error: "UBL_SBDH_PAYLOAD_INVALID" });
+  // DOCTYPE v obálke sa odmietne pred parsovaním rovnako
+  assert.deepEqual(parseInboundUbl(new TextDecoder().decode(wrapped).replace("?>", "?><!DOCTYPE x>")), { ok: false, error: "UBL_DTD_NOT_ALLOWED" });
+});
+
+await check("SBDH doklad: originál (obálka + UBL) uložený NEZMENENÝ, hash = prijaté bajty, koncept + ACK; SBDH pre iného príjemcu → RECIPIENT_MISMATCH", async () => {
+  const wrapped = wrapSbdh(inboundXml("FA-SBDH-OK"), "9915:2055555555", "9915:2020000000", "inst-ok");
+  const row = await processSingle("rcv-sbdh-ok", wrapped, "org-a");
+  assert.equal(row.processing_status, "acknowledged");
+  assert.equal(row.xml_sha256, sha(wrapped));
+  assert.equal(Number(row.xml_size_bytes), wrapped.byteLength);
+  const bad = await processSingle("rcv-sbdh-bad", wrapSbdh(inboundXml("FA-SBDH-BAD"), "9915:2055555555", "9915:2030000000", "inst-bad"), "org-a");
+  assert.equal(bad.processing_status, "failed");
+  assert.equal(bad.last_error_code, "RECIPIENT_MISMATCH");
+  assert.equal(bad.invoice_id, null);
 });
 
 await check("čítanie: owner a accountant vidia inbound + koncepty; admin iba s finance.view áno; admin bez financií a employee nie", async () => {

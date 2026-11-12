@@ -37,7 +37,7 @@ Brána: `docs/einvoice-production-gate-2026-11-12.md` (G1–G12).
 | 4 | send_only `…beef` | PASS offline (poll ho vynechá), RC PASS |
 | 5 | outbound A → B | PASS offline; RC: `delivered` |
 | 6–7 | inbound B + received endpoint | PASS offline; RC PASS |
-| 8–9 | webhook received + opakovaný webhook | PASS (`DUPLICATE`, iné telo pod tým istým ID 409, **nové: to isté telo pod novým ID 409**) |
+| 8–9 | webhook received + opakovaný webhook | PASS (`DUPLICATE`, iné telo pod tým istým ID 409, **nové: to isté telo pod novým ID → 200 DUPLICATE**) |
 | 10 | duplicitný received dokument | PASS (provider ID, hash vo firme, dodávateľ+číslo) |
 | 11 | retry po dočasnej chybe | PASS (timeout fetch → retry → acknowledged; ACK retry; webhook retry max 5) |
 | 12 | nesprávny recipient | **opravené → FAIL CLOSED** (pozri E) |
@@ -52,7 +52,7 @@ Oficiálne (developers.efaktura.sk/en/docs/webhooks): `X-Webhook-Signature: t=<u
 
 Implementácia: zhoduje sa (raw body pred JSON, constant-time, rotácia, 300 s, limit 256 kB, telo sa neukladá ani neloguje — iba SHA-256, odpoveď iba `{code}`, dáta sa vždy znova načítajú od poskytovateľa, `data.mode` ≠ prostredie → IGNORED).
 
-Nález + oprava: `X-Webhook-Id` nie je podpísaný → zachytený request sa dal v 300 s okne prehrať s novým ID (nový dedupe riadok, zbytočné volania poskytovateľa). **Pridané**: rovnaké podpísané telo pod iným ID → `409 REPLAYED_WEBHOOK`, nič sa nezaznamená ani nevolá.
+Nález + oprava: `X-Webhook-Id` nie je podpísaný → zachytený request sa dal v 300 s okne prehrať s novým ID (nový dedupe riadok, zbytočné volania poskytovateľa). **Pridané**: rovnaké podpísané telo pod iným ID → `200 DUPLICATE`, nič sa nezaznamená ani nevolá. (Pôvodne 409 — zmenené po živom teste: udalosť už spracovaná feed fallbackom by inak u poskytovateľa vyvolala retry a po 15 zlyhaniach deaktiváciu endpointu.)
 
 Rate limit: v aplikácii iba počítadlo odmietnutí; per-instance limit na serverless nemá zmysel → **production blocker G5: Vercel WAF pravidlo** pre `/api/einvoice/webhook` (nastaviť pri aktivácii, nie teraz).
 
@@ -125,3 +125,10 @@ Regresia: **115/115 `test:*` PASS**, `tsc --noEmit` čisté, eslint dotknutých 
 6. Účtovné stanovisko; billing rozhodnutie (od 1. 12. platí min. 10 €/mes. po aktivácii).
 7. Peppol kredit v sandbox portáli 0 — ak sandbox odoslanie vyžaduje kredit, outbound A→B bude 402 (potvrdiť živým behom).
 8. Nesúvisiace: lokálny `main` je pozadu za `origin/main` a má 41 necommitnutých zmien z iných relácií (nedotknuté).
+
+## Doplnok — živý sandbox A/B (2026-11-12, vetva `einvoice-readiness-audit`)
+
+Pozri `docs/einvoice-sandbox-ab-live-2026-11-12.md`. Živý beh našiel ďalšiu produkčnú chybu: eFaktura.sk
+`GET /received/:id/xml` vracia **Peppol SBDH obálku** (`sh:StandardBusinessDocument` + vnorený UBL) → parser
+odmietol každý prijatý doklad (`INVALID_XML / UBL_UNSUPPORTED_ROOT`). Opravené: originál (obálka + UBL) sa ukladá
+nezmenený, parsuje sa vnorený UBL; SBDH `Receiver` musí tiež sedieť s participantom organizácie (fail closed).

@@ -1,0 +1,438 @@
+{
+  "generated_at": "2026-11-12T21:33:28.288Z",
+  "environment": "eFaktura.sk sandbox (API partner)",
+  "seed": "e2e-ab-20261112c",
+  "synthetic_identities": {
+    "A": {
+      "ico": "39810763",
+      "dic": "2030998233"
+    },
+    "B": {
+      "ico": "31635016",
+      "dic": "2075211402"
+    },
+    "C": {
+      "ico": "31929192",
+      "dic": "2001835382"
+    },
+    "D": {
+      "ico": "39079554",
+      "dic": "2046366685"
+    }
+  },
+  "synthetic_provider_orgs": {
+    "A": {
+      "org_id": "5766da96-01c1-4996-8ff3-8b510b500008",
+      "reception": "active",
+      "participant": "9915:2030998233"
+    },
+    "B": {
+      "org_id": "9efd2efa-0853-4e4a-aa9e-dc761db96140",
+      "reception": "active",
+      "participant": "9915:2075211402"
+    },
+    "C": {
+      "org_id": "16a88793-859e-4a16-9d98-e730f8b787d1",
+      "reception": "failed",
+      "participant": null
+    },
+    "D": {
+      "org_id": "a174d08c-ed57-4773-a595-13e253394a58",
+      "reception": "send_only",
+      "participant": "9915:2046366685"
+    }
+  },
+  "provider_calls": {
+    "POST /v1/agent/organizations 201": 4,
+    "GET /v1/agent/organizations/:id 200": 6,
+    "POST /v1/agent/organizations 200": 1,
+    "POST /v1/agent/peppol/enroll 201": 4,
+    "GET /v1/agent/events 200": 7,
+    "POST /v1/agent/peppol/enroll 400": 3,
+    "GET /v1/agent/peppol/recipient 200": 1,
+    "POST /v1/agent/peppol/preflight 200": 1,
+    "POST /v1/agent/peppol/connector/send 200": 1,
+    "GET /v1/agent/peppol/status/:id 200": 1,
+    "GET /v1/agent/peppol/sent/:id/evidence 200": 1,
+    "GET /v1/agent/peppol/received 200": 7,
+    "GET /v1/agent/peppol/received/:id/xml 200": 1,
+    "POST /v1/agent/peppol/received/:id/acknowledge 200": 1
+  },
+  "counts": {
+    "PASS": 26,
+    "PARTIAL": 1
+  },
+  "results": [
+    {
+      "id": "D1",
+      "label": "POST /organizations firma A → org ID + mapovanie v Esblu (reception pending)",
+      "verdict": "PASS",
+      "evidence": {
+        "http_status": [
+          201
+        ],
+        "org": "sha256:fd226179c552",
+        "reused_by_provider": false,
+        "participant_after_create": null
+      }
+    },
+    {
+      "id": "D2",
+      "label": "idempotencia: opakované založenie A (aj priamo u poskytovateľa) → ten istý org, žiadny duplicitný riadok",
+      "verdict": "PASS",
+      "evidence": {
+        "same_org": true,
+        "provider_reused": true,
+        "esblu_rows": 1
+      }
+    },
+    {
+      "id": "D3",
+      "label": "POST /organizations firma B (+ C, D pre negatívne scenáre)",
+      "verdict": "PASS",
+      "evidence": {
+        "B": {
+          "org": "sha256:b0d119e3fb2f",
+          "reception": "pending"
+        },
+        "C": {
+          "org": "sha256:57a18763f3d4",
+          "reception": "pending"
+        },
+        "D": {
+          "org": "sha256:caabcea4383f",
+          "reception": "pending"
+        }
+      }
+    },
+    {
+      "id": "E1",
+      "label": "enroll A (a1b2c3) → enrolled, 9915:DIČ_A, príjem aktívny",
+      "verdict": "PASS",
+      "evidence": {
+        "status": "enrolled",
+        "participant_scheme": "9915",
+        "reception": "active",
+        "warnings": []
+      }
+    },
+    {
+      "id": "E2",
+      "label": "enroll B (a1b2c3) → enrolled, príjem aktívny",
+      "verdict": "PASS",
+      "evidence": {
+        "status": "enrolled",
+        "reception": "active"
+      }
+    },
+    {
+      "id": "E3",
+      "label": "opakovaný enroll A → stále enrolled/active, jeden riadok",
+      "verdict": "PASS",
+      "evidence": {
+        "status": "enrolled",
+        "rows": 1
+      }
+    },
+    {
+      "id": "E4",
+      "label": "participant.activated pre A a B vo feede → spracované; opätovné spracovanie = DUPLICATE",
+      "verdict": "PASS",
+      "evidence": {
+        "activated_A": 2,
+        "activated_B": 1,
+        "mode": "test",
+        "source": "api_enroll",
+        "first": [
+          "PARTICIPANT_UPDATED",
+          "PARTICIPANT_UPDATED",
+          "PARTICIPANT_UPDATED"
+        ],
+        "replay": [
+          "DUPLICATE",
+          "DUPLICATE",
+          "DUPLICATE"
+        ]
+      }
+    },
+    {
+      "id": "F1",
+      "label": "enroll C 000000000000dead → 400, príjem failed, žiadny aktívny participant",
+      "verdict": "PASS",
+      "evidence": {
+        "http_status": 400,
+        "code": "EINVOICE_ENROLL_TOKEN_INVALID",
+        "reception": "failed",
+        "error_code": "VERIFICATION_TOKEN_INVALID",
+        "receiving_active": false,
+        "sending_enabled": false
+      }
+    },
+    {
+      "id": "F2",
+      "label": "opakovanie dead → rovnaký výsledok, bezpečné; neplatný kód nezhorší aktívnu firmu A",
+      "verdict": "PASS",
+      "evidence": {
+        "c_again": "EINVOICE_ENROLL_TOKEN_INVALID",
+        "a_after_invalid": "active",
+        "a_participant_failed_events": 1,
+        "a_after_event": "active"
+      }
+    },
+    {
+      "id": "F3",
+      "label": "participant.failed pre C vo feede → spracované, stav ostáva failed",
+      "verdict": "PASS",
+      "evidence": {
+        "participant_failed_for_C": 2,
+        "code": "VALIDATION_ERROR",
+        "processed": [
+          "PARTICIPANT_UPDATED",
+          "PARTICIPANT_UPDATED"
+        ]
+      }
+    },
+    {
+      "id": "G1",
+      "label": "enroll D 000000000000beef → send_only; príjem NEaktívny, odosielanie povolené",
+      "verdict": "PASS",
+      "evidence": {
+        "status": "send_only",
+        "reception": "send_only",
+        "receiving_active": false,
+        "sending_enabled": true,
+        "held_by_recorded": true
+      }
+    },
+    {
+      "id": "G2",
+      "label": "participant.failed PARTICIPANT_HELD_ELSEWHERE pre D → spracované, ostáva send_only (nie active, nie failed)",
+      "verdict": "PASS",
+      "evidence": {
+        "events": 1,
+        "code": "PARTICIPANT_HELD_ELSEWHERE",
+        "reception": "send_only"
+      }
+    },
+    {
+      "id": "G3",
+      "label": "poll príjmu vynechá send_only (D) a failed (C); UI view nehlási aktívny príjem",
+      "verdict": "PASS",
+      "evidence": {
+        "polled_companies": 2,
+        "includes_D": false,
+        "includes_C": false,
+        "ui_state_D": "send_only"
+      }
+    },
+    {
+      "id": "I1",
+      "label": "faktúra A → B (syntetická): readiness ready, UBL EN 16931, identifikátory a sumy",
+      "verdict": "PASS",
+      "evidence": {
+        "readiness": "ready",
+        "warnings": []
+      }
+    },
+    {
+      "id": "I2",
+      "label": "route (confirm_send) → recipient + preflight → queued → worker send → poskytovateľ prijal",
+      "verdict": "PASS",
+      "evidence": {
+        "state": "sent",
+        "provider_calls": [
+          "GET /v1/agent/peppol/recipient 200",
+          "POST /v1/agent/peppol/preflight 200",
+          "POST /v1/agent/peppol/connector/send 200"
+        ],
+        "ubl_sha256": "b340f453013d",
+        "endpoints_scheme": [
+          "9915",
+          "9915"
+        ],
+        "seller_is_A": true,
+        "buyer_is_B": true,
+        "totals": {
+          "net": "10.00",
+          "vat": "2.30",
+          "gross": "12.30"
+        },
+        "customization": "EN16931 / Peppol BIS 3.0",
+        "provider_preflight": "send_ready (vyžadované pred zaradením)"
+      }
+    },
+    {
+      "id": "I3",
+      "label": "reconciliation → delivered (dôkaz poskytovateľa) alebo sent",
+      "verdict": "PASS",
+      "evidence": {
+        "state": "delivered",
+        "evidence_ubl_hash_matches": true,
+        "evidence_keys": [
+          "delivered_at",
+          "delivery_state",
+          "document_id",
+          "provider_invoice_id",
+          "schema",
+          "transactions",
+          "ubl_sha256"
+        ]
+      }
+    },
+    {
+      "id": "I4",
+      "label": "peppol.document.sent / delivered pre A vo feede → webhook spracovanie RECONCILED/IGNORED, bez zmeny na horšie",
+      "verdict": "PASS",
+      "evidence": {
+        "events": [
+          "peppol.document.delivered"
+        ],
+        "mode": "test",
+        "handler": [
+          "ALREADY_FINAL"
+        ],
+        "handler_note": "IGNORED = podanie je už terminálne (delivered) — stav sa overuje dotazom u poskytovateľa, nie z tela webhooku",
+        "state": "delivered"
+      }
+    },
+    {
+      "id": "I5",
+      "label": "retry/duplicita: opakovaný request + worker → žiadne druhé podanie (1× connector/send)",
+      "verdict": "PASS",
+      "evidence": {
+        "repeat_request": {
+          "status": 200,
+          "code": "ALREADY_REQUESTED"
+        },
+        "new_provider_sends": 0,
+        "attempts": 1
+      }
+    },
+    {
+      "id": "J1",
+      "label": "B: GET /peppol/received → doklad z A (XML = odoslaný UBL, SHA-256)",
+      "verdict": "PASS",
+      "evidence": {
+        "listed_for_B": 1,
+        "stored_for_B": true,
+        "status": "acknowledged",
+        "code": null,
+        "original_is_sbdh": true,
+        "embedded_ubl_equals_sent": false,
+        "original_sha256_prefix": "09d9cf8e33bf",
+        "sbdh_receiver_is_B": true,
+        "is_test": true,
+        "inbound_rows_in_A": 0
+      }
+    },
+    {
+      "id": "J2",
+      "label": "peppol.document.received pre B vo feede → webhook spracovanie PROCESSED",
+      "verdict": "PASS",
+      "evidence": {
+        "events": 1,
+        "handler": [
+          "PROCESSED"
+        ]
+      }
+    },
+    {
+      "id": "J3",
+      "label": "spracovanie → koncept prijatej faktúry (draft na kontrolu), ACK, auto-založený dodávateľ A v B",
+      "verdict": "PASS",
+      "evidence": {
+        "status": "acknowledged",
+        "acknowledged": true,
+        "draft": {
+          "direction": "received",
+          "status": "draft",
+          "source": "efaktura_peppol"
+        },
+        "supplier_partner_before": 0,
+        "supplier_partner_after": 1,
+        "supplier_linked": true,
+        "supplier_dic_from_xml": true
+      }
+    },
+    {
+      "id": "J4",
+      "label": "duplicitný doklad: opätovný poll/registrácia → žiadny nový koncept ani partner",
+      "verdict": "PASS",
+      "evidence": {
+        "drafts_before": 1,
+        "drafts_after": 1,
+        "inbound_rows": 1,
+        "supplier_partners": 1
+      }
+    },
+    {
+      "id": "J5",
+      "label": "izolácia firiem: A nevidí inbound B, B nevidí outbound A; zamestnanec A nevidí E-Faktúru",
+      "verdict": "PASS",
+      "evidence": {
+        "a_sees_b_inbound": 0,
+        "b_sees_a_outbound": 0,
+        "b_sees_foreign_orgs": 0,
+        "employee_sees_outbound": 0
+      }
+    },
+    {
+      "id": "J6",
+      "label": "recipient mismatch: REÁLNE prijaté XML (adresované B) v schránke A → failed RECIPIENT_MISMATCH, bez konceptu, bez ACK",
+      "verdict": "PASS",
+      "evidence": {
+        "company": "A",
+        "status": "failed",
+        "code": "RECIPIENT_MISMATCH",
+        "detail": "RECIPIENT_ENVELOPE_MISMATCH",
+        "draft_created": false,
+        "ack_sent": 0,
+        "original_xml_kept": true
+      }
+    },
+    {
+      "id": "H1",
+      "label": "webhook handler: každý typ udalosti (telo z feedu, HMAC) → správna vetva; neplatný podpis 401; stará pečiatka 401; duplicita 200 DUPLICATE; iné telo pod tým istým ID 409",
+      "verdict": "PARTIAL",
+      "evidence": {
+        "per_event": {
+          "participant.activated": "200 DUPLICATE",
+          "participant.failed": "200 DUPLICATE",
+          "peppol.document.received": "200 DUPLICATE",
+          "peppol.document.delivered": "200 DUPLICATE",
+          "peppol.document.failed": "200 ALREADY_FINAL"
+        },
+        "peppol_document_failed_body": "synthetic (sandbox ho nevyvolá)",
+        "missing_types": [
+          "peppol.document.sent"
+        ],
+        "invalid_signature": 401,
+        "stale_timestamp": 401,
+        "duplicate": "DUPLICATE",
+        "same_id_other_body": 409,
+        "same_body_new_id": "200 DUPLICATE",
+        "real_http_delivery": "NOT_RUN — vyžaduje verejný HTTPS endpoint (preview/staging deploy) a secret z portálu"
+      }
+    },
+    {
+      "id": "H2",
+      "label": "wrong company: webhook s cudzím/neznámym orgId → UNKNOWN_ORG; company_id A v tele s orgId B → spracované IBA pre B",
+      "verdict": "PASS",
+      "evidence": {
+        "unknown_org": "UNKNOWN_ORG",
+        "forged_company_id_in_body": "PROCESSED",
+        "resolved_company": "B (z orgId)",
+        "rows_created_in_A": 0
+      }
+    },
+    {
+      "id": "K1",
+      "label": "žiadny API kľúč ani overovací kód v DB Esblu; žiadny kľúč v reporte",
+      "verdict": "PASS",
+      "evidence": {
+        "db_clean": true,
+        "report_clean": true
+      }
+    }
+  ]
+}

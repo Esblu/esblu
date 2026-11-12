@@ -244,6 +244,14 @@ export async function createPartnerHarness() {
     async webhookComplete(id, status, code) {
       await svcRows("select public.esblu_einvoice_webhook_complete($1, $2, $3)", [id, status, code]);
     },
+    // Zrkadlí supabase-store.webhookBodySeen (replay ochrana: rovnaké telo pod iným ID doručenia).
+    async webhookBodySeen(i) {
+      const rows = await svcRows<{ n: number }>(
+        "select count(*)::int n from public.einvoice_webhook_events where provider = $1 and environment = $2 and body_sha256 = $3 and delivery_id <> $4",
+        [i.provider, i.environment, i.bodySha256, i.deliveryId]
+      );
+      return rows[0].n > 0;
+    },
     async register(i) {
       const [r] = await svcRows<Row>("select * from public.esblu_einvoice_inbound_register($1, $2, $3, $4, $5, $6::jsonb)", [i.provider, i.environment, i.providerOrgId, i.providerReceivedId, i.source, JSON.stringify(i.meta)]);
       return { inboundId: r.inbound_id as string, created: r.created as boolean, processingStatus: r.processing_status as string, companyId: r.company_id as string };

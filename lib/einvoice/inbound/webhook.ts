@@ -125,7 +125,9 @@ async function handleVerified(
   const deliveryId = str(input.deliveryIdHeader) ?? str(payload.id) ?? str(payload.delivery_id);
   const bodySha256 = createHash("sha256").update(input.rawBody).digest("hex");
   // ID doručenia nie je podpísané: to isté podpísané telo pod iným ID (v rámci časového
-  // okna) = replay zachyteného requestu → 409, nič sa nespracuje ani neopakuje u poskytovateľa.
+  // okna) = replay zachyteného requestu ALEBO legitímne doručenie udalosti, ktorú už spracoval
+  // feed fallback. V oboch prípadoch sa nič nespracuje; odpoveď je 200 DUPLICATE (nie 4xx),
+  // aby poskytovateľ legitímne doručenie neopakoval a endpoint po 15 zlyhaniach nedeaktivoval.
   if (deliveryId && DELIVERY_ID.test(deliveryId) && deps.inbound.webhookBodySeen) {
     let seen = false;
     try {
@@ -133,7 +135,7 @@ async function handleVerified(
     } catch {
       return { status: 503, body: { code: "TEMPORARILY_UNAVAILABLE" } };
     }
-    if (seen) return { status: 409, body: { code: "REPLAYED_WEBHOOK" } };
+    if (seen) return { status: 200, body: { code: "DUPLICATE" } };
   }
   return processProviderEvent(deps, { deliveryId, payload, bodySha256 });
 }

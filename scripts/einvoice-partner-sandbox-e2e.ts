@@ -41,7 +41,9 @@ import { handleEinvoiceWebhook, processPartnerEventPage, type WebhookDeps } from
 import { handleOutboundSendRequest } from "../lib/einvoice/outbound/route-handler.ts";
 import { loadEinvoiceReadiness } from "../lib/einvoice/readiness-server.ts";
 import { runOutboundReconcileBatch, runOutboundSendBatch } from "../lib/einvoice/outbound/worker.ts";
-import { runInboundPoll, runInboundProcessBatch } from "../lib/einvoice/inbound/processor.ts";
+import { processInboundRow, runInboundPoll, runInboundProcessBatch } from "../lib/einvoice/inbound/processor.ts";
+import type { InboundRow } from "../lib/einvoice/inbound/store.ts";
+import type { EinvoiceProvider } from "../lib/einvoice/provider/types.ts";
 import { parseInboundUbl } from "../lib/einvoice/ubl/parse.ts";
 
 // -----------------------------------------------------------------------------
@@ -382,6 +384,8 @@ await step("G3", "poll príjmu vynechá send_only (D) a failed (C); UI view nehl
 let INV = "";
 let OUT = "";
 let SENT_SHA = "";
+let SENT_UBL = "";
+let SENT_NUMBER = "";
 let SUBMISSION = "";
 await step("I1", "faktúra A → B (syntetická): readiness ready, UBL EN 16931, identifikátory a sumy", ["E1", "E2"], async () => {
   const { rows } = await as(U.A, () => h.db.query<{ id: string }>(
@@ -419,6 +423,8 @@ await step("I2", "route (confirm_send) → recipient + preflight → queued → 
   assert.equal(SENT_SHA, row.ubl_sha256);
   const parsed = parseInboundUbl(ubl);
   assert.ok(parsed.ok, "vlastný UBL sa dá parsovať");
+  SENT_UBL = new TextDecoder().decode(ubl);
+  SENT_NUMBER = parsed.ok ? String(parsed.document.invoiceNumber) : "";
   const text = new TextDecoder().decode(ubl);
   const endpoints = [...text.matchAll(/<cbc:EndpointID schemeID="([0-9]{4})">([^<]+)<\/cbc:EndpointID>/g)].map((m) => `${m[1]}:${m[2]}`);
   assert.deepEqual(endpoints, [ID.A.participant, ID.B.participant]);
@@ -482,11 +488,37 @@ await step("J1", "B: GET /peppol/received → doklad z A (XML = odoslaný UBL, S
     await sleep(5_000);
     listed = (await provider.listUnacknowledgedInbound({ environment: "sandbox", providerOrgId: b })).length;
     await runInboundPoll(inboundDeps, { batchSize: 10 });
-    INB = (await sql<Row>("select * from public.einvoice_inbound where company_id = $1 and xml_sha256 = $2", [CO.B, SENT_SHA])).rows[0] ?? null;
+    // Prijatý originál = SBDH obálka + UBL → hash ≠ odoslaný UBL; párovanie podľa čísla dokladu vo firme B.
+    INB = (await sql<Row>("select * from public.einvoice_inbound where company_id = $1 and document_number = $2 and xml_sha256 is not null", [CO.B, SENT_NUMBER])).rows[0] ?? null;
   }
-  if (!INB) return { verdict: "FAIL", evidence: { listed_for_B: listed, note: "doklad sa u B neobjavil do 90 s" } };
+  if (!INB) {
+    // Diagnostika (bez XML/PII): čo sa u B reálne stalo s prijatým dokladom.
+    const rows = (await sql<Row>("select id, processing_status, last_error_code, xml_sha256, xml_storage_path from public.einvoice_inbound where company_id = $1", [CO.B])).rows;
+    const diag = [];
+    for (const r of rows) {
+      const ev = (await sql<Row>("select provider_code from public.einvoice_events where inbound_id = $1 order by created_at desc, id desc limit 1", [r.id])).rows[0];
+      let recipient: Record<string, unknown> = {};
+      if (r.xml_storage_path) {
+        const bytes = await h.inbound.getXml(String(r.xml_storage_path));
+        const parsed = bytes ? parseInboundUbl(bytes) : null;
+        if (parsed?.ok) recipient = { xml_customer_endpoint: `${parsed.document.customer.endpointScheme}:${parsed.document.customer.endpointId}`, org_participant: (await orgRow(CO.B))?.participant_id ?? null };
+      }
+      diag.push({ status: r.processing_status, code: r.last_error_code, detail: ev?.provider_code ?? null, hash_equals_sent: r.xml_sha256 === SENT_SHA, ...recipient });
+    }
+    return { verdict: "FAIL", evidence: { listed_for_B: listed, note: "doklad s hashom odoslaného UBL sa u B neobjavil do 90 s", inbound_rows_B: diag } };
+  }
   const inA = (await sql<{ n: number }>("select count(*)::int n from public.einvoice_inbound where company_id = $1", [CO.A])).rows[0].n;
-  return { listed_for_B: listed, stored_for_B: true, xml_equals_sent: INB.xml_sha256 === SENT_SHA, is_test: INB.is_test, inbound_rows_in_A: inA };
+  // Integrita: vnorený UBL v prijatom origináli = presne odoslaný UBL (bajty bez XML deklarácie).
+  const stored = await h.inbound.getXml(String(INB.xml_storage_path));
+  const storedText = stored ? new TextDecoder().decode(stored) : "";
+  const sentInner = SENT_UBL.replace(/^\s*<\?xml[^>]*\?>\s*/, "");
+  const parsed = stored ? parseInboundUbl(stored) : null;
+  return {
+    listed_for_B: listed, stored_for_B: true, status: INB.processing_status, code: INB.last_error_code ?? null,
+    original_is_sbdh: /StandardBusinessDocument/.test(storedText), embedded_ubl_equals_sent: storedText.includes(sentInner),
+    original_sha256_prefix: String(INB.xml_sha256).slice(0, 12), sbdh_receiver_is_B: parsed?.ok ? parsed.document.envelope?.receiver === ID.B.participant : null,
+    is_test: INB.is_test, inbound_rows_in_A: inA,
+  };
 });
 await step("J2", "peppol.document.received pre B vo feede → webhook spracovanie PROCESSED", ["J1"], async () => {
   const b = await orgIdOf(CO.B);
@@ -543,6 +575,35 @@ await step("J5", "izolácia firiem: A nevidí inbound B, B nevidí outbound A; z
   return { a_sees_b_inbound: aSeesIn, b_sees_a_outbound: bSeesOut, b_sees_foreign_orgs: bSeesOrgs.filter((c) => c !== CO.B).length, employee_sees_outbound: empSees };
 });
 
+await step("J6", "recipient mismatch: REÁLNE prijaté XML (adresované B) v schránke A → failed RECIPIENT_MISMATCH, bez konceptu, bez ACK", ["J3"], async () => {
+  // Reálne bajty z J1 (uložené u B, hash = odoslaný UBL). Smerovanie do A je syntetické — u poskytovateľa
+  // sa pre toto ID nič nevolá (fetch aj ACK idú cez lokálny obal, ACK sa iba zaznamená).
+  const bytes = await h.inbound.getXml(String(INB!.xml_storage_path));
+  assert.ok(bytes, "XML z J1");
+  const acks: string[] = [];
+  const wrapped = Object.create(provider) as EinvoiceProvider;
+  wrapped.getInboundDocument = async () => ({ xml: bytes! }) as Awaited<ReturnType<EinvoiceProvider["getInboundDocument"]>>;
+  wrapped.acknowledgeInbound = async (_ctx, id) => {
+    acks.push(id);
+  };
+  const pid = `e2e-mismatch-${RUN}`;
+  const draftsA = async () => (await sql<{ n: number }>("select count(*)::int n from public.invoices where company_id = $1 and direction = 'received'", [CO.A])).rows[0].n;
+  const before = await draftsA();
+  const reg = await h.inbound.register({ provider: provider.name, environment: "sandbox", providerOrgId: await orgIdOf(CO.A), providerReceivedId: pid, source: "poll", meta: {} });
+  const row = (await sql<{ j: InboundRow }>("select to_jsonb(i) j from public.einvoice_inbound i where id = $1", [reg.inboundId])).rows[0].j;
+  await processInboundRow({ store: h.inbound, provider: wrapped, environment: "sandbox" }, row);
+  const after = (await sql<Row>("select company_id, processing_status, last_error_code, invoice_id, acknowledged_at, xml_sha256 from public.einvoice_inbound where id = $1", [reg.inboundId])).rows[0];
+  const lastEvent = (await sql<Row>("select provider_code from public.einvoice_events where inbound_id = $1 order by created_at desc, id desc limit 1", [reg.inboundId])).rows[0];
+  assert.equal(after.company_id, CO.A);
+  assert.equal(after.processing_status, "failed");
+  assert.equal(after.last_error_code, "RECIPIENT_MISMATCH");
+  assert.equal(after.invoice_id, null);
+  assert.equal(after.acknowledged_at, null);
+  assert.deepEqual(acks, []);
+  assert.equal(await draftsA(), before);
+  return { company: "A", status: after.processing_status, code: after.last_error_code, detail: lastEvent?.provider_code ?? null, draft_created: false, ack_sent: acks.length, original_xml_kept: after.xml_sha256 === INB!.xml_sha256 };
+});
+
 // =============================================================================
 // H — webhook endpoint (lokálne podpísané presné telá z feedu)
 // =============================================================================
@@ -563,7 +624,8 @@ await step("H1", "webhook handler: každý typ udalosti (telo z feedu, HMAC) →
     perEvent[type] = `${r.status} ${r.body.code}`;
     assert.equal(r.status, 200, `${type}: ${r.body.code}`);
   }
-  const body = JSON.stringify(byType.values().next().value!.payload);
+  // Čerstvé telo (nová pečiatka obálky) — telá z feedu sú už spracované a replay guard by ich vrátil ako DUPLICATE.
+  const body = JSON.stringify({ ...byType.values().next().value!.payload, timestamp: new Date().toISOString(), e2e_run: RUN });
   const id = randomUUID();
   const bad = await handleEinvoiceWebhook(webhookDeps, { rawBody: new TextEncoder().encode(body), signatureHeader: `t=${Math.floor(Date.now() / 1000)},v1=${"0".repeat(64)}`, deliveryIdHeader: id });
   const stale = await handleEinvoiceWebhook(webhookDeps, { rawBody: new TextEncoder().encode(body), signatureHeader: sign(body, Math.floor(Date.now() / 1000) - 3600), deliveryIdHeader: id });
@@ -576,12 +638,37 @@ await step("H1", "webhook handler: každý typ udalosti (telo z feedu, HMAC) →
   assert.equal(ok1.status, 200);
   assert.equal(dup.body.code, "DUPLICATE");
   assert.equal(replay.status, 409);
+  // Replay ochrana: to isté PODPÍSANÉ telo pod NOVÝM X-Webhook-Id (ID nie je v HMAC) → 200 DUPLICATE, nič nové.
+  const hooks = async () => (await sql<{ n: number }>("select count(*)::int n from public.einvoice_webhook_events")).rows[0].n;
+  const hooksBefore = await hooks();
+  const bodyReplay = await handleEinvoiceWebhook(webhookDeps, { rawBody: new TextEncoder().encode(body), signatureHeader: sign(body), deliveryIdHeader: randomUUID() });
+  assert.equal(bodyReplay.status, 200);
+  assert.equal(bodyReplay.body.code, "DUPLICATE");
+  assert.equal(await hooks(), hooksBefore);
   const required = ["participant.activated", "participant.failed", "peppol.document.sent", "peppol.document.delivered", "peppol.document.failed", "peppol.document.received"];
   const missing = required.filter((t) => !perEvent[t]);
   return {
     verdict: missing.length ? "PARTIAL" : "PASS",
-    evidence: { per_event: perEvent, peppol_document_failed_body: synthetic ? "synthetic (sandbox ho nevyvolá)" : "from feed", missing_types: missing, invalid_signature: bad.status, stale_timestamp: stale.status, duplicate: dup.body.code, same_id_other_body: replay.status, real_http_delivery: "NOT_RUN — vyžaduje verejný HTTPS endpoint (preview/staging deploy) a secret z portálu" },
+    evidence: { per_event: perEvent, peppol_document_failed_body: synthetic ? "synthetic (sandbox ho nevyvolá)" : "from feed", missing_types: missing, invalid_signature: bad.status, stale_timestamp: stale.status, duplicate: dup.body.code, same_id_other_body: replay.status, same_body_new_id: `${bodyReplay.status} ${bodyReplay.body.code}`, real_http_delivery: "NOT_RUN — vyžaduje verejný HTTPS endpoint (preview/staging deploy) a secret z portálu" },
   };
+});
+
+await step("H2", "wrong company: webhook s cudzím/neznámym orgId → UNKNOWN_ORG; company_id A v tele s orgId B → spracované IBA pre B", ["J1"], async () => {
+  const sign = (body: string, t = Math.floor(Date.now() / 1000)) => `t=${t},v1=${createHmac("sha256", LOCAL_SECRET).update(`${t}.${body}`).digest("hex")}`;
+  const send = (payload: Record<string, unknown>) => {
+    const body = JSON.stringify(payload);
+    return handleEinvoiceWebhook(webhookDeps, { rawBody: new TextEncoder().encode(body), signatureHeader: sign(body), deliveryIdHeader: randomUUID() });
+  };
+  const inA = async () => (await sql<{ n: number }>("select count(*)::int n from public.einvoice_inbound where company_id = $1", [CO.A])).rows[0].n;
+  const beforeA = await inA();
+  const unknown = await send({ event: "peppol.document.received", timestamp: new Date().toISOString(), data: { orgId: `unknown-${RUN}`, receivedDocumentId: randomUUID() } });
+  assert.equal(unknown.body.code, "UNKNOWN_ORG");
+  const forged = await send({ event: "peppol.document.received", timestamp: new Date().toISOString(), company_id: CO.A, data: { orgId: await orgIdOf(CO.B), company_id: CO.A, receivedDocumentId: randomUUID() } });
+  assert.equal(forged.status, 200);
+  assert.equal(await inA(), beforeA, "nič nevzniklo v A");
+  const rec = (await sql<Row>("select company_id from public.einvoice_webhook_events order by received_at desc limit 1")).rows[0];
+  assert.equal(rec.company_id, CO.B);
+  return { unknown_org: unknown.body.code, forged_company_id_in_body: forged.body.code, resolved_company: "B (z orgId)", rows_created_in_A: 0 };
 });
 
 // =============================================================================
@@ -608,6 +695,8 @@ const summary = {
   environment: SELFTEST ? "offline-selftest (fake sandbox, bez siete)" : "eFaktura.sk sandbox (API partner)",
   seed: SEED,
   synthetic_identities: Object.fromEntries(Object.entries(ID).map(([k, v]) => [k, { ico: v.ico, dic: v.dic }])),
+  // Provider org ID nie sú tajomstvá (identifikátor syntetickej sandbox organizácie).
+  synthetic_provider_orgs: Object.fromEntries(await Promise.all((["A", "B", "C", "D"] as const).map(async (k) => [k, { org_id: (await orgIdOf(CO[k])) || null, reception: (await orgRow(CO[k]))?.reception_status ?? null, participant: (await orgRow(CO[k]))?.participant_id ?? null }]))),
   provider_calls: calls.reduce<Record<string, number>>((acc, c) => ((acc[`${c.method} ${c.path} ${c.status}`] = (acc[`${c.method} ${c.path} ${c.status}`] ?? 0) + 1), acc), {}),
   counts: results.reduce<Record<string, number>>((acc, r) => ((acc[r.verdict] = (acc[r.verdict] ?? 0) + 1), acc), {}),
   results,
