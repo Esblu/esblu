@@ -5,6 +5,7 @@ import {
   PublicLegalLayout,
 } from "@/app/components/PublicLegalLayout";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
+import { legalConfig } from "@/lib/legal-config";
 
 const emailLinkClass =
   "break-all font-medium text-brand-300 underline decoration-brand-300/40 underline-offset-4";
@@ -29,6 +30,20 @@ export function ContactPageClient() {
             info@esblu.com
           </a>
           .
+        </p>
+      </LegalSection>
+
+      {/* 22/2004 § 4: telefón — jediný zdroj legalConfig.publicPhone (VOP čl. 1 odkazuje sem). */}
+      <LegalSection title={t("legal.contactPage.phoneTitle")}>
+        <p data-testid="contact-phone">
+          {t("legal.contactPage.phoneText")}{" "}
+          {legalConfig.publicPhone ? (
+            <a href={`tel:${legalConfig.publicPhone.replace(/\s+/g, "")}`} className={emailLinkClass}>
+              {legalConfig.publicPhone}
+            </a>
+          ) : (
+            t("legal.contactPage.phonePlaceholder")
+          )}
         </p>
       </LegalSection>
 

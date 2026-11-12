@@ -12,6 +12,42 @@ end $$;
 
 drop function if exists public.esblu_accept_company_terms(text, boolean, boolean, text);
 drop function if exists public.esblu_get_my_company_terms_status();
+drop function if exists public.esblu_company_terms_requirement(uuid);
+
+-- pending required acceptances: späť na pôvodnú verziu (20260815100000)
+create or replace function public.esblu_get_my_pending_required_acceptances()
+returns table (document_type text, version text, effective_at timestamptz)
+language sql
+stable
+security definer
+set search_path = ''
+as $function$
+  select ld.type, ld.version, ld.effective_at
+  from public.legal_documents ld
+  where ld.required = true
+    and ld.id in (
+      -- Najnovšia publikovaná required verzia pre daný typ. Deterministický
+      -- výber aj pri zhode effective_at (napr. dve verzie publikované v
+      -- tom istom momente/migrácii): sekundárne created_at desc (poradie
+      -- vloženia), terciárne version desc ako posledná poistka, aby výber
+      -- nikdy nezávisel od nedefinovaného poradia riadkov.
+      select distinct on (type) id
+      from public.legal_documents
+      where required = true
+      order by type, effective_at desc, created_at desc, version desc
+    )
+    and auth.uid() is not null
+    and not exists (
+      select 1
+      from public.user_legal_acceptances ula
+      where ula.user_id = auth.uid()
+        and ula.document_type = ld.type
+        and ula.version = ld.version
+    );
+$function$;
+
+revoke all on function public.esblu_get_my_pending_required_acceptances() from public, anon;
+grant execute on function public.esblu_get_my_pending_required_acceptances() to authenticated;
 
 -- esblu_accept_company_dpa: späť na J10.1 verziu (bez poradia VOP → DPA)
 create or replace function public.esblu_accept_company_dpa(
@@ -168,3 +204,4 @@ alter table public.company_dpa_acceptances
 alter table public.legal_documents disable trigger esblu_legal_documents_no_delete;
 delete from public.legal_documents where type = 'terms' and version = '1.2';
 alter table public.legal_documents enable trigger esblu_legal_documents_no_delete;
+alter table public.legal_documents drop column if exists reaccept_grace_until;

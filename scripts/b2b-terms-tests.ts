@@ -68,10 +68,10 @@ check("EN/DE = úplné preklady: rovnaká štruktúra riadkov, čísla a odkazy"
   assert.deepEqual(legalTranslationAvailability("terms", "1.2"), { sk: true, en: true, de: true });
 });
 
-check("DB seed hash = sha256(legal/terms/1.2.md), canonical /podmienky-pouzivania, required", () => {
+check("DB seed hash = sha256(legal/terms/1.2.md), canonical /podmienky-pouzivania, firemné prijatie + 30-dňová lehota", () => {
   const h = createHash("sha256").update(readFileSync(path.join(ROOT, "legal/terms/1.2.md"))).digest("hex");
   const m = read("supabase/migrations/20261112100000_b2b_terms_1_2_company_acceptance.sql");
-  assert.ok(m.includes(`('terms', '1.2', now(), true, '${h}', '/podmienky-pouzivania')`));
+  assert.ok(m.includes(`('terms', '1.2', now(), false, '${h}', '/podmienky-pouzivania', now() + interval '30 days')`));
   assert.ok(existsSync(path.join(ROOT, "supabase/rollback/20261112100000_b2b_terms_1_2_company_acceptance_rollback.sql")));
 });
 
@@ -88,7 +88,11 @@ check("firemný gate: owner potvrdzuje B2B + oprávnenie, VOP pred DPA, legal-ho
   const g = read("app/components/CompanyDpaGate.tsx");
   assert.match(g, /acceptCompanyTerms\(/);
   assert.match(g, /disabled=\{!confirmedB2b \|\| !confirmedTermsAuthority \|\| submitting\}/);
-  assert.match(g, /isOwner && !termsPending && dpaPending/);
+  assert.match(g, /isOwner && !showTermsModal && !termsConfirmation && !termsBlocking && dpaPending/);
+  assert.match(g, /termsBlocking = termsPending && !!termsStatus\?\.required_now/);
+  assert.match(g, /company-terms-grace-notice/);
+  assert.match(g, /company-terms-confirmation/);
+  assert.match(g, /company-terms-review/);
   assert.match(g, /legalHold: dpaPending/);
   const lib = read("lib/company-dpa.ts");
   assert.match(lib, /esblu_accept_company_terms/);
@@ -144,6 +148,46 @@ check("konzistencia s DPA 1.3 / PP 1.4 / Cookies 1.1 (odkazy a prednosť DPA)", 
   for (const href of ["/dpa", "/ochrana-osobnych-udajov", "/cookies", "/subprocessors", "/cennik"]) assert.ok(SK.includes(`(${href})`), href);
   assert.match(SK, /V otázkach spracúvania osobných údajov má DPA prednosť pred týmito VOP/);
   assert.match(read("legal/dpa/1.3.md"), /trénovanie modelov umelej inteligencie/);
+});
+
+check("ChatGPT audit: čl. 1 (SOI adresa, DPH, telefón cez /kontakt), Firma ≠ Zákazník", () => {
+  assert.match(SK, /Slovenská obchodná inšpekcia, Ústredný inšpektorát, Bajkalská 21\/A, P\. O\. BOX 29, 827 99 Bratislava/);
+  assert.match(SK, /Ku dňu účinnosti týchto VOP Esblu nie je platiteľom DPH\./);
+  assert.match(SK, /\*\*Telefón:\*\* aktuálne kontaktné telefónne číslo je uvedené na stránke \[Kontakt\]\(\/kontakt\)/);
+  assert.doesNotMatch(SK, /každá Firma je samostatným Zákazníkom/);
+  assert.match(SK, /Firma je jednotkou Predplatného/);
+  assert.match(read("app/kontakt/ContactPageClient.tsx"), /legalConfig\.publicPhone/);
+  assert.equal(typeof legalConfig.publicPhone, "string");
+});
+
+check("ChatGPT audit: čl. 8 (kroky, oprava, uchovanie, jazyk, potvrdenie; bez prijatia nevlastníkom)", () => {
+  assert.doesNotMatch(SK, /Používateľom, ktorý nie je Vlastníkom, znamená/);
+  assert.match(SK, /vykonať ho môže iba Vlastník/);
+  assert.match(SK, /bez odoslania sa Zmluva neuzatvára/);
+  assert.match(SK, /Vlastník ho môže kedykoľvek zobraziť v nastaveniach Aplikácie/);
+  assert.match(SK, /Zmluva sa uzatvára v slovenskom jazyku/);
+  assert.match(SK, /\*\*8\.5\*\* Esblu potvrdí uzatvorenie Zmluvy bez zbytočného odkladu elektronicky/);
+  assert.match(read("app/nastavenia/page.tsx"), /CompanyLegalAcceptancesSection/);
+});
+
+check("ChatGPT audit: čl. 17.2, 20.2/20.6, 36, 39, 43, 44.5", () => {
+  assert.match(SK, /výpoveď nadobudne účinnosť uplynutím aktuálneho zaplateného zúčtovacieho obdobia, ak sa zmluvné strany nedohodnú na skoršom skončení/);
+  assert.match(SK, /neobmedzuje právo Zákazníka po skončení poskytovania služieb rozhodnúť podľa DPA o vrátení alebo výmaze osobných údajov/);
+  assert.match(SK, /Esblu nemá vlastnú zákonnú povinnosť archivovať účtovné doklady Zákazníka/);
+  assert.doesNotMatch(SK, /500 EUR|12 mesiacov pred vznikom škody/);
+  assert.match(SK, /pravidla o predvídateľnosti škody podľa § 379 Obchodného zákonníka/);
+  assert.match(SK, /§ 386 ods\. 1 Obchodného zákonníka/);
+  assert.doesNotMatch(SK, /sa považuje za súhlas so zmenou/);
+  assert.match(SK, /Pokračovanie v používaní Aplikácie samo osebe nepredstavuje súhlas/);
+  assert.match(SK, /Prípadné spory budú rozhodované príslušnými súdmi podľa uplatniteľných právnych predpisov/);
+  assert.doesNotMatch(SK, /podľa sídla Esblu/);
+  assert.match(SK, /Do prijatia, najdlhšie do uplynutia tejto lehoty, sa vzťah spravuje Podmienkami používania vo verzii 1\.1/);
+});
+
+check("produkčná brána existuje a nie je súčasťou test:* regresie", () => {
+  const pkg = JSON.parse(read("package.json")) as { scripts: Record<string, string> };
+  assert.ok(pkg.scripts["check:b2b-terms-release"]);
+  assert.ok(!Object.keys(pkg.scripts).some((k) => k.startsWith("test:") && pkg.scripts[k].includes("b2b-terms-release-gate")));
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

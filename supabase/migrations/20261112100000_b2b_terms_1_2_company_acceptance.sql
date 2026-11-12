@@ -1,30 +1,38 @@
 -- =============================================================================
 -- B2B VOP 1.2 — Všeobecné obchodné podmienky (B2B) + firemné prijatie
+-- (revízia po audite 2026-11-12: 30-dňová lehota, potvrdenie uzatvorenia)
 -- =============================================================================
--- 1. legal_documents: terms 1.2 (SK originál legal/terms/1.2.md; EN/DE =
---    preklady tej istej verzie). required = true → existujúci
---    LegalAcceptanceGate si od každého Používateľa vyžiada osobné potvrdenie
---    pravidiel používania (VOP 8.5).
--- 2. Firemné prijatie VOP (zmluva so Zákazníkom, VOP 8.1–8.3) — ŽIADNY nový
---    paralelný systém: rozširuje company_dpa_acceptances (append-only, owner-
---    only RPC, archivácia do legal_acceptance_evidence) o document_type
---    'terms', acceptance_method 'company_terms_gate' a stĺpec b2b_confirmed.
--- 3. esblu_accept_company_terms(p_version, p_b2b_confirmed,
---    p_authority_confirmed, p_locale) — owner aktívnej firmy, obe vyhlásenia
---    povinné, iba aktuálna účinná verzia. Zároveň zapíše osobné potvrdenie
---    ownera (user_legal_acceptances, metadata.via = company_terms_gate), aby
---    owner nepotvrdzoval tú istú verziu dvakrát.
--- 4. esblu_get_my_company_terms_status() — read-only stav pre člena firmy.
--- 5. esblu_accept_company_dpa: DPA sa potvrdzuje až po VOP aktuálnej verzie
---    (poradie VOP → DPA). Existujúce DPA prijatia ostávajú platné.
--- 6. Archivácia dôkazu: scope 'company_terms' + b2b_confirmed v details.
--- Neblokuje existujúce dáta, nič nemaže. Idempotentné.
+-- 1. legal_documents: terms 1.2 + nový stĺpec reaccept_grace_until (VOP 39.2,
+--    44.5): existujúce firmy (založené pred effective_at) majú na prijatie
+--    30 dní; nové firmy prijímajú hneď. required = false — zmluvné prijatie
+--    je owner-only na úrovni firmy (VOP 8.1); osobný LegalAcceptanceGate
+--    preto existujúcich používateľov neblokuje. Registrácia naďalej
+--    zaznamenáva oboznámenie s aktuálnou verziou.
+-- 2. company_dpa_acceptances rozšírená o 'terms' (žiadny paralelný systém).
+-- 3. esblu_company_terms_requirement (interné) + esblu_accept_company_terms.
+-- 4. esblu_get_my_company_terms_status: verzia, prijatie, grace_until,
+--    required_now, údaje firmy na kontrolu pred odoslaním (22/2004 § 5).
+-- 5. esblu_accept_company_dpa: VOP pred DPA iba ak je VOP pre firmu už povinné.
+-- 6. Archivácia dôkazu (scope company_terms).
+-- 7. esblu_get_my_pending_required_acceptances: novšia prijatá verzia
+--    (napr. VOP 1.2 pri registrácii) spĺňa staršiu required verziu.
+-- (VOP 20.6 — výmaz firmy s finalizovanými dokladmi po exporte — NIE je
+--  súčasťou tejto migrácie: vyžaduje samostatne auditovanú zmenu immutability
+--  triggerov; dovtedy riadený servisný postup, docs/b2b-vop-1-2-audit-2026-11-12.md.)
+-- Nič nemaže, neblokuje existujúce dáta. Idempotentné.
 -- Rollback: supabase/rollback/20261112100000_b2b_terms_1_2_company_acceptance_rollback.sql
 -- =============================================================================
 
 -- ----------------------------------------------------------------------------- 1
-insert into public.legal_documents (type, version, effective_at, required, content_hash, canonical_path)
-values ('terms', '1.2', now(), true, '9dbbbb56ce4ade59fb36bee8b2c169fbe9cb4658256345e74a784eab3898bd1b', '/podmienky-pouzivania')
+alter table public.legal_documents
+  add column if not exists reaccept_grace_until timestamptz null;
+
+comment on column public.legal_documents.reaccept_grace_until is
+  'VOP 39.2 / 44.5: do tohto času nie je nová verzia povinná pre firmy založené pred effective_at '
+  '(oznámenie + 30 dní na rozhodnutie, dobrovoľné skoršie prijatie možné). NULL = bez lehoty.';
+
+insert into public.legal_documents (type, version, effective_at, required, content_hash, canonical_path, reaccept_grace_until)
+values ('terms', '1.2', now(), false, '95b2c2e1822cb641ce9b4c7aea55b593ac880f587fbd7bf16706c3e538b342f0', '/podmienky-pouzivania', now() + interval '30 days')
 on conflict (type, version) do nothing;
 
 -- ----------------------------------------------------------------------------- 2
@@ -69,6 +77,58 @@ comment on table public.company_dpa_acceptances is
   'Append-only; zápis iba cez esblu_accept_company_dpa / esblu_accept_company_terms.';
 
 -- ----------------------------------------------------------------------------- 3
+-- Interný výpočet (volajú ho iba SECURITY DEFINER funkcie): aktuálna účinná
+-- verzia VOP s firemným prijatím (od 1.2), či ju firma prijala, do kedy plynie
+-- lehota a či je prijatie už povinné.
+create or replace function public.esblu_company_terms_requirement(p_company_id uuid)
+returns table (
+  current_terms_version text,
+  effective_at timestamptz,
+  grace_until timestamptz,
+  has_current_acceptance boolean,
+  required_now boolean
+)
+language sql
+stable
+security definer
+set search_path = ''
+as $function$
+  with cur as (
+    select ld.version, ld.effective_at, ld.reaccept_grace_until
+    from public.legal_documents ld
+    where ld.type = 'terms'
+      and ld.effective_at <= now()
+      and ld.version not in ('1.0', '1.1')
+    order by ld.effective_at desc, ld.created_at desc, ld.version desc
+    limit 1
+  ),
+  st as (
+    select
+      cur.version,
+      cur.effective_at,
+      case when c.created_at >= cur.effective_at then null else cur.reaccept_grace_until end as grace_until,
+      exists (
+        select 1 from public.company_dpa_acceptances a
+        where a.company_id = c.id and a.document_type = 'terms' and a.version = cur.version
+      ) as accepted
+    from cur
+    join public.companies c on c.id = p_company_id
+  )
+  select
+    st.version,
+    st.effective_at,
+    st.grace_until,
+    st.accepted,
+    (not st.accepted) and (st.grace_until is null or now() >= st.grace_until)
+  from st;
+$function$;
+
+comment on function public.esblu_company_terms_requirement(uuid) is
+  'Interné (bez klientského EXECUTE): stav povinnosti firemného prijatia VOP. Nová firma (created_at >= effective_at) '
+  '→ povinné hneď; existujúca firma → povinné až po reaccept_grace_until (VOP 39.2, 44.5).';
+
+revoke all on function public.esblu_company_terms_requirement(uuid) from public, anon, authenticated;
+
 create or replace function public.esblu_accept_company_terms(
   p_version text,
   p_b2b_confirmed boolean default false,
@@ -124,6 +184,7 @@ begin
   from public.legal_documents ld
   where ld.type = 'terms'
     and ld.effective_at <= now()
+    and ld.version not in ('1.0', '1.1')
   order by ld.effective_at desc, ld.created_at desc, ld.version desc
   limit 1;
 
@@ -188,13 +249,19 @@ revoke all on function public.esblu_accept_company_terms(text, boolean, boolean,
 grant execute on function public.esblu_accept_company_terms(text, boolean, boolean, text) to authenticated;
 
 -- ----------------------------------------------------------------------------- 4
+drop function if exists public.esblu_get_my_company_terms_status();
+
 create or replace function public.esblu_get_my_company_terms_status()
 returns table (
   company_id uuid,
   current_terms_version text,
   has_current_acceptance boolean,
   accepted_at timestamptz,
-  my_role text
+  my_role text,
+  grace_until timestamptz,
+  required_now boolean,
+  company_name text,
+  company_registration_id text
 )
 language sql
 stable
@@ -208,31 +275,32 @@ as $function$
       and cm.status = 'active'
       and cm.company_id = public.esblu_my_active_company_id()
     limit 1
-  ),
-  current_terms as (
-    select ld.version
-    from public.legal_documents ld
-    where ld.type = 'terms'
-      and ld.effective_at <= now()
-    order by ld.effective_at desc, ld.created_at desc, ld.version desc
-    limit 1
   )
   select
     mm.company_id,
-    ct.version,
-    (cta.id is not null),
+    req.current_terms_version,
+    req.has_current_acceptance,
     cta.accepted_at,
-    mm.role
+    mm.role,
+    req.grace_until,
+    req.required_now,
+    c.name,
+    coalesce(
+      (select li.registration_id from public.company_legal_identities li where li.company_id = mm.company_id),
+      (select bp.ico from public.company_billing_profile bp where bp.company_id = mm.company_id)
+    )
   from my_membership mm
-  cross join current_terms ct
+  join public.companies c on c.id = mm.company_id
+  cross join lateral public.esblu_company_terms_requirement(mm.company_id) req
   left join public.company_dpa_acceptances cta
     on cta.company_id = mm.company_id
    and cta.document_type = 'terms'
-   and cta.version = ct.version;
+   and cta.version = req.current_terms_version;
 $function$;
 
 comment on function public.esblu_get_my_company_terms_status() is
-  'Read-only stav firemného prijatia aktuálnych VOP pre aktívnu firmu volajúceho (každý aktívny člen).';
+  'Read-only stav firemného prijatia aktuálnych VOP pre aktívnu firmu volajúceho (každý aktívny člen): '
+  'verzia, prijatie, lehota (grace_until), povinnosť (required_now) a údaje firmy na kontrolu pred odoslaním.';
 
 revoke all on function public.esblu_get_my_company_terms_status() from public, anon;
 grant execute on function public.esblu_get_my_company_terms_status() to authenticated;
@@ -254,7 +322,6 @@ declare
   v_role text;
   v_current_version text;
   v_hash text;
-  v_terms_version text;
   v_name text;
   v_reg text;
   v_row public.company_dpa_acceptances;
@@ -283,21 +350,11 @@ begin
     raise exception 'ESBLU_DPA_AUTHORITY_NOT_CONFIRMED';
   end if;
 
-  -- B2B VOP 1.2: poradie VOP → DPA. Vyžaduje sa iba vtedy, ak existuje účinná
-  -- verzia VOP s firemným prijatím (od 1.2); staršie verzie (1.0/1.1) firemné
-  -- prijatie nemali.
-  select ld.version into v_terms_version
-  from public.legal_documents ld
-  where ld.type = 'terms' and ld.effective_at <= now()
-  order by ld.effective_at desc, ld.created_at desc, ld.version desc
-  limit 1;
-
-  if v_terms_version is not null
-     and v_terms_version not in ('1.0', '1.1')
-     and not exists (
-       select 1 from public.company_dpa_acceptances t
-       where t.company_id = v_company_id and t.document_type = 'terms' and t.version = v_terms_version
-     ) then
+  -- B2B VOP 1.2: poradie VOP → DPA, ale iba keď je prijatie VOP pre firmu
+  -- už povinné (nová firma, alebo uplynula 30-dňová lehota — VOP 39.2/44.5).
+  if exists (
+    select 1 from public.esblu_company_terms_requirement(v_company_id) req where req.required_now
+  ) then
     raise exception 'ESBLU_COMPANY_TERMS_NOT_ACCEPTED';
   end if;
 
@@ -400,3 +457,39 @@ end
 $function$;
 
 revoke all on function public.esblu_archive_legal_acceptance() from public, anon, authenticated;
+
+-- ----------------------------------------------------------------------------- 7
+create or replace function public.esblu_get_my_pending_required_acceptances()
+returns table (document_type text, version text, effective_at timestamptz)
+language sql
+stable
+security definer
+set search_path = ''
+as $function$
+  select ld.type, ld.version, ld.effective_at
+  from public.legal_documents ld
+  where ld.required = true
+    and ld.id in (
+      select distinct on (type) id
+      from public.legal_documents
+      where required = true
+      order by type, effective_at desc, created_at desc, version desc
+    )
+    and auth.uid() is not null
+    and not exists (
+      select 1
+      from public.user_legal_acceptances ula
+      join public.legal_documents acc
+        on acc.type = ula.document_type and acc.version = ula.version
+      where ula.user_id = auth.uid()
+        and ula.document_type = ld.type
+        and (ula.version = ld.version or acc.effective_at > ld.effective_at)
+    );
+$function$;
+
+comment on function public.esblu_get_my_pending_required_acceptances() is
+  'Read-only: najnovšie required verzie (terms/privacy_policy), ktoré používateľ nepotvrdil. B2B VOP 1.2: '
+  'potvrdenie NOVŠEJ verzie toho istého typu (napr. VOP 1.2 pri registrácii) spĺňa staršiu required verziu.';
+
+revoke all on function public.esblu_get_my_pending_required_acceptances() from public, anon;
+grant execute on function public.esblu_get_my_pending_required_acceptances() to authenticated;

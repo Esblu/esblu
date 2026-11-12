@@ -107,11 +107,12 @@ await db.exec(`
 const { createHash } = await import("node:crypto");
 const sha = (p: string) => createHash("sha256").update(readFileSync(path.join(ROOT, p))).digest("hex");
 
-await check("terms 1.2 je aktuálna účinná required verzia a hash = legal/terms/1.2.md", async () => {
-  const r = await su<{ version: string; required: boolean; content_hash: string; canonical_path: string }>(
-    "select version, required, content_hash, canonical_path from public.legal_documents where type = 'terms' order by effective_at desc, created_at desc, version desc limit 1");
+await check("terms 1.2: aktuálna verzia, hash = legal/terms/1.2.md, firemné prijatie (required=false), lehota 30 dní", async () => {
+  const r = await su<{ version: string; required: boolean; content_hash: string; canonical_path: string; d: number }>(
+    "select version, required, content_hash, canonical_path, round(extract(epoch from (reaccept_grace_until - effective_at)) / 86400)::int d from public.legal_documents where type = 'terms' order by effective_at desc, created_at desc, version desc limit 1");
   assert.equal(r[0].version, "1.2");
-  assert.equal(r[0].required, true);
+  assert.equal(r[0].required, false);
+  assert.equal(r[0].d, 30);
   assert.equal(r[0].content_hash, sha("legal/terms/1.2.md"));
   assert.equal(r[0].canonical_path, "/podmienky-pouzivania");
 });
@@ -122,6 +123,10 @@ await check("status pred prijatím: každý člen vidí has_current_acceptance =
     assert.equal(o.layer, "ok", o.message);
     assert.equal(o.data[0].current_terms_version, "1.2");
     assert.equal(o.data[0].has_current_acceptance, false);
+    assert.equal(o.data[0].required_now, true, "nová firma (po zverejnení) → povinné hneď");
+    assert.equal(o.data[0].grace_until, null);
+    assert.equal(o.data[0].company_name, "Firma A s.r.o.");
+    assert.equal(o.data[0].company_registration_id, "12345678");
   }
   const a = await run({ role: "anon" }, "select * from public.esblu_get_my_company_terms_status()");
   assert.equal(a.layer, "privilege");
@@ -222,6 +227,42 @@ await check("re-accept: nová účinná verzia VOP → status false, stará verz
   await su("alter table public.legal_documents disable trigger esblu_legal_documents_no_delete");
   await su("delete from public.legal_documents where type = 'terms' and version = '9.9'");
   await su("alter table public.legal_documents enable trigger esblu_legal_documents_no_delete");
+});
+
+await check("grace period: existujúca firma (pred zverejnením) → 30 dní nepovinné, po lehote povinné", async () => {
+  const C2 = "e3000000-0000-4000-8000-00000000000c";
+  await su(`set session_replication_role = replica`);
+  await su(`insert into public.companies (id, owner_id, name, created_at) values ('${C2}', '${U.ownerB}', 'Stará firma s.r.o.', now() - interval '1 year')`);
+  await su(`insert into public.company_members (company_id, user_id, role, status, permissions) values ('${C2}', '${U.ownerB}', 'owner', 'active', '{}')`);
+  await su(`set session_replication_role = origin`);
+  const req = await su<{ required_now: boolean; grace_until: string | null; has_current_acceptance: boolean }>(
+    `select * from public.esblu_company_terms_requirement('${C2}')`);
+  assert.equal(req[0].has_current_acceptance, false);
+  assert.equal(req[0].required_now, false, "počas lehoty nepovinné");
+  assert.ok(req[0].grace_until, "grace_until nastavené");
+  const fresh = await su<{ required_now: boolean }>(`select * from public.esblu_company_terms_requirement('${C.b}')`);
+  assert.equal(fresh[0].required_now, true, "firma založená po zverejnení → povinné hneď");
+  // po uplynutí lehoty
+  await su("alter table public.legal_documents disable trigger esblu_legal_documents_no_update");
+  await su("update public.legal_documents set reaccept_grace_until = now() - interval '1 second' where type = 'terms' and version = '1.2'");
+  const after = await su<{ required_now: boolean }>(`select * from public.esblu_company_terms_requirement('${C2}')`);
+  assert.equal(after[0].required_now, true, "po lehote povinné");
+  await su("update public.legal_documents set reaccept_grace_until = effective_at + interval '30 days' where type = 'terms' and version = '1.2'");
+  await su("alter table public.legal_documents enable trigger esblu_legal_documents_no_update");
+  const fn = await su(`select 1 from pg_proc where proname = 'esblu_company_terms_requirement' and (has_function_privilege('authenticated', oid, 'execute') or has_function_privilege('anon', oid, 'execute'))`);
+  assert.equal(fn.length, 0, "interná funkcia bez klientského EXECUTE");
+});
+
+await check("osobný gate: terms 1.1 alebo 1.2 používateľa neblokuje; registrácia 1.2 nespôsobí pending 1.1", async () => {
+  const U3 = "e2000000-0000-4000-8000-0000000000c3";
+  await su(`insert into auth.users (id, email, email_confirmed_at) values ('${U3}', 'new@example.invalid', now())`);
+  await su(`insert into auth.sessions (id, user_id) values ('e4000000-0000-4000-8000-0000000000c3', '${U3}')`);
+  const u3: Who = { role: "authenticated", uid: U3, session: "e4000000-0000-4000-8000-0000000000c3" };
+  const reg = await run(u3, "select public.esblu_accept_legal_document_registration('terms', '1.2', 'sk')", [], true);
+  assert.equal(reg.layer, "ok", reg.message);
+  const o = await run(u3, "select document_type, version from public.esblu_get_my_pending_required_acceptances() where document_type = 'terms'");
+  assert.equal(o.layer, "ok", o.message);
+  assert.equal(o.data.length, 0, "novšia prijatá verzia spĺňa staršiu required 1.1");
 });
 
 await check("anon: žiadna nová funkcia nie je spustiteľná", async () => {

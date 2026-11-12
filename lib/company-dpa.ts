@@ -122,7 +122,52 @@ export type CompanyTermsStatus = {
   has_current_acceptance: boolean;
   accepted_at: string | null;
   my_role: "owner" | "admin" | "accountant" | "employee";
+  /** VOP 39.2 / 44.5: do kedy môže existujúca firma novú verziu prijať (null = povinné hneď). */
+  grace_until: string | null;
+  /** true = prijatie je už povinné (nová firma alebo uplynutá lehota). */
+  required_now: boolean;
+  /** Údaje firmy na kontrolu pred odoslaním (22/2004 § 5, VOP 8.2). */
+  company_name: string | null;
+  company_registration_id: string | null;
 };
+
+/** Záznam firemného prijatia (VOP 8.3 / 8.5) — potvrdenie zobrazené v appke. */
+export type CompanyLegalAcceptanceRecord = {
+  document_type: "terms" | "dpa";
+  version: string;
+  accepted_at: string;
+  accepted_role: string | null;
+  acceptance_method: string;
+  authority_confirmed: boolean | null;
+  b2b_confirmed: boolean | null;
+  document_content_hash: string | null;
+  display_locale: string | null;
+  company_name_snapshot: string | null;
+  company_registration_id_snapshot: string | null;
+};
+
+const ACCEPTANCE_RECORD_COLUMNS =
+  "document_type, version, accepted_at, accepted_role, acceptance_method, authority_confirmed, b2b_confirmed, document_content_hash, display_locale, company_name_snapshot, company_registration_id_snapshot";
+
+/**
+ * VOP 8.3 / 8.5: záznamy firemného prijatia VOP a DPA aktívnej firmy (RLS:
+ * iba aktívni členovia firmy). Zobrazujú sa v Nastaveniach ako trvalé
+ * potvrdenie uzatvorenia.
+ */
+export async function listCompanyLegalAcceptances(companyId: string): Promise<CompanyLegalAcceptanceRecord[]> {
+  const { data, error } = await supabase
+    .from("company_dpa_acceptances")
+    .select(ACCEPTANCE_RECORD_COLUMNS)
+    .eq("company_id", companyId)
+    .order("accepted_at", { ascending: false });
+
+  if (error) {
+    console.error("listCompanyLegalAcceptances zlyhalo:", error.message);
+    return [];
+  }
+
+  return (data ?? []) as CompanyLegalAcceptanceRecord[];
+}
 
 /** Stav firemného prijatia aktuálnych VOP; null = nič neblokovať (bez session / migrácie). */
 export async function getMyCompanyTermsStatus(): Promise<CompanyTermsStatus | null> {
@@ -146,8 +191,8 @@ export async function acceptCompanyTerms(
   version: string,
   b2bConfirmed: boolean,
   authorityConfirmed: boolean
-): Promise<{ ok: true } | { ok: false; error: string }> {
-  const { error } = await supabase.rpc("esblu_accept_company_terms", {
+): Promise<{ ok: true; record: CompanyLegalAcceptanceRecord | null } | { ok: false; error: string }> {
+  const { data, error } = await supabase.rpc("esblu_accept_company_terms", {
     p_version: version,
     p_b2b_confirmed: b2bConfirmed,
     p_authority_confirmed: authorityConfirmed,
@@ -159,7 +204,9 @@ export async function acceptCompanyTerms(
     return { ok: false, error: error.message };
   }
 
-  return { ok: true };
+  // VOP 8.5: RPC vracia zaznamenaný riadok → okamžité potvrdenie v appke.
+  const row = Array.isArray(data) ? data[0] : data;
+  return { ok: true, record: (row as CompanyLegalAcceptanceRecord) ?? null };
 }
 
 export const ACCEPT_COMPANY_TERMS_ERROR_CODES = [

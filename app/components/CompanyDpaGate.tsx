@@ -10,6 +10,7 @@ import {
   getMyCompanyDpaStatus,
   getMyCompanyTermsStatus,
   type CompanyDpaStatus,
+  type CompanyLegalAcceptanceRecord,
   type CompanyTermsStatus,
 } from "@/lib/company-dpa";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
@@ -78,7 +79,7 @@ export default function CompanyDpaGate({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
   const skip = SKIP_PATH_PREFIXES.some(
     (prefix) => pathname === prefix || pathname?.startsWith(prefix + "/")
   );
@@ -94,6 +95,13 @@ export default function CompanyDpaGate({
   const [submitError, setSubmitError] = useState("");
   const [employeeNoticeDismissed, setEmployeeNoticeDismissed] =
     useState(false);
+  // VOP 39.2 / 44.5: počas 30-dňovej lehoty owner dostane oznámenie a môže
+  // VOP prijať dobrovoľne skôr (modal otvorí sám); po lehote je modal povinný.
+  const [termsModalOpen, setTermsModalOpen] = useState(false);
+  const [graceNoticeDismissed, setGraceNoticeDismissed] = useState(false);
+  // VOP 8.5: okamžité elektronické potvrdenie uzatvorenia Zmluvy.
+  const [termsConfirmation, setTermsConfirmation] =
+    useState<CompanyLegalAcceptanceRecord | null>(null);
 
   useEffect(() => {
     if (skip) {
@@ -172,7 +180,9 @@ export default function CompanyDpaGate({
       return;
     }
 
-    setTermsStatus({ ...termsStatus, has_current_acceptance: true });
+    setTermsStatus({ ...termsStatus, has_current_acceptance: true, required_now: false });
+    setTermsModalOpen(false);
+    setTermsConfirmation(result.record);
     setSubmitting(false);
   }
 
@@ -197,9 +207,16 @@ export default function CompanyDpaGate({
   }
 
   const termsPending = !!termsStatus && !termsStatus.has_current_acceptance;
+  // Povinné prijatie (nová firma alebo uplynutá lehota) vs. 30-dňová lehota
+  // pre existujúce firmy (VOP 39.2 / 44.5) — server: required_now.
+  const termsBlocking = termsPending && !!termsStatus?.required_now;
+  const termsGrace = termsPending && !termsStatus?.required_now;
   const dpaPending = !!status && !status.has_current_acceptance;
+  // VOP 8.2: údaje firmy sa dajú pred odoslaním opraviť v Nastaveniach —
+  // povinný VOP modal sa tam preto nezobrazuje.
+  const onSettings = pathname === "/nastavenia" || !!pathname?.startsWith("/nastavenia/");
 
-  if (!checked || skip || (!termsPending && !dpaPending)) {
+  if (!checked || skip || (!termsPending && !dpaPending && !termsConfirmation)) {
     return <>{children}</>;
   }
 
@@ -211,6 +228,11 @@ export default function CompanyDpaGate({
   // situácii ako employee: nesmie dostať možnosť DPA podpísať, iba
   // informáciu, že potvrdenie musí vykonať vlastník účtu.
   const isOwner = (status?.my_role ?? termsStatus?.my_role) === "owner";
+  const showTermsModal =
+    isOwner && termsPending && !!termsStatus && ((termsBlocking && !onSettings) || termsModalOpen);
+  const graceUntilLabel = termsStatus?.grace_until
+    ? new Date(termsStatus.grace_until).toLocaleDateString(locale)
+    : "";
 
   // Kým firma nemá platnú DPA acceptance, sme vždy v legal-hold režime —
   // táto vetva kódu (za skoro-return vyššie) sa vykoná IBA vtedy, keď
@@ -222,7 +244,73 @@ export default function CompanyDpaGate({
     <CompanyDpaLegalHoldContext.Provider value={{ legalHold: dpaPending }}>
       {children}
 
-      {isOwner && termsPending && termsStatus && (
+      {termsConfirmation && (
+        <div
+          className="fixed inset-0 flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm"
+          style={{ zIndex: Z_INDEX }}
+          data-testid="company-terms-confirmation"
+        >
+          <div className="max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-y-auto rounded-doc border border-doc-border bg-surface-1 p-4 shadow-2xl sm:p-6">
+            <h2 className="text-lg font-semibold tracking-tight text-primary sm:text-xl">
+              {t("companyTermsGate.confirmationTitle")}
+            </h2>
+            <p className="mt-2 text-sm leading-6 text-secondary">
+              {t("companyTermsGate.confirmationDescription")}
+            </p>
+            <dl className="mt-3 space-y-1 rounded-doc-sm border border-subtle bg-surface-2 p-3 text-[13px] leading-5 text-secondary">
+              <div>{t("companyTermsGate.recordCompany")}: {termsConfirmation.company_name_snapshot ?? "—"} ({termsConfirmation.company_registration_id_snapshot ?? "—"})</div>
+              <div>{t("companyTermsGate.recordVersion")}: {termsConfirmation.version}</div>
+              <div>{t("companyTermsGate.recordAcceptedAt")}: {new Date(termsConfirmation.accepted_at).toLocaleString(locale)}</div>
+              <div>{t("companyTermsGate.recordRole")}: {termsConfirmation.accepted_role ?? "—"}</div>
+              <div>{t("companyTermsGate.recordLanguage")}: {termsConfirmation.display_locale ?? "—"}</div>
+              <div className="break-all">{t("companyTermsGate.recordHash")}: {termsConfirmation.document_content_hash ?? "—"}</div>
+            </dl>
+            <p className="mt-2 text-[13px] text-secondary">{t("companyTermsGate.confirmationWhereStored")}</p>
+            <button
+              type="button"
+              onClick={() => setTermsConfirmation(null)}
+              className="ui-btn ui-btn-primary mt-4 w-full"
+            >
+              {t("companyTermsGate.confirmationContinue")}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {isOwner && termsGrace && !termsModalOpen && !graceNoticeDismissed && !termsConfirmation && (
+        <div
+          className="fixed inset-x-0 bottom-0 flex justify-center p-4"
+          style={{ zIndex: Z_INDEX }}
+          data-testid="company-terms-grace-notice"
+        >
+          <div className="w-full max-w-md rounded-doc border border-brand-300/30 bg-surface-1 p-3 shadow-2xl sm:p-4">
+            <p className="text-sm font-semibold text-primary">
+              {t("companyTermsGate.graceNoticeTitle", { version: termsStatus?.current_terms_version ?? "" })}
+            </p>
+            <p className="mt-1 text-[13px] leading-5 text-secondary">
+              {t("companyTermsGate.graceNoticeDescription", { date: graceUntilLabel })}
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => setTermsModalOpen(true)}
+                className="ui-btn ui-btn-sm ui-btn-primary"
+              >
+                {t("companyTermsGate.graceNoticeAccept")}
+              </button>
+              <button
+                type="button"
+                onClick={() => setGraceNoticeDismissed(true)}
+                className="ui-btn ui-btn-sm ui-btn-ghost"
+              >
+                {t("companyTermsGate.graceNoticeLater")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showTermsModal && termsStatus && !termsConfirmation && (
         <div
           className="fixed inset-0 flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm"
           style={{ zIndex: Z_INDEX }}
@@ -234,6 +322,23 @@ export default function CompanyDpaGate({
 
             <p className="mt-2 text-sm leading-6 text-secondary">
               {t("companyTermsGate.description")}
+            </p>
+
+            {termsGrace && graceUntilLabel && (
+              <p className="mt-2 text-[13px] text-secondary">
+                {t("companyTermsGate.graceNoticeDescription", { date: graceUntilLabel })}
+              </p>
+            )}
+
+            <dl className="mt-3 space-y-1 rounded-doc-sm border border-subtle bg-surface-2 p-3 text-[13px] leading-5 text-secondary" data-testid="company-terms-review">
+              <div>{t("companyTermsGate.recordCompany")}: {termsStatus.company_name ?? "—"}</div>
+              <div>{t("companyTermsGate.recordRegistrationId")}: {termsStatus.company_registration_id ?? "—"}</div>
+            </dl>
+            <p className="mt-1 text-[12px] text-secondary">
+              {t("companyTermsGate.reviewHint")}{" "}
+              <a href="/nastavenia" className="font-medium text-brand-300 hover:underline">
+                {t("companyTermsGate.reviewEditLink")}
+              </a>
             </p>
 
             <p className="mt-2 text-[13px]">
@@ -289,19 +394,30 @@ export default function CompanyDpaGate({
                 : t("companyTermsGate.confirmButton")}
             </button>
 
-            <button
-              type="button"
-              onClick={handleLogout}
-              disabled={submitting}
-              className="ui-btn ui-btn-ghost mt-2 w-full"
-            >
-              {t("legalGate.logout")}
-            </button>
+            {termsBlocking ? (
+              <button
+                type="button"
+                onClick={handleLogout}
+                disabled={submitting}
+                className="ui-btn ui-btn-ghost mt-2 w-full"
+              >
+                {t("legalGate.logout")}
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setTermsModalOpen(false)}
+                disabled={submitting}
+                className="ui-btn ui-btn-ghost mt-2 w-full"
+              >
+                {t("companyTermsGate.graceNoticeLater")}
+              </button>
+            )}
           </div>
         </div>
       )}
 
-      {isOwner && !termsPending && dpaPending && status && (
+      {isOwner && !showTermsModal && !termsConfirmation && !termsBlocking && dpaPending && status && (
         <div
           className="fixed inset-0 flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm"
           style={{ zIndex: Z_INDEX }}
@@ -369,7 +485,7 @@ export default function CompanyDpaGate({
         </div>
       )}
 
-      {!isOwner && !employeeNoticeDismissed && termsPending && (
+      {!isOwner && !employeeNoticeDismissed && termsBlocking && (
         <div
           className="fixed inset-x-0 bottom-0 flex justify-center p-4"
           style={{ zIndex: Z_INDEX }}
@@ -397,7 +513,7 @@ export default function CompanyDpaGate({
         </div>
       )}
 
-      {!isOwner && !employeeNoticeDismissed && !termsPending && dpaPending && (
+      {!isOwner && !employeeNoticeDismissed && !termsBlocking && dpaPending && (
         <div
           className="fixed inset-x-0 bottom-0 flex justify-center p-4"
           style={{ zIndex: Z_INDEX }}

@@ -27,6 +27,11 @@ export const legalConfig = {
   country: "Slovenská republika",
 
   contactEmail: "info@esblu.com",
+  // Verejné kontaktné telefónne číslo Esblu (zákon 22/2004 § 4 ods. 1).
+  // JEDINÉ miesto zmeny: VOP 1.2 čl. 1 odkazuje na stránku /kontakt, takže
+  // zmena čísla (dočasné číslo → samostatné firemné) NEMENÍ text ani hash VOP.
+  // Prázdne = PRODUKČNÝ HARD STOP (npm run check:b2b-terms-release zlyhá).
+  publicPhone: "" as string,
   privacyEmail: "privacy@esblu.com",
 
   businessId: "57 815 941", // IČO

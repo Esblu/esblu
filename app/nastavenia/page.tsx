@@ -1,6 +1,7 @@
 "use client";
 
 import { ChangeEvent, useEffect, useState } from "react";
+import { CompanyLegalAcceptancesSection } from "@/app/components/CompanyLegalAcceptancesSection";
 import { assertStorageCapacity } from "@/lib/storage/capacity-client";
 import { supabase } from "@/lib/supabase";
 import { flushMediaDeletions } from "@/lib/storage/media-deletion";
@@ -1361,6 +1362,9 @@ export default function NastaveniaPage() {
               <SettingsLinkRow href="/kontakt" title={t("settings.legal.contactLink")} />
             </nav>
           </SettingsSection>
+
+          {/* ---------------- Záznam o uzatvorení VOP / DPA (VOP 8.3, 8.5) ---------------- */}
+          {companyId && <CompanyLegalAcceptancesSection companyId={companyId} />}
 
           {/* ---------------- Súkromie a dáta ---------------- */}
           <SettingsSection
