@@ -18,7 +18,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { handleEinvoiceWebhook, classifyWebhookEvent, WEBHOOK_MAX_BODY_BYTES } from "../lib/einvoice/inbound/webhook.ts";
 import { processInboundRow, runInboundPoll, runInboundProcessBatch } from "../lib/einvoice/inbound/processor.ts";
 import { InboundStoreError, inboundXmlPath, type InboundRow, type InboundStore } from "../lib/einvoice/inbound/store.ts";
-import { mapInboundDraft } from "../lib/einvoice/inbound/mapping.ts";
+import { mapInboundDraft, verifyInboundRecipient } from "../lib/einvoice/inbound/mapping.ts";
 import { dbErrorCode, OutboundStoreError, type OutboundRow, type OutboundStore } from "../lib/einvoice/outbound/store.ts";
 import {
   EinvoiceProviderError,
@@ -202,6 +202,14 @@ const inboundStore: InboundStore = {
   },
   async webhookComplete(id, status, code) {
     await svc("select public.esblu_einvoice_webhook_complete($1, $2, $3)", [id, status, code]);
+  },
+  // Zrkadlí supabase-store.webhookBodySeen (service_role čítanie einvoice_webhook_events).
+  async webhookBodySeen(i) {
+    const { rows } = await sql<{ n: number }>(
+      "select count(*)::int n from public.einvoice_webhook_events where provider = $1 and environment = $2 and body_sha256 = $3 and delivery_id <> $4",
+      [i.provider, i.environment, i.bodySha256, i.deliveryId]
+    );
+    return rows[0].n > 0;
   },
   async register(i) {
     const [r] = await svc<Row>("select * from public.esblu_einvoice_inbound_register($1, $2, $3, $4, $5, $6::jsonb)", [i.provider, i.environment, i.providerOrgId, i.providerReceivedId, i.source, JSON.stringify(i.meta)]);
@@ -457,8 +465,22 @@ await check("mapovanie: profil EN16931, dobropis a neznáma DPH kategória = UNS
   assert.deepEqual(mapInboundDraft({ ...ok.document, typeCode: "384" }, [], null), { ok: false, code: "UNSUPPORTED_PROFILE", detail: "CORRECTED_INVOICE_UNSUPPORTED" });
   assert.deepEqual(mapInboundDraft({ ...ok.document, lines: [{ ...ok.document.lines[0], vatCategory: "L" }] }, [], null), { ok: false, code: "UNSUPPORTED_PROFILE", detail: "VAT_CATEGORY_UNSUPPORTED" });
   assert.deepEqual(mapInboundDraft({ ...ok.document, invoiceNumber: null }, [], null), { ok: false, code: "INVALID_XML", detail: "MISSING_INVOICE_NUMBER" });
-  const wrongRecipient = mapInboundDraft(ok.document, [], "9915:9999999999");
-  assert.ok(wrongRecipient.ok && wrongRecipient.reviewReasons.includes("RECIPIENT_ENDPOINT_MISMATCH"));
+  // FAIL CLOSED (readiness 2026-11-12): iný príjemca = žiadny koncept (predtým iba review reason).
+  assert.deepEqual(mapInboundDraft(ok.document, [], "9915:9999999999"), { ok: false, code: "RECIPIENT_MISMATCH", detail: "RECIPIENT_ENDPOINT_MISMATCH" });
+  // Peppol ID je case-insensitive a orezané — rovnaký participant nie je „mismatch".
+  assert.ok(mapInboundDraft(ok.document, [], " 9915:2020000000 ").ok);
+});
+
+await check("recipient → organizácia: verifyInboundRecipient fail-closed (chýba participant firmy / chýba BT-49 / iný príjemca)", () => {
+  const ok = parseInboundUbl(inboundXml("FA-R-1"));
+  assert.ok(ok.ok);
+  if (!ok.ok) return;
+  assert.deepEqual(verifyInboundRecipient(ok.document, "9915:2020000000"), { ok: true });
+  assert.deepEqual(verifyInboundRecipient(ok.document, null), { ok: false, code: "RECIPIENT_MISMATCH", detail: "RECIPIENT_UNVERIFIED" });
+  assert.deepEqual(verifyInboundRecipient(ok.document, ""), { ok: false, code: "RECIPIENT_MISMATCH", detail: "RECIPIENT_UNVERIFIED" });
+  assert.deepEqual(verifyInboundRecipient({ customer: { ...ok.document.customer, endpointId: null } }, "9915:2020000000"), { ok: false, code: "RECIPIENT_MISMATCH", detail: "RECIPIENT_MISSING" });
+  assert.deepEqual(verifyInboundRecipient(ok.document, "9915:2030000000"), { ok: false, code: "RECIPIENT_MISMATCH", detail: "RECIPIENT_ENDPOINT_MISMATCH" });
+  assert.deepEqual(verifyInboundRecipient(ok.document, "0245:2020000000"), { ok: false, code: "RECIPIENT_MISMATCH", detail: "RECIPIENT_ENDPOINT_MISMATCH" });
 });
 
 await check("grant: inbound RPC iba service_role; jadro konceptu nikto; verejná RPC AI Inboxu ostáva pre authenticated", async () => {
@@ -918,16 +940,66 @@ await check("cross-tenant: rovnaké XML do firmy B → vlastný koncept v B (has
   assert.notEqual(rowB.dedupe_matched_on, "xml_sha256");
   const invB = (await sql<Row>("select company_id from public.invoices where id = $1", [rowB.invoice_id])).rows[0];
   assert.equal(invB.company_id, CB);
-  // úplne rovnaké bajty ako v A → v B aj tak nový koncept (dedupe je iba v rámci firmy)
+  // Doklad adresovaný A (BT-49 = 9915:2020000000), ktorý by prišiel do schránky B →
+  // FAIL CLOSED: žiadny koncept v B, žiadny ACK, žiadny dedupe proti A (readiness 2026-11-12).
+  provider.calls = [];
+  const invBefore = (await sql<{ n: number }>(`select count(*)::int n from public.invoices where company_id = '${CB}'`)).rows[0].n;
   const rowB2 = await processSingle("rcv-b-same-bytes", XML_1, "org-b");
-  assert.ok(rowB2.invoice_id);
-  assert.notEqual(rowB2.dedupe_matched_on, "xml_sha256");
-  const invB2 = (await sql<Row>("select company_id from public.invoices where id = $1", [rowB2.invoice_id])).rows[0];
-  assert.equal(invB2.company_id, CB);
+  assert.equal(rowB2.company_id, CB, "riadok ostáva vo firme z mapovania org — nikdy nie v A ani v „aktívnej\" firme");
+  assert.equal(rowB2.processing_status, "failed");
+  assert.equal(rowB2.last_error_code, "RECIPIENT_MISMATCH");
+  assert.equal(rowB2.invoice_id, null);
+  assert.equal(rowB2.acknowledged_at, null);
+  assert.ok(!provider.calls.some((c) => c.startsWith("ack:")), "žiadny ACK pri nesúlade príjemcu");
+  assert.equal((await sql<{ n: number }>(`select count(*)::int n from public.invoices where company_id = '${CB}'`)).rows[0].n, invBefore);
+  assert.equal((await sql<{ n: number }>(`select count(*)::int n from public.einvoice_inbound where company_id = '${CA}' and provider_received_id = 'rcv-b-same-bytes'`)).rows[0].n, 0);
   const seen = await as(U.b, () => db.query<{ n: number }>(`select count(*)::int n from public.einvoice_inbound where company_id = '${CA}'`));
   assert.equal(seen.rows[0].n, 0);
   const seenInv = await as(U.b, () => db.query<{ n: number }>(`select count(*)::int n from public.invoices where company_id = '${CA}'`));
   assert.equal(seenInv.rows[0].n, 0);
+});
+
+await check("wrong recipient: XML pre inú firmu v schránke A → failed RECIPIENT_MISMATCH, bez konceptu, bez ACK, reprocess sa neponúka", async () => {
+  provider.calls = [];
+  const xml = inboundXml("FA-WRONG-1", { endpoint: "2099999999", customerIco: "99999999" });
+  const row = await processSingle("rcv-wrong-recipient", xml, "org-a");
+  assert.equal(row.company_id, CA);
+  assert.equal(row.processing_status, "failed");
+  assert.equal(row.last_error_code, "RECIPIENT_MISMATCH");
+  assert.equal(row.invoice_id, null);
+  assert.ok(row.xml_sha256, "originál ostáva uložený (nemenný) na kontrolu");
+  assert.ok(!provider.calls.some((c) => c.startsWith("ack:")));
+  const ev = await eventsOf(String(row.id));
+  assert.ok(ev.at(-1)?.endsWith("->failed:job"));
+});
+
+await check("organizácia bez overeného participant_id → RECIPIENT_MISMATCH (RECIPIENT_UNVERIFIED), žiadny fallback", async () => {
+  await sql(`update public.einvoice_organizations set participant_id = null where company_id = '${CA}' and environment = 'sandbox'`);
+  try {
+    provider.calls = [];
+    const row = await processSingle("rcv-unverified-org", inboundXml("FA-UNV-1"), "org-a");
+    assert.equal(row.processing_status, "failed");
+    assert.equal(row.last_error_code, "RECIPIENT_MISMATCH");
+    assert.equal(row.invoice_id, null);
+    assert.ok(!provider.calls.some((c) => c.startsWith("ack:")));
+    const ev = (await sql<Row>("select provider_code from public.einvoice_events where inbound_id = $1 order by created_at desc, id desc limit 1", [row.id])).rows[0];
+    assert.equal(ev.provider_code, "RECIPIENT_UNVERIFIED");
+  } finally {
+    await sql(`update public.einvoice_organizations set participant_id = '9915:2020000000' where company_id = '${CA}' and environment = 'sandbox'`);
+  }
+});
+
+await check("webhook replay: to isté podpísané telo pod NOVÝM X-Webhook-Id → 409 REPLAYED_WEBHOOK, nič sa nezaznamená ani nenačíta", async () => {
+  const body = { event: "peppol.document.received", organization_id: "org-a", company_id: CB, data: { company_id: CB, received_id: "rcv-FAKE" } };
+  provider.calls = [];
+  const before = (await sql<{ n: number }>("select count(*)::int n from public.einvoice_webhook_events")).rows[0].n;
+  const r = await webhook(body, "dlv-1-forged-new-id");
+  assert.deepEqual(r, { status: 409, body: { code: "REPLAYED_WEBHOOK" } });
+  assert.deepEqual(provider.calls, []);
+  assert.equal((await sql<{ n: number }>("select count(*)::int n from public.einvoice_webhook_events")).rows[0].n, before);
+  // legitímna nová udalosť (iné telo — iný timestamp obálky) prejde
+  const fresh = await webhook({ ...body, timestamp: "2026-11-12T10:00:00Z" }, "dlv-1-legit-new");
+  assert.equal(fresh.status, 200);
 });
 
 await check("čítanie: owner a accountant vidia inbound + koncepty; admin iba s finance.view áno; admin bez financií a employee nie", async () => {

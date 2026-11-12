@@ -142,6 +142,18 @@ export function createSupabaseInboundStore(admin: SupabaseClient = getSupabaseAd
         p_sbdh_instance_identifier: ids.sbdhInstanceIdentifier,
       })) ?? 0;
     },
+    async webhookBodySeen(i) {
+      const { data, error } = await admin
+        .from("einvoice_webhook_events")
+        .select("id")
+        .eq("provider", i.provider)
+        .eq("environment", i.environment)
+        .eq("body_sha256", i.bodySha256)
+        .neq("delivery_id", i.deliveryId)
+        .limit(1);
+      if (error) throw new InboundStoreError("DB_ERROR");
+      return ((data as { id: string }[] | null) ?? []).length > 0;
+    },
     async webhookRetry(id) {
       return (await rpc<boolean>("esblu_einvoice_webhook_retry", { p_webhook_event_id: id, p_max: 5 })) === true;
     },

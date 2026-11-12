@@ -3497,6 +3497,7 @@ const sk = {
           ACK_FAILED: "Potvrdenie prijatia poskytovateľovi zlyhalo — systém to zopakuje.",
           STORAGE_FAILED: "Uloženie originálu zlyhalo — systém to zopakuje.",
           UNKNOWN_ORG: "Firma nie je správne prepojená s poskytovateľom. Kontaktujte podporu.",
+          RECIPIENT_MISMATCH: "Príjemca v doklade sa nezhoduje s overenou Peppol adresou firmy. Koncept nevznikol a prijatie nebolo potvrdené — kontaktujte podporu.",
         },
       },
       inboundState: {

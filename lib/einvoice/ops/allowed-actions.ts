@@ -49,7 +49,7 @@ export function inboundAllowedActions(input: {
   const reprocessable =
     ["received", "stored", "parsed"].includes(input.status) ||
     // Trvalé chyby dát (nepodporovaný profil / dobropis) sa opätovným spracovaním nezmenia — tlačidlo sa neponúka.
-    (input.status === "failed" && input.hasXml && input.invoiceId === null && input.lastErrorCode !== "UNSUPPORTED_PROFILE");
+    (input.status === "failed" && input.hasXml && input.invoiceId === null && input.lastErrorCode !== "UNSUPPORTED_PROFILE" && input.lastErrorCode !== "RECIPIENT_MISMATCH");
   const reprocess = canOperate && access.entitlementActive && reprocessable;
   const ackRetry = canOperate && ["ack_pending", "draft_created", "duplicate"].includes(input.status) && input.invoiceId !== null && input.hasXml;
   return { reprocess, ackRetry };

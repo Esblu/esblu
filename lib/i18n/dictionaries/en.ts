@@ -3467,6 +3467,7 @@ const en = {
           ACK_FAILED: "Confirming receipt to the provider failed — the system will retry.",
           STORAGE_FAILED: "Storing the original failed — the system will retry.",
           UNKNOWN_ORG: "The company is not linked to the provider correctly. Please contact support.",
+          RECIPIENT_MISMATCH: "The recipient in the document does not match the company's verified Peppol address. No draft was created and receipt was not acknowledged — please contact support.",
         },
       },
       inboundState: {

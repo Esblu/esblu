@@ -5,7 +5,7 @@ import { EinvoiceProviderError, type EinvoiceEnvironment, type EinvoiceProvider,
 import { MAX_INBOUND_XML_BYTES, parseInboundUbl } from "../ubl/parse.ts";
 import { backoffMs, errorCode } from "../outbound/policy.ts";
 import { dbErrorCode } from "../outbound/store.ts";
-import { mapInboundDraft } from "./mapping.ts";
+import { mapInboundDraft, verifyInboundRecipient } from "./mapping.ts";
 import { inboundXmlPath, InboundStoreError, type InboundRow, type InboundStore } from "./store.ts";
 
 // =============================================================================
@@ -35,6 +35,8 @@ export const INBOUND_ERROR = {
   DRAFT_CREATE_FAILED: "DRAFT_CREATE_FAILED",
   ACK_FAILED: "ACK_FAILED",
   UNKNOWN_ORG: "UNKNOWN_ORG",
+  /** Príjemca v XML ≠ overený participant organizácie (alebo chýba) — fail closed, bez konceptu a ACK. */
+  RECIPIENT_MISMATCH: "RECIPIENT_MISMATCH",
 } as const;
 
 /** Trvalé chyby konceptu (dáta dokladu) — bez ACK, na kontrolu človekom; nič sa neopakuje. */
@@ -163,7 +165,10 @@ async function stepParse(deps: InboundDeps, row: InboundRow): Promise<StepOutcom
   if (!parsed.ok) return failPermanently(deps, row, INBOUND_ERROR.INVALID_XML, parsed.error);
 
   const org = await deps.store.organizationFor(row.company_id, row.environment);
-  const mapped = mapInboundDraft(parsed.document, parsed.reviewReasons, org?.participantId ?? null, { allowTestScheme: deps.environment === "sandbox" });
+  // Recipient → overená organizácia → company_id: bez zhody FAIL CLOSED (žiadny fallback).
+  const recipient = verifyInboundRecipient(parsed.document, org?.participantId ?? null);
+  if (!recipient.ok) return failPermanently(deps, row, recipient.code, recipient.detail);
+  const mapped = mapInboundDraft(parsed.document, parsed.reviewReasons, org!.participantId, { allowTestScheme: deps.environment === "sandbox" });
   if (!mapped.ok) return failPermanently(deps, row, mapped.code, mapped.detail);
 
   const d = parsed.document;
@@ -190,7 +195,10 @@ async function stepDraft(deps: InboundDeps, row: InboundRow): Promise<StepOutcom
   if ("error" in read) return failPermanently(deps, row, INBOUND_ERROR.STORAGE_FAILED, read.error ?? null);
   if (!read.parsed.ok) return failPermanently(deps, row, INBOUND_ERROR.INVALID_XML, read.parsed.error);
   const org = await deps.store.organizationFor(row.company_id, row.environment);
-  const mapped = mapInboundDraft(read.parsed.document, read.parsed.reviewReasons, org?.participantId ?? null, { allowTestScheme: deps.environment === "sandbox" });
+  // Druhá kontrola tesne pred konceptom (organizácia sa medzitým mohla zmeniť).
+  const recipient = verifyInboundRecipient(read.parsed.document, org?.participantId ?? null);
+  if (!recipient.ok) return failPermanently(deps, row, recipient.code, recipient.detail);
+  const mapped = mapInboundDraft(read.parsed.document, read.parsed.reviewReasons, org!.participantId, { allowTestScheme: deps.environment === "sandbox" });
   if (!mapped.ok) return failPermanently(deps, row, mapped.code, mapped.detail);
 
   try {

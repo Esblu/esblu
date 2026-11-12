@@ -126,6 +126,7 @@
     "test:einvoice-staging-guard": "node --experimental-strip-types --no-warnings scripts/einvoice-staging-e2e-guard-tests.ts",
     "test:einvoice-prod-precheck": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/einvoice-prod-precheck-tests.ts",
     "test:einvoice-partner-e2e-selftest": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/einvoice-partner-sandbox-e2e.ts --offline-selftest",
+    "test:einvoice-production-gate": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/einvoice-production-gate-tests.ts",
     "check:b2b-terms-release": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/b2b-terms-release-gate.ts",
     "verify:mobile-bundle": "node scripts/verify-mobile-bundle.mjs"
   },

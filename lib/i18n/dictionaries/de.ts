@@ -3487,6 +3487,7 @@ const de = {
           ACK_FAILED: "Die Empfangsbestätigung an den Anbieter ist fehlgeschlagen — das System wiederholt.",
           STORAGE_FAILED: "Das Speichern des Originals ist fehlgeschlagen — das System wiederholt.",
           UNKNOWN_ORG: "Das Unternehmen ist nicht korrekt mit dem Anbieter verknüpft. Bitte wenden Sie sich an den Support.",
+          RECIPIENT_MISMATCH: "Der Empfänger im Dokument stimmt nicht mit der verifizierten Peppol-Adresse des Unternehmens überein. Es wurde kein Entwurf erstellt und der Empfang nicht bestätigt — bitte wenden Sie sich an den Support.",
         },
       },
       inboundState: {

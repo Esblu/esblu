@@ -133,7 +133,35 @@ export type InboundDraftPayload = {
 export type MappingResult =
   | { ok: true; draft: InboundDraftPayload; reviewReasons: string[] }
   /** code = verejný kód chyby (UNSUPPORTED_PROFILE / INVALID_XML), detail = strojový podkód. */
-  | { ok: false; code: "UNSUPPORTED_PROFILE" | "INVALID_XML"; detail: string };
+  | { ok: false; code: "UNSUPPORTED_PROFILE" | "INVALID_XML" | "RECIPIENT_MISMATCH"; detail: string };
+
+/**
+ * Peppol participant ID (schéma:hodnota) — porovnanie bez ohľadu na veľkosť písmen
+ * (iso6523-actorid-upis je case-insensitive), orezané medzery. Prázdne = null.
+ */
+export function normalizeParticipantId(value: string | null | undefined): string | null {
+  const v = (value ?? "").trim().toLowerCase();
+  return /^[0-9]{4}:[^\s:]{1,200}$/.test(v) ? v : null;
+}
+
+/**
+ * FAIL CLOSED: prijatý doklad musí byť adresovaný overenej organizácii firmy.
+ * BT-49 (príjemca v UBL) == participant_id organizácie (zapísaný pri enroll).
+ * Chýbajúci participant organizácie alebo chýbajúci / iný príjemca v XML
+ * = žiadny koncept, žiadny ACK, nič sa nepriradí „aktívnej" ani inej firme.
+ */
+export function verifyInboundRecipient(
+  doc: Pick<ParsedInboundUbl, "customer">,
+  orgParticipantId: string | null | undefined
+): { ok: true } | { ok: false; code: "RECIPIENT_MISMATCH"; detail: "RECIPIENT_UNVERIFIED" | "RECIPIENT_MISSING" | "RECIPIENT_ENDPOINT_MISMATCH" } {
+  const expected = normalizeParticipantId(orgParticipantId);
+  if (!expected) return { ok: false, code: "RECIPIENT_MISMATCH", detail: "RECIPIENT_UNVERIFIED" };
+  const c = doc.customer;
+  const actual = c.endpointId && c.endpointScheme ? normalizeParticipantId(`${c.endpointScheme}:${c.endpointId}`) : null;
+  if (!actual) return { ok: false, code: "RECIPIENT_MISMATCH", detail: "RECIPIENT_MISSING" };
+  if (actual !== expected) return { ok: false, code: "RECIPIENT_MISMATCH", detail: "RECIPIENT_ENDPOINT_MISMATCH" };
+  return { ok: true };
+}
 
 function blank(v: string | null | undefined): boolean {
   return v === null || v === undefined || v.trim() === "";
@@ -220,10 +248,12 @@ export function mapInboundDraft(
     if (profile.typeReview) reasons.add("CORRECTION_TYPE_REVIEW");
   }
 
-  // Príjemca musí byť naša organizácia (Peppol to zaručuje; ak nesedí, iba na kontrolu).
-  if (recipientParticipantId) {
-    const customer = doc.customer.endpointId && doc.customer.endpointScheme ? `${doc.customer.endpointScheme}:${doc.customer.endpointId}` : null;
-    if (customer !== recipientParticipantId) reasons.add("RECIPIENT_ENDPOINT_MISMATCH");
+  // Príjemca musí byť naša organizácia — FAIL CLOSED (žiadny koncept, žiadny ACK).
+  // null = čisté mapovanie bez kontextu firmy (unit testy); produkčný procesor
+  // volá verifyInboundRecipient VŽDY a chýbajúci participant tiež odmietne.
+  if (recipientParticipantId !== null) {
+    const recipient = verifyInboundRecipient(doc, recipientParticipantId);
+    if (!recipient.ok) return recipient;
   }
 
   // Peňažné súčty dokladu (BG-22) — povinné v EN16931 (BT-106, BT-109, BT-112, BT-115).

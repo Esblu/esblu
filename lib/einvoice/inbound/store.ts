@@ -76,6 +76,12 @@ export interface InboundStore {
    * Voliteľné: bez metódy sa opakované doručenie berie ako DUPLICATE (pôvodné správanie).
    */
   webhookRetry?(webhookEventId: string): Promise<boolean>;
+  /**
+   * Replay ochrana: X-Webhook-Id nie je súčasťou podpisu (HMAC = "<t>.<telo>").
+   * Rovnaké podpísané telo pod INÝM ID doručenia = opakovanie zachyteného requestu → nespracuje sa.
+   * (Telo obsahuje `timestamp` obálky, dve rôzne legitímne udalosti nemajú rovnaký hash.)
+   */
+  webhookBodySeen?(input: { provider: string; environment: EinvoiceEnvironment; bodySha256: string; deliveryId: string }): Promise<boolean>;
   register(input: { provider: string; environment: EinvoiceEnvironment; providerOrgId: string; providerReceivedId: string; source: "webhook" | "poll"; meta: RegisterMeta }): Promise<{ inboundId: string; created: boolean; processingStatus: string; companyId: string }>;
   claim(limit: number, leaseSeconds: number): Promise<InboundRow[]>;
   transition(id: string, expectedState: string, toState: string | null, source: InboundSource, providerCode: string | null, fields: InboundTransitionFields): Promise<InboundRow>;
