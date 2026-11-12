@@ -2,9 +2,11 @@
 -- B2B VOP 1.2 — Všeobecné obchodné podmienky (B2B) + firemné prijatie
 -- (revízia po audite 2026-11-12: 30-dňová lehota, potvrdenie uzatvorenia)
 -- =============================================================================
--- 1. legal_documents: terms 1.2 + nový stĺpec reaccept_grace_until (VOP 39.2,
---    44.5): existujúce firmy (založené pred effective_at) majú na prijatie
---    30 dní; nové firmy prijímajú hneď. required = false — zmluvné prijatie
+-- 1. legal_documents: terms 1.2 + reaccept_notice_days (VOP 39.2, 44.5).
+--    company_terms_notices: preukázateľné in-app oznámenie Vlastníkovi
+--    (company_id, terms_version, notified_at, effective_at, grace_until);
+--    30-dňová lehota beží OD OZNÁMENIA, nie od migrácie. Nové firmy
+--    (založené po zverejnení) prijímajú hneď. required = false — zmluvné prijatie
 --    je owner-only na úrovni firmy (VOP 8.1); osobný LegalAcceptanceGate
 --    preto existujúcich používateľov neblokuje. Registrácia naďalej
 --    zaznamenáva oboznámenie s aktuálnou verziou.
@@ -25,15 +27,47 @@
 
 -- ----------------------------------------------------------------------------- 1
 alter table public.legal_documents
-  add column if not exists reaccept_grace_until timestamptz null;
+  add column if not exists reaccept_notice_days integer null;
 
-comment on column public.legal_documents.reaccept_grace_until is
-  'VOP 39.2 / 44.5: do tohto času nie je nová verzia povinná pre firmy založené pred effective_at '
-  '(oznámenie + 30 dní na rozhodnutie, dobrovoľné skoršie prijatie možné). NULL = bez lehoty.';
+comment on column public.legal_documents.reaccept_notice_days is
+  'VOP 39.2 / 44.5: lehota (dni) od preukázateľného oznámenia existujúcej firme, počas ktorej nová verzia '
+  'nie je povinná (dobrovoľné skoršie prijatie možné). NULL = povinné hneď.';
 
-insert into public.legal_documents (type, version, effective_at, required, content_hash, canonical_path, reaccept_grace_until)
-values ('terms', '1.2', now(), false, '95b2c2e1822cb641ce9b4c7aea55b593ac880f587fbd7bf16706c3e538b342f0', '/podmienky-pouzivania', now() + interval '30 days')
+insert into public.legal_documents (type, version, effective_at, required, content_hash, canonical_path, reaccept_notice_days)
+values ('terms', '1.2', now(), false, 'ed0ce390f5022516d9175a074ed94455413e13c95578f612ec54bb553bde5ee7', '/podmienky-pouzivania', 30)
 on conflict (type, version) do nothing;
+
+create table if not exists public.company_terms_notices (
+  company_id uuid not null references public.companies(id) on delete cascade,
+  terms_version text not null,
+  notified_at timestamptz not null default now(),
+  notified_user_id uuid not null,
+  notice_method text not null default 'in_app_owner_notice',
+  effective_at timestamptz not null,
+  grace_until timestamptz not null,
+  primary key (company_id, terms_version),
+  constraint company_terms_notices_method_check check (notice_method in ('in_app_owner_notice')),
+  constraint company_terms_notices_dates_check check (grace_until >= notified_at and effective_at = grace_until)
+);
+
+comment on table public.company_terms_notices is
+  'VOP 39.2 / 44.5: preukázateľné elektronické oznámenie novej verzie VOP Vlastníkovi existujúcej firmy '
+  '(in-app). effective_at = grace_until = notified_at + reaccept_notice_days: do tohto dňa platia pre firmu '
+  'doterajšie podmienky, ak Vlastník novú verziu neprijme skôr. Append-only, zápis iba cez '
+  'esblu_record_company_terms_notice.';
+
+alter table public.company_terms_notices enable row level security;
+revoke all on table public.company_terms_notices from public, anon, authenticated;
+grant select on table public.company_terms_notices to authenticated;
+grant select, insert, update, delete on table public.company_terms_notices to service_role;
+
+drop policy if exists company_terms_notices_select_member on public.company_terms_notices;
+create policy company_terms_notices_select_member on public.company_terms_notices
+  for select to authenticated
+  using (company_id in (
+    select cm.company_id from public.company_members cm
+    where cm.user_id = auth.uid() and cm.status = 'active'
+  ));
 
 -- ----------------------------------------------------------------------------- 2
 alter table public.company_dpa_acceptances
@@ -80,13 +114,17 @@ comment on table public.company_dpa_acceptances is
 -- Interný výpočet (volajú ho iba SECURITY DEFINER funkcie): aktuálna účinná
 -- verzia VOP s firemným prijatím (od 1.2), či ju firma prijala, do kedy plynie
 -- lehota a či je prijatie už povinné.
+drop function if exists public.esblu_company_terms_requirement(uuid);
+
 create or replace function public.esblu_company_terms_requirement(p_company_id uuid)
 returns table (
   current_terms_version text,
   effective_at timestamptz,
   grace_until timestamptz,
   has_current_acceptance boolean,
-  required_now boolean
+  required_now boolean,
+  needs_notice boolean,
+  notified_at timestamptz
 )
 language sql
 stable
@@ -94,7 +132,7 @@ security definer
 set search_path = ''
 as $function$
   with cur as (
-    select ld.version, ld.effective_at, ld.reaccept_grace_until
+    select ld.version, ld.effective_at, ld.reaccept_notice_days
     from public.legal_documents ld
     where ld.type = 'terms'
       and ld.effective_at <= now()
@@ -106,28 +144,94 @@ as $function$
     select
       cur.version,
       cur.effective_at,
-      case when c.created_at >= cur.effective_at then null else cur.reaccept_grace_until end as grace_until,
+      (c.created_at < cur.effective_at and cur.reaccept_notice_days is not null) as needs_notice,
+      n.notified_at,
+      n.grace_until,
       exists (
         select 1 from public.company_dpa_acceptances a
         where a.company_id = c.id and a.document_type = 'terms' and a.version = cur.version
       ) as accepted
     from cur
     join public.companies c on c.id = p_company_id
+    left join public.company_terms_notices n on n.company_id = c.id and n.terms_version = cur.version
   )
   select
     st.version,
     st.effective_at,
-    st.grace_until,
+    case when st.needs_notice then st.grace_until end,
     st.accepted,
-    (not st.accepted) and (st.grace_until is null or now() >= st.grace_until)
+    (not st.accepted) and (
+      not st.needs_notice
+      or (st.grace_until is not null and now() >= st.grace_until)
+    ),
+    st.needs_notice,
+    st.notified_at
   from st;
 $function$;
 
 comment on function public.esblu_company_terms_requirement(uuid) is
   'Interné (bez klientského EXECUTE): stav povinnosti firemného prijatia VOP. Nová firma (created_at >= effective_at) '
-  '→ povinné hneď; existujúca firma → povinné až po reaccept_grace_until (VOP 39.2, 44.5).';
+  '→ povinné hneď; existujúca firma → povinné až 30 dní po preukázateľnom oznámení (company_terms_notices; VOP 39.2, 44.5). '
+  'Bez oznámenia nie je nová verzia pre existujúcu firmu povinná.';
 
 revoke all on function public.esblu_company_terms_requirement(uuid) from public, anon, authenticated;
+
+create or replace function public.esblu_record_company_terms_notice()
+returns public.company_terms_notices
+language plpgsql
+security definer
+set search_path = ''
+as $function$
+declare
+  v_uid uuid := auth.uid();
+  v_company_id uuid;
+  v_role text;
+  v_req record;
+  v_days integer;
+  v_row public.company_terms_notices;
+begin
+  if v_uid is null then
+    raise exception 'NOT_AUTHENTICATED';
+  end if;
+  select cm.company_id, cm.role into v_company_id, v_role
+  from public.company_members cm
+  where cm.user_id = v_uid and cm.status = 'active'
+    and cm.company_id = public.esblu_my_active_company_id()
+  limit 1;
+  if v_company_id is null then
+    raise exception 'ESBLU_NO_ACTIVE_MEMBERSHIP';
+  end if;
+  if v_role <> 'owner' then
+    raise exception 'ESBLU_NOT_ACTIVE_OWNER';
+  end if;
+
+  select * into v_req from public.esblu_company_terms_requirement(v_company_id);
+  if v_req.current_terms_version is null or not v_req.needs_notice or v_req.has_current_acceptance then
+    return null;
+  end if;
+
+  select ld.reaccept_notice_days into v_days from public.legal_documents ld
+  where ld.type = 'terms' and ld.version = v_req.current_terms_version;
+
+  insert into public.company_terms_notices (company_id, terms_version, notified_user_id, effective_at, grace_until, notified_at)
+  values (
+    v_company_id, v_req.current_terms_version, v_uid,
+    now() + make_interval(days => v_days), now() + make_interval(days => v_days), now()
+  )
+  on conflict (company_id, terms_version) do nothing;
+
+  select * into v_row from public.company_terms_notices
+  where company_id = v_company_id and terms_version = v_req.current_terms_version;
+  return v_row;
+end;
+$function$;
+
+comment on function public.esblu_record_company_terms_notice() is
+  'VOP 39.2 / 44.5: zaznamená preukázateľné in-app oznámenie novej verzie VOP Vlastníkovi aktívnej existujúcej firmy '
+  '(prvé zobrazenie oznámenia). Lehota 30 dní beží od notified_at. Append-only (ON CONFLICT DO NOTHING).';
+
+revoke all on function public.esblu_record_company_terms_notice() from public, anon;
+grant execute on function public.esblu_record_company_terms_notice() to authenticated;
 
 create or replace function public.esblu_accept_company_terms(
   p_version text,
@@ -215,8 +319,6 @@ begin
   )
   on conflict (company_id, document_type, version) do nothing;
 
-  -- Osobné potvrdenie ownera tej istej verzie (LegalAcceptanceGate ho už
-  -- nebude pýtať druhýkrát). Append-only, existujúci riadok sa neprepíše.
   insert into public.user_legal_acceptances (user_id, document_type, version, acceptance_method, metadata)
   values (
     v_uid, 'terms', v_current_version, 'legal_gate',
@@ -261,7 +363,9 @@ returns table (
   grace_until timestamptz,
   required_now boolean,
   company_name text,
-  company_registration_id text
+  company_registration_id text,
+  needs_notice boolean,
+  notified_at timestamptz
 )
 language sql
 stable
@@ -288,7 +392,9 @@ as $function$
     coalesce(
       (select li.registration_id from public.company_legal_identities li where li.company_id = mm.company_id),
       (select bp.ico from public.company_billing_profile bp where bp.company_id = mm.company_id)
-    )
+    ),
+    req.needs_notice,
+    req.notified_at
   from my_membership mm
   join public.companies c on c.id = mm.company_id
   cross join lateral public.esblu_company_terms_requirement(mm.company_id) req
@@ -350,8 +456,6 @@ begin
     raise exception 'ESBLU_DPA_AUTHORITY_NOT_CONFIRMED';
   end if;
 
-  -- B2B VOP 1.2: poradie VOP → DPA, ale iba keď je prijatie VOP pre firmu
-  -- už povinné (nová firma, alebo uplynula 30-dňová lehota — VOP 39.2/44.5).
   if exists (
     select 1 from public.esblu_company_terms_requirement(v_company_id) req where req.required_now
   ) then

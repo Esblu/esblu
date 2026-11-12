@@ -87,7 +87,9 @@ check("pre_rc (61) ∪ rc_tables (37) == grants manifest, disjoint", () => {
   assert.equal(pre.length, 61);
   assert.equal(rc.length, 37);
   assert.deepEqual(pre.filter((t) => rc.includes(t)), []);
-  assert.deepEqual([...pre, ...rc].sort(), manifest);
+  // Tabuľky po uzavretom release #1–#47 (nový samostatný release runbook).
+  const POST_RELEASE_TABLES = ["company_terminations", "company_terms_notices"];
+  assert.deepEqual([...pre, ...rc].sort(), manifest.filter((t) => !POST_RELEASE_TABLES.includes(t)));
 });
 check("every rc table is created by an RC migration file", () => {
   const rcSql = RC_ABSENT.map((b) => read(`supabase/migrations/${b}.sql`)).join("\n").toLowerCase();

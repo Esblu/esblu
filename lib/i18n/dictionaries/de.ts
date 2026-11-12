@@ -994,6 +994,33 @@ const de = {
   },
 
   settings: {
+    companyExport: {
+      title: "Export der Firmendaten",
+      footer: "Lädt alle Daten der aktiven Firma (Datensätze als JSON und CSV) und die Originaldateien stapelweise als ZIP herunter. Der Export ist kein gesetzliches Archiv — für die Aufbewahrung der Buchungsbelege ist die Firma verantwortlich. Nur für den Inhaber.",
+      button: "Export der Firmendaten herunterladen",
+      running: "Export wird vorbereitet…",
+      progress: "Teil {{done}} von {{total}} wird heruntergeladen…",
+      done: "Der Export wurde heruntergeladen.",
+      doneWithMissing: "Der Export wurde heruntergeladen. Einige Dateien ({{count}}) konnten nicht gelesen werden — sie sind im Manifest des Exports aufgeführt.",
+      errors: {
+        BAD_REQUEST: "Ungültige Exportanfrage.",
+        UNAUTHORIZED: "Bitte melden Sie sich zuerst an.",
+        NO_ACTIVE_COMPANY: "Bitte wählen Sie zuerst eine Firma.",
+        OWNER_ONLY: "Nur der Inhaber kann den Export der Firmendaten herunterladen.",
+        EXPORT_FAILED: "Der Export konnte nicht vorbereitet werden. Bitte versuchen Sie es erneut.",
+        CHECKSUM_MISMATCH: "Die heruntergeladene Datei stimmt nicht mit der Prüfsumme überein. Bitte versuchen Sie den Export erneut.",
+      },
+    },
+    termination: {
+      intro: "Die Firma enthält finalisierte Buchungsbelege oder E-Rechnungen. Die normale Löschung ist daher gesperrt, damit Belege nicht versehentlich verloren gehen. Als Inhaber können Sie die Firma beenden und ihre Daten einschließlich der Belege gemäß dem Auftragsverarbeitungsvertrag löschen (AGB Art. 20.6).",
+      exportStep: "1. Laden Sie zuerst den Export der Firmendaten herunter (Datensätze und Originaldateien). Buchhaltungspakete mit Rechnungs-PDFs finden Sie auch unter Rechnungen → Paket für den Buchhalter.",
+      exported: "Ich habe den Export heruntergeladen und erhalten.",
+      waived: "Ich benötige keinen Export — ich beantrage die Löschung ohne Export.",
+      acknowledge: "Ich verstehe, dass die Löschung unwiderruflich ist und auch Buchungsbelege und E-Rechnungen umfasst. Esblu ist kein gesetzliches Archiv; für die gesetzliche Aufbewahrung der Belege ist die Firma verantwortlich.",
+      forfeit: "Ich verstehe, dass der verbleibende bezahlte Abonnementzeitraum ohne Erstattung verfällt.",
+      confirmPhrase: "Zur Bestätigung geben Sie {{phrase}} ein",
+      submit: "Firma beenden und Daten löschen",
+    },
     // Granulárne oprávnenia zamestnancov (20261023100000).
     permissions: {
       title: "Berechtigungen",
@@ -2358,6 +2385,8 @@ const de = {
       phoneTitle: "Telefon",
       phoneText: "Telefonischer Kontakt:",
       phonePlaceholder: "[Telefonnummer wird ergänzt]",
+      phoneHours: "Telefonische Erreichbarkeit: Werktage 10:00 – 15:00 Uhr.",
+      phoneScope: "Der telefonische Kontakt dient der grundlegenden Kunden- und organisatorischen Kommunikation. Komplexere technische, vertragliche, DSGVO-, Abrechnungs-, E-Rechnungs-/Peppol- und Sicherheitsanfragen können anschließend schriftlich über den offiziellen E-Mail-Kontakt bearbeitet werden. Der telefonische Support ist nicht rund um die Uhr verfügbar und bedeutet keine sofortige Antwort oder sofortige Lösung eines Problems; Anrufe außerhalb der angegebenen Zeiten werden möglicherweise nicht bearbeitet.",
       intro:
         "Esblu ist ein Dienst zur Firmenerfassung für Unternehmer zu geschäftlichen Zwecken. Verantwortlicher ist die Gesellschaft Esblu s. r. o. mit Sitz in Karpatské námestie 10A, 831 06 Bratislava – Stadtteil Rača, Slowakische Republik, Handelsregisternummer (IČO): 57 815 941.",
       generalTitle: "Allgemeine Fragen und Support",

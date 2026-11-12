@@ -129,7 +129,25 @@ export type CompanyTermsStatus = {
   /** Údaje firmy na kontrolu pred odoslaním (22/2004 § 5, VOP 8.2). */
   company_name: string | null;
   company_registration_id: string | null;
+  /** VOP 39.2 / 44.5: existujúca firma — lehota beží od preukázateľného oznámenia. */
+  needs_notice?: boolean;
+  notified_at?: string | null;
 };
+
+/**
+ * VOP 39.2 / 44.5: zaznamená preukázateľné in-app oznámenie novej verzie VOP
+ * Vlastníkovi existujúcej firmy (company_terms_notices). Lehota 30 dní beží od
+ * tohto okamihu. Opakované volanie lehotu neposúva.
+ */
+export async function recordCompanyTermsNotice(): Promise<{ notified_at: string; grace_until: string } | null> {
+  const { data, error } = await supabase.rpc("esblu_record_company_terms_notice");
+  if (error) {
+    console.error("recordCompanyTermsNotice zlyhalo:", error.message);
+    return null;
+  }
+  const row = (Array.isArray(data) ? data[0] : data) as { notified_at?: string | null; grace_until?: string | null } | null;
+  return row?.notified_at && row.grace_until ? { notified_at: row.notified_at, grace_until: row.grace_until } : null;
+}
 
 /** Záznam firemného prijatia (VOP 8.3 / 8.5) — potvrdenie zobrazené v appke. */
 export type CompanyLegalAcceptanceRecord = {

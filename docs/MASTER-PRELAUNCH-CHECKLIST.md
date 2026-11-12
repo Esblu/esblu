@@ -832,6 +832,8 @@ Praktické poradie. Technické blokery (J5) sú PASS — zvyšok sú rozhodnutia
 - [x] Interný audit: `docs/b2b-vop-1-2-audit-2026-11-12.md`
 - [ ] **HARD STOP:** externý právny/technický audit textu (ChatGPT/právnik) — bez schválenia NEdeployovať do produkcie
 - [x] Revízia podľa ChatGPT auditu + benchmark (čl. 1, 2, 8, 17, 20, 36, 39, 43, 44.5; 30-dňová lehota; potvrdenie uzatvorenia)
-- [ ] Vlastník: `legalConfig.publicPhone` (22/2004 § 4) — `npm run check:b2b-terms-release`
-- [ ] VOP 20.6: samostatne auditovaná migrácia pre výmaz firmy s finalizovanými dokladmi po exporte
+- [x] Telefón `legalConfig.publicPhone` + dostupnosť na `/kontakt` — `npm run check:b2b-terms-release` OK
+- [x] VOP 20.6: termination / DPA delete workflow (`20261112110000`) + export údajov firmy
+- [x] Lehota 30 dní od preukázateľného oznámenia (`company_terms_notices`)
+- [ ] Finálny release check → produkčný release (nový runbook)
 - [ ] Produkcia: samostatný release migrácie `20261112100000` + merge do main po schválení

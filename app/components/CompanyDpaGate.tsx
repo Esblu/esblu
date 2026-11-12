@@ -9,6 +9,7 @@ import {
   getAcceptCompanyTermsErrorMessage,
   getMyCompanyDpaStatus,
   getMyCompanyTermsStatus,
+  recordCompanyTermsNotice,
   type CompanyDpaStatus,
   type CompanyLegalAcceptanceRecord,
   type CompanyTermsStatus,
@@ -124,10 +125,26 @@ export default function CompanyDpaGate({
         return;
       }
 
-      const [result, terms] = await Promise.all([
+      const [result, loadedTerms] = await Promise.all([
         getMyCompanyDpaStatus(),
         getMyCompanyTermsStatus(),
       ]);
+      let terms = loadedTerms;
+
+      // VOP 39.2 / 44.5: existujúca firma — prvé zobrazenie oznámenia
+      // Vlastníkovi sa preukázateľne zaznamená; 30-dňová lehota beží odtiaľto.
+      if (
+        terms &&
+        terms.my_role === "owner" &&
+        !terms.has_current_acceptance &&
+        terms.needs_notice &&
+        !terms.notified_at
+      ) {
+        const notice = await recordCompanyTermsNotice();
+        if (notice) {
+          terms = { ...terms, notified_at: notice.notified_at, grace_until: notice.grace_until };
+        }
+      }
 
       if (!cancelled) {
         setStatus(result);

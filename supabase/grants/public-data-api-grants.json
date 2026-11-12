@@ -798,6 +798,22 @@
       "authenticated": "SELECT,INSERT,UPDATE,DELETE",
       "service_role": "SELECT,INSERT,UPDATE,DELETE",
       "note": ""
+    },
+    "company_terminations": {
+      "domain": "legal",
+      "access": "D",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT",
+      "note": "VOP 20.6 auditny zaznam ukoncenia firmy (bez FK); zapis iba esblu_company_termination_commit/_record_failure"
+    },
+    "company_terms_notices": {
+      "domain": "legal",
+      "access": "B",
+      "anon": "",
+      "authenticated": "SELECT",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "VOP 39.2/44.5 in-app oznamenie novej verzie VOP; zapis cez esblu_record_company_terms_notice"
     }
   },
   "service_role_functions": [
@@ -847,6 +863,9 @@
     "esblu_company_price_tier(uuid)",
     "esblu_company_storage_bytes(uuid)",
     "esblu_company_storage_status(uuid)",
+    "esblu_company_termination_commit(uuid,uuid,boolean,text)",
+    "esblu_company_termination_in_progress()",
+    "esblu_company_termination_record_failure(uuid,uuid,text,text)",
     "esblu_create_company_invite(text,text)",
     "esblu_create_my_company(text)",
     "esblu_einvoice_claim_inbound(integer,integer)",

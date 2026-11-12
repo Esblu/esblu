@@ -71,7 +71,7 @@ check("EN/DE = úplné preklady: rovnaká štruktúra riadkov, čísla a odkazy"
 check("DB seed hash = sha256(legal/terms/1.2.md), canonical /podmienky-pouzivania, firemné prijatie + 30-dňová lehota", () => {
   const h = createHash("sha256").update(readFileSync(path.join(ROOT, "legal/terms/1.2.md"))).digest("hex");
   const m = read("supabase/migrations/20261112100000_b2b_terms_1_2_company_acceptance.sql");
-  assert.ok(m.includes(`('terms', '1.2', now(), false, '${h}', '/podmienky-pouzivania', now() + interval '30 days')`));
+  assert.ok(m.includes(`('terms', '1.2', now(), false, '${h}', '/podmienky-pouzivania', 30)`));
   assert.ok(existsSync(path.join(ROOT, "supabase/rollback/20261112100000_b2b_terms_1_2_company_acceptance_rollback.sql")));
 });
 
@@ -125,7 +125,7 @@ check("bez rozporu: žiadne 'Podmienky používania' / 'bezplatná testovacia ve
 check("VOP neobsahuje vymyslené SLA ani spotrebiteľské inštitúty (nie sú ponúkané)", () => {
   assert.doesNotMatch(SK, /99[.,]\d+\s*%/);
   assert.doesNotMatch(SK, /odstúpiť od zmluvy do 14 dní|alternatívne riešenie spotrebiteľských sporov|reklamačný poriadok/i);
-  assert.match(SK, /negarantuje konkrétnu percentuálnu dostupnosť/);
+  assert.match(SK, /negarantuje nepretržitú prevádzku, konkrétnu percentuálnu dostupnosť/);
   // kogentné práva sa nevylučujú (nie obchádzanie spotrebiteľského práva)
   assert.match(SK, /tým nie sú dotknuté práva, ktoré takejto osobe priznávajú kogentné právne predpisy/);
 });
@@ -157,7 +157,7 @@ check("ChatGPT audit: čl. 1 (SOI adresa, DPH, telefón cez /kontakt), Firma ≠
   assert.doesNotMatch(SK, /každá Firma je samostatným Zákazníkom/);
   assert.match(SK, /Firma je jednotkou Predplatného/);
   assert.match(read("app/kontakt/ContactPageClient.tsx"), /legalConfig\.publicPhone/);
-  assert.equal(typeof legalConfig.publicPhone, "string");
+  assert.equal(legalConfig.publicPhone, "0903 464 006");
 });
 
 check("ChatGPT audit: čl. 8 (kroky, oprava, uchovanie, jazyk, potvrdenie; bez prijatia nevlastníkom)", () => {
@@ -188,6 +188,24 @@ check("produkčná brána existuje a nie je súčasťou test:* regresie", () => 
   const pkg = JSON.parse(read("package.json")) as { scripts: Record<string, string> };
   assert.ok(pkg.scripts["check:b2b-terms-release"]);
   assert.ok(!Object.keys(pkg.scripts).some((k) => k.startsWith("test:") && pkg.scripts[k].includes("b2b-terms-release-gate")));
+});
+
+check("re-audit: výpadky nezakladajú automatický nárok, súčinnosť, tvrdenie ≠ uznanie, zákonná zodpovednosť nedotknutá", () => {
+  assert.match(SK, /Esblu negarantuje nepretržitú prevádzku, konkrétnu percentuálnu dostupnosť ani to, že Aplikácia bude bez chýb/);
+  assert.match(SK, /samo osebe nezakladá nárok na zľavu z odplaty ani na náhradu škody/);
+  assert.match(SK, /bez zbytočného odkladu po tom, ako poruchu zistil/);
+  assert.match(SK, /primeranú súčinnosť pri diagnostike/);
+  assert.match(SK, /samotné tvrdenie o výpadku, nedostupnosti údajov alebo škode nepredstavuje uznanie nároku/);
+  assert.match(SK, /zodpovednosť Esblu za porušenie jej zákonných povinností, za úmyselné konanie/);
+  assert.doesNotMatch(SK, /500 EUR|12 mesiacov pred vznikom škody/);
+});
+
+check("re-audit: export všetkých údajov (19.2), obnova zo záloh bez sľubu 100 % (19.4), termination workflow (20.6)", () => {
+  assert.match(SK, /export všetkých údajov Firmy, a to záznamy vo formáte JSON a CSV a originálne súbory vo formáte ZIP/);
+  assert.match(SK, /obnova zo zálohy nemusí zahŕňať zmeny vykonané po jej vytvorení/);
+  assert.match(SK, /Výmaz databázových záznamov prebieha naraz v jednom kroku/);
+  assert.match(SK, /Esblu nemá vlastnú zákonnú povinnosť archivovať účtovné doklady Zákazníka/);
+  assert.doesNotMatch(SK, /zákonný archív zákazníckych/);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

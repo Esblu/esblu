@@ -28,6 +28,18 @@ if (!read("supabase/migrations/20261112100000_b2b_terms_1_2_company_acceptance.s
   problems.push("migrácia 20261112100000 nemá aktuálny hash legal/terms/1.2.md");
 }
 
+// Re-audit 2026-11-12: termination/DPA delete flow a export musia byť súčasťou releasu.
+for (const f of [
+  "supabase/migrations/20261112110000_company_termination_workflow.sql",
+  "app/api/company/export/route.ts",
+]) {
+  try {
+    read(f);
+  } catch {
+    problems.push(`${f}: chýba (termination / export údajov firmy)`);
+  }
+}
+
 if (problems.length) {
   console.log(`HARD STOP — VOP 1.2 nie je pripravené na produkciu:\n  - ${problems.join("\n  - ")}`);
   process.exit(1);

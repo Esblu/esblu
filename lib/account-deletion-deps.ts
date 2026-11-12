@@ -128,3 +128,53 @@ export function supabaseDeletionDeps(admin: SupabaseClient): DeletionDeps {
     },
   };
 }
+
+// -----------------------------------------------------------------------------
+// VOP 1.2 čl. 20.6 / DPA: ukončenie firmy s účtovnými dokladmi
+// (esblu_company_termination_commit, 20261112110000). Rovnaká orchestrácia
+// „DB najprv, Storage až po commite" ako bežné zrušenie; iba commit je
+// auditovaný termination workflow. Zlyhanie sa zapíše do auditu (iba kód).
+// -----------------------------------------------------------------------------
+export type TerminationExportMode = "exported" | "waived";
+
+export function supabaseTerminationDeps(admin: SupabaseClient, exportMode: TerminationExportMode): DeletionDeps {
+  const base = supabaseDeletionDeps(admin);
+  return {
+    ...base,
+    async commit(request: DeletionRequest): Promise<CommitResult> {
+      const { userId, companyId, deleteAccount } = request;
+      const { data, error } = await admin.rpc("esblu_company_termination_commit", {
+        p_user_id: userId,
+        p_company_id: companyId,
+        p_delete_account: deleteAccount,
+        p_export_mode: exportMode,
+      });
+      if (!error) {
+        const row = (data ?? {}) as { job_id?: string; storage_targets?: unknown; summary?: unknown; delete_account?: boolean };
+        return {
+          ok: true,
+          jobId: row.job_id ?? null,
+          storageTargets: parseStorageTargets(row.storage_targets),
+          summary: row.summary ?? null,
+          deleteAccount: row.delete_account === true,
+        };
+      }
+      const code = dbCode(error);
+      console.error("company/termination: esblu_company_termination_commit zlyhalo:", code);
+      await admin
+        .rpc("esblu_company_termination_record_failure", {
+          p_user_id: userId,
+          p_company_id: companyId,
+          p_export_mode: exportMode,
+          p_error_code: code,
+        })
+        .then(
+          () => undefined,
+          () => undefined
+        );
+      const guard = subscriptionGuardCode(error);
+      if (guard) return { ok: false, reason: "subscription_guard", code: guard };
+      return { ok: false, reason: "db_error", code };
+    },
+  };
+}

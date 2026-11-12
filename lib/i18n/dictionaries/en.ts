@@ -993,6 +993,33 @@ const en = {
   },
 
   settings: {
+    companyExport: {
+      title: "Company data export",
+      footer: "Downloads all data of the active company (records as JSON and CSV) and the original files in batches as ZIP. The export is not a statutory archive — the company is responsible for retaining accounting documents. Owner only.",
+      button: "Download company data export",
+      running: "Preparing export…",
+      progress: "Downloading part {{done}} of {{total}}…",
+      done: "The export has been downloaded.",
+      doneWithMissing: "The export has been downloaded. Some files ({{count}}) could not be read — they are listed in the export manifest.",
+      errors: {
+        BAD_REQUEST: "Invalid export request.",
+        UNAUTHORIZED: "Please log in first.",
+        NO_ACTIVE_COMPANY: "Please select a company first.",
+        OWNER_ONLY: "Only the company owner can download the company data export.",
+        EXPORT_FAILED: "The export could not be prepared. Please try again.",
+        CHECKSUM_MISMATCH: "The downloaded file does not match its checksum. Please try the export again.",
+      },
+    },
+    termination: {
+      intro: "The company contains finalised accounting documents or e-invoices. Regular deletion is therefore blocked so that documents are not lost by mistake. As the owner, you can terminate the company and delete its data including the documents in accordance with the Data Processing Agreement (Terms Art. 20.6).",
+      exportStep: "1. First download the company data export (records and original files). Accounting packages with invoice PDFs are also available under Invoices → Package for accountant.",
+      exported: "I have downloaded and received the export.",
+      waived: "I do not need an export — I request deletion without export.",
+      acknowledge: "I understand that deletion is irreversible and also covers accounting documents and e-invoices. Esblu is not a statutory archive; the company is responsible for retaining documents as required by law.",
+      forfeit: "I understand that the remaining paid subscription period is forfeited without a refund.",
+      confirmPhrase: "To confirm, type {{phrase}}",
+      submit: "Terminate the company and delete data",
+    },
     // Granulárne oprávnenia zamestnancov (20261023100000).
     permissions: {
       title: "Permissions",
@@ -2338,6 +2365,8 @@ const en = {
       phoneTitle: "Telephone",
       phoneText: "Telephone contact:",
       phonePlaceholder: "[telephone number to be added]",
+      phoneHours: "Telephone availability: working days 10:00 – 15:00.",
+      phoneScope: "The telephone contact is intended for basic customer and organisational communication. More complex technical, contractual, GDPR, billing, e-invoicing/Peppol and security requests may be handled subsequently in writing via the official e-mail contact. Telephone support is not available around the clock and does not mean an immediate response or immediate resolution of a problem; calls outside the stated hours may not be handled.",
       intro:
         "Esblu is a business record-keeping service intended for businesses for business purposes. The controller is Esblu s. r. o., with its registered seat at Karpatské námestie 10A, 831 06 Bratislava – Rača, Slovak Republic, Company ID (IČO): 57 815 941.",
       generalTitle: "General questions and support",

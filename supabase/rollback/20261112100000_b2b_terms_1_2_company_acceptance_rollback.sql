@@ -5,7 +5,8 @@ do $$
 begin
   if exists (select 1 from public.company_dpa_acceptances where document_type = 'terms')
      or exists (select 1 from public.user_legal_acceptances where document_type = 'terms' and version = '1.2')
-     or exists (select 1 from public.legal_acceptance_evidence where scope = 'company_terms') then
+     or exists (select 1 from public.legal_acceptance_evidence where scope = 'company_terms')
+     or (to_regclass('public.company_terms_notices') is not null and exists (select 1 from public.company_terms_notices)) then
     raise exception 'ROLLBACK_BLOCKED: VOP 1.2 už majú prijatia';
   end if;
 end $$;
@@ -204,4 +205,6 @@ alter table public.company_dpa_acceptances
 alter table public.legal_documents disable trigger esblu_legal_documents_no_delete;
 delete from public.legal_documents where type = 'terms' and version = '1.2';
 alter table public.legal_documents enable trigger esblu_legal_documents_no_delete;
-alter table public.legal_documents drop column if exists reaccept_grace_until;
+drop function if exists public.esblu_record_company_terms_notice();
+drop table if exists public.company_terms_notices;
+alter table public.legal_documents drop column if exists reaccept_notice_days;

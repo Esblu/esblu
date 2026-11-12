@@ -1007,6 +1007,33 @@ const sk = {
   },
 
   settings: {
+    companyExport: {
+      title: "Export údajov firmy",
+      footer: "Stiahne všetky údaje aktívnej firmy (záznamy vo formáte JSON a CSV) a originálne súbory po dávkach vo formáte ZIP. Export nie je zákonný archív — za uchovávanie účtovných dokladov zodpovedá firma. Iba pre vlastníka.",
+      button: "Stiahnuť export údajov firmy",
+      running: "Pripravujem export…",
+      progress: "Sťahujem časť {{done}} z {{total}}…",
+      done: "Export bol stiahnutý.",
+      doneWithMissing: "Export bol stiahnutý. Niektoré súbory ({{count}}) sa nepodarilo načítať — sú uvedené v manifeste exportu.",
+      errors: {
+        BAD_REQUEST: "Neplatná požiadavka na export.",
+        UNAUTHORIZED: "Najprv sa prihláste.",
+        NO_ACTIVE_COMPANY: "Najprv vyberte firmu.",
+        OWNER_ONLY: "Export údajov firmy môže stiahnuť iba vlastník firmy.",
+        EXPORT_FAILED: "Export sa nepodarilo pripraviť. Skúste to prosím znova.",
+        CHECKSUM_MISMATCH: "Stiahnutý súbor sa nezhoduje s odtlačkom. Skúste export znova.",
+      },
+    },
+    termination: {
+      intro: "Firma obsahuje finalizované účtovné doklady alebo e-faktúry. Bežné zrušenie je preto zablokované, aby sa doklady nestratili omylom. Ako vlastník môžete firmu ukončiť a jej údaje vrátane dokladov vymazať podľa Zmluvy o spracúvaní osobných údajov (VOP čl. 20.6).",
+      exportStep: "1. Najprv si stiahnite export údajov firmy (záznamy a originálne súbory). Účtovné balíky s PDF faktúr nájdete aj v časti Faktúry → Balík pre účtovníka.",
+      exported: "Export som stiahol/stiahla a prevzal/a.",
+      waived: "Export nepotrebujem — žiadam výmaz bez exportu.",
+      acknowledge: "Rozumiem, že výmaz je nevratný a zahŕňa aj účtovné doklady a e-faktúry. Esblu nie je zákonný archív; za uchovávanie dokladov podľa zákona zodpovedá firma.",
+      forfeit: "Rozumiem, že zostávajúce zaplatené obdobie predplatného prepadá bez nároku na vrátenie.",
+      confirmPhrase: "Na potvrdenie napíšte {{phrase}}",
+      submit: "Ukončiť firmu a vymazať údaje",
+    },
     // Granulárne oprávnenia zamestnancov (20261023100000).
     permissions: {
       title: "Oprávnenia",
@@ -2365,6 +2392,8 @@ const sk = {
       phoneTitle: "Telefón",
       phoneText: "Telefonický kontakt:",
       phonePlaceholder: "[telefónne číslo bude doplnené]",
+      phoneHours: "Telefonická dostupnosť: pracovné dni 10:00 – 15:00.",
+      phoneScope: "Telefonický kontakt slúži na základnú zákaznícku a organizačnú komunikáciu. Zložitejšie technické, zmluvné, GDPR, billingové, eFaktúra/Peppol a bezpečnostné požiadavky môžeme vybaviť následne písomne cez oficiálny e-mailový kontakt. Telefonická podpora nie je nepretržitá a neznamená okamžitú odpoveď ani okamžité vyriešenie problému; mimo uvedených hodín nemusí byť hovor vybavený.",
       intro:
         "Esblu je služba na firemnú evidenciu určená podnikateľom na podnikateľské účely. Prevádzkovateľom je spoločnosť Esblu s. r. o., so sídlom Karpatské námestie 10A, 831 06 Bratislava – mestská časť Rača, Slovenská republika, IČO: 57 815 941.",
       generalTitle: "Všeobecné otázky a podpora",

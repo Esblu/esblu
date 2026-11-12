@@ -2,6 +2,7 @@
 
 import { ChangeEvent, useEffect, useState } from "react";
 import { CompanyLegalAcceptancesSection } from "@/app/components/CompanyLegalAcceptancesSection";
+import { CompanyExportButton } from "@/app/components/CompanyExportButton";
 import { assertStorageCapacity } from "@/lib/storage/capacity-client";
 import { supabase } from "@/lib/supabase";
 import { flushMediaDeletions } from "@/lib/storage/media-deletion";
@@ -241,6 +242,9 @@ export default function NastaveniaPage() {
   const [deleteConfirmText, setDeleteConfirmText] = useState("");
   // Zrušená obnova + bežiace obdobie: výslovné potvrdenie straty zvyšku obdobia.
   const [forfeitAcknowledged, setForfeitAcknowledged] = useState(false);
+  // VOP 1.2 čl. 20.6 / DPA: ukončenie firmy s účtovnými dokladmi.
+  const [terminationExportMode, setTerminationExportMode] = useState<"" | "exported" | "waived">("");
+  const [terminationAcknowledged, setTerminationAcknowledged] = useState(false);
   // Multi-company: názov aktívnej firmy (texty „Opustiť firmu …").
   const [activeCompanyName, setActiveCompanyName] = useState("");
   const [deleteSubmitting, setDeleteSubmitting] = useState(false);
@@ -872,10 +876,21 @@ export default function NastaveniaPage() {
     setDeleteError("");
 
     try {
+      const terminationFlow =
+        deletePreflight.role === "owner" &&
+        (deletePreflight.ownerDeletionBlocked === "FINALIZED_ACCOUNTING_DOCUMENTS" ||
+          deletePreflight.ownerDeletionBlocked === "EINVOICE_RECORDS");
+      if (terminationFlow && (!terminationExportMode || !terminationAcknowledged)) {
+        setDeleteSubmitting(false);
+        return;
+      }
       const { accountDeleted } = await deleteMyAccount(
         locale,
         deletePreflight.role === "owner" ? deleteConfirmText : undefined,
-        { acknowledgeForfeit: deletePreflight.role === "owner" && forfeitAcknowledged }
+        {
+          acknowledgeForfeit: deletePreflight.role === "owner" && forfeitAcknowledged,
+          ...(terminationFlow && terminationExportMode ? { termination: { exportMode: terminationExportMode } } : {}),
+        }
       );
 
       if (!accountDeleted) {
@@ -1363,6 +1378,15 @@ export default function NastaveniaPage() {
             </nav>
           </SettingsSection>
 
+          {/* ---------------- Export údajov firmy (VOP 19, DPA) — iba owner ---------------- */}
+          {companyId && myRole === "owner" && (
+            <SettingsSection title={t("settings.companyExport.title")} footer={t("settings.companyExport.footer")}>
+              <div className="p-3">
+                <CompanyExportButton />
+              </div>
+            </SettingsSection>
+          )}
+
           {/* ---------------- Záznam o uzatvorení VOP / DPA (VOP 8.3, 8.5) ---------------- */}
           {companyId && <CompanyLegalAcceptancesSection companyId={companyId} />}
 
@@ -1460,6 +1484,62 @@ export default function NastaveniaPage() {
                 <p className="ui-notice" data-tone="error" role="alert">
                   {deletePreflightError}
                 </p>
+              ) : deletePreflight?.role === "owner" &&
+                (deletePreflight.ownerDeletionBlocked === "FINALIZED_ACCOUNTING_DOCUMENTS" ||
+                  deletePreflight.ownerDeletionBlocked === "EINVOICE_RECORDS") &&
+                !(deletePreflight.subscription && !deletePreflight.subscription.can_delete) ? (
+                <div className="space-y-3" data-testid="company-termination">
+                  {/* VOP 1.2 čl. 20.6 / DPA: auditovaný termination workflow (owner, export, potvrdenie). */}
+                  <p className="ui-body">{t("settings.termination.intro")}</p>
+                  <p className="ui-body">{t("settings.termination.exportStep")}</p>
+                  <CompanyExportButton onDone={() => setTerminationExportMode("exported")} />
+                  <fieldset className="space-y-2">
+                    <label className="flex items-start gap-2 text-[13px] leading-5">
+                      <input type="radio" name="termination-export" className="mt-0.5" checked={terminationExportMode === "exported"} onChange={() => setTerminationExportMode("exported")} disabled={deleteSubmitting} />
+                      <span>{t("settings.termination.exported")}</span>
+                    </label>
+                    <label className="flex items-start gap-2 text-[13px] leading-5">
+                      <input type="radio" name="termination-export" className="mt-0.5" checked={terminationExportMode === "waived"} onChange={() => setTerminationExportMode("waived")} disabled={deleteSubmitting} />
+                      <span>{t("settings.termination.waived")}</span>
+                    </label>
+                  </fieldset>
+                  <label className="flex items-start gap-2 text-[13px] leading-5">
+                    <input type="checkbox" className="mt-0.5" checked={terminationAcknowledged} onChange={(e) => setTerminationAcknowledged(e.target.checked)} disabled={deleteSubmitting} />
+                    <span>{t("settings.termination.acknowledge")}</span>
+                  </label>
+                  {deletePreflight.subscription?.forfeits_remaining_period && (
+                    <label className="flex items-start gap-2 text-[13px] leading-5">
+                      <input type="checkbox" className="mt-0.5" checked={forfeitAcknowledged} onChange={(e) => setForfeitAcknowledged(e.target.checked)} disabled={deleteSubmitting} />
+                      <span>{t("settings.termination.forfeit")}</span>
+                    </label>
+                  )}
+                  <label className="block text-[13px]">
+                    <span className="ui-label">{t("settings.termination.confirmPhrase", { phrase: ACCOUNT_DELETION_CONFIRM_PHRASE })}</span>
+                    <input type="text" className="ui-input mt-1 w-full" value={deleteConfirmText} onChange={(e) => setDeleteConfirmText(e.target.value)} disabled={deleteSubmitting} autoComplete="off" />
+                  </label>
+                  {deleteError && (
+                    <p className="ui-notice" data-tone="error" role="alert">{deleteError}</p>
+                  )}
+                  <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                    <button type="button" onClick={closeDeleteAccountModal} disabled={deleteSubmitting} className="ui-btn ui-btn-secondary">
+                      {t("settings.deleteModal.cancel")}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={confirmDeleteAccount}
+                      disabled={
+                        deleteSubmitting ||
+                        !terminationExportMode ||
+                        !terminationAcknowledged ||
+                        deleteConfirmText !== ACCOUNT_DELETION_CONFIRM_PHRASE ||
+                        (deletePreflight.subscription?.forfeits_remaining_period === true && !forfeitAcknowledged)
+                      }
+                      className="ui-btn bg-red-600 text-white hover:bg-red-700"
+                    >
+                      {deleteSubmitting ? t("settings.deleteModal.deletingAccount") : t("settings.termination.submit")}
+                    </button>
+                  </div>
+                </div>
               ) : deletePreflight?.role === "owner" && deletePreflight.ownerDeletionBlocked ? (
                 <div className="space-y-3">
                   {/* Archivácia účtovných dokladov / e-faktúry / registrácia u providera: zrušenie sa NEPONÚKNE (nič sa nemaže). */}

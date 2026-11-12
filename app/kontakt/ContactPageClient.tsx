@@ -45,6 +45,10 @@ export function ContactPageClient() {
             t("legal.contactPage.phonePlaceholder")
           )}
         </p>
+        <p data-testid="contact-phone-hours">{t("legal.contactPage.phoneHours")}</p>
+        <p className="text-[13px] leading-5 text-secondary" data-testid="contact-phone-scope">
+          {t("legal.contactPage.phoneScope")}
+        </p>
       </LegalSection>
 
       <LegalSection title={t("legal.contactPage.privacyTitle")}>

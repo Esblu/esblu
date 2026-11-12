@@ -109,7 +109,7 @@ const sha = (p: string) => createHash("sha256").update(readFileSync(path.join(RO
 
 await check("terms 1.2: aktuálna verzia, hash = legal/terms/1.2.md, firemné prijatie (required=false), lehota 30 dní", async () => {
   const r = await su<{ version: string; required: boolean; content_hash: string; canonical_path: string; d: number }>(
-    "select version, required, content_hash, canonical_path, round(extract(epoch from (reaccept_grace_until - effective_at)) / 86400)::int d from public.legal_documents where type = 'terms' order by effective_at desc, created_at desc, version desc limit 1");
+    "select version, required, content_hash, canonical_path, reaccept_notice_days d from public.legal_documents where type = 'terms' order by effective_at desc, created_at desc, version desc limit 1");
   assert.equal(r[0].version, "1.2");
   assert.equal(r[0].required, false);
   assert.equal(r[0].d, 30);
@@ -229,28 +229,61 @@ await check("re-accept: nová účinná verzia VOP → status false, stará verz
   await su("alter table public.legal_documents enable trigger esblu_legal_documents_no_delete");
 });
 
-await check("grace period: existujúca firma (pred zverejnením) → 30 dní nepovinné, po lehote povinné", async () => {
+await check("grace period: existujúca firma → lehota beží OD OZNÁMENIA (company_terms_notices), owner-only, po lehote povinné", async () => {
   const C2 = "e3000000-0000-4000-8000-00000000000c";
+  const U4 = "e2000000-0000-4000-8000-0000000000c4";
+  const S4 = "e4000000-0000-4000-8000-0000000000c4";
+  await su(`insert into auth.users (id, email, email_confirmed_at) values ('${U4}', 'old-owner@example.invalid', now())`);
+  await su(`insert into auth.sessions (id, user_id) values ('${S4}', '${U4}')`);
   await su(`set session_replication_role = replica`);
-  await su(`insert into public.companies (id, owner_id, name, created_at) values ('${C2}', '${U.ownerB}', 'Stará firma s.r.o.', now() - interval '1 year')`);
-  await su(`insert into public.company_members (company_id, user_id, role, status, permissions) values ('${C2}', '${U.ownerB}', 'owner', 'active', '{}')`);
+  await su(`insert into public.companies (id, owner_id, name, created_at) values ('${C2}', '${U4}', 'Stará firma s.r.o.', now() - interval '1 year')`);
+  await su(`insert into public.company_members (company_id, user_id, role, status, permissions) values ('${C2}', '${U4}', 'owner', 'active', '{}'), ('${C2}', '${U.employee}', 'employee', 'active', '{}')`);
   await su(`set session_replication_role = origin`);
-  const req = await su<{ required_now: boolean; grace_until: string | null; has_current_acceptance: boolean }>(
-    `select * from public.esblu_company_terms_requirement('${C2}')`);
-  assert.equal(req[0].has_current_acceptance, false);
-  assert.equal(req[0].required_now, false, "počas lehoty nepovinné");
-  assert.ok(req[0].grace_until, "grace_until nastavené");
-  const fresh = await su<{ required_now: boolean }>(`select * from public.esblu_company_terms_requirement('${C.b}')`);
+  const oldOwner: Who = { role: "authenticated", uid: U4, session: S4 };
+  const req = async () => (await su<{ required_now: boolean; grace_until: string | null; needs_notice: boolean; notified_at: string | null }>(
+    `select * from public.esblu_company_terms_requirement('${C2}')`))[0];
+  let r0 = await req();
+  assert.equal(r0.needs_notice, true);
+  assert.equal(r0.notified_at, null);
+  assert.equal(r0.required_now, false, "bez oznámenia nie je povinné");
+  const fresh = await su<{ required_now: boolean; needs_notice: boolean }>(`select * from public.esblu_company_terms_requirement('${C.b}')`);
   assert.equal(fresh[0].required_now, true, "firma založená po zverejnení → povinné hneď");
+  assert.equal(fresh[0].needs_notice, false);
+  // owner zaznamená oznámenie (prvé zobrazenie v appke)
+  const n = await run(oldOwner, "select (public.esblu_record_company_terms_notice()).*", [], true);
+  assert.equal(n.layer, "ok", n.message);
+  assert.equal(n.data[0].company_id, C2);
+  assert.equal(n.data[0].terms_version, "1.2");
+  assert.equal(n.data[0].notified_user_id, U4);
+  const days = Math.round((Date.parse(String(n.data[0].grace_until)) - Date.parse(String(n.data[0].notified_at))) / 86_400_000);
+  assert.equal(days, 30);
+  assert.equal(String(n.data[0].effective_at), String(n.data[0].grace_until));
+  // opakovanie neposunie lehotu (append-only)
+  const again = await run(oldOwner, "select (public.esblu_record_company_terms_notice()).grace_until g", [], true);
+  assert.equal(String(again.data[0].g), String(n.data[0].grace_until));
+  r0 = await req();
+  assert.equal(r0.required_now, false, "počas lehoty nepovinné");
+  assert.ok(r0.grace_until);
+  // status pre ownera
+  const st = await run(oldOwner, "select needs_notice, notified_at, grace_until, required_now from public.esblu_get_my_company_terms_status()");
+  assert.equal(st.data[0].needs_notice, true);
+  assert.ok(st.data[0].notified_at);
+  // klient nemôže zapisovať priamo
+  const ins = await run(oldOwner, `update public.company_terms_notices set grace_until = now() + interval '1 year' where company_id = '${C2}'`);
+  assert.equal(ins.layer, "privilege");
   // po uplynutí lehoty
-  await su("alter table public.legal_documents disable trigger esblu_legal_documents_no_update");
-  await su("update public.legal_documents set reaccept_grace_until = now() - interval '1 second' where type = 'terms' and version = '1.2'");
-  const after = await su<{ required_now: boolean }>(`select * from public.esblu_company_terms_requirement('${C2}')`);
-  assert.equal(after[0].required_now, true, "po lehote povinné");
-  await su("update public.legal_documents set reaccept_grace_until = effective_at + interval '30 days' where type = 'terms' and version = '1.2'");
-  await su("alter table public.legal_documents enable trigger esblu_legal_documents_no_update");
+  await su(`update public.company_terms_notices set notified_at = now() - interval '31 days', effective_at = now() - interval '1 day', grace_until = now() - interval '1 day' where company_id = '${C2}'`);
+  assert.equal((await req()).required_now, true, "po lehote povinné");
   const fn = await su(`select 1 from pg_proc where proname = 'esblu_company_terms_requirement' and (has_function_privilege('authenticated', oid, 'execute') or has_function_privilege('anon', oid, 'execute'))`);
   assert.equal(fn.length, 0, "interná funkcia bez klientského EXECUTE");
+});
+
+await check("oznámenie: nevlastník ho nezaznamená; nová firma nepotrebuje oznámenie", async () => {
+  const e = await run(admin, "select public.esblu_record_company_terms_notice()");
+  assert.match(e.message, /ESBLU_NOT_ACTIVE_OWNER/);
+  const o = await run(ownerB, "select (public.esblu_record_company_terms_notice()).company_id c");
+  assert.equal(o.layer, "ok", o.message);
+  assert.equal(o.data[0].c, null, "nová firma — bez oznámenia (povinné hneď)");
 });
 
 await check("osobný gate: terms 1.1 alebo 1.2 používateľa neblokuje; registrácia 1.2 nespôsobí pending 1.1", async () => {
@@ -294,6 +327,7 @@ await check("rollback + re-apply na čistej DB (bez prijatí) prejde a je idempo
   await su("delete from public.legal_acceptance_evidence");
   await su("alter table public.legal_acceptance_evidence enable trigger all");
   await su("delete from public.company_dpa_acceptances");
+  await su("delete from public.company_terms_notices");
   await su("delete from public.user_legal_acceptances where document_type = 'terms' and version = '1.2'");
   await su("delete from public.legal_acceptance_evidence");
   await db.exec(read("supabase/rollback/20261112100000_b2b_terms_1_2_company_acceptance_rollback.sql"));

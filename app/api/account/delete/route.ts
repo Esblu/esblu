@@ -9,7 +9,7 @@ import { checkSubscriptionForDeletion } from "@/lib/account-deletion-subscriptio
 import type { SubscriptionDeletionCheck } from "@/lib/billing/deletion-guard";
 import type { Locale } from "@/lib/i18n/locales";
 import { orchestrateAccountDeletion, type OrchestrationResult } from "@/lib/account-deletion-orchestrator";
-import { supabaseDeletionDeps } from "@/lib/account-deletion-deps";
+import { supabaseDeletionDeps, supabaseTerminationDeps, type TerminationExportMode } from "@/lib/account-deletion-deps";
 import { resolveActiveMembershipForUser } from "@/lib/active-membership-server";
 import { requestSessionId } from "@/lib/request-session";
 
@@ -290,7 +290,13 @@ export async function POST(req: Request) {
     const admin = getSupabaseAdmin();
 
     // Telo požiadavky (scope: company | global; owner: fráza + forfeit potvrdenie).
-    let body: { confirmPhrase?: string; acknowledgeForfeit?: boolean; scope?: string } = {};
+    let body: {
+      confirmPhrase?: string;
+      acknowledgeForfeit?: boolean;
+      scope?: string;
+      // VOP 1.2 čl. 20.6 / DPA: ukončenie firmy s účtovnými dokladmi.
+      termination?: { exportMode?: unknown; confirmed?: unknown };
+    } = {};
     try {
       body = await req.json();
     } catch {
@@ -369,9 +375,25 @@ export async function POST(req: Request) {
           { status: 500 }
         );
       }
-      if (blocker) {
+      // VOP 1.2 čl. 20.6 / DPA: firma s účtovnými dokladmi / e-faktúrami sa dá
+      // ukončiť IBA auditovaným termination workflow — owner, fráza, výslovné
+      // potvrdenie a export (alebo výslovné vzdanie sa exportu). Registrácia
+      // u providera e-Faktúry blokuje vždy (najprv ukončenie registrácie).
+      const terminationMode: TerminationExportMode | null =
+        body.termination?.confirmed === true &&
+        (body.termination.exportMode === "exported" || body.termination.exportMode === "waived")
+          ? body.termination.exportMode
+          : null;
+      const terminationAllowed =
+        blocker === "FINALIZED_ACCOUNTING_DOCUMENTS" || blocker === "EINVOICE_RECORDS";
+      if (blocker && !(terminationAllowed && terminationMode)) {
         return Response.json(
-          { error: translate(locale, ownerDeletionBlockerMessageKey(blocker)), blocked: blocker, code: "ESBLU_ACCOUNTING_RECORDS_BLOCK_DELETION" },
+          {
+            error: translate(locale, ownerDeletionBlockerMessageKey(blocker)),
+            blocked: blocker,
+            code: "ESBLU_ACCOUNTING_RECORDS_BLOCK_DELETION",
+            termination_available: terminationAllowed,
+          },
           { status: 409 }
         );
       }
@@ -433,7 +455,7 @@ export async function POST(req: Request) {
       // (lib/account-deletion-orchestrator.ts). Odmietnutie DB = žiadny súbor
       // sa nezmaže.
       const ownerResult = await orchestrateAccountDeletion(
-        supabaseDeletionDeps(admin),
+        blocker && terminationMode ? supabaseTerminationDeps(admin, terminationMode) : supabaseDeletionDeps(admin),
         { kind: "owner", userId: user.id, companyId: membership.company_id, deleteAccount }
       );
       return orchestrationResponse(locale, "owner", ownerResult);

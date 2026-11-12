@@ -31,7 +31,11 @@ export const legalConfig = {
   // JEDINÉ miesto zmeny: VOP 1.2 čl. 1 odkazuje na stránku /kontakt, takže
   // zmena čísla (dočasné číslo → samostatné firemné) NEMENÍ text ani hash VOP.
   // Prázdne = PRODUKČNÝ HARD STOP (npm run check:b2b-terms-release zlyhá).
-  publicPhone: "" as string,
+  // 2026-11-12: DOČASNÝ verejný kontakt (schválený vlastníkom); neskôr sa
+  // nahradí samostatným firemným číslom IBA tu.
+  publicPhone: "0903 464 006" as string,
+  // Telefonická dostupnosť (zobrazuje /kontakt; text je v i18n slovníku).
+  publicPhoneHours: { days: "mon-fri", from: "10:00", to: "15:00" } as const,
   privacyEmail: "privacy@esblu.com",
 
   businessId: "57 815 941", // IČO
