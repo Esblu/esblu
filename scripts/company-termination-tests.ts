@@ -101,6 +101,31 @@ check("export eFaktúry (G1): životný cyklus — ID poskytovateľa, SBDH/AS4, 
   for (const e of l) for (const k of ["locked_until", "next_retry_at", "idempotency_key", "body_sha256", "delivery_id"]) assert.ok(!(k in e), k);
 });
 
+check("export evidence: dôkaz vzniká iba na serveri po vygenerovaní; dávky viazané na beh; ukončenie mapuje NOT_VERIFIED", () => {
+  const route = read("app/api/company/export/route.ts");
+  assert.match(route, /esblu_company_export_begin/);
+  assert.match(route, /esblu_company_export_part/);
+  assert.ok(route.indexOf("generateAsync") < route.indexOf("esblu_company_export_begin"), "dôkaz až po vygenerovaní data ZIP");
+  assert.match(route, /exportId = typeof body\.export_id === "string" && UUID_RE\.test/);
+  assert.match(route, /if \(!exportId\) return fail\(400, "BAD_REQUEST"\)/);
+  assert.doesNotMatch(route, /status:\s*"completed"|p_status/, "klient nikdy neposiela stav behu");
+  assert.match(route, /p_user_id: user\.id/);
+  assert.match(route, /p_company_id: companyId/);
+  const client = read("lib/company-export-client.ts");
+  assert.match(client, /export_id: exportId/);
+  assert.match(client, /completed: status === "completed"/);
+  assert.match(read("app/components/CompanyExportButton.tsx"), /if \(result\.completed\) onDone\?\.\(\)/);
+  assert.match(read("app/api/account/delete/route.ts"), /ESBLU_TERMINATION_EXPORT_NOT_VERIFIED: "settings\.errors\.terminationExportNotVerified"/);
+  const mig = read("supabase/migrations/20261113110000_company_export_evidence.sql");
+  assert.match(mig, /revoke all on table public\.company_export_runs from public, anon, authenticated/);
+  assert.match(mig, /before insert on public\.company_terminations/);
+  for (const [name, d] of [["sk", sk], ["en", en], ["de", de]] as const) {
+    const dict = d as unknown as { settings: { errors: Record<string, string>; companyExport: { errors: Record<string, string> } } };
+    assert.ok(dict.settings.errors.terminationExportNotVerified, `${name} terminationExportNotVerified`);
+    assert.ok(dict.settings.companyExport.errors.EXPORT_RUN_INVALID, `${name} EXPORT_RUN_INVALID`);
+  }
+});
+
 check("export: dávky, deduplikácia, bezpečné cesty, CSV", () => {
   assert.equal(exportFilePartCount(0), 1);
   assert.equal(exportFilePartCount(250, 100), 3);

@@ -1009,6 +1009,7 @@ const de = {
         OWNER_ONLY: "Nur der Inhaber kann den Export der Firmendaten herunterladen.",
         EXPORT_FAILED: "Der Export konnte nicht vorbereitet werden. Bitte versuchen Sie es erneut.",
         CHECKSUM_MISMATCH: "Die heruntergeladene Datei stimmt nicht mit der Prüfsumme überein. Bitte versuchen Sie den Export erneut.",
+        EXPORT_RUN_INVALID: "Der Export wurde nicht abgeschlossen und auf dem Server erfasst (fehlender Teil, fehlende Datei oder die Daten haben sich zwischenzeitlich geändert). Bitte starten Sie den Export erneut.",
       },
     },
     termination: {
@@ -1382,6 +1383,7 @@ const de = {
         "Die Kontolöschung ist fehlgeschlagen. Bitte versuchen Sie es erneut oder kontaktieren Sie den Support.",
       accountVerificationFailedContactSupport:
         "Die Kontolöschung konnte nicht vollständig überprüft werden. Bitte kontaktieren Sie den Support.",
+      terminationExportNotVerified: "Die Beendigung des Unternehmens als „exportiert“ erfordert einen vollständigen Datenexport aus Esblu aus den letzten 24 Stunden. Starten Sie zuerst den Export oder wählen Sie ausdrücklich die Beendigung ohne Export. Es wurde nichts gelöscht.",
       companyHasAccountingRecords:
         "Das Unternehmen hat ausgestellte oder empfangene Buchhaltungsbelege (Rechnungen, E-Rechnungen). Exportieren Sie diese zuerst (Übergabe an die Buchhaltung) und kontaktieren Sie den Support — Belege werden nicht automatisch gelöscht.",
       companyDeletionFailedRetry:

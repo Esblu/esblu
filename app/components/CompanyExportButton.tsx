@@ -20,12 +20,15 @@ export function CompanyExportButton({ onDone }: { onDone?: () => void }) {
         setProgress(t("settings.companyExport.progress", { done, total }))
       );
       setMessage({
-        tone: "success",
+        tone: result.completed ? "success" : "error",
         text: result.missingFiles > 0
           ? t("settings.companyExport.doneWithMissing", { count: result.missingFiles })
-          : t("settings.companyExport.done"),
+          : result.completed
+            ? t("settings.companyExport.done")
+            : t("settings.companyExport.errors.EXPORT_RUN_INVALID"),
       });
-      onDone?.();
+      // „Exportované“ sa ponúkne iba po serverom zaevidovanom kompletnom exporte.
+      if (result.completed) onDone?.();
     } catch (error) {
       const code = error instanceof CompanyExportError ? error.code : "EXPORT_FAILED";
       setMessage({ tone: "error", text: error instanceof CompanyExportError && error.message !== code ? error.message : t(`settings.companyExport.errors.${code}`) });

@@ -1008,6 +1008,7 @@ const en = {
         OWNER_ONLY: "Only the company owner can download the company data export.",
         EXPORT_FAILED: "The export could not be prepared. Please try again.",
         CHECKSUM_MISMATCH: "The downloaded file does not match its checksum. Please try the export again.",
+        EXPORT_RUN_INVALID: "The export was not completed and recorded on the server (missing batch, missing file or the data changed meanwhile). Please run the export again.",
       },
     },
     termination: {
@@ -1381,6 +1382,7 @@ const en = {
         "Account deletion failed. Please try again or contact support.",
       accountVerificationFailedContactSupport:
         "The account deletion could not be fully verified. Please contact support.",
+      terminationExportNotVerified: "Terminating the company as \"exported\" requires a complete data export created in Esblu within the last 24 hours. Run the export first, or explicitly choose termination without export. Nothing was deleted.",
       companyHasAccountingRecords:
         "The company has issued or received accounting documents (invoices, e-invoices). Export them first (Accountant handoff) and contact support — documents are not deleted automatically.",
       companyDeletionFailedRetry:

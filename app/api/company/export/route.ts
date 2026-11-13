@@ -33,6 +33,9 @@ export const runtime = "nodejs";
 export const maxDuration = 300;
 
 const PAGE = 1000;
+/** Verzia schémy exportu (manifest + server-side dôkaz company_export_runs). */
+const COMPANY_EXPORT_SCHEMA_VERSION = "2026-11-13.einvoice-lifecycle";
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const INVOICE_CHUNK = 200;
 
 type Row = Record<string, unknown>;
@@ -101,12 +104,16 @@ export async function POST(req: Request) {
 
   let part: "data" | "files" = "data";
   let index = 0;
+  let exportId = "";
   try {
-    const body = (await req.json()) as { part?: unknown; index?: unknown };
+    const body = (await req.json()) as { part?: unknown; index?: unknown; export_id?: unknown };
     if (body.part === "files") {
       part = "files";
       index = typeof body.index === "number" && Number.isInteger(body.index) && body.index >= 0 ? body.index : -1;
       if (index < 0) return fail(400, "BAD_REQUEST");
+      // Dávka súborov patrí k behu exportu založenému serverom pri data ZIP (dôkaz pre ukončenie firmy).
+      exportId = typeof body.export_id === "string" && UUID_RE.test(body.export_id) ? body.export_id : "";
+      if (!exportId) return fail(400, "BAD_REQUEST");
     } else if (body.part !== undefined && body.part !== "data") {
       return fail(400, "BAD_REQUEST");
     }
@@ -165,6 +172,7 @@ export async function POST(req: Request) {
       const manifest = {
         kind: "esblu_company_export",
         part: "data",
+        schema_version: COMPANY_EXPORT_SCHEMA_VERSION,
         company_id: companyId,
         generated_at: generatedAt,
         formats: ["JSON", "CSV (UTF-8, čiarka)"],
@@ -178,9 +186,25 @@ export async function POST(req: Request) {
       };
       zip.file("manifest.json", JSON.stringify(manifest, null, 2));
       const bytes = await zip.generateAsync({ type: "uint8array", compression: "DEFLATE", compressionOptions: { level: 6 } });
+      // Server-side dôkaz (company_export_runs): vzniká IBA tu, po vygenerovaní ZIP; klient ho nevie vytvoriť.
+      const fileParts = files.length > 0 ? exportFilePartCount(files.length) : 0;
+      const { data: runId, error: runError } = await admin.rpc("esblu_company_export_begin", {
+        p_user_id: user.id,
+        p_company_id: companyId,
+        p_schema_version: COMPANY_EXPORT_SCHEMA_VERSION,
+        p_files_total: files.length,
+        p_file_parts: fileParts,
+        p_data_sha256: sha256(bytes),
+      });
+      if (runError || typeof runId !== "string") {
+        console.error("company/export: evidencia exportu zlyhala:", runError?.code ?? "unknown");
+        return fail(500, "EXPORT_FAILED");
+      }
       return zipResponse(bytes, `esblu-export-udaje-${generatedAt.slice(0, 10)}.zip`, {
         "X-Esblu-Export-Files-Total": String(files.length),
         "X-Esblu-Export-File-Parts": String(exportFilePartCount(files.length)),
+        "X-Esblu-Export-Id": runId,
+        "X-Esblu-Export-Status": fileParts === 0 ? "completed" : "in_progress",
       });
     }
 
@@ -213,13 +237,34 @@ export async function POST(req: Request) {
       missing,
     }, null, 2));
     const bytes = await zip.generateAsync({ type: "uint8array", compression: "STORE" });
+    // Dávka zapísaná k behu exportu; posledná dávka bez chýbajúcich súborov = completed.
+    const { data: runStatus, error: partError } = await admin.rpc("esblu_company_export_part", {
+      p_export_id: exportId,
+      p_user_id: user.id,
+      p_company_id: companyId,
+      p_index: index,
+      p_files_total: files.length,
+      p_part_sha256: sha256(bytes),
+      p_missing: missing.length,
+    });
+    if (partError || typeof runStatus !== "string") {
+      const code = partError?.message?.match(/ESBLU_EXPORT_[A-Z_]+/)?.[0] ?? "EXPORT_FAILED";
+      console.error("company/export: evidencia dávky zlyhala:", code);
+      return fail(409, "EXPORT_RUN_INVALID");
+    }
     return zipResponse(bytes, `esblu-export-subory-${index + 1}-z-${parts}.zip`, {
       "X-Esblu-Export-File-Parts": String(parts),
       "X-Esblu-Export-Missing": String(missing.length),
+      "X-Esblu-Export-Id": exportId,
+      "X-Esblu-Export-Status": runStatus,
     });
   } catch (error) {
     const code = error instanceof Error && /^EXPORT_READ_FAILED:[a-z_]+:[A-Za-z0-9]+$/.test(error.message) ? error.message : "EXPORT_FAILED";
     console.error("company/export zlyhal:", code);
+    // Rozpracovaný beh sa označí failed — nikdy sa nepočíta ako dôkaz pre ukončenie firmy.
+    if (part === "files" && exportId) {
+      await admin.rpc("esblu_company_export_fail", { p_export_id: exportId, p_company_id: companyId, p_error_code: "EXPORT_FAILED" }).then(() => undefined, () => undefined);
+    }
     return fail(500, "EXPORT_FAILED");
   }
 }

@@ -18,7 +18,7 @@ async function sha256Hex(bytes: Uint8Array): Promise<string> {
   return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-async function requestPart(locale: Locale, body: { part: "data" } | { part: "files"; index: number }) {
+async function requestPart(locale: Locale, body: { part: "data" } | { part: "files"; index: number; export_id: string }) {
   const { data } = await supabase.auth.getSession();
   const token = data.session?.access_token;
   if (!token) throw new CompanyExportError("UNAUTHORIZED", null);
@@ -43,16 +43,21 @@ async function requestPart(locale: Locale, body: { part: "data" } | { part: "fil
 export async function downloadCompanyExport(
   locale: Locale,
   onProgress?: (done: number, total: number) => void
-): Promise<{ fileParts: number; missingFiles: number }> {
+): Promise<{ fileParts: number; missingFiles: number; exportId: string; completed: boolean }> {
   const headers = await requestPart(locale, { part: "data" });
+  const exportId = headers.get("x-esblu-export-id") ?? "";
+  if (!exportId) throw new CompanyExportError("EXPORT_FAILED", null);
   const total = Number(headers.get("x-esblu-export-files-total") ?? "0");
   const fileParts = total > 0 ? Number(headers.get("x-esblu-export-file-parts") ?? "1") : 0;
+  let status = headers.get("x-esblu-export-status") ?? "in_progress";
   onProgress?.(1, fileParts + 1);
   let missingFiles = 0;
   for (let i = 0; i < fileParts; i++) {
-    const h = await requestPart(locale, { part: "files", index: i });
+    const h = await requestPart(locale, { part: "files", index: i, export_id: exportId });
     missingFiles += Number(h.get("x-esblu-export-missing") ?? "0");
+    status = h.get("x-esblu-export-status") ?? status;
     onProgress?.(i + 2, fileParts + 1);
   }
-  return { fileParts, missingFiles };
+  // completed = server zaevidoval kompletný export (podmienka ukončenia firmy v režime „exportované“).
+  return { fileParts, missingFiles, exportId, completed: status === "completed" };
 }

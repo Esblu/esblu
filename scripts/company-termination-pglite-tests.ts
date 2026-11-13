@@ -236,12 +236,92 @@ await check("registrácia u eFaktúra providera → stop pred výmazom", async (
   assert.deepEqual(await companyRows(C.a), before.a);
 });
 
+// -----------------------------------------------------------------------------
+// Server-side dôkaz exportu (20261113110000): 'exported' bez dokončeného exportu = BLOCK
+// -----------------------------------------------------------------------------
+const SHA = (c: string) => c.repeat(64);
+const beginSql = "select public.esblu_company_export_begin($1, $2, 'test.v1', $3, $4, $5) id";
+const partSql = "select public.esblu_company_export_part($1, $2, $3, $4, $5, $6, $7) st";
+const exportRuns = async () => count(`select count(*)::int n from public.company_export_runs where company_id = '${C.a}'`);
+async function beginRun(user: string, company: string, files: number, parts: number): Promise<string> {
+  const o = await run(svc, beginSql, [user, company, files, parts, SHA("a")], true);
+  assert.equal(o.layer, "ok", o.message);
+  return String(o.data[0].id);
+}
+const expectBlocked = async (label: string) => {
+  const o = await run(svc, commitSql, [U.owner, C.a, "exported"]);
+  assert.match(o.message, /ESBLU_TERMINATION_EXPORT_NOT_VERIFIED/, label);
+  assert.deepEqual(await companyRows(C.a), before.a, `${label}: nič sa nezmazalo`);
+  assert.equal(await count(`select count(*)::int n from public.company_terminations where status in ('executing','completed')`), 0, label);
+  assert.equal(await count(`select count(*)::int n from public.account_deletion_cleanup_jobs where company_id = '${C.a}'`), 0, label);
+};
+
+await check("export evidence: klient (owner/admin/employee/anon) nemá prístup k tabuľke ani RPC — dôkaz nevie vytvoriť", async () => {
+  for (const w of [owner, admin, employee, { role: "anon" } as Who]) {
+    for (const sql of [
+      "select * from public.company_export_runs",
+      `insert into public.company_export_runs (company_id, requested_by, status, schema_version, files_total, file_parts, data_sha256, completed_at) values ('${C.a}', '${U.owner}', 'completed', 'x', 0, 0, '${SHA("a")}', now())`,
+    ]) assert.equal((await run(w, sql)).layer, "privilege", `${w.role} ${sql.slice(0, 20)}`);
+    const o = await run(w, beginSql, [U.owner, C.a, 0, 0, SHA("a")]);
+    assert.equal(o.layer, "privilege", `${w.role} begin`);
+  }
+  assert.equal(await exportRuns(), 0);
+});
+
+await check("BLOCK: export neprebehol → ESBLU_TERMINATION_EXPORT_NOT_VERIFIED, nič sa nezmaže", async () => {
+  await expectBlocked("bez exportu");
+});
+
+await check("BLOCK: export iba začal (in_progress, chýbajú dávky) / zlyhal / chýbajúce súbory / zmenené údaje", async () => {
+  const r1 = await beginRun(U.owner, C.a, 150, 2);
+  assert.equal((await run(svc, partSql, [r1, U.owner, C.a, 0, 150, SHA("b"), 0], true)).data[0].st, "in_progress");
+  await expectBlocked("in_progress");
+  const r2 = await beginRun(U.owner, C.a, 10, 1);
+  await run(svc, "select public.esblu_company_export_fail($1, $2, 'EXPORT_FAILED')", [r2, C.a], true);
+  await expectBlocked("failed");
+  const r3 = await beginRun(U.owner, C.a, 10, 1);
+  assert.equal((await run(svc, partSql, [r3, U.owner, C.a, 0, 10, SHA("c"), 2], true)).data[0].st, "failed");
+  await expectBlocked("chýbajúce súbory");
+  const r4 = await beginRun(U.owner, C.a, 10, 1);
+  assert.equal((await run(svc, partSql, [r4, U.owner, C.a, 0, 11, SHA("c"), 0], true)).data[0].st, "failed");
+  await expectBlocked("zmenený počet súborov");
+  const st = await su<{ status: string; error_code: string }>(`select status, error_code from public.company_export_runs where id in ('${r2}','${r3}','${r4}') order by created_at`);
+  assert.deepEqual(st.map((x) => x.error_code), ["EXPORT_FAILED", "FILES_MISSING", "FILES_CHANGED"]);
+});
+
+await check("BLOCK: export inej firmy / iného používateľa nepomôže; cudzí beh sa nedá dokončiť", async () => {
+  await beginRun(U.ownerB, C.b, 0, 0); // dokončený export firmy B
+  await expectBlocked("export inej firmy");
+  // admin / employee firmy A nemôže založiť ani dokončiť export (owner-only aj v DB)
+  for (const u of [U.admin, U.employee, U.ownerB]) {
+    const o = await run(svc, beginSql, [u, C.a, 0, 0, SHA("a")]);
+    assert.match(o.message, /ESBLU_NOT_ACTIVE_OWNER/, u);
+  }
+  const rA = await beginRun(U.owner, C.a, 5, 1);
+  const cross = await run(svc, partSql, [rA, U.ownerB, C.b, 0, 5, SHA("d"), 0]);
+  assert.match(cross.message, /ESBLU_EXPORT_NOT_FOUND/, "beh firmy A nedokončí owner firmy B");
+  await expectBlocked("beh A nedokončený");
+});
+
+await check("BLOCK: dokončený export starší ako 24 h sa nepočíta", async () => {
+  const r = await beginRun(U.owner, C.a, 0, 0);
+  await su(`update public.company_export_runs set created_at = now() - interval '2 days', completed_at = now() - interval '2 days' where id = '${r}'`);
+  await expectBlocked("starý export");
+});
+
+await check("waived: výslovné vzdanie sa exportu nevyžaduje dôkaz (samostatný režim; potvrdenie rieši route)", async () => {
+  const o = await run(svc, commitSql, [U.owner, C.a, "waived"]); // rollback — iba overenie, že brána neblokuje
+  assert.equal(o.layer, "ok", o.message);
+  assert.deepEqual(await companyRows(C.a), before.a, "rollback");
+});
+
 await check("zlyhanie uprostred procesu → rollback celku, žiadny partial delete ani auditný executing záznam", async () => {
   await db.exec(`
     create function public.test_fail_company_delete() returns trigger language plpgsql as $f$
     begin raise exception 'TEST_INJECTED_FAILURE'; end $f$;
     create trigger test_fail_company_delete before delete on public.companies for each row execute function public.test_fail_company_delete();
   `);
+  await beginRun(U.owner, C.a, 0, 0); // overený export (inak by brána zastavila skôr)
   const o = await run(svc, commitSql, [U.owner, C.a, "exported"]);
   assert.match(o.message, /TEST_INJECTED_FAILURE/);
   await db.exec(`drop trigger test_fail_company_delete on public.companies; drop function public.test_fail_company_delete();`);
@@ -251,6 +331,22 @@ await check("zlyhanie uprostred procesu → rollback celku, žiadny partial dele
   const f = await run(svc, "select public.esblu_company_termination_record_failure($1, $2, 'exported', 'TEST_INJECTED_FAILURE')", [U.owner, C.a], true);
   assert.equal(f.layer, "ok", f.message);
   assert.equal(await count(`select count(*)::int n from public.company_terminations where status = 'failed' and error_code = 'TEST_INJECTED_FAILURE'`), 1);
+});
+
+let exportRunId = "";
+await check("PASS: owner dokončí export (data + všetky dávky) → completed so SHA-256 dávok", async () => {
+  exportRunId = await beginRun(U.owner, C.a, 150, 2);
+  assert.equal((await run(svc, partSql, [exportRunId, U.owner, C.a, 1, 150, SHA("e"), 0], true)).data[0].st, "in_progress");
+  assert.equal((await run(svc, partSql, [exportRunId, U.owner, C.a, 1, 150, SHA("e"), 0], true)).data[0].st, "in_progress", "opakovaná dávka sa nezapočíta 2×");
+  assert.equal((await run(svc, partSql, [exportRunId, U.owner, C.a, 0, 150, SHA("f"), 0], true)).data[0].st, "completed");
+  const r = await su<{ status: string; parts_done: number[]; part_sha256: Record<string, string>; completed_at: string | null }>(
+    `select status, parts_done, part_sha256, completed_at from public.company_export_runs where id = '${exportRunId}'`);
+  assert.equal(r[0].status, "completed");
+  assert.deepEqual(r[0].parts_done, [0, 1]);
+  assert.deepEqual(Object.keys(r[0].part_sha256).sort(), ["0", "1"]);
+  assert.ok(r[0].completed_at);
+  const again = await run(svc, partSql, [exportRunId, U.owner, C.a, 0, 150, SHA("f"), 0]);
+  assert.match(again.message, /ESBLU_EXPORT_NOT_IN_PROGRESS/, "dokončený beh sa nedá meniť");
 });
 
 let terminationId = "";
@@ -270,6 +366,9 @@ await check("retry po zlyhaní → úspech: firma A celá preč, Storage ciele v
     `select status, export_mode, deleted_counts, storage_target_count from public.company_terminations where id = '${terminationId}'`);
   assert.equal(t[0].status, "completed");
   assert.equal(t[0].export_mode, "exported");
+  const link = await su<{ export_run_id: string }>(`select export_run_id from public.company_terminations where id = '${terminationId}'`);
+  assert.equal(link[0].export_run_id, exportRunId, "ukončenie odkazuje na overený export");
+  assert.equal(await count(`select count(*)::int n from public.company_export_runs where id = '${exportRunId}'`), 1, "dôkaz exportu prežije výmaz firmy");
   assert.equal(t[0].deleted_counts.invoices, 2);
   assert.equal(t[0].deleted_counts.einvoice_events, 1);
   assert.equal(t[0].storage_target_count, 3);
@@ -313,6 +412,16 @@ await check("rollback migrácie (audit ostáva) + re-apply je idempotentné", as
   await db.exec(read(f));
   await db.exec(read(f));
   assert.equal((await su("select 1 from pg_proc where proname = 'esblu_company_termination_commit'")).length, 1);
+});
+
+await check("rollback 20261113110000 (dôkazy ostávajú) + re-apply idempotentné", async () => {
+  await db.exec(read("supabase/rollback/20261113110000_company_export_evidence_rollback.sql"));
+  assert.equal((await su("select 1 from pg_trigger where tgname = 'esblu_company_termination_export_gate'")).length, 0);
+  assert.notEqual((await su("select to_regclass('public.company_export_runs') r"))[0].r, null, "dôkazy sa nemažú");
+  const f = "supabase/migrations/20261113110000_company_export_evidence.sql";
+  await db.exec(read(f));
+  await db.exec(read(f));
+  assert.equal((await su("select 1 from pg_trigger where tgname = 'esblu_company_termination_export_gate'")).length, 1);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

@@ -799,6 +799,14 @@
       "service_role": "SELECT,INSERT,UPDATE,DELETE",
       "note": ""
     },
+    "company_export_runs": {
+      "domain": "legal",
+      "access": "D",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT",
+      "note": "VOP 20.6 / DPA server-side dokaz exportu firmy (bez FK, iba metadata+SHA-256); zapis iba esblu_company_export_begin/_part/_fail; podmienka ukoncenia v rezime exported"
+    },
     "company_terminations": {
       "domain": "legal",
       "access": "D",
@@ -863,6 +871,9 @@
     "esblu_company_price_tier(uuid)",
     "esblu_company_storage_bytes(uuid)",
     "esblu_company_storage_status(uuid)",
+    "esblu_company_export_begin(uuid,uuid,text,integer,integer,text)",
+    "esblu_company_export_fail(uuid,uuid,text)",
+    "esblu_company_export_part(uuid,uuid,uuid,integer,integer,text,integer)",
     "esblu_company_termination_commit(uuid,uuid,boolean,text)",
     "esblu_company_termination_in_progress()",
     "esblu_company_termination_record_failure(uuid,uuid,text,text)",

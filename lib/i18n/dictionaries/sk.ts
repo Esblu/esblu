@@ -1022,6 +1022,7 @@ const sk = {
         OWNER_ONLY: "Export údajov firmy môže stiahnuť iba vlastník firmy.",
         EXPORT_FAILED: "Export sa nepodarilo pripraviť. Skúste to prosím znova.",
         CHECKSUM_MISMATCH: "Stiahnutý súbor sa nezhoduje s odtlačkom. Skúste export znova.",
+        EXPORT_RUN_INVALID: "Export nebol dokončený a zaevidovaný na serveri (chýbajúca dávka, chýbajúci súbor alebo sa údaje medzičasom zmenili). Spustite export znova.",
       },
     },
     termination: {
@@ -1395,6 +1396,7 @@ const sk = {
         "Zrušenie účtu zlyhalo. Skús to prosím znova alebo kontaktuj podporu.",
       accountVerificationFailedContactSupport:
         "Zrušenie účtu sa nepodarilo úplne overiť. Kontaktuj podporu.",
+      terminationExportNotVerified: "Ukončenie firmy v režime „exportované“ vyžaduje kompletný export údajov vytvorený v Esblu za posledných 24 hodín. Najprv spustite export, alebo zvoľte výslovné ukončenie bez exportu. Nič sa nezmazalo.",
       companyHasAccountingRecords:
         "Firma má vystavené alebo prijaté účtovné doklady (faktúry, e-faktúry). Pred zrušením si ich exportuj (Odovzdanie účtovníkovi) a kontaktuj podporu — doklady sa nemažú automaticky.",
       companyDeletionFailedRetry:

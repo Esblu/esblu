@@ -93,6 +93,8 @@ function orchestrationResponse(locale: Locale, role: string, result: Orchestrati
         ESBLU_MULTI_COMPANY_NOT_MIGRATED: "settings.errors.deletionFailedRetry",
         // eInvoice ↔ zrušenie firmy (20261013100000): súbeh medzi preflightom a transakciou.
         ESBLU_ACCOUNTING_RECORDS_BLOCK_DELETION: "settings.errors.companyHasAccountingRecords",
+        // Ukončenie „exported“ bez serverom zaevidovaného kompletného exportu (20261113110000) — nič sa nezmazalo.
+        ESBLU_TERMINATION_EXPORT_NOT_VERIFIED: "settings.errors.terminationExportNotVerified",
       };
       const key = rule[result.code];
       return Response.json(
