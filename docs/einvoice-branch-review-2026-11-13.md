@@ -48,3 +48,9 @@ Feature gating: production bez env → `null`; live vyžaduje provider + live k�
 | Staging smoke Preview `/` | PASS (200) |
 | Živý sandbox A/B + provider-signed webhook + E2E A→B | PASS (12.–13. 11.) |
 | Produkcia | 0 riadkov vo všetkých `einvoice_*`, 0 XML, migrácia `20261112193351`, webhook 503 `NOT_CONFIGURED` |
+
+## Doplnok 2026-11-13 — G1 / S3 / M1
+
+- **G1:** company export obsahuje `einvoice_events` (kanonická append-only história stavov) a odvodený `data/einvoice_lifecycle.{json,csv}` — 1 riadok na prijatý doklad / pokus o odoslanie: ID poskytovateľa (`provider_received_id` / `provider_submission_id`, `document_id`), SBDH InstanceIdentifier a AS4 message ID (outbound; pri inbound sú v exportovanom SBDH origináli), SHA-256 + veľkosť + cesta k originálu v exporte súborov, časy prijatia / ACK / odoslania / doručenia / zlyhania, stav, posledný kód chyby, delivery evidence, história stavov. Interné logy (`einvoice_webhook_events`, `_rejections`, `_ops_audit`, `_event_cursors`, `_enroll_attempts`, `_rollout`, `_organizations`) sa neexportujú (uvedené v manifeste). Termination používa ten istý export; samoobslužné ukončenie je pri registrácii u poskytovateľa zablokované. Zistenie: `export_mode = exported` je deklarácia používateľa (server neoveruje dokončený export) — termination flow na `main` nemenený.
+- **S3:** migrácia `20261113100000_einvoice_webhook_body_sha256_idx.sql` — ne-UNIQUE B-tree `(provider, environment, body_sha256)` podľa WHERE v `webhookBodySeen`; rollback `supabase/rollback/20261113100000_einvoice_webhook_body_sha256_idx_rollback.sql`. Aplikovaná iba na staging `esblu-test` (Index Scan overený). **Pri merge/release treba migráciu aplikovať aj v produkcii podľa production migration runbooku (aditívna, bez dát).**
+- **M1:** runbook `docs/einvoice-operations-runbook.md` §12 (`RECIPIENT_MISMATCH`). Kód fail-closed nemenený, žiadne UI ani automatický reprocess.

@@ -289,3 +289,45 @@ firmy — jeden tenant by inak mohol vyčerpať kapacitu ostatným, (b) Esblu ne
 skúšanie overovacích kódov, (c) poskytovateľ môže pri opakovaných chybách zablokovať organizáciu.
 Ukladá sa iba firma, používateľ, čas a výsledok (`einvoice_enroll_attempts`, 30 dní) — nikdy kód ani hash.
 Uvoľnenie pre konkrétnu firmu (iba po overení): `delete from public.einvoice_enroll_attempts where company_id = '<id>';`
+
+## 12. `RECIPIENT_MISMATCH` — prijatý doklad nesedí s firmou (fail closed)
+
+**Čo znamená.** Prijatý doklad (`einvoice_inbound.processing_status = failed`, `last_error_code = RECIPIENT_MISMATCH`)
+nebol priradený firme, lebo príjemca v doklade nesedí s overenou Peppol identitou organizácie firmy.
+Nevznikol koncept, **poskytovateľovi sa neodoslal ACK**, originál (SBDH + UBL) je uložený nezmenený pre kontrolu.
+Detail je v poslednej udalosti `einvoice_events.provider_code`:
+
+| Detail | Príčina |
+|---|---|
+| `RECIPIENT_UNVERIFIED` | organizácia firmy nemá `participant_id` (enroll nedokončený / zrušený) |
+| `RECIPIENT_ENVELOPE_MISMATCH` | SBDH `Receiver` (Peppol smerovanie) ≠ `participant_id` organizácie |
+| `RECIPIENT_MISSING` | v UBL chýba BT-49 (`cac:AccountingCustomerParty/…/cbc:EndpointID`) |
+| `RECIPIENT_ENDPOINT_MISMATCH` | BT-49 v UBL ≠ `participant_id` organizácie |
+
+**Čo skontrolovať (iba čítanie, service_role, bez obsahu XML v tikete):**
+1. **Provider organization ID** — `einvoice_inbound.provider` + riadok `einvoice_organizations` firmy (`provider_org_id`, `environment`, `reception_status`, `participant_id`). Doklad bol stiahnutý zo schránky tejto org.
+2. **Company mapping** — `einvoice_organizations (provider, environment, provider_org_id)` je unikátne → presne jedna `company_id`. Over, že mapovanie zodpovedá firme, ktorá u poskytovateľa naozaj vlastní túto organizáciu (porovnaj s portálom / `GET /v1/agent/organizations/{id}`).
+3. **SBDH recipient** — `sh:StandardBusinessDocumentHeader/sh:Receiver/sh:Identifier` v uloženom origináli.
+4. **UBL recipient** — BT-49 `schemeID:EndpointID` vo vnorenom UBL.
+5. Porovnaj (case-insensitive, bez medzier) s `participant_id` organizácie. Over SHA-256 originálu = `xml_sha256`.
+
+**Zakázané:**
+- **Nikdy ručne nemeň `company_id`** (ani `provider_org_id` / cestu / hash) len aby doklad prešiel — identita je write-once a zámena firmy = únik údajov inej firme.
+- Nemeň `participant_id` na hodnotu z dokladu bez overenia u poskytovateľa a FS.
+- Neposielaj ACK ručne; doklad, ktorý nepatrí firme, sa nesmie potvrdiť jej menom.
+
+**Kedy je opätovné spracovanie bezpečné (všetko musí platiť):**
+1. Príčina je opravená **pri zdroji** — napr. dokončený enroll (správny `participant_id` od poskytovateľa), opravené mapovanie organizácie po overení u poskytovateľa, alebo odosielateľ poslal opravený doklad.
+2. Po oprave SBDH `Receiver` **aj** BT-49 dokladu sedia s `participant_id` organizácie **tej istej** firmy.
+3. Ak doklad patrí inej firme / inému participantovi → **nereprocessuj**; eskaluj na poskytovateľa (doklad doručený do zlej schránky) a odosielateľa.
+
+**Ako (iba po splnení podmienok):** `POST /api/einvoice/inbound/[id]/reprocess` s `{confirm_action:true}` používateľom s `finance.manage`
+(UI tlačidlo sa zámerne neponúka). Akcia je auditovaná (`einvoice_events`, `provider_code = OPERATOR_INBOUND_REPROCESS`, `actor_user_id`).
+Procesor znova overí príjemcu — ak stále nesedí, riadok sa vráti do `RECIPIENT_MISMATCH` (fail closed).
+
+**Overenie po reprocess (žiadna duplicita):**
+- `select count(*) from einvoice_inbound where provider_received_id = '<id>'` = 1,
+- `select count(*) from invoices where transport_message_id = '<id>'` ≤ 1 a `company_id` = firma z mapovania,
+- `select count(*) from einvoice_events where inbound_id = '<inbound_id>' and to_state = 'acknowledged'` ≤ 1,
+- u poskytovateľa doklad už nie je v `GET /v1/agent/peppol/received?acknowledged=false`,
+- iná firma nevidí doklad (RLS) ani nemá nový koncept / partnera.
