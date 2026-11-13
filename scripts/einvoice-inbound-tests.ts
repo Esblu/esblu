@@ -126,6 +126,7 @@ for (const migration of [
   "20261008100009_taxed_advance_deduction_lines.sql",
   "20261008100010_received_advance_match_safeupdate.sql",
   "20261008100011_einvoice_outbound_transport_ids.sql",
+  "20261113100000_einvoice_webhook_body_sha256_idx.sql",
 ]) {
   try {
     await db.exec(read(`supabase/migrations/${migration}`));
@@ -1054,6 +1055,23 @@ await check("replay z portálu po ZLYHANOM spracovaní (nové X-Webhook-Id, rovn
   // ďalší replay toho istého tela (teraz už spracované) → DUPLICATE
   const again = await webhook(body, "dlv-portal-1-replay-2");
   assert.deepEqual(again, { status: 200, body: { code: "DUPLICATE" } });
+});
+
+await check("S3: index (provider, environment, body_sha256) existuje, nie je UNIQUE a lookup webhookBodySeen ho používa", async () => {
+  const idx = (await sql<{ def: string }>("select indexdef def from pg_indexes where schemaname = 'public' and indexname = 'einvoice_webhook_events_body_lookup_idx'")).rows[0];
+  assert.ok(idx, "index chýba");
+  assert.doesNotMatch(idx.def, /UNIQUE/i);
+  assert.match(idx.def, /\(provider, environment, body_sha256\)/);
+  await sql("set enable_seqscan = off");
+  try {
+    const plan = (await sql<{ "QUERY PLAN": string }>(
+      "explain select id from public.einvoice_webhook_events where provider = 'mock' and environment = 'sandbox' and body_sha256 = $1 and delivery_id <> 'x' and processing_status in ('processed','ignored','rejected') limit 1",
+      ["a".repeat(64)]
+    )).rows.map((r) => r["QUERY PLAN"]).join("\n");
+    assert.match(plan, /einvoice_webhook_events_body_lookup_idx/);
+  } finally {
+    await sql("set enable_seqscan = on");
+  }
 });
 
 await check("čítanie: owner a accountant vidia inbound + koncepty; admin iba s finance.view áno; admin bez financií a employee nie", async () => {

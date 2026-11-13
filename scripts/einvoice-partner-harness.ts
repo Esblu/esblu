@@ -72,6 +72,7 @@ export const EINVOICE_MIGRATIONS = [
   "20261008100009_taxed_advance_deduction_lines.sql",
   "20261008100010_received_advance_match_safeupdate.sql",
   "20261008100011_einvoice_outbound_transport_ids.sql",
+  "20261113100000_einvoice_webhook_body_sha256_idx.sql",
 ];
 
 async function loadPglite(): Promise<Db> {
