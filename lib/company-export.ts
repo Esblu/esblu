@@ -54,6 +54,8 @@ export const COMPANY_EXPORT_TABLES: ExportTableSpec[] = [
   { table: "received_advance_links", scope: "company" },
   { table: "einvoice_inbound", scope: "company" },
   { table: "einvoice_outbound", scope: "company" },
+  // Kanonická história stavov e-faktúry (append-only, firma z mapovania) — preukázanie životného cyklu/doručenia.
+  { table: "einvoice_events", scope: "company" },
   { table: "invoice_items", scope: "invoice" },
   { table: "invoice_parties", scope: "invoice" },
   { table: "invoice_tax_breakdowns", scope: "invoice" },
@@ -72,7 +74,7 @@ export const COMPANY_EXPORT_EXCLUDED = [
   "ai_processing_usage, ai_scan_usage, ai_usage_monthly (kvóty a ochrana pred zneužitím)",
   "assistant_action_confirmations, assistant_conversation_contexts (krátkodobý technický kontext, hlasové nahrávky sa neuchovávajú)",
   "notification_*, push_* (technické doručovanie upozornení)",
-  "einvoice_events, einvoice_webhook_events, einvoice_enroll_attempts, einvoice_organizations, einvoice_rollout (technický stav prenosu)",
+  "einvoice_webhook_events, einvoice_webhook_rejections, einvoice_enroll_attempts, einvoice_organizations, einvoice_rollout, einvoice_event_cursors, einvoice_ops_audit (interné technické a bezpečnostné záznamy prenosu; kanonická história dokladu je v einvoice_events a einvoice_lifecycle)",
   "document_download_events, document_export_*, accounting_handoff_* (evidencia sťahovaní)",
   "session_active_company, user_active_company, media_deletion_queue (technické)",
 ];
@@ -141,4 +143,103 @@ export function rowsToCsv(rows: Record<string, unknown>[]): string {
   const lines = [columns.map(csvCell).join(",")];
   for (const row of rows) lines.push(columns.map((c) => csvCell(row[c])).join(","));
   return `﻿${lines.join("\r\n")}\r\n`;
+}
+
+// -----------------------------------------------------------------------------
+// eFaktúra — kanonický životný cyklus dokladu (odvodený súhrn pre zákazníka).
+// Jeden riadok na prijatý doklad / pokus o odoslanie: identifikátory poskytovateľa,
+// SHA-256 originálu, cesta k originálu v exporte súborov, časy a história stavov.
+// Iba z už exportovaných tabuliek (einvoice_inbound / einvoice_outbound /
+// einvoice_events / invoices) — žiadne webhook ani bezpečnostné logy.
+// -----------------------------------------------------------------------------
+
+type ExportRow = Record<string, unknown>;
+
+export type EinvoiceLifecycleEntry = {
+  direction: "inbound" | "outbound";
+  einvoice_id: string;
+  invoice_id: string | null;
+  document_number: string | null;
+  document_type: string | null;
+  state: string | null;
+  provider: string | null;
+  environment: string | null;
+  /** inbound: ID prijatého dokladu u poskytovateľa; outbound: ID podania (connector/send invoice_id). */
+  provider_reference: string | null;
+  /** outbound: document_id poskytovateľa (ak ho vrátil). */
+  provider_document_id: string | null;
+  counterparty_participant_id: string | null;
+  /** outbound: SBDH InstanceIdentifier; inbound: je súčasťou exportovaného originálu (SBDH obálka). */
+  sbdh_instance_identifier: string | null;
+  as4_message_id: string | null;
+  sha256: string | null;
+  size_bytes: number | null;
+  original_file: string | null;
+  attempt: number | null;
+  received_at: string | null;
+  acknowledged_at: string | null;
+  sent_at: string | null;
+  delivered_at: string | null;
+  failed_at: string | null;
+  last_error_code: string | null;
+  delivery_evidence: unknown;
+  history: Array<{ at: string | null; from: string | null; to: string | null; source: string | null; provider_code: string | null }>;
+};
+
+const str = (v: unknown): string | null => (typeof v === "string" && v.length > 0 ? v : null);
+const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : typeof v === "string" && /^\d+$/.test(v) ? Number(v) : null);
+
+export function buildEinvoiceLifecycle(input: {
+  inbound: ExportRow[];
+  outbound: ExportRow[];
+  events: ExportRow[];
+  invoices: ExportRow[];
+}): EinvoiceLifecycleEntry[] {
+  const byInbound = new Map<string, ExportRow[]>();
+  const byOutbound = new Map<string, ExportRow[]>();
+  for (const e of input.events) {
+    const key = str(e.inbound_id) ?? str(e.outbound_id);
+    if (!key) continue;
+    const map = str(e.inbound_id) ? byInbound : byOutbound;
+    const list = map.get(key) ?? [];
+    list.push(e);
+    map.set(key, list);
+  }
+  const history = (rows: ExportRow[] | undefined) =>
+    [...(rows ?? [])]
+      .sort((a, b) => String(a.created_at ?? "").localeCompare(String(b.created_at ?? "")) || String(a.id ?? "").localeCompare(String(b.id ?? "")))
+      .map((e) => ({ at: str(e.created_at), from: str(e.from_state), to: str(e.to_state), source: str(e.source), provider_code: str(e.provider_code) }));
+  const failedAt = (h: EinvoiceLifecycleEntry["history"]) => h.find((x) => x.to === "failed" || x.to === "rejected")?.at ?? null;
+  const invoiceNumber = new Map(input.invoices.map((i) => [String(i.id), str(i.invoice_number) ?? str(i.supplier_invoice_number)]));
+  const file = (path: unknown) => (str(path) ? zipSafePath("einvoice-documents", String(path)) : null);
+
+  const out: EinvoiceLifecycleEntry[] = [];
+  for (const r of input.inbound) {
+    const h = history(byInbound.get(String(r.id)));
+    out.push({
+      direction: "inbound", einvoice_id: String(r.id), invoice_id: str(r.invoice_id),
+      document_number: str(r.document_number), document_type: str(r.document_type), state: str(r.processing_status),
+      provider: str(r.provider), environment: str(r.environment),
+      provider_reference: str(r.provider_received_id), provider_document_id: null,
+      counterparty_participant_id: str(r.sender_participant_id), sbdh_instance_identifier: null, as4_message_id: null,
+      sha256: str(r.xml_sha256), size_bytes: num(r.xml_size_bytes), original_file: file(r.xml_storage_path), attempt: null,
+      received_at: str(r.received_at), acknowledged_at: str(r.acknowledged_at), sent_at: null, delivered_at: null,
+      failed_at: failedAt(h), last_error_code: str(r.last_error_code), delivery_evidence: null, history: h,
+    });
+  }
+  for (const r of input.outbound) {
+    const h = history(byOutbound.get(String(r.id)));
+    out.push({
+      direction: "outbound", einvoice_id: String(r.id), invoice_id: str(r.invoice_id),
+      document_number: r.invoice_id ? invoiceNumber.get(String(r.invoice_id)) ?? null : null, document_type: null, state: str(r.state),
+      provider: str(r.provider), environment: str(r.environment),
+      provider_reference: str(r.provider_submission_id), provider_document_id: str(r.document_id),
+      counterparty_participant_id: str(r.receiver_participant_id), sbdh_instance_identifier: str(r.sbdh_instance_identifier),
+      as4_message_id: str(r.as4_message_id), sha256: str(r.ubl_sha256), size_bytes: num(r.ubl_size_bytes),
+      original_file: file(r.ubl_storage_path), attempt: num(r.attempt),
+      received_at: null, acknowledged_at: null, sent_at: str(r.sent_at), delivered_at: str(r.delivered_at),
+      failed_at: failedAt(h), last_error_code: str(r.last_error_code), delivery_evidence: r.evidence ?? null, history: h,
+    });
+  }
+  return out.sort((a, b) => (a.direction === b.direction ? a.einvoice_id.localeCompare(b.einvoice_id) : a.direction.localeCompare(b.direction)));
 }

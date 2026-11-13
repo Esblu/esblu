@@ -7,6 +7,8 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  buildEinvoiceLifecycle,
+  COMPANY_EXPORT_EXCLUDED,
   COMPANY_EXPORT_FILE_SOURCES,
   COMPANY_EXPORT_TABLES,
   exportFilePartCount,
@@ -41,12 +43,62 @@ check("export pokrýva všetky kategórie zákazníckych údajov (DPA vrátenie)
     "vehicle_services", "vehicle_vignettes", "machines", "machine_photos", "machine_services", "inventory_items", "inventory_photos",
     "documents", "document_attachments", "document_folders", "document_folder_items", "ai_evidence", "chat_conversations",
     "chat_messages", "chat_attachments", "invoices", "invoice_items", "invoice_parties", "invoice_tax_breakdowns",
-    "invoice_payments", "einvoice_inbound", "einvoice_outbound"]) assert.ok(tables.includes(t), t);
-  for (const t of ["company_invites", "billing_events", "subscription_accounts", "push_devices", "einvoice_organizations"])
+    "invoice_payments", "einvoice_inbound", "einvoice_outbound", "einvoice_events"]) assert.ok(tables.includes(t), t);
+  for (const t of ["company_invites", "billing_events", "subscription_accounts", "push_devices", "einvoice_organizations",
+    "einvoice_webhook_events", "einvoice_webhook_rejections", "einvoice_enroll_attempts", "einvoice_rollout", "einvoice_event_cursors", "einvoice_ops_audit"])
     assert.ok(!tables.includes(t), `${t} sa neexportuje`);
   const buckets = new Set(COMPANY_EXPORT_FILE_SOURCES.map((s) => s.bucket ?? s.bucketColumn));
   for (const b of ["ai-evidence-documents", "machine-photos", "inventory-photos", "vehicle-photos", "company-logos", "einvoice-documents", "storage_bucket"])
     assert.ok(buckets.has(b), b);
+});
+
+check("export eFaktúry (G1): einvoice_events v exporte, interné webhook/bezpečnostné logy nie; manifest to uvádza", () => {
+  const ex = COMPANY_EXPORT_EXCLUDED.join(" | ");
+  assert.ok(!/(^|[ ,(])einvoice_events[ ,]/.test(ex.replace("v einvoice_events a", "")), "einvoice_events už nie je vylúčené");
+  for (const t of ["einvoice_webhook_events", "einvoice_webhook_rejections", "einvoice_ops_audit"]) assert.ok(ex.includes(t), t);
+  const route = read("app/api/company/export/route.ts");
+  assert.match(route, /buildEinvoiceLifecycle\(/);
+  assert.match(route, /data\/einvoice_lifecycle\.json/);
+  assert.match(route, /data\/einvoice_lifecycle\.csv/);
+  assert.doesNotMatch(route, /einvoice_webhook_events|einvoice_webhook_rejections/, "route nečíta webhook logy");
+});
+
+check("export eFaktúry (G1): životný cyklus — ID poskytovateľa, SBDH/AS4, SHA-256, časy, história, súbor originálu", () => {
+  const inbound = [{ id: "in-1", company_id: "c", provider: "efaktura_sk", environment: "sandbox", provider_received_id: "rcv-1", sender_participant_id: "9915:2054825695",
+    document_number: "FA-1", document_type: "invoice", xml_storage_path: "c/inbound/efaktura_sk/rcv-1/abc.xml", xml_sha256: "a".repeat(64), xml_size_bytes: 5101,
+    acknowledged_at: "2026-11-13T19:40:31Z", invoice_id: "inv-in", processing_status: "acknowledged", received_at: "2026-11-13T19:40:28Z", last_error_code: null }];
+  const outbound = [{ id: "out-1", company_id: "c", invoice_id: "inv-out", provider: "efaktura_sk", environment: "sandbox", attempt: 1, ubl_sha256: "b".repeat(64),
+    ubl_storage_path: "c/outbound/out-1/b.xml", ubl_size_bytes: "4000", provider_submission_id: "sub-1", document_id: "doc-1", state: "delivered",
+    receiver_participant_id: "9915:2020147507", sent_at: "2026-11-13T19:40:27Z", delivered_at: "2026-11-13T19:40:38Z", evidence: { delivery_state: "DELIVERED" },
+    sbdh_instance_identifier: "sbdh-1", as4_message_id: "as4-1@ap", last_error_code: null }];
+  const events = [
+    { id: "e2", company_id: "c", inbound_id: "in-1", from_state: "received", to_state: "stored", source: "job", provider_code: null, created_at: "2026-11-13T19:40:29Z" },
+    { id: "e1", company_id: "c", inbound_id: "in-1", from_state: null, to_state: "received", source: "webhook", provider_code: null, created_at: "2026-11-13T19:40:28Z" },
+    { id: "e3", company_id: "c", outbound_id: "out-1", from_state: "sending", to_state: "failed", source: "provider", provider_code: "X", created_at: "2026-11-13T19:40:30Z" },
+    { id: "e4", company_id: "c", outbound_id: "out-1", from_state: "failed", to_state: "delivered", source: "provider", provider_code: null, created_at: "2026-11-13T19:40:38Z" },
+  ];
+  const l = buildEinvoiceLifecycle({ inbound, outbound, events, invoices: [{ id: "inv-out", invoice_number: "FA2026001" }] });
+  assert.equal(l.length, 2);
+  const i = l.find((x) => x.direction === "inbound")!;
+  assert.equal(i.provider_reference, "rcv-1");
+  assert.equal(i.sha256, "a".repeat(64));
+  assert.equal(i.original_file, "files/einvoice-documents/c/inbound/efaktura_sk/rcv-1/abc.xml");
+  assert.deepEqual(i.history.map((h) => h.to), ["received", "stored"], "história zoradená podľa času");
+  assert.equal(i.acknowledged_at, "2026-11-13T19:40:31Z");
+  const o = l.find((x) => x.direction === "outbound")!;
+  assert.equal(o.document_number, "FA2026001");
+  assert.equal(o.provider_reference, "sub-1");
+  assert.equal(o.provider_document_id, "doc-1");
+  assert.equal(o.sbdh_instance_identifier, "sbdh-1");
+  assert.equal(o.as4_message_id, "as4-1@ap");
+  assert.equal(o.size_bytes, 4000);
+  assert.equal(o.failed_at, "2026-11-13T19:40:30Z");
+  assert.equal(o.delivered_at, "2026-11-13T19:40:38Z");
+  assert.deepEqual(o.delivery_evidence, { delivery_state: "DELIVERED" });
+  // CSV sa dá vygenerovať (história ako JSON v bunke)
+  assert.match(rowsToCsv(l as unknown as Record<string, unknown>[]), /history/);
+  // žiadne interné technické polia
+  for (const e of l) for (const k of ["locked_until", "next_retry_at", "idempotency_key", "body_sha256", "delivery_id"]) assert.ok(!(k in e), k);
 });
 
 check("export: dávky, deduplikácia, bezpečné cesty, CSV", () => {

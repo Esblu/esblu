@@ -12,6 +12,7 @@ import {
   COMPANY_EXPORT_FILE_SOURCES,
   COMPANY_EXPORT_FILES_PER_PART,
   COMPANY_EXPORT_TABLES,
+  buildEinvoiceLifecycle,
   exportFilePartCount,
   normalizeExportFiles,
   rowsToCsv,
@@ -132,8 +133,10 @@ export async function POST(req: Request) {
       const hashes: Record<string, string> = {};
       const invoices = await fetchTable(admin, "invoices", "company", companyId, []);
       const invoiceIds = invoices.map((r) => String(r.id));
+      const exported: Record<string, Row[]> = {};
       for (const spec of COMPANY_EXPORT_TABLES) {
         const rows = spec.table === "invoices" ? invoices : await fetchTable(admin, spec.table, spec.scope, companyId, invoiceIds);
+        exported[spec.table] = rows;
         counts[spec.table] = rows.length;
         const json = JSON.stringify(rows, null, 2);
         const csv = rowsToCsv(rows);
@@ -141,6 +144,22 @@ export async function POST(req: Request) {
         zip.file(`data/${spec.table}.csv`, csv);
         hashes[`data/${spec.table}.json`] = sha256(json);
         hashes[`data/${spec.table}.csv`] = sha256(csv);
+      }
+      // eFaktúra: kanonický životný cyklus dokladu (odvodený iba z exportovaných tabuliek).
+      const lifecycle = buildEinvoiceLifecycle({
+        inbound: exported.einvoice_inbound ?? [],
+        outbound: exported.einvoice_outbound ?? [],
+        events: exported.einvoice_events ?? [],
+        invoices,
+      });
+      {
+        const json = JSON.stringify(lifecycle, null, 2);
+        const csv = rowsToCsv(lifecycle as unknown as Row[]);
+        zip.file("data/einvoice_lifecycle.json", json);
+        zip.file("data/einvoice_lifecycle.csv", csv);
+        counts.einvoice_lifecycle = lifecycle.length;
+        hashes["data/einvoice_lifecycle.json"] = sha256(json);
+        hashes["data/einvoice_lifecycle.csv"] = sha256(csv);
       }
       const files = await collectFiles(admin, companyId);
       const manifest = {
