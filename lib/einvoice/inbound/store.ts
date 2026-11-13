@@ -80,6 +80,8 @@ export interface InboundStore {
    * Replay ochrana: X-Webhook-Id nie je súčasťou podpisu (HMAC = "<t>.<telo>").
    * Rovnaké podpísané telo pod INÝM ID doručenia = opakovanie zachyteného requestu → nespracuje sa.
    * (Telo obsahuje `timestamp` obálky, dve rôzne legitímne udalosti nemajú rovnaký hash.)
+   * Počíta sa iba UKONČENÉ doručenie (processed / ignored / rejected): replay z portálu eFaktura.sk
+   * posiela nové X-Webhook-Id s rovnakým telom a po zlyhanom spracovaní ho treba spracovať.
    */
   webhookBodySeen?(input: { provider: string; environment: EinvoiceEnvironment; bodySha256: string; deliveryId: string }): Promise<boolean>;
   register(input: { provider: string; environment: EinvoiceEnvironment; providerOrgId: string; providerReceivedId: string; source: "webhook" | "poll"; meta: RegisterMeta }): Promise<{ inboundId: string; created: boolean; processingStatus: string; companyId: string }>;

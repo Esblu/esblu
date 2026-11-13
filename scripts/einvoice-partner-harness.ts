@@ -247,7 +247,7 @@ export async function createPartnerHarness() {
     // Zrkadlí supabase-store.webhookBodySeen (replay ochrana: rovnaké telo pod iným ID doručenia).
     async webhookBodySeen(i) {
       const rows = await svcRows<{ n: number }>(
-        "select count(*)::int n from public.einvoice_webhook_events where provider = $1 and environment = $2 and body_sha256 = $3 and delivery_id <> $4",
+        "select count(*)::int n from public.einvoice_webhook_events where provider = $1 and environment = $2 and body_sha256 = $3 and delivery_id <> $4 and processing_status in ('processed', 'ignored', 'rejected')",
         [i.provider, i.environment, i.bodySha256, i.deliveryId]
       );
       return rows[0].n > 0;

@@ -207,7 +207,7 @@ const inboundStore: InboundStore = {
   // Zrkadlí supabase-store.webhookBodySeen (service_role čítanie einvoice_webhook_events).
   async webhookBodySeen(i) {
     const { rows } = await sql<{ n: number }>(
-      "select count(*)::int n from public.einvoice_webhook_events where provider = $1 and environment = $2 and body_sha256 = $3 and delivery_id <> $4",
+      "select count(*)::int n from public.einvoice_webhook_events where provider = $1 and environment = $2 and body_sha256 = $3 and delivery_id <> $4 and processing_status in ('processed', 'ignored', 'rejected')",
       [i.provider, i.environment, i.bodySha256, i.deliveryId]
     );
     return rows[0].n > 0;
@@ -1034,6 +1034,26 @@ await check("SBDH doklad: originál (obálka + UBL) uložený NEZMENENÝ, hash =
   assert.equal(bad.processing_status, "failed");
   assert.equal(bad.last_error_code, "RECIPIENT_MISMATCH");
   assert.equal(bad.invoice_id, null);
+});
+
+await check("replay z portálu po ZLYHANOM spracovaní (nové X-Webhook-Id, rovnaké telo) → spracuje sa (nie DUPLICATE)", async () => {
+  const body = { event: "peppol.document.received", timestamp: "2026-11-13T08:00:00Z", data: { orgId: "org-a" } };
+  provider.calls = [];
+  provider.listError = new EinvoiceProviderError("EINVOICE_PROVIDER_UNAVAILABLE", "down", true);
+  try {
+    const first = await webhook(body, "dlv-portal-1");
+    assert.deepEqual(first, { status: 200, body: { code: "ACCEPTED_RETRY_LATER" } });
+  } finally {
+    provider.listError = null;
+  }
+  const st = (await sql<Row>("select processing_status from public.einvoice_webhook_events where delivery_id = 'dlv-portal-1'")).rows[0];
+  assert.equal(st.processing_status, "failed");
+  const replay = await webhook(body, "dlv-portal-1-replay");
+  assert.equal(replay.status, 200);
+  assert.equal(replay.body.code, "PROCESSED", "replay po zlyhaní sa spracuje");
+  // ďalší replay toho istého tela (teraz už spracované) → DUPLICATE
+  const again = await webhook(body, "dlv-portal-1-replay-2");
+  assert.deepEqual(again, { status: 200, body: { code: "DUPLICATE" } });
 });
 
 await check("čítanie: owner a accountant vidia inbound + koncepty; admin iba s finance.view áno; admin bez financií a employee nie", async () => {

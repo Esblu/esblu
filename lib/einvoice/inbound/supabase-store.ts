@@ -150,6 +150,8 @@ export function createSupabaseInboundStore(admin: SupabaseClient = getSupabaseAd
         .eq("environment", i.environment)
         .eq("body_sha256", i.bodySha256)
         .neq("delivery_id", i.deliveryId)
+        // Zlyhané / rozpracované doručenie sa NEpočíta — replay z portálu (nové ID, rovnaké telo) ho smie dokončiť.
+        .in("processing_status", ["processed", "ignored", "rejected"])
         .limit(1);
       if (error) throw new InboundStoreError("DB_ERROR");
       return ((data as { id: string }[] | null) ?? []).length > 0;
