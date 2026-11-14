@@ -69,6 +69,15 @@ try {
     $r = Invoke-JavaVersion $bad
     $r.ExitCode -eq 3 -and (Get-JavaVersionMajor 'openjdk version "25.0.1" 2025-10-21') -eq 25 -and (Get-JavaVersionMajor 'java version "1.8.0_402"') -eq 8 -and $null -eq (Invoke-JavaVersion (Join-Path $tmp "nope.exe"))
   }
+  Check "JAVA_HOME with trailing backslash -> normalized; Gradle args are 4 separate elements" {
+    $jh = 'C:\Program Files\Eclipse Adoptium\jdk-21.0.12.101-hotspot' 
+    $a = Get-EsbluGradleArgs -JavaHome ($jh + '\') -VersionCode 3 -VersionName '1.0.0' 
+    $b = Get-EsbluGradleArgs -JavaHome $jh -VersionCode 3 -VersionName '1.0.0' 
+    $a.Count -eq 4 -and $a[0] -eq 'bundleRelease' -and $a[1] -eq "-Dorg.gradle.java.home=$jh" -and $a[2] -eq '-PesbluVersionCode=3' -and $a[3] -eq '-PesbluVersionName=1.0.0' -and (Compare-Object $a $b) -eq $null -and (ConvertTo-EsbluJavaHome 'C:\') -eq 'C:\' 
+  }
+  Check "Gradle args reject JAVA_HOME with embedded quote" {
+    try { $null = Get-EsbluGradleArgs -JavaHome 'C:\a"b' -VersionCode 3 -VersionName '1.0.0'; $false } catch { $true }
+  }
   Check "missing JAVA_HOME folder / no java.exe -> ignored" {
     (Get-JdkMajor (Join-Path $tmp "does-not-exist")) -eq $null
   }

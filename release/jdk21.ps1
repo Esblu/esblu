@@ -127,6 +127,25 @@ function Select-Jdk21 {
   return $null
 }
 
+function ConvertTo-EsbluJavaHome([string]$JavaHome) {
+  # Removes trailing \ or / (keeps a drive root like C:\). Never changes the folder itself.
+  if (-not $JavaHome) { return $JavaHome }
+  $h = $JavaHome.Trim().Trim('"').TrimEnd('\', '/')
+  if ($h -match '^[A-Za-z]:$') { $h += '\' }
+  return $h
+}
+
+function Get-EsbluGradleArgs {
+  # Gradle arguments as SEPARATE array elements (passed with splatting: & .\gradlew.bat @args).
+  # Windows PowerShell 5.1 wraps an element containing spaces in "..." WITHOUT escaping a trailing
+  # backslash; Java/CRT would then read \" as a literal quote and glue the next arguments into
+  # org.gradle.java.home. The JAVA_HOME is therefore normalized and validated here.
+  param([string]$JavaHome, [int]$VersionCode, [string]$VersionName, [string]$Task = 'bundleRelease')
+  $h = ConvertTo-EsbluJavaHome $JavaHome
+  if (-not $h -or $h.Contains('"') -or $h.EndsWith('\')) { throw "Invalid JAVA_HOME for Gradle: '$JavaHome'" }
+  return @($Task, "-Dorg.gradle.java.home=$h", "-PesbluVersionCode=$VersionCode", "-PesbluVersionName=$VersionName")
+}
+
 function Use-Jdk21OrFail {
   # Sets JAVA_HOME for THIS process only when the existing one is not JDK 21.
   $sel = Select-Jdk21
@@ -137,7 +156,10 @@ function Use-Jdk21OrFail {
     Write-Host "      Install Eclipse Temurin 21 (https://adoptium.net) or set JAVA_HOME to a JDK 21." -ForegroundColor Red
     exit 1
   }
-  if ($env:JAVA_HOME -ne $sel.Home) { $env:JAVA_HOME = $sel.Home }
+  # Normalized (no trailing \): a JAVA_HOME like "C:\Program Files\...\jdk-21...\" (Adoptium installer) would
+  # end a quoted native argument with \" and swallow the following Gradle arguments.
+  $home21 = ConvertTo-EsbluJavaHome $sel.Home
+  if ($env:JAVA_HOME -ne $home21) { $env:JAVA_HOME = $home21 }
   # Real check of the selected runtime: exit code 0 AND `java -version` reports major 21.
   $r = Invoke-JavaVersion (Join-Path $env:JAVA_HOME "bin\java.exe")
   $verLine = if ($r) { ($r.Text -split "`r?`n" | Select-Object -First 1) } else { "<java.exe could not be started>" }

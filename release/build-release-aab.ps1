@@ -73,7 +73,10 @@ try {
   Push-Location $AndroidDir
   try {
     # Gradle launcher AND daemon on the selected JDK 21 (not a JBR/JDK 25 daemon).
-    & .\gradlew.bat bundleRelease "-Dorg.gradle.java.home=$env:JAVA_HOME" "-PesbluVersionCode=$VersionCode" "-PesbluVersionName=$VersionName"
+    # Each argument is its own array element; JAVA_HOME without trailing \ (see jdk21.ps1 Get-EsbluGradleArgs).
+    $gradleArgs = Get-EsbluGradleArgs -JavaHome $env:JAVA_HOME -VersionCode $VersionCode -VersionName $VersionName
+    Write-Host ("gradlew.bat " + (($gradleArgs | ForEach-Object { "[$_]" }) -join ' '))
+    & .\gradlew.bat @gradleArgs
     if ($LASTEXITCODE -ne 0) { Fail "gradlew bundleRelease failed" }
   } finally { Pop-Location }
 
