@@ -39,7 +39,7 @@ import { advanceSummary } from "@/lib/invoicing/advance-summary";
 
 let fontsRegistered = false;
 
-function ensureFontsRegistered() {
+export function ensureFontsRegistered() {
   if (fontsRegistered) return;
 
   const fontsDir = path.join(process.cwd(), "assets", "fonts");

@@ -1000,7 +1000,7 @@ const de = {
       button: "Export der Firmendaten herunterladen",
       running: "Export wird vorbereitet…",
       progress: "Teil {{done}} von {{total}} wird heruntergeladen…",
-      done: "Der Export wurde heruntergeladen.",
+      done: "Export heruntergeladen. Er enthält das technische Archiv sowie lesbare PDF/CSV-Dateien (Ordner CITATELNY_EXPORT).",
       doneWithMissing: "Der Export wurde heruntergeladen. Einige Dateien ({{count}}) konnten nicht gelesen werden — sie sind im Manifest des Exports aufgeführt.",
       errors: {
         BAD_REQUEST: "Ungültige Exportanfrage.",
@@ -1242,8 +1242,8 @@ const de = {
         "Es liegt noch kein Nachweis über die Bestätigung eines Dokuments vor (oder die Datenbankfunktion zu deren Erfassung wurde noch nicht bereitgestellt).",
       currentVersions:
         "Aktuell gültige Versionen: Allgemeine Geschäftsbedingungen v{{terms}}, Datenschutzerklärung v{{privacy}}.",
-      requestExport: "Export meiner Daten anfordern",
-      requestCorrection: "Korrektur meiner Daten anfordern",
+      requestExport: "Antrag auf Export personenbezogener Daten schreiben (E-Mail)",
+      requestCorrection: "Antrag auf Berichtigung personenbezogener Daten schreiben (E-Mail)",
       docTypes: {
         terms: "Allgemeine Geschäftsbedingungen",
         privacy_policy: "Datenschutzerklärung",

@@ -1013,7 +1013,7 @@ const sk = {
       button: "Stiahnuť export údajov firmy",
       running: "Pripravujem export…",
       progress: "Sťahujem časť {{done}} z {{total}}…",
-      done: "Export bol stiahnutý.",
+      done: "Export bol stiahnutý. Obsahuje technický archív aj čitateľné PDF/CSV súbory (priečinok CITATELNY_EXPORT).",
       doneWithMissing: "Export bol stiahnutý. Niektoré súbory ({{count}}) sa nepodarilo načítať — sú uvedené v manifeste exportu.",
       errors: {
         BAD_REQUEST: "Neplatná požiadavka na export.",
@@ -1255,8 +1255,8 @@ const sk = {
         "Zatiaľ nemáme záznam o potvrdení žiadneho dokumentu (alebo ešte nebola nasadená databázová funkcia na ich evidenciu).",
       currentVersions:
         "Aktuálne platné verzie: Všeobecné obchodné podmienky v {{terms}}, Zásady spracúvania osobných údajov v {{privacy}}.",
-      requestExport: "Požiadať o export mojich údajov",
-      requestCorrection: "Požiadať o opravu mojich údajov",
+      requestExport: "Napísať žiadosť o export osobných údajov (e-mail)",
+      requestCorrection: "Napísať žiadosť o opravu osobných údajov (e-mail)",
       docTypes: {
         terms: "Všeobecné obchodné podmienky",
         privacy_policy: "Zásady spracúvania osobných údajov",

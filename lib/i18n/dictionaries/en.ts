@@ -999,7 +999,7 @@ const en = {
       button: "Download company data export",
       running: "Preparing export…",
       progress: "Downloading part {{done}} of {{total}}…",
-      done: "The export has been downloaded.",
+      done: "Export downloaded. It contains the technical archive as well as readable PDF/CSV files (folder CITATELNY_EXPORT).",
       doneWithMissing: "The export has been downloaded. Some files ({{count}}) could not be read — they are listed in the export manifest.",
       errors: {
         BAD_REQUEST: "Invalid export request.",
@@ -1241,8 +1241,8 @@ const en = {
         "We don't have a record of any accepted document yet (or the database function for recording them hasn't been deployed yet).",
       currentVersions:
         "Currently valid versions: Terms and Conditions v{{terms}}, Privacy Policy v{{privacy}}.",
-      requestExport: "Request an export of my data",
-      requestCorrection: "Request a correction of my data",
+      requestExport: "Write a request to export personal data (email)",
+      requestCorrection: "Write a request to correct personal data (email)",
       docTypes: {
         terms: "Terms and Conditions",
         privacy_policy: "Privacy Policy",

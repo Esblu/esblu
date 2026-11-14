@@ -67,7 +67,7 @@ import {
   SettingsRow,
   SettingsSection,
 } from "@/app/components/ui/SettingsList";
-import { ImageIcon, TrashIcon } from "@/app/components/icons/AppIcons";
+import { ImageIcon, MailIcon, TrashIcon } from "@/app/components/icons/AppIcons";
 import { MemberPermissionsEditor } from "@/app/components/team/MemberPermissionsEditor";
 import { listCompanyMemberPermissions } from "@/lib/team-permissions-client";
 import CompanySwitcher from "@/app/components/workspaces/CompanySwitcher";
@@ -1427,8 +1427,9 @@ export default function NastaveniaPage() {
                 <p className="ui-help">{acceptancesLoading ? t("settings.privacy.loading") : t("settings.privacy.noAcceptancesYet")}</p>
               )}
             </SettingsDisclosure>
-            <SettingsLinkRow href={exportRequestMailto} title={t("settings.privacy.requestExport")} />
-            <SettingsLinkRow href={correctionRequestMailto} title={t("settings.privacy.requestCorrection")} />
+            {/* E-mailové žiadosti (mailto:) — ikona e-mailu, aby sa nezamieňali s exportom údajov firmy. */}
+            <SettingsLinkRow href={exportRequestMailto} title={t("settings.privacy.requestExport")} leading={<MailIcon size={18} className="text-muted-esblu" aria-hidden="true" />} />
+            <SettingsLinkRow href={correctionRequestMailto} title={t("settings.privacy.requestCorrection")} leading={<MailIcon size={18} className="text-muted-esblu" aria-hidden="true" />} />
           </SettingsSection>
 
           {/* ---------------- Zrušiť účet ---------------- */}

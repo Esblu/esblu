@@ -13,6 +13,8 @@ const nextConfig: NextConfig = {
     // renderujú PDF vydaných faktúr tým istým rendererom.
     "/api/document-packages/**": ["./assets/fonts/**"],
     "/api/accounting-handoff/**": ["./assets/fonts/**"],
+    // Export údajov firmy: čitateľná vrstva (Prehlad_firmy.pdf + PDF vizualizácie faktúr).
+    "/api/company/export": ["./assets/fonts/**"],
   },
 };
 

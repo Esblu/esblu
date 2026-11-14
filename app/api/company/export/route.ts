@@ -20,6 +20,17 @@ import {
   zipSafePath,
   type StorageFileRef,
 } from "@/lib/company-export";
+import {
+  buildReadableCsvFiles,
+  companyOverview,
+  HUMAN_READABLE_VERSION,
+  issuedInvoiceBundles,
+  README_TEXT,
+  READABLE_ROOT,
+  READABLE_SOURCE_DATASETS,
+  type ReadableDatasets,
+  type ReadableFile,
+} from "@/lib/company-export-readable";
 
 // =============================================================================
 // POST /api/company/export — export údajov AKTÍVNEJ firmy (iba owner).
@@ -35,6 +46,9 @@ export const maxDuration = 300;
 const PAGE = 1000;
 /** Verzia schémy exportu (manifest + server-side dôkaz company_export_runs). */
 const COMPANY_EXPORT_SCHEMA_VERSION = "2026-11-13.einvoice-lifecycle";
+/** Čitateľná vrstva: max. počet PDF vizualizácií faktúr a časový rozpočet (zvyšok iba v Zoznam_faktur.csv). */
+const READABLE_INVOICE_PDF_CAP = 200;
+const READABLE_PDF_BUDGET_MS = 90_000;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const INVOICE_CHUNK = 200;
 
@@ -168,6 +182,16 @@ export async function POST(req: Request) {
         hashes["data/einvoice_lifecycle.json"] = sha256(json);
         hashes["data/einvoice_lifecycle.csv"] = sha256(csv);
       }
+      // Čitateľná vrstva (CITATELNY_EXPORT/) — iba z už exportovaných riadkov, v pamäti, bez uloženia.
+      const humanReadable = await buildHumanReadable(
+        { ...(Object.fromEntries(READABLE_SOURCE_DATASETS.map((k) => [k, exported[k] ?? []])) as ReadableDatasets), einvoice_lifecycle: lifecycle },
+        generatedAt,
+        counts
+      );
+      for (const file of humanReadable.files) {
+        zip.file(file.path, file.content);
+        hashes[file.path] = sha256(file.content);
+      }
       const files = await collectFiles(admin, companyId);
       const manifest = {
         kind: "esblu_company_export",
@@ -182,6 +206,20 @@ export async function POST(req: Request) {
         files_parts: exportFilePartCount(files.length),
         files_per_part: COMPANY_EXPORT_FILES_PER_PART,
         excluded: COMPANY_EXPORT_EXCLUDED,
+        technical_export: {
+          description: "Úplný strojovo spracovateľný export: data/<tabuľka>.json + .csv, data/einvoice_lifecycle.*, originálne súbory v dávkach files/…",
+          datasets: COMPANY_EXPORT_TABLES.map((t) => t.table).concat("einvoice_lifecycle"),
+          formats: ["JSON", "CSV (UTF-8, čiarka)", "originálne súbory (XML/PDF/obrázky) v dávkach"],
+        },
+        human_readable_export: {
+          version: HUMAN_READABLE_VERSION,
+          root: `${READABLE_ROOT}/`,
+          derived_from_technical_export_only: true,
+          note: "Prezentačná vrstva tých istých údajov ako technický export; nepridáva údaje ani kategórie osobných údajov. PDF faktúr sú vizualizácie, nie právne originály. Originály súborov sa neduplikujú — zoznamy odkazujú na cesty files/… v dávkach.",
+          status: humanReadable.status,
+          files: humanReadable.files.map((f) => ({ path: f.path, kind: f.kind, sources: f.sources, sha256: hashes[f.path] })),
+          invoice_pdfs: humanReadable.invoicePdfs,
+        },
         note: "Export nie je zákonný archív. Za uchovávanie účtovných dokladov zodpovedá Zákazník (VOP čl. 19.4, 21.3). Účtovné balíky s PDF faktúr: Faktúry → Balík pre účtovníka.",
       };
       zip.file("manifest.json", JSON.stringify(manifest, null, 2));
@@ -267,4 +305,48 @@ export async function POST(req: Request) {
     }
     return fail(500, "EXPORT_FAILED");
   }
+}
+
+/**
+ * Čitateľná vrstva exportu. Vstup = iba datasety technického exportu (READABLE_SOURCE_DATASETS).
+ * Zlyhanie PDF nikdy nezastaví technický export (status „partial“ v manifeste).
+ */
+async function buildHumanReadable(
+  datasets: ReadableDatasets,
+  generatedAt: string,
+  counts: Record<string, number>
+): Promise<{ files: ReadableFile[]; status: "complete" | "partial"; invoicePdfs: { eligible: number; rendered: number; skipped: number; cap: number } }> {
+  const files: ReadableFile[] = [{ path: `${READABLE_ROOT}/CITAJ_MA.txt`, content: README_TEXT, sources: [], kind: "txt" }];
+  files.push(...buildReadableCsvFiles(datasets));
+  let status: "complete" | "partial" = "complete";
+  const { renderCompanyOverviewPdf } = await import("@/lib/company-export-readable-pdf");
+  try {
+    const pdf = await renderCompanyOverviewPdf(companyOverview(datasets, generatedAt, counts));
+    files.push({ path: `${READABLE_ROOT}/Prehlad_firmy.pdf`, content: new Uint8Array(pdf), sources: ["companies", "company_billing_profile", "company_legal_identities"], kind: "pdf" });
+  } catch (error) {
+    console.error("company/export: Prehlad_firmy.pdf zlyhal:", error instanceof Error ? error.name : "unknown");
+    status = "partial";
+  }
+  const bundles = issuedInvoiceBundles(datasets);
+  const started = Date.now();
+  let rendered = 0;
+  if (bundles.length > 0) {
+    const { renderInvoicePdfBuffer } = await import("@/lib/invoicing/pdf-renderer");
+    for (const b of bundles.slice(0, READABLE_INVOICE_PDF_CAP)) {
+      if (Date.now() - started > READABLE_PDF_BUDGET_MS) break;
+      if (!b.seller || b.items.length === 0) continue;
+      try {
+        const pdf = await renderInvoicePdfBuffer({
+          invoice: b.invoice as never, seller: b.seller as never, buyer: b.buyer as never, items: b.items as never,
+          taxBreakdowns: b.taxBreakdowns as never, locale: "sk", correctedInvoiceNumber: b.correctedInvoiceNumber, advanceDeductions: b.advanceDeductions,
+        });
+        files.push({ path: b.path, content: new Uint8Array(pdf), sources: ["invoices", "invoice_parties", "invoice_items", "invoice_tax_breakdowns", "invoice_advance_deductions"], kind: "pdf" });
+        rendered++;
+      } catch (error) {
+        console.error("company/export: PDF vizualizácia faktúry zlyhala:", error instanceof Error ? error.name : "unknown");
+      }
+    }
+  }
+  if (rendered < bundles.length) status = "partial";
+  return { files, status, invoicePdfs: { eligible: bundles.length, rendered, skipped: bundles.length - rendered, cap: READABLE_INVOICE_PDF_CAP } };
 }
