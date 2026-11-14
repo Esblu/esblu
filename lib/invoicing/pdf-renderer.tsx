@@ -70,6 +70,9 @@ export type InvoicePdfBundle = {
   correctedInvoiceNumber?: string | null;
   /** 20261008100005: odpočty záloh konečnej faktúry (základ + DPH) a čísla zálohových faktúr. */
   advanceDeductions?: { taxable_amount: number; vat_amount: number; advance_number: string | null }[];
+  /** Iba čitateľný export firmy: označenie „náhľad, nenahrádza originál“ na každej strane.
+   *  Bežné PDF faktúry (stiahnutie, balík pre účtovníka) ho nepoužívajú. */
+  previewNotice?: string | null;
 };
 
 const styles = StyleSheet.create({
@@ -228,6 +231,15 @@ const styles = StyleSheet.create({
     fontSize: 7,
     color: "#94a3b8",
   },
+  previewNotice: {
+    position: "absolute",
+    top: 12,
+    left: 40,
+    right: 40,
+    fontSize: 7.5,
+    color: "#92400e",
+    textAlign: "center",
+  },
 });
 
 // Pozri lib/i18n/format.ts. PDF sa generuje na serveri a `RangeError` z
@@ -327,7 +339,7 @@ function documentNumberFor(invoice: InvoicePdfBundle["invoice"]): string | null 
     : (invoice.invoice_number ?? null);
 }
 
-function InvoicePdfDocument({ invoice, seller, buyer, items, taxBreakdowns, locale, correctedInvoiceNumber, advanceDeductions = [] }: InvoicePdfBundle) {
+function InvoicePdfDocument({ invoice, seller, buyer, items, taxBreakdowns, locale, correctedInvoiceNumber, advanceDeductions = [], previewNotice = null }: InvoicePdfBundle) {
   const documentLabel = translate(locale, `invoices.kind.${invoice.kind}`);
   // Dobropis: sumy sa tlačia so znamienkom mínus (v DB sú kladné; znamienko
   // určuje druh dokladu — lib/invoicing/credit-note-semantics.ts).
@@ -584,6 +596,12 @@ function InvoicePdfDocument({ invoice, seller, buyer, items, taxBreakdowns, loca
               </Text>
             )}
           </View>
+        )}
+
+        {previewNotice && (
+          <Text style={styles.previewNotice} fixed>
+            {previewNotice}
+          </Text>
         )}
 
         <View style={styles.footer} fixed>

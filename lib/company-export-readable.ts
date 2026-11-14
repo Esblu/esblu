@@ -91,6 +91,18 @@ const KIND: Record<string, string> = {
   advance_invoice: "zálohová faktúra", payment_received_invoice: "faktúra k prijatej platbe",
 };
 const PARTNER_KIND: Record<string, string> = { customer: "odberateľ", supplier: "dodávateľ", both: "odberateľ aj dodávateľ" };
+// documents.document_type / documents.status (CHECK v DB); popisky ako v appke. Neznáma hodnota = pôvodná.
+const DOCUMENT_TYPE: Record<string, string> = {
+  weigh_ticket: "vážny lístok", delivery_note: "dodací list", invoice: "faktúra", receipt: "bloček",
+  insurance: "PZP / poistná zmluva", service_document: "servisný doklad", vehicle_registration: "technický preukaz vozidla", other: "iný dokument",
+};
+const DOCUMENT_STATE: Record<string, string> = {
+  uploaded: "nahraný", processing: "spracúva sa", extracted: "vyčítaný", needs_review: "na kontrolu", confirmed: "potvrdený", failed: "chyba spracovania",
+};
+
+/** Označenie na každej strane PDF faktúry v čitateľnom exporte (nie je to nový originál dokladu). */
+export const INVOICE_PREVIEW_NOTICE =
+  "ČITATEĽNÝ NÁHĽAD z exportu údajov Esblu — vizualizácia uložených údajov faktúry. Nenahrádza originál dokladu ani originál e-faktúry (XML).";
 const label = (map: Record<string, string>, v: unknown) => map[s(v)] ?? s(v);
 
 // ---------------------------------------------------------------- CSV tabuľky
@@ -138,7 +150,7 @@ export function buildReadableCsvFiles(d: ReadableDatasets): ReadableFile[] {
   out.push({
     path: `${READABLE_ROOT}/Dokumenty.csv`, kind: "csv", sources: ["documents"],
     content: table((d.documents ?? []).filter((r) => !r.deleted_at), [
-      ["Názov súboru", f("original_filename")], ["Typ dokladu", f("document_type")], ["Stav", f("status")], ["Poznámka", f("note")],
+      ["Názov súboru", f("original_filename")], ["Typ dokladu", (r) => label(DOCUMENT_TYPE, r.document_type)], ["Stav", (r) => label(DOCUMENT_STATE, r.status)], ["Poznámka", f("note")],
       ["Nahrané", fd("created_at")], ["Veľkosť (B)", f("file_size")], ["SHA-256", f("content_sha256")],
       ["Súbor v exporte (dávky súborov)", (r) => filePath(r.storage_bucket, r.storage_path)],
     ], (r) => `${s(r.created_at)}${s(r.id)}`),

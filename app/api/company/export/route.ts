@@ -24,6 +24,7 @@ import {
   buildReadableCsvFiles,
   companyOverview,
   HUMAN_READABLE_VERSION,
+  INVOICE_PREVIEW_NOTICE,
   issuedInvoiceBundles,
   README_TEXT,
   READABLE_ROOT,
@@ -339,6 +340,7 @@ async function buildHumanReadable(
         const pdf = await renderInvoicePdfBuffer({
           invoice: b.invoice as never, seller: b.seller as never, buyer: b.buyer as never, items: b.items as never,
           taxBreakdowns: b.taxBreakdowns as never, locale: "sk", correctedInvoiceNumber: b.correctedInvoiceNumber, advanceDeductions: b.advanceDeductions,
+          previewNotice: INVOICE_PREVIEW_NOTICE,
         });
         files.push({ path: b.path, content: new Uint8Array(pdf), sources: ["invoices", "invoice_parties", "invoice_items", "invoice_tax_breakdowns", "invoice_advance_deductions"], kind: "pdf" });
         rendered++;

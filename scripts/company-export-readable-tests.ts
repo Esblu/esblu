@@ -13,6 +13,7 @@ import { COMPANY_EXPORT_EXCLUDED, COMPANY_EXPORT_TABLES, buildEinvoiceLifecycle 
 import {
   buildReadableCsvFiles,
   companyOverview,
+  INVOICE_PREVIEW_NOTICE,
   issuedInvoiceBundles,
   issuedInvoicePdfNames,
   readableCsv,
@@ -185,6 +186,38 @@ await check("PDF: Prehlad_firmy.pdf a vizualizácia faktúry sa vyrenderujú (aj
     items: b.items as never, taxBreakdowns: b.taxBreakdowns as never, locale: "sk", correctedInvoiceNumber: null, advanceDeductions: [],
   });
   assert.equal(Buffer.from(inv).subarray(0, 5).toString(), "%PDF-");
+});
+
+await check("Dokumenty.csv: typ a stav dokladu po slovensky (neznáma hodnota ostáva pôvodná)", () => {
+  const d = sample();
+  d.documents = [
+    { id: "d3", original_filename: "blocek.pdf", document_type: "receipt", status: "needs_review", storage_bucket: "ai-inbox-documents", storage_path: `${C}/blocek.pdf` },
+    { id: "d4", original_filename: "x.pdf", document_type: "contract", status: "custom_state" },
+  ];
+  const csv = buildReadableCsvFiles(d).find((f) => f.path.endsWith("Dokumenty.csv"))!.content as string;
+  assert.match(csv, /blocek\.pdf;bloček;na kontrolu;/);
+  assert.match(csv, /x\.pdf;contract;custom_state;/);
+});
+
+await check("PDF faktúry v exporte je označené ako čitateľný náhľad; bežné PDF faktúr bez zmeny", async () => {
+  assert.match(INVOICE_PREVIEW_NOTICE, /NÁHĽAD/);
+  assert.match(INVOICE_PREVIEW_NOTICE, /Nenahrádza originál/);
+  const route = read("app/api/company/export/route.ts");
+  assert.match(route, /previewNotice: INVOICE_PREVIEW_NOTICE/);
+  // Ostatné volania renderera (stiahnutie PDF, balík pre účtovníka) označenie neposielajú.
+  for (const p of ["app/api/invoices/[id]/pdf/route.ts", "app/api/accounting-handoff/package/route.ts", "lib/invoicing/document-package-server.ts"]) {
+    try { assert.doesNotMatch(read(p), /previewNotice/); } catch (e) { if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e; }
+  }
+  const renderer = read("lib/invoicing/pdf-renderer.tsx");
+  assert.match(renderer, /\{previewNotice && \(/);
+  const { renderInvoicePdfBuffer } = await import("@/lib/invoicing/pdf-renderer");
+  const [b] = issuedInvoiceBundles(sample());
+  const base = { invoice: { ...b.invoice, rounding_amount: 0, kind: "regular_invoice" } as never, seller: b.seller as never, buyer: b.buyer as never,
+    items: b.items as never, taxBreakdowns: b.taxBreakdowns as never, locale: "sk" as const, correctedInvoiceNumber: null, advanceDeductions: [] };
+  const plain = await renderInvoicePdfBuffer(base);
+  const marked = await renderInvoicePdfBuffer({ ...base, previewNotice: INVOICE_PREVIEW_NOTICE });
+  assert.equal(Buffer.from(marked).subarray(0, 5).toString(), "%PDF-");
+  assert.ok(marked.byteLength > plain.byteLength, "označené PDF obsahuje text navyše");
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
