@@ -71,12 +71,19 @@ Výstup: `esblu-1.0.1-vc4.aab` + `esblu-1.0.1-vc4.signing.txt`. Overenie (agent)
 | S5 | Pred IČO: moduly zamknuté | staging | PREŠIEL | Dashboard „Nie je súčasťou vášho balíka“ |
 | S6 | Overenie IČO v registri + 14-dňový trial | staging | PREŠIEL | „Firemné údaje sú overené. Skúšobné obdobie je aktívne“, trial 17. 11. → 1. 12. 2026 |
 | S7 | Syntetický partner + koncept faktúry | staging | PREŠIEL | „QA Odberateľ Demo s.r.o.“, faktúra `regular_invoice/draft/issued` |
-| P1 | Registrácia e-mailom + heslom | produkcia | BLOKOVANÝ (vlastník) | heslo do produkčného formulára agent nezadáva |
-| P2 | Doručenie a otvorenie potvrdzovacieho e-mailu | produkcia | BLOKOVANÝ (vlastník) | agent nemá prístup k schránke |
-| P3 | Návrat z Google prihlásenia | produkcia | BLOKOVANÝ (vlastník, Google účet) | štart OAuth overený skôr (`/auth/v1/authorize` na produkčnom Supabase) |
-| P4 | Prihlásenie existujúceho používateľa / kontrolóra | produkcia | BLOKOVANÝ (vlastník) | stav účtu overený v DB (§ 4), heslo iba v Play Console |
+| P1 | Registrácia e-mailom + heslom, adresa mimo tímu projektu (v appke vc4) | produkcia | PREŠIEL | 22:55:16 hook `esblu_before_user_created_beta_gate` OK → `/signup` 200 `user_confirmation_requested`; doména mimo `esblu.com`; owner novej firmy, súhlasy VOP 1.2 + zásady 1.4 (`registration`) |
+| P2 | Doručenie a otvorenie potvrdzovacieho e-mailu | produkcia (custom SMTP zapnuté — potvrdil vlastník v Dashboarde) | PREŠIEL | `/verify` 200 o 13 s po odoslaní (22:55:29), `email_confirmed_at` nastavené, vlastník: „odkaz ma dostal do Esblu“ |
+| P3 | Návrat z Google prihlásenia — appka aj web | produkcia | PREŠIEL | appka: `/authorize` z `com.esblu.app://auth/callback` → `/callback` 302 → `/token` pkce 200 (22:52, 22:58, 23:01, 23:04); web: `/authorize` z `www.esblu.com/auth/callback?oauth=google` → `/token` pkce 200 (23:06:24) |
+| P4 | Prihlásenie heslom (existujúci používateľ / kontrolór) | produkcia | PREŠIEL | appka vc4: `/token` password 200 (23:03:39); kontrolórsky účet: password 200 dnes 11:33 a 12:03 UTC (Android) |
 | A1 | Mobilný build + cap sync + kontroly bundlu | sandbox (produkčná konfigurácia) | PREŠIEL | § 1 |
-| A2 | Podpísaný AAB vc4 | Windows | BLOKOVANÝ (vlastník) | vyžaduje upload keystore + heslo a Android SDK |
-| A3 | Interný kanál + telefón (registrácia, odkaz, prihlásenie, bez bety) | telefón | BLOKOVANÝ (vlastník) | § 3 |
+| A2 | Podpísaný AAB vc4 | Windows (vlastník zadal heslo) + overenie sandbox | PREŠIEL | `esblu-1.0.1-vc4.aab` (9 237 343 B, SHA-256 `9c120a0b7c55bbba…`), verify-release-aab: com.esblu.app, vc 4, 1.0.1, min 24 / target 36, nie debug, signer = upload key `51:83:9A:…:11:BA`, 64-bit ABI, iba produkčný backend; 0 textov uzavretej bety |
+| A3 | Interný kanál + telefón | Play Internal testing, telefón | PREŠIEL | rollout spustený (vlastník); po aktualizácii registrácia ukazuje „Po registrácii sa založí účet firmy…“; P1–P4 vykonané z appky |
 | G1 | Popisy SK/EN a release notes vs. balík | repo | PREŠIEL | § 4, `01-store-listing.md` C + H2 |
-| G2 | Kontrolórsky účet | produkcia | ČIASTOČNE | metadáta OK; prihlásenie heslom overí vlastník |
+| G2 | Kontrolórsky účet | produkcia | PREŠIEL | metadáta (§ 4) + úspešné prihlásenie heslom dnes; Play Console App access musí obsahovať `info+playreview@esblu.com` |
+
+Doplnok (2026-11-17, druhé kolo): SMTP — vlastný SMTP v produkčnom Supabase je zapnutý (Dashboard, potvrdil vlastník;
+host/odosielateľa agent nevidí — MCP nevracia konfiguráciu Auth). Pri GDPR evidencii treba poskytovateľa SMTP uviesť
+medzi sprostredkovateľmi, ak tam ešte nie je (otvorená otázka Q11 z `clia-gdpr-reconciliation-2026-11-10.md`).
+Vedľajšie nálezy z testu: zrušenie účtu v appke prebehlo (job 23:01:40); po teste zostal v produkcii testovací účet
+vytvorený cez Google (23:04, owner novej firmy „Moja firma“) — zmazať v appke Nastavenia → Zrušiť účet, ak nie je potrebný.
+Produkčné vydanie v Play Console: iba koncept (neodoslané).
