@@ -86,6 +86,43 @@ Create an account for your company directly in the app or at www.esblu.com. Once
 
 Short description a ostatné polia bez zmeny (`release/play-submission/01-store-listing.md`).
 
-## 6. Validácia
+## 6. Validácia (2026-11-17)
 
-Pozri sekciu „Výsledky“ nižšie (doplnené po staging E2E a produkčnom smoke teste).
+Kód: `tsc --noEmit` OK; ESLint zmenených súborov 0 chýb (celý `npm run lint` hlási 33 chýb / 31 varovaní iba
+v nezmenených súboroch — existujúci stav `origin/main`); `next build` overený Vercel Preview buildom
+`dpl_2ZthwANJhEeLJRpf2aPriKojwEZn` (READY; sandbox nemá prístup k Google Fonts). Testy: `test:google-oauth` 17/0,
+`test:google-oauth-db` 26/0 (nová matica open/closed/fail-closed), `test:dashboard-today` 18/0, `test:i18n` 114/0,
+`test:auth-recovery` 18/0, `test:clia-gdpr` 17/0.
+
+Staging `esblu-test` (migrácia aplikovaná; syntetické účty `@esblu-qa.invalid`, transakcie s rollbackom):
+
+| Krok | Výsledok |
+|---|---|
+| hook pre nový e-mail mimo allowlistu (e-mail aj Google) | povolené |
+| súhlasy pri registrácii (VOP 1.1 / zásady 1.4) | zapísané, 0 čakajúcich |
+| založenie firmy | `created = true`, rola owner, druhé volanie bez novej firmy |
+| firemné VOP 1.2 + DPA 1.3 (owner) | prijaté |
+| pred overením IČO | trial neaktívny, faktúra `ENTITLEMENT_DENIED:invoicing` |
+| po overení IČO (server, service_role) | trial aktívny, 14 dní |
+| prvý syntetický doklad (koncept faktúry pod RLS) | uložený |
+| pozvánka (token) → registrácia pozvaného | hook povolí; vlastnú firmu nezaloží (`ESBLU_PENDING_INVITE_EXISTS`); prijatie = presne zadaná rola; opakované prijatie `ESBLU_INVITE_ALREADY_ACCEPTED` |
+| oprávnenia employee | pozvať `ESBLU_NOT_ACTIVE_OWNER_OR_ADMIN`, prijať VOP za firmu `ESBLU_NOT_ACTIVE_OWNER` |
+| opakované čerpanie trialu (iná firma, to isté IČO s medzerami) | trial **nie** |
+| iný tenant | 0 viditeľných faktúr cudzej firmy |
+| režim `closed_beta` | cudzí e-mail 403 (nová hláška), allowlist/pozvánky/Google pozvánka OK, Apple bez obchvatu, chýbajúci riadok = zatvorené |
+
+Produkcia `assetpilot` (po migrácii; read-only počty + jedna transakcia s rollbackom, žiadne trvalé zápisy dát):
+politika `open`; všetkých 7 existujúcich používateľov s firmou → `ensure` nezaloží novú firmu (0 chýb);
+nový syntetický zákazník: hook OK (e-mail aj Google), súhlasy, firma, VOP+DPA, trial až po IČO, prvý doklad,
+0 viditeľných cudzích firiem/faktúr/dokladov; pozvánka admin → prijatá ako admin; opakované čerpanie trialu odmietnuté.
+Security advisors: nové iba očakávané `rls_enabled_no_policy` (INFO) pre `registration_policy` (zámerne ako `beta_allowlist`).
+
+Web (Preview, Playwright 1440×900 a 390×844, SK/EN/DE): bez horizontálneho posunu, „Vytvoriť účet“ viditeľné na
+úvodnej obrazovke, snímka aplikácie na mobile v prvom zobrazení, skip-link → `#obsah`, mobilné menu sa zatvára Esc,
+`/login?rezim=registracia` otvorí registráciu, 0 výskytov „beta/tester“ na `/`, registrácii a cenníku, právne
+stránky 200 so spoločnou hlavičkou, OG obrázok + `summary_large_image`, `theme-color #05080f`.
+
+Neoverené automatom (vyžaduje zadanie hesla / Google účtu v prehliadači — vykoná vlastník): interaktívna registrácia
+e-mailom s potvrdením e-mailu na stagingu, prihlásenie cez Google, prihlásenie existujúceho používateľa heslom.
+Postup: `/login?rezim=registracia` → nový e-mail → potvrdiť e-mail → Nastavenia → Identita firmy (IČO) →
+Faktúry → nový koncept; Google: `/login` → „Pokračovať cez Google“ (ak je na danom prostredí zapnutý).
