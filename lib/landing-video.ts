@@ -21,7 +21,7 @@ export const VIDEO_CAPTIONS_SK = "/video/esblu-demo-sk.vtt";
 export const SITE_URL = "https://www.esblu.com";
 
 /** Dĺžka videa v sekundách. */
-export const VIDEO_DURATION_SECONDS = 416;
+export const VIDEO_DURATION_SECONDS = 405;
 
 /**
  * Dátum zverejnenia videa v tvare ISO 8601 (napr. "2026-09-23").

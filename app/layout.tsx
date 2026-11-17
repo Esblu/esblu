@@ -25,12 +25,19 @@ const geistMono = Geist_Mono({
 // appka dnes nemá per-locale metadata (SSR vždy vykresľuje DEFAULT_LOCALE,
 // pozri komentár pri <html lang> nižšie), preto title/description/OG/
 // Twitter ostávajú jeden spoločný (SK) text, nie nová i18n vrstva. Text
-// musí odzrkadľovať uzavretú beta a NESMIE tvrdiť, že eFaktúra je hotová
-// (bod 10 zadania) — PDF faktúr (FÁZA 3A) tu tiež nie je prezentované ako
-// eFaktúra.
+// NESMIE tvrdiť, že eFaktúra je hotová (bod 10 zadania) — PDF faktúr
+// (FÁZA 3A) tu tiež nie je prezentované ako eFaktúra. Od 2026-11-17
+// (verejná registrácia) bez zmienky o uzavretej bete.
 const LANDING_SOCIAL_TITLE = "Esblu — firma pod kontrolou";
 const LANDING_SOCIAL_DESCRIPTION =
-  "Faktúry, autá, stroje, sklad, dokumenty a termíny malej firmy na jednom mieste. Esblu ukáže, čo potrebuje pozornosť. Aktuálne v uzavretej beta verzii.";
+  "Faktúry, autá, stroje, sklad, dokumenty a termíny malej firmy na jednom mieste. Esblu ukáže, čo potrebuje pozornosť. Vyskúšajte 14 dní zadarmo, bez platobnej karty.";
+// Náhľad pri zdieľaní: skutočná obrazovka Esblu s demo údajmi (1200×630).
+const LANDING_SOCIAL_IMAGE = {
+  url: "/images/landing/esblu-og.png",
+  width: 1200,
+  height: 630,
+  alt: "Esblu — prehľad Dnes s modulmi a upozorneniami (demo údaje)",
+};
 
 export const metadata: Metadata = {
   // metadataBase je potrebná na to, aby Next.js vedel relatívne cesty
@@ -46,16 +53,19 @@ export const metadata: Metadata = {
     siteName: "Esblu",
     locale: "sk_SK",
     type: "website",
+    images: [LANDING_SOCIAL_IMAGE],
   },
   twitter: {
-    card: "summary",
+    card: "summary_large_image",
     title: LANDING_SOCIAL_TITLE,
     description: LANDING_SOCIAL_DESCRIPTION,
+    images: [LANDING_SOCIAL_IMAGE.url],
   },
 };
 
 export const viewport: Viewport = {
-  themeColor: "#2563eb",
+  // Farba pozadia appky (--color-page-bg) — tmavý rámec prehliadača/PWA.
+  themeColor: "#05080f",
   // MOBILE CHAT LAYOUT BUG fix (2026-08-30): default Chrome/Android WebView
   // viewport behavior ("resizes-visual") shrinká iba VIZUÁLNY viewport pri
   // otvorení soft klávesnice, ale NIE layout viewport — takže `dvh` jednotky

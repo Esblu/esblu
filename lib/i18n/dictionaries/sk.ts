@@ -608,34 +608,33 @@ const sk = {
   landing: {
     nav: {
       features: "Funkcie",
+      howItWorks: "Ako začať",
       pricing: "Cenník",
       demo: "Ukážka",
-      freePlan: "Bezplatný plán",
       contact: "Kontakt",
       login: "Prihlásiť sa",
+      register: "Vytvoriť účet",
       backToTop: "Esblu – späť na začiatok",
       mainNavAriaLabel: "Hlavná navigácia",
       openMenu: "Otvoriť menu",
       closeMenu: "Zavrieť menu",
+      skipToContent: "Preskočiť na obsah",
     },
     hero: {
-      badge: "Uzavretá beta",
+      badge: "Firemná evidencia pre malé firmy",
       title: "Firma pod kontrolou.",
       subtitle: "Faktúry, autá, stroje, sklad, dokumenty a termíny na jednom mieste. Esblu vám ukáže, čo vo firme potrebuje pozornosť — a pomôže to rovno vybaviť.",
-      ctaPrimary: "Požiadať o beta prístup",
+      ctaPrimary: "Vytvoriť účet zdarma",
       ctaSecondary: "Prihlásiť sa",
       ctaVideo: "Pozrieť ukážku",
-      betaNotice:
-        "Esblu je momentálne v uzavretej beta verzii. Nové účty sú dostupné len pre schválených testerov.",
-      cardKicker: "Jeden systém pre malú firmu",
-      cardTitle: "Všetko dôležité prehľadne",
-      cardAiNote: "Menej ručného prepisovania dokumentov",
-      moduleInboxDesc: "Dokumenty",
-      moduleVehiclesDesc: "Technické údaje",
-      moduleMachinesDesc: "Firemná technika",
-      moduleInventoryDesc: "Položky a množstvo",
-      moduleBusinessPartnersDesc: "Zákazníci a dodávatelia",
-      moduleInvoicesDesc: "Fakturácia a úhrady",
+      point1: "14 dní zadarmo",
+      point2: "Bez platobnej karty",
+      point3: "Nič sa automaticky neúčtuje",
+      trialNote: "Skúšobná verzia sa spustí po overení IČO firmy.",
+      screenshotsLabel: "Ukážka aplikácie Esblu s demo údajmi",
+      screenshotDesktopAlt: "Esblu na počítači — prehľad Dnes s modulmi, upozorneniami na faktúry po splatnosti, nízky stav skladu a blížiace sa STK (demo údaje)",
+      screenshotMobileAlt: "Esblu v mobile — prehľad Dnes s urgentnými úlohami a modulmi (demo údaje)",
+      screenshotCaption: "Skutočné obrazovky Esblu s ukážkovými údajmi",
     },
     video: {
       kicker: "Produktová ukážka",
@@ -647,12 +646,10 @@ const sk = {
         "Rozhranie Esblu — firemný prehľad s modulmi a upozorneniami na blížiace sa termíny",
       audioLanguage: "Zvuk v slovenčine",
       ctaTitle: "Chcete zistiť, či Esblu dáva zmysel aj pre vašu firmu?",
-      ctaDescription:
-        "Napíšte nám, o akú firmu ide a čo dnes riešite cez papiere, Excel alebo WhatsApp. Ozveme sa a povieme si, či vám Esblu vie pomôcť.",
-      ctaPrimary: "Požiadať o beta prístup",
+      ctaDescription: "Vytvorte si účet a 14 dní vyskúšajte všetky hlavné moduly. Ak si nie ste istí, napíšte nám na info@esblu.com — radi poradíme.",
+      ctaPrimary: "Vytvoriť účet zdarma",
       ctaSecondary: "Prejsť na funkcie",
-      betaNotice:
-        "Ukážka je verejná a nevyžaduje registráciu. Beta prístup riešime individuálne e-mailom.",
+      publicNote: "Ukážka je verejná a nevyžaduje registráciu.",
     },
     features: {
       kicker: "Jeden systém namiesto Excelu, WhatsAppu a fakturačky",
@@ -692,6 +689,17 @@ const sk = {
       chatDesc:
         "Interná komunikácia medzi členmi vašej firmy priamo v Esblu. Správy v reálnom čase, prílohy a možnosť odkázať na konkrétne vozidlo, stroj, skladovú položku alebo dokument.",
     },
+    steps: {
+      kicker: "Ako začať",
+      title: "Účet máte za pár minút",
+      subtitle: "Bez inštalácie a bez platobnej karty. Esblu funguje v prehliadači na počítači aj v mobile.",
+      step1Title: "Vytvorte si účet",
+      step1Desc: "Zaregistrujte sa e-mailom alebo cez Google a potvrďte obchodné podmienky a zásady spracúvania osobných údajov.",
+      step2Title: "Založte firmu a overte IČO",
+      step2Desc: "Ako vlastník firmy potvrdíte VOP a zmluvu o spracúvaní osobných údajov (DPA). Po overení IČO sa spustí 14-dňová skúšobná verzia.",
+      step3Title: "Pozvite tím a začnite",
+      step3Desc: "Pridajte vozidlá, stroje, sklad a prvé doklady. Kolegov pozvete e-mailom a každému nastavíte, k čomu má prístup.",
+    },
     ai: {
       kicker: "AI spracovanie",
       title: "Menej ručného prepisovania dokumentov",
@@ -727,8 +735,8 @@ const sk = {
       badge: "Skúšobná verzia pre firmu",
       price: "0 €",
       priceNote: "bez platobnej karty",
-      cta: "Požiadať o beta prístup",
-      note: "Esblu je momentálne v uzavretej beta verzii — nové účty sú dostupné len pre schválených testerov. Po 14 dňoch si vyberiete iba moduly, ktoré používate; vaše údaje sa nemažú a ostávajú na čítanie. Ceny modulov sú zatiaľ orientačné a pred spustením sa môžu zmeniť.",
+      cta: "Vytvoriť účet zdarma",
+      note: "Po 14 dňoch si vyberiete Esblu Komplet alebo iba moduly, ktoré používate. Vaše údaje sa nemažú a ostávajú na čítanie. Skúšobná verzia platí raz pre jednu firmu (IČO).",
     },
     security: {
       kicker: "Dôvera a bezpečnosť",
@@ -742,13 +750,17 @@ const sk = {
     },
     finalCta: {
       title: "Vyskúšajte, či vám Esblu zjednoduší firemnú evidenciu.",
-      description:
-        "Esblu je momentálne v uzavretej beta verzii. Nové účty sú dostupné len pre schválených testerov. Napíšte nám a po schválení vám radi otvoríme prístup zdarma.",
-      ctaPrimary: "Požiadať o beta prístup",
+      description: "Vytvorte si účet, overte IČO firmy a 14 dní používajte všetky hlavné moduly zadarmo. Bez platobnej karty.",
+      ctaPrimary: "Vytvoriť účet zdarma",
       ctaSecondary: "Už mám účet",
     },
     footer: {
-      tagline: "Uzavretá beta — firma pod kontrolou",
+      tagline: "Firma pod kontrolou. Faktúry, vozidlá, stroje, sklad a doklady malej firmy na jednom mieste.",
+      productHeading: "Produkt",
+      legalHeading: "Právne informácie",
+      contactHeading: "Kontakt",
+      features: "Funkcie",
+      register: "Vytvoriť účet",
       privacy: "Ochrana osobných údajov",
       terms: "Všeobecné obchodné podmienky",
       cookies: "Cookies",
@@ -756,6 +768,7 @@ const sk = {
       subprocessors: "Sprostredkovatelia",
       contact: "Kontakt",
       login: "Prihlásenie",
+      operator: "Prevádzkovateľ: Esblu s. r. o.",
       copyright: "© {{year}} Esblu",
     },
   },
@@ -767,8 +780,8 @@ const sk = {
       apple: "Pokračovať cez Apple",
       startFailed: "Prihlásenie cez poskytovateľa sa nepodarilo spustiť. Skúste to, prosím, znova.",
       cancelled: "Prihlásenie bolo zrušené.",
-      failed: "Prihlásenie sa nepodarilo. Ak ešte nemáte prístup do uzavretej beta verzie alebo pozvánku, kontaktujte nás na info@esblu.com.",
-      betaRequired: "Tento Google účet nemá prístup do uzavretej beta verzie Esblu. Ak máte pozvánku, otvorte odkaz z pozvánky a prihláste sa e-mailom, na ktorý prišla. Prístup do bety vám zriadime na info@esblu.com.",
+      failed: "Prihlásenie sa nepodarilo. Skúste to znova alebo nás kontaktujte na info@esblu.com.",
+      betaRequired: "Registrácia nových firiem je momentálne pozastavená. Ak máte pozvánku, otvorte odkaz z pozvánky a prihláste sa e-mailom, na ktorý prišla. S otázkami vám pomôžeme na info@esblu.com.",
       redirecting: "Presmerúvame na Google…",
     },
     login: {
@@ -776,6 +789,7 @@ const sk = {
       registerTitle: "Registrácia firmy",
       subtitleLogin: "Prihlás sa do aplikácie Esblu.",
       subtitleRegister: "Vytvor nový účet pre svoju firmu.",
+      registerTrialNotice: "Po registrácii sa založí účet firmy. Po overení IČO firma získa 14 dní všetkých hlavných modulov zadarmo — bez platobnej karty, nič sa automaticky neúčtuje.",
       email: "E-mail",
       password: "Heslo",
       confirmPasswordPlaceholder: "Potvrdenie hesla",
@@ -810,10 +824,8 @@ const sk = {
       registrationFailedPrefix: "Registrácia sa nepodarila: ",
     },
     closedBeta: {
-      message:
-        "Esblu je momentálne v uzavretej beta verzii. Registrácia je dostupná iba pre schválených beta testerov. Ak máte záujem, napíšte nám na info@esblu.com.",
-      registerNotice:
-        "Esblu je momentálne v uzavretej beta verzii. Registrácia novej firmy je dostupná iba pre schválených beta testerov. Ak máte schválený prístup, pokračujte nižšie — inak nás kontaktujte na info@esblu.com.",
+      message: "Registrácia nových firiem je momentálne pozastavená. Ak máte pozvánku alebo schválený prístup, napíšte nám na info@esblu.com.",
+      registerNotice: "Registrácia nových firiem je momentálne pozastavená. Ak máte pozvánku alebo schválený prístup, napíšte nám na info@esblu.com.",
     },
     resetPassword: {
       title: "Obnovenie hesla",
@@ -2218,7 +2230,7 @@ const sk = {
   onboarding: {
     checkingEmailConfirmation: "Overujem potvrdenie e-mailu...",
     bootstrappingCompany: "Zakladám firemný účet...",
-    betaRequiredTitle: "Uzavretá beta",
+    betaRequiredTitle: "Registrácia pozastavená",
     invalidLinkTitle: "Odkaz nie je platný",
     invalidLinkDescription:
       "Tento odkaz je platný iba bezprostredne po potvrdení e-mailu z registrácie novej firmy. Skús sa prihlásiť znova.",
@@ -4167,7 +4179,7 @@ const sk = {
     kicker: "Cenník",
     headline: "Jedna cena za celú firmu.",
     intro: "Platíte za firmu, nie za každého zamestnanca. Vyberte si Esblu Komplet so všetkými modulmi alebo iba moduly, ktoré používate.",
-    betaNotice: "Esblu je v uzavretej beta verzii. Online platba zatiaľ nie je dostupná — aktiváciu vybavujeme osobne cez info@esblu.com.",
+    betaNotice: "Online platba zatiaľ nie je dostupná — predplatné po skončení skúšobnej verzie aktivujeme cez info@esblu.com.",
     trial: {
       badge: "Skúšobná verzia",
       title: "{{days}} dní zadarmo",
@@ -4184,8 +4196,8 @@ const sk = {
       after: "Po 14 dňoch sa skúšobná verzia sama skončí — nič sa neúčtuje. Potom si vyberiete Esblu Komplet alebo jednotlivé moduly.",
       keepData: "Keď skúšobná verzia skončí, vaše údaje sa nikdy nemažú.",
       afterStorage: "Po skončení skúšobnej verzie bez predplatného nové súbory nenahráte; existujúce súbory ostávajú zachované.",
-      cta: "Požiadať o 14-dňovú skúšobnú verziu",
-      ctaNote: "Počas uzavretej beta verzie posielame prístup po schválení.",
+      cta: "Vytvoriť účet zdarma",
+      ctaNote: "Skúšobná verzia sa spustí po overení IČO firmy. Bez platobnej karty.",
     },
     complete: {
       badge: "Odporúčame",

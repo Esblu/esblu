@@ -593,34 +593,33 @@ const de = {
   landing: {
     nav: {
       features: "Funktionen",
+      howItWorks: "So starten Sie",
       pricing: "Preise",
       demo: "Demo",
-      freePlan: "Kostenloser Plan",
       contact: "Kontakt",
       login: "Anmelden",
+      register: "Konto erstellen",
       backToTop: "Esblu – zurück zum Anfang",
       mainNavAriaLabel: "Hauptnavigation",
       openMenu: "Menü öffnen",
       closeMenu: "Menü schließen",
+      skipToContent: "Zum Inhalt springen",
     },
     hero: {
-      badge: "Geschlossene Beta",
+      badge: "Firmenverwaltung für kleine Betriebe",
       title: "Ihre Firma im Griff.",
       subtitle: "Rechnungen, Fahrzeuge, Maschinen, Lager, Dokumente und Fristen an einem Ort. Esblu zeigt Ihnen, was in der Firma Aufmerksamkeit braucht — und hilft, es gleich zu erledigen.",
-      ctaPrimary: "Beta-Zugang anfragen",
+      ctaPrimary: "Kostenloses Konto erstellen",
       ctaSecondary: "Anmelden",
       ctaVideo: "Demo ansehen",
-      betaNotice:
-        "Esblu befindet sich derzeit in einer geschlossenen Betaphase. Neue Konten sind nur für freigegebene Tester verfügbar.",
-      cardKicker: "Ein System für kleine Firmen",
-      cardTitle: "Alles Wichtige im Überblick",
-      cardAiNote: "Weniger manuelles Abtippen von Dokumenten",
-      moduleInboxDesc: "Dokumente",
-      moduleVehiclesDesc: "Technische Daten",
-      moduleMachinesDesc: "Firmentechnik",
-      moduleInventoryDesc: "Artikel und Mengen",
-      moduleBusinessPartnersDesc: "Kunden und Lieferanten",
-      moduleInvoicesDesc: "Rechnungsstellung und Zahlungen",
+      point1: "14 Tage kostenlos",
+      point2: "Ohne Zahlungskarte",
+      point3: "Keine automatische Abbuchung",
+      trialNote: "Die Testversion startet nach der Prüfung der Firmen-ID (IČO).",
+      screenshotsLabel: "Vorschau der Esblu-App mit Demodaten",
+      screenshotDesktopAlt: "Esblu am Computer — Übersicht „Heute“ mit Modulen, Hinweisen auf überfällige Rechnungen, niedrigen Lagerbestand und anstehende Prüftermine (Demodaten)",
+      screenshotMobileAlt: "Esblu auf dem Smartphone — Übersicht „Heute“ mit dringenden Aufgaben und Modulen (Demodaten)",
+      screenshotCaption: "Echte Esblu-Bildschirme mit Beispieldaten",
     },
     video: {
       kicker: "Produktdemo",
@@ -632,12 +631,10 @@ const de = {
         "Esblu Oberfläche — Firmenübersicht mit Modulen und Hinweisen auf anstehende Fristen",
       audioLanguage: "Ton auf Slowakisch",
       ctaTitle: "Möchten Sie wissen, ob Esblu zu Ihrem Betrieb passt?",
-      ctaDescription:
-        "Schreiben Sie uns, um was für einen Betrieb es geht und was Sie heute über Papier, Excel oder WhatsApp lösen. Wir melden uns und klären, ob Esblu Ihnen helfen kann.",
-      ctaPrimary: "Beta-Zugang anfragen",
+      ctaDescription: "Erstellen Sie ein Konto und testen Sie 14 Tage lang alle Hauptmodule. Unsicher? Schreiben Sie uns an info@esblu.com — wir beraten Sie gern.",
+      ctaPrimary: "Kostenloses Konto erstellen",
       ctaSecondary: "Zu den Funktionen",
-      betaNotice:
-        "Das Video ist öffentlich und erfordert keine Registrierung. Den Beta-Zugang klären wir individuell per E-Mail.",
+      publicNote: "Das Video ist öffentlich und erfordert keine Registrierung.",
     },
     features: {
       kicker: "Ein System statt Excel, WhatsApp und Rechnungsprogramm",
@@ -677,6 +674,17 @@ const de = {
       chatDesc:
         "Interne Kommunikation zwischen den Mitgliedern Ihrer Firma direkt in Esblu. Nachrichten in Echtzeit, Anhänge und die Möglichkeit, auf ein bestimmtes Fahrzeug, eine Maschine, einen Lagerartikel oder ein Dokument zu verweisen.",
     },
+    steps: {
+      kicker: "So starten Sie",
+      title: "Ihr Konto ist in wenigen Minuten bereit",
+      subtitle: "Ohne Installation und ohne Zahlungskarte. Esblu läuft im Browser am Computer und auf dem Smartphone.",
+      step1Title: "Konto erstellen",
+      step1Desc: "Registrieren Sie sich per E-Mail oder mit Google und bestätigen Sie die Geschäftsbedingungen und die Datenschutzhinweise.",
+      step2Title: "Firma anlegen und Firmen-ID prüfen",
+      step2Desc: "Als Firmeninhaber bestätigen Sie die AGB und den Auftragsverarbeitungsvertrag (AVV). Nach der Prüfung der Firmen-ID (IČO) startet die 14-tägige Testversion.",
+      step3Title: "Team einladen und loslegen",
+      step3Desc: "Erfassen Sie Fahrzeuge, Maschinen, Lager und die ersten Belege. Kollegen laden Sie per E-Mail ein und legen fest, worauf sie Zugriff haben.",
+    },
     ai: {
       kicker: "KI-Verarbeitung",
       title: "Weniger manuelles Abtippen von Dokumenten",
@@ -713,8 +721,8 @@ const de = {
       badge: "Testversion für Firmen",
       price: "0 €",
       priceNote: "ohne Zahlungskarte",
-      cta: "Beta-Zugang anfragen",
-      note: "Esblu befindet sich derzeit in einer geschlossenen Beta — neue Konten gibt es nur für freigegebene Tester. Nach 14 Tagen wählen Sie nur die Module, die Sie nutzen; Ihre Daten werden nicht gelöscht und bleiben lesbar. Die Modulpreise sind Richtwerte und können sich vor dem Start ändern.",
+      cta: "Kostenloses Konto erstellen",
+      note: "Nach 14 Tagen wählen Sie Esblu Komplett oder nur die Module, die Sie nutzen. Ihre Daten werden nicht gelöscht und bleiben lesbar. Die Testversion gibt es einmal pro Firma (Firmen-ID).",
     },
     security: {
       kicker: "Vertrauen und Sicherheit",
@@ -729,13 +737,17 @@ const de = {
     },
     finalCta: {
       title: "Testen Sie, ob Esblu Ihre Firmenverwaltung vereinfacht.",
-      description:
-        "Esblu befindet sich derzeit in einer geschlossenen Betaphase. Neue Konten sind nur für freigegebene Tester verfügbar. Schreiben Sie uns, und wir öffnen Ihnen nach Freigabe gerne kostenlosen Zugang.",
-      ctaPrimary: "Beta-Zugang anfragen",
+      description: "Erstellen Sie ein Konto, lassen Sie die Firmen-ID prüfen und nutzen Sie 14 Tage lang alle Hauptmodule kostenlos. Ohne Zahlungskarte.",
+      ctaPrimary: "Kostenloses Konto erstellen",
       ctaSecondary: "Ich habe bereits ein Konto",
     },
     footer: {
-      tagline: "Geschlossene Beta — Ihre Firma im Griff",
+      tagline: "Ihre Firma im Griff. Rechnungen, Fahrzeuge, Maschinen, Lager und Belege eines kleinen Betriebs an einem Ort.",
+      productHeading: "Produkt",
+      legalHeading: "Rechtliches",
+      contactHeading: "Kontakt",
+      features: "Funktionen",
+      register: "Konto erstellen",
       privacy: "Datenschutz",
       terms: "Allgemeine Geschäftsbedingungen",
       cookies: "Cookies",
@@ -743,6 +755,7 @@ const de = {
       subprocessors: "Unterauftragsverarbeiter",
       contact: "Kontakt",
       login: "Anmeldung",
+      operator: "Betreiber: Esblu s. r. o.",
       copyright: "© {{year}} Esblu",
     },
   },
@@ -754,8 +767,8 @@ const de = {
       apple: "Mit Apple fortfahren",
       startFailed: "Die Anmeldung beim Anbieter konnte nicht gestartet werden. Bitte versuchen Sie es erneut.",
       cancelled: "Die Anmeldung wurde abgebrochen.",
-      failed: "Die Anmeldung ist fehlgeschlagen. Wenn Sie noch keinen Zugang zur geschlossenen Beta oder keine Einladung haben, kontaktieren Sie uns unter info@esblu.com.",
-      betaRequired: "Dieses Google-Konto hat keinen Zugang zur geschlossenen Beta von Esblu. Wenn Sie eine Einladung haben, öffnen Sie den Einladungslink und melden Sie sich mit der E-Mail-Adresse an, an die sie gesendet wurde. Beta-Zugang erhalten Sie über info@esblu.com.",
+      failed: "Die Anmeldung ist fehlgeschlagen. Bitte versuchen Sie es erneut oder kontaktieren Sie uns unter info@esblu.com.",
+      betaRequired: "Die Registrierung neuer Firmen ist derzeit pausiert. Wenn Sie eine Einladung haben, öffnen Sie den Einladungslink und melden Sie sich mit der E-Mail-Adresse an, an die sie gesendet wurde. Bei Fragen helfen wir unter info@esblu.com.",
       redirecting: "Weiterleitung zu Google…",
     },
     login: {
@@ -763,6 +776,7 @@ const de = {
       registerTitle: "Firma registrieren",
       subtitleLogin: "Melden Sie sich bei Esblu an.",
       subtitleRegister: "Erstellen Sie ein neues Konto für Ihre Firma.",
+      registerTrialNotice: "Nach dem Erstellen des Kontos legen Sie Ihre Firma an. Nach der Prüfung der Firmen-ID erhalten Sie 14 Tage lang alle Hauptmodule kostenlos — ohne Zahlungskarte, keine automatische Abbuchung.",
       email: "E-Mail",
       password: "Passwort",
       confirmPasswordPlaceholder: "Passwort bestätigen",
@@ -797,10 +811,8 @@ const de = {
       registrationFailedPrefix: "Die Registrierung ist fehlgeschlagen: ",
     },
     closedBeta: {
-      message:
-        "Esblu befindet sich derzeit in einer geschlossenen Betaphase. Die Registrierung ist nur für freigegebene Beta-Tester möglich. Bei Interesse schreiben Sie uns an info@esblu.com.",
-      registerNotice:
-        "Esblu befindet sich derzeit in einer geschlossenen Betaphase. Die Registrierung einer neuen Firma ist nur für freigegebene Beta-Tester möglich. Wenn Sie freigegeben wurden, fahren Sie unten fort — andernfalls kontaktieren Sie uns unter info@esblu.com.",
+      message: "Die Registrierung neuer Firmen ist derzeit pausiert. Wenn Sie eine Einladung oder einen freigegebenen Zugang haben, schreiben Sie uns an info@esblu.com.",
+      registerNotice: "Die Registrierung neuer Firmen ist derzeit pausiert. Wenn Sie eine Einladung oder einen freigegebenen Zugang haben, schreiben Sie uns an info@esblu.com.",
     },
     resetPassword: {
       title: "Passwort zurücksetzen",
@@ -2210,7 +2222,7 @@ const de = {
   onboarding: {
     checkingEmailConfirmation: "E-Mail-Bestätigung wird überprüft...",
     bootstrappingCompany: "Firmenkonto wird erstellt...",
-    betaRequiredTitle: "Geschlossene Beta",
+    betaRequiredTitle: "Registrierung pausiert",
     invalidLinkTitle: "Der Link ist ungültig",
     invalidLinkDescription:
       "Dieser Link ist nur unmittelbar nach der E-Mail-Bestätigung bei der Registrierung einer neuen Firma gültig. Bitte erneut anmelden.",
@@ -4157,7 +4169,7 @@ const de = {
     kicker: "Preise",
     headline: "Ein Preis für die ganze Firma.",
     intro: "Sie zahlen pro Firma, nicht pro Mitarbeiter. Wählen Sie Esblu Komplett mit allen Modulen oder nur die Module, die Sie nutzen.",
-    betaNotice: "Esblu ist in einer geschlossenen Beta. Online-Zahlung ist noch nicht verfügbar — die Aktivierung erledigen wir persönlich über info@esblu.com.",
+    betaNotice: "Online-Zahlung ist noch nicht verfügbar — nach der Testversion aktivieren wir Ihr Abonnement über info@esblu.com.",
     trial: {
       badge: "Testversion",
       title: "{{days}} Tage kostenlos",
@@ -4174,8 +4186,8 @@ const de = {
       after: "Nach 14 Tagen endet die Testversion von selbst — es wird nichts berechnet. Danach wählen Sie Esblu Komplett oder einzelne Module.",
       keepData: "Wenn die Testversion endet, werden Ihre Daten nie gelöscht.",
       afterStorage: "Nach dem Ende der Testversion ohne Abo können keine neuen Dateien hochgeladen werden; bestehende Dateien bleiben erhalten.",
-      cta: "14-tägige Testversion anfragen",
-      ctaNote: "Während der geschlossenen Beta senden wir den Zugang nach Freigabe.",
+      cta: "Kostenloses Konto erstellen",
+      ctaNote: "Die Testversion startet nach der Prüfung der Firmen-ID. Ohne Zahlungskarte.",
     },
     complete: {
       badge: "Empfohlen",

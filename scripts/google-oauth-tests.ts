@@ -57,6 +57,9 @@ await check("F odmietnutie Auth hookom uzavretej bety → lokalizovaná beta spr
   const description = "Esblu je momentálne v uzavretej beta verzii. Ak máte schválený beta prístup, kontaktujte nás na info@esblu.com.";
   assert.equal(oauth.decideOAuthDestination({ providerError: "access_denied", providerErrorDescription: description, hasSession: false, hasActiveMembership: false, pending: pending() }), "/login?oauth=beta");
   assert.equal(oauth.decideOAuthDestination({ providerError: "server_error", providerErrorDescription: description, hasSession: false, hasActiveMembership: false, pending: null }), "/login?oauth=beta");
+  // Hláška hooku po 20261117100000 (režim closed_beta = rýchly návrat).
+  const paused = "Registrácia nových firiem je dočasne pozastavená. Ak máte pozvánku alebo schválený prístup, kontaktujte nás na info@esblu.com.";
+  assert.equal(oauth.decideOAuthDestination({ providerError: "access_denied", providerErrorDescription: paused, hasSession: false, hasActiveMembership: false, pending: pending() }), "/login?oauth=beta");
 });
 
 await check("zrušenie u Google → „zrušené“; iná chyba → „chyba“; bez session → „chyba“", () => {

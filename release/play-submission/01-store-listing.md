@@ -1,5 +1,7 @@
 # 01 — Store listing (draft, NEPUBLIKOVANÉ)
 
+> **2026-11-17 — verejná registrácia:** posledný odsek plného popisu (uzavretá beta) je nahradený textom nižšie. Presný text na vloženie do Play Console: `docs/open-registration-2026-11-17.md` § 5.
+
 Zdroj textov: existujúce schválené texty webu Esblu (`lib/i18n/dictionaries/{sk,en}.ts` → `landing.hero`, `landing.features`). Žiadne nové marketingové tvrdenia; **bez** eFaktúry/Peppol, bez bankového napojenia, bez tvrdení o 10-ročnej archivácii, bez billing/predplatného.
 
 | Pole (limit) | SK (primárny jazyk) | EN (voliteľný preklad listingu) |
@@ -26,7 +28,7 @@ Esblu pomáha menším stavebným, servisným, dopravným a technickým firmám 
 • Faktúry — Vystavovanie faktúr, evidencia úhrad a opravné doklady priamo v Esblu. Finalizované faktúry majú nemenné fakturačné údaje a je možné ich vytvoriť ako PDF.
 • Firemný chat — Interná komunikácia medzi členmi vašej firmy priamo v Esblu. Správy v reálnom čase, prílohy a možnosť odkázať na konkrétne vozidlo, stroj, skladovú položku alebo dokument.
 
-Esblu je momentálne v uzavretej beta verzii. Nové účty sú dostupné len pre schválených testerov.
+Účet pre firmu si vytvoríte priamo v aplikácii alebo na www.esblu.com. Po overení IČO firmy získate 14 dní všetkých hlavných modulov zadarmo — bez platobnej karty, nič sa automaticky neúčtuje.
 ```
 
 ### EN
@@ -41,7 +43,7 @@ Esblu helps smaller construction, service, transport and technical companies man
 • Invoices — Issue invoices, track payments and create correction documents directly in Esblu. Finalized invoices have immutable billing data and can be created as a PDF.
 • Company chat — Internal communication between your company's team members, built into Esblu. Real-time messages, attachments, and the ability to reference a specific vehicle, machine, inventory item or document.
 
-Esblu is currently in closed beta. New accounts are available only to approved testers.
+Create an account for your company directly in the app or at www.esblu.com. Once your company ID is verified, you get all main modules free for 14 days — no payment card, nothing is charged automatically.
 ```
 
 Pozn.: „evidencia úhrad" = ručné zaznamenanie úhrady používateľom, nie platobná funkcia.

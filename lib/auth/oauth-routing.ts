@@ -65,7 +65,9 @@ export type OAuthDestination =
  * zavádzajúce „Prihlásenie bolo zrušené". Text sa iba porovná, nikdy sa
  * nezobrazí ani nezaloguje.
  */
-const BETA_GATE_REJECTION = /uzavretej beta|closed beta|beta verzii|beta access/i;
+// Pôvodná hláška (do 20261117100000) aj nová hláška režimu closed_beta
+// („Registrácia nových firiem je dočasne pozastavená …“).
+const BETA_GATE_REJECTION = /uzavretej beta|closed beta|beta verzii|beta access|registrácia nových firiem je dočasne pozastavená/i;
 
 /**
  * Kam po návrate z Google/Apple. Iba pevné cesty; token pozvánky iba v

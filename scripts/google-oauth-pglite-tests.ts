@@ -321,5 +321,104 @@ await check("PROD hook dnes: NOVÝ pozvaný (bez allowlistu) cez Google je BEZPE
   assert.equal((r.error as Row)?.http_code, 403);
 });
 
+// =============================================================================
+// VEREJNÁ REGISTRÁCIA (20261117100000): registration_policy + obe kontroly.
+// Funkcie doslovne z migrácie; tabuľka politiky rovnaká ako v migrácii.
+// =============================================================================
+const OPEN_REG = "supabase/migrations/20261117100000_open_public_registration.sql";
+await db.exec(`
+  create table public.registration_policy (
+    id boolean primary key default true,
+    mode text not null default 'closed_beta',
+    updated_at timestamptz not null default now(),
+    note text null,
+    constraint registration_policy_singleton_check check (id),
+    constraint registration_policy_mode_check check (mode in ('open', 'closed_beta'))
+  );
+  insert into public.registration_policy (id, mode) values (true, 'open');
+  alter table public.company_members add column if not exists created_at timestamptz not null default now();
+  create function public.esblu_my_active_company_id() returns uuid language sql stable as $f$ select null::uuid $f$;
+  create function public.esblu_set_session_company_internal(p_user uuid, p_company uuid) returns void language sql as $f$ select null::void $f$;
+`);
+await db.exec(extractFunction(OPEN_REG, "esblu_public_registration_open"));
+await db.exec(extractFunction(OPEN_REG, "esblu_before_user_created_beta_gate"));
+await db.exec(extractFunction(OPEN_REG, "esblu_ensure_my_owner_company"));
+const setMode = (mode: string) => db.query("update public.registration_policy set mode = $1 where id", [mode]);
+async function signUp(email: string, provider = "email", meta: Row = {}): Promise<string | null> {
+  if (!allowed(await hook(email, provider, meta))) return null;
+  const id = await uuid();
+  await db.query("insert into auth.users (id, email) values ($1, $2)", [id, email]);
+  return id;
+}
+
+await check("OPEN: nový zákazník mimo allowlistu (e-mail aj Google) → účet aj firma s rolou owner, raz", async () => {
+  await setMode("open");
+  for (const [email, provider] of [["verejny.novy@firma.example", "email"], ["verejny.google@gmail.example", "google"]]) {
+    const uid = await signUp(email, provider);
+    assert.ok(uid, `${provider}: hook mal povoliť`);
+    const r = await ensure(uid!);
+    assert.equal((r.rows[0] as Row).created, true);
+    assert.equal((r.rows[0] as Row).role, "owner");
+    assert.equal((await ensure(uid!)).rows[0].created, false, "druhé volanie nezaloží druhú firmu");
+    assert.equal(await count("select count(*)::int as n from public.company_members where user_id = $1", [uid]), 1);
+  }
+});
+
+await check("OPEN: e-mail s čakajúcou pozvánkou si firmu nezaloží (ESBLU_PENDING_INVITE_EXISTS) a pozvánku prijme so správnou rolou", async () => {
+  await setMode("open");
+  const token = await invite("open.pozvany@firma.example", "employee");
+  const uid = await signUp("open.pozvany@firma.example", "email", { esblu_invite_token: token });
+  assert.ok(uid);
+  assert.match(await errorOf(() => ensure(uid!)), /ESBLU_PENDING_INVITE_EXISTS/);
+  assert.equal((await accept(uid!, token)).rows[0].role, "employee");
+});
+
+await check("OPEN: allowlist slot sa pri založení firmy iba zaeviduje (consumed_at), prístup neovplyvní", async () => {
+  await setMode("open");
+  await db.query("insert into public.beta_allowlist (email) values ('open.allow@firma.example')");
+  const uid = await signUp("open.allow@firma.example");
+  await ensure(uid!);
+  assert.equal(await count("select count(*)::int as n from public.beta_allowlist where email = 'open.allow@firma.example' and consumed_by = $1", [uid]), 1);
+});
+
+await check("OPEN: prázdny e-mail stále 400", async () => {
+  await setMode("open");
+  assert.equal(((await hook("  ", "email")).error as Row)?.http_code, 400);
+});
+
+await check("CLOSED (rýchly návrat): cudzí e-mail 403 so stabilnou hláškou; ensure bez allowlistu ESBLU_BETA_ACCESS_REQUIRED", async () => {
+  await setMode("closed_beta");
+  const r = await hook("zatvorene.cudzi@firma.example", "email");
+  assert.equal((r.error as Row)?.http_code, 403);
+  assert.match(String((r.error as Row)?.message), /dočasne pozastavená/);
+  assert.doesNotMatch(String((r.error as Row)?.message), /beta/i);
+  const uid = await uuid();
+  await db.query("insert into auth.users (id, email) values ($1, 'zatvorene.bez.hooku@firma.example')", [uid]);
+  assert.match(await errorOf(() => ensure(uid)), /ESBLU_BETA_ACCESS_REQUIRED/);
+});
+
+await check("CLOSED: allowlist, pozvánka s tokenom aj Google pozvánka fungujú ako predtým; Apple bez obchvatu", async () => {
+  await setMode("closed_beta");
+  await db.query("insert into public.beta_allowlist (email) values ('zatvorene.allow@firma.example')");
+  assert.equal(allowed(await hook("zatvorene.allow@firma.example", "email")), true);
+  const token = await invite("zatvorene.pozvany@firma.example", "admin");
+  assert.equal(allowed(await hook("zatvorene.pozvany@firma.example", "email", { esblu_invite_token: token })), true);
+  assert.equal(allowed(await hook("zatvorene.pozvany@firma.example", "google")), true);
+  assert.equal(allowed(await hook("zatvorene.pozvany@firma.example", "apple")), false);
+  assert.equal(allowed(await hook("iny@firma.example", "email", { esblu_invite_token: token })), false);
+});
+
+await check("FAIL CLOSED: chýbajúci riadok politiky = uzavretá registrácia", async () => {
+  await db.query("delete from public.registration_policy");
+  assert.equal((await db.query<{ o: boolean }>("select public.esblu_public_registration_open() as o")).rows[0].o, false);
+  assert.equal(allowed(await hook("bez.politiky@firma.example", "email")), false);
+  await db.query("insert into public.registration_policy (id, mode) values (true, 'open')");
+  assert.equal(allowed(await hook("bez.politiky@firma.example", "email")), true);
+});
+
+await check("CHECK: neznámy režim politiky DB odmietne", async () => {
+  assert.match(await errorOf(() => setMode("everyone")), /registration_policy_mode_check/);
+});
+
 console.log(`google-oauth-db: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

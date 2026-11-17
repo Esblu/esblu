@@ -594,34 +594,33 @@ const en = {
   landing: {
     nav: {
       features: "Features",
+      howItWorks: "Get started",
       pricing: "Pricing",
       demo: "Demo",
-      freePlan: "Free plan",
       contact: "Contact",
       login: "Log in",
+      register: "Create account",
       backToTop: "Esblu – back to top",
       mainNavAriaLabel: "Main navigation",
       openMenu: "Open menu",
       closeMenu: "Close menu",
+      skipToContent: "Skip to content",
     },
     hero: {
-      badge: "Closed beta",
+      badge: "Company records for small businesses",
       title: "Your company under control.",
       subtitle: "Invoices, vehicles, machines, stock, documents and deadlines in one place. Esblu shows you what needs attention in your company — and helps you deal with it right away.",
-      ctaPrimary: "Request beta access",
+      ctaPrimary: "Create a free account",
       ctaSecondary: "Log in",
       ctaVideo: "Watch the demo",
-      betaNotice:
-        "Esblu is currently in closed beta. New accounts are available only to approved testers.",
-      cardKicker: "One system for a small company",
-      cardTitle: "Everything important, at a glance",
-      cardAiNote: "Less manual retyping of documents",
-      moduleInboxDesc: "Documents",
-      moduleVehiclesDesc: "Technical data",
-      moduleMachinesDesc: "Company equipment",
-      moduleInventoryDesc: "Items and quantities",
-      moduleBusinessPartnersDesc: "Customers and suppliers",
-      moduleInvoicesDesc: "Invoicing and payments",
+      point1: "14 days free",
+      point2: "No payment card",
+      point3: "Nothing is charged automatically",
+      trialNote: "The trial starts once your company ID (IČO) is verified.",
+      screenshotsLabel: "Esblu app preview with demo data",
+      screenshotDesktopAlt: "Esblu on desktop — Today overview with modules, alerts for overdue invoices, low stock and upcoming vehicle inspections (demo data)",
+      screenshotMobileAlt: "Esblu on mobile — Today overview with urgent tasks and modules (demo data)",
+      screenshotCaption: "Real Esblu screens with sample data",
     },
     video: {
       kicker: "Product demo",
@@ -633,12 +632,10 @@ const en = {
         "Esblu interface — company overview with modules and alerts for upcoming deadlines",
       audioLanguage: "Audio in Slovak",
       ctaTitle: "Want to find out whether Esblu fits your company?",
-      ctaDescription:
-        "Tell us what kind of company you run and what you handle on paper, in Excel or over WhatsApp today. We will get back to you and see whether Esblu can help.",
-      ctaPrimary: "Request beta access",
+      ctaDescription: "Create an account and try all main modules for 14 days. Not sure yet? Write to us at info@esblu.com — we are happy to help.",
+      ctaPrimary: "Create a free account",
       ctaSecondary: "See the features",
-      betaNotice:
-        "The video is public and requires no sign-up. Beta access is arranged individually by e-mail.",
+      publicNote: "The video is public and requires no sign-up.",
     },
     features: {
       kicker: "One system instead of Excel, WhatsApp and an invoicing app",
@@ -678,6 +675,17 @@ const en = {
       chatDesc:
         "Internal communication between your company's team members, built into Esblu. Real-time messages, attachments, and the ability to reference a specific vehicle, machine, inventory item or document.",
     },
+    steps: {
+      kicker: "Get started",
+      title: "Your account is ready in minutes",
+      subtitle: "No installation and no payment card. Esblu runs in the browser on desktop and mobile.",
+      step1Title: "Create your account",
+      step1Desc: "Sign up with e-mail or Google and accept the terms and conditions and the privacy policy.",
+      step2Title: "Set up your company and verify its ID",
+      step2Desc: "As the company owner you confirm the terms and the data processing agreement (DPA). Once the company ID (IČO) is verified, the 14-day trial starts.",
+      step3Title: "Invite your team and get going",
+      step3Desc: "Add vehicles, machines, stock and your first documents. Invite colleagues by e-mail and decide what each of them can access.",
+    },
     ai: {
       kicker: "AI processing",
       title: "Less manual retyping of documents",
@@ -713,8 +721,8 @@ const en = {
       badge: "Company trial",
       price: "€0",
       priceNote: "no payment card required",
-      cta: "Request beta access",
-      note: "Esblu is currently in closed beta — new accounts are available only to approved testers. After 14 days you choose only the modules you use; your data is not deleted and stays readable. Module prices are indicative and may change before launch.",
+      cta: "Create a free account",
+      note: "After 14 days you choose Esblu Complete or only the modules you use. Your data is not deleted and stays readable. The trial is available once per company (company ID).",
     },
     security: {
       kicker: "Trust and security",
@@ -728,13 +736,17 @@ const en = {
     },
     finalCta: {
       title: "See if Esblu can simplify your company records.",
-      description:
-        "Esblu is currently in closed beta. New accounts are available only to approved testers. Write to us and we'll be happy to open free access for you once approved.",
-      ctaPrimary: "Request beta access",
+      description: "Create an account, verify your company ID and use all main modules free for 14 days. No payment card required.",
+      ctaPrimary: "Create a free account",
       ctaSecondary: "I already have an account",
     },
     footer: {
-      tagline: "Closed beta — your company under control",
+      tagline: "Your company under control. Invoices, vehicles, machines, stock and documents of a small company in one place.",
+      productHeading: "Product",
+      legalHeading: "Legal",
+      contactHeading: "Contact",
+      features: "Features",
+      register: "Create account",
       privacy: "Privacy Policy",
       terms: "Terms and Conditions",
       cookies: "Cookies",
@@ -742,6 +754,7 @@ const en = {
       subprocessors: "Subprocessors",
       contact: "Contact",
       login: "Log in",
+      operator: "Operator: Esblu s. r. o.",
       copyright: "© {{year}} Esblu",
     },
   },
@@ -753,8 +766,8 @@ const en = {
       apple: "Continue with Apple",
       startFailed: "Sign-in with the provider could not be started. Please try again.",
       cancelled: "Sign-in was cancelled.",
-      failed: "Sign-in failed. If you do not yet have closed-beta access or an invitation, contact us at info@esblu.com.",
-      betaRequired: "This Google account does not have access to the Esblu closed beta. If you have an invitation, open the invitation link and sign in with the email address it was sent to. To request beta access, contact info@esblu.com.",
+      failed: "Sign-in failed. Please try again or contact us at info@esblu.com.",
+      betaRequired: "Registration of new companies is currently paused. If you have an invitation, open the invitation link and sign in with the email address it was sent to. For questions, contact info@esblu.com.",
       redirecting: "Redirecting to Google…",
     },
     login: {
@@ -762,6 +775,7 @@ const en = {
       registerTitle: "Register a company",
       subtitleLogin: "Log in to Esblu.",
       subtitleRegister: "Create a new account for your company.",
+      registerTrialNotice: "After creating your account you set up your company. Once its company ID is verified, you get all main modules free for 14 days — no payment card, nothing is charged automatically.",
       email: "Email",
       password: "Password",
       confirmPasswordPlaceholder: "Confirm password",
@@ -796,10 +810,8 @@ const en = {
       registrationFailedPrefix: "Registration failed: ",
     },
     closedBeta: {
-      message:
-        "Esblu is currently in closed beta. Registration is only available to approved beta testers. If you're interested, write to us at info@esblu.com.",
-      registerNotice:
-        "Esblu is currently in closed beta. Registering a new company is only available to approved beta testers. If you have been approved, continue below — otherwise contact us at info@esblu.com.",
+      message: "Registration of new companies is currently paused. If you have an invitation or approved access, write to us at info@esblu.com.",
+      registerNotice: "Registration of new companies is currently paused. If you have an invitation or approved access, write to us at info@esblu.com.",
     },
     resetPassword: {
       title: "Reset password",
@@ -2190,7 +2202,7 @@ const en = {
   onboarding: {
     checkingEmailConfirmation: "Verifying email confirmation...",
     bootstrappingCompany: "Creating company account...",
-    betaRequiredTitle: "Closed beta",
+    betaRequiredTitle: "Registration paused",
     invalidLinkTitle: "The link is not valid",
     invalidLinkDescription:
       "This link is only valid immediately after confirming your email from the new company registration. Please log in again.",
@@ -4137,7 +4149,7 @@ const en = {
     kicker: "Pricing",
     headline: "One price for the whole company.",
     intro: "You pay per company, not per employee. Choose Esblu Complete with all modules or only the modules you use.",
-    betaNotice: "Esblu is in closed beta. Online payment is not available yet — we handle activation personally via info@esblu.com.",
+    betaNotice: "Online payment is not available yet — after the trial we activate your subscription via info@esblu.com.",
     trial: {
       badge: "Trial",
       title: "{{days}} days free",
@@ -4154,8 +4166,8 @@ const en = {
       after: "After 14 days the trial ends on its own — nothing is charged. Then you choose Esblu Complete or single modules.",
       keepData: "When the trial ends, your data is never deleted.",
       afterStorage: "After the trial ends without a subscription you cannot upload new files; existing files stay intact.",
-      cta: "Request a 14-day trial",
-      ctaNote: "During the closed beta we send access after approval.",
+      cta: "Create a free account",
+      ctaNote: "The trial starts once your company ID is verified. No payment card required.",
     },
     complete: {
       badge: "Recommended",

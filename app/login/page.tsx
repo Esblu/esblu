@@ -16,18 +16,19 @@ import LanguageSwitcher from "@/app/components/LanguageSwitcher";
 import { SocialAuthButtons } from "@/app/components/auth/SocialAuthButtons";
 import { LegalDocLink } from "@/app/components/LegalDocLink";
 import { signOutOnThisDevice } from "@/lib/sign-out";
+import { wantsRegisterMode } from "@/lib/public-links";
+import { BrandMark, PublicSiteFooter, PublicSiteHeader } from "@/app/components/public/PublicSite";
+import { CheckIcon } from "@/app/components/icons/AppIcons";
 
-// Closed Beta (supabase/migrations/20260816130000_add_closed_beta_allowlist.sql):
-// verejná owner registrácia je dočasne obmedzená iba na schválených beta
-// testerov (server-side e-mail allowlist). Primárne vynútenie beží v
-// Supabase Auth hooku "Before User Created"
-// (esblu_before_user_created_beta_gate) — pre neschválený e-mail sa
-// auth.users vôbec nevytvorí a signUp() nižšie vráti chybu priamo s touto
-// slovenskou správou. ensureMyOwnerCompany() dole má rovnaký check ako
-// defense-in-depth (pre prípad, že by Auth hook v Dashboarde ešte nebol
-// zapnutý). Bežné prihlásenie (login()) a existujúci /invite/[token] flow
-// touto zmenou nie sú nijako dotknuté.
-const CLOSED_BETA_ERROR_MARKER = "uzavretej beta verzii";
+// Verejná registrácia (20261117100000): o tom, či sa nový zákazník môže
+// zaregistrovať, rozhoduje server — public.registration_policy (open /
+// closed_beta), ktorú čítajú Auth hook esblu_before_user_created_beta_gate
+// aj esblu_ensure_my_owner_company. V režime closed_beta hook odmietne
+// signUp() slovenskou hláškou (stabilný marker nižšie; pôvodný marker
+// ponechaný kvôli spätnému návratu) — tu sa nahradí lokalizovaným textom.
+// Bežné prihlásenie (login()) a /invite/[token] flow tým nie sú dotknuté.
+const REGISTRATION_CLOSED_MARKERS = ["dočasne pozastavená", "uzavretej beta verzii"];
+const isRegistrationClosedMessage = (message: string) => REGISTRATION_CLOSED_MARKERS.some((marker) => message.includes(marker));
 
 // DÔLEŽITÉ: táto stránka slúži AJ existujúcim používateľom (owner, admin,
 // employee) na bežné prihlásenie — login() preto NIKDY nesmie volať
@@ -92,6 +93,11 @@ export default function LoginPage() {
       }
 
       const params = new URLSearchParams(window.location.search);
+      // Odkaz „Vytvoriť účet“ z verejného webu (/login?rezim=registracia).
+      if (wantsRegisterMode(window.location.search)) {
+        await Promise.resolve();
+        setMode("register");
+      }
       const oauth = params.get("oauth");
       if (oauth === "cancelled" || oauth === "error" || oauth === "beta") {
         await Promise.resolve();
@@ -224,7 +230,7 @@ export default function LoginPage() {
       // bez znalosti UI jazyka) — tu ju nahradíme preloženou verziou podľa
       // aktuálneho jazyka namiesto zobrazenia surového SK textu z error.message.
       alert(
-        error.message.includes(CLOSED_BETA_ERROR_MARKER)
+        isRegistrationClosedMessage(error.message)
           ? t("auth.closedBeta.message")
           : t("auth.login.registrationFailedPrefix") + error.message
       );
@@ -331,16 +337,25 @@ async function resetPassword() {
     setConfirmPassword("");
   }
 
-  return (
-    <main className="app-shell-bg flex min-h-screen items-center justify-center px-4 py-6">
-      <div className="w-full max-w-sm rounded-doc border border-doc-border bg-surface-1 p-4 sm:p-6">
+  const card = (
+      <div className="w-full max-w-md rounded-[var(--radius-card-lg)] border border-subtle bg-surface-1 p-5 shadow-2xl shadow-black/40 sm:p-7">
+        {IS_MOBILE_BUILD && (
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <BrandMark size="sm" />
+            <LanguageSwitcher subtle />
+          </div>
+        )}
         <div className="flex items-start justify-between gap-3">
-          <h1 className="text-lg font-semibold tracking-tight text-primary sm:text-xl">
+          <h1 className="text-xl font-bold tracking-tight text-primary sm:text-2xl">
             {mode === "login"
               ? t("auth.login.title")
               : t("auth.login.registerTitle")}
           </h1>
-          <LanguageSwitcher subtle />
+          {!IS_MOBILE_BUILD && (
+            <span className="lg:hidden">
+              <LanguageSwitcher subtle />
+            </span>
+          )}
         </div>
 
         <p className="mt-0.5 text-[13px] leading-5 text-muted-esblu">
@@ -369,7 +384,7 @@ async function resetPassword() {
 
         {mode === "register" && (
           <p className="ui-notice mt-3 border-brand-500/30 bg-info-soft text-brand-300">
-            {t("auth.closedBeta.registerNotice")}
+            {t("auth.login.registerTrialNotice")}
           </p>
         )}
 
@@ -446,7 +461,8 @@ async function resetPassword() {
                 <LegalDocLink path="/ochrana-osobnych-udajov" className="font-medium text-brand-300 hover:underline">
                   {t("auth.login.agreePrivacyLink")}
                 </LegalDocLink>{" "}
-                {t("auth.login.agreePrivacySuffix")}.
+                {t("auth.login.agreePrivacySuffix")}
+                {t("auth.login.agreePrivacySuffix").endsWith(".") ? "" : "."}
               </span>
             </label>
           </div>
@@ -469,7 +485,7 @@ async function resetPassword() {
 </button>
 
 {/* Google / Apple — registrácia iba so zaškrtnutým súhlasom (rovnako ako
-    e-mail). Prístup aj tak rozhodne uzavretá beta a pozvánky. */}
+    e-mail). O vzniku účtu rozhoduje server (registration_policy + pozvánky). */}
 <SocialAuthButtons
   mode={mode}
   legalAccepted={mode === "register" && agreedTerms && agreedPrivacy}
@@ -518,6 +534,55 @@ async function resetPassword() {
           </Link>
         </nav>
       </div>
-    </main>
+  );
+
+  // Mobilná appka: iba karta (bez marketingovej hlavičky webu).
+  if (IS_MOBILE_BUILD) {
+    return (
+      <main className="app-shell-bg flex min-h-screen items-center justify-center px-4 py-6">
+        {card}
+      </main>
+    );
+  }
+
+  // Web: spoločný rámec verejných stránok (hlavička + pätička) a vedľa
+  // formulára stručne, čo nový zákazník po registrácii dostane.
+  return (
+    <div className="flex min-h-screen flex-col bg-page-bg text-primary">
+      <PublicSiteHeader hideAuthLinks />
+      <main className="relative flex-1 overflow-hidden">
+        <div aria-hidden="true" className="pointer-events-none absolute inset-0 bg-[radial-gradient(45%_45%_at_15%_0%,rgba(1,129,253,0.14),rgba(1,129,253,0)_70%)]" />
+        <div className="relative mx-auto grid max-w-6xl items-center gap-10 px-4 py-8 sm:px-6 sm:py-12 lg:grid-cols-[1fr_28rem] lg:gap-16 lg:px-8 lg:py-20">
+          <section className="order-2 lg:order-1" aria-labelledby="login-aside-title">
+            <p className="text-xs font-bold uppercase tracking-[0.16em] text-accent-cyan sm:text-sm">{t("landing.hero.badge")}</p>
+            <h2 id="login-aside-title" className="mt-3 text-3xl font-black tracking-tight text-primary sm:text-4xl">{t("landing.hero.title")}</h2>
+            <p className="mt-4 max-w-xl text-base leading-7 text-secondary">{t("landing.steps.subtitle")}</p>
+            <ol className="mt-6 space-y-4">
+              {[1, 2, 3].map((n) => (
+                <li key={n} className="flex gap-3">
+                  <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-brand-600 text-sm font-black text-white">{n}</span>
+                  <span>
+                    <span className="block font-bold text-primary">{t(`landing.steps.step${n}Title`)}</span>
+                    <span className="mt-0.5 block text-sm leading-6 text-secondary">{t(`landing.steps.step${n}Desc`)}</span>
+                  </span>
+                </li>
+              ))}
+            </ol>
+            <ul className="mt-6 flex flex-wrap gap-x-5 gap-y-2 text-sm font-medium text-secondary">
+              {["landing.hero.point1", "landing.hero.point2", "landing.hero.point3"].map((key) => (
+                <li key={key} className="flex items-center gap-2">
+                  <span className="grid h-5 w-5 place-items-center rounded-full bg-brand-500/15 text-brand-300">
+                    <CheckIcon size={13} strokeWidth={2.6} />
+                  </span>
+                  {t(key)}
+                </li>
+              ))}
+            </ul>
+          </section>
+          <div className="order-1 flex justify-center lg:order-2">{card}</div>
+        </div>
+      </main>
+      <PublicSiteFooter />
+    </div>
   );
 }

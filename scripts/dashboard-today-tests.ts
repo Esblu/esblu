@@ -225,7 +225,9 @@ await check("metadata stránky zodpovedajú positioningu a nesľubujú eFaktúru
   const layout = read("app/layout.tsx");
   assert.ok(layout.includes('const LANDING_SOCIAL_TITLE = "Esblu — firma pod kontrolou";'));
   const desc = /LANDING_SOCIAL_DESCRIPTION =\s*"([^"]+)"/.exec(layout)?.[1] ?? "";
-  assert.ok(desc.includes("uzavretej beta"));
+  // Verejná registrácia (2026-11-17): bez zmienky o uzavretej bete, so skúšobnou verziou.
+  assert.ok(!/beta/i.test(desc));
+  assert.ok(desc.includes("14 dní zadarmo"));
   assert.ok(!/efakt|peppol/i.test(desc));
 });
 

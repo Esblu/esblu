@@ -4,6 +4,8 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import LanguageSwitcher from "./LanguageSwitcher";
+import { IS_MOBILE_BUILD } from "@/lib/build-target";
+import { PublicSiteFooter, PublicSiteHeader } from "./public/PublicSite";
 
 type PublicLegalLayoutProps = {
   titleKey: string;
@@ -28,10 +30,10 @@ export function PublicLegalLayout({
   const { t } = useLocale();
   const title = t(titleKey);
 
-  return (
-    <main className="app-shell-bg min-h-screen px-4 py-4 sm:px-6 sm:py-8">
-      <article className="mx-auto max-w-3xl rounded-doc border border-doc-border bg-surface-1 p-4 sm:p-6">
+  const article = (
+      <article className="mx-auto max-w-3xl rounded-[var(--radius-card-lg)] border border-subtle bg-surface-1 p-4 sm:p-8">
         <header className="border-b border-subtle pb-4">
+          {IS_MOBILE_BUILD && (
           <div className="flex flex-wrap items-center justify-between gap-3">
             <Link
               href="/login"
@@ -41,6 +43,7 @@ export function PublicLegalLayout({
             </Link>
             <LanguageSwitcher subtle />
           </div>
+          )}
 
           <h1 className="mt-4 text-xl font-semibold tracking-tight text-primary sm:text-2xl">
             {title}
@@ -91,12 +94,27 @@ export function PublicLegalLayout({
             </Link>
           </nav>
 
-          <Link href="/login" className="ui-btn ui-btn-secondary mt-4">
-            {t("legal.backToLogin")}
-          </Link>
+          {IS_MOBILE_BUILD && (
+            <Link href="/login" className="ui-btn ui-btn-secondary mt-4">
+              {t("legal.backToLogin")}
+            </Link>
+          )}
         </footer>
       </article>
-    </main>
+  );
+
+  // Mobilná appka: samostatná karta ako doteraz (bez hlavičky webu).
+  if (IS_MOBILE_BUILD) {
+    return <main className="app-shell-bg min-h-screen px-4 py-4 sm:px-6 sm:py-8">{article}</main>;
+  }
+
+  // Web: spoločný rámec verejných stránok (rovnaká hlavička a pätička ako landing).
+  return (
+    <div className="flex min-h-screen flex-col bg-page-bg text-primary">
+      <PublicSiteHeader />
+      <main className="flex-1 px-4 py-6 sm:px-6 sm:py-12">{article}</main>
+      <PublicSiteFooter />
+    </div>
   );
 }
 

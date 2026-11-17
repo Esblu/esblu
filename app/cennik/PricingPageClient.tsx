@@ -3,8 +3,9 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
-import LanguageSwitcher from "@/app/components/LanguageSwitcher";
 import { TrialOfferList } from "@/app/components/pricing/TrialOfferList";
+import { PublicSiteFooter, PublicSiteHeader } from "@/app/components/public/PublicSite";
+import { REGISTER_HREF } from "@/lib/public-links";
 import {
   ADDON_IDS,
   ADDONS,
@@ -34,17 +35,6 @@ import {
 
 const FAQ = ["1", "2", "3", "4", "5"] as const;
 
-function BrandMark() {
-  return (
-    <span className="flex items-center gap-3">
-      <span className="grid h-10 w-10 place-items-center rounded-xl bg-gradient-to-br from-accent-cyan to-accent-blue-strong shadow-lg shadow-black/30">
-        <span aria-hidden="true" className="h-5 w-5 rotate-45 rounded-sm border-[3px] border-[#051221]" />
-      </span>
-      <span className="text-2xl font-black tracking-tight text-white">Esblu</span>
-    </span>
-  );
-}
-
 export function PricingPageClient() {
   const { t, locale } = useLocale();
   const [selected, setSelected] = useState<BaseModuleId[]>([]);
@@ -66,30 +56,12 @@ export function PricingPageClient() {
 
   return (
     <div className="min-h-screen overflow-x-hidden bg-page-bg text-primary">
-      <header className="sticky top-0 z-50 border-b border-subtle bg-slate-950/95 backdrop-blur-xl">
-        <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-3 sm:px-6 lg:px-8 lg:py-4">
-          <Link href="/" aria-label={t("pricing.nav.backHome")} className="shrink-0 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-cyan">
-            <BrandMark />
-          </Link>
-          {/* Pod sm sa jazyk presúva do úvodu stránky (nižšie), aby sa hlavička netlačila. */}
-          <div className="flex shrink-0 items-center gap-2 sm:gap-3">
-            <div className="hidden sm:block">
-              <LanguageSwitcher variant="dark" />
-            </div>
-            <Link href="/login" className="btn-secondary inline-flex min-h-11 items-center whitespace-nowrap px-4 py-2 text-sm">
-              {t("pricing.nav.login")}
-            </Link>
-          </div>
-        </div>
-      </header>
+      <PublicSiteHeader />
 
       <main>
         <section className="relative overflow-hidden pb-8 pt-6 sm:py-20">
-          <div aria-hidden="true" className="pointer-events-none absolute -top-40 left-1/2 h-80 w-[40rem] -translate-x-1/2 rounded-full bg-accent-cyan/10 blur-3xl" />
+          <div aria-hidden="true" className="pointer-events-none absolute -top-40 left-1/2 h-80 w-[40rem] -translate-x-1/2 rounded-full bg-brand-500/10 blur-3xl" />
           <div className="relative mx-auto max-w-3xl px-4 text-center sm:px-6 lg:px-8">
-            <div className="mb-5 flex justify-center sm:hidden">
-              <LanguageSwitcher variant="dark" />
-            </div>
             <p className="text-xs font-bold uppercase tracking-[0.18em] text-accent-cyan sm:text-sm">{t("pricing.kicker")}</p>
             <h1 className="mt-2 text-[1.875rem] font-black leading-[1.15] tracking-tight text-primary sm:mt-3 sm:text-5xl sm:leading-tight">{t("pricing.headline")}</h1>
             <p className="mt-3 text-base leading-7 text-secondary sm:mt-5 sm:text-lg sm:leading-8">{t("pricing.intro")}</p>
@@ -120,9 +92,9 @@ export function PricingPageClient() {
                 <p>{t("pricing.trial.after")}</p>
                 <p className="font-semibold text-primary">{t("pricing.trial.keepData")}</p>
               </div>
-              <a href="mailto:info@esblu.com" className="btn-primary mt-5 flex min-h-12 w-full items-center justify-center px-5 py-3 text-center sm:mt-7 sm:px-6">
+              <Link href={REGISTER_HREF} className="btn-primary mt-5 flex min-h-12 w-full items-center justify-center px-5 py-3 text-center sm:mt-7 sm:px-6">
                 {t("pricing.trial.cta")}
-              </a>
+              </Link>
               <p className="mt-3 text-center text-xs text-muted-esblu">{t("pricing.trial.ctaNote")}</p>
             </div>
           </div>
@@ -284,9 +256,9 @@ export function PricingPageClient() {
               ))}
             </div>
             <div className="mt-8 flex flex-col items-stretch justify-center gap-3 sm:mt-10 sm:flex-row sm:items-center">
-              <a href="mailto:info@esblu.com" className="btn-primary inline-flex min-h-12 items-center justify-center px-6 py-3">
+              <Link href={REGISTER_HREF} className="btn-primary inline-flex min-h-12 items-center justify-center px-6 py-3">
                 {t("pricing.trial.cta")}
-              </a>
+              </Link>
               <Link href="/" className="btn-secondary inline-flex min-h-12 items-center justify-center px-6 py-3">
                 {t("pricing.nav.backHome")}
               </Link>
@@ -294,6 +266,7 @@ export function PricingPageClient() {
           </div>
         </section>
       </main>
+      <PublicSiteFooter />
     </div>
   );
 }
