@@ -60,12 +60,23 @@ check("build/create skripty: žiadny natvrdo JBR override, používajú Use-Jdk2
   assert.match(build, /gradlew\.bat bundleRelease "-Dorg\.gradle\.java\.home=\$env:JAVA_HOME"/, "aj Gradle daemon na JDK 21");
 });
 check("build skript: verzia/podpis/package nezmenené", () => {
-  assert.match(build, /\$VersionCode = 2\b/, "vc2 = Internal Testing build z mobile-platform (vc1 už existuje)");
+  // 2026-11-17: versionCode/Name sú parametre (predtým natvrdo vc2); default = najbližší voľný kód po vc3.
+  assert.match(build, /\[int\]\$VersionCode = 4\b/, "default vc4 (vc1–vc3 už použité)");
+  assert.match(build, /\[string\]\$VersionName = "1\.0\.1"/);
+  assert.match(build, /if \(\$VersionCode -lt 4\)/, "použité kódy vc1–vc3 sú odmietnuté");
   assert.match(build, /if \(Test-Path \$OutAab\) \{ Fail /, "existujúci AAB sa neprepíše");
-  assert.match(build, /\$VersionName = "1\.0\.0"/);
   assert.match(build, /esblu-upload-key-2026\.jks/);
   assert.match(build, /\$Alias = "esblu"/);
   assert.match(build, /-notcontains "com\.esblu\.app"/);
+});
+check("build skript: čerstvé mobilné podklady (-PrepareWeb) a kontrola synchronizovaných assetov", () => {
+  assert.match(build, /\[switch\]\$PrepareWeb/);
+  assert.match(build, /npm run build --workspace mobile/);
+  assert.match(build, /npx cap sync android/);
+  assert.match(build, /android-prebuild-check\.mjs --target production/);
+  assert.match(build, /verify-mobile-bundle\.mjs \$Assets/);
+  assert.match(build, /"testerov", "approved testers", "freigegebene Tester"/, "uzavretá beta v bundli = FAIL");
+  assert.ok(!/[^\x00-\x7F]/.test(build), "skript je čisté ASCII (PowerShell 5.1)");
 });
 check("jdk21.ps1: java -version bez NativeCommandError (Process capture), overený exit code + major 21", () => {
   assert.doesNotMatch(jdk, /&\s*\$java\s+-version\s+2>&1/, "žiadne & java -version 2>&1 (PS 5.1 + EAP Stop = NativeCommandError)");

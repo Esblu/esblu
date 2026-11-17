@@ -48,6 +48,20 @@ Create an account for your company directly in the app or at www.esblu.com. Once
 
 Pozn.: „evidencia úhrad" = ručné zaznamenanie úhrady používateľom, nie platobná funkcia.
 
+## H2. Release notes 1.0.1 (versionCode 4 — verejné vydanie, Production, ≤ 500 zn./jazyk)
+
+Zodpovedá balíku vc4 (zdroj `0a44a60`, `docs/android-release-vc4-2026-11-17.md`): registrácia firmy priamo v appke
+(e-mail; Google iba ak je v produkčnom Supabase povolený redirect `com.esblu.app://auth/callback`), bez textov o uzavretej bete.
+
+```
+<sk-SK>
+Prvé verejné vydanie Esblu pre Android. Účet pre firmu si vytvoríte priamo v aplikácii a po overení IČO používate 14 dní všetky hlavné moduly zadarmo: Inbox s načítaním dokladov, vozidlá, stroje, sklad, obchodných partnerov, faktúry s PDF, firemný chat a push notifikácie.
+</sk-SK>
+<en-US>
+First public release of Esblu for Android. Create an account for your company directly in the app and, once your company ID is verified, use all main modules free for 14 days: Inbox with document reading, vehicles, machines, inventory, business partners, invoices with PDF, company chat and push notifications.
+</en-US>
+```
+
 ## H. Release notes 1.0.0 (Internal testing, ≤ 500 zn./jazyk)
 
 ```

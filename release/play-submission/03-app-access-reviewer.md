@@ -1,6 +1,8 @@
 # 03 — App access / reviewer balík (finálny, 2026-10-11)
 
-**Stav:** pripravené. **Účet NEVYTVORENÝ:** vyžaduje zápis do produkcie a čaká na výslovný súhlas vlastníka.
+**Stav 2026-11-17:** účet **existuje** ako `info+playre…@esblu.com` (presná adresa v Play Console → App access), owner firmy Esblu Demo s.r.o., VOP 1.2 + DPA 1.3 prijaté, 9 ručných nárokov aktívnych, chýba druhý člen pre chat — pozri `docs/android-release-vc4-2026-11-17.md` § 4. Do App access textu (sekcia 6) vložiť skutočnú adresu, nie `play-review@esblu.com`.
+
+~~**Stav:** pripravené. **Účet NEVYTVORENÝ:** vyžaduje zápis do produkcie a čaká na výslovný súhlas vlastníka.~~
 
 Bez súhlasu sa nevytvára žiadny produkčný účet, firma, allowlist ani grant.
 
