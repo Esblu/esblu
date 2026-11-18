@@ -213,6 +213,61 @@ Preview premenné vetvy prepnuté na `ESBLU_BILLING_MODE=off`, `NEXT_PUBLIC_ESBL
 (zmazanie premenných vetvy môže vlastník spraviť vo Verceli). Produkcia sa nemenila; ostré platby vypnuté.
 Vedľajší nález (nesúvisiaci, neopravený): na `/nastavenia/predplatne` sa zobrazujú nepreložené kľúče `subscription.planPanel.*`.
 
+## 8. Stripe sandbox cez oficiálny Stripe CLI (2026-11-18)
+
+### 8.1 Overený postup (`stripe sandbox create --help`)
+
+Oficiálny Stripe CLI **1.55.12** (npm `@stripe/cli`, repozitár `github.com/stripe/stripe-cli`, správcovia Stripe;
+binárka `@stripe/cli-linux-x64`). `stripe sandbox` je alias `stripe sandboxes` (`create`, `claim`, `list`, `delete`).
+Podľa `stripe sandboxes create --help`:
+
+- **Bez prihlásenia a bez API kľúča v profile** CLI vytvorí **dočasný claimable sandbox s testovacími kľúčmi** — iba
+  s parametrom `--email <adresa>` (adresa iba predvyplní registračný formulár pri neskoršom „claim“) alebo `--from-git`
+  (e-mail a meno z git configu). Kľúče sa uložia do aktuálneho CLI profilu a ďalšie príkazy `stripe …` fungujú hneď.
+- `stripe sandboxes create "<meno>"` (s menom) vyžaduje prihlásenie k live účtu — pre Esblu nepoužiteľné.
+- `--create-blank --country SK` iba pre spravovaný sandbox pod live účtom.
+- Ak anonymné vytvorenie zlyhá, CLI prejde na registráciu v prehliadači.
+
+### 8.2 Pokus v prostredí agenta — BLOKOVANÉ sieťou
+
+```
+stripe sandboxes create --email qa-sandbox@example.invalid --non-interactive --log-level debug
+sandbox: POST /keys/challenge
+sandbox: challenge request failed  error="Post \"https://ai.stripe.com/keys/challenge\": Forbidden"
+Could not provision a sandbox automatically. Opening browser …
+Post "https://dashboard.stripe.com/stripecli/auth": Forbidden
+```
+
+Proxy prostredia agenta blokuje `ai.stripe.com`, `api.stripe.com`, `dashboard.stripe.com` aj sťahovanie z GitHub Releases
+(`HTTP 403 from proxy after CONNECT`). Sandbox sa preto musí vytvoriť na počítači vlastníka (krok 8.4/1). Použitá bola iba
+syntetická adresa `@example.invalid`; žiadny sandbox nevznikol.
+
+### 8.3 Čo sa overilo lokálne s oficiálnymi nástrojmi Stripe (bez siete)
+
+| Test | Výsledok |
+|---|---|
+| Podpis webhooku z **oficiálnej knižnice `stripe` 23.1.0** (`webhooks.generateTestHeaderString`) → overenie adaptérom Esblu | PASS 4/4: platný podpis prijatý; cudzí secret, `livemode:true` a starý timestamp (1 h) odmietnuté |
+| Parametre Checkout Session a Billing Portal z adaptéra Esblu typované oficiálnym SDK (`Stripe.Checkout.SessionCreateParams` vrátane `origin_context`, `expires_at`, `tax_id_collection`, `customer_update`) | PASS (`tsc --strict`) |
+
+### 8.4 Runbook — reálny Stripe test (sandbox + Vercel Preview + staging DB)
+
+1. **Vlastník (PowerShell na PC, Node je nainštalovaný):**
+   `npx @stripe/cli@1.55.12 sandboxes create --email <adresa> --non-interactive` — anonymný claimable sandbox, test kľúče
+   v profile CLI. (Adresa sa posiela Stripe; použiť firemnú alebo vlastnú.)
+2. **Vlastník:** `npx @stripe/cli@1.55.12 prices create --currency eur --unit-amount 1590 -d "recurring[interval]=month" -d "product_data[name]=Esblu Komplet (test)"` → poslať agentovi `price_…` (nie je tajné).
+3. **Agent (po súhlase):** Vercel → `esblu` → Deployment Protection → *Protection Bypass for Automation* (tajomstvo pre
+   doručenie webhookov do chránenej Preview); pošle vlastníkovi presnú webhook URL.
+4. **Vlastník:** `npx @stripe/cli@1.55.12 webhook_endpoints create --url "<URL od agenta>" -d "enabled_events[]=checkout.session.completed" -d "enabled_events[]=checkout.session.expired" -d "enabled_events[]=customer.subscription.created" -d "enabled_events[]=customer.subscription.updated" -d "enabled_events[]=customer.subscription.deleted" -d "enabled_events[]=invoice.paid" -d "enabled_events[]=invoice.payment_failed" -d "enabled_events[]=charge.refunded" -d "enabled_events[]=charge.dispute.created" -d "enabled_events[]=charge.dispute.closed"` → `whsec_…`.
+5. **Vlastník (Vercel UI, nie do chatu):** Preview, vetva `android-release-payments-ios-2026-11-18`: `STRIPE_SECRET_KEY`
+   (`sk_test_…` z `npx @stripe/cli@1.55.12 config --list`) a `STRIPE_WEBHOOK_SECRET` (`whsec_…`).
+6. **Agent:** `ESBLU_BILLING_MODE=stripe_test`, `NEXT_PUBLIC_ESBLU_BILLING_UI=1`, `ESBLU_BILLING_RETURN_ORIGIN` (vetva),
+   staging `billing_provider_prices` (stripe/test/esblu_complete/month/`price_…`) + `web_provider='stripe'`, redeploy, QA firma.
+7. **Testy:** nákup (karta `4242 4242 4242 4242` — **zadáva vlastník** na `checkout.stripe.com`), aktivácia po webhooku,
+   odmietnutá karta `4000 0000 0000 0002`, obnova (`subscriptions update <sub> -d billing_cycle_anchor=now -d proration_behavior=none`),
+   zlyhanie obnovy (platobná metóda `pm_card_chargeCustomerFail` + nové obdobie), vypnutie obnovy v Esblu, refund
+   (`refunds create --charge <ch>` plný / `--amount 500`), dve karty naraz (agent), spor (`pm_card_createDispute`).
+8. **Cleanup:** staging `web_provider='none'`, Preview premenné vetvy vypnúť, bypass zrušiť, sandbox `stripe sandboxes delete`.
+
 ## 6. Otázky do podmienok predplatného (pre CLIA)
 
 Pozri `docs/clia-delta-2026-11-24-draft.md` § 3: kto je predajca, kedy vzniká nárok na refund, či čiastočná refundácia
