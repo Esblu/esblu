@@ -295,7 +295,32 @@ canceled vs. Esblu refunded) → stav bez zmeny, žiadne ďalšie ukončenie u S
 Opakovateľné overenie v Stripe (skript; firma D má po L9 stav `canceled` — nové predplatné ho nahradí):
 `clock-setup` → `renew` → `refund-old` (Esblu aj Stripe `active`) → `refund-current` (Esblu `refunded`, Stripe `canceled`,
 `customer.subscription.deleted` = `stale/TERMINAL_STATE`, 0 aktívnych nárokov) → `verify-terminal` (2× reconciliation,
-stav bez zmeny, zoznam udalostí) → `advance-check` (ďalšie obdobie bez faktúry a platby). Výsledky sa doplnia po behu.
+stav bez zmeny, zoznam udalostí) → `advance-check` (ďalšie obdobie bez faktúry a platby).
+
+#### Výsledky behu (firma QA-STRIPE D, `sub_1UdFkMRKE4QKs2ULSARsG1Rj`, 18. 11. 2026)
+
+| # | Krok | Výsledok | Dôkaz |
+|---|---|---|---|
+| L12 | `refund-old` — plná refundácia staršej faktúry `in_1UdFkMRKE4QKs2ULvzwRrFaJ` (18. 11. → 18. 12. 2026) | **PASS (Stripe + Esblu)**: `charge.refunded` `evt_3UdFkNRKE4QKs2UL1MMgdeHg` prijatá 20:49:04.78, `processed` 20:49:05.77 UTC, bez chyby; audit `older_invoice`, faktúra, obdobie, 15,90 EUR, predplatné; Esblu aj Stripe `active`. Prvý beh hlásil timeout — **chyba testovacieho čakania, nie doručenia ani spracovania**: porovnanie „najnovšej“ udalosti a potom dvojúrovňový filter `summary->refund->>invoice` v PS 5.1 nevrátili riadok, hoci udalosť existovala | staging `billing_events`; skript: filter `summary->>subscription` (osvedčený) + porovnanie faktúry v PowerShelli, opakovaný beh nerefunduje znova (stav charge zo Stripe) |
+| L13 | `refund-current` — plná refundácia faktúry aktuálneho obdobia `in_1UdFlMRKE4QKs2ULdJJDS2bk` (18. 12. 2026 → 18. 1. 2027) | **PASS**: `charge.refunded` `evt_3UdFlRRKE4QKs2UL0BGI8iYO` `processed` 21:22:00 UTC, audit `current_period`, 15,90 EUR; Esblu `refunded` 21:22:01; `esblu.audit.terminal_cancel` 21:22:02 (Esblu ukončilo predplatné u Stripe); `customer.subscription.deleted` 21:22:02 = `stale` (refunded ostal); Stripe `canceled`; 9/9 nárokov `revoked`, 0 účinných. Prvý beh hlásil „1590 != 0“ — **chyba skriptu**: suma sa porovnávala so snímkou charge načítanou **pred** refundáciou | skript: po spracovaní znova načíta charge zo Stripe (tá istá charge, plne refundovaná), porovnanie v centoch (audit = refundované = zaplatené na faktúre, mena), výpis „15,90 EUR“, kontrola 0 nárokov |
+| L14 | `advance-check` — Test Clock posunutý do 22. 2. 2027 | **PASS**: Stripe `canceled`, počet faktúr 2, úspešných platieb 2 (žiadne ďalšie účtovanie); Esblu `refunded`; v staging DB **žiadna** udalosť po 21:22:03 UTC | výpis vlastníka + staging `billing_events` |
+| L15 | `verify-terminal` | **ČAKÁ na beh** — reconciliation preskakuje účet 24 h po poslednej kontrole (D: `last_checked_at` 20:19, `next_check_at` 19. 11. 20:19), takže pôvodná verzia by vrátila `checked=0` a nič by nedokázala | skript: pred každým z 2 behov naplánuje účet QA na okamžitú kontrolu (`billing_reconciliation` iba tohto účtu) a vyžaduje novú kontrolu s výsledkom `in_sync`, Esblu stav bez zmeny, Stripe `canceled`, 0 nárokov |
+
+Stav DB po L14 (read-only SQL, 18. 11. 2026): účet D `refunded`, `ended_at` 21:22:00 UTC, 9 riadkov nárokov zo `subscription`, všetky `revoked`, 0 účinných aktívnych.
+
+### 8.6 Firma QA-STRIPE E — zrušenie v aplikácii a súbežný nákup v dvoch kartách (pripravené)
+
+Staging: firma `QA-STRIPE E (dve karty + zrusenie)` (`5a5a0000-…-0000000000e0`), syntetický owner
+`qa-stripe-e-owner@example.invalid` (bez osobných údajov), výber plánu Komplet (9 cieľových nárokov), 0 predplatných,
+0 zámerov; `web_provider='stripe'`, aktívna cena `price_1UdE7tRKE4QKs2ULYWShYLxS`. Heslo pri vytvorení náhodné a nikomu
+neznáme; prihlasovacie heslo nastaví `-Step qa-login` cez Admin API stagingu iba do schránky vlastníka.
+
+| # | Krok (lokálne Esblu `http://localhost:3000` + `stripe listen`) | Očakávanie | Overenie |
+|---|---|---|---|
+| E1 | Dve karty `/nastavenia/predplatne`, „Pokračovať na platbu“ v oboch čo najrýchlejšie po sebe | obe karty → **tá istá** Stripe Checkout relácia; 1 otvorený zámer | `-Step qa-check` |
+| E2 | Zaplatiť v karte 1 (`4242 4242 4242 4242`), potom skúsiť zaplatiť v karte 2 | 1 zaplatená relácia, 1 predplatné u Stripe; karta 2 zobrazí dokončenú reláciu / nové tlačidlo vráti `ALREADY_SUBSCRIBED` | `qa-check` (najviac 1 `completed`, najviac 1 `paid`, 1 neukončené predplatné) |
+| E3 | V aplikácii zrušiť predplatné (Nastavenia → Predplatné) | Esblu aj Stripe `cancel_at_period_end=true`, stav `active` do konca obdobia, nároky ostávajú | `qa-check` (zhoda Esblu ↔ Stripe) |
+| E4 | Upratanie po teste | owner E `banned_until=infinity`, `web_provider='none'` | agent (staging SQL) |
 
 ### 8.4 Runbook — reálny Stripe test (sandbox + Vercel Preview + staging DB)
 

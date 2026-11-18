@@ -17,6 +17,9 @@
       reconcile      - reconciliation Esblu (lokalny cron): ucet refunded/revoked + Stripe active -> ukoncit u Stripe
       advance-check  - posun Test Clock o dalsie obdobie -> ziadna nova faktura ani platba, Esblu bez zmeny
       verify-terminal - refunded/revoked ostava po customer.subscription.deleted, opakovanej reconciliation; ziadny aktivny narok
+      qa-login     - prihlasenie syntetickeho ownera QA-STRIPE E (qa-stripe-e-owner@example.invalid): nove nahodne
+                     heslo cez Supabase Admin API stagingu, iba do schranky (nevypisuje sa), odblokovanie pouzivatela
+      qa-check     - firma E: zamery checkoutu, relacie v Stripe, predplatne, zrusenie; invarianty dvoch kariet
       status       - stav v Stripe aj v Esblu + posledne riadky stripe listen (tajomstva zamaskovane)
     Kazdy krok vypise OK AZ ked je vysledok overeny v Stripe AJ v testovacej DB Esblu.
 
@@ -32,7 +35,7 @@
 #>
 param(
   [ValidateSet("start", "status", "new-sandbox", "clock-setup", "renew", "fail-renew", "fix-payment", "refund-partial", "refund-full",
-               "refund-old", "refund-current", "reconcile", "advance-check", "verify-terminal")]
+               "refund-old", "refund-current", "reconcile", "advance-check", "verify-terminal", "qa-login", "qa-check")]
   [string]$Step = "start",
   [string]$Project = "esblu-qa2",
   [string]$Email = "",
@@ -57,6 +60,9 @@ $ExposedFile = Join-Path $StateDir "exposed.sha256"             # SHA-256 vystav
 $CronFile = Join-Path $StateDir "cron-$Project.secret"          # nahodny lokalny CRON_SECRET (iba pocas behu okna 1)
 $CompanyD = "5a5a0000-0000-4000-8000-0000000000d0"              # QA-STRIPE D (test clock)
 $OwnerD = "5a5a0000-0000-4000-8000-000000000031"
+$CompanyE = "5a5a0000-0000-4000-8000-0000000000e0"              # QA-STRIPE E (dve karty + zrusenie v aplikacii)
+$OwnerE = "5a5a0000-0000-4000-8000-000000000041"
+$OwnerEEmail = "qa-stripe-e-owner@example.invalid"
 $PriceId = $null
 if (Test-Path $SandboxFile) { $PriceId = (Get-Content $SandboxFile -Raw | ConvertFrom-Json).price }
 $Events = @(
@@ -551,12 +557,25 @@ if ($Step -ne "start") {
       Assert-TerminalKept $subId $acc0.status
       if (-not (Test-Path $CronFile)) { Fail "Okno 1 nebezi (chyba lokalny CRON_SECRET)." }
       $cron = (Get-Content $CronFile -Raw).Trim()
+      $accRow = (Get-Rows "subscription_accounts?provider_subscription_id=eq.$subId&select=id,ended_at")[0]
+      if (-not $accRow) { Fail "Esblu: ucet $subId nenajdeny." }
       for ($k = 1; $k -le 2; $k++) {
+        # Ucet QA naplanovat na okamzitu kontrolu (inak ho reconciliation 24 h preskakuje a checked=0 nic nedokazuje).
+        Invoke-Staging "PATCH" "billing_reconciliation?account_id=eq.$($accRow.id)" @{ last_checked_at = $null; next_check_at = $null } | Out-Null
+        $t0 = [DateTime]::UtcNow
         $res = Invoke-RestMethod -Uri "http://localhost:$Port/api/cron/billing-reconcile" -Headers @{ Authorization = "Bearer $cron" } -Method Get
+        $rec = (Get-Rows "billing_reconciliation?account_id=eq.$($accRow.id)&select=last_checked_at,last_result,last_error_code")[0]
         $acc = Get-EsbluAccount $subId
-        Say "reconciliation #$($k): checked=$($res.checked) summary=$(($res.summary | ConvertTo-Json -Compress)); Esblu stav=$($acc.status)"
+        $s = Get-Sub $subId
+        Say "reconciliation #$($k): checked=$($res.checked) summary=$(($res.summary | ConvertTo-Json -Compress)); ucet QA: vysledok=$($rec.last_result) kod=$($rec.last_error_code) kontrola=$($rec.last_checked_at); Esblu stav=$($acc.status); Stripe stav=$($s.status)"
+        if (-not $rec -or -not $rec.last_checked_at -or [DateTime]::Parse($rec.last_checked_at).ToUniversalTime() -lt $t0.AddSeconds(-5)) { Fail "Reconciliation ucet QA neskontrolovala." }
+        if ($rec.last_result -ne "in_sync") { Fail "Reconciliation vysledok $($rec.last_result) (ocakavane in_sync)." }
         if ($acc.status -ne $acc0.status) { Fail "Reconciliation zmenila stav na $($acc.status)." }
+        if ($s.status -ne "canceled") { Fail "Stripe predplatne nie je canceled (stav=$($s.status))." }
       }
+      $n = Get-ActiveSubEnts $acc0.company_id
+      if ($n -ne 0) { Fail "Firma ma $n ucinnych aktivnych narokov." }
+      Say "Esblu: 0 ucinnych aktivnych narokov"
       $events = Get-SubEvents $subId ""
       Say "Udalosti predplatneho v Esblu ($($events.Count)):"
       $events | ForEach-Object { Say ("  {0}  {1,-34} {2,-10} {3}" -f $_.received_at, $_.event_type, $_.status, $_.error_code) }
@@ -578,6 +597,57 @@ if ($Step -ne "start") {
       if ($c1.invoices -ne $c0.invoices -or $c1.charges -ne $c0.charges) { Fail "Po posune hodin vznikla nova faktura alebo platba." }
       if ($acc1.status -ne $acc0.status) { Fail "Esblu stav sa zmenil." }
       Say "OK: dalsie obdobie bez faktury a bez platby; Esblu bez zmeny."
+    }
+    "qa-login" {
+      # Nahodne heslo (kryptograficky RNG) -> Supabase Admin API stagingu. Heslo ide iba do schranky.
+      $bytes = New-Object byte[] 18
+      [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+      $pw = "Qa-" + ([Convert]::ToBase64String($bytes) -replace "[+/=]", "x")
+      $k = Get-ServiceRole
+      $h = @{ apikey = $k; Authorization = "Bearer $k" }
+      $body = @{ password = $pw; ban_duration = "none"; email_confirm = $true } | ConvertTo-Json -Compress
+      $u = Invoke-RestMethod -Uri "$StagingUrl/auth/v1/admin/users/$OwnerE" -Headers $h -Method Put -ContentType "application/json" -Body $body
+      if ($u.email -ne $OwnerEEmail) { Fail "Admin API vratilo ineho pouzivatela." }
+      Set-Clipboard -Value $pw
+      $pw = $null
+      Say "QA-STRIPE E: e-mail $OwnerEEmail, heslo je v SCHRANKE (nevypisuje sa; vlozte ho iba do prihlasenia http://localhost:$Port)."
+    }
+    "qa-check" {
+      $intents = Get-Rows "billing_checkout_sessions?company_id=eq.$CompanyE&order=created_at.asc&select=id,status,provider,provider_session_id,plan_code,billing_interval,created_at,expires_at,completed_at"
+      Say "Zamery checkoutu firmy E ($($intents.Count)):"
+      foreach ($i in $intents) { Say ("  {0} {1,-10} {2} {3}/{4} vytvoreny {5} relacia {6}" -f $i.id, $i.status, $i.provider, $i.plan_code, $i.billing_interval, $i.created_at, $i.provider_session_id) }
+      $open = @($intents | Where-Object { $_.status -in @("created", "open") })
+      $done = @($intents | Where-Object { $_.status -eq "completed" })
+      if ($open.Count -gt 1) { Fail "Firma E ma $($open.Count) otvorene zamery naraz." }
+      if ($done.Count -gt 1) { Fail "Firma E ma $($done.Count) dokoncene zamery (dvojita platba)." }
+      # Stripe: kazda relacia zo zamerov; zaplatena smie byt najviac jedna.
+      $paid = 0
+      foreach ($sid in @($intents | Where-Object { $_.provider_session_id } | ForEach-Object { $_.provider_session_id } | Select-Object -Unique)) {
+        $cs = Get-StripeJson @("checkout", "sessions", "retrieve", $sid)
+        Say ("  Stripe relacia {0}: status={1} payment_status={2} predplatne={3} expires={4}" -f $cs.id, $cs.status, $cs.payment_status, $cs.subscription, (Utc $cs.expires_at))
+        if ($cs.payment_status -eq "paid") { $paid++ }
+      }
+      if ($paid -gt 1) { Fail "Stripe: $paid zaplatene relacie pre firmu E." }
+      $acc = (Get-Rows "subscription_accounts?company_id=eq.$CompanyE&select=status,provider_subscription_id,provider_customer_id,current_period_end,cancel_at_period_end")[0]
+      if ($acc) {
+        Say "Esblu: stav=$($acc.status) predplatne=$($acc.provider_subscription_id) koniec=$($acc.current_period_end) cancel_at_period_end=$($acc.cancel_at_period_end)"
+        if ($acc.provider_customer_id) {
+          $subs = Get-StripeJson @("subscriptions", "list", "-d", "customer=$($acc.provider_customer_id)", "-d", "status=all", "--limit", "10")
+          $live = @($subs.data | ForEach-Object { $_ } | Where-Object { $_.status -notin @("canceled", "incomplete_expired") })
+          Say "Stripe: zakaznik ma $(@($subs.data | ForEach-Object { $_ }).Count) predplatne(-ych), neukoncenych $($live.Count)"
+          if ($live.Count -gt 1) { Fail "Stripe: viac neukoncenych predplatnych pre firmu E." }
+        }
+        if ($acc.provider_subscription_id) {
+          $s = Get-Sub $acc.provider_subscription_id
+          $stripeCancel = [bool]$s.cancel_at_period_end -or [bool]$s.cancel_at
+          Say "Stripe: $($s.id) stav=$($s.status) cancel_at_period_end=$($s.cancel_at_period_end) cancel_at=$(if ($s.cancel_at) { Utc $s.cancel_at } else { '-' })"
+          if ([bool]$acc.cancel_at_period_end -ne $stripeCancel) { Fail "Zrusenie nesedi: Esblu cancel_at_period_end=$($acc.cancel_at_period_end), Stripe=$stripeCancel." }
+          $n = Get-ActiveSubEnts $CompanyE
+          Say "Esblu: ucinnych aktivnych narokov $n"
+          if ($acc.status -eq "active" -and $n -lt 1) { Fail "Aktivne predplatne bez narokov." }
+        }
+      } else { Say "Esblu: firma E zatial nema predplatne." }
+      Say "OK: firma E - najviac 1 otvoreny zamer, najviac 1 zaplatena relacia, Esblu a Stripe zhodne."
     }
     "status" {
       $subId = if ($Subscription) { $Subscription } elseif (Test-Path $ClockFile) { (Get-ClockState).subscription } else { "" }
