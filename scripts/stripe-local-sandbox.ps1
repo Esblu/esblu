@@ -249,9 +249,24 @@ function Get-InvoicePaymentIntent($inv) {
   if ($inv.payment_intent) { if ($inv.payment_intent.id) { return $inv.payment_intent.id } else { return $inv.payment_intent } }
   Fail "Faktura $($inv.id) nema payment_intent."
 }
-function Get-LatestRefundEvent {
-  $rows = Get-Rows "billing_events?provider=eq.stripe&event_type=eq.charge.refunded&order=received_at.desc&limit=1&select=status,error_code,received_at,summary"
+function Get-RefundEventForInvoice([string]$invoiceId) {
+  # Deterministicky: charge.refunded, ktorej audit (summary.refund.invoice) odkazuje na refundovanu fakturu.
+  # Nezavisi od porovnania casov s "poslednou" udalostou pred refundaciou.
+  $rows = Get-Rows "billing_events?provider=eq.stripe&event_type=eq.charge.refunded&summary->refund->>invoice=eq.$invoiceId&order=received_at.desc&limit=1&select=provider_event_id,status,error_code,received_at,processed_at,summary"
   if ($rows.Count -gt 0) { return $rows[0] } else { return $null }
+}
+function Get-LastRefundEventInfo {
+  $rows = Get-Rows "billing_events?provider=eq.stripe&event_type=eq.charge.refunded&order=received_at.desc&limit=1&select=provider_event_id,status,error_code,received_at,summary"
+  if ($rows.Count -eq 0) { return "ziadna udalost charge.refunded" }
+  $r = $rows[0]
+  return ("posledna charge.refunded: {0} status={1} chyba={2} prijata={3} faktura={4}" -f $r.provider_event_id, $r.status, $r.error_code, $r.received_at, $r.summary.refund.invoice)
+}
+function Get-ChargeRefundState([string]$pi) {
+  # Stav refundacie platby v Stripe (na zabranenie dvojitej refundacii pri opakovanom behu).
+  $p = Get-StripeJson @("payment_intents", "retrieve", $pi, "--expand", "latest_charge")
+  $c = $p.latest_charge
+  if (-not $c -or -not $c.id) { Fail "PaymentIntent $pi nema charge." }
+  return @{ charge = $c.id; amount = [long]$c.amount; refunded = [long]$c.amount_refunded }
 }
 function Get-SubEvents([string]$subId, [string]$type) {
   $q = "billing_events?provider=eq.stripe&summary->>subscription=eq.$subId&order=received_at.asc&select=event_type,status,error_code,received_at,summary"
@@ -434,18 +449,29 @@ if ($Step -ne "start") {
         if (-not $inv) { Fail "Faktura aktualneho obdobia ($currentId) nie je zaplatena." }
       }
       $pi = Get-InvoicePaymentIntent $inv
-      $before = Get-LatestRefundEvent
-      Invoke-Stripe @("refunds", "create", "-d", "payment_intent=$pi") | Out-Null
-      Say "Stripe: plna refundacia faktury $($inv.id) ($($inv.billing_reason), obdobie $(Utc $inv.period_start) -> $(Utc $inv.period_end)); aktualna faktura predplatneho = $currentId"
-      # pockat na spracovanie charge.refunded v Esblu
-      $ev = $null
-      for ($i = 0; $i -lt 40; $i++) {
-        $ev = Get-LatestRefundEvent
-        if ($ev -and (-not $before -or $ev.received_at -ne $before.received_at) -and $ev.status -ne "received") { break }
-        $ev = $null; Start-Sleep -Seconds 3
+      $cs = Get-ChargeRefundState $pi
+      if ($cs.refunded -ge $cs.amount -and $cs.amount -gt 0) {
+        # Opakovany beh: faktura uz je plne refundovana -> NErefundovat znova, iba overit vysledok.
+        Say "Stripe: faktura $($inv.id) je uz plne refundovana (charge $($cs.charge), $($cs.refunded)/$($cs.amount)) - iba overenie, bez novej refundacie."
+      } elseif ($cs.refunded -gt 0) {
+        Fail "Faktura $($inv.id) je refundovana ciastocne ($($cs.refunded)/$($cs.amount)) - krok vyzaduje plnu refundaciu; pouzi inu fakturu/predplatne."
+      } else {
+        Invoke-Stripe @("refunds", "create", "-d", "payment_intent=$pi") | Out-Null
+        Say "Stripe: plna refundacia faktury $($inv.id) ($($inv.billing_reason), obdobie $(Utc $inv.period_start) -> $(Utc $inv.period_end)); aktualna faktura predplatneho = $currentId"
       }
-      if (-not $ev) { Fail "Esblu DB: udalost charge.refunded sa do 120 s nespracovala." }
-      Say "Esblu: charge.refunded spracovana (status=$($ev.status), stav v udalosti=$($ev.summary.status))"
+      # pockat na spracovanie charge.refunded v Esblu - podla faktury v audite (deterministicky)
+      $ev = $null; $seen = $null
+      for ($i = 0; $i -lt 40; $i++) {
+        $seen = Get-RefundEventForInvoice $inv.id
+        if ($seen -and $seen.status -ne "received") { $ev = $seen; break }
+        Start-Sleep -Seconds 3
+      }
+      if (-not $ev) {
+        $diag = if ($seen) { "udalost $($seen.provider_event_id) pre fakturu je stale status=$($seen.status) (prijata, nespracovana -> okno 1)" } else { "pre fakturu $($inv.id) ziadna udalost (nedorucene -> okno 2 stripe listen); $(Get-LastRefundEventInfo)" }
+        Fail "Esblu DB: charge.refunded pre fakturu $($inv.id) sa do 120 s nespracovala: $diag"
+      }
+      if ($ev.status -ne "processed") { Fail "Esblu DB: udalost $($ev.provider_event_id) skoncila status=$($ev.status) chyba=$($ev.error_code)." }
+      Say "Esblu: charge.refunded $($ev.provider_event_id) spracovana (status=$($ev.status), prijata $($ev.received_at), spracovana $($ev.processed_at), stav v udalosti=$($ev.summary.status))"
       # Vazba refundacie na fakturu a jej obdobie (riadok predplatneho).
       $line = @($inv.lines.data | ForEach-Object { $_ }) | Where-Object { $_.period } | Select-Object -First 1
       $expScope = if ($Step -eq "refund-old") { "older_invoice" } else { "current_period" }
