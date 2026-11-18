@@ -77,6 +77,11 @@ function Hide-Secrets([string]$s) {
 }
 function Say([string]$s) { Write-Host (Hide-Secrets $s) }
 function Fail([string]$s) { throw (Hide-Secrets $s) }
+function Format-Eur([long]$minor, [string]$cur = "EUR") {
+  # Sumy sa porovnavaju v centoch (long); zobrazenie 1590 -> "15,90 EUR".
+  $sign = if ($minor -lt 0) { "-" } else { "" }; $a = [Math]::Abs($minor)
+  return ("{0}{1},{2:D2} {3}" -f $sign, [Math]::Floor($a / 100), ($a % 100), $cur.ToUpper())
+}
 function Utc([long]$ts) { return [DateTimeOffset]::FromUnixTimeSeconds($ts).UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss 'UTC'") }
 
 function Invoke-Stripe([string[]]$StripeArgs) {
@@ -458,9 +463,9 @@ if ($Step -ne "start") {
       $cs = Get-ChargeRefundState $pi
       if ($cs.refunded -ge $cs.amount -and $cs.amount -gt 0) {
         # Opakovany beh: faktura uz je plne refundovana -> NErefundovat znova, iba overit vysledok.
-        Say "Stripe: faktura $($inv.id) je uz plne refundovana (charge $($cs.charge), $($cs.refunded)/$($cs.amount)) - iba overenie, bez novej refundacie."
+        Say "Stripe: faktura $($inv.id) je uz plne refundovana (charge $($cs.charge), $(Format-Eur $cs.refunded) z $(Format-Eur $cs.amount)) - iba overenie, bez novej refundacie."
       } elseif ($cs.refunded -gt 0) {
-        Fail "Faktura $($inv.id) je refundovana ciastocne ($($cs.refunded)/$($cs.amount)) - krok vyzaduje plnu refundaciu; pouzi inu fakturu/predplatne."
+        Fail "Faktura $($inv.id) je refundovana ciastocne ($(Format-Eur $cs.refunded) z $(Format-Eur $cs.amount)) - krok vyzaduje plnu refundaciu; pouzi inu fakturu/predplatne."
       } else {
         Invoke-Stripe @("refunds", "create", "-d", "payment_intent=$pi") | Out-Null
         Say "Stripe: plna refundacia faktury $($inv.id) ($($inv.billing_reason), obdobie $(Utc $inv.period_start) -> $(Utc $inv.period_end)); aktualna faktura predplatneho = $currentId"
@@ -477,20 +482,29 @@ if ($Step -ne "start") {
         Fail "Esblu DB: charge.refunded pre fakturu $($inv.id) sa do 120 s nespracovala: $diag"
       }
       if ($ev.status -ne "processed") { Fail "Esblu DB: udalost $($ev.provider_event_id) skoncila status=$($ev.status) chyba=$($ev.error_code)." }
-      Say "Esblu: charge.refunded $($ev.provider_event_id) spracovana (status=$($ev.status), prijata $($ev.received_at), spracovana $($ev.processed_at), stav uctu v udalosti=$($ev.summary.account_status))"
+      $evAcc = if ($ev.summary.account_status) { $ev.summary.account_status } else { $ev.summary.status }
+      Say "Esblu: charge.refunded $($ev.provider_event_id) spracovana (status=$($ev.status), prijata $($ev.received_at), spracovana $($ev.processed_at), stav uctu v udalosti=$evAcc)"
+      # Stav platby v Stripe NACITAT ZNOVA - $cs je snimka pred refundaciou (refunded=0).
+      $csNow = Get-ChargeRefundState $pi
+      for ($i = 0; $i -lt 10 -and $csNow.refunded -lt $csNow.amount; $i++) { Start-Sleep -Seconds 2; $csNow = Get-ChargeRefundState $pi }
+      if ($csNow.charge -ne $cs.charge) { Fail "Platba faktury sa zmenila ($($cs.charge) -> $($csNow.charge))." }
+      if ($csNow.amount -le 0 -or $csNow.refunded -ne $csNow.amount) { Fail "Stripe: charge $($csNow.charge) nie je plne refundovana ($(Format-Eur $csNow.refunded) z $(Format-Eur $csNow.amount))." }
+      Say "Stripe (po refundacii): charge $($csNow.charge) refundovane $(Format-Eur $csNow.refunded) z $(Format-Eur $csNow.amount)"
       # Vazba refundacie na fakturu a jej obdobie (riadok predplatneho).
       $line = @($inv.lines.data | ForEach-Object { $_ }) | Where-Object { $_.period } | Select-Object -First 1
       $expScope = if ($Step -eq "refund-old") { "older_invoice" } else { "current_period" }
       $r = $ev.summary.refund
-      Say ("Esblu audit: faktura={0} rozsah={1} obdobie {2} -> {3} suma={4} {5}" -f $r.invoice, $r.scope, $r.invoice_period_start, $r.invoice_period_end, $r.amount_minor, $r.currency)
+      Say ("Esblu audit: faktura={0} rozsah={1} obdobie {2} -> {3} suma={4}" -f $r.invoice, $r.scope, $r.invoice_period_start, $r.invoice_period_end, (Format-Eur ([long]$r.amount_minor) ([string]$r.currency)))
       if ($r.invoice -ne $inv.id) { Fail "Audit odkazuje na fakturu $($r.invoice), refundovana bola $($inv.id)." }
       if ([string]$ev.summary.subscription -ne $subId) { Fail "Audit odkazuje na predplatne $($ev.summary.subscription), ocakavane $subId." }
       if ([string]$inv.subscription -ne $subId -and [string]$inv.parent.subscription_details.subscription -ne $subId) { Fail "Faktura $($inv.id) v Stripe nepatri predplatnemu $subId." }
       $accLink = Get-EsbluAccount $subId
       if (-not $accLink) { Fail "Esblu: ucet predplatneho $subId nenajdeny." }
       if ([string]$ev.company_id -ne [string]$accLink.company_id) { Fail "Udalost patri firme $($ev.company_id), predplatne firme $($accLink.company_id)." }
-      if ([long]$r.amount_minor -ne [long]$cs.refunded) { Fail "Suma v audite $($r.amount_minor) != refundovane v Stripe $($cs.refunded)." }
-      Say "Vazby OK: faktura=$($inv.id) predplatne=$subId firma=$($accLink.company_id) suma=$($r.amount_minor) (Stripe charge $($cs.charge))"
+      if ([string]$r.currency -ne ([string]$inv.currency).ToUpper() -and [string]$r.currency -ne [string]$inv.currency) { Fail "Mena v audite $($r.currency) != mena faktury $($inv.currency)." }
+      if ([long]$r.amount_minor -ne [long]$csNow.refunded) { Fail "Suma v audite $(Format-Eur ([long]$r.amount_minor)) != refundovane v Stripe $(Format-Eur $csNow.refunded) (centy: $($r.amount_minor) vs $($csNow.refunded))." }
+      if ([long]$inv.amount_paid -ne [long]$csNow.amount) { Fail "Zaplatene na fakture $(Format-Eur ([long]$inv.amount_paid)) != suma platby $(Format-Eur $csNow.amount)." }
+      Say "Vazby OK: faktura=$($inv.id) predplatne=$subId firma=$($accLink.company_id) suma=$(Format-Eur ([long]$r.amount_minor)) (Stripe charge $($csNow.charge))"
       if ($r.scope -ne $expScope) { Fail "Rozsah refundacie $($r.scope), ocakavany $expScope." }
       if ($line -and ([DateTime]::Parse($r.invoice_period_start).ToUniversalTime() -ne [DateTimeOffset]::FromUnixTimeSeconds($line.period.start).UtcDateTime)) { Fail "Obdobie v audite nesedi s obdobim faktury v Stripe." }
       if ($Step -eq "refund-old") {
@@ -507,6 +521,9 @@ if ($Step -ne "start") {
         if ($s.status -ne "canceled") { Fail "Stripe: predplatne nebolo ukoncene (stav=$($s.status)) - Esblu by ho dalej uctoval." }
         Say "Esblu: stav=$($acc.status) (pristup odvolany); Stripe: predplatne $subId stav=$($s.status), ended_at=$(Utc $s.ended_at)"
         Assert-TerminalKept $subId "refunded"
+        $n = Get-ActiveSubEnts $accLink.company_id
+        if ($n -ne 0) { Fail "Firma ma stale $n ucinnych aktivnych narokov." }
+        Say "Esblu: 0 ucinnych aktivnych narokov firmy $($accLink.company_id)"
         Say "OK: refundacia aktualneho obdobia ukoncila pristup aj dalsie uctovanie; refunded ostal aj po udalosti zrusenia."
       }
     }
