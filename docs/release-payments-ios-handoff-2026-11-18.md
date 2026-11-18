@@ -44,6 +44,11 @@ Vetva `android-release-payments-ios-2026-11-18` z `origin/main` @ `12da726c843b`
 - Zistenia: dvojitá platba pri súbežnom nákupe potrebuje operátorský postup (refund); čiastočná refundácia nemení prístup
   (potvrdiť VOP); DB Esblu neukladá poplatky ani výplaty (párovanie zo Stripe reportov); adaptér prijíma 1 položku na predplatné.
 
+- **Oprava (2026-11-18, `bac46e4`):** firma má najviac jednu zaplatiteľnú webovú checkout reláciu (DB reuse pod zámkom,
+  Idempotency-Key, `expires_at`, unikátny index, zrušenie). Overené: PGlite, unit, staging 10 paralelných spojení a test
+  v dvoch kartách prehliadača na Preview (vrátane opakovania po výpadku) — `docs/stripe-test-and-reconciliation-2026-11-18.md` § 7.
+  Migrácia `20261118120000` je aplikovaná **iba na stagingu**; produkcia čaká na súhlas (billing je tam vypnutý).
+
 ## 3. Ekonomika a dane
 
 `docs/payment-channels-economics-2026-11-18.md` + `scripts/payment-channel-economics.py` (sebatest OK).

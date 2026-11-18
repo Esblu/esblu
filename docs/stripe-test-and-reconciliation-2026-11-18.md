@@ -188,15 +188,30 @@ Staging po teste: zámery QA uzavreté, `web_provider='none'`, dočasná rola `q
 odstránené. Ostali syntetické firmy `QA-CHECKOUT A/B` (bez osobných údajov) pre test v prehliadači. Advisors: bez ERROR,
 rovnaké WARN/INFO ako baseline (owner RPC `security definer` je zámerný).
 
-### Test v dvoch kartách prehliadača — čaká na Preview build
+### Test v dvoch kartách prehliadača (2026-11-18, PASS)
 
-Kód je commitnutý lokálne; **push z prostredia agenta je zablokovaný** (Cowork povoľuje iba clone/fetch), preto Vercel Preview
-s opravou zatiaľ neexistuje. Po pushi vetvy agent: (1) nastaví **iba pre túto vetvu v Preview** `ESBLU_BILLING_MODE=fake`,
-náhodný `ESBLU_FAKE_BILLING_SECRET`, `NEXT_PUBLIC_ESBLU_BILLING_UI=1`, `ESBLU_BILLING_RETURN_ORIGIN=<preview>`; (2) na stagingu
-dočasne `web_provider='fake'` a heslo pre `QA-CHECKOUT A` owner; (3) v dvoch kartách súčasne „Pokračovať na platbu“ →
-obe karty musia dostať **rovnaký `checkout_id`**; v druhej karte pokus o iný plán → hláška „prebieha iná platba“;
-(4) výpadok: zablokovať sieť karty počas požiadavky → opakovanie → rovnaký `checkout_id`; (5) zaplatiť v jednej karte →
-druhá karta „zaplatiť“ → `CHECKOUT_STATE`; (6) cleanup a vrátenie `web_provider='none'`. Produkcia sa nemení.
+Prostredie: Vercel Preview `dpl_As98TG1h6bx2PboMdnRYApY2WbyD` (SHA `bac46e4`, alias
+`esblu-git-android-release-payments-ios-2026-11-18-esblu.vercel.app`, fra1) → Supabase staging `cjbdijbbcujvmrzezusd`
+(overené z relácie v prehliadači). Billing iba pre túto vetvu v Preview: `ESBLU_BILLING_MODE=fake`, testovací fake secret,
+`NEXT_PUBLIC_ESBLU_BILLING_UI=1`; staging `web_provider='fake'` počas testu. Syntetický owner `QA-CHECKOUT A`.
+
+| # | Krok | Výsledok |
+|---|---|---|
+| B1 | Dve karty, „Pokračovať na platbu“ (Pro) naplánované na **ten istý okamih** (obe kliky 12:29:45.333 UTC) | obe karty presmerované na **ten istý** `checkout_id` `1d58a73c-…`; v DB 1 zámer `open` s jednou reláciou |
+| B2 | Druhá karta: iný plán (Starter) / iný interval (ročne) | `409 ESBLU_BILLING_CHECKOUT_IN_PROGRESS`; UI: „Pre firmu už prebieha iná rozpracovaná platba. Dokončite ju alebo ju zrušte a skúste znova.“ |
+| B3 | Výpadok spojenia: požiadavka zrušená po 5 ms (AbortError), opakovanie po 1,5 s | opakovanie vrátilo **ten istý** `checkout_id` (`reused:true`) |
+| B4 | 3 ďalšie súbežné požiadavky z karty | 3× ten istý `checkout_id`, `reused:true` |
+| B5 | Zaplatenie v prvej karte (fake „úspešná platba“) | zámer `completed`, predplatné `active` (test_pro, fake), **1** spracovaný event |
+| B6 | Druhá karta sa pokúsi zaplatiť ten istý checkout | `409 ESBLU_BILLING_CHECKOUT_STATE` — žiadna druhá platba |
+| B7 | Nový nákup po zaplatení | `409 ESBLU_BILLING_ALREADY_SUBSCRIBED` |
+
+Nepokryté v prehliadači: zrušenie rozpracovanej platby cez `POST /api/billing/checkout/[id]` (overené PGlite + unit; E2E
+v prehliadači neprebehlo, firma A už mala predplatné).
+
+Po teste: staging `web_provider='none'`, QA používatelia `banned_until=infinity`, heslo zneplatnené, relácie zmazané;
+Preview premenné vetvy prepnuté na `ESBLU_BILLING_MODE=off`, `NEXT_PUBLIC_ESBLU_BILLING_UI=0`, fake secret zneplatnený
+(zmazanie premenných vetvy môže vlastník spraviť vo Verceli). Produkcia sa nemenila; ostré platby vypnuté.
+Vedľajší nález (nesúvisiaci, neopravený): na `/nastavenia/predplatne` sa zobrazujú nepreložené kľúče `subscription.planPanel.*`.
 
 ## 6. Otázky do podmienok predplatného (pre CLIA)
 
