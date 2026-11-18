@@ -36,7 +36,7 @@ $ProdRef = "fkpgvgvsmbpieduoatrt"
 $StagingUrl = "https://$StagingRef.supabase.co"
 # Verejny (anon) kluc stagingu - nie je tajny (je v kazdom klientskom bundli).
 $StagingAnon = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNqYmRpamJiY3Vqdm1yemV6dXNkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY1NTMxMDgsImV4cCI6MjEwMjEyOTEwOH0.gxhb1j2a5lmQnkeDHYOD2KEAe_zN44p-nSDUqIqkJbM"
-$PriceId = "price_1UdBoJB5dmk5ax59ZKBBoWfY"   # Esblu Komplet (test) 15,90 EUR / mesiac
+$PriceId = "price_1UdDE5B5dmk5ax59pvsZRezn"   # Esblu Komplet (test) 15,90 EUR / mesiac - sandbox #2 (18. 11. 2026)
 $StateDir = Join-Path $env:TEMP "esblu-stripe-qa"
 $ClockFile = Join-Path $StateDir "clock.json"
 $Events = @(
@@ -173,6 +173,10 @@ function Show-Logs {
 # ----------------------------------------------------------------------------- scenare (okno 2)
 if ($Step -ne "start") {
   Get-StripeTestKey | Out-Null
+  # Kluc musi patrit sandboxu, v ktorom existuje $PriceId (ceny su viazane na ucet) -> inak koniec.
+  $pr = Get-StripeJson @("prices", "retrieve", $PriceId)
+  if ($pr.livemode -or $pr.id -ne $PriceId) { Fail "Cena $PriceId nie je v sandboxe aktualneho kluca." }
+  Say "    sandbox OK: kluc vidi cenu $PriceId ($($pr.unit_amount/100) $($pr.currency.ToUpper()) / $($pr.recurring.interval))"
   switch ($Step) {
     "clock-setup" {
       if ($CheckoutId -notmatch "^[0-9a-f-]{36}$") { Fail "Zadaj -CheckoutId <uuid zameru Esblu>." }
