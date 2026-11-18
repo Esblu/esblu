@@ -42,6 +42,7 @@ const POST_COMMIT = "supabase/migrations/20261012130000_account_deletion_post_co
 const POST_COMMIT_ROLLBACK = "supabase/rollback/20261012130000_account_deletion_post_commit_cleanup_rollback.sql";
 const SINGLE_OPEN = "supabase/migrations/20261118120000_billing_single_open_checkout.sql";
 const TERMINAL_PRECEDENCE = "supabase/migrations/20261118130000_billing_terminal_precedence.sql";
+const REFUND_AUDIT = "supabase/migrations/20261118140000_billing_refund_audit.sql";
 const SUITE = (process.argv[2] ?? process.env.SUITE ?? "").replace(/^--suite=/, "").trim() || null;
 
 type Row = Record<string, unknown>;
@@ -193,6 +194,7 @@ await db.exec(`
 await db.exec(read(POST_COMMIT));
 await db.exec(read(SINGLE_OPEN));
 await db.exec(read(TERMINAL_PRECEDENCE));
+await db.exec(read(REFUND_AUDIT));
 await db.exec(`update public.billing_runtime_config set web_provider = 'fake',
   enabled_methods = array['stripe_web_checkout','apple_iap','google_play']`);
 
@@ -267,6 +269,8 @@ await check("subscription-migrations: obe migrácie sú idempotentné (re-run be
   await serialized(() => db.exec(read(SINGLE_OPEN)));
   await serialized(() => db.exec(read(TERMINAL_PRECEDENCE)));
   await serialized(() => db.exec(read(TERMINAL_PRECEDENCE)));
+  await serialized(() => db.exec(read(REFUND_AUDIT)));
+  await serialized(() => db.exec(read(REFUND_AUDIT)));
   assert.equal((await accountOf(co)).status, "active");
   assert.equal((await ent(co.owner, "voice")).active, true);
 });
@@ -949,7 +953,7 @@ await check("stripe-adapter: plná refundácia staršej faktúry → prístup os
       if (init?.method === "DELETE") { deletes.push(url); remote = { ...remote, status: "canceled", canceled_at: nowS, ended_at: nowS }; }
       const body = url.includes("/subscriptions/sub_db_2") ? remote
         : url.includes("/invoice_payments") ? { data: [{ invoice: url.includes("pi_old") ? "in_old" : "in_new" }] }
-        : url.includes("/invoices/in_old") ? { object: "invoice", id: "in_old", subscription: "sub_db_2" }
+        : url.includes("/invoices/in_old") ? { object: "invoice", id: "in_old", subscription: "sub_db_2", lines: { data: [{ period: { start: 1797000000, end: 1799600000 } }] } }
         : url.includes("/invoices/in_new") ? { object: "invoice", id: "in_new", subscription: "sub_db_2" } : null;
       return new Response(JSON.stringify(body ?? { error: {} }), { status: body ? 200 : 404 });
     }) as unknown as typeof fetch;
@@ -967,6 +971,13 @@ await check("stripe-adapter: plná refundácia staršej faktúry → prístup os
     assert.equal((await accountOf(co)).status, "active");
     assert.equal((await ent(co.owner, "voice")).active, true);
     assert.equal(deletes.length, 0);
+    // audit: väzba refundácie na faktúru, obdobie a rozsah
+    const audit = await one<{ s: Row }>(`select summary s from public.billing_events where provider_event_id = 'evt_o_2'`);
+    const refund = (audit.s as { refund?: Row }).refund as Row;
+    assert.equal(refund.scope, "older_invoice");
+    assert.equal(refund.invoice, "in_old");
+    assert.equal(refund.invoice_period_start, new Date(1797000000 * 1000).toISOString());
+    assert.equal((audit.s as Row).subscription, "sub_db_2");
     // Stav ako po pôvodnom kóde: Esblu refunded, Stripe stále active → reconciliation ukončí predplatné u Stripe
     await su(`update public.subscription_accounts set status = 'refunded', ended_at = now() where company_id = '${co.id}'`);
     await su(`select public.esblu_billing_sync_entitlements('${co.id}'::uuid)`);
@@ -1440,6 +1451,7 @@ await check("subscription-migrations: lifecycle rollback zachová dáta, zmapuje
   await serialized(() => db.exec(read(LIFECYCLE)));
   await serialized(() => db.exec(read(SINGLE_OPEN)));
   await serialized(() => db.exec(read(TERMINAL_PRECEDENCE)));
+  await serialized(() => db.exec(read(REFUND_AUDIT)));
   assert.equal((await ent(dash.owner, "voice")).active, true);
 });
 

@@ -164,6 +164,15 @@ export function stripeExpiresAt(iso: string | null | undefined): number | null {
   return Number.isFinite(ms) ? Math.floor(ms / 1000) : null;
 }
 
+/** Obdobie služby faktúry = obdobie riadku predplatného (invoice.period_* je pri predplatnom posunuté). */
+export function stripeInvoiceServicePeriod(invoice: unknown): { start: string | null; end: string | null } {
+  if (!isObj(invoice)) return { start: null, end: null };
+  const lines = isObj(invoice.lines) && Array.isArray(invoice.lines.data) ? (invoice.lines.data as unknown[]) : [];
+  const line = lines.find((l) => isObj(l) && isObj(l.period)) as Obj | undefined;
+  const p = line && isObj(line.period) ? line.period : null;
+  return { start: isoFromUnix(p?.start), end: isoFromUnix(p?.end) };
+}
+
 function stripeCheckoutStatus(status: unknown): CheckoutExpireResult {
   return status === "complete" ? "complete" : status === "expired" ? "expired" : "open";
 }
@@ -378,7 +387,7 @@ export class StripeTestProvider implements BillingProvider {
    * (REFUND_NEEDS_OPERATOR) — operátor nahlási ručne.
    */
   /** charge → (payment_intent → invoice_payments →) invoice → subscription. */
-  private async subscriptionIdForCharge(charge: Obj): Promise<{ subscriptionId: string | null; invoiceId: string | null }> {
+  private async subscriptionIdForCharge(charge: Obj): Promise<{ subscriptionId: string | null; invoiceId: string | null; invoice?: Obj }> {
     let invoiceId = idOf(charge.invoice);
     const paymentIntent = idOf(charge.payment_intent);
     if (!invoiceId && paymentIntent) {
@@ -392,7 +401,7 @@ export class StripeTestProvider implements BillingProvider {
     }
     if (!invoiceId) return { subscriptionId: null, invoiceId: null };
     const invoice = await this.request("GET", `/invoices/${encodeURIComponent(invoiceId)}`);
-    return { subscriptionId: stripeSubscriptionIdFromEvent("invoice.paid", invoice).subscriptionId, invoiceId };
+    return { subscriptionId: stripeSubscriptionIdFromEvent("invoice.paid", invoice).subscriptionId, invoiceId, invoice };
   }
 
   /**
@@ -408,8 +417,9 @@ export class StripeTestProvider implements BillingProvider {
   private async normalizeRefund(event: VerifiedProviderEvent): Promise<NormalizationResult> {
     const charge = event.data;
     if (!isObj(charge) || charge.object !== "charge") return { kind: "ignore", reason: "AUDIT_ONLY" };
-    const { subscriptionId, invoiceId } = await this.subscriptionIdForCharge(charge);
+    const { subscriptionId, invoiceId, invoice } = await this.subscriptionIdForCharge(charge);
     if (!subscriptionId) return { kind: "ignore", reason: "REFUND_NEEDS_OPERATOR" };
+    const period = stripeInvoiceServicePeriod(invoice);
     const refunded = typeof charge.amount_refunded === "number" ? charge.amount_refunded : null;
     const amount = typeof charge.amount === "number" ? charge.amount : null;
     const refundCharge: NormalizedCharge = {
@@ -421,6 +431,9 @@ export class StripeTestProvider implements BillingProvider {
       at: event.createdAt,
       tax_country: null,
       refunded_charge_id: invoiceId,
+      invoice_period_start: period.start,
+      invoice_period_end: period.end,
+      refund_scope: "partial",
     };
     const full = charge.refunded === true || (refunded !== null && amount !== null && refunded >= amount);
     if (!full) return { kind: "charge", providerSubscriptionId: subscriptionId, charge: refundCharge };
@@ -428,12 +441,12 @@ export class StripeTestProvider implements BillingProvider {
     // Plná refundácia STARŠEJ faktúry (nie aktuálneho obdobia) = iba účtovný záznam; aktuálne
     // obdobie je zaplatené, prístup ostáva. Aktuálne obdobie = posledná faktúra predplatného.
     if (invoiceId && idOf(sub.latest_invoice) !== invoiceId) {
-      return { kind: "charge", providerSubscriptionId: subscriptionId, charge: refundCharge };
+      return { kind: "charge", providerSubscriptionId: subscriptionId, charge: { ...refundCharge, refund_scope: "older_invoice" } };
     }
     const state = normalizeStripeSubscription(sub, this.now().toISOString()); // čas načítania = ochrana poradia
     return {
       kind: "state",
-      state: { ...state, status: "refunded", ended_at: event.createdAt, review_flag: null, charge: refundCharge },
+      state: { ...state, status: "refunded", ended_at: event.createdAt, review_flag: null, charge: { ...refundCharge, refund_scope: "current_period" } },
       // Prístup končí → predplatné u Stripe ukončiť hneď, aby sa ďalej neúčtovalo.
       followUp: "cancel_provider_now",
     };

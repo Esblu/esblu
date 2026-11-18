@@ -116,7 +116,7 @@ function stripeEvent(type: string, object: unknown, id = `evt_${type.replace(/\W
 }
 const CHARGE_BASE = { object: "charge", id: "ch_1", amount: 1218, currency: "eur", payment_intent: "pi_1" };
 // Aktuálne obdobie = posledná faktúra predplatného (latest_invoice).
-const lookup = { "/invoice_payments": { data: [{ invoice: "in_1" }] }, "/invoices/in_1": { object: "invoice", id: "in_1", subscription: "sub_r1" }, "/subscriptions/sub_r1": { ...SUB, latest_invoice: "in_1" }, "/charges/ch_1": CHARGE_BASE };
+const lookup = { "/invoice_payments": { data: [{ invoice: "in_1" }] }, "/invoices/in_1": { object: "invoice", id: "in_1", subscription: "sub_r1", period_start: NOW - 30 * 86400, period_end: NOW, lines: { data: [{ period: { start: NOW, end: NOW + 30 * 86400 } }] } }, "/subscriptions/sub_r1": { ...SUB, latest_invoice: "in_1" }, "/charges/ch_1": CHARGE_BASE };
 
 await check("stripe-adapter: úplný refund → kanonický refunded + refund charge (reporting)", async () => {
   const p = stripe(lookup);
@@ -128,13 +128,18 @@ await check("stripe-adapter: úplný refund → kanonický refunded + refund cha
   assert.ok(r.state.ended_at);
   assert.equal(r.state.charge?.kind, "refund");
   assert.equal(r.followUp, "cancel_provider_now", "plná refundácia aktuálneho obdobia → ukončiť aj u Stripe");
+  // väzba na faktúru a obdobie služby (riadok predplatného, nie posunuté invoice.period_*)
+  assert.equal(r.state.charge?.refunded_charge_id, "in_1");
+  assert.equal(r.state.charge?.refund_scope, "current_period");
+  assert.equal(r.state.charge?.invoice_period_start, new Date(NOW * 1000).toISOString());
+  assert.equal(r.state.charge?.invoice_period_end, new Date((NOW + 30 * 86400) * 1000).toISOString());
 });
 await check("stripe-adapter: plná refundácia STARŠEJ faktúry → iba účtovný záznam, prístup aj predplatné ostávajú", async () => {
   const p = stripe({ ...lookup, "/subscriptions/sub_r1": { ...SUB, latest_invoice: "in_2" } });
   const e = stripeEvent("charge.refunded", { ...CHARGE_BASE, amount_refunded: 1218, refunded: true });
   const r = await p.normalizeEvent(await p.verifyWebhook(e.raw, e.headers));
   assert.equal(r.kind, "charge");
-  if (r.kind === "charge") assert.equal(r.charge.kind, "refund");
+  if (r.kind === "charge") { assert.equal(r.charge.kind, "refund"); assert.equal(r.charge.refund_scope, "older_invoice"); }
 });
 await check("stripe-adapter: cancelSubscriptionNow → DELETE bez faktúry a prorácie; už ukončené = idempotentné", async () => {
   const calls: string[] = [];

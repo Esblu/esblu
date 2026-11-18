@@ -71,6 +71,10 @@ export type NormalizedCharge = {
   at: string;
   tax_country: string | null;
   refunded_charge_id?: string | null;
+  /** Refundácia: obdobie služby refundovanej faktúry (riadok predplatného) a rozsah dopadu. */
+  invoice_period_start?: string | null;
+  invoice_period_end?: string | null;
+  refund_scope?: "partial" | "older_invoice" | "current_period" | null;
 };
 
 /** Overená (podpis OK) udalosť providera — ešte NEnormalizovaná. */

@@ -95,6 +95,12 @@ function Get-StripeJson([string[]]$StripeArgs) {
   return ($text.Substring($a, $b - $a + 1) | ConvertFrom-Json)
 }
 
+function Get-Rows([string]$path) {
+  # Windows PowerShell 5.1: Invoke-RestMethod vrati JSON pole ako JEDEN objekt (nerozbaleny).
+  # @(...) by potom malo vzdy Count = 1 (aj pre prazdne pole) -> rozbalit cez ForEach-Object.
+  return @(Invoke-Staging "GET" $path | ForEach-Object { $_ })
+}
+
 function Get-StripeTestKey {
   # Kluc sa NIKDY nevypisuje. Poradie:
   #  1) $env:STRIPE_API_KEY (test) z tohto okna,
@@ -244,16 +250,20 @@ function Get-InvoicePaymentIntent($inv) {
   Fail "Faktura $($inv.id) nema payment_intent."
 }
 function Get-LatestRefundEvent {
-  $rows = Invoke-Staging "GET" "billing_events?provider=eq.stripe&event_type=eq.charge.refunded&order=received_at.desc&limit=1&select=status,error_code,received_at,summary"
-  if ($rows -and @($rows).Count -gt 0) { return @($rows)[0] } else { return $null }
+  $rows = Get-Rows "billing_events?provider=eq.stripe&event_type=eq.charge.refunded&order=received_at.desc&limit=1&select=status,error_code,received_at,summary"
+  if ($rows.Count -gt 0) { return $rows[0] } else { return $null }
 }
 function Get-SubEvents([string]$subId, [string]$type) {
   $q = "billing_events?provider=eq.stripe&summary->>subscription=eq.$subId&order=received_at.asc&select=event_type,status,error_code,received_at,summary"
   if ($type) { $q += "&event_type=eq.$type" }
-  return @(Invoke-Staging "GET" $q)
+  return (Get-Rows $q)
 }
 function Get-ActiveSubEnts([string]$companyId) {
-  return @(Invoke-Staging "GET" "company_entitlements?company_id=eq.$companyId&source=eq.subscription&status=eq.active&select=entitlement_key").Count
+  # Vsetky aktivne a platne naroky firmy (kazdy zdroj) - to, co realne odomyka moduly v aplikacii.
+  $now = [DateTime]::UtcNow.ToString("o")
+  $rows = Get-Rows "company_entitlements?company_id=eq.$companyId&status=eq.active&or=(valid_until.is.null,valid_until.gt.$now)&select=entitlement_key,source,valid_until,external_ref"
+  foreach ($r in $rows) { Say ("    aktivny narok: {0} zdroj={1} do={2} ref={3}" -f $r.entitlement_key, $r.source, $r.valid_until, $r.external_ref) }
+  return $rows.Count
 }
 function Assert-TerminalKept([string]$subId, [string]$expect) {
   # Po ukonceni u Stripe pride customer.subscription.deleted (canceled) -> musi byt stale/TERMINAL_STATE.
@@ -266,10 +276,10 @@ function Assert-TerminalKept([string]$subId, [string]$expect) {
   if (-not $del) { Fail "Esblu DB: customer.subscription.deleted pre $subId sa do 120 s nespracovala." }
   $acc = Get-EsbluAccount $subId
   $ents = Get-ActiveSubEnts $acc.company_id
-  Say "Esblu: customer.subscription.deleted -> status=$($del.status) error=$($del.error_code); ucet=$($acc.status); aktivne naroky zo subscription=$ents"
+  Say "Esblu: customer.subscription.deleted -> status=$($del.status) error=$($del.error_code); ucet=$($acc.status); aktivne naroky (vsetky zdroje)=$ents"
   if ($acc.status -ne $expect) { Fail "Esblu stav $($acc.status) namiesto $expect (prepisany udalostou zrusenia)." }
   if ($del.status -ne "stale" -or $del.error_code -ne "TERMINAL_STATE") { Fail "Udalost zrusenia nebola zapisana ako stale/TERMINAL_STATE." }
-  if ($ents -ne 0) { Fail "Firma ma stale $ents aktivnych narokov zo subscription." }
+  if ($ents -ne 0) { Fail "Firma ma stale $ents aktivnych narokov (vypis vyssie)." }
 }
 
 function Get-Counts([string]$subId, [string]$customer) {
@@ -436,6 +446,14 @@ if ($Step -ne "start") {
       }
       if (-not $ev) { Fail "Esblu DB: udalost charge.refunded sa do 120 s nespracovala." }
       Say "Esblu: charge.refunded spracovana (status=$($ev.status), stav v udalosti=$($ev.summary.status))"
+      # Vazba refundacie na fakturu a jej obdobie (riadok predplatneho).
+      $line = @($inv.lines.data | ForEach-Object { $_ }) | Where-Object { $_.period } | Select-Object -First 1
+      $expScope = if ($Step -eq "refund-old") { "older_invoice" } else { "current_period" }
+      $r = $ev.summary.refund
+      Say ("Esblu audit: faktura={0} rozsah={1} obdobie {2} -> {3} suma={4} {5}" -f $r.invoice, $r.scope, $r.invoice_period_start, $r.invoice_period_end, $r.amount_minor, $r.currency)
+      if ($r.invoice -ne $inv.id) { Fail "Audit odkazuje na fakturu $($r.invoice), refundovana bola $($inv.id)." }
+      if ($r.scope -ne $expScope) { Fail "Rozsah refundacie $($r.scope), ocakavany $expScope." }
+      if ($line -and ([DateTime]::Parse($r.invoice_period_start).ToUniversalTime() -ne [DateTimeOffset]::FromUnixTimeSeconds($line.period.start).UtcDateTime)) { Fail "Obdobie v audite nesedi s obdobim faktury v Stripe." }
       if ($Step -eq "refund-old") {
         Start-Sleep -Seconds 5
         $s = Get-Sub $subId
