@@ -5,7 +5,9 @@
     powershell -ExecutionPolicy Bypass -File .\scripts\stripe-local-sandbox.ps1
   Okno 2 (scenare):
     powershell -ExecutionPolicy Bypass -File .\scripts\stripe-local-sandbox.ps1 -Step <krok> [-CheckoutId <uuid>] [-Subscription <sub_...>]
-      clock-setup  - predplatne na Stripe TEST CLOCK pre Esblu zamer -CheckoutId (firma QA-STRIPE D)
+      new-sandbox  - NOVY anonymny sandbox v samostatnom profile CLI (-Project, default esblu-qa2) -Email <adresa>:
+                     test kluce, nova cena 15,90 EUR/mes., mapovanie ceny na stagingu, odtlacok vystaveneho tajomstva
+      clock-setup  - predplatne na Stripe TEST CLOCK pre firmu QA-STRIPE D (zamer sa vytvori automaticky)
       renew        - posun hodin za koniec obdobia -> nova zaplatena faktura subscription_cycle
       fail-renew   - karta pm_card_chargeCustomerFail + posun hodin -> invoice.payment_failed, past_due
       fix-payment  - platna karta + zaplatenie otvorenej faktury -> active
@@ -15,30 +17,40 @@
 
   Bezpecnost:
   - Stripe kluc sa cita z profilu Stripe CLI, nikdy sa nevypisuje. Iba test mode (sk_/rk_/rkcs_test_).
-  - Webhook secret: pri kazdom starte NOVY (nove meno zariadenia pre stripe listen); skript overi, ze
-    sa lisi od predchadzajuceho (porovnava iba SHA-256, tajomstvo neuklada). Stare logy sa mazu.
+  - Webhook secret zo `stripe listen` je viazany na Stripe UCET (sandbox), nie na zariadenie. Novy secret
+    = novy sandbox (-Step new-sandbox). Skript porovnava iba SHA-256 s odtlackom vystaveneho tajomstva
+    (exposed.sha256) a nespusti sa, kym sa zhoduju. Stare logy sa mazu.
   - Vsetky vypisy prechadzaju maskovanim (whsec_*, *_test_*, *_live_*, JWT).
   - Staging service role kluc: skryte zadanie (Read-Host) alebo $env:ESBLU_QA_SERVICE_ROLE v okne 2.
   - Databaza: Supabase staging `cjbdijbbcujvmrzezusd` (esblu-test). Produkcia sa nepouziva.
 #>
 param(
-  [ValidateSet("start", "status", "clock-setup", "renew", "fail-renew", "fix-payment", "refund-partial", "refund-full")]
+  [ValidateSet("start", "status", "new-sandbox", "clock-setup", "renew", "fail-renew", "fix-payment", "refund-partial", "refund-full")]
   [string]$Step = "start",
+  [string]$Project = "esblu-qa2",
+  [string]$Email = "",
   [string]$CheckoutId = "",
   [string]$Subscription = "",
   [int]$Port = 3000
 )
 $ErrorActionPreference = "Stop"
 
-$StripeCli = @("npx", "--yes", "@stripe/cli@1.55.12")
+$StripeCliBase = @("npx", "--yes", "@stripe/cli@1.55.12")
+# Samostatny profil Stripe CLI pre QA sandbox (default profil = povodny sandbox s vystavenym tajomstvom).
+$StripeCli = $StripeCliBase + @("--project-name", $Project)
 $StagingRef = "cjbdijbbcujvmrzezusd"
 $ProdRef = "fkpgvgvsmbpieduoatrt"
 $StagingUrl = "https://$StagingRef.supabase.co"
 # Verejny (anon) kluc stagingu - nie je tajny (je v kazdom klientskom bundli).
 $StagingAnon = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNqYmRpamJiY3Vqdm1yemV6dXNkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY1NTMxMDgsImV4cCI6MjEwMjEyOTEwOH0.gxhb1j2a5lmQnkeDHYOD2KEAe_zN44p-nSDUqIqkJbM"
-$PriceId = "price_1UdDE5B5dmk5ax59pvsZRezn"   # Esblu Komplet (test) 15,90 EUR / mesiac - sandbox #2 (18. 11. 2026)
 $StateDir = Join-Path $env:TEMP "esblu-stripe-qa"
-$ClockFile = Join-Path $StateDir "clock.json"
+$ClockFile = Join-Path $StateDir "clock-$Project.json"
+$SandboxFile = Join-Path $StateDir "sandbox-$Project.json"     # cena sandboxu (nie je tajna)
+$ExposedFile = Join-Path $StateDir "exposed.sha256"             # SHA-256 vystaveneho whsec (nie tajomstvo)
+$CompanyD = "5a5a0000-0000-4000-8000-0000000000d0"              # QA-STRIPE D (test clock)
+$OwnerD = "5a5a0000-0000-4000-8000-000000000031"
+$PriceId = $null
+if (Test-Path $SandboxFile) { $PriceId = (Get-Content $SandboxFile -Raw | ConvertFrom-Json).price }
 $Events = @(
   "checkout.session.completed", "checkout.session.async_payment_succeeded", "checkout.session.async_payment_failed",
   "checkout.session.expired", "customer.subscription.created", "customer.subscription.updated",
@@ -111,6 +123,24 @@ function Get-ServiceRole {
   return $k
 }
 
+function Invoke-Staging([string]$method, [string]$path, $body = $null) {
+  $k = Get-ServiceRole
+  $h = @{ apikey = $k; Authorization = "Bearer $k"; Prefer = "return=representation" }
+  $u = "$StagingUrl/rest/v1/$path"
+  if ($body -ne $null) { return Invoke-RestMethod -Uri $u -Headers $h -Method $method -ContentType "application/json" -Body ($body | ConvertTo-Json -Compress) }
+  return Invoke-RestMethod -Uri $u -Headers $h -Method $method
+}
+
+function Invoke-StripeRaw([string[]]$cli, [string[]]$StripeArgs) {
+  # Bez kontroly chyb (napr. prazdny profil); vystup sa nikdy nevypisuje priamo.
+  $cmd = $cli[0]; $rest = $cli[1..($cli.Length - 1)] + $StripeArgs
+  $ErrorActionPreference = "Continue"
+  return ((& $cmd @rest 2>&1 | ForEach-Object { "$_" }) | Out-String)
+}
+function Get-ListenSecret([string[]]$cli) {
+  return [regex]::Match((Invoke-StripeRaw $cli @("listen", "--print-secret")), "whsec_[A-Za-z0-9]+").Value
+}
+
 function Get-EsbluAccount([string]$subId) {
   $k = Get-ServiceRole
   $h = @{ apikey = $k; Authorization = "Bearer $k" }
@@ -171,15 +201,54 @@ function Show-Logs {
 }
 
 # ----------------------------------------------------------------------------- scenare (okno 2)
+if ($Step -eq "new-sandbox") {
+  if ($Email -notmatch "^[^@\s]+@[^@\s]+\.[^@\s]+$") { Fail "Zadaj -Email <adresa> (predvyplni registraciu pri neskorsom claim)." }
+  # 1) Odtlacok VYSTAVENEHO tajomstva = secret povodneho (default) profilu CLI.
+  $exposed = Get-ListenSecret $StripeCliBase
+  if ($exposed) { Set-Content -Path $ExposedFile -Value (Get-Sha256 $exposed) -Encoding ASCII; Say "    odtlacok vystaveneho tajomstva ulozeny (SHA-256 $((Get-Sha256 $exposed).Substring(0,8))...)" }
+  elseif (-not (Test-Path $ExposedFile)) { Fail "Neviem urcit vystavene tajomstvo (default profil bez kluca)." }
+  # 2) Novy profil musi byt prazdny, inak by `sandboxes create` iba otvoril Dashboard povodneho uctu.
+  $cfg = Invoke-StripeRaw $StripeCli @("config", "--list")
+  if ($cfg -match "(?:sk|rk|rkcs)_test_") { Fail "Profil '$Project' uz ma kluc. Pouzi iny -Project (napr. esblu-qa3)." }
+  Say "1/4 Novy anonymny sandbox v profile '$Project'..."
+  Invoke-Stripe @("sandboxes", "create", "--email", $Email, "--non-interactive") | Out-Null
+  Get-StripeTestKey | Out-Null
+  # 3) Novy ucet => nove tajomstvo; musi sa lisit od vystaveneho.
+  $w = Get-ListenSecret $StripeCli
+  if (-not $w) { Fail "stripe listen --print-secret v novom profile nevratil whsec_." }
+  if ((Get-Sha256 $w) -eq (Get-Content $ExposedFile -Raw).Trim()) { Fail "Novy sandbox ma rovnake tajomstvo ako vystavene - sandbox nevznikol." }
+  Say "2/4 nove tajomstvo whsec_*** sa lisi od vystaveneho (SHA-256 $((Get-Sha256 $w).Substring(0,8))...)"
+  # 4) Cena Esblu Komplet 15,90 EUR / mesiac v novom sandboxe.
+  $price = Get-StripeJson @("prices", "create", "-d", "currency=eur", "-d", "unit_amount=1590", "-d", "recurring[interval]=month", "-d", "product_data[name]=Esblu Komplet (test)")
+  if ($price.livemode) { Fail "Cena je live." }
+  @{ price = $price.id; created = (Get-Date).ToUniversalTime().ToString("o") } | ConvertTo-Json | Set-Content -Path $SandboxFile -Encoding ASCII
+  Say "3/4 cena $($price.id) = 15,90 EUR / mesiac"
+  # 5) Mapovanie ceny na stagingu (iba test): stara cena neaktivna, nova aktivna.
+  Invoke-Staging "PATCH" "billing_provider_prices?provider=eq.stripe&environment=eq.test&plan_code=eq.esblu_complete&billing_interval=eq.month&active=eq.true" @{ active = $false } | Out-Null
+  Invoke-Staging "POST" "billing_provider_prices" @{ provider = "stripe"; environment = "test"; plan_code = "esblu_complete"; billing_interval = "month"; provider_price_id = $price.id; active = $true } | Out-Null
+  Say "4/4 staging: esblu_complete/month -> $($price.id)"
+  Say "OK: novy sandbox pripraveny (profil '$Project'). Spusti okno 1 znova."
+  exit 0
+}
+
 if ($Step -ne "start") {
   Get-StripeTestKey | Out-Null
+  if (-not $PriceId) { Fail "Pre profil '$Project' chyba cena - spusti najprv -Step new-sandbox -Email <adresa>." }
   # Kluc musi patrit sandboxu, v ktorom existuje $PriceId (ceny su viazane na ucet) -> inak koniec.
   $pr = Get-StripeJson @("prices", "retrieve", $PriceId)
   if ($pr.livemode -or $pr.id -ne $PriceId) { Fail "Cena $PriceId nie je v sandboxe aktualneho kluca." }
   Say "    sandbox OK: kluc vidi cenu $PriceId ($($pr.unit_amount/100) $($pr.currency.ToUpper()) / $($pr.recurring.interval))"
   switch ($Step) {
     "clock-setup" {
-      if ($CheckoutId -notmatch "^[0-9a-f-]{36}$") { Fail "Zadaj -CheckoutId <uuid zameru Esblu>." }
+      if (-not $CheckoutId) {
+        # Novy zamer firmy D pre aktualnu cenu (stare otvorene zamery D sa uzavru; 1 otvoreny na firmu).
+        Invoke-Staging "PATCH" "billing_checkout_sessions?company_id=eq.$CompanyD&status=in.(created,open)" @{ status = "expired" } | Out-Null
+        $row = Invoke-Staging "POST" "billing_checkout_sessions" @{ company_id = $CompanyD; created_by = $OwnerD; provider = "stripe"; environment = "test";
+          plan_code = "esblu_complete"; billing_interval = "month"; provider_price_id = $PriceId; expires_at = (Get-Date).ToUniversalTime().AddHours(1).ToString("o") }
+        $CheckoutId = @($row)[0].id
+        Say "    novy zamer firmy QA-STRIPE D: $CheckoutId (plati 1 h)"
+      }
+      if ($CheckoutId -notmatch "^[0-9a-f-]{36}$") { Fail "Neplatne -CheckoutId." }
       $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
       $clock = Get-StripeJson @("test_helpers", "test_clocks", "create", "-d", "frozen_time=$now", "-d", "name=Esblu QA renewal")
       $cus = Get-StripeJson @("customers", "create", "-d", "test_clock=$($clock.id)", "-d", "email=qa-stripe-d@example.invalid", "-d", "name=QA-STRIPE D")
@@ -284,28 +353,22 @@ foreach ($f in @(".env", ".env.local", ".env.development", ".env.development.loc
 # Stare logy mohli obsahovat predchadzajuce podpisove tajomstvo -> zmazat.
 Remove-Item (Join-Path $StateDir "listen*.log") -Force -ErrorAction SilentlyContinue
 
-Say "1/5 Stripe CLI a testovaci kluc z profilu sandboxu..."
+Say "1/5 Stripe CLI (profil '$Project') a testovaci kluc..."
+if (-not $PriceId) { Fail "Pre profil '$Project' chyba cena - spusti najprv -Step new-sandbox -Email <adresa>." }
 $StripeKey = Get-StripeTestKey
 $price = Get-StripeJson @("prices", "retrieve", $PriceId)
 if ($price.livemode) { Fail "Cena je live - koniec." }
 Say "    cena $PriceId = $($price.unit_amount/100) $($price.currency.ToUpper()) / $($price.recurring.interval)  (livemode=false)"
 
-Say "2/5 NOVE podpisove tajomstvo pre stripe listen (rotacia)..."
-$Device = "esblu-qa-" + (Get-Date -Format "yyyyMMddHHmmss")
-$wDefault = [regex]::Match((Invoke-Stripe @("listen", "--print-secret")), "whsec_[A-Za-z0-9]+").Value
-$wNew = [regex]::Match((Invoke-Stripe @("--device-name", $Device, "listen", "--print-secret")), "whsec_[A-Za-z0-9]+").Value
-if (-not $wNew) { Fail "stripe listen --print-secret nevratil whsec_." }
-$hashFile = Join-Path $StateDir "whsec.sha256"
-$prevHash = if (Test-Path $hashFile) { (Get-Content $hashFile -Raw).Trim() } else { "" }
-$newHash = Get-Sha256 $wNew
-if ($newHash -eq (Get-Sha256 $wDefault) -or $newHash -eq $prevHash) {
-  Fail ("Stripe CLI nevydal nove podpisove tajomstvo (rovnake ako predtym). Rotacia cez stripe listen nie je mozna -> vytvor NOVY sandbox:`n" +
-    "  npx @stripe/cli@1.55.12 sandboxes create --email <adresa> --non-interactive`n" +
-    "  a posli novu cenu (price_...). Stare tajomstvo Esblu uz nepouzije.")
+Say "2/5 Podpisove tajomstvo stripe listen (viazane na sandbox profilu '$Project')..."
+$WhSec = Get-ListenSecret $StripeCli
+if (-not $WhSec) { Fail "stripe listen --print-secret nevratil whsec_." }
+$newHash = Get-Sha256 $WhSec
+if ((Test-Path $ExposedFile) -and ($newHash -eq (Get-Content $ExposedFile -Raw).Trim())) {
+  Fail "Profil '$Project' pouziva VYSTAVENE tajomstvo. Vytvor novy sandbox: -Step new-sandbox -Email <adresa>."
 }
-Set-Content -Path $hashFile -Value $newHash -Encoding ASCII
-$WhSec = $wNew
-Say "    nove tajomstvo whsec_*** (SHA-256 $($newHash.Substring(0,8))..., zariadenie $Device); predchadzajuce sa uz nepouziva"
+if (-not (Test-Path $ExposedFile)) { Fail "Chyba odtlacok vystaveneho tajomstva - spusti najprv -Step new-sandbox -Email <adresa>." }
+Say "    tajomstvo whsec_*** (SHA-256 $($newHash.Substring(0,8))...) - lisi sa od vystaveneho"
 
 Say "3/5 Staging Supabase service role kluc (esblu-test)."
 Say "    Supabase Dashboard -> projekt esblu-test -> Project Settings -> API Keys -> service_role (secret)."
@@ -326,7 +389,7 @@ Say "4/5 Zavislosti..."
 if (-not (Test-Path "node_modules\.bin\next.cmd")) { npm ci --no-audit --no-fund; if ($LASTEXITCODE -ne 0) { Fail "npm ci zlyhal" } }
 
 Say "5/5 stripe listen -> http://localhost:$Port/api/billing/webhooks/stripe"
-$listen = Start-Process -FilePath "npx.cmd" -ArgumentList @("--yes", "@stripe/cli@1.55.12", "--device-name", $Device, "listen", "--events", $Events, "--forward-to", "http://localhost:$Port/api/billing/webhooks/stripe") `
+$listen = Start-Process -FilePath "npx.cmd" -ArgumentList @("--yes", "@stripe/cli@1.55.12", "--project-name", $Project, "listen", "--events", $Events, "--forward-to", "http://localhost:$Port/api/billing/webhooks/stripe") `
   -RedirectStandardOutput (Join-Path $StateDir "listen.out.log") -RedirectStandardError (Join-Path $StateDir "listen.log") -NoNewWindow -PassThru
 
 Say ""

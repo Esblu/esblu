@@ -249,6 +249,15 @@ syntetická adresa `@example.invalid`; žiadny sandbox nevznikol.
 | Podpis webhooku z **oficiálnej knižnice `stripe` 23.1.0** (`webhooks.generateTestHeaderString`) → overenie adaptérom Esblu | PASS 4/4: platný podpis prijatý; cudzí secret, `livemode:true` a starý timestamp (1 h) odmietnuté |
 | Parametre Checkout Session a Billing Portal z adaptéra Esblu typované oficiálnym SDK (`Stripe.Checkout.SessionCreateParams` vrátane `origin_context`, `expires_at`, `tax_id_collection`, `customer_update`) | PASS (`tsc --strict`) |
 
+### 8.3a Zistenia z behu na PC vlastníka (18. 11. 2026)
+
+| # | Krok | Výsledok | Dôkaz / oprava |
+|---|---|---|---|
+| L1 | Nákup cez Stripe Checkout (lokálne Esblu + `stripe listen` + staging DB), karta `4000…0002` zamietnutá, `4242…` zaplatená | **PASS priamo cez Stripe** — 3 udalosti (`checkout.session.completed`, `customer.subscription.created`, `invoice.paid`) HTTP 200, spracované; predplatné `active`, 9 nárokov Kompletu; zamietnutá karta nič nevytvorila | staging `billing_events`, `subscription_accounts` |
+| L2 | „renew“ cez `billing_cycle_anchor=now` | **NEPLATNÝ TEST** — Stripe CLI vrátil chybu s exit kódom 0, skript vypísal OK; žiadna nová faktúra | skript teraz kontroluje `"error"` v odpovedi; obnova iba cez **Test Clock** (OK až po zaplatenej `subscription_cycle` a zhode obdobia v Stripe aj Esblu) |
+| L3 | `-Step status` vypísal celé `whsec_…` z logu `stripe listen` | **bezpečnostný nález** — všetky výpisy sa maskujú, logy sa mažú pri štarte a konci | tajomstvo `stripe listen` je viazané na **Stripe účet**, nie na zariadenie → rotácia = nový sandbox |
+| L4 | „Nový sandbox“ cez `sandboxes create` v tom istom profile | **nevznikol** — podľa `--help` profil s kľúčom iba otvorí Dashboard; nová cena `price_1UdDE5…` je v **tom istom účte** (rovnaký segment účtu `B5dmk5ax59` v ID `price_1UdBoJ…`, `price_1UdDE5…`, `sub_1UdChQ…`), preto rovnaké tajomstvo | skript: samostatný profil CLI (`--project-name esblu-qa2`), `-Step new-sandbox` uloží odtlačok vystaveného tajomstva a overí, že nový sa líši |
+
 ### 8.4 Runbook — reálny Stripe test (sandbox + Vercel Preview + staging DB)
 
 1. **Vlastník (PowerShell na PC, Node je nainštalovaný):**
