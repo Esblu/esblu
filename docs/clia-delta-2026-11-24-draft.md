@@ -18,9 +18,23 @@ dokumentmi (Zásady ochrany osobných údajov 1.4 z 9. 11. 2026, DPA 1.3, VOP 1.
 ### 1.1 Resend — odosielanie potvrdzovacích e-mailov (od 17. 11. 2026)
 
 - **Realita:** Supabase Auth v produkcii odosiela registračné a autentifikačné e-maily (potvrdenie registrácie, obnova hesla,
-  pozvánky) cez vlastný SMTP poskytovateľa **Resend** z domény `mail.esblu.com`. Dôkaz: DNS záznamy
-  `resend._domainkey.mail.esblu.com` (DKIM Resend) a `send.mail.esblu.com` (SPF `amazonses.com`); zapnutie potvrdil vlastník
-  v Supabase Dashboarde 17. 11. 2026; potvrdzovací e-mail bol doručený pri teste registrácie v Android appke.
+  pozvánky) cez vlastný SMTP poskytovateľa **Resend** z domény `mail.esblu.com`.
+- **Dôkazy (stav 18. 11. 2026):**
+  1. *DNS (overené agentom, dns.google):* `resend._domainkey.mail.esblu.com` TXT = DKIM kľúč Resend; `send.mail.esblu.com`
+     TXT = `v=spf1 include:amazonses.com ~all` (odosielacia infraštruktúra Resend). Koreňová doména `esblu.com` má SPF iba
+     pre Namecheap Private Email — `mail.esblu.com` je samostatná odosielacia subdoména pre Resend.
+  2. *Nastavenie SMTP:* vlastný SMTP zapol vlastník v Supabase Dashboard → Authentication → SMTP Settings (potvrdenie
+     vlastníka 17. 11. 2026, `docs/android-release-vc4-2026-11-17.md`, doplnok). **Snímka nastavenia (host `smtp.resend.com`,
+     odosielateľ) zatiaľ nie je priložená** — agent nemá prístup do Supabase Dashboardu ani do Resend; doplní ju vlastník
+     (Authentication → SMTP Settings: host, port, odosielateľ — bez hesla) alebo hlavičkou doručeného potvrdzovacieho e-mailu
+     (`Received:` / `DKIM-Signature: d=mail.esblu.com` / `Return-Path` na `send.mail.esblu.com`). V schránkach dostupných
+     agentovi (esblu.office@gmail.com, roia.juris@gmail.com) sa žiadny e-mail z `mail.esblu.com` nenachádza.
+  3. *Prevádzkový záznam:* produkčný auth log 17. 11. 2026 22:55:16 UTC `user_confirmation_requested` (registrácia z Android
+     appky, adresa mimo `esblu.com`) → `/verify` 200 o 22:55:29 UTC; vlastník potvrdil prijatie e-mailu a návrat do Esblu.
+     Vstavaný mailer Supabase doručuje iba adresám členov tímu projektu, takže doručenie na externú adresu zodpovedá vlastnému SMTP.
+- **Dátum začiatku podľa dostupného dôkazu:** **najneskôr 17. 11. 2026 22:55 UTC** (prvé doložené doručenie cez vlastný SMTP).
+  Presný okamih zapnutia a overenia domény ukáže Resend → Domains → `mail.esblu.com` (Created / Verified) a prvý záznam
+  v Resend → Emails; ak by bol skorší, uvedie sa ten.
 - **Dokumenty:**
   - `/subprocessors` výslovne uvádza, že „Resend nie je aplikáciou nikde použitý“ a že e-maily odosiela „výhradne vstavaný
     e-mailový systém Supabase Auth“ — **nepravdivé od 17. 11. 2026**.

@@ -26,7 +26,8 @@ import { gatePurchaseOptions, methodAllowedByServer, providerGateFromEnv } from 
 import { normalizeGooglePluginResult } from "@/lib/billing/native-bridge-contract";
 import { BILLING_ENV_SCHEMA, resolveProviderModes, validateBillingEnv } from "@/lib/billing/provider-modes";
 import { normalizeAppleNotification, normalizeGoogleSubscription, GooglePlayProvider } from "@/lib/billing/providers/stores";
-import { mapStripeStatus, StripeTestProvider } from "@/lib/billing/providers/stripe";
+import { mapStripeStatus, stripeExpiresAt, StripeTestProvider } from "@/lib/billing/providers/stripe";
+import { startWebCheckout } from "@/lib/billing/web-checkout";
 import { appleReconcileSource, appleStatusCodeToCanonical, googleReconcileSource } from "@/lib/billing/reconcile-sources";
 import { hasDrift, reconcileOne, runReconciliation, type ReconcileCandidate } from "@/lib/billing/reconciliation";
 import { signTimestamped } from "@/lib/billing/signature";
@@ -537,6 +538,96 @@ await check("billing-ui: employee/accountant (bez správy) → iba prehľad, ži
   assert.equal(m.showManageControls, false);
   assert.equal(m.managedViaKey, null);
   assert.equal(m.showRestore, false);
+});
+
+// ============================================================================= stripe-adapter: jedna relácia (2026-11-18)
+/** Mock Stripe: relácie podľa Idempotency-Key (ako Stripe), voliteľný výpadok a súbeh. */
+function mockStripeCheckout(opts: { failFirstAfterCreate?: boolean; inFlightConflicts?: number } = {}) {
+  const sessions = new Map<string, { id: string; url: string; status: string; body: string }>();
+  const calls: { key: string | null; body: string }[] = [];
+  let created = 0;
+  let conflicts = opts.inFlightConflicts ?? 0;
+  let failNext = opts.failFirstAfterCreate === true;
+  const fetchImpl = (async (url: string, init: RequestInit) => {
+    const headers = init.headers as Record<string, string>;
+    const key = headers["Idempotency-Key"] ?? null;
+    const body = String(init.body ?? "");
+    calls.push({ key, body });
+    if (url.endsWith("/checkout/sessions") && init.method === "POST") {
+      if (conflicts > 0) { conflicts--; return new Response(JSON.stringify({ error: { code: "idempotency_key_in_use" } }), { status: 409 }); }
+      let session = key ? sessions.get(key) : undefined;
+      if (session && session.body !== body) return new Response(JSON.stringify({ error: { type: "idempotency_error" } }), { status: 400 });
+      if (!session) {
+        created++;
+        session = { id: `cs_test_${created}`, url: `https://checkout.stripe.test/c/${created}`, status: "open", body };
+        if (key) sessions.set(key, session);
+      }
+      if (failNext) { failNext = false; return new Response("upstream timeout", { status: 504 }); }
+      return new Response(JSON.stringify({ object: "checkout.session", id: session.id, url: session.url, livemode: false }), { status: 200 });
+    }
+    const exp = url.match(/\/checkout\/sessions\/([^/]+)\/expire$/);
+    if (exp) {
+      const s = [...sessions.values()].find((x) => x.id === exp[1]);
+      if (!s || s.status !== "open") return new Response(JSON.stringify({ error: {} }), { status: 400 });
+      s.status = "expired";
+      return new Response(JSON.stringify({ object: "checkout.session", id: s.id, status: "expired", livemode: false }), { status: 200 });
+    }
+    const get = url.match(/\/checkout\/sessions\/([^/?]+)$/);
+    if (get) {
+      const s = [...sessions.values()].find((x) => x.id === get[1]);
+      return new Response(JSON.stringify({ object: "checkout.session", id: get[1], status: s?.status ?? "expired", livemode: false }), { status: 200 });
+    }
+    return new Response(JSON.stringify({ error: {} }), { status: 404 });
+  }) as unknown as typeof fetch;
+  return { fetchImpl, sessions, calls, createdCount: () => created };
+}
+const INTENT = { checkout_id: "11111111-2222-4333-8444-555555555555", provider: "stripe", provider_price_id: "price_x", provider_customer_id: null, expires_at: new Date(Date.now() + 3600_000).toISOString(), reused: false };
+const attachLog: string[] = [];
+const attach = async (checkoutId: string, sessionId: string) => { attachLog.push(`${checkoutId}:${sessionId}`); return { error: null }; };
+
+await check("stripe-adapter: dve karty prehliadača — ten istý zámer → 1 Stripe relácia (Idempotency-Key + expires_at)", async () => {
+  const m = mockStripeCheckout({ inFlightConflicts: 1 });
+  const stripe = new StripeTestProvider({ secretKey: "sk_test_" + "a".repeat(24), webhookSecret: "whsec_x", fetchImpl: m.fetchImpl });
+  attachLog.length = 0;
+  const [a, b] = await Promise.all([
+    startWebCheckout({ provider: stripe, intent: INTENT, origin: "https://staging.esblu.test", attach }),
+    startWebCheckout({ provider: stripe, intent: { ...INTENT, reused: true }, origin: "https://staging.esblu.test", attach }),
+  ]);
+  assert.ok(a.ok && b.ok);
+  assert.equal(m.createdCount(), 1, "jediná zaplatiteľná relácia");
+  assert.equal(a.ok && a.url, b.ok && b.url);
+  assert.ok(m.calls.every((c) => c.key === `esblu-checkout-${INTENT.checkout_id}`));
+  const expires = stripeExpiresAt(INTENT.expires_at);
+  assert.ok(m.calls[0].body.includes(`expires_at=${expires}`));
+  assert.equal(new Set(attachLog).size, 1);
+});
+await check("stripe-adapter: výpadok po vytvorení relácie (504) → opakovanie s tým istým kľúčom vráti tú istú reláciu", async () => {
+  const m = mockStripeCheckout({ failFirstAfterCreate: true });
+  const stripe = new StripeTestProvider({ secretKey: "sk_test_" + "a".repeat(24), webhookSecret: "whsec_x", fetchImpl: m.fetchImpl });
+  attachLog.length = 0;
+  const r = await startWebCheckout({ provider: stripe, intent: INTENT, origin: "https://staging.esblu.test", attach });
+  assert.ok(r.ok, JSON.stringify(r));
+  assert.equal(m.createdCount(), 1);
+  assert.equal(m.calls.length, 2);
+  // aj keby server vrátil 502 (maxAttempts 1), opakovanie klienta dostane ten istý zámer → tú istú reláciu
+  const m2 = mockStripeCheckout({ failFirstAfterCreate: true });
+  const s2 = new StripeTestProvider({ secretKey: "sk_test_" + "a".repeat(24), webhookSecret: "whsec_x", fetchImpl: m2.fetchImpl });
+  const first = await startWebCheckout({ provider: s2, intent: INTENT, origin: "https://staging.esblu.test", attach, maxAttempts: 1 });
+  assert.equal(first.ok, false);
+  const retry = await startWebCheckout({ provider: s2, intent: { ...INTENT, reused: true }, origin: "https://staging.esblu.test", attach, maxAttempts: 1 });
+  assert.ok(retry.ok);
+  assert.equal(m2.createdCount(), 1);
+});
+await check("stripe-adapter: zrušenie rozpracovanej platby — open → expired; dokončená relácia sa nezruší", async () => {
+  const m = mockStripeCheckout();
+  const stripe = new StripeTestProvider({ secretKey: "sk_test_" + "a".repeat(24), webhookSecret: "whsec_x", fetchImpl: m.fetchImpl });
+  const r = await startWebCheckout({ provider: stripe, intent: INTENT, origin: "https://staging.esblu.test", attach });
+  assert.ok(r.ok);
+  assert.equal(await stripe.expireCheckout("cs_test_1"), "expired");
+  m.sessions.get(`esblu-checkout-${INTENT.checkout_id}`)!.status = "complete";
+  assert.equal(await stripe.expireCheckout("cs_test_1"), "complete");
+  assert.equal(stripeExpiresAt(null), null);
+  assert.equal(stripeExpiresAt("2026-11-18T12:00:00.000Z"), 1795003200);
 });
 
 console.log(`\nsubscriptions-lifecycle: ${passed} passed, ${failed} failed`);

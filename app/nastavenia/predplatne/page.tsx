@@ -53,6 +53,7 @@ const ERROR_KEYS: Record<string, string> = {
   ESBLU_BILLING_ALREADY_SUBSCRIBED: "subscription.errors.alreadySubscribed",
   ESBLU_BILLING_ACTIVE_ON_OTHER_PROVIDER: "subscription.errors.otherProvider",
   ESBLU_BILLING_RATE_LIMITED: "subscription.errors.rateLimited",
+  ESBLU_BILLING_CHECKOUT_IN_PROGRESS: "subscription.errors.checkoutInProgress",
 };
 
 const BANNER_KEYS: Record<Exclude<Banner, null>, string> = {
@@ -216,8 +217,19 @@ export default function SubscriptionPage() {
       const params = new URLSearchParams(window.location.search);
       const checkoutId = params.get("checkout_id");
       if (checkoutId) {
-        if (params.get("checkout") === "canceled") setBanner("canceled");
-        else {
+        if (params.get("checkout") === "canceled") {
+          setBanner("canceled");
+          // Zrušená platba: server expiruje reláciu u providera a uzavrie zámer, aby
+          // ďalší pokus (aj iný plán) nenarazil na rozpracovanú platbu. Chyba = nič sa nemení.
+          const headers = await authHeaders();
+          if (headers) {
+            await fetchWithTimeout(apiUrl(`/api/billing/checkout/${encodeURIComponent(checkoutId)}`), {
+              method: "POST",
+              headers,
+              body: JSON.stringify({ action: "cancel" }),
+            });
+          }
+        } else {
           // Počas čakania na webhook nesmie vzniknúť druhý checkout.
           inFlightRef.current = true;
           setBusy(true);

@@ -12,9 +12,61 @@ Podklad: reálny kód (`mobile-platform`) + merged manifest AAB 1.0.0 (vc1). Int
 | Data deletion URL | `https://www.esblu.com/zrusenie-uctu` | live |
 
 **Kontrola voči vc4 (2026-11-18):** typy dát nižšie sedia so správaním 1.0.1 / vc4 (žiadny platobný SDK, `BILLING` povolenie
-ani analytika; billing UI vypnuté `NEXT_PUBLIC_ESBLU_BILLING_UI`). Zmena od pôvodného draftu: potvrdzovacie e-maily
+ani analytický SDK tretej strany; billing UI vypnuté `NEXT_PUBLIC_ESBLU_BILLING_UI`). Zmena od pôvodného draftu: potvrdzovacie e-maily
 odosiela od 17. 11. 2026 **Resend** (vlastný SMTP Supabase Auth, doména `mail.esblu.com`) — service provider, teda „not shared“
 pri Email address; verejné dokumenty ho zatiaľ neuvádzajú → CLIA (`docs/clia-delta-2026-11-24-draft.md` § 1.1).
+
+## Prepracované body — Kontakty, Finančné údaje, Aktivita v aplikáciách (2026-11-18, PRIPRAVENÉ, v Play Console neuložené)
+
+**Živý stav formulára** (Play Console → Obsah aplikácie → Zabezpečenie údajov, krok 4 a Ukážka, 2026-11-18, iba čítanie):
+Kontakty — *Kontakty* (voliteľné; Funkcie aplikácie). Finančné údaje — *Platobné údaje používateľa*, *História nákupov*,
+*Iné finančné údaje* (všetko voliteľné; Funkcie aplikácie). Aktivita v aplikáciách — *Interakcie s aplikáciou* (voliteľné;
+Funkcie aplikácie, Analytika, Prevencia podvodov, zabezpečenie a dodržiavanie pravidiel), *História vyhľadávania v aplikácii*
+(Funkcie aplikácie), *Ďalší obsah vytváraný používateľmi* (voliteľné; Funkcie aplikácie), *Iné akcie* (Funkcie aplikácie,
+Prevencia podvodov, …). Zdieľanie: „S tretími stranami nie sú zdieľané žiadne údaje“.
+
+**Oprava predchádzajúceho odporúčania:** v odovzdaní z 18. 11. som navrhol zrušiť Kontakty, ponechať jediný finančný typ
+a odstrániť účel Analytika. Podrobná kontrola schémy produkčnej DB (iba názvy stĺpcov) a kódu ukázala, že **všetky tri
+súčasné voľby zodpovedajú skutočnému správaniu verzie 4**. Odporúčanie: **nič nemeniť**, iba doplniť odpovede nižšie,
+ak by ich Console pri úprave vyžadovala znova.
+
+Spoločná cesta údajov (všetky tri body): aplikácia (WebView, HTTPS) → API `www.esblu.com` (Vercel, fra1) → databáza
+Supabase `assetpilot` (eu-central-1, Frankfurt). Pri skenovaní dokladu ide obrázok aj na OpenAI (spracovateľ, `store:false`).
+Nič sa nepredáva ani neposiela tretím stranám na ich vlastné účely → „nezdieľané“ (výnimka pre poskytovateľa služieb).
+
+### 1. Kontakty
+
+| | |
+|---|---|
+| **Konkrétne údaje** | adresár obchodných partnerov firmy: obchodné meno, IČO/DIČ/IČ DPH, adresa, **e-mail, telefón**, IBAN/BIC, Peppol/elektronická adresa (`business_partners`: `legal_name, ico, dic, ic_dph, address_line1…, email, phone, iban, bic, electronic_address`); e-maily pozvaných členov tímu (`company_invites.email`). Zadáva používateľ ručne alebo ich AI navrhne zo skenovaného dokladu a používateľ potvrdí. **Adresár zariadenia sa nečíta** (manifest nemá `READ_CONTACTS`, žiadny contact picker plugin). |
+| **Kam sa odosielajú** | Esblu API (Vercel fra1) → Supabase Frankfurt; pri skenovaní dokladu s údajmi partnera obrázok na OpenAI (spracovateľ). Pozvánka: e-mail cez Supabase Auth → Resend. |
+| **Účel** | Funkcie aplikácie — adresár zákazníkov/dodávateľov, predvyplnenie faktúr, pozvanie člena tímu. |
+| **Dôkaz** | schéma `business_partners`, `company_invites` (produkcia, metadáta 2026-11-18); `mobile/android/app/src/main/AndroidManifest.xml` (povolenia iba INTERNET, ACCESS_NETWORK_STATE, POST_NOTIFICATIONS, RECORD_AUDIO, MODIFY_AUDIO_SETTINGS) |
+| **Odpoveď do Play Console** | Kontakty → **Kontakty: vybrané**. Zhromažďované: **áno**. Zdieľané: **nie**. Dočasné spracovanie: **nie**. Povinné: **voliteľné** (používatelia môžu zvoliť, či údaje poskytnú). Účel zhromažďovania: **Funkcie aplikácie** (nič iné). = súčasný stav, ponechať. |
+
+### 2. Finančné údaje (3 zo 4)
+
+| Typ | Konkrétne údaje | Účel | Dôkaz | Odpoveď do Play Console |
+|---|---|---|---|---|
+| **Platobné údaje používateľa** | IBAN a BIC firmy používateľa (`company_billing_profile.iban, bic`), IBAN na faktúre (`invoices.iban`); IBAN/BIC partnerov. **Žiadne čísla kariet**, žiadne platby v appke. | Funkcie aplikácie — platobné údaje na vystavenej faktúre (QR / údaje na úhradu) | schéma `company_billing_profile`, `invoices`, `business_partners` | **vybrané**; zhromažďované áno; zdieľané nie; dočasné nie; voliteľné; **Funkcie aplikácie** |
+| **História nákupov** | nákupy firmy z naskenovaných dokladov a prijatých faktúr: dodávateľ, číslo dokladu, dátum, množstvo, materiál, sumy (`ai_evidence: supplier, document_number, document_date, material, quantity, netto…`; `invoices` s `direction` prijaté, `supplier_business_partner_id`) | Funkcie aplikácie — evidencia nákladov, priradenie k vozidlu/stroju | schéma `ai_evidence`, `invoices` | **vybrané**; zhromažďované áno; zdieľané nie; dočasné nie; voliteľné; **Funkcie aplikácie** |
+| **Iné finančné údaje** | vydané faktúry a opravné doklady (sumy, DPH, splatnosť, variabilný symbol), ručne zaznamenané úhrady (`invoice_payments: paid_amount, paid_at, payment_method`) | Funkcie aplikácie — fakturácia a evidencia úhrad | schéma `invoices`, `invoice_payments` | **vybrané**; zhromažďované áno; zdieľané nie; dočasné nie; voliteľné; **Funkcie aplikácie** |
+| Úverové skóre / úverové údaje | nezbiera sa | — | — | **nevybrané** |
+
+Kam: Esblu API → Supabase Frankfurt; obrázok skenovaného dokladu → OpenAI (spracovateľ). = súčasný stav, ponechať.
+Pozn.: „Finančné funkcie“ (deklarácia) ostávajú „Aplikácia neposkytuje finančné funkcie“ — evidencia údajov nie je platobná služba.
+
+### 3. Aktivita v aplikáciách (4 z 5)
+
+| Typ | Konkrétne údaje | Účel | Dôkaz | Odpoveď do Play Console |
+|---|---|---|---|---|
+| **Interakcie s aplikáciou** | počty použitia funkcií na firmu: AI spracovania dokladov (`ai_processing_usage`, `ai_scan_usage` — firma, používateľ, endpoint, čas), mesačné počítadlá (`company_usage_counters`), **agregovaná telemetria nákladov** `ai_usage_monthly` (firma × mesiac × flow × model × výsledok × súčty tokenov/sekúnd; bez textu a bez `user_id`), triedy príkazov asistenta (`intent_command`) | Funkcie aplikácie (kvóty balíka), **Analytika** (meranie spotreby a nákladov funkcií — `docs/esblu-unit-economics-2026-10-22.md`), Prevencia podvodov a zabezpečenie (limit zneužitia 60/h, 240/deň, idempotencia) | migrácia `20261025100000_ai_usage_metering.sql`, `lib/intents/command-telemetry.ts`; schéma tabuliek | **vybrané**; zhromažďované áno; zdieľané nie; dočasné nie; voliteľné; účely **Funkcie aplikácie, Analytika, Prevencia podvodov, zabezpečenie a dodržiavanie pravidiel** — ponechať (Analytika je pravdivá, ide o vlastnú agregovanú telemetriu, nie SDK tretej strany) |
+| **História vyhľadávania v aplikácii** | text z vyhľadávacieho poľa / príkazu asistenta: spracuje Intent Engine, pri nejasnom príkaze AI fallback (OpenAI, `store:false`); rozpracovaná úloha sa dočasne ukladá (`assistant_conversation_contexts: pending_intent, slots`, s `expires_at`) | Funkcie aplikácie | `lib/intents/*`, schéma `assistant_conversation_contexts` | **vybrané**; zhromažďované áno; zdieľané nie; dočasné **nie** (kontext sa ukladá do expirácie); voliteľné; **Funkcie aplikácie** |
+| **Ďalší obsah vytváraný používateľmi** | poznámky, popisy vozidiel/strojov/skladu, umiestnenia, poznámky k úhradám | Funkcie aplikácie | schémy modulov | **vybrané**; áno; nie; nie; voliteľné; **Funkcie aplikácie** |
+| **Iné akcie** | potvrdenia akcií asistenta (`assistant_action_confirmations`), prijatie VOP/DPA, registrácia zariadenia pre push (`push_devices.last_seen_at`) | Funkcie aplikácie, Prevencia podvodov a zabezpečenie, Správa účtu | schémy uvedených tabuliek | **vybrané**; áno; nie; nie; **povinné** (v Ukážke bez „Voliteľné“); **Funkcie aplikácie, Prevencia podvodov, zabezpečenie a dodržiavanie pravidiel** + **Správa účtu** (prijatie VOP/DPA) — tretí účel bol v Ukážke orezaný, pri úprave overiť |
+| Nainštalované aplikácie | nezbiera sa | — | — | **nevybrané** |
+
+Kam: Esblu API → Supabase Frankfurt; text príkazu pri AI fallbacku → OpenAI (spracovateľ). = súčasný stav, ponechať.
 
 ## Externé služby (kontext pre „shared")
 | Služba | Rola | Dáta |

@@ -17,21 +17,17 @@ Vetva `android-release-payments-ios-2026-11-18` z `origin/main` @ `12da726c843b`
 | Stránka zrušenia účtu | `https://www.esblu.com/zrusenie-uctu` 200 (web + Android, žiadosť bez appky) | HTTPS GET |
 | App access | účet `info+playreview@esblu.com` funkčný (potvrdený, owner demo firmy, 9 nárokov, posledné prihlásenie dnes). **Demo firma nemá faktúry, Inbox ani chat**, hoci pôvodný text ich sľubuje → text 6A (po doplnení dát) a 6B (dnešný stav) v `03-app-access-reviewer.md` | read-only metadáta, záznam v `docs/ops/service-intervention-log.md` |
 | Data safety (živý formulár) | zhromažďuje: áno; šifrovanie pri prenose: áno; účty: meno+heslo a OAuth; URL zrušenia `/zrusenie-uctu`; čiastočné mazanie: áno → `/ochrana-osobnych-udajov`; **zdieľanie: žiadne**. Typy: Osobné (meno, e-mail, ID, adresa, telefón, ďalšie), Finančné **3 zo 4**, Správy 1, Fotky 1, Zvuk 1 (dočasné), Súbory 1, **Kontakty 1/1**, Aktivita v aplikácii **4 z 5** (pri prvej položke účel **Analytika**), ID zariadenia 1 | Obsah aplikácie → Zabezpečenie údajov (kroky 2, 3, 5 — iba čítanie, nič neuložené) |
-| Data safety vs. vc4 | **3 rozdiely na opravu** (§ 1.1 bod 2); zvyšok sedí (žiadny platobný SDK, reklamné ID ani analytika; Google login aj v appke) | kód + `04-data-safety.md` |
+| Data safety vs. vc4 | **sedí** — Kontakty, 3 finančné typy aj účel Analytika zodpovedajú skutočnému správaniu (prepracované 2026-11-18, `04-data-safety.md` § Prepracované body); pôvodný návrh na 3 opravy bol nesprávny | schéma produkčnej DB (iba stĺpce), manifest, `ai_usage_metering` |
 | Finančné funkcie | „My app doesn't provide any financial features“ — sedí s vc4 (billing UI vypnuté, žiadny nákup ani cenník v appke) | `05-financial-features.md`, `app/nastavenia/page.tsx` (`NEXT_PUBLIC_ESBLU_BILLING_UI`) |
 | Zverejnená dokumentácia vs. vc4 | **2 rozdiely**: Resend nie je v Zásadách/DPA a `/subprocessors` tvrdí opak; Zásady 1.4 a DPA 1.3 uvádzajú Google iba na webe | § 5 (CLIA) |
 
 ### 1.1 Položky pred odoslaním na kontrolu
 
-1. **Vlastník:** doplniť demo dáta (3 faktúry, 1 doklad v Inboxe, 2. člen + chat) a vložiť text **6A**; inak vložiť **6B**.
-2. **Vlastník — Data safety (Obsah aplikácie → Zabezpečenie údajov → krok 3/4):**
-   (a) **Kontakty** — appka nečíta kontakty zariadenia (žiadne povolenie `READ_CONTACTS`); kontakty obchodných partnerov
-   patria pod Osobné údaje → „Ďalšie informácie“ → zrušiť výber Kontakty;
-   (b) **Finančné údaje 3 zo 4** — vc4 nemá platby ani nákupy; ponechať iba „Iné finančné údaje“ (faktúry, IBAN),
-   zrušiť „Platobné údaje“ / „História nákupov“ / „Úverové“, ak sú vybrané;
-   (c) **Aktivita v aplikácii — účel „Analytika“** — appka nemá analytiku; ponechať Funkcie aplikácie (+ Prevencia podvodov
-   a zabezpečenie pri prihlasovaní). Potom „Uložiť“. „Žiadne zdieľanie“ je obhájiteľné (spracovatelia = výnimka), konzervatívny
-   výklad pre OpenAI ostáva otázkou pre CLIA.
+1. **App access:** použiť text **6B** (overený stav demo účtu: 2 vozidlá, 1 stroj, 3 skladové položky, 1 partner;
+   bez faktúr, Inboxu a chatu) — `03-app-access-reviewer.md` § 6B. Heslo zadáva iba vlastník.
+2. **Data safety:** odpovede pre Kontakty, Finančné údaje a Aktivitu v aplikáciách sú pripravené po typoch (údaje, kam,
+   účel, dôkaz, presná odpoveď) v `04-data-safety.md` § Prepracované body. Súčasný stav v Console im zodpovedá → **nemeniť**.
+   „Žiadne zdieľanie“ je obhájiteľné (spracovatelia = výnimka); konzervatívny výklad pre OpenAI ostáva otázkou pre CLIA.
 3. **Vlastník — EN záznam (voliteľné):** Záznamy v obchode → Spravovať jazyky → pridať English (United States) a vložiť text
    z `01-store-listing.md` C (EN). Bez neho sa anglickým používateľom zobrazí slovenský záznam.
 4. **Zásady vs. appka:** rozhodnúť s CLIA (§ 5), či sa verejné vydanie odošle pred úpravou Zásad (Google login v appke, Resend).
@@ -71,8 +67,8 @@ v Android appke, nesúlad dátumov na `/subprocessors`, otázky k Apple prihlás
 
 | Otvorený bod | Najbližší vykonateľný krok | Kto |
 |---|---|---|
-| Play Console Data safety | opraviť Kontakty / Finančné / Analytika (§ 1.1 bod 2) | vlastník |
-| Demo dáta pre kontrolóra | doplniť podľa `03-app-access-reviewer.md` § 4 alebo použiť text 6B | vlastník |
+| Play Console Data safety | bez zmeny; pripravené odpovede v `04-data-safety.md` | — |
+| App access | vložiť text 6B do Play Console (heslo vlastník) | vlastník |
 | Stripe reálny test | Stripe test účet + cena 15,90 € + restricted key a webhook do Vercel Preview (runbook § 4) | vlastník → agent |
 | Účtovníčka | poslať otázky § 6 ekonomiky + vzor párovania | vlastník |
 | Apple | D-U-N-S → Apple Developer (99 $/rok, schválenie) | vlastník |

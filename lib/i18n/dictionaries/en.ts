@@ -4106,6 +4106,7 @@ const en = {
       alreadySubscribed: "The company already has an active subscription — use change plan.",
       otherProvider: "The company already has an active subscription through another channel. End it there first.",
       rateLimited: "Too many attempts. Please try again shortly.",
+      checkoutInProgress: "Another payment for this company is already in progress. Complete or cancel it, then try again.",
     },
     buy: {
       web: "Continue to payment",

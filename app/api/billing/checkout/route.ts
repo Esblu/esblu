@@ -1,5 +1,6 @@
 import { billingReturnOrigin } from "@/lib/billing/config";
 import { authorizeBillingCaller, billingErrorResponse, getWebBillingProvider } from "@/lib/billing/server";
+import { startWebCheckout, type WebIntentData } from "@/lib/billing/web-checkout";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 
 // -----------------------------------------------------------------------------
@@ -34,27 +35,22 @@ export async function POST(req: Request) {
 
   const intent = await who.db.rpc("esblu_billing_create_checkout_intent", { p_plan_code: planCode, p_interval: interval });
   if (intent.error || !intent.data) return billingErrorResponse(intent.error);
-  const data = intent.data as { checkout_id: string; provider: string; provider_price_id: string; provider_customer_id: string | null };
+  const data = intent.data as WebIntentData;
 
   const provider = getWebBillingProvider(data.provider);
   if (!provider) return Response.json({ success: false, code: "ESBLU_BILLING_DISABLED" }, { status: 503 });
 
-  const returnBase = `${origin}/nastavenia/predplatne?checkout_id=${encodeURIComponent(data.checkout_id)}`;
-  try {
-    const session = await provider.createCheckout({
-      checkoutId: data.checkout_id,
-      providerPriceId: data.provider_price_id,
-      providerCustomerId: data.provider_customer_id,
-      successUrl: `${returnBase}&checkout=returned`,
-      cancelUrl: `${returnBase}&checkout=canceled`,
-    });
-    const attach = await getSupabaseAdmin().rpc("esblu_billing_attach_checkout_session", {
-      p_checkout_id: data.checkout_id,
-      p_provider_session_id: session.providerSessionId,
-    });
-    if (attach.error) return billingErrorResponse(attach.error);
-    return Response.json({ success: true, checkoutId: data.checkout_id, url: session.url });
-  } catch {
-    return Response.json({ success: false, code: "ESBLU_BILLING_PROVIDER_ERROR" }, { status: 502 });
+  // Súbežný / opakovaný pokus dostane ten istý zámer → tú istú reláciu (lib/billing/web-checkout.ts).
+  const result = await startWebCheckout({
+    provider,
+    intent: data,
+    origin,
+    attach: async (checkoutId, sessionId) =>
+      getSupabaseAdmin().rpc("esblu_billing_attach_checkout_session", { p_checkout_id: checkoutId, p_provider_session_id: sessionId }),
+  });
+  if (!result.ok) {
+    if (result.code === "ESBLU_BILLING_CHECKOUT_STATE") return billingErrorResponse(result.error as { message?: string } | null);
+    return Response.json({ success: false, code: result.code }, { status: 502 });
   }
+  return Response.json({ success: true, checkoutId: result.checkoutId, url: result.url, reused: result.reused });
 }

@@ -91,6 +91,12 @@ export class FakeBillingProvider implements BillingProvider {
     };
   }
 
+  /** Fake hosted checkout nemá stav u providera — zámer uzavrie DB. */
+  async expireCheckout(): Promise<"expired"> {
+    this.requireSecret();
+    return "expired";
+  }
+
   /** Simuluje dokončenú platbu: vytvorí aktívne predplatné (nie je to webhook — ten treba podpísať zvlášť). */
   async simulateCheckoutPaid(input: { checkoutId: string; providerPriceId: string; interval: "month" | "year"; customerId?: string }): Promise<NormalizedSubscriptionState> {
     const start = this.now();

@@ -4126,6 +4126,7 @@ const de = {
       alreadySubscribed: "Die Firma hat bereits ein aktives Abonnement — nutzen Sie den Planwechsel.",
       otherProvider: "Die Firma hat bereits ein aktives Abonnement über einen anderen Kanal. Beenden Sie es zuerst dort.",
       rateLimited: "Zu viele Versuche. Bitte versuchen Sie es gleich noch einmal.",
+      checkoutInProgress: "Für diese Firma läuft bereits eine andere Zahlung. Schließen Sie sie ab oder brechen Sie sie ab und versuchen Sie es erneut.",
     },
     buy: {
       web: "Weiter zur Zahlung",

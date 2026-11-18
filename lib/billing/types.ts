@@ -99,7 +99,15 @@ export type CheckoutRequest = {
   providerCustomerId: string | null;
   successUrl: string;
   cancelUrl: string;
+  /**
+   * Koniec platnosti zámeru z DB (ISO). Stripe `expires_at` = rovnaký okamih → relácia
+   * zanikne spolu so zámerom a opakovanie s tým istým Idempotency-Key má zhodné parametre.
+   */
+  expiresAt?: string | null;
 };
+
+/** Výsledok expirácie hosted checkout relácie u providera. */
+export type CheckoutExpireResult = "expired" | "complete" | "open";
 
 export type CheckoutSession = { providerSessionId: string; url: string };
 
@@ -135,6 +143,8 @@ export interface BillingProvider {
   readonly id: BillingProviderId;
   readonly environment: BillingEnvironment;
   createCheckout(request: CheckoutRequest): Promise<CheckoutSession>;
+  /** Zrušenie rozpracovanej platby (iba webové providery s hosted checkoutom). */
+  expireCheckout?(providerSessionId: string): Promise<CheckoutExpireResult>;
   getSubscription(ref: ProviderSubscriptionRef): Promise<NormalizedSubscriptionState>;
   cancelSubscription(ref: ProviderSubscriptionRef): Promise<NormalizedSubscriptionState>;
   resumeSubscription(ref: ProviderSubscriptionRef): Promise<NormalizedSubscriptionState>;

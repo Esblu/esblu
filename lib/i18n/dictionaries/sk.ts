@@ -4136,6 +4136,7 @@ const sk = {
       alreadySubscribed: "Firma už má aktívne predplatné — použite zmenu plánu.",
       otherProvider: "Firma už má aktívne predplatné cez iný kanál. Najprv ho ukončite tam.",
       rateLimited: "Príliš veľa pokusov. Skúste to o chvíľu.",
+      checkoutInProgress: "Pre firmu už prebieha iná rozpracovaná platba. Dokončite ju alebo ju zrušte a skúste znova.",
     },
     buy: {
       web: "Pokračovať na platbu",

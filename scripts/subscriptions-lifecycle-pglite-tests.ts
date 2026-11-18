@@ -40,6 +40,7 @@ const DELETION_GUARD = "supabase/migrations/20261012120000_account_deletion_subs
 const DELETION_GUARD_ROLLBACK = "supabase/rollback/20261012120000_account_deletion_subscription_guard_rollback.sql";
 const POST_COMMIT = "supabase/migrations/20261012130000_account_deletion_post_commit_cleanup.sql";
 const POST_COMMIT_ROLLBACK = "supabase/rollback/20261012130000_account_deletion_post_commit_cleanup_rollback.sql";
+const SINGLE_OPEN = "supabase/migrations/20261118120000_billing_single_open_checkout.sql";
 const SUITE = (process.argv[2] ?? process.env.SUITE ?? "").replace(/^--suite=/, "").trim() || null;
 
 type Row = Record<string, unknown>;
@@ -189,6 +190,7 @@ await db.exec(`
   end $f$;
 `);
 await db.exec(read(POST_COMMIT));
+await db.exec(read(SINGLE_OPEN));
 await db.exec(`update public.billing_runtime_config set web_provider = 'fake',
   enabled_methods = array['stripe_web_checkout','apple_iap','google_play']`);
 
@@ -259,6 +261,8 @@ await check("subscription-migrations: obe migrácie sú idempotentné (re-run be
   await serialized(() => db.exec(read(LIFECYCLE)));
   await serialized(() => db.exec(read(REDACTION)));
   await serialized(() => db.exec(read(OWNED_METHODS)));
+  await serialized(() => db.exec(read(SINGLE_OPEN)));
+  await serialized(() => db.exec(read(SINGLE_OPEN)));
   assert.equal((await accountOf(co)).status, "active");
   assert.equal((await ent(co.owner, "voice")).active, true);
 });
@@ -745,8 +749,11 @@ await check("subscription-concurrency: dve rôzne predplatné súbežne pre jedn
   const co = await newCompany({ trialEnded: true });
   const c1 = String(((await rpcAs(co.owner, "esblu_billing_create_checkout_intent", ["test_pro", "month"])) as Row).checkout_id);
   const c2 = String(((await rpcAs(co.billingAdmin, "esblu_billing_create_checkout_intent", ["test_pro", "month"])) as Row).checkout_id);
+  // 2026-11-18: druhý pokus dostane TEN ISTÝ zámer (jedna zaplatiteľná relácia).
+  assert.equal(c2, c1);
+  // DB poistka pre anomáliu na strane providera: dve rôzne predplatné pre ten istý zámer.
   const s1 = await fake.simulateCheckoutPaid({ checkoutId: c1, providerPriceId: "fake_price_pro_month", interval: "month" });
-  const s2 = await fake.simulateCheckoutPaid({ checkoutId: c2, providerPriceId: "fake_price_pro_month", interval: "month" });
+  const s2 = { ...(await fake.simulateCheckoutPaid({ checkoutId: c1, providerPriceId: "fake_price_pro_month", interval: "month" })), provider_subscription_id: "fake_sub_second_anomaly" };
   const [r1, r2] = await Promise.all([deliver("fake.checkout.completed", s1), deliver("fake.checkout.completed", s2)]);
   assert.deepEqual([r1.outcome, r2.outcome].sort(), ["applied", "conflict"], JSON.stringify([r1, r2]));
   assert.equal(Number((await one<{ n: number }>(`select count(*)::int n from public.company_entitlements where company_id = '${co.id}' and source = 'subscription' and entitlement_key = 'voice'`)).n), 1);
@@ -768,6 +775,77 @@ await check("subscription-concurrency: DB ochrana — unique (provider, env, eve
   assert.match(apply, /for update/);
   const intentSrc = src.slice(src.indexOf("function public.esblu_billing_create_purchase_intent"));
   assert.match(intentSrc, /pg_advisory_xact_lock/);
+});
+
+// ============================================================================= checkout-single-open (2026-11-18)
+const openWebIntents = async (co: Co) =>
+  Number((await one<{ n: number }>(`select count(*)::int n from public.billing_checkout_sessions where company_id = '${co.id}' and status in ('created','open') and provider in ('stripe','fake')`)).n);
+await check("checkout-single-open: dve karty / dvaja manažéri súbežne, ten istý plán → jeden zámer (reused), jedna relácia", async () => {
+  const co = await newCompany({ trialEnded: true });
+  const results = (await Promise.all([
+    rpcAs(co.owner, "esblu_billing_create_checkout_intent", ["test_pro", "month"]),
+    rpcAs(co.owner, "esblu_billing_create_checkout_intent", ["test_pro", "month"]),
+    rpcAs(co.billingAdmin, "esblu_billing_create_checkout_intent", ["test_pro", "month"]),
+  ])) as Row[];
+  assert.equal(new Set(results.map((r) => String(r.checkout_id))).size, 1, JSON.stringify(results));
+  assert.deepEqual(results.map((r) => r.reused).sort(), [false, true, true]);
+  assert.equal(await openWebIntents(co), 1);
+  // Relácia (fake = deterministická podľa zámeru) — attach 2× tou istou reláciou je idempotentné.
+  const id = String(results[0].checkout_id);
+  const session = await fake.createCheckout({ checkoutId: id, providerPriceId: "fake_price_pro_month", providerCustomerId: null, successUrl: "https://x/s", cancelUrl: "https://x/c" });
+  await su(`select public.esblu_billing_attach_checkout_session($1::uuid, $2)`, [id, session.providerSessionId]);
+  await su(`select public.esblu_billing_attach_checkout_session($1::uuid, $2)`, [id, session.providerSessionId]);
+  await fails(() => su(`select public.esblu_billing_attach_checkout_session($1::uuid, $2)`, [id, "fake_cs_other"]), /CHECKOUT_STATE/);
+  // Otvorená relácia (status open) sa znova použije aj po ďalšom pokuse.
+  const again = (await rpcAs(co.owner, "esblu_billing_create_checkout_intent", ["test_pro", "month"])) as Row;
+  assert.equal(String(again.checkout_id), id);
+  assert.equal(again.reused, true);
+});
+await check("checkout-single-open: iný plán počas otvorenej relácie → CHECKOUT_IN_PROGRESS; po zrušení nový zámer", async () => {
+  const co = await newCompany({ trialEnded: true });
+  const first = (await rpcAs(co.owner, "esblu_billing_create_checkout_intent", ["test_pro", "month"])) as Row;
+  await fails(() => rpcAs(co.owner, "esblu_billing_create_checkout_intent", ["test_starter", "month"]), /CHECKOUT_IN_PROGRESS/);
+  await fails(() => rpcAs(co.owner, "esblu_billing_create_checkout_intent", ["test_pro", "year"]), /CHECKOUT_IN_PROGRESS/);
+  // zrušenie: owner krok 1 (iba čítanie), cudzí/nevlastník nič
+  const info = (await rpcAs(co.owner, "esblu_billing_checkout_for_cancel", [first.checkout_id])) as Row;
+  assert.equal(info.found, true);
+  await fails(() => rpcAs(co.emp, "esblu_billing_checkout_for_cancel", [first.checkout_id]), /FORBIDDEN/);
+  const other = await newCompany({ trialEnded: true });
+  assert.equal(((await rpcAs(other.owner, "esblu_billing_checkout_for_cancel", [first.checkout_id])) as Row).found, false);
+  await fails(() => rpcAs(co.owner, "esblu_billing_mark_checkout_expired", [first.checkout_id]), /permission denied|not allowed|42501/i);
+  const st = await one<{ s: string }>(`select public.esblu_billing_mark_checkout_expired($1::uuid) s`, [first.checkout_id]);
+  assert.equal(st.s, "expired");
+  const second = (await rpcAs(co.owner, "esblu_billing_create_checkout_intent", ["test_starter", "month"])) as Row;
+  assert.notEqual(String(second.checkout_id), String(first.checkout_id));
+  assert.equal(await openWebIntents(co), 1);
+});
+await check("checkout-single-open: výpadok providera → opakovanie použije ten istý zámer; neskoro (< 31 min) nový zámer", async () => {
+  const co = await newCompany({ trialEnded: true });
+  const a = (await rpcAs(co.owner, "esblu_billing_create_checkout_intent", ["test_pro", "month"])) as Row;
+  // výpadok: relácia sa nepriradila (status created) → opakovanie = ten istý zámer
+  const b = (await rpcAs(co.owner, "esblu_billing_create_checkout_intent", ["test_pro", "month"])) as Row;
+  assert.equal(String(b.checkout_id), String(a.checkout_id));
+  assert.ok(Date.parse(String(a.expires_at)) - Date.now() > 55 * 60 * 1000, "zámer platí 1 h");
+  // zámer bez relácie tesne pred koncom platnosti → nový zámer (Stripe min. 30 min)
+  await su(`update public.billing_checkout_sessions set expires_at = now() + interval '20 minutes' where id = $1::uuid`, [a.checkout_id]);
+  const c = (await rpcAs(co.owner, "esblu_billing_create_checkout_intent", ["test_pro", "month"])) as Row;
+  assert.notEqual(String(c.checkout_id), String(a.checkout_id));
+  assert.equal((await one<{ status: string }>(`select status from public.billing_checkout_sessions where id = $1::uuid`, [a.checkout_id])).status, "expired");
+  // expirovaný otvorený zámer sa uzavrie automaticky
+  await su(`update public.billing_checkout_sessions set expires_at = now() - interval '1 minute' where id = $1::uuid`, [c.checkout_id]);
+  const d = (await rpcAs(co.owner, "esblu_billing_create_checkout_intent", ["test_starter", "month"])) as Row;
+  assert.notEqual(String(d.checkout_id), String(c.checkout_id));
+  assert.equal(await openWebIntents(co), 1);
+});
+await check("checkout-single-open: DB poistka — unikátny index (company) pre created/open stripe/fake; store kanály bez zmeny", async () => {
+  const idx = await one<{ d: string }>(`select indexdef d from pg_indexes where indexname = 'billing_checkout_sessions_one_open_web_idx'`);
+  assert.match(idx.d, /UNIQUE/i);
+  const co = await newCompany({ trialEnded: true });
+  await rpcAs(co.owner, "esblu_billing_create_checkout_intent", ["test_pro", "month"]);
+  await fails(() => su(`insert into public.billing_checkout_sessions (company_id, created_by, provider, environment, plan_code, billing_interval, provider_price_id)
+    values ('${co.id}', '${co.owner}', 'fake', 'test', 'test_pro', 'month', 'fake_price_pro_month')`), /duplicate key|unique/i);
+  const sql = read(SINGLE_OPEN).toLowerCase();
+  assert.doesNotMatch(sql, /drop table|truncate|delete from/);
 });
 
 // ============================================================================= stripe-adapter (cez DB pipeline)
@@ -1270,6 +1348,7 @@ await check("subscription-migrations: lifecycle rollback zachová dáta, zmapuje
   assert.equal(Number((await one<{ n: number }>(`select count(*)::int n from public.billing_events`)).n), before, "rollback nemaže eventy");
   await fails(() => su(`select public.esblu_billing_explain_my_entitlements()`), /does not exist/);
   await serialized(() => db.exec(read(LIFECYCLE)));
+  await serialized(() => db.exec(read(SINGLE_OPEN)));
   assert.equal((await ent(dash.owner, "voice")).active, true);
 });
 

@@ -58,8 +58,9 @@ Legenda: **SIM PASS** = overené simuláciou dnes · **REAL —** = čaká na St
 
 Zistenia z revízie kódu (nemenené, na rozhodnutie):
 
-1. **C1 — dvojitá platba:** ak dva Checkouty dobehnú v Stripe, DB správne odmietne druhé predplatné (`conflict`), ale druhá
-   karta je stiahnutá. Treba operátorský postup „conflict → zrušiť subscription + plná refundácia“ (dnes iba event pre operátora).
+1. **C1 — dvojitá platba: OPRAVENÉ (2026-11-18, § 7).** Pôvodne dva súbežné pokusy vytvorili dva zámery a dve zaplatiteľné
+   relácie; DB odmietla iba druhé predplatné (`conflict`) a druhá karta bola stiahnutá. Teraz má firma najviac jeden
+   zaplatiteľný webový checkout. Operátorský postup „conflict → zrušiť + refund“ ostáva ako poistka pre anomálie providera.
 2. **S9 — čiastočná refundácia nemení prístup.** Je to zámer kódu; potvrdiť v podmienkach predplatného (CLIA, § 6 nižšie).
 3. **Doklady:** Esblu dnes neukladá Stripe `balance_transaction` (poplatok, čistá suma, výplata). Mesačné párovanie preto
    ide zo Stripe reportov (§ 5), nie z DB Esblu. Ak chce účtovníčka automatiku, treba nový import reportu — až po jej rozhodnutí.
@@ -151,6 +152,51 @@ Mena: EUR (bez konverzie; ak by sa objavila iná mena, stĺpec `kurz` = kurz Str
 **Ak dodávateľ (Stripe alebo iný) vyčíslil DPH:** (1) skontrolovať, či bolo v profile zadané IČ DPH Esblu; (2) doplniť
 IČ DPH a požiadať o opravnú faktúru bez DPH; (3) do rozhodnutia účtovníčky účtovať DPH dodávateľa ako náklad a **neodvádzať**
 slovenskú DPH duplicitne; (4) zapísať do evidencie § 70 s poznámkou.
+
+## 7. Oprava: jedna zaplatiteľná relácia na firmu (2026-11-18)
+
+Ostré platby ostávajú vypnuté (DB `environment='test'`, `VERCEL_ENV=production` → billing off, iba `sk_test_`/`rk_test_`).
+
+| Vrstva | Zmena | Súbor |
+|---|---|---|
+| DB | `esblu_billing_create_purchase_intent` (pod advisory lockom firmy): otvorený webový zámer s rovnakým plánom/intervalom/kanálom/cenou → **ten istý zámer** (`reused: true`); iný plán/kanál → `ESBLU_BILLING_CHECKOUT_IN_PROGRESS`; webový zámer platí **1 h**; expirované sa uzavrú automaticky; zámer bez relácie s < 31 min platnosti sa nahradí | `supabase/migrations/20261118120000_billing_single_open_checkout.sql` |
+| DB poistka | čiastočný unikátny index `billing_checkout_sessions_one_open_web_idx` (company) pre `created/open` a `stripe/fake` | to isté |
+| DB | `esblu_billing_attach_checkout_session` idempotentné; nové `esblu_billing_checkout_for_cancel` (owner) a `esblu_billing_mark_checkout_expired` (iba service_role) | to isté; rollback `supabase/rollback/20261118120000_…_rollback.sql` |
+| Stripe adaptér | `expires_at` = koniec zámeru (rovnaké parametre pri opakovaní); pri `409 idempotency_key_in_use` počká a zopakuje; `expireCheckout` (`/checkout/sessions/{id}/expire`, inak rozhodne stav relácie) | `lib/billing/providers/stripe.ts`, `lib/billing/types.ts` |
+| Server | spoločný `startWebCheckout`: Idempotency-Key `esblu-checkout-<zámer>`, 1 okamžité opakovanie po výpadku, idempotentné priradenie | `lib/billing/web-checkout.ts`, `app/api/billing/checkout/route.ts`, `app/api/billing/purchase-intent/route.ts` |
+| Zrušenie | `POST /api/billing/checkout/[id] {action:"cancel"}`: najprv expirácia u providera, potom uzavretie zámeru; dokončenú platbu neruší | `app/api/billing/checkout/[id]/route.ts` |
+| UI | návrat `?checkout=canceled` zavolá zrušenie; hláška `checkoutInProgress` (SK/EN/DE) | `app/nastavenia/predplatne/page.tsx`, `lib/i18n/dictionaries/*` |
+| Fake checkout | po uplynutí platnosti zámeru už nie je zaplatiteľný (ako Stripe) | `app/api/billing/fake/complete/route.ts` |
+
+### Výsledky testov opravy
+
+| Test | Prostredie | Výsledok |
+|---|---|---|
+| dve karty / dvaja manažéri súbežne, rovnaký plán → 1 zámer (1× `reused:false`, 2× `true`), attach 2× OK, iná relácia odmietnutá | PGlite (produkčné migrácie) | PASS |
+| iný plán / interval počas otvorenej relácie → `CHECKOUT_IN_PROGRESS`; zrušenie (owner OK, zamestnanec FORBIDDEN, iná firma `found:false`, `mark_expired` iba service_role) → nový zámer | PGlite | PASS |
+| výpadok: zámer bez relácie → opakovanie = ten istý zámer; < 31 min → nový; expirovaný → uzavretý | PGlite | PASS |
+| unikátny index + forward-only (bez DROP/TRUNCATE/DELETE) | PGlite | PASS |
+| Stripe mock: dve súbežné požiadavky, druhá dostane 409 → **1 relácia**, rovnaký `Idempotency-Key` aj `expires_at` | unit | PASS |
+| Stripe mock: relácia vznikla, odpoveď 504 → opakovanie vráti **tú istú reláciu** (aj pri opakovaní klientom po 502) | unit | PASS |
+| zrušenie: open → expired; dokončená relácia → `complete` (neruší sa) | unit | PASS |
+| **10 skutočných paralelných Postgres spojení** (dblink, bariéra, rozptyl 32 ms), owner firmy QA-A, rovnaký plán | staging `esblu-test` | PASS — 1 zámer, 1× `reused=false`, 9× `reused=true` |
+| 5 paralelných spojení, 4× Pro + 1× Starter | staging | PASS — prvý (Starter) vytvoril zámer, 4× `CHECKOUT_IN_PROGRESS` |
+| izolácia: owner firmy B nevidí/neruší zámer A (`found:false`), `mark_expired`/`attach` permission denied; zamestnanec A FORBIDDEN, tabuľka nedostupná; owner B má vlastný nezávislý zámer | staging | PASS |
+| regresia: `test:subscriptions` 28, `test:subscriptions-db` 60, `test:subscriptions-lifecycle` 47, `test:subscriptions-lifecycle-db` 73, `billing-ui`, `account-deletion-subscription`, `native-billing-contract` 13 | lokálne | PASS |
+
+Staging po teste: zámery QA uzavreté, `web_provider='none'`, dočasná rola `qa_checkout_runner`, schéma a rozšírenie `dblink`
+odstránené. Ostali syntetické firmy `QA-CHECKOUT A/B` (bez osobných údajov) pre test v prehliadači. Advisors: bez ERROR,
+rovnaké WARN/INFO ako baseline (owner RPC `security definer` je zámerný).
+
+### Test v dvoch kartách prehliadača — čaká na Preview build
+
+Kód je commitnutý lokálne; **push z prostredia agenta je zablokovaný** (Cowork povoľuje iba clone/fetch), preto Vercel Preview
+s opravou zatiaľ neexistuje. Po pushi vetvy agent: (1) nastaví **iba pre túto vetvu v Preview** `ESBLU_BILLING_MODE=fake`,
+náhodný `ESBLU_FAKE_BILLING_SECRET`, `NEXT_PUBLIC_ESBLU_BILLING_UI=1`, `ESBLU_BILLING_RETURN_ORIGIN=<preview>`; (2) na stagingu
+dočasne `web_provider='fake'` a heslo pre `QA-CHECKOUT A` owner; (3) v dvoch kartách súčasne „Pokračovať na platbu“ →
+obe karty musia dostať **rovnaký `checkout_id`**; v druhej karte pokus o iný plán → hláška „prebieha iná platba“;
+(4) výpadok: zablokovať sieť karty počas požiadavky → opakovanie → rovnaký `checkout_id`; (5) zaplatiť v jednej karte →
+druhá karta „zaplatiť“ → `CHECKOUT_STATE`; (6) cleanup a vrátenie `web_provider='none'`. Produkcia sa nemení.
 
 ## 6. Otázky do podmienok predplatného (pre CLIA)
 

@@ -18,6 +18,7 @@ import {
   BillingProviderError,
   type BillingProvider,
   type CanonicalStatus,
+  type CheckoutExpireResult,
   type CheckoutRequest,
   type CheckoutSession,
   type NormalizationResult,
@@ -149,6 +150,17 @@ export function stripeSubscriptionIdFromEvent(eventType: string, object: unknown
   return { subscriptionId: null, checkoutRef: null };
 }
 
+/** ISO koniec platnosti zámeru → Stripe `expires_at` (unix s); neplatné/žiadne → bez parametra. */
+export function stripeExpiresAt(iso: string | null | undefined): number | null {
+  if (!iso) return null;
+  const ms = Date.parse(iso);
+  return Number.isFinite(ms) ? Math.floor(ms / 1000) : null;
+}
+
+function stripeCheckoutStatus(status: unknown): CheckoutExpireResult {
+  return status === "complete" ? "complete" : status === "expired" ? "expired" : "open";
+}
+
 function formEncode(params: Record<string, string | number | boolean | null | undefined>): string {
   const body = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
@@ -192,7 +204,13 @@ export class StripeTestProvider implements BillingProvider {
     } else if (params) {
       url += `?${formEncode(params)}`;
     }
-    const response = await this.fetchImpl(url, { method, headers, body, cache: "no-store" });
+    let response = await this.fetchImpl(url, { method, headers, body, cache: "no-store" });
+    // Súbežná požiadavka s tým istým Idempotency-Key (dve karty prehliadača) → Stripe 409
+    // `idempotency_key_in_use`. Počkať a zopakovať: dostaneme odpoveď prvej požiadavky.
+    for (let attempt = 1; response.status === 409 && idempotencyKey && attempt <= 3; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 250 * attempt));
+      response = await this.fetchImpl(url, { method, headers, body, cache: "no-store" });
+    }
     const json = (await response.json().catch(() => null)) as unknown;
     if (!response.ok || !isObj(json)) {
       // Nikdy neprepúšťame text chyby Stripe ďalej (môže obsahovať identifikátory).
@@ -221,6 +239,8 @@ export class StripeTestProvider implements BillingProvider {
         locale: "sk",
         // Checkout otvorený z appky (in-app browser / Safari) — docs.stripe.com/mobile/digital-goods/checkout
         origin_context: request.mobileApp ? "mobile_app" : null,
+        // Relácia platí presne tak dlho ako zámer v DB (min. 30 min podľa Stripe).
+        expires_at: stripeExpiresAt(request.expiresAt),
         success_url: request.successUrl,
         cancel_url: request.cancelUrl,
       },
@@ -230,6 +250,22 @@ export class StripeTestProvider implements BillingProvider {
     const url = str(session.url);
     if (!id || !url) throw new BillingProviderError("PROVIDER_ERROR", "checkout session without url");
     return { providerSessionId: id, url };
+  }
+
+  /**
+   * Zrušenie rozpracovanej platby: POST /v1/checkout/sessions/{id}/expire. Ak Stripe
+   * expiráciu odmietne (už dokončená / už expirovaná), rozhodne aktuálny stav relácie.
+   */
+  async expireCheckout(providerSessionId: string): Promise<CheckoutExpireResult> {
+    const path = `/checkout/sessions/${encodeURIComponent(providerSessionId)}`;
+    try {
+      const session = await this.request("POST", `${path}/expire`, {}, `esblu-expire-${providerSessionId}`);
+      return stripeCheckoutStatus(session.status);
+    } catch (error) {
+      if (error instanceof BillingProviderError && error.code === "LIVE_MODE_FORBIDDEN") throw error;
+      const session = await this.request("GET", path);
+      return stripeCheckoutStatus(session.status);
+    }
   }
 
   async getSubscription(ref: ProviderSubscriptionRef): Promise<NormalizedSubscriptionState> {
