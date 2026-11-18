@@ -258,6 +258,9 @@ syntetická adresa `@example.invalid`; žiadny sandbox nevznikol.
 | L3 | `-Step status` vypísal celé `whsec_…` z logu `stripe listen` | **bezpečnostný nález** — všetky výpisy sa maskujú, logy sa mažú pri štarte a konci | tajomstvo `stripe listen` je viazané na **Stripe účet**, nie na zariadenie → rotácia = nový sandbox |
 | L4 | „Nový sandbox“ cez `sandboxes create` v tom istom profile | **nevznikol** — podľa `--help` profil s kľúčom iba otvorí Dashboard; nová cena `price_1UdDE5…` je v **tom istom účte** (rovnaký segment účtu `B5dmk5ax59` v ID `price_1UdBoJ…`, `price_1UdDE5…`, `sub_1UdChQ…`), preto rovnaké tajomstvo | skript: samostatný profil CLI (`--project-name esblu-qa2`), `-Step new-sandbox` uloží odtlačok vystaveného tajomstva a overí, že nový sa líši |
 
+| L5 | `-Step new-sandbox` v profile `esblu-qa2` | **PASS** — nový účet (iný segment účtu `RKE4QKs2UL` v `price_1UdE7tRKE4QKs2ULYWShYLxS`), tajomstvo sa líši od vystaveného, staging mapovanie prepnuté na novú cenu | staging `billing_provider_prices` |
+| L6 | Po prevzatí sandboxu a `stripe login --project-name esblu-qa2` krok 1/5 „nie je testovací kľúč“ | príčina: po `stripe login` CLI ukladá kľúč do systémového trezoru (Windows Credential Manager), `config --list` ho nezobrazí | skript: `STRIPE_API_KEY` → profil → **skrytá výzva** na Secret key sandboxu; overenie účtu (kľúč vidí cenu profilu 15,90 EUR/mes.) a oprávnenia na Test Clocks priamo cez Stripe API; kľúč iba v procese |
+
 ### 8.4 Runbook — reálny Stripe test (sandbox + Vercel Preview + staging DB)
 
 1. **Vlastník (PowerShell na PC, Node je nainštalovaný):**

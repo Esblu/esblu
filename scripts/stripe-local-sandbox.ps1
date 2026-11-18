@@ -16,7 +16,8 @@
     Kazdy krok vypise OK AZ ked je vysledok overeny v Stripe AJ v testovacej DB Esblu.
 
   Bezpecnost:
-  - Stripe kluc sa cita z profilu Stripe CLI, nikdy sa nevypisuje. Iba test mode (sk_/rk_/rkcs_test_).
+  - Stripe kluc: $env:STRIPE_API_KEY -> profil CLI -> skryta vyzva (po prevzati sandboxu). Nikdy sa nevypisuje.
+    Overenie: kluc vidi cenu profilu (spravny ucet) a ma pristup k Test Clocks. Iba test mode.
   - Webhook secret zo `stripe listen` je viazany na Stripe UCET (sandbox), nie na zariadenie. Novy secret
     = novy sandbox (-Step new-sandbox). Skript porovnava iba SHA-256 s odtlackom vystaveneho tajomstva
     (exposed.sha256) a nespusti sa, kym sa zhoduju. Stare logy sa mazu.
@@ -88,19 +89,49 @@ function Get-StripeJson([string[]]$StripeArgs) {
 }
 
 function Get-StripeTestKey {
+  # Kluc sa NIKDY nevypisuje. Poradie:
+  #  1) $env:STRIPE_API_KEY (test) z tohto okna,
+  #  2) nezamaskovany test_mode_api_key v profile Stripe CLI (anonymny sandbox pred prevzatim),
+  #  3) skryta vyzva - po prevzati sandboxu a `stripe login` uklada CLI kluc do systemoveho trezoru
+  #     (Windows Credential Manager) a `config --list` ho uz neukaze.
+  # Vybrany kluc sa nastavi do $env:STRIPE_API_KEY (iba tento proces), takze CLI aj Esblu pouziju TEN ISTY ucet.
   $testRe = "(?:sk|rk|rkcs)_test_[A-Za-z0-9]+"
   $liveRe = "(?:sk|rk|rkcs)_live_"
+  $key = $null; $src = ""
   if ($env:STRIPE_API_KEY) {
     if ($env:STRIPE_API_KEY -match "^$liveRe") { Fail "STRIPE_API_KEY je LIVE kluc - skript pracuje iba s test mode." }
-    if ($env:STRIPE_API_KEY -match "^$testRe$") { Say "    kluc: STRIPE_API_KEY (test mode)"; return $env:STRIPE_API_KEY }
+    if ($env:STRIPE_API_KEY -match "^$testRe$") { $key = $env:STRIPE_API_KEY; $src = "STRIPE_API_KEY" }
   }
-  $cfg = Invoke-Stripe @("config", "--list")
-  if ($cfg -match "test_mode_api_key\s*=\s*['`"]?$liveRe") { Fail "V profile je LIVE kluc - skript pracuje iba s test mode." }
-  $m = [regex]::Match($cfg, "test_mode_api_key\s*=\s*['`"]?($testRe)")
-  if (-not $m.Success) { Fail "V aktualnom profile Stripe CLI nie je testovaci kluc (sk_test_/rk_test_/rkcs_test_)." }
-  $prefix = $m.Groups[1].Value.Substring(0, $m.Groups[1].Value.IndexOf("_test_") + 6)
-  Say "    kluc: profil Stripe CLI ($prefix***)"
-  return $m.Groups[1].Value
+  if (-not $key) {
+    $cfg = Invoke-StripeRaw $StripeCli @("config", "--list")
+    if ($cfg -match "test_mode_api_key\s*=\s*['`"]?$liveRe") { Fail "V profile je LIVE kluc - skript pracuje iba s test mode." }
+    $m = [regex]::Match($cfg, "test_mode_api_key\s*=\s*['`"]?($testRe)")
+    if ($m.Success) { $key = $m.Groups[1].Value; $src = "profil Stripe CLI '$Project'" }
+  }
+  if (-not $key) {
+    Say "    Profil '$Project' nema citatelny testovaci kluc (po stripe login je v systemovom trezore)."
+    Say "    Stripe Dashboard -> tvoj sandbox (prepinac vlavo hore) -> Developers -> API keys -> Secret key (sk_test_...)."
+    $sec = Read-Host -AsSecureString "    Vloz testovaci Secret key (nezobrazi sa)"
+    $key = ([Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec))).Trim()
+    if ($key -match "^$liveRe") { Fail "Zadany kluc je LIVE - skript pracuje iba s test mode." }
+    if ($key -notmatch "^$testRe$") { Fail "Zadany kluc nie je testovaci Stripe kluc (sk_test_/rk_test_/rkcs_test_)." }
+    $src = "skryta vyzva"
+  }
+  $env:STRIPE_API_KEY = $key   # iba tento proces; Stripe CLI ho uprednostni pred profilom
+  Say ("    kluc: {0} ({1}***)" -f $src, $key.Substring(0, $key.IndexOf("_test_") + 6))
+  return $key
+}
+
+function Assert-StripeAccount([string]$key) {
+  # Spravny ucet = kluc vidi cenu ulozenu pre profil (ceny su viazane na ucet). Bez vypisu kluca.
+  $h = @{ Authorization = "Bearer $key" }
+  try { $pr = Invoke-RestMethod -Uri "https://api.stripe.com/v1/prices/$PriceId" -Headers $h -Method Get }
+  catch { Fail "Kluc nevidi cenu $PriceId - patri inemu Stripe uctu alebo nema opravnenie na Prices. ($($_.Exception.Message))" }
+  if ($pr.livemode -or $pr.id -ne $PriceId) { Fail "Cena $PriceId nie je testovacia cena tohto kluca." }
+  if ($pr.unit_amount -ne 1590 -or $pr.currency -ne "eur" -or $pr.recurring.interval -ne "month") { Fail "Cena $PriceId nie je 15,90 EUR / mesiac." }
+  try { Invoke-RestMethod -Uri "https://api.stripe.com/v1/test_helpers/test_clocks?limit=1" -Headers $h -Method Get | Out-Null }
+  catch { Fail "Kluc nema opravnenie na Test Clocks (test_helpers). Pouzi Secret key (sk_test_) sandboxu. ($($_.Exception.Message))" }
+  Say "    ucet OK: kluc vidi cenu $PriceId (15,90 EUR / mesiac, test) a ma pristup k Test Clocks"
 }
 
 function Get-Sha256([string]$s) {
@@ -232,12 +263,9 @@ if ($Step -eq "new-sandbox") {
 }
 
 if ($Step -ne "start") {
-  Get-StripeTestKey | Out-Null
   if (-not $PriceId) { Fail "Pre profil '$Project' chyba cena - spusti najprv -Step new-sandbox -Email <adresa>." }
-  # Kluc musi patrit sandboxu, v ktorom existuje $PriceId (ceny su viazane na ucet) -> inak koniec.
-  $pr = Get-StripeJson @("prices", "retrieve", $PriceId)
-  if ($pr.livemode -or $pr.id -ne $PriceId) { Fail "Cena $PriceId nie je v sandboxe aktualneho kluca." }
-  Say "    sandbox OK: kluc vidi cenu $PriceId ($($pr.unit_amount/100) $($pr.currency.ToUpper()) / $($pr.recurring.interval))"
+  $k = Get-StripeTestKey
+  Assert-StripeAccount $k
   switch ($Step) {
     "clock-setup" {
       if (-not $CheckoutId) {
@@ -356,9 +384,7 @@ Remove-Item (Join-Path $StateDir "listen*.log") -Force -ErrorAction SilentlyCont
 Say "1/5 Stripe CLI (profil '$Project') a testovaci kluc..."
 if (-not $PriceId) { Fail "Pre profil '$Project' chyba cena - spusti najprv -Step new-sandbox -Email <adresa>." }
 $StripeKey = Get-StripeTestKey
-$price = Get-StripeJson @("prices", "retrieve", $PriceId)
-if ($price.livemode) { Fail "Cena je live - koniec." }
-Say "    cena $PriceId = $($price.unit_amount/100) $($price.currency.ToUpper()) / $($price.recurring.interval)  (livemode=false)"
+Assert-StripeAccount $StripeKey
 
 Say "2/5 Podpisove tajomstvo stripe listen (viazane na sandbox profilu '$Project')..."
 $WhSec = Get-ListenSecret $StripeCli
@@ -404,6 +430,6 @@ try {
 } finally {
   if ($listen -and -not $listen.HasExited) { Stop-Process -Id $listen.Id -Force -ErrorAction SilentlyContinue }
   Remove-Item (Join-Path $StateDir "listen*.log") -Force -ErrorAction SilentlyContinue
-  Remove-Item Env:STRIPE_SECRET_KEY, Env:STRIPE_WEBHOOK_SECRET, Env:SUPABASE_SERVICE_ROLE_KEY, Env:ESBLU_QA_SERVICE_ROLE -ErrorAction SilentlyContinue
+  Remove-Item Env:STRIPE_SECRET_KEY, Env:STRIPE_API_KEY, Env:STRIPE_WEBHOOK_SECRET, Env:SUPABASE_SERVICE_ROLE_KEY, Env:ESBLU_QA_SERVICE_ROLE -ErrorAction SilentlyContinue
   Say "Zastavene."
 }
