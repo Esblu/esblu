@@ -82,7 +82,21 @@ if ($Step -ne "start") {
   $sub = Get-QaSubscription
   Write-Host "Predplatne $($sub.id)  stav=$($sub.status)  cancel_at_period_end=$($sub.cancel_at_period_end)"
   switch ($Step) {
-    "status" { }
+    "status" {
+      # Obdobie (nove API: na polozke predplatneho), posledna faktura, posledne riadky stripe listen. Ziadne kluce.
+      $full = Get-StripeJson @("subscriptions", "retrieve", $sub.id, "--expand", "latest_invoice")
+      $item = $full.items.data[0]
+      $ps = if ($item.current_period_start) { $item.current_period_start } else { $full.current_period_start }
+      $pe = if ($item.current_period_end) { $item.current_period_end } else { $full.current_period_end }
+      Write-Host ("Obdobie (UTC): {0} -> {1}" -f [DateTimeOffset]::FromUnixTimeSeconds($ps).UtcDateTime.ToString("u"), [DateTimeOffset]::FromUnixTimeSeconds($pe).UtcDateTime.ToString("u"))
+      $li = $full.latest_invoice
+      if ($li) { Write-Host ("Posledna faktura: {0}  stav={1}  suma={2} {3}  vytvorena={4}  billing_reason={5}" -f $li.id, $li.status, ($li.amount_due/100), $li.currency, [DateTimeOffset]::FromUnixTimeSeconds($li.created).UtcDateTime.ToString("u"), $li.billing_reason) }
+      foreach ($name in @("listen.out.log", "listen.log")) {
+        $log = Join-Path (Join-Path $env:TEMP "esblu-stripe-qa") $name
+        if (Test-Path $log) { Write-Host "--- posledne riadky $name ---"; Get-Content $log -Tail 12 }
+        else { Write-Host "$name neexistuje - bezi okno so skriptom (start)?" }
+      }
+    }
     "renew" {
       # Obnova: nove fakturacne obdobie hned (invoice.paid -> Esblu posunie koniec obdobia).
       Invoke-Stripe @("subscriptions", "update", $sub.id, "-d", "billing_cycle_anchor=now", "-d", "proration_behavior=none") | Out-Null
