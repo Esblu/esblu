@@ -178,12 +178,37 @@ function Get-ServiceRole {
   return $k
 }
 
+function Get-HttpErrorText($err) {
+  # Telo chybovej odpovede (PostgREST: code, message, details, hint). Windows PowerShell 5.1:
+  # ErrorDetails.Message, inak stream odpovede. Vystup ide cez Hide-Secrets.
+  $raw = $null
+  if ($err.ErrorDetails -and $err.ErrorDetails.Message) { $raw = $err.ErrorDetails.Message }
+  elseif ($err.Exception.Response) {
+    try { $sr = New-Object IO.StreamReader($err.Exception.Response.GetResponseStream()); $raw = $sr.ReadToEnd(); $sr.Close() } catch { }
+  }
+  $status = $null
+  try { $status = [int]$err.Exception.Response.StatusCode } catch { }
+  $txt = "HTTP $status"
+  if ($raw) {
+    try {
+      $j = $raw | ConvertFrom-Json
+      $txt += " code=$($j.code) message=$($j.message) details=$($j.details) hint=$($j.hint)"
+      if (-not $j.code -and -not $j.message) { $txt += " body=$raw" }
+    } catch { $txt += " body=$raw" }
+  }
+  return (Hide-Secrets $txt)
+}
 function Invoke-Staging([string]$method, [string]$path, $body = $null) {
   $k = Get-ServiceRole
   $h = @{ apikey = $k; Authorization = "Bearer $k"; Prefer = "return=representation" }
   $u = "$StagingUrl/rest/v1/$path"
-  if ($body -ne $null) { return Invoke-RestMethod -Uri $u -Headers $h -Method $method -ContentType "application/json" -Body ($body | ConvertTo-Json -Compress) }
-  return Invoke-RestMethod -Uri $u -Headers $h -Method $method
+  $op = "$method /rest/v1/$(($path -split '\?')[0])"
+  try {
+    if ($body -ne $null) { return Invoke-RestMethod -Uri $u -Headers $h -Method $method -ContentType "application/json" -Body ($body | ConvertTo-Json -Compress) }
+    return Invoke-RestMethod -Uri $u -Headers $h -Method $method
+  } catch {
+    Fail "Staging REST $op zlyhal: $(Get-HttpErrorText $_)"
+  }
 }
 
 function Invoke-StripeRaw([string[]]$cli, [string[]]$StripeArgs) {
@@ -561,9 +586,15 @@ if ($Step -ne "start") {
       if (-not $accRow) { Fail "Esblu: ucet $subId nenajdeny." }
       for ($k = 1; $k -le 2; $k++) {
         # Ucet QA naplanovat na okamzitu kontrolu (inak ho reconciliation 24 h preskakuje a checked=0 nic nedokazuje).
-        Invoke-Staging "PATCH" "billing_reconciliation?account_id=eq.$($accRow.id)" @{ last_checked_at = $null; next_check_at = $null } | Out-Null
+        # next_check_at je NOT NULL (null -> HTTP 400, 23502) -> nastavit do minulosti; last_checked_at null = najvyssia priorita.
+        $due = [DateTime]::UtcNow.AddMinutes(-1).ToString("yyyy-MM-ddTHH:mm:ss.fffZ")
+        $upd = @(Invoke-Staging "PATCH" "billing_reconciliation?account_id=eq.$($accRow.id)" @{ last_checked_at = $null; next_check_at = $due } | ForEach-Object { $_ })
+        if ($upd.Count -ne 1) { Fail "Naplanovanie kontroly: zmenenych riadkov $($upd.Count) (ocakavany 1)." }
         $t0 = [DateTime]::UtcNow
-        $res = Invoke-RestMethod -Uri "http://localhost:$Port/api/cron/billing-reconcile" -Headers @{ Authorization = "Bearer $cron" } -Method Get
+        try {
+          $res = Invoke-RestMethod -Uri "http://localhost:$Port/api/cron/billing-reconcile" -Headers @{ Authorization = "Bearer $cron" } -Method Get
+        } catch { Fail "GET /api/cron/billing-reconcile zlyhal: $(Get-HttpErrorText $_)" }
+        if ([int]$res.checked -lt 1) { Fail "Reconciliation #$($k) nic neskontrolovala (checked=$($res.checked))." }
         $rec = (Get-Rows "billing_reconciliation?account_id=eq.$($accRow.id)&select=last_checked_at,last_result,last_error_code")[0]
         $acc = Get-EsbluAccount $subId
         $s = Get-Sub $subId
