@@ -87,7 +87,12 @@ export type VerifiedProviderEvent = {
 
 /** Výsledok normalizácie: buď zmena stavu, alebo vedome ignorovaný typ. */
 export type NormalizationResult =
-  | { kind: "state"; state: NormalizedSubscriptionState }
+  /**
+   * followUp "cancel_provider_now": po zápise terminálneho stavu (plná refundácia aktuálneho
+   * obdobia, prehraný spor) okamžite ukončiť predplatné U PROVIDERA — inak by ďalej účtoval
+   * firme, ktorá už nemá prístup (2026-11-18, Stripe Test Clock nález).
+   */
+  | { kind: "state"; state: NormalizedSubscriptionState; followUp?: "cancel_provider_now" }
   | { kind: "charge"; providerSubscriptionId: string; charge: NormalizedCharge }
   | { kind: "ignore"; reason: string };
 
@@ -147,6 +152,8 @@ export interface BillingProvider {
   expireCheckout?(providerSessionId: string): Promise<CheckoutExpireResult>;
   getSubscription(ref: ProviderSubscriptionRef): Promise<NormalizedSubscriptionState>;
   cancelSubscription(ref: ProviderSubscriptionRef): Promise<NormalizedSubscriptionState>;
+  /** Okamžité ukončenie u providera bez ďalšej faktúry a bez prorácie (iba webové providery). */
+  cancelSubscriptionNow?(ref: ProviderSubscriptionRef): Promise<NormalizedSubscriptionState>;
   resumeSubscription(ref: ProviderSubscriptionRef): Promise<NormalizedSubscriptionState>;
   changePlan(ref: ProviderSubscriptionRef, newProviderPriceId: string): Promise<NormalizedSubscriptionState>;
   createPortalSession(providerCustomerId: string, returnUrl: string): Promise<{ url: string }>;

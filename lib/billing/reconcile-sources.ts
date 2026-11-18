@@ -24,6 +24,10 @@ export function providerReconcileSource(provider: BillingProvider): ReconcileSou
     provider: provider.id,
     fetchState: (c: ReconcileCandidate) =>
       provider.getSubscription({ providerSubscriptionId: c.provider_subscription_id, providerCustomerId: c.provider_customer_id }),
+    cancelNow: provider.cancelSubscriptionNow
+      ? (c: ReconcileCandidate) =>
+          provider.cancelSubscriptionNow!({ providerSubscriptionId: c.provider_subscription_id, providerCustomerId: c.provider_customer_id })
+      : undefined,
   };
 }
 

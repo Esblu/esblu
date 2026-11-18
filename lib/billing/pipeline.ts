@@ -9,6 +9,7 @@
 // NEURČUJE — robí to DB z vlastných tabuliek.
 // =============================================================================
 
+import { sha256Hex } from "@/lib/billing/signature";
 import {
   BillingProviderError,
   type BillingProvider,
@@ -157,7 +158,64 @@ export async function processWebhook(provider: BillingProvider, rawBody: string,
   }
 
   // 5+6) kanonický stav + nároky
-  return applyState(db, recorded.event_id, normalized.state);
+  const applied = await applyState(db, recorded.event_id, normalized.state);
+
+  // 7) Terminálny stav v Esblu (plná refundácia aktuálneho obdobia, prehraný spor) → ukončiť
+  //    predplatné U PROVIDERA, aby firma bez prístupu nebola ďalej účtovaná. Zlyhanie nevracia
+  //    retry (event je zapísaný); poistkou je reconciliation (účet refunded/revoked + otvorené
+  //    predplatné u providera → okamžité ukončenie).
+  if (normalized.followUp === "cancel_provider_now" && (applied.outcome === "applied" || applied.outcome === "stale")) {
+    const followUp = await cancelAtProvider(db, provider, normalized.state);
+    return { ...applied, code: followUp };
+  }
+  return applied;
+}
+
+/**
+ * Auditný záznam akcie u providera BEZ zmeny kanonického stavu (napr. terminálny `refunded`
+ * ostáva `refunded`, hoci Stripe po ukončení hlási `canceled`). Idempotentné podľa event ID.
+ */
+export async function recordProviderAudit(
+  db: BillingDb,
+  provider: { id: BillingProviderId; environment: "test" },
+  action: string,
+  state: NormalizedSubscriptionState,
+  reason: string,
+): Promise<void> {
+  try {
+    const recorded = await recordEvent(db, {
+      provider: provider.id,
+      environment: provider.environment,
+      eventId: `audit:${action}:${state.provider_subscription_id ?? "none"}`.slice(0, 256),
+      eventType: `esblu.audit.${action}`,
+      createdAt: state.state_at,
+      payloadSha256: sha256Hex(JSON.stringify(state)),
+    });
+    if (recorded.duplicate) return;
+    await db.rpc("esblu_billing_close_event", {
+      p_event_id: recorded.event_id,
+      p_status: "ignored",
+      p_error_code: null,
+      p_summary: summarizeState(state, reason),
+    });
+  } catch {
+    // audit je best-effort; stav u providera je rozhodujúci a reconciliation ho overí znova
+  }
+}
+
+/** Okamžité ukončenie predplatného u providera + auditný záznam (stav ostáva terminálny). */
+export async function cancelAtProvider(db: BillingDb, provider: BillingProvider, state: NormalizedSubscriptionState): Promise<string> {
+  if (!provider.cancelSubscriptionNow || !state.provider_subscription_id) return "PROVIDER_CANCEL_UNSUPPORTED";
+  try {
+    const ended = await provider.cancelSubscriptionNow({
+      providerSubscriptionId: state.provider_subscription_id,
+      providerCustomerId: state.provider_customer_id,
+    });
+    await recordProviderAudit(db, { id: provider.id, environment: provider.environment }, "terminal_cancel", ended, "PROVIDER_CANCELED");
+    return "PROVIDER_CANCELED";
+  } catch {
+    return "PROVIDER_CANCEL_FAILED";
+  }
 }
 
 /**

@@ -148,6 +148,11 @@ export class FakeBillingProvider implements BillingProvider {
     return this.mutate(ref, { cancel_at_period_end: true, canceled_at: this.now().toISOString() });
   }
 
+  cancelSubscriptionNow(ref: ProviderSubscriptionRef) {
+    const now = this.now().toISOString();
+    return this.mutate(ref, { status: "canceled", cancel_at_period_end: false, canceled_at: now, ended_at: now });
+  }
+
   resumeSubscription(ref: ProviderSubscriptionRef) {
     return this.mutate(ref, { cancel_at_period_end: false, canceled_at: null });
   }

@@ -198,7 +198,7 @@ export class StripeTestProvider implements BillingProvider {
     this.now = options.now ?? (() => new Date());
   }
 
-  private async request(method: "GET" | "POST", path: string, params?: Record<string, string | number | boolean | null | undefined>, idempotencyKey?: string): Promise<Obj> {
+  private async request(method: "GET" | "POST" | "DELETE", path: string, params?: Record<string, string | number | boolean | null | undefined>, idempotencyKey?: string): Promise<Obj> {
     const key = assertStripeTestKey(this.options.secretKey);
     const headers: Record<string, string> = { Authorization: `Bearer ${key}` };
     if (this.options.apiVersion) headers["Stripe-Version"] = this.options.apiVersion;
@@ -208,7 +208,7 @@ export class StripeTestProvider implements BillingProvider {
       headers["Content-Type"] = "application/x-www-form-urlencoded";
       if (idempotencyKey) headers["Idempotency-Key"] = idempotencyKey;
       body = formEncode(params ?? {});
-    } else if (params) {
+    } else if (params && Object.keys(params).length > 0) {
       url += `?${formEncode(params)}`;
     }
     let response = await this.fetchImpl(url, { method, headers, body, cache: "no-store" });
@@ -283,6 +283,24 @@ export class StripeTestProvider implements BillingProvider {
   async cancelSubscription(ref: ProviderSubscriptionRef): Promise<NormalizedSubscriptionState> {
     const sub = await this.request("POST", `/subscriptions/${encodeURIComponent(ref.providerSubscriptionId)}`, { cancel_at_period_end: true });
     return normalizeStripeSubscription(sub, this.now().toISOString());
+  }
+
+  /**
+   * Okamžité ukončenie (DELETE /v1/subscriptions/{id}, bez faktúry a bez prorácie). Ak je už
+   * ukončené, Stripe vráti chybu → rozhodne aktuálny stav z API (idempotentné).
+   */
+  async cancelSubscriptionNow(ref: ProviderSubscriptionRef): Promise<NormalizedSubscriptionState> {
+    const path = `/subscriptions/${encodeURIComponent(ref.providerSubscriptionId)}`;
+    try {
+      const sub = await this.request("DELETE", path, { invoice_now: false, prorate: false });
+      return normalizeStripeSubscription(sub, this.now().toISOString());
+    } catch (error) {
+      if (error instanceof BillingProviderError && error.code === "LIVE_MODE_FORBIDDEN") throw error;
+      const sub = await this.request("GET", path);
+      const state = normalizeStripeSubscription(sub, this.now().toISOString());
+      if (state.status !== "canceled" && state.status !== "expired") throw error;
+      return state;
+    }
   }
 
   async resumeSubscription(ref: ProviderSubscriptionRef): Promise<NormalizedSubscriptionState> {
@@ -407,10 +425,17 @@ export class StripeTestProvider implements BillingProvider {
     const full = charge.refunded === true || (refunded !== null && amount !== null && refunded >= amount);
     if (!full) return { kind: "charge", providerSubscriptionId: subscriptionId, charge: refundCharge };
     const sub = await this.request("GET", `/subscriptions/${encodeURIComponent(subscriptionId)}`);
+    // Plná refundácia STARŠEJ faktúry (nie aktuálneho obdobia) = iba účtovný záznam; aktuálne
+    // obdobie je zaplatené, prístup ostáva. Aktuálne obdobie = posledná faktúra predplatného.
+    if (invoiceId && idOf(sub.latest_invoice) !== invoiceId) {
+      return { kind: "charge", providerSubscriptionId: subscriptionId, charge: refundCharge };
+    }
     const state = normalizeStripeSubscription(sub, this.now().toISOString()); // čas načítania = ochrana poradia
     return {
       kind: "state",
       state: { ...state, status: "refunded", ended_at: event.createdAt, review_flag: null, charge: refundCharge },
+      // Prístup končí → predplatné u Stripe ukončiť hneď, aby sa ďalej neúčtovalo.
+      followUp: "cancel_provider_now",
     };
   }
 
@@ -429,7 +454,7 @@ export class StripeTestProvider implements BillingProvider {
     const sub = await this.request("GET", `/subscriptions/${encodeURIComponent(subscriptionId)}`);
     const state = normalizeStripeSubscription(sub, this.now().toISOString()); // čas načítania = ochrana poradia
     if (event.eventType === "charge.dispute.created") return { kind: "state", state: { ...state, review_flag: "dispute_open" } };
-    if (dispute.status === "lost") return { kind: "state", state: { ...state, status: "revoked", ended_at: event.createdAt, review_flag: null } };
+    if (dispute.status === "lost") return { kind: "state", state: { ...state, status: "revoked", ended_at: event.createdAt, review_flag: null }, followUp: "cancel_provider_now" };
     if (dispute.status === "won") return { kind: "state", state: { ...state, review_flag: null } };
     return { kind: "ignore", reason: "DISPUTE_PENDING" };
   }

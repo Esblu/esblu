@@ -261,6 +261,29 @@ syntetická adresa `@example.invalid`; žiadny sandbox nevznikol.
 | L5 | `-Step new-sandbox` v profile `esblu-qa2` | **PASS** — nový účet (iný segment účtu `RKE4QKs2UL` v `price_1UdE7tRKE4QKs2ULYWShYLxS`), tajomstvo sa líši od vystaveného, staging mapovanie prepnuté na novú cenu | staging `billing_provider_prices` |
 | L6 | Po prevzatí sandboxu a `stripe login --project-name esblu-qa2` krok 1/5 „nie je testovací kľúč“ | príčina: po `stripe login` CLI ukladá kľúč do systémového trezoru (Windows Credential Manager), `config --list` ho nezobrazí | skript: `STRIPE_API_KEY` → profil → **skrytá výzva** na Secret key sandboxu; overenie účtu (kľúč vidí cenu profilu 15,90 EUR/mes.) a oprávnenia na Test Clocks priamo cez Stripe API; kľúč iba v procese |
 
+| L7 | Test Clock (firma QA-STRIPE D, `sub_1UdEirRKE4QKs2ULOsvPiHDD`): clock-setup → renew → fail-renew → fix-payment → refund-partial → refund-full | **PASS v Stripe aj Esblu** pre každý krok (staging `billing_events`: `invoice.paid` 18. 12. → 18. 1. → 18. 2. 2027, `invoice.payment_failed` → `past_due`, `invoice.paid` → `active`, 2× `charge.refunded`) | výpis vlastníka + staging DB |
+| L8 | Po plnej refundácii: Esblu `refunded` (9 nárokov odvolaných), Stripe `active`, `cancel_at_period_end=false` | **CHYBA** — Stripe by pri ďalšom období znova účtoval firme bez prístupu; neskoré `invoice.paid` by Esblu odmietlo (`TERMINAL_STATE`) | oprava 8.5 |
+
+### 8.5 Refundácia, prístup a ďalšie účtovanie (pravidlo + oprava, 2026-11-18)
+
+| Prípad | Esblu (prístup) | Stripe (predplatné) | Implementácia |
+|---|---|---|---|
+| Čiastočná refundácia (akákoľvek faktúra) | bez zmeny | bez zmeny | iba účtovný záznam (`esblu_billing_apply_charge`) |
+| Plná refundácia **staršej** faktúry (nie aktuálneho obdobia) | bez zmeny — aktuálne obdobie je zaplatené | bez zmeny | adaptér: refundovaná faktúra ≠ `latest_invoice` predplatného → iba účtovný záznam |
+| Plná refundácia faktúry **aktuálneho obdobia** | `refunded`, nároky odvolané okamžite, dáta ostávajú | **okamžite ukončené** (`DELETE /v1/subscriptions/{id}`, `invoice_now=false`, `prorate=false`) — žiadne ďalšie účtovanie | `followUp: cancel_provider_now` v pipeline po zápise stavu; audit `esblu.audit.terminal_cancel` (stav v Esblu ostáva `refunded`) |
+| Prehraný spor | `revoked` | okamžite ukončené | rovnaký `followUp` |
+| Účet `refunded`/`revoked`, ale predplatné u providera stále beží (napr. zlyhalo ukončenie, alebo stav pred opravou) | bez zmeny (terminálny) | reconciliation ho ukončí | `reconcileOne`: terminálny účet + otvorený stav providera → `cancelNow`, výsledok `corrected / PROVIDER_CANCELED` |
+| Nový nákup po refundácii | nové predplatné, nové ID | nové predplatné | bez zmeny (existujúce pravidlo) |
+
+Rozhodnutie „plná refundácia aktuálneho obdobia = koniec prístupu a koniec predplatného“ je v súlade s pôvodným návrhom
+(§ 2, S8) a doplnené o ukončenie u Stripe; formulácia pre zákazníka ostáva otázkou pre CLIA (`clia-delta-2026-11-24-draft.md` § 3.2).
+Testy: unit (+4: staršia vs. aktuálna faktúra, DELETE bez prorácie a idempotentne, spor lost) a PGlite (+1: staršia faktúra
+ponechá prístup; reconciliation ukončí otvorené predplatné pri účte `refunded`), regresia `test:subscriptions-lifecycle` 51,
+`test:subscriptions-lifecycle-db` 74, `test:subscriptions-db` 60, `test:subscriptions` 28.
+
+Overenie v Stripe (skript, kroky `reconcile`, `advance-check`, `clock-setup`, `renew`, `refund-old`, `refund-current`,
+`advance-check`): výsledky sa doplnia po behu na PC vlastníka.
+
 ### 8.4 Runbook — reálny Stripe test (sandbox + Vercel Preview + staging DB)
 
 1. **Vlastník (PowerShell na PC, Node je nainštalovaný):**

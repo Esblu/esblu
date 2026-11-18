@@ -12,7 +12,8 @@
 // osobné údaje. Spúšťa ho iba explicitný cron/operátor (žiadny production cron).
 // =============================================================================
 
-import { applyProviderState, type BillingDb } from "@/lib/billing/pipeline";
+import { isOpenStatus, isTerminalStatus } from "@/lib/billing/canonical-state";
+import { applyProviderState, recordProviderAudit, type BillingDb } from "@/lib/billing/pipeline";
 import { sha256Hex } from "@/lib/billing/signature";
 import { BillingProviderError, type BillingProviderId, type NormalizedSubscriptionState } from "@/lib/billing/types";
 
@@ -33,6 +34,8 @@ export type ReconcileCandidate = {
 export interface ReconcileSource {
   readonly provider: BillingProviderId;
   fetchState(candidate: ReconcileCandidate): Promise<NormalizedSubscriptionState | null>;
+  /** Okamžité ukončenie u providera (Stripe/fake) — poistka pre terminálny účet s otvoreným predplatným. */
+  cancelNow?(candidate: ReconcileCandidate): Promise<NormalizedSubscriptionState>;
 }
 
 export type ReconcileItemResult = {
@@ -99,6 +102,24 @@ export async function reconcileOne(
   if (!remote) {
     await record(db, candidate.account_id, "error", "PROVIDER_NO_STATE");
     return { accountId: candidate.account_id, result: "error", errorCode: "PROVIDER_NO_STATE" };
+  }
+  // Terminálny účet v Esblu (refunded/revoked), ale predplatné u providera stále beží → ukončiť
+  // u providera (inak by firma bez prístupu platila ďalšie obdobia). Stav v Esblu ostáva terminálny.
+  if (isTerminalStatus(candidate.status) && (candidate.status === "refunded" || candidate.status === "revoked") && isOpenStatus(remote.status)) {
+    if (!source.cancelNow) {
+      await record(db, candidate.account_id, "error", "TERMINAL_PROVIDER_OPEN");
+      return { accountId: candidate.account_id, result: "error", errorCode: "TERMINAL_PROVIDER_OPEN" };
+    }
+    try {
+      const ended = await withTimeout(source.cancelNow(candidate), options.timeoutMs ?? 15_000);
+      await recordProviderAudit(db, { id: candidate.billing_provider, environment: "test" }, "terminal_cancel", ended, "PROVIDER_CANCELED");
+      await record(db, candidate.account_id, "corrected", null);
+      return { accountId: candidate.account_id, result: "corrected", errorCode: "PROVIDER_CANCELED" };
+    } catch (error) {
+      const code = errorCode(error);
+      await record(db, candidate.account_id, "error", code);
+      return { accountId: candidate.account_id, result: "error", errorCode: code };
+    }
   }
   if (!hasDrift(candidate, remote)) {
     await record(db, candidate.account_id, "in_sync", null);

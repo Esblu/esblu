@@ -862,9 +862,15 @@ await check("stripe-adapter: Stripe test webhook → DB (checkout, full refund �
     let remote: Row = {
       object: "subscription", id: "sub_db_1", customer: "cus_db_1", status: "active", cancel_at_period_end: false, cancel_at: null, canceled_at: null, ended_at: null,
       metadata: { esblu_checkout_id: checkout }, items: { data: [{ id: "si_1", price: { id: "price_test_pro_m" }, current_period_start: nowS, current_period_end: nowS + 30 * 86400 }] },
+      latest_invoice: "in_db_1",
     };
     const charge = { object: "charge", id: "ch_db_1", amount: 1218, currency: "eur", payment_intent: "pi_1" };
-    const fetchImpl = (async (url: string) => {
+    const deletes: string[] = [];
+    const fetchImpl = (async (url: string, init?: RequestInit) => {
+      if (init?.method === "DELETE") {
+        deletes.push(url);
+        remote = { ...remote, status: "canceled", canceled_at: nowS, ended_at: nowS };
+      }
       const body = url.includes("/subscriptions/sub_db_1") ? remote
         : url.includes("/invoice_payments") ? { data: [{ invoice: "in_db_1" }] }
         : url.includes("/invoices/in_db_1") ? { object: "invoice", id: "in_db_1", subscription: "sub_db_1" }
@@ -888,11 +894,69 @@ await check("stripe-adapter: Stripe test webhook → DB (checkout, full refund �
     assert.equal(r3.outcome, "applied", JSON.stringify(r3));
     assert.equal((await accountOf(co)).status, "refunded");
     assert.equal((await ent(co.owner, "voice")).active, false);
+    // 2026-11-18: plná refundácia aktuálneho obdobia → predplatné ukončené aj u Stripe (žiadne ďalšie účtovanie)
+    assert.equal(r3.code, "PROVIDER_CANCELED", JSON.stringify(r3));
+    assert.equal(deletes.length, 1);
+    assert.equal((await accountOf(co)).status, "refunded", "stav ostáva terminálny refunded");
+    // neskorá udalosť (Stripe ešte posiela active) pre terminálny účet → opäť ukončiť u providera, prístup sa nevráti
     // late dispute lost na už refundovanom = terminálny (refunded→revoked je stále terminálny, nič sa neoživí)
     const r4 = await send("charge.dispute.closed", { object: "dispute", id: "dp_1", charge: "ch_db_1", status: "lost" }, "evt_db_4");
     assert.ok(["applied", "stale"].includes(r4.outcome), JSON.stringify(r4));
     assert.equal((await ent(co.owner, "voice")).active, false);
     remote = { ...remote };
+  } finally {
+    await su(`update public.billing_runtime_config set web_provider = 'fake'`);
+  }
+});
+
+await check("stripe-adapter: plná refundácia staršej faktúry → prístup ostáva; terminálny účet + otvorené predplatné → reconciliation ukončí u providera", async () => {
+  const KEY = "sk_test_" + "a".repeat(24);
+  const WHSEC = "whsec_" + "b".repeat(32);
+  await su(`insert into public.billing_provider_prices (provider, environment, plan_code, billing_interval, provider_price_id, active)
+    values ('stripe', 'test', 'test_pro', 'month', 'price_test_pro_m', true) on conflict do nothing`);
+  await su(`update public.billing_runtime_config set web_provider = 'stripe'`);
+  try {
+    const co = await newCompany({ trialEnded: true });
+    const checkout = String(((await rpcAs(co.owner, "esblu_billing_create_checkout_intent", ["test_pro", "month"])) as Row).checkout_id);
+    let nowS = Math.floor(Date.now() / 1000);
+    let remote: Row = {
+      object: "subscription", id: "sub_db_2", customer: "cus_db_2", status: "active", cancel_at_period_end: false, cancel_at: null, canceled_at: null, ended_at: null,
+      metadata: { esblu_checkout_id: checkout }, items: { data: [{ id: "si_2", price: { id: "price_test_pro_m" }, current_period_start: nowS, current_period_end: nowS + 30 * 86400 }] },
+      latest_invoice: "in_new",
+    };
+    const deletes: string[] = [];
+    const fetchImpl = (async (url: string, init?: RequestInit) => {
+      if (init?.method === "DELETE") { deletes.push(url); remote = { ...remote, status: "canceled", canceled_at: nowS, ended_at: nowS }; }
+      const body = url.includes("/subscriptions/sub_db_2") ? remote
+        : url.includes("/invoice_payments") ? { data: [{ invoice: url.includes("pi_old") ? "in_old" : "in_new" }] }
+        : url.includes("/invoices/in_old") ? { object: "invoice", id: "in_old", subscription: "sub_db_2" }
+        : url.includes("/invoices/in_new") ? { object: "invoice", id: "in_new", subscription: "sub_db_2" } : null;
+      return new Response(JSON.stringify(body ?? { error: {} }), { status: body ? 200 : 404 });
+    }) as unknown as typeof fetch;
+    let wallMs = Date.now();
+    const stripe = new StripeTestProvider({ secretKey: KEY, webhookSecret: WHSEC, fetchImpl, now: () => new Date(wallMs) });
+    const send = (type: string, object: unknown, id: string) => {
+      wallMs += 5000; nowS = Math.floor(wallMs / 1000);
+      const raw = JSON.stringify({ object: "event", id, type, created: nowS, livemode: false, data: { object } });
+      return processWebhook(stripe, raw, new Headers({ "stripe-signature": signTimestamped(raw, WHSEC, nowS) }), serviceDb);
+    };
+    assert.equal((await send("checkout.session.completed", { object: "checkout.session", id: "cs_2", mode: "subscription", subscription: "sub_db_2", client_reference_id: checkout }, "evt_o_1")).outcome, "applied");
+    // plná refundácia STARŠEJ faktúry → iba záznam; aktívne predplatné a nároky ostávajú, nič sa neruší u Stripe
+    const old = await send("charge.refunded", { object: "charge", id: "ch_old", amount: 1590, currency: "eur", payment_intent: "pi_old", amount_refunded: 1590, refunded: true }, "evt_o_2");
+    assert.equal(old.outcome, "applied", JSON.stringify(old));
+    assert.equal((await accountOf(co)).status, "active");
+    assert.equal((await ent(co.owner, "voice")).active, true);
+    assert.equal(deletes.length, 0);
+    // Stav ako po pôvodnom kóde: Esblu refunded, Stripe stále active → reconciliation ukončí predplatné u Stripe
+    await su(`update public.subscription_accounts set status = 'refunded', ended_at = now() where company_id = '${co.id}'`);
+    await su(`select public.esblu_billing_sync_entitlements('${co.id}'::uuid)`);
+    const out = await runReconciliation(serviceDb, { stripe: providerReconcileSource(stripe) }, { limit: 500 });
+    const mine = out.results.find((x) => x.errorCode === "PROVIDER_CANCELED");
+    assert.ok(mine, JSON.stringify(out.results.slice(0, 5)));
+    assert.equal(deletes.length, 1);
+    assert.equal(remote.status, "canceled");
+    assert.equal((await accountOf(co)).status, "refunded", "Esblu ostáva refunded, prístup sa nevracia");
+    assert.equal((await ent(co.owner, "voice")).active, false);
   } finally {
     await su(`update public.billing_runtime_config set web_provider = 'fake'`);
   }

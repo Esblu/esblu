@@ -12,6 +12,10 @@
       fail-renew   - karta pm_card_chargeCustomerFail + posun hodin -> invoice.payment_failed, past_due
       fix-payment  - platna karta + zaplatenie otvorenej faktury -> active
       refund-partial / refund-full - refundacia poslednej zaplatenej platby
+      refund-old     - plna refundacia STARSEJ zaplatenej faktury -> Esblu aj Stripe ostavaju active
+      refund-current - plna refundacia faktury AKTUALNEHO obdobia -> Esblu refunded + Stripe predplatne ukoncene
+      reconcile      - reconciliation Esblu (lokalny cron): ucet refunded/revoked + Stripe active -> ukoncit u Stripe
+      advance-check  - posun Test Clock o dalsie obdobie -> ziadna nova faktura ani platba, Esblu bez zmeny
       status       - stav v Stripe aj v Esblu + posledne riadky stripe listen (tajomstva zamaskovane)
     Kazdy krok vypise OK AZ ked je vysledok overeny v Stripe AJ v testovacej DB Esblu.
 
@@ -26,7 +30,8 @@
   - Databaza: Supabase staging `cjbdijbbcujvmrzezusd` (esblu-test). Produkcia sa nepouziva.
 #>
 param(
-  [ValidateSet("start", "status", "new-sandbox", "clock-setup", "renew", "fail-renew", "fix-payment", "refund-partial", "refund-full")]
+  [ValidateSet("start", "status", "new-sandbox", "clock-setup", "renew", "fail-renew", "fix-payment", "refund-partial", "refund-full",
+               "refund-old", "refund-current", "reconcile", "advance-check")]
   [string]$Step = "start",
   [string]$Project = "esblu-qa2",
   [string]$Email = "",
@@ -48,6 +53,7 @@ $StateDir = Join-Path $env:TEMP "esblu-stripe-qa"
 $ClockFile = Join-Path $StateDir "clock-$Project.json"
 $SandboxFile = Join-Path $StateDir "sandbox-$Project.json"     # cena sandboxu (nie je tajna)
 $ExposedFile = Join-Path $StateDir "exposed.sha256"             # SHA-256 vystaveneho whsec (nie tajomstvo)
+$CronFile = Join-Path $StateDir "cron-$Project.secret"          # nahodny lokalny CRON_SECRET (iba pocas behu okna 1)
 $CompanyD = "5a5a0000-0000-4000-8000-0000000000d0"              # QA-STRIPE D (test clock)
 $OwnerD = "5a5a0000-0000-4000-8000-000000000031"
 $PriceId = $null
@@ -224,6 +230,28 @@ function Wait-StripeInvoice([string]$subId, [string]$reason, [string]$status, [l
   Fail "Stripe: faktura $reason/$status sa do 120 s neobjavila."
 }
 
+function Get-PaidInvoices([string]$subId) {
+  $list = Get-StripeJson @("invoices", "list", "-d", "subscription=$subId", "-d", "status=paid", "--limit", "20", "--expand", "data.payments")
+  return @($list.data)
+}
+function Get-InvoicePaymentIntent($inv) {
+  if ($inv.payments -and $inv.payments.data -and $inv.payments.data.Count -gt 0) {
+    $p = $inv.payments.data[0].payment
+    if ($p.payment_intent) { if ($p.payment_intent.id) { return $p.payment_intent.id } else { return $p.payment_intent } }
+  }
+  if ($inv.payment_intent) { if ($inv.payment_intent.id) { return $inv.payment_intent.id } else { return $inv.payment_intent } }
+  Fail "Faktura $($inv.id) nema payment_intent."
+}
+function Get-LatestRefundEvent {
+  $rows = Invoke-Staging "GET" "billing_events?provider=eq.stripe&event_type=eq.charge.refunded&order=received_at.desc&limit=1&select=status,error_code,received_at,summary"
+  if ($rows -and @($rows).Count -gt 0) { return @($rows)[0] } else { return $null }
+}
+function Get-Counts([string]$subId, [string]$customer) {
+  $inv = Get-StripeJson @("invoices", "list", "-d", "subscription=$subId", "--limit", "100")
+  $ch = Get-StripeJson @("charges", "list", "-d", "customer=$customer", "--limit", "100")
+  return @{ invoices = @($inv.data).Count; charges = @($ch.data | Where-Object { $_.status -eq "succeeded" }).Count; latest = @($inv.data)[0].id }
+}
+
 function Show-Logs {
   foreach ($name in @("listen.out.log", "listen.log")) {
     $log = Join-Path $StateDir $name
@@ -357,6 +385,78 @@ if ($Step -ne "start") {
         Say "OK: plna refundacia overena."
       }
     }
+    { $_ -in @("refund-old", "refund-current") } {
+      $st = Get-ClockState; $subId = if ($Subscription) { $Subscription } else { $st.subscription }
+      $sub = Get-Sub $subId
+      $currentId = if ($sub.latest_invoice.id) { $sub.latest_invoice.id } else { $sub.latest_invoice }
+      $paid = Get-PaidInvoices $subId
+      if ($Step -eq "refund-old") {
+        $inv = $paid | Where-Object { $_.id -ne $currentId } | Select-Object -First 1
+        if (-not $inv) { Fail "Chyba starsia zaplatena faktura - najprv -Step renew." }
+      } else {
+        $inv = $paid | Where-Object { $_.id -eq $currentId } | Select-Object -First 1
+        if (-not $inv) { Fail "Faktura aktualneho obdobia ($currentId) nie je zaplatena." }
+      }
+      $pi = Get-InvoicePaymentIntent $inv
+      $before = Get-LatestRefundEvent
+      Invoke-Stripe @("refunds", "create", "-d", "payment_intent=$pi") | Out-Null
+      Say "Stripe: plna refundacia faktury $($inv.id) ($($inv.billing_reason), obdobie $(Utc $inv.period_start) -> $(Utc $inv.period_end)); aktualna faktura predplatneho = $currentId"
+      # pockat na spracovanie charge.refunded v Esblu
+      $ev = $null
+      for ($i = 0; $i -lt 40; $i++) {
+        $ev = Get-LatestRefundEvent
+        if ($ev -and (-not $before -or $ev.received_at -ne $before.received_at) -and $ev.status -ne "received") { break }
+        $ev = $null; Start-Sleep -Seconds 3
+      }
+      if (-not $ev) { Fail "Esblu DB: udalost charge.refunded sa do 120 s nespracovala." }
+      Say "Esblu: charge.refunded spracovana (status=$($ev.status), stav v udalosti=$($ev.summary.status))"
+      if ($Step -eq "refund-old") {
+        Start-Sleep -Seconds 5
+        $s = Get-Sub $subId
+        if ($s.status -ne "active") { Fail "Stripe: predplatne nie je active (stav=$($s.status))." }
+        $acc = Wait-Esblu $subId { param($a) $a.status -eq "active" } "zachovanie pristupu"
+        Say "Stripe: predplatne $subId stale active; Esblu: stav=$($acc.status) koniec=$($acc.current_period_end)"
+        Say "OK: refundacia starsej faktury = iba uctovny zaznam, pristup aj obnovovanie pokracuju."
+      } else {
+        $acc = Wait-Esblu $subId { param($a) $a.status -eq "refunded" } "stav refunded"
+        $s = Get-Sub $subId
+        for ($i = 0; $i -lt 40 -and $s.status -ne "canceled"; $i++) { Start-Sleep -Seconds 3; $s = Get-Sub $subId }
+        if ($s.status -ne "canceled") { Fail "Stripe: predplatne nebolo ukoncene (stav=$($s.status)) - Esblu by ho dalej uctoval." }
+        Say "Esblu: stav=$($acc.status) (pristup odvolany); Stripe: predplatne $subId stav=$($s.status), ended_at=$(Utc $s.ended_at)"
+        Say "OK: refundacia aktualneho obdobia ukoncila pristup aj dalsie uctovanie."
+      }
+    }
+    "reconcile" {
+      $st = Get-ClockState; $subId = if ($Subscription) { $Subscription } else { $st.subscription }
+      if (-not (Test-Path $CronFile)) { Fail "Okno 1 nebezi s novou verziou skriptu (chyba lokalny CRON_SECRET) - restartuj okno 1." }
+      $cron = (Get-Content $CronFile -Raw).Trim()
+      $res = Invoke-RestMethod -Uri "http://localhost:$Port/api/cron/billing-reconcile" -Headers @{ Authorization = "Bearer $cron" } -Method Get
+      Say "Esblu reconciliation: checked=$($res.checked) summary=$(($res.summary | ConvertTo-Json -Compress))"
+      $s = Get-Sub $subId
+      for ($i = 0; $i -lt 20 -and $s.status -ne "canceled"; $i++) { Start-Sleep -Seconds 3; $s = Get-Sub $subId }
+      $acc = Get-EsbluAccount $subId
+      Say "Stripe: $subId stav=$($s.status) ended_at=$(if ($s.ended_at) { Utc $s.ended_at } else { '-' }); Esblu: stav=$($acc.status)"
+      if ($s.status -ne "canceled") { Fail "Stripe predplatne stale bezi." }
+      if ($acc.status -ne "refunded" -and $acc.status -ne "revoked") { Fail "Esblu stav sa zmenil na $($acc.status)." }
+      Say "OK: reconciliation ukoncila predplatne u Stripe, Esblu ostava $($acc.status)."
+    }
+    "advance-check" {
+      $st = Get-ClockState; $subId = if ($Subscription) { $Subscription } else { $st.subscription }
+      $s = Get-Sub $subId; $p = Get-Period $s
+      $c0 = Get-Counts $subId $st.customer
+      $acc0 = Get-EsbluAccount $subId
+      $clock = Get-StripeJson @("test_helpers", "test_clocks", "retrieve", $st.clock)
+      $target = [Math]::Max([long]$clock.frozen_time, $p.end) + 35 * 86400
+      Move-Clock $st.clock $target
+      Start-Sleep -Seconds 15
+      $s1 = Get-Sub $subId; $c1 = Get-Counts $subId $st.customer; $acc1 = Get-EsbluAccount $subId
+      Say "Test clock: $(Utc $clock.frozen_time) -> $(Utc $target)"
+      Say "Stripe: stav $($s.status) -> $($s1.status); faktury $($c0.invoices) -> $($c1.invoices) (posledna $($c0.latest) -> $($c1.latest)); uspesne platby $($c0.charges) -> $($c1.charges)"
+      Say "Esblu: stav $($acc0.status) -> $($acc1.status)"
+      if ($c1.invoices -ne $c0.invoices -or $c1.charges -ne $c0.charges) { Fail "Po posune hodin vznikla nova faktura alebo platba." }
+      if ($acc1.status -ne $acc0.status) { Fail "Esblu stav sa zmenil." }
+      Say "OK: dalsie obdobie bez faktury a bez platby; Esblu bez zmeny."
+    }
     "status" {
       $subId = if ($Subscription) { $Subscription } elseif (Test-Path $ClockFile) { (Get-ClockState).subscription } else { "" }
       if (-not $subId) { $subId = (Get-StripeJson @("subscriptions", "list", "--limit", "1", "-d", "status=all")).data[0].id }
@@ -409,6 +509,10 @@ $env:STRIPE_SECRET_KEY = $StripeKey
 $env:STRIPE_WEBHOOK_SECRET = $WhSec
 $env:ESBLU_BILLING_RETURN_ORIGIN = "http://localhost:$Port"
 $env:NEXT_PUBLIC_ESBLU_BILLING_UI = "1"
+# Lokalny CRON_SECRET pre reconciliation (nahodny, iba pocas behu; subor sa zmaze pri ukonceni).
+$rng = [Security.Cryptography.RandomNumberGenerator]::Create(); $buf = New-Object byte[] 32; $rng.GetBytes($buf)
+$env:CRON_SECRET = ([BitConverter]::ToString($buf) -replace "-", "").ToLower()
+Set-Content -Path $CronFile -Value $env:CRON_SECRET -Encoding ASCII
 Remove-Item Env:VERCEL_ENV -ErrorAction SilentlyContinue
 
 Say "4/5 Zavislosti..."
@@ -429,7 +533,7 @@ try {
   npx next dev -p $Port
 } finally {
   if ($listen -and -not $listen.HasExited) { Stop-Process -Id $listen.Id -Force -ErrorAction SilentlyContinue }
-  Remove-Item (Join-Path $StateDir "listen*.log") -Force -ErrorAction SilentlyContinue
-  Remove-Item Env:STRIPE_SECRET_KEY, Env:STRIPE_API_KEY, Env:STRIPE_WEBHOOK_SECRET, Env:SUPABASE_SERVICE_ROLE_KEY, Env:ESBLU_QA_SERVICE_ROLE -ErrorAction SilentlyContinue
+  Remove-Item (Join-Path $StateDir "listen*.log"), $CronFile -Force -ErrorAction SilentlyContinue
+  Remove-Item Env:CRON_SECRET, Env:STRIPE_SECRET_KEY, Env:STRIPE_API_KEY, Env:STRIPE_WEBHOOK_SECRET, Env:SUPABASE_SERVICE_ROLE_KEY, Env:ESBLU_QA_SERVICE_ROLE -ErrorAction SilentlyContinue
   Say "Zastavene."
 }
