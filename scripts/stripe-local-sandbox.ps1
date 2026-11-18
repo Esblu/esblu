@@ -249,11 +249,17 @@ function Get-InvoicePaymentIntent($inv) {
   if ($inv.payment_intent) { if ($inv.payment_intent.id) { return $inv.payment_intent.id } else { return $inv.payment_intent } }
   Fail "Faktura $($inv.id) nema payment_intent."
 }
-function Get-RefundEventForInvoice([string]$invoiceId) {
-  # Deterministicky: charge.refunded, ktorej audit (summary.refund.invoice) odkazuje na refundovanu fakturu.
-  # Nezavisi od porovnania casov s "poslednou" udalostou pred refundaciou.
-  $rows = Get-Rows "billing_events?provider=eq.stripe&event_type=eq.charge.refunded&summary->refund->>invoice=eq.$invoiceId&order=received_at.desc&limit=1&select=provider_event_id,status,error_code,received_at,processed_at,summary"
-  if ($rows.Count -gt 0) { return $rows[0] } else { return $null }
+function Get-RefundEventForInvoice([string]$subId, [string]$invoiceId) {
+  # charge.refunded pre refundovanu fakturu. Server filtruje iba osvedcenym jednourovnovym filtrom
+  # summary->>subscription (rovnako ako Get-SubEvents); dvojurovnovy filter summary->refund->>invoice
+  # v PS 5.1 nevratil ziadny riadok, hoci udalost existovala. Fakturu porovnavame az v PowerShelli.
+  $rows = Get-Rows "billing_events?provider=eq.stripe&event_type=eq.charge.refunded&summary->>subscription=eq.$subId&order=received_at.desc&limit=50&select=provider_event_id,status,error_code,received_at,processed_at,company_id,summary"
+  foreach ($r in $rows) {
+    $ri = $null
+    if ($r.summary -and $r.summary.refund) { $ri = [string]$r.summary.refund.invoice }
+    if ($ri -eq $invoiceId) { return $r }
+  }
+  return $null
 }
 function Get-LastRefundEventInfo {
   $rows = Get-Rows "billing_events?provider=eq.stripe&event_type=eq.charge.refunded&order=received_at.desc&limit=1&select=provider_event_id,status,error_code,received_at,summary"
@@ -462,7 +468,7 @@ if ($Step -ne "start") {
       # pockat na spracovanie charge.refunded v Esblu - podla faktury v audite (deterministicky)
       $ev = $null; $seen = $null
       for ($i = 0; $i -lt 40; $i++) {
-        $seen = Get-RefundEventForInvoice $inv.id
+        $seen = Get-RefundEventForInvoice $subId $inv.id
         if ($seen -and $seen.status -ne "received") { $ev = $seen; break }
         Start-Sleep -Seconds 3
       }
@@ -471,13 +477,20 @@ if ($Step -ne "start") {
         Fail "Esblu DB: charge.refunded pre fakturu $($inv.id) sa do 120 s nespracovala: $diag"
       }
       if ($ev.status -ne "processed") { Fail "Esblu DB: udalost $($ev.provider_event_id) skoncila status=$($ev.status) chyba=$($ev.error_code)." }
-      Say "Esblu: charge.refunded $($ev.provider_event_id) spracovana (status=$($ev.status), prijata $($ev.received_at), spracovana $($ev.processed_at), stav v udalosti=$($ev.summary.status))"
+      Say "Esblu: charge.refunded $($ev.provider_event_id) spracovana (status=$($ev.status), prijata $($ev.received_at), spracovana $($ev.processed_at), stav uctu v udalosti=$($ev.summary.account_status))"
       # Vazba refundacie na fakturu a jej obdobie (riadok predplatneho).
       $line = @($inv.lines.data | ForEach-Object { $_ }) | Where-Object { $_.period } | Select-Object -First 1
       $expScope = if ($Step -eq "refund-old") { "older_invoice" } else { "current_period" }
       $r = $ev.summary.refund
       Say ("Esblu audit: faktura={0} rozsah={1} obdobie {2} -> {3} suma={4} {5}" -f $r.invoice, $r.scope, $r.invoice_period_start, $r.invoice_period_end, $r.amount_minor, $r.currency)
       if ($r.invoice -ne $inv.id) { Fail "Audit odkazuje na fakturu $($r.invoice), refundovana bola $($inv.id)." }
+      if ([string]$ev.summary.subscription -ne $subId) { Fail "Audit odkazuje na predplatne $($ev.summary.subscription), ocakavane $subId." }
+      if ([string]$inv.subscription -ne $subId -and [string]$inv.parent.subscription_details.subscription -ne $subId) { Fail "Faktura $($inv.id) v Stripe nepatri predplatnemu $subId." }
+      $accLink = Get-EsbluAccount $subId
+      if (-not $accLink) { Fail "Esblu: ucet predplatneho $subId nenajdeny." }
+      if ([string]$ev.company_id -ne [string]$accLink.company_id) { Fail "Udalost patri firme $($ev.company_id), predplatne firme $($accLink.company_id)." }
+      if ([long]$r.amount_minor -ne [long]$cs.refunded) { Fail "Suma v audite $($r.amount_minor) != refundovane v Stripe $($cs.refunded)." }
+      Say "Vazby OK: faktura=$($inv.id) predplatne=$subId firma=$($accLink.company_id) suma=$($r.amount_minor) (Stripe charge $($cs.charge))"
       if ($r.scope -ne $expScope) { Fail "Rozsah refundacie $($r.scope), ocakavany $expScope." }
       if ($line -and ([DateTime]::Parse($r.invoice_period_start).ToUniversalTime() -ne [DateTimeOffset]::FromUnixTimeSeconds($line.period.start).UtcDateTime)) { Fail "Obdobie v audite nesedi s obdobim faktury v Stripe." }
       if ($Step -eq "refund-old") {
