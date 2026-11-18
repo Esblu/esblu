@@ -16,6 +16,7 @@
       refund-current - plna refundacia faktury AKTUALNEHO obdobia -> Esblu refunded + Stripe predplatne ukoncene
       reconcile      - reconciliation Esblu (lokalny cron): ucet refunded/revoked + Stripe active -> ukoncit u Stripe
       advance-check  - posun Test Clock o dalsie obdobie -> ziadna nova faktura ani platba, Esblu bez zmeny
+      verify-terminal - refunded/revoked ostava po customer.subscription.deleted, opakovanej reconciliation; ziadny aktivny narok
       status       - stav v Stripe aj v Esblu + posledne riadky stripe listen (tajomstva zamaskovane)
     Kazdy krok vypise OK AZ ked je vysledok overeny v Stripe AJ v testovacej DB Esblu.
 
@@ -31,7 +32,7 @@
 #>
 param(
   [ValidateSet("start", "status", "new-sandbox", "clock-setup", "renew", "fail-renew", "fix-payment", "refund-partial", "refund-full",
-               "refund-old", "refund-current", "reconcile", "advance-check")]
+               "refund-old", "refund-current", "reconcile", "advance-check", "verify-terminal")]
   [string]$Step = "start",
   [string]$Project = "esblu-qa2",
   [string]$Email = "",
@@ -246,6 +247,31 @@ function Get-LatestRefundEvent {
   $rows = Invoke-Staging "GET" "billing_events?provider=eq.stripe&event_type=eq.charge.refunded&order=received_at.desc&limit=1&select=status,error_code,received_at,summary"
   if ($rows -and @($rows).Count -gt 0) { return @($rows)[0] } else { return $null }
 }
+function Get-SubEvents([string]$subId, [string]$type) {
+  $q = "billing_events?provider=eq.stripe&summary->>subscription=eq.$subId&order=received_at.asc&select=event_type,status,error_code,received_at,summary"
+  if ($type) { $q += "&event_type=eq.$type" }
+  return @(Invoke-Staging "GET" $q)
+}
+function Get-ActiveSubEnts([string]$companyId) {
+  return @(Invoke-Staging "GET" "company_entitlements?company_id=eq.$companyId&source=eq.subscription&status=eq.active&select=entitlement_key").Count
+}
+function Assert-TerminalKept([string]$subId, [string]$expect) {
+  # Po ukonceni u Stripe pride customer.subscription.deleted (canceled) -> musi byt stale/TERMINAL_STATE.
+  $del = $null
+  for ($i = 0; $i -lt 40; $i++) {
+    $del = Get-SubEvents $subId "customer.subscription.deleted" | Select-Object -Last 1
+    if ($del -and $del.status -ne "received") { break }
+    $del = $null; Start-Sleep -Seconds 3
+  }
+  if (-not $del) { Fail "Esblu DB: customer.subscription.deleted pre $subId sa do 120 s nespracovala." }
+  $acc = Get-EsbluAccount $subId
+  $ents = Get-ActiveSubEnts $acc.company_id
+  Say "Esblu: customer.subscription.deleted -> status=$($del.status) error=$($del.error_code); ucet=$($acc.status); aktivne naroky zo subscription=$ents"
+  if ($acc.status -ne $expect) { Fail "Esblu stav $($acc.status) namiesto $expect (prepisany udalostou zrusenia)." }
+  if ($del.status -ne "stale" -or $del.error_code -ne "TERMINAL_STATE") { Fail "Udalost zrusenia nebola zapisana ako stale/TERMINAL_STATE." }
+  if ($ents -ne 0) { Fail "Firma ma stale $ents aktivnych narokov zo subscription." }
+}
+
 function Get-Counts([string]$subId, [string]$customer) {
   $inv = Get-StripeJson @("invoices", "list", "-d", "subscription=$subId", "--limit", "100")
   $ch = Get-StripeJson @("charges", "list", "-d", "customer=$customer", "--limit", "100")
@@ -423,7 +449,8 @@ if ($Step -ne "start") {
         for ($i = 0; $i -lt 40 -and $s.status -ne "canceled"; $i++) { Start-Sleep -Seconds 3; $s = Get-Sub $subId }
         if ($s.status -ne "canceled") { Fail "Stripe: predplatne nebolo ukoncene (stav=$($s.status)) - Esblu by ho dalej uctoval." }
         Say "Esblu: stav=$($acc.status) (pristup odvolany); Stripe: predplatne $subId stav=$($s.status), ended_at=$(Utc $s.ended_at)"
-        Say "OK: refundacia aktualneho obdobia ukoncila pristup aj dalsie uctovanie."
+        Assert-TerminalKept $subId "refunded"
+        Say "OK: refundacia aktualneho obdobia ukoncila pristup aj dalsie uctovanie; refunded ostal aj po udalosti zrusenia."
       }
     }
     "reconcile" {
@@ -438,7 +465,28 @@ if ($Step -ne "start") {
       Say "Stripe: $subId stav=$($s.status) ended_at=$(if ($s.ended_at) { Utc $s.ended_at } else { '-' }); Esblu: stav=$($acc.status)"
       if ($s.status -ne "canceled") { Fail "Stripe predplatne stale bezi." }
       if ($acc.status -ne "refunded" -and $acc.status -ne "revoked") { Fail "Esblu stav sa zmenil na $($acc.status)." }
+      Assert-TerminalKept $subId $acc.status
       Say "OK: reconciliation ukoncila predplatne u Stripe, Esblu ostava $($acc.status)."
+    }
+    "verify-terminal" {
+      # Opakovatelne overenie: stav refunded/revoked, ziadny aktivny narok, udalost zrusenia stale,
+      # opakovana reconciliation (Stripe canceled vs. Esblu refunded) stav nezmeni.
+      $st = Get-ClockState; $subId = if ($Subscription) { $Subscription } else { $st.subscription }
+      $acc0 = Get-EsbluAccount $subId
+      if ($acc0.status -ne "refunded" -and $acc0.status -ne "revoked") { Fail "Esblu stav je $($acc0.status) - overenie plati pre refunded/revoked." }
+      Assert-TerminalKept $subId $acc0.status
+      if (-not (Test-Path $CronFile)) { Fail "Okno 1 nebezi (chyba lokalny CRON_SECRET)." }
+      $cron = (Get-Content $CronFile -Raw).Trim()
+      for ($k = 1; $k -le 2; $k++) {
+        $res = Invoke-RestMethod -Uri "http://localhost:$Port/api/cron/billing-reconcile" -Headers @{ Authorization = "Bearer $cron" } -Method Get
+        $acc = Get-EsbluAccount $subId
+        Say "reconciliation #$($k): checked=$($res.checked) summary=$(($res.summary | ConvertTo-Json -Compress)); Esblu stav=$($acc.status)"
+        if ($acc.status -ne $acc0.status) { Fail "Reconciliation zmenila stav na $($acc.status)." }
+      }
+      $events = Get-SubEvents $subId ""
+      Say "Udalosti predplatneho v Esblu ($($events.Count)):"
+      $events | ForEach-Object { Say ("  {0}  {1,-34} {2,-10} {3}" -f $_.received_at, $_.event_type, $_.status, $_.error_code) }
+      Say "OK: $($acc0.status) zachovany, ziadny aktivny narok, opakovane spracovanie bez zmeny."
     }
     "advance-check" {
       $st = Get-ClockState; $subId = if ($Subscription) { $Subscription } else { $st.subscription }

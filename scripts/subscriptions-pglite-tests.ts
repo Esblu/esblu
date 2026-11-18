@@ -100,6 +100,7 @@ await db.exec(read("supabase/migrations/20261012120000_account_deletion_subscrip
 await db.exec(read("supabase/migrations/20261012130000_account_deletion_post_commit_cleanup.sql"));
 await db.exec(read("supabase/migrations/20261012140000_multi_company_workspaces.sql"));
 await db.exec(read("supabase/migrations/20261118120000_billing_single_open_checkout.sql"));
+await db.exec(read("supabase/migrations/20261118130000_billing_terminal_precedence.sql"));
 
 // ----------------------------------------------------------------------------- dáta
 const C = {
@@ -898,6 +899,7 @@ await check("rollback: RPC zmiznú, tabuľky (default) ostanú, nároky sa nema�
   const before = await subscriptionRowsA();
   // Poradie: od najnovšej — jeden otvorený checkout (2026-11-18), multi-company, post-commit cleanup, poistka zrušenia,
   // lifecycle (2026-10-11), potom pôvodná billing migrácia.
+  await db.exec(read("supabase/rollback/20261118130000_billing_terminal_precedence_rollback.sql"));
   await db.exec(read("supabase/rollback/20261118120000_billing_single_open_checkout_rollback.sql"));
   assert.equal(((await one(`select to_regclass('public.billing_checkout_sessions_one_open_web_idx') t`)) as Row).t, null);
   await db.exec(read("supabase/rollback/20261012140000_multi_company_workspaces_rollback.sql"));

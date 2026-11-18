@@ -41,6 +41,7 @@ const DELETION_GUARD_ROLLBACK = "supabase/rollback/20261012120000_account_deleti
 const POST_COMMIT = "supabase/migrations/20261012130000_account_deletion_post_commit_cleanup.sql";
 const POST_COMMIT_ROLLBACK = "supabase/rollback/20261012130000_account_deletion_post_commit_cleanup_rollback.sql";
 const SINGLE_OPEN = "supabase/migrations/20261118120000_billing_single_open_checkout.sql";
+const TERMINAL_PRECEDENCE = "supabase/migrations/20261118130000_billing_terminal_precedence.sql";
 const SUITE = (process.argv[2] ?? process.env.SUITE ?? "").replace(/^--suite=/, "").trim() || null;
 
 type Row = Record<string, unknown>;
@@ -191,6 +192,7 @@ await db.exec(`
 `);
 await db.exec(read(POST_COMMIT));
 await db.exec(read(SINGLE_OPEN));
+await db.exec(read(TERMINAL_PRECEDENCE));
 await db.exec(`update public.billing_runtime_config set web_provider = 'fake',
   enabled_methods = array['stripe_web_checkout','apple_iap','google_play']`);
 
@@ -263,6 +265,8 @@ await check("subscription-migrations: obe migrácie sú idempotentné (re-run be
   await serialized(() => db.exec(read(OWNED_METHODS)));
   await serialized(() => db.exec(read(SINGLE_OPEN)));
   await serialized(() => db.exec(read(SINGLE_OPEN)));
+  await serialized(() => db.exec(read(TERMINAL_PRECEDENCE)));
+  await serialized(() => db.exec(read(TERMINAL_PRECEDENCE)));
   assert.equal((await accountOf(co)).status, "active");
   assert.equal((await ent(co.owner, "voice")).active, true);
 });
@@ -898,11 +902,27 @@ await check("stripe-adapter: Stripe test webhook → DB (checkout, full refund �
     assert.equal(r3.code, "PROVIDER_CANCELED", JSON.stringify(r3));
     assert.equal(deletes.length, 1);
     assert.equal((await accountOf(co)).status, "refunded", "stav ostáva terminálny refunded");
-    // neskorá udalosť (Stripe ešte posiela active) pre terminálny účet → opäť ukončiť u providera, prístup sa nevráti
+    // 2026-11-18 (e2): Stripe po ukončení pošle customer.subscription.deleted (canceled) → refunded ostáva
+    const del1 = await send("customer.subscription.deleted", remote, "evt_db_del");
+    assert.equal(del1.outcome, "stale", JSON.stringify(del1));
+    assert.equal(del1.code, "TERMINAL_STATE");
+    assert.equal((await accountOf(co)).status, "refunded");
+    assert.equal((await ent(co.owner, "voice")).active, false);
+    // opakované doručenie tej istej udalosti → duplicate, nič sa nemení
+    assert.equal((await send("customer.subscription.deleted", remote, "evt_db_del")).outcome, "duplicate");
+    // oneskorená udalosť (iné ID, Stripe stav po refetchi = canceled) → stale, refunded ostáva
+    assert.equal((await send("customer.subscription.updated", remote, "evt_db_late")).outcome, "stale");
+    assert.equal((await accountOf(co)).status, "refunded");
     // late dispute lost na už refundovanom = terminálny (refunded→revoked je stále terminálny, nič sa neoživí)
     const r4 = await send("charge.dispute.closed", { object: "dispute", id: "dp_1", charge: "ch_db_1", status: "lost" }, "evt_db_4");
     assert.ok(["applied", "stale"].includes(r4.outcome), JSON.stringify(r4));
     assert.equal((await ent(co.owner, "voice")).active, false);
+    // refunded → revoked (prehraný spor) je povolený; následné canceled už revoked neprepíše
+    assert.equal((await accountOf(co)).status, "revoked");
+    assert.equal((await send("customer.subscription.deleted", remote, "evt_db_del2")).outcome, "stale");
+    assert.equal((await accountOf(co)).status, "revoked");
+    const subEnts = await one<{ n: number }>(`select count(*)::int n from public.company_entitlements where company_id = '${co.id}' and source = 'subscription' and status = 'active'`);
+    assert.equal(Number(subEnts.n), 0, "žiadny aktívny nárok zo subscription");
     remote = { ...remote };
   } finally {
     await su(`update public.billing_runtime_config set web_provider = 'fake'`);
@@ -957,6 +977,12 @@ await check("stripe-adapter: plná refundácia staršej faktúry → prístup os
     assert.equal(remote.status, "canceled");
     assert.equal((await accountOf(co)).status, "refunded", "Esblu ostáva refunded, prístup sa nevracia");
     assert.equal((await ent(co.owner, "voice")).active, false);
+    // opakovaná reconciliation: Stripe canceled vs. Esblu refunded → oprava sa zapíše ako stale (e2), stav ostáva
+    await su(`update public.billing_reconciliation set next_check_at = now() - interval '1 minute', last_checked_at = now() - interval '2 days' where account_id = (select id from public.subscription_accounts where company_id = '${co.id}')`);
+    const again = await runReconciliation(serviceDb, { stripe: providerReconcileSource(stripe) }, { limit: 500 });
+    assert.ok(again.results.length > 0);
+    assert.equal(deletes.length, 1, "druhý beh už nič neruší");
+    assert.equal((await accountOf(co)).status, "refunded");
   } finally {
     await su(`update public.billing_runtime_config set web_provider = 'fake'`);
   }
@@ -1413,6 +1439,7 @@ await check("subscription-migrations: lifecycle rollback zachová dáta, zmapuje
   await fails(() => su(`select public.esblu_billing_explain_my_entitlements()`), /does not exist/);
   await serialized(() => db.exec(read(LIFECYCLE)));
   await serialized(() => db.exec(read(SINGLE_OPEN)));
+  await serialized(() => db.exec(read(TERMINAL_PRECEDENCE)));
   assert.equal((await ent(dash.owner, "voice")).active, true);
 });
 

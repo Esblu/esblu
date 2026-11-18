@@ -264,6 +264,8 @@ syntetická adresa `@example.invalid`; žiadny sandbox nevznikol.
 | L7 | Test Clock (firma QA-STRIPE D, `sub_1UdEirRKE4QKs2ULOsvPiHDD`): clock-setup → renew → fail-renew → fix-payment → refund-partial → refund-full | **PASS v Stripe aj Esblu** pre každý krok (staging `billing_events`: `invoice.paid` 18. 12. → 18. 1. → 18. 2. 2027, `invoice.payment_failed` → `past_due`, `invoice.paid` → `active`, 2× `charge.refunded`) | výpis vlastníka + staging DB |
 | L8 | Po plnej refundácii: Esblu `refunded` (9 nárokov odvolaných), Stripe `active`, `cancel_at_period_end=false` | **CHYBA** — Stripe by pri ďalšom období znova účtoval firme bez prístupu; neskoré `invoice.paid` by Esblu odmietlo (`TERMINAL_STATE`) | oprava 8.5 |
 
+| L9 | `-Step reconcile` (D): Stripe `sub_1UdEirRKE4QKs2ULOsvPiHDD` → `canceled` (PASS), ale Esblu `refunded` → **`canceled`** | **CHYBA** — webhook `customer.subscription.deleted` (20:19:00 UTC, `processed`, stav `canceled`) prešiel pravidlom (e) v `esblu_billing_apply_event`, ktoré blokovalo iba ne-terminálne stavy; dôvod ukončenia `refunded` sa stratil (nároky ostali odvolané) | migrácia `20261118130000_billing_terminal_precedence` (pravidlo e2: revoked > refunded > canceled/expired), staging aplikované, md5 = repo |
+
 ### 8.5 Refundácia, prístup a ďalšie účtovanie (pravidlo + oprava, 2026-11-18)
 
 | Prípad | Esblu (prístup) | Stripe (predplatné) | Implementácia |
@@ -281,8 +283,16 @@ Testy: unit (+4: staršia vs. aktuálna faktúra, DELETE bez prorácie a idempot
 ponechá prístup; reconciliation ukončí otvorené predplatné pri účte `refunded`), regresia `test:subscriptions-lifecycle` 51,
 `test:subscriptions-lifecycle-db` 74, `test:subscriptions-db` 60, `test:subscriptions` 28.
 
-Overenie v Stripe (skript, kroky `reconcile`, `advance-check`, `clock-setup`, `renew`, `refund-old`, `refund-current`,
-`advance-check`): výsledky sa doplnia po behu na PC vlastníka.
+Zachovanie konečného stavu (migrácia `20261118130000`): pri tom istom predplatnom revoked > refunded > canceled / expired;
+slabší terminálny stav → `stale / TERMINAL_STATE`, účet ani nároky sa nemenia; refunded → revoked (neskorý prehraný spor)
+povolené. PGlite: `customer.subscription.deleted` po refundácii → stale, refunded ostáva, nároky 0; opakované doručenie →
+`duplicate`; oneskorená udalosť → stale; spor lost → revoked; následné canceled → stale; opakovaná reconciliation (Stripe
+canceled vs. Esblu refunded) → stav bez zmeny, žiadne ďalšie ukončenie u Stripe.
+
+Opakovateľné overenie v Stripe (skript; firma D má po L9 stav `canceled` — nové predplatné ho nahradí):
+`clock-setup` → `renew` → `refund-old` (Esblu aj Stripe `active`) → `refund-current` (Esblu `refunded`, Stripe `canceled`,
+`customer.subscription.deleted` = `stale/TERMINAL_STATE`, 0 aktívnych nárokov) → `verify-terminal` (2× reconciliation,
+stav bez zmeny, zoznam udalostí) → `advance-check` (ďalšie obdobie bez faktúry a platby). Výsledky sa doplnia po behu.
 
 ### 8.4 Runbook — reálny Stripe test (sandbox + Vercel Preview + staging DB)
 
