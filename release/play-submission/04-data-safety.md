@@ -7,14 +7,20 @@ Podklad: reálny kód (`mobile-platform`) + merged manifest AAB 1.0.0 (vc1). Int
 |---|---|---|
 | Does your app collect or share any of the required user data types? | **Yes** | tabuľka nižšie |
 | Is all of the user data collected by your app encrypted in transit? | **Yes** | HTTPS: `www.esblu.com` (Vercel), `*.supabase.co`, OpenAI API (server-side), FCM; `usesCleartextTraffic` nie je povolený (targetSdk 36 default = zakázaný cleartext) |
-| Do you provide a way for users to request that their data is deleted? | **Yes** | in-app Nastavenia → Zrušiť účet; web `https://www.esblu.com/zrusenie-uctu` (**zatiaľ iba na vetve — 404 na produkcii**) |
-| Account creation method | **Username/e-mail + password** a **OAuth (Google)** | Supabase Auth |
-| Data deletion URL | `https://www.esblu.com/zrusenie-uctu` | po deployi |
+| Do you provide a way for users to request that their data is deleted? | **Yes** | in-app Nastavenia → Zrušiť účet; web `https://www.esblu.com/zrusenie-uctu` (**live 200, overené 2026-11-18**; spomína web aj Android appku a žiadosť bez appky na privacy@esblu.com) |
+| Account creation method | **Username/e-mail + password** a **OAuth (Google)** — Google je od vc4 aj v Android appke | Supabase Auth |
+| Data deletion URL | `https://www.esblu.com/zrusenie-uctu` | live |
+
+**Kontrola voči vc4 (2026-11-18):** typy dát nižšie sedia so správaním 1.0.1 / vc4 (žiadny platobný SDK, `BILLING` povolenie
+ani analytika; billing UI vypnuté `NEXT_PUBLIC_ESBLU_BILLING_UI`). Zmena od pôvodného draftu: potvrdzovacie e-maily
+odosiela od 17. 11. 2026 **Resend** (vlastný SMTP Supabase Auth, doména `mail.esblu.com`) — service provider, teda „not shared“
+pri Email address; verejné dokumenty ho zatiaľ neuvádzajú → CLIA (`docs/clia-delta-2026-11-24-draft.md` § 1.1).
 
 ## Externé služby (kontext pre „shared")
 | Služba | Rola | Dáta |
 |---|---|---|
 | Supabase (EU, Frankfurt) | hosting DB/Auth/Storage — spracovateľ | všetky dáta appky |
+| Resend (od 2026-11-17) | SMTP pre e-maily Supabase Auth (potvrdenie registrácie, obnova hesla, pozvánky) | e-mailová adresa, obsah auth e-mailu |
 | Vercel (fra1) | hosting webu a API — spracovateľ | prenos všetkých API požiadaviek |
 | OpenAI | AI vyťaženie dokladov (`scan-document`, `scan-vehicle-*`, `store:false`), prepis hlasu (`gpt-4o-transcribe`, bez `store` parametra — SDK ho pri prepise nemá), AI fallback asistenta (`store:false`) | obrázky dokladov/fotiek, audio hlasu, text príkazov |
 | Firebase Cloud Messaging (Google) | doručenie push | FCM token, Firebase Installation ID, text notifikácie (generický; náhľad správy predvolene vypnutý) |
@@ -48,5 +54,7 @@ Podľa Google je zdieľanie so **service providerom** (spracúva v mene vývojá
 1. Výklad „shared" pre OpenAI (spracovateľ vs. tretia strana) a lokalita spracovania.
 2. Retencia: finalizované účtovné doklady (blokované zrušenie) — formulácia v privacy policy.
 3. Údaje tretích osôb (kontakty partnerov, IBAN partnerov) — informačná povinnosť.
-4. Privacy policy 1.3 a `/subprocessors` dnes **nespomínajú** Firebase FCM, hlas → OpenAI, text asistenta → OpenAI, registre RPO/RÚZ.
+4. ~~Privacy policy 1.3 a `/subprocessors` dnes **nespomínajú** Firebase FCM, hlas → OpenAI, text asistenta → OpenAI, registre RPO/RÚZ.~~
+   Vyriešené v Zásadách 1.4 (9. 11. 2026) a `/subprocessors` (FCM, OpenAI hlas/príkazy). **Nové (2026-11-18):** Resend chýba
+   a `/subprocessors` tvrdí, že sa nepoužíva; Zásady 1.4 a DPA 1.3 uvádzajú Google prihlásenie iba vo webovom rozhraní.
 5. FCM telemetria (`datatransport`) — potvrdiť podľa Firebase „Data disclosure".

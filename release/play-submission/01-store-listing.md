@@ -11,7 +11,7 @@ Zdroj textov: existujúce schválené texty webu Esblu (`lib/i18n/dictionaries/{
 | **D. Kategória** | **Business** (Firmy) — alternatíva Productivity; odporúčam Business (cieľová skupina: firmy, evidencia majetku a faktúr) | — |
 | **E. Kontaktný e-mail** | `info@esblu.com` | |
 | **F. Web** | `https://www.esblu.com` | |
-| **G. Privacy policy** | `https://www.esblu.com/ochrana-osobnych-udajov` (dnes live 200; verzia 1.3 — aktualizácia čaká na CLIA/legal) | |
+| **G. Privacy policy** | `https://www.esblu.com/ochrana-osobnych-udajov` (live 200, **verzia 1.4 z 9. 11. 2026**, overené 2026-11-18; rozdiely Resend + Google v appke → CLIA) | |
 | Telefón | nevypĺňať (voliteľné) | |
 
 ## C. Full description (≤ 4000)
