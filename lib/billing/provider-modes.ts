@@ -45,7 +45,7 @@ type EnvRule = { name: string; secret: boolean; required: (m: ProviderModes) => 
 export const BILLING_ENV_SCHEMA: readonly EnvRule[] = [
   { name: "ESBLU_FAKE_BILLING_SECRET", secret: true, required: (m) => m.web === "fake" || m.stores === "fake", valid: (v) => v.length >= 16 },
   { name: "ESBLU_BILLING_RETURN_ORIGIN", secret: false, required: (m) => m.web !== "disabled", valid: (v) => /^https:\/\/[^/]+$/.test(v) || /^http:\/\/localhost(:\d+)?$/.test(v) },
-  { name: "STRIPE_SECRET_KEY", secret: true, required: (m) => m.web === "sandbox", valid: (v) => /^(sk|rk)_test_[A-Za-z0-9]{8,}$/.test(v) },
+  { name: "STRIPE_SECRET_KEY", secret: true, required: (m) => m.web === "sandbox", valid: (v) => /^(sk|rk|rkcs)_test_[A-Za-z0-9]{8,}$/.test(v) },
   { name: "STRIPE_WEBHOOK_SECRET", secret: true, required: (m) => m.web === "sandbox", valid: (v) => /^whsec_[A-Za-z0-9+/=_-]{8,}$/.test(v) },
   { name: "STRIPE_API_VERSION", secret: false, required: () => false, valid: (v) => /^\d{4}-\d{2}-\d{2}(\.[a-z]+)?$/.test(v) },
   { name: "GOOGLE_PLAY_PACKAGE_NAME", secret: false, required: (m) => m.stores === "sandbox", valid: (v) => v === "com.esblu.app" },
@@ -74,6 +74,6 @@ export function validateBillingEnv(env: Env = process.env): { modes: ProviderMod
     if (!rule.valid(value)) invalid.push(rule.name);
   }
   // Live kľúč omylom v prostredí = vždy chyba (aj keď by sa nepoužil).
-  if (/^(sk|rk)_live_/.test((env.STRIPE_SECRET_KEY ?? "").trim())) invalid.push("STRIPE_SECRET_KEY:LIVE_FORBIDDEN");
+  if (/^(sk|rk|rkcs)_live_/.test((env.STRIPE_SECRET_KEY ?? "").trim())) invalid.push("STRIPE_SECRET_KEY:LIVE_FORBIDDEN");
   return { modes, missing, invalid, ok: missing.length === 0 && invalid.length === 0 && !modes.issues.includes("LIVE_NOT_APPROVED") };
 }

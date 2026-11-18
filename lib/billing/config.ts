@@ -3,7 +3,7 @@
 //
 // TVRDÉ POISTKY tejto fázy:
 //   - VERCEL_ENV=production → billing VŽDY vypnutý (aj keby niekto nastavil env).
-//   - Iba test mode: Stripe kľúč musí byť sk_test_/rk_test_ (providers/stripe.ts),
+//   - Iba test mode: Stripe kľúč musí byť sk_test_/rk_test_/rkcs_test_ (providers/stripe.ts),
 //     DB config povoľuje iba environment='test' (check constraint).
 //   - Default = 'off'. Zapína sa iba explicitne na stagingu/preview:
 //       ESBLU_BILLING_MODE=fake         (+ ESBLU_FAKE_BILLING_SECRET, ≥16 znakov)

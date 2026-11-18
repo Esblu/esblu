@@ -52,12 +52,22 @@ function Get-StripeJson([string[]]$StripeArgs) {
 }
 
 function Get-StripeTestKey {
-  $cfg = Invoke-Stripe @("config", "--list")
-  $m = [regex]::Match($cfg, "test_mode_api_key\s*=\s*'?((?:sk|rk)_test_[A-Za-z0-9]+)'?")
-  if (-not $m.Success) {
-    if ($cfg -match "(sk|rk)_live_") { throw "V profile je LIVE kluc - skript pracuje iba s test mode." }
-    throw "V profile Stripe CLI nie je testovaci kluc. Spusti najprv: npx @stripe/cli@1.55.12 sandboxes create --email <adresa> --non-interactive"
+  # Kluc sa NIKDY nevypisuje. Poradie: STRIPE_API_KEY (ak je nastaveny) -> aktualny profil Stripe CLI.
+  # Prefixy: sk_test_ / rk_test_ / rkcs_test_ (restricted kluc claimable sandboxu).
+  $testRe = "(?:sk|rk|rkcs)_test_[A-Za-z0-9]+"
+  $liveRe = "(?:sk|rk|rkcs)_live_"
+  if ($env:STRIPE_API_KEY) {
+    if ($env:STRIPE_API_KEY -match "^$liveRe") { throw "STRIPE_API_KEY je LIVE kluc - skript pracuje iba s test mode." }
+    if ($env:STRIPE_API_KEY -match "^$testRe$") { Write-Host "    kluc: STRIPE_API_KEY (test mode)"; return $env:STRIPE_API_KEY }
   }
+  $cfg = Invoke-Stripe @("config", "--list")
+  if ($cfg -match "test_mode_api_key\s*=\s*['`"]?$liveRe") { throw "V profile je LIVE kluc - skript pracuje iba s test mode." }
+  $m = [regex]::Match($cfg, "test_mode_api_key\s*=\s*['`"]?($testRe)")
+  if (-not $m.Success) {
+    throw "V aktualnom profile Stripe CLI nie je testovaci kluc (sk_test_/rk_test_/rkcs_test_). Over: npx @stripe/cli@1.55.12 config --list (kluc nikam nekopiruj)."
+  }
+  $prefix = $m.Groups[1].Value.Substring(0, $m.Groups[1].Value.IndexOf("_test_") + 6)
+  Write-Host "    kluc: profil Stripe CLI ($prefix***)"
   return $m.Groups[1].Value
 }
 

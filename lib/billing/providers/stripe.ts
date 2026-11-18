@@ -1,7 +1,7 @@
 // =============================================================================
 // Stripe adapter — IBA TEST MODE / SANDBOX.
 //
-// - Kľúč musí začínať `sk_test_` alebo `rk_test_`; `*_live_*` → LIVE_MODE_FORBIDDEN
+// - Kľúč musí začínať `sk_test_`, `rk_test_` alebo `rkcs_test_` (sandbox); `*_live_*` → LIVE_MODE_FORBIDDEN
 //   (tvrdá poistka v kóde, nie iba konfigurácia). Event s `livemode: true` sa odmietne.
 // - Stripe-hosted Checkout (mode=subscription): Esblu nikdy nevidí PAN/CVC
 //   (PCI SAQ A). Apple Pay / Google Pay ponúka hosted Checkout sám podľa
@@ -75,10 +75,17 @@ export function stripeChargeFromInvoice(invoice: unknown): NormalizedCharge | nu
   };
 }
 
+/**
+ * Prefixy Stripe kľúčov: `sk_` (secret), `rk_` (restricted), `rkcs_` (restricted kľúč
+ * claimable sandboxu zo `stripe sandboxes create`). Povolený je IBA test mode.
+ */
+export const STRIPE_TEST_KEY_RE = /^(sk|rk|rkcs)_test_[A-Za-z0-9]{8,}$/;
+export const STRIPE_LIVE_KEY_RE = /^(sk|rk|rkcs)_live_/;
+
 export function assertStripeTestKey(secretKey: string | undefined): string {
   const key = (secretKey ?? "").trim();
-  if (/^(sk|rk)_live_/.test(key)) throw new BillingProviderError("LIVE_MODE_FORBIDDEN");
-  if (!/^(sk|rk)_test_[A-Za-z0-9]{8,}$/.test(key)) throw new BillingProviderError("NOT_CONFIGURED");
+  if (STRIPE_LIVE_KEY_RE.test(key)) throw new BillingProviderError("LIVE_MODE_FORBIDDEN");
+  if (!STRIPE_TEST_KEY_RE.test(key)) throw new BillingProviderError("NOT_CONFIGURED");
   return key;
 }
 

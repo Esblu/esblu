@@ -26,7 +26,7 @@ import { gatePurchaseOptions, methodAllowedByServer, providerGateFromEnv } from 
 import { normalizeGooglePluginResult } from "@/lib/billing/native-bridge-contract";
 import { BILLING_ENV_SCHEMA, resolveProviderModes, validateBillingEnv } from "@/lib/billing/provider-modes";
 import { normalizeAppleNotification, normalizeGoogleSubscription, GooglePlayProvider } from "@/lib/billing/providers/stores";
-import { mapStripeStatus, stripeExpiresAt, StripeTestProvider } from "@/lib/billing/providers/stripe";
+import { assertStripeTestKey, mapStripeStatus, stripeExpiresAt, StripeTestProvider } from "@/lib/billing/providers/stripe";
 import { startWebCheckout } from "@/lib/billing/web-checkout";
 import { appleReconcileSource, appleStatusCodeToCanonical, googleReconcileSource } from "@/lib/billing/reconcile-sources";
 import { hasDrift, reconcileOne, runReconciliation, type ReconcileCandidate } from "@/lib/billing/reconciliation";
@@ -628,6 +628,15 @@ await check("stripe-adapter: zrušenie rozpracovanej platby — open → expired
   assert.equal(await stripe.expireCheckout("cs_test_1"), "complete");
   assert.equal(stripeExpiresAt(null), null);
   assert.equal(stripeExpiresAt("2026-11-18T12:00:00.000Z"), 1795003200);
+});
+
+await check("stripe-adapter: kľúče — sk_test_/rk_test_/rkcs_test_ (sandbox) povolené; *_live_ vrátane rkcs_live_ odmietnuté", () => {
+  for (const k of ["sk_test_", "rk_test_", "rkcs_test_"]) assert.equal(assertStripeTestKey(k + "A1b2C3d4E5"), k + "A1b2C3d4E5");
+  for (const k of ["sk_live_", "rk_live_", "rkcs_live_"]) assert.throws(() => assertStripeTestKey(k + "A1b2C3d4E5"), /LIVE_MODE_FORBIDDEN/);
+  assert.throws(() => assertStripeTestKey("pk_test_A1b2C3d4E5"), /NOT_CONFIGURED/);
+  const env = { ESBLU_BILLING_MODE: "stripe_test", ESBLU_BILLING_RETURN_ORIGIN: "http://localhost:3000", STRIPE_SECRET_KEY: "rkcs_test_A1b2C3d4E5", STRIPE_WEBHOOK_SECRET: "whsec_A1b2C3d4E5" };
+  assert.ok(!validateBillingEnv(env).invalid.includes("STRIPE_SECRET_KEY"));
+  assert.ok(validateBillingEnv({ ...env, STRIPE_SECRET_KEY: "rkcs_live_A1b2C3d4E5" }).invalid.some((x) => x.startsWith("STRIPE_SECRET_KEY")));
 });
 
 console.log(`\nsubscriptions-lifecycle: ${passed} passed, ${failed} failed`);
