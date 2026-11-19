@@ -69,6 +69,7 @@
     "test:company-termination": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/company-termination-tests.ts",
     "test:company-export-readable": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs --import ./scripts/tsx-loader.mjs scripts/company-export-readable-tests.ts",
     "test:company-termination-db": "node --experimental-strip-types --no-warnings scripts/company-termination-pglite-tests.ts",
+    "test:retention-archive-db": "node --experimental-strip-types --no-warnings scripts/retention-archive-pglite-tests.ts",
     "test:b2b-terms-db": "node --experimental-strip-types --no-warnings scripts/b2b-terms-pglite-tests.ts",
     "test:b2b-terms": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/b2b-terms-tests.ts",
     "test:grants-guard": "node --experimental-strip-types --no-warnings scripts/grants-migration-guard-tests.ts",
