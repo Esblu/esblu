@@ -26,7 +26,8 @@ import { gatePurchaseOptions, methodAllowedByServer, providerGateFromEnv } from 
 import { normalizeGooglePluginResult } from "@/lib/billing/native-bridge-contract";
 import { BILLING_ENV_SCHEMA, resolveProviderModes, validateBillingEnv } from "@/lib/billing/provider-modes";
 import { normalizeAppleNotification, normalizeGoogleSubscription, GooglePlayProvider } from "@/lib/billing/providers/stores";
-import { assertStripeTestKey, mapStripeStatus, stripeExpiresAt, StripeTestProvider } from "@/lib/billing/providers/stripe";
+import { assertStripeKeyFor, assertStripeTestKey, mapStripeStatus, stripeExpiresAt, StripeLiveProvider, StripeTestProvider } from "@/lib/billing/providers/stripe";
+import { billingEnvironmentForMode, getBillingServerMode } from "@/lib/billing/config";
 import { startWebCheckout } from "@/lib/billing/web-checkout";
 import { appleReconcileSource, appleStatusCodeToCanonical, googleReconcileSource } from "@/lib/billing/reconcile-sources";
 import { hasDrift, reconcileOne, runReconciliation, type ReconcileCandidate } from "@/lib/billing/reconciliation";
@@ -709,6 +710,118 @@ await check("S12 cron: bez CRON_SECRET 401; billing vypnutý / VERCEL_ENV=produc
     assert.deepEqual(calls, [], "žiadne sieťové volanie");
   } finally {
     globalThis.fetch = realFetch;
+    process.env = saved;
+  }
+});
+
+// ============================================================================= S15 live režim
+const LIVE_K = "sk_live_" + "L".repeat(24);
+const TEST_K = "sk_test_" + "T".repeat(24);
+const WH = "whsec_" + "w".repeat(32);
+await check("S15 config: stripe_live IBA v produkcii so schválením; produkcia bez schválenia / so stripe_test / fake = off; mimo produkcie live = off", () => {
+  assert.equal(getBillingServerMode({ VERCEL_ENV: "production", ESBLU_BILLING_MODE: "stripe_live", ESBLU_BILLING_LIVE_APPROVED: "true" }), "stripe_live");
+  assert.equal(getBillingServerMode({ VERCEL_ENV: "production", ESBLU_BILLING_MODE: "stripe_live" }), "off", "bez schválenia");
+  assert.equal(getBillingServerMode({ VERCEL_ENV: "production", ESBLU_BILLING_MODE: "stripe_live", ESBLU_BILLING_LIVE_APPROVED: "TRUE" }), "off", "presne 'true'");
+  assert.equal(getBillingServerMode({ VERCEL_ENV: "production", ESBLU_BILLING_MODE: "stripe_test", ESBLU_BILLING_LIVE_APPROVED: "true" }), "off");
+  assert.equal(getBillingServerMode({ VERCEL_ENV: "production", ESBLU_BILLING_MODE: "fake", ESBLU_BILLING_LIVE_APPROVED: "true" }), "off");
+  for (const v of ["preview", "development", undefined]) {
+    assert.equal(getBillingServerMode({ VERCEL_ENV: v, ESBLU_BILLING_MODE: "stripe_live", ESBLU_BILLING_LIVE_APPROVED: "true" }), "off", `VERCEL_ENV=${v}`);
+  }
+  assert.equal(billingEnvironmentForMode("stripe_live"), "live");
+  assert.equal(billingEnvironmentForMode("stripe_test"), "test");
+  assert.equal(billingEnvironmentForMode("off"), null);
+});
+await check("S15 kľúče: live provider odmietne test kľúč (TEST_MODE_FORBIDDEN) a rkcs_live; test provider odmietne live kľúč", () => {
+  const code = (fn: () => unknown) => { try { fn(); return "ok"; } catch (e) { return (e as { code?: string }).code; } };
+  assert.equal(code(() => assertStripeKeyFor("live", LIVE_K)), "ok");
+  assert.equal(code(() => assertStripeKeyFor("live", "rk_live_" + "x".repeat(20))), "ok");
+  assert.equal(code(() => assertStripeKeyFor("live", TEST_K)), "TEST_MODE_FORBIDDEN");
+  assert.equal(code(() => assertStripeKeyFor("live", "rkcs_test_" + "x".repeat(20))), "TEST_MODE_FORBIDDEN");
+  assert.equal(code(() => assertStripeKeyFor("live", "rkcs_live_" + "x".repeat(20))), "NOT_CONFIGURED");
+  assert.equal(code(() => assertStripeKeyFor("live", undefined)), "NOT_CONFIGURED");
+  assert.equal(code(() => assertStripeKeyFor("test", LIVE_K)), "LIVE_MODE_FORBIDDEN");
+  assert.equal(code(() => assertStripeTestKey(LIVE_K)), "LIVE_MODE_FORBIDDEN");
+});
+await check("S15 webhook a API: livemode musí zodpovedať prostrediu (live ← test udalosť / objekt = odmietnuté a naopak)", async () => {
+  const now = Math.floor(Date.now() / 1000);
+  const evt = (livemode: boolean) => JSON.stringify({ object: "event", id: "evt_s15", type: "invoice.paid", created: now, livemode, data: { object: {} } });
+  const live = new StripeLiveProvider({ secretKey: LIVE_K, webhookSecret: WH, now: () => new Date(now * 1000) });
+  const test = new StripeTestProvider({ secretKey: TEST_K, webhookSecret: WH, now: () => new Date(now * 1000) });
+  const verify = async (p: StripeLiveProvider | StripeTestProvider, raw: string) => {
+    try { const e = await p.verifyWebhook(raw, new Headers({ "stripe-signature": signTimestamped(raw, WH, now) })); return e.environment; }
+    catch (e) { return (e as { code?: string }).code; }
+  };
+  assert.equal(await verify(live, evt(true)), "live");
+  assert.equal(await verify(live, evt(false)), "TEST_MODE_FORBIDDEN");
+  assert.equal(await verify(test, evt(false)), "test");
+  assert.equal(await verify(test, evt(true)), "LIVE_MODE_FORBIDDEN");
+  const missing = JSON.stringify({ object: "event", id: "evt_s15b", type: "invoice.paid", created: now, data: { object: {} } });
+  assert.equal(await verify(live, missing), "TEST_MODE_FORBIDDEN", "chýbajúci livemode v live = odmietnuté");
+  assert.equal(await verify(test, missing), "LIVE_MODE_FORBIDDEN", "chýbajúci livemode v test = odmietnuté");
+  const code = (fn: () => unknown) => { try { fn(); return "ok"; } catch (e) { return (e as { code?: string }).code; } };
+  assert.equal(code(() => live.eventFromApi({ object: "event", id: "e", type: "x", created: now, livemode: false })), "TEST_MODE_FORBIDDEN");
+  assert.equal(code(() => test.eventFromApi({ object: "event", id: "e", type: "x", created: now, livemode: true })), "LIVE_MODE_FORBIDDEN");
+  const testObj = (async () => new Response(JSON.stringify({ object: "subscription", id: "sub_x", livemode: false }), { status: 200 })) as unknown as typeof fetch;
+  const liveApi = new StripeLiveProvider({ secretKey: LIVE_K, webhookSecret: WH, fetchImpl: testObj });
+  await assert.rejects(() => liveApi.getSubscription({ providerSubscriptionId: "sub_x", providerCustomerId: null }), (e: unknown) => (e as { code?: string }).code === "TEST_MODE_FORBIDDEN");
+  const liveObj = (async () => new Response(JSON.stringify({ object: "subscription", id: "sub_x", livemode: true }), { status: 200 })) as unknown as typeof fetch;
+  const testApi = new StripeTestProvider({ secretKey: TEST_K, webhookSecret: WH, fetchImpl: liveObj });
+  await assert.rejects(() => testApi.getSubscription({ providerSubscriptionId: "sub_x", providerCustomerId: null }), (e: unknown) => (e as { code?: string }).code === "LIVE_MODE_FORBIDDEN");
+});
+await check("S15 env schéma: produkcia live úplná = ok; test kľúče vedľa live, http návrat, live premenné mimo produkcie = chyba (iba názvy)", () => {
+  const prod = { VERCEL_ENV: "production", ESBLU_BILLING_MODE: "stripe_live", ESBLU_BILLING_LIVE_APPROVED: "true", STRIPE_LIVE_SECRET_KEY: LIVE_K,
+    STRIPE_LIVE_WEBHOOK_SECRET: WH, ESBLU_BILLING_RETURN_ORIGIN: "https://www.esblu.com", CRON_SECRET: "c".repeat(32) };
+  const ok = validateBillingEnv(prod);
+  assert.equal(ok.ok, true, JSON.stringify(ok));
+  assert.equal(ok.modes.web, "live");
+  const mixed = validateBillingEnv({ ...prod, STRIPE_SECRET_KEY: TEST_K, STRIPE_WEBHOOK_SECRET: WH });
+  assert.equal(mixed.ok, false);
+  assert.ok(mixed.invalid.includes("STRIPE_SECRET_KEY:TEST_CONFIG_IN_LIVE") && mixed.invalid.includes("STRIPE_WEBHOOK_SECRET:TEST_CONFIG_IN_LIVE"));
+  assert.ok(validateBillingEnv({ ...prod, ESBLU_BILLING_RETURN_ORIGIN: "http://localhost:3000" }).invalid.includes("ESBLU_BILLING_RETURN_ORIGIN:HTTPS_REQUIRED"));
+  assert.ok(validateBillingEnv({ ...prod, STRIPE_LIVE_SECRET_KEY: TEST_K }).invalid.includes("STRIPE_LIVE_SECRET_KEY"));
+  const missing = validateBillingEnv({ ...prod, STRIPE_LIVE_WEBHOOK_SECRET: "" });
+  assert.ok(missing.missing.includes("STRIPE_LIVE_WEBHOOK_SECRET"));
+  const preview = validateBillingEnv({ VERCEL_ENV: "preview", ESBLU_BILLING_MODE: "stripe_test", STRIPE_SECRET_KEY: TEST_K, STRIPE_WEBHOOK_SECRET: WH,
+    STRIPE_LIVE_SECRET_KEY: LIVE_K, ESBLU_BILLING_RETURN_ORIGIN: "https://x.vercel.app", CRON_SECRET: "c".repeat(32) });
+  assert.ok(preview.invalid.includes("STRIPE_LIVE_SECRET_KEY:LIVE_OUTSIDE_PRODUCTION"));
+  const unapproved = resolveProviderModes({ VERCEL_ENV: "production", ESBLU_BILLING_MODE: "stripe_live" });
+  assert.equal(unapproved.web, "disabled");
+  assert.ok(unapproved.issues.includes("LIVE_NOT_APPROVED"));
+  for (const r of [ok, mixed, preview]) assert.ok(!JSON.stringify(r).includes(LIVE_K) && !JSON.stringify(r).includes(TEST_K), "žiadne hodnoty");
+});
+await check("S15 getWebBillingProvider: live iba pri platnej produkčnej konfigurácii; zámer iného prostredia → null; checkout iného prostredia sa nevolá", async () => {
+  const saved = { ...process.env };
+  try {
+    process.env.NEXT_PUBLIC_SUPABASE_URL ||= "http://127.0.0.1:9";
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||= "anon-placeholder";
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||= "service-placeholder";
+    const { getWebBillingProvider } = await import("../lib/billing/server.ts");
+    Object.assign(process.env, { VERCEL_ENV: "production", ESBLU_BILLING_MODE: "stripe_live", ESBLU_BILLING_LIVE_APPROVED: "true", STRIPE_LIVE_SECRET_KEY: LIVE_K,
+      STRIPE_LIVE_WEBHOOK_SECRET: WH, ESBLU_BILLING_RETURN_ORIGIN: "https://www.esblu.com", CRON_SECRET: "c".repeat(32) });
+    delete process.env.STRIPE_SECRET_KEY; delete process.env.STRIPE_WEBHOOK_SECRET; delete process.env.ESBLU_FAKE_BILLING_SECRET;
+    const p = getWebBillingProvider("stripe");
+    assert.ok(p instanceof StripeLiveProvider, "live provider");
+    assert.equal(p?.environment, "live");
+    assert.equal(getWebBillingProvider("stripe", "test"), null, "zámer z test prostredia");
+    assert.ok(getWebBillingProvider("stripe", "live") instanceof StripeLiveProvider);
+    process.env.STRIPE_SECRET_KEY = TEST_K;
+    assert.equal(getWebBillingProvider("stripe"), null, "test kľúč vedľa live = fail closed");
+    delete process.env.STRIPE_SECRET_KEY;
+    process.env.ESBLU_BILLING_LIVE_APPROVED = "false";
+    assert.equal(getWebBillingProvider("stripe"), null, "bez schválenia");
+    Object.assign(process.env, { VERCEL_ENV: "preview", ESBLU_BILLING_MODE: "stripe_test", STRIPE_SECRET_KEY: TEST_K, STRIPE_WEBHOOK_SECRET: WH });
+    const t = getWebBillingProvider("stripe");
+    assert.ok(t instanceof StripeTestProvider && !(t instanceof StripeLiveProvider));
+    assert.equal(getWebBillingProvider("stripe", "live"), null);
+    let called = 0;
+    const r = await startWebCheckout({
+      provider: { ...(t as StripeTestProvider), environment: "test", createCheckout: async () => { called++; return { providerSessionId: "cs", url: "u" }; } } as unknown as StripeTestProvider,
+      intent: { checkout_id: "11111111-1111-4111-8111-111111111111", provider: "stripe", provider_price_id: "price_x", provider_customer_id: null, environment: "live" },
+      origin: "https://x", attach: async () => ({ error: null }),
+    });
+    assert.equal(r.ok, false);
+    assert.equal(called, 0, "provider sa pri inom prostredí nevolá");
+  } finally {
     process.env = saved;
   }
 });

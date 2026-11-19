@@ -1,27 +1,26 @@
 import { getBillingServerMode } from "@/lib/billing/config";
 import { processWebhook } from "@/lib/billing/pipeline";
-import { StripeTestProvider } from "@/lib/billing/providers/stripe";
+import { getWebBillingProvider } from "@/lib/billing/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 
 // -----------------------------------------------------------------------------
-// POST /api/billing/webhooks/stripe — Stripe TEST MODE webhook.
-// Raw body (req.text()) → overenie Stripe-Signature (HMAC, tolerancia 300 s)
-// → dedupe/uloženie → refetch predplatného z API → kanonický stav → nároky.
-// livemode=true alebo live kľúč → 400. Mimo režimu stripe_test → 404.
+// POST /api/billing/webhooks/stripe — Stripe webhook (test ALEBO live podľa režimu servera, S15).
+// Raw body (req.text()) → overenie Stripe-Signature (HMAC, tolerancia 300 s) secretom PRÁVE
+// aktívneho prostredia → `livemode` udalosti musí zodpovedať prostrediu (test ↔ live → 400)
+// → dedupe/uloženie (DB odmietne prostredie ≠ billing_runtime_config.environment)
+// → refetch predplatného z API → kanonický stav → nároky. Billing vypnutý → 404.
 // -----------------------------------------------------------------------------
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function POST(req: Request) {
-  if (getBillingServerMode() !== "stripe_test") return new Response(null, { status: 404 });
+  const mode = getBillingServerMode();
+  if (mode !== "stripe_test" && mode !== "stripe_live") return new Response(null, { status: 404 });
   const rawBody = await req.text();
   if (rawBody.length > 512 * 1024) return new Response(null, { status: 413 });
-  const provider = new StripeTestProvider({
-    secretKey: process.env.STRIPE_SECRET_KEY,
-    webhookSecret: process.env.STRIPE_WEBHOOK_SECRET,
-    apiVersion: process.env.STRIPE_API_VERSION || undefined,
-  });
+  const provider = getWebBillingProvider("stripe");
+  if (!provider) return new Response(null, { status: 404 });
   const result = await processWebhook(provider, rawBody, req.headers, getSupabaseAdmin());
   return Response.json({ received: result.httpStatus < 300, outcome: result.outcome }, { status: result.httpStatus });
 }

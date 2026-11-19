@@ -38,7 +38,7 @@ Hotové: testy v Stripe sandboxe (nákup, obnova, zlyhanie, refundácie, zrušen
 | S1 | ~~Rozhodnúť o rezerve~~ — **schválené 19. 11.: 48 h ochranná lehota** po riadnom skončení; migrácia `20261119100000` na stagingu, testy PASS (`stripe-test-and-reconciliation` § 8.8); produkcia spolu s S4 | — |
 | S2 | Účtovníčka: 12 otázok (DPH § 7a, Stripe poplatky, doklady) + vzor mesačného párovania | V → Ú | `payment-channels-economics-2026-11-18.md` § 6 |
 | S3 | ⛔ Merge vetvy do `main` (kód billing ostáva vypnutý flagmi) | V |
-| S4 | ⛔ Produkčné migrácie `20261118120000`, `20261118130000`, `20261118140000`, `20261119100000`, `20261119110000`, `20261119120000` (záloha + dump, po jednej, rollback súbory v repe) | V súhlas → A |
+| S4 | ⛔ Produkčné migrácie `20261118120000`, `20261118130000`, `20261118140000`, `20261119100000`, `20261119110000`, `20261119120000`, `20261119130000` (záloha + dump, po jednej, rollback súbory v repe) | V súhlas → A |
 | S5 | ⛔ Stripe live účet (Esblu s.r.o., overenie firmy, SEPA), produkt + cena 15,90 €/mes., Billing Portal, daňové nastavenia (§ 7a, OSS ak B2C) | V |
 | S6 | ⛔ Vercel production: `STRIPE_SECRET_KEY` (restricted live), `STRIPE_WEBHOOK_SECRET`, `ESBLU_BILLING_MODE`, `ESBLU_BILLING_RETURN_ORIGIN`, `CRON_SECRET` pre reconciliation; webhook endpoint v Stripe (10 udalostí) | V |
 | S7 | ⛔ Prod DB: `billing_provider_prices` (live cena), `billing_runtime_config.web_provider='stripe'`, `environment='live'` | V súhlas → A |
@@ -47,7 +47,7 @@ Hotové: testy v Stripe sandboxe (nákup, obnova, zlyhanie, refundácie, zrušen
 | S12 | ~~Chýbajúce webhooky~~ — **implementované 19. 11.** (doťahovanie `/v1/events` + reconciliation platby aktuálnej faktúry + crony); staging DB testy PASS; zostáva overenie so živým sandboxom a produkčné migrácie (S4) | A / V |
 | S13 | ~~Ukončenie k zvolenému dátumu~~ — **implementované 19. 11.** (`scheduled_end_at`, bez 48 h); overiť `cancel_at` v sandboxe | A / V |
 | S14 | ~~Manifest grantov~~ — **hotové 19. 11.** (`registration_policy`, nové tabuľky/funkcie; ACL v DB bez zmeny) | — |
-| S15 | **Live režim Stripe (pred ostrým billingom):** provider s očakávaným `livemode` podľa prostredia, `ESBLU_BILLING_MODE=stripe_live` iba v produkcii, DB `environment=live` (config, ceny, kurzor), testy oddelenia sandbox ↔ live (`stripe-test-and-reconciliation` § 8.11) | A (po súhlase) |
+| S15 | ~~Live režim Stripe~~ — **implementované 19. 11. (kód + migrácia `20261119130000`, iba staging; nič nezapnuté)**: oddelené kľúče/secrety (`STRIPE_LIVE_*`), `stripe_live` iba produkcia + `ESBLU_BILLING_LIVE_APPROVED=true`, `livemode` kontrola, DB guard prostredia; rollout a rollback: `docs/billing-live-rollout-2026-11-19.md` | — |
 | S16 | ~~Overenie S12/S13 so skutočným sandboxom~~ — **PASS 4/4 (19. 11.)**: `s12-events`, `s12-catchup`, `verify-terminal`, `s13-existing`; Stripe skracuje obdobie pri `cancel_at` → oprava S13 (`af55a4d`) potvrdená; staging vrátený na `web_provider=none` (§ 8.13) | — |
 | S10 | Monitoring: alert na `billing_events` s chybou, `dead_letter` v reconciliation | A |
 | S11 | Upratanie Stripe sandboxov: zrušiť predplatné C v pôvodnom sandboxe (príkaz v § 8.7), potom `stripe sandboxes delete` | V |

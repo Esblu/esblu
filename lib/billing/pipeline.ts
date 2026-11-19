@@ -12,6 +12,7 @@
 import { sha256Hex } from "@/lib/billing/signature";
 import {
   BillingProviderError,
+  type BillingEnvironment,
   type BillingProvider,
   type BillingProviderId,
   type NormalizedSubscriptionState,
@@ -43,6 +44,7 @@ function signatureFailure(error: unknown): PipelineResult | null {
     case "STALE_SIGNATURE":
     case "MALFORMED_PAYLOAD":
     case "LIVE_MODE_FORBIDDEN":
+    case "TEST_MODE_FORBIDDEN":
       return { httpStatus: 400, outcome: "rejected", code: error.code };
     case "NOT_CONFIGURED":
       return { httpStatus: 503, outcome: "rejected", code: error.code };
@@ -185,7 +187,7 @@ export async function processVerifiedEvent(provider: BillingProvider, event: Ver
  */
 export async function recordProviderAudit(
   db: BillingDb,
-  provider: { id: BillingProviderId; environment: "test" },
+  provider: { id: BillingProviderId; environment: BillingEnvironment },
   action: string,
   state: NormalizedSubscriptionState,
   reason: string,
@@ -234,7 +236,7 @@ export async function cancelAtProvider(db: BillingDb, provider: BillingProvider,
 /** Overený nákup z mobilu (StoreKit / Play) — rovnaká cesta record → apply. */
 export async function applyVerifiedStorePurchase(
   db: BillingDb,
-  provider: { id: BillingProviderId; environment: "test" },
+  provider: { id: BillingProviderId; environment: BillingEnvironment },
   eventId: string,
   state: NormalizedSubscriptionState,
   payloadSha256: string,
@@ -258,7 +260,7 @@ export async function applyVerifiedStorePurchase(
 
 export async function applyProviderState(
   db: BillingDb,
-  provider: { id: BillingProviderId; environment: "test" },
+  provider: { id: BillingProviderId; environment: BillingEnvironment },
   action: string,
   state: NormalizedSubscriptionState,
   payloadSha256: string,

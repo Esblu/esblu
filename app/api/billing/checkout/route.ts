@@ -37,7 +37,7 @@ export async function POST(req: Request) {
   if (intent.error || !intent.data) return billingErrorResponse(intent.error);
   const data = intent.data as WebIntentData;
 
-  const provider = getWebBillingProvider(data.provider);
+  const provider = getWebBillingProvider(data.provider, data.environment);
   if (!provider) return Response.json({ success: false, code: "ESBLU_BILLING_DISABLED" }, { status: 503 });
 
   // Súbežný / opakovaný pokus dostane ten istý zámer → tú istú reláciu (lib/billing/web-checkout.ts).

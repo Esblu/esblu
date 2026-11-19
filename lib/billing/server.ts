@@ -10,10 +10,11 @@ import { verifyRequestUser } from "@/lib/server-auth";
 import { getUserScopedSupabaseClient } from "@/lib/server-supabase-user-client";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { getRequestLocale } from "@/lib/i18n/request-locale";
-import { getBillingServerMode, webProviderForMode } from "@/lib/billing/config";
+import { billingEnvironmentForMode, getBillingServerMode, webProviderForMode } from "@/lib/billing/config";
 import { getStoreMode } from "@/lib/billing/stores/store-config";
 import { FakeBillingProvider, type FakeStateStore } from "@/lib/billing/providers/fake";
-import { StripeTestProvider } from "@/lib/billing/providers/stripe";
+import { StripeLiveProvider, StripeTestProvider } from "@/lib/billing/providers/stripe";
+import { validateBillingEnv } from "@/lib/billing/provider-modes";
 import type { BillingProvider, NormalizedSubscriptionState } from "@/lib/billing/types";
 
 export const BILLING_ERROR_STATUS: Record<string, number> = {
@@ -95,11 +96,28 @@ class DbBackedFakeStore implements FakeStateStore {
   }
 }
 
-/** Webový provider podľa režimu servera. `provider` z DB musí súhlasiť. */
-export function getWebBillingProvider(expected?: string | null): BillingProvider | null {
+/**
+ * Webový provider podľa režimu servera. `provider` (a ak je zadané, aj `environment`) z DB musí súhlasiť,
+ * inak null → volajúci odpovie „billing vypnutý" (fail closed).
+ * S15: TEST a LIVE používajú ODDELENÉ premenné — test STRIPE_SECRET_KEY / STRIPE_WEBHOOK_SECRET,
+ * live STRIPE_LIVE_SECRET_KEY / STRIPE_LIVE_WEBHOOK_SECRET. Live provider vzniká iba v režime
+ * `stripe_live` (produkcia + schválenie); zlý typ kľúča odmietne samotný provider.
+ */
+export function getWebBillingProvider(expected?: string | null, expectedEnvironment?: string | null): BillingProvider | null {
   const mode = getBillingServerMode();
   const id = webProviderForMode(mode);
-  if (!id || (expected && expected !== id)) return null;
+  const environment = billingEnvironmentForMode(mode);
+  if (!id || !environment || (expected && expected !== id)) return null;
+  if (expectedEnvironment && expectedEnvironment !== environment) return null;
+  if (mode === "stripe_live") {
+    // Live = celá env schéma musí byť platná (žiadne test kľúče vedľa live, https návrat, schválenie).
+    if (!validateBillingEnv().ok) return null;
+    return new StripeLiveProvider({
+      secretKey: process.env.STRIPE_LIVE_SECRET_KEY,
+      webhookSecret: process.env.STRIPE_LIVE_WEBHOOK_SECRET,
+      apiVersion: process.env.STRIPE_API_VERSION || undefined,
+    });
+  }
   if (id === "stripe") {
     return new StripeTestProvider({
       secretKey: process.env.STRIPE_SECRET_KEY,

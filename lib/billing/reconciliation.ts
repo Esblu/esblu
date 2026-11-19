@@ -15,7 +15,7 @@
 import { isOpenStatus, isTerminalStatus } from "@/lib/billing/canonical-state";
 import { applyProviderState, recordProviderAudit, type BillingDb } from "@/lib/billing/pipeline";
 import { sha256Hex } from "@/lib/billing/signature";
-import { BillingProviderError, type BillingProviderId, type NormalizedSubscriptionState } from "@/lib/billing/types";
+import { BillingProviderError, type BillingEnvironment, type BillingProviderId, type NormalizedSubscriptionState } from "@/lib/billing/types";
 
 export type ReconcileCandidate = {
   account_id: string;
@@ -40,6 +40,8 @@ export type RemoteSubscriptionState = NormalizedSubscriptionState & { providerOp
 /** Zdroj autoritatívneho stavu jedného providera (Stripe/fake API, Play Developer API, App Store Server API). */
 export interface ReconcileSource {
   readonly provider: BillingProviderId;
+  /** S15: prostredie providera (audit, synchronizácia); chýba = "test" (obchody, fake). */
+  readonly environment?: BillingEnvironment;
   fetchState(candidate: ReconcileCandidate): Promise<RemoteSubscriptionState | null>;
   /** Okamžité ukončenie u providera (Stripe/fake) — poistka pre terminálny účet s otvoreným predplatným. */
   cancelNow?(candidate: ReconcileCandidate): Promise<NormalizedSubscriptionState>;
@@ -95,6 +97,12 @@ export async function reconcileOne(
     await record(db, candidate.account_id, "skipped", "PROVIDER_NOT_CONFIGURED");
     return { accountId: candidate.account_id, result: "skipped", errorCode: "PROVIDER_NOT_CONFIGURED" };
   }
+  // S15: účet z iného prostredia (test ↔ live) sa nikdy neoveruje tým istým providerom (iný kľúč, iný účet).
+  const sourceEnv = source.environment ?? "test";
+  if (candidate.provider_environment && candidate.provider_environment !== sourceEnv) {
+    await record(db, candidate.account_id, "skipped", "ENVIRONMENT_MISMATCH");
+    return { accountId: candidate.account_id, result: "skipped", errorCode: "ENVIRONMENT_MISMATCH" };
+  }
   let remote: RemoteSubscriptionState | null;
   try {
     remote = await withTimeout(source.fetchState(candidate), options.timeoutMs ?? 15_000);
@@ -121,7 +129,7 @@ export async function reconcileOne(
     }
     try {
       const ended = await withTimeout(source.cancelNow(candidate), options.timeoutMs ?? 15_000);
-      await recordProviderAudit(db, { id: candidate.billing_provider, environment: "test" }, "terminal_cancel", ended, "PROVIDER_CANCELED");
+      await recordProviderAudit(db, { id: candidate.billing_provider, environment: source.environment ?? "test" }, "terminal_cancel", ended, "PROVIDER_CANCELED");
       await record(db, candidate.account_id, "corrected", null);
       return { accountId: candidate.account_id, result: "corrected", errorCode: "PROVIDER_CANCELED" };
     } catch (error) {
@@ -137,7 +145,7 @@ export async function reconcileOne(
   // Oprava = syntetický event tou istou pipeline (dedupe podľa stavu + času).
   const applied = await applyProviderState(
     db,
-    { id: candidate.billing_provider, environment: "test" },
+    { id: candidate.billing_provider, environment: source.environment ?? "test" },
     "reconcile",
     remote,
     sha256Hex(JSON.stringify(remote)),
@@ -148,7 +156,7 @@ export async function reconcileOne(
     if (remote.followUp === "cancel_provider_now" && providerOpen && source.cancelNow) {
       try {
         const ended = await withTimeout(source.cancelNow(candidate), options.timeoutMs ?? 15_000);
-        await recordProviderAudit(db, { id: candidate.billing_provider, environment: "test" }, "terminal_cancel", ended, "PROVIDER_CANCELED");
+        await recordProviderAudit(db, { id: candidate.billing_provider, environment: source.environment ?? "test" }, "terminal_cancel", ended, "PROVIDER_CANCELED");
       } catch {
         // ďalší beh: terminálny účet + otvorené predplatné → cancelNow (vetva vyššie)
       }

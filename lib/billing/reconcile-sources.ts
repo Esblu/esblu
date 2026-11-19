@@ -22,6 +22,7 @@ const isoFromMillis = (v: unknown): string | null =>
 export function providerReconcileSource(provider: BillingProvider): ReconcileSource {
   return {
     provider: provider.id,
+    environment: provider.environment,
     // S12: Stripe aj s kontrolou platby aktuálnej faktúry (plná refundácia / prehraný spor bez webhooku).
     fetchState: (c: ReconcileCandidate) => {
       const ref = { providerSubscriptionId: c.provider_subscription_id, providerCustomerId: c.provider_customer_id };

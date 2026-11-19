@@ -22,6 +22,8 @@ export type WebIntentData = {
   provider_customer_id: string | null;
   expires_at?: string | null;
   reused?: boolean;
+  /** S15: prostredie zámeru z DB (billing_runtime_config.environment) — provider musí mať rovnaké. */
+  environment?: string | null;
 };
 
 export type AttachFn = (checkoutId: string, providerSessionId: string) => Promise<{ error: unknown | null }>;
@@ -43,6 +45,8 @@ export async function startWebCheckout(input: {
   maxAttempts?: number;
 }): Promise<WebCheckoutResult> {
   const { provider, intent, origin } = input;
+  // S15: zámer z iného prostredia (test ↔ live) sa nikdy nepošle tomuto providerovi (fail closed).
+  if (intent.environment && intent.environment !== provider.environment) return { ok: false, code: "ESBLU_BILLING_PROVIDER_ERROR" };
   const returnBase = checkoutReturnBase(origin, intent.checkout_id);
   const request = {
     checkoutId: intent.checkout_id,

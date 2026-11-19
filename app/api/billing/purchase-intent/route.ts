@@ -63,6 +63,7 @@ export async function POST(req: Request) {
     replaces_subscription_id: string | null;
     expires_at?: string | null;
     reused?: boolean;
+    environment?: string | null;
   };
 
   if (data.provider === "apple" || data.provider === "google") {
@@ -80,7 +81,7 @@ export async function POST(req: Request) {
     });
   }
 
-  const provider = getWebBillingProvider(data.provider);
+  const provider = getWebBillingProvider(data.provider, data.environment);
   const origin = billingReturnOrigin();
   if (!provider || !origin) return Response.json({ success: false, code: "ESBLU_BILLING_DISABLED" }, { status: 503 });
   // Návrat na https URL — na mobile ju zachytí App Link / Universal Link (deep-link-resolve).

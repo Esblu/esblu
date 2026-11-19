@@ -111,7 +111,8 @@ export async function runEventCatchup(
     } catch (error) {
       // live / poškodená udalosť sa NIKDY nespracuje; preskočiť a posunúť kurzor (trvalá chyba)
       out.outcomes.rejected = (out.outcomes.rejected ?? 0) + 1;
-      stopCode = safeCode(error) === "LIVE_MODE_FORBIDDEN" ? "LIVE_EVENT_SKIPPED" : stopCode;
+      const code = safeCode(error);
+      stopCode = code === "LIVE_MODE_FORBIDDEN" ? "LIVE_EVENT_SKIPPED" : code === "TEST_MODE_FORBIDDEN" ? "TEST_EVENT_SKIPPED" : stopCode;
       return advance(raw);
     }
     const res = await processVerifiedEvent(provider, event, db);
@@ -189,7 +190,7 @@ export async function runEventCatchup(
     stopCode = safeCode(error);
   }
 
-  const ok = !stopCode || stopCode === "LIVE_EVENT_SKIPPED";
+  const ok = !stopCode || stopCode === "LIVE_EVENT_SKIPPED" || stopCode === "TEST_EVENT_SKIPPED";
   await db.rpc("esblu_billing_event_cursor_release", {
     p_provider: provider.id,
     p_environment: provider.environment,

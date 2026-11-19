@@ -1,8 +1,12 @@
 // =============================================================================
-// Stripe adapter — IBA TEST MODE / SANDBOX.
+// Stripe adapter — TEST (sandbox) a LIVE, prísne oddelené (S15, 2026-11-19).
 //
-// - Kľúč musí začínať `sk_test_`, `rk_test_` alebo `rkcs_test_` (sandbox); `*_live_*` → LIVE_MODE_FORBIDDEN
-//   (tvrdá poistka v kóde, nie iba konfigurácia). Event s `livemode: true` sa odmietne.
+// - Prostredie inštancie je pevné (`environment` = "test" | "live"), nikdy sa neodvodzuje z kľúča.
+// - test: kľúč `sk_test_` / `rk_test_` / `rkcs_test_`; live kľúč → LIVE_MODE_FORBIDDEN; objekt alebo
+//   udalosť s `livemode: true` → LIVE_MODE_FORBIDDEN.
+// - live: kľúč `sk_live_` / `rk_live_`; test kľúč → TEST_MODE_FORBIDDEN; objekt alebo udalosť
+//   s `livemode: false` → TEST_MODE_FORBIDDEN. Kedy sa live inštancia smie vytvoriť, rozhoduje
+//   lib/billing/config.ts (iba VERCEL_ENV=production + výslovné schválenie).
 // - Stripe-hosted Checkout (mode=subscription): Esblu nikdy nevidí PAN/CVC
 //   (PCI SAQ A). Apple Pay / Google Pay ponúka hosted Checkout sám podľa
 //   nastavení platobných metód v Stripe Dashboarde (bez registrácie domény).
@@ -21,6 +25,7 @@ import {
   type CheckoutExpireResult,
   type CheckoutRequest,
   type CheckoutSession,
+  type BillingEnvironment,
   type NormalizationResult,
   type NormalizedCharge,
   type NormalizedSubscriptionState,
@@ -91,13 +96,32 @@ export function stripeChargeFromInvoice(invoice: unknown): NormalizedCharge | nu
  * claimable sandboxu zo `stripe sandboxes create`). Povolený je IBA test mode.
  */
 export const STRIPE_TEST_KEY_RE = /^(sk|rk|rkcs)_test_[A-Za-z0-9]{8,}$/;
+/** Akýkoľvek live prefix (aj neplatný tvar) — na odmietnutie v test prostredí. */
 export const STRIPE_LIVE_KEY_RE = /^(sk|rk|rkcs)_live_/;
+/** Platný live kľúč (claimable sandbox `rkcs_` je vždy test). */
+export const STRIPE_LIVE_KEY_FULL_RE = /^(sk|rk)_live_[A-Za-z0-9]{8,}$/;
 
 export function assertStripeTestKey(secretKey: string | undefined): string {
   const key = (secretKey ?? "").trim();
   if (STRIPE_LIVE_KEY_RE.test(key)) throw new BillingProviderError("LIVE_MODE_FORBIDDEN");
   if (!STRIPE_TEST_KEY_RE.test(key)) throw new BillingProviderError("NOT_CONFIGURED");
   return key;
+}
+
+/** S15: kľúč musí presne zodpovedať prostrediu inštancie (fail closed). */
+export function assertStripeKeyFor(environment: BillingEnvironment, secretKey: string | undefined): string {
+  if (environment === "test") return assertStripeTestKey(secretKey);
+  const key = (secretKey ?? "").trim();
+  if (/^(sk|rk|rkcs)_test_/.test(key)) throw new BillingProviderError("TEST_MODE_FORBIDDEN");
+  if (!STRIPE_LIVE_KEY_FULL_RE.test(key)) throw new BillingProviderError("NOT_CONFIGURED");
+  return key;
+}
+
+/** S15: `livemode` objektu / udalosti musí zodpovedať prostrediu (chýbajúci = nekontroluje sa, napr. zoznam). */
+export function assertStripeLivemode(environment: BillingEnvironment, livemode: unknown, required = false): void {
+  if (livemode === undefined && !required) return;
+  if (environment === "test" && livemode !== false) throw new BillingProviderError("LIVE_MODE_FORBIDDEN");
+  if (environment === "live" && livemode !== true) throw new BillingProviderError("TEST_MODE_FORBIDDEN");
 }
 
 export function mapStripeStatus(status: unknown): CanonicalStatus | null {
@@ -211,21 +235,23 @@ export type StripeTestProviderOptions = {
   now?: () => Date;
 };
 
-export class StripeTestProvider implements BillingProvider {
+export class StripeProvider implements BillingProvider {
   readonly id = "stripe" as const;
-  readonly environment = "test" as const;
+  readonly environment: BillingEnvironment;
   private readonly options: StripeTestProviderOptions;
   private readonly fetchImpl: typeof fetch;
   private readonly now: () => Date;
 
-  constructor(options: StripeTestProviderOptions) {
+  constructor(environment: BillingEnvironment, options: StripeTestProviderOptions) {
+    if (environment !== "test" && environment !== "live") throw new BillingProviderError("NOT_CONFIGURED");
+    this.environment = environment;
     this.options = options;
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.now = options.now ?? (() => new Date());
   }
 
   private async request(method: "GET" | "POST" | "DELETE", path: string, params?: Record<string, string | number | boolean | null | undefined>, idempotencyKey?: string): Promise<Obj> {
-    const key = assertStripeTestKey(this.options.secretKey);
+    const key = assertStripeKeyFor(this.environment, this.options.secretKey);
     const headers: Record<string, string> = { Authorization: `Bearer ${key}` };
     if (this.options.apiVersion) headers["Stripe-Version"] = this.options.apiVersion;
     let url = `${STRIPE_API}${path}`;
@@ -249,7 +275,7 @@ export class StripeTestProvider implements BillingProvider {
       // Nikdy neprepúšťame text chyby Stripe ďalej (môže obsahovať identifikátory).
       throw new BillingProviderError("PROVIDER_ERROR", `stripe ${method} ${path.split("/")[1]} ${response.status}`);
     }
-    if (json.livemode === true) throw new BillingProviderError("LIVE_MODE_FORBIDDEN");
+    assertStripeLivemode(this.environment, json.livemode);
     return json;
   }
 
@@ -295,7 +321,7 @@ export class StripeTestProvider implements BillingProvider {
       const session = await this.request("POST", `${path}/expire`, {}, `esblu-expire-${providerSessionId}`);
       return stripeCheckoutStatus(session.status);
     } catch (error) {
-      if (error instanceof BillingProviderError && error.code === "LIVE_MODE_FORBIDDEN") throw error;
+      if (error instanceof BillingProviderError && (error.code === "LIVE_MODE_FORBIDDEN" || error.code === "TEST_MODE_FORBIDDEN")) throw error;
       const session = await this.request("GET", path);
       return stripeCheckoutStatus(session.status);
     }
@@ -321,7 +347,7 @@ export class StripeTestProvider implements BillingProvider {
       const sub = await this.request("DELETE", path, { invoice_now: false, prorate: false });
       return normalizeStripeSubscription(sub, this.now().toISOString());
     } catch (error) {
-      if (error instanceof BillingProviderError && error.code === "LIVE_MODE_FORBIDDEN") throw error;
+      if (error instanceof BillingProviderError && (error.code === "LIVE_MODE_FORBIDDEN" || error.code === "TEST_MODE_FORBIDDEN")) throw error;
       const sub = await this.request("GET", path);
       const state = normalizeStripeSubscription(sub, this.now().toISOString());
       if (state.status !== "canceled" && state.status !== "expired") throw error;
@@ -390,10 +416,10 @@ export class StripeTestProvider implements BillingProvider {
     if (event.object !== "event" || !str(event.id) || !str(event.type) || typeof event.created !== "number") {
       throw new BillingProviderError("MALFORMED_PAYLOAD");
     }
-    if (event.livemode !== false) throw new BillingProviderError("LIVE_MODE_FORBIDDEN");
+    assertStripeLivemode(this.environment, event.livemode, true);
     return {
       provider: "stripe",
-      environment: "test",
+      environment: this.environment,
       eventId: str(event.id)!,
       eventType: str(event.type)!,
       createdAt: new Date((event.created as number) * 1000).toISOString(),
@@ -456,11 +482,11 @@ export class StripeTestProvider implements BillingProvider {
     if (!isObj(event) || event.object !== "event" || !str(event.id) || !str(event.type) || typeof event.created !== "number") {
       throw new BillingProviderError("MALFORMED_PAYLOAD");
     }
-    if (event.livemode !== false) throw new BillingProviderError("LIVE_MODE_FORBIDDEN");
+    assertStripeLivemode(this.environment, event.livemode, true);
     const data = isObj(event.data) ? event.data.object : null;
     return {
       provider: "stripe",
-      environment: "test",
+      environment: this.environment,
       eventId: str(event.id)!,
       eventType: str(event.type)!,
       createdAt: new Date((event.created as number) * 1000).toISOString(),
@@ -573,5 +599,19 @@ export class StripeTestProvider implements BillingProvider {
     if (dispute.status === "lost") return { kind: "state", state: { ...state, status: "revoked", ended_at: event.createdAt, review_flag: null }, followUp: "cancel_provider_now" };
     if (dispute.status === "won") return { kind: "state", state: { ...state, review_flag: null } };
     return { kind: "ignore", reason: "DISPUTE_PENDING" };
+  }
+}
+
+/** Test (sandbox) provider — zachovaný názov pre existujúci kód a testy. */
+export class StripeTestProvider extends StripeProvider {
+  constructor(options: StripeTestProviderOptions) {
+    super("test", options);
+  }
+}
+
+/** S15: live provider — vytvára ho IBA lib/billing/server.ts v schválenom produkčnom režime. */
+export class StripeLiveProvider extends StripeProvider {
+  constructor(options: StripeTestProviderOptions) {
+    super("live", options);
   }
 }

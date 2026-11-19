@@ -7,7 +7,8 @@
 // =============================================================================
 
 export type BillingProviderId = "stripe" | "apple" | "google" | "fake";
-export type BillingEnvironment = "test";
+/** S15: "live" iba Stripe v schválenom produkčnom režime (lib/billing/config.ts); obchody a fake sú vždy "test". */
+export type BillingEnvironment = "test" | "live";
 export type BillingInterval = "month" | "year";
 
 /** Kanonické stavy — rovnaké pre všetkých providerov (DB check constraint). Mapa: lib/billing/canonical-state.ts. */
@@ -133,6 +134,7 @@ export type ProviderSubscriptionRef = {
 export type BillingProviderErrorCode =
   | "NOT_CONFIGURED"
   | "LIVE_MODE_FORBIDDEN"
+  | "TEST_MODE_FORBIDDEN"
   | "INVALID_SIGNATURE"
   | "STALE_SIGNATURE"
   | "MALFORMED_PAYLOAD"
