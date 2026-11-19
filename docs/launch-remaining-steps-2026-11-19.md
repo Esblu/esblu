@@ -44,6 +44,9 @@ Hotové: testy v Stripe sandboxe (nákup, obnova, zlyhanie, refundácie, zrušen
 | S7 | ⛔ Prod DB: `billing_provider_prices` (live cena), `billing_runtime_config.web_provider='stripe'`, `environment='live'` | V súhlas → A |
 | S8 | ⛔ Cron reconciliation v `vercel.json` (dnes zámerne vypnutý) | V súhlas → A |
 | S9 | ⛔ `NEXT_PUBLIC_ESBLU_BILLING_UI=1` až po L5 (VOP) a interný nákup vlastnou kartou + refund | V |
+| S12 | **Bloker:** chýbajúce webhooky — naplánovať reconciliation cron + catch-up udalostí zo Stripe (`/v1/events`, 30 dní); refundácia a prehraný spor dnes bez nápravy, ak webhook úplne chýba (`stripe-test-and-reconciliation` § 8.9) | A (po súhlase) |
+| S13 | Ukončenie k zvolenému dátumu uprostred obdobia: normalizácia zahodí `cancel_at` → oprava (stĺpec `cancel_at`, bez 48 h) + overenie v sandboxe (§ 8.9) | A |
+| S14 | Manifest grantov: doplniť `registration_policy` + explicitné ACL `esblu_ensure_my_owner_company()` (iba dokumentácia/test, ACL v DB je správne) | A |
 | S10 | Monitoring: alert na `billing_events` s chybou, `dead_letter` v reconciliation | A |
 | S11 | Upratanie Stripe sandboxov: zrušiť predplatné C v pôvodnom sandboxe (príkaz v § 8.7), potom `stripe sandboxes delete` | V |
 

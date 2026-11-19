@@ -379,8 +379,9 @@ počas lehoty, čiastočná refundácia bez zmeny, neskorý webhook neposúva ko
 nespustí sync, dáta ostávajú, idempotencia, rollback a znovu-forward. Regresia: `test:pricing-entitlements-db` 35/35,
 `test:subscriptions-db` 60/60, `test:subscriptions-lifecycle-db` 74/74, `test:subscriptions` 28/28,
 `test:subscriptions-lifecycle` 51/51 (+ parsovanie `access_until`), `test:i18n` 114/114, `tsc` 0 chýb, `eslint` 0 chýb.
-`test:grants-guard` / `test:grants-replay-db`: zostávajú iba zlyhania zdedené z `main` (`registration_policy` z `20261117100000`,
-`fx_rate_publication_exceptions` nie sú v manifeste) — mimo tejto zmeny.
+`test:grants-guard` / `test:grants-replay-db`: zostávajú iba zlyhania zdedené z `main` (`registration_policy` z `20261117100000`)
+— mimo tejto zmeny; rozbor v § 8.9 (oprava: `fx_rate_publication_exceptions` tu bolo uvedené omylom — tabuľku zmaže
+`20261008100004`, v DB neexistuje a testy ju nehlásia).
 
 **Staging (skutočná pipeline, transakcia s rollbackom, účet QA-STRIPE E):** obdobie skončilo pred 1 h, webhook ešte nie →
 `active`, nároky do cpe + 48 h; `customer.subscription.deleted` cez `esblu_billing_record_event` + `esblu_billing_apply_event`
@@ -391,6 +392,55 @@ nespustí sync, dáta ostávajú, idempotencia, rollback a znovu-forward. Regres
 (zámer: zákazník zvolil skorší koniec). (2) Obchody (Apple/Google) — `expired` po vypršaní obdobia dostane 48 h; po
 `account_hold` je kotva v minulosti → bez efektu. (3) Zrušenie účtu/firmy počas lehoty lehotu prepadá (existujúci
 forfeit text). (4) Produkcia: migrácia čaká na súhlas spolu s `20261118120000–140000`.
+
+### 8.9 Kontrola po pushi `00afb87` (19. 11. 2026)
+
+**Preview:** `dpl_hTaVtAJwxyAWWzAcw5vfX5PbL5hY` (`00afb87`) READY, alias vetvy ukazuje naň. Stránka Predplatné v sk/en/de bez
+surových kľúčov, „Online predplatné zatiaľ nie je dostupné.“ (`/api/billing/subscription` a `purchase-options` → 404, billing
+vypnutý). Text 48 h lehoty a polia `access_until` / `post_period_protection` sú v nasadenom JS (3 jazyky), ale pri vypnutom
+billingu ich UI **nezobrazí** (pohľad na predplatné sa nenačíta) → UI lehoty **nie je E2E overené na Preview**. Server
+overený na stagingu (DB Preview = staging, migrácia `20261119100000` aplikovaná): owner E cez `esblu_get_my_subscription`
+ako `authenticated` (transakcia s rollbackom) → `canceled`, `post_period_protection=true`, `access_until` = cpe + 48 h,
+hlas aktívny. Prihlásenie QA ownera E iba dočasne, potom znova zablokovaný, heslo zneplatnené, relácie zmazané.
+
+**Chýbajúce vs. oneskorené webhooky:**
+
+| Udalosť | Oneskorená (Stripe opakuje doručenie do 3 dní) | Úplne chýba | Riziko bez nápravy |
+|---|---|---|---|
+| okamžité ukončenie (`customer.subscription.deleted` uprostred obdobia) | spracuje sa v poradí podľa `state_at`, dedupe podľa ID | reconciliation (`getSubscription`) by našla `canceled` → oprava | **cron reconciliation nie je v `vercel.json`** → prístup do cpe + 48 h zadarmo |
+| úplná refundácia (`charge.refunded`) | OK | **reconciliation ju nevidí** — porovnáva iba objekt predplatného, ktoré ostáva `active` | firma má prístup aj po vrátení peňazí a **Stripe účtuje ďalšie obdobie** |
+| prehraný spor (`charge.dispute.closed` lost) | OK | rovnako neviditeľný | prístup aj ďalšie účtovanie pokračujú |
+
+Návrh pred produkciou (nie implementované): (1) naplánovať `/api/cron/billing-reconcile` (napr. každých 6 h, `CRON_SECRET`);
+(2) „catch-up“ udalostí: cron číta `GET /v1/events` (Stripe uchováva 30 dní) od poslednej spracovanej udalosti pre
+`charge.refunded`, `charge.dispute.closed`, `customer.subscription.*`, `invoice.*` a posiela ich tou istou pipeline (dedupe
+podľa ID udalosti, udalosť z API je autentická — bez podpisu); (3) alternatívne / doplnkovo: reconciliation pri otvorenom
+účte načíta `latest_invoice` s platbou a pri plnej refundácii / prehranom spore aplikuje `refunded` / `revoked` + ukončenie;
+(4) monitoring: upozornenie na zlyhané doručenia webhooku (Stripe e-mail) a na `billing_events` s chybou.
+Rozsah (1)+(2): 1 route + adaptér Stripe events + testy, bez migrácie.
+
+**Predčasné ukončenie (normalizácia Stripe, skutočný kód):**
+
+| Prípad | Stripe objekt | Esblu dnes | Správne podľa pravidla |
+|---|---|---|---|
+| zrušenie obnovovania ku koncu obdobia | `cancel_at_period_end=true` | `cape=true`, prístup do cpe + 48 h; po konci `ended_at = cpe` → + 48 h | ✅ |
+| ukončenie k zvolenému dátumu uprostred obdobia | `cancel_at` < koniec obdobia, `cancel_at_period_end=false` | normalizácia nastaví `cape=true` a dátum `cancel_at` **zahodí** → kým beží, nároky do cpe + 48 h, UI ukazuje koniec = cpe; po konci (webhook) `ended_at < cpe` → hneď off | ❌ ak webhook o skončení chýba, prístup beží do pôvodného cpe + 48 h; UI zobrazuje nesprávny dátum |
+| okamžité ukončenie | `status=canceled`, `ended_at = teraz` | `ended_at < cpe` → hneď off | ✅ |
+
+Esblu ponúka iba zrušenie ku koncu obdobia; dátum uprostred obdobia vie nastaviť iba operátor v Stripe Dashboarde / API.
+Neoverené v sandboxe: či novšie API Stripe pri `cancel_at` skracuje `current_period_end` (potom by Esblu dalo + 48 h po
+predčasnom konci). Návrh opravy (nie implementované): normalizácia `cancel_at_period_end` = iba príznak zo Stripe; nové pole
+`cancel_at` v stave a účte; helper: ak `cancel_at` < cpe − 5 min → prístup do `cancel_at`, bez 48 h; test v sandboxe
+(`subscriptions update … -d cancel_at=…`). Rozsah: 1 migrácia (stĺpec + helper), adaptér, unit + PGlite testy, sandbox krok.
+
+**`registration_policy` (zdedené z `main`, `20261117100000`):** skutočný stav staging **aj produkcia** (read-only metadáta):
+RLS zapnutá, 0 politík, ACL `postgres` + `service_role=arwd`, žiadny prístup `anon`/`authenticated`;
+`esblu_ensure_my_owner_company()` EXECUTE `authenticated, service_role` (= manifest); `esblu_public_registration_open()`
+iba `postgres` (volá sa z definer funkcií). Migrácia má správne `revoke all` + cielený grant. **Nejde o problém oprávnení ani
+RLS** — chýba iba (a) položka `registration_policy` v `supabase/grants/public-data-api-grants.json` a (b) explicitné
+`grant/revoke execute` pre `esblu_ensure_my_owner_company()` v tej migrácii (`create or replace` ponechal pôvodné ACL).
+Návrh: doplniť manifest (`access: D`, service CRUD — ako `beta_allowlist`) a pridať no-op forward migráciu, ktorá ACL
+funkcie iba explicitne zopakuje (alebo výnimku v guarde). Bezpečnostná zmena nie je potrebná.
 
 ### 8.7 Upratanie stagingu (19. 11. 2026, dôkazy zachované)
 

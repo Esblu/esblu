@@ -63,6 +63,15 @@ dokumentmi (Zásady ochrany osobných údajov 1.4 z 9. 11. 2026, DPA 1.3, VOP 1.
 - **Verejné vydanie appky = verejná registrácia aj v appke** (od 17. 11. 2026 je registrácia otvorená). Texty o „pozvaných alebo
   schválených záujemcoch“ (VOP 5.1, druhá veta) sú formulované ako možnosť — bez rozdielu, iba na vedomie.
 
+### 1.4 eFaktura.sk (Peppol) — plánovaný sprostredkovateľ, zatiaľ NIE v prevádzke
+
+- **Stav:** modul eFaktúry je implementovaný a testovaný iba v sandboxe; v produkcii vypnutý (žiadny live kľúč ani zmluva).
+- **Pred aktiváciou:** zaradiť eFaktura.sk ako sprostredkovateľa (Zásady, DPA príloha, `/subprocessors`, smernica),
+  posúdiť Prílohu 2 partnerskej zmluvy (DPA čl. 28) a lehotu oznámenia zákazníkom (D-15).
+- **Údaje:** obsah faktúr (UBL), identifikátory Peppol, údaje odberateľov/dodávateľov. Podrobný opis:
+  `docs/einvoice-clia-change-request.md`.
+- **Otázka:** stačí oznámenie nového sprostredkovateľa podľa DPA 1.3, alebo treba novú verziu DPA?
+
 ## 2. Google Play — Data safety a deklarácie (na vedomie, pred odoslaním na kontrolu)
 
 Pripravené odpovede (`release/play-submission/04-data-safety.md`) zostávajú konzervatívne: OpenAI ako „Shared“ pri skenoch
