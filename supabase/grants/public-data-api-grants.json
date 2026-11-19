@@ -513,6 +513,14 @@
       "service_role": "SELECT,INSERT",
       "note": "oficialne kurzy — import cez esblu_fx_import_ecb_batch"
     },
+    "internal_operator_grants": {
+      "domain": "billing",
+      "access": "D",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT",
+      "note": "audit interneho tarifu prevadzkovatela — zapis iba rola postgres cez esblu_operator_grant_internal_plan"
+    },
     "inventory_items": {
       "domain": "assets",
       "access": "A",
