@@ -11,6 +11,7 @@ import {
   type SendDisposition,
 } from "./policy.ts";
 import { OutboundStoreError, type OutboundRow, type OutboundStore, type TransitionFields } from "./store.ts";
+import { alertForProviderError, type OpsAlertSink } from "../ops/alert-sink.ts";
 
 // =============================================================================
 // E-Faktúra outbound — worker (odoslanie) a reconciliation. SERVER-ONLY logika
@@ -29,6 +30,11 @@ export type WorkerDeps = {
   store: OutboundStore;
   provider: EinvoiceProvider;
   now?: () => Date;
+  /**
+   * 20261122120000: prevádzkové alerty (402 kredit, odmietnutý kľúč, konfigurácia) s dedupe.
+   * Best effort — nikdy nezmení výsledok pokusu. Bez sinku sa iba nealertuje.
+   */
+  alerts?: OpsAlertSink;
 };
 
 export type WorkerOptions = {
@@ -89,6 +95,10 @@ async function recordFailure(deps: WorkerDeps, row: OutboundRow, disposition: Se
     priorOutcomeUnknown: row.send_outcome_unknown,
     now,
   });
+  const alert = alertForProviderError(plan.code);
+  if (alert && deps.alerts) {
+    await deps.alerts.raise({ ...alert, provider: deps.provider.name, environment: row.environment, detailCode: plan.code });
+  }
   const base: TransitionFields = { ...extra, send_in_flight: false, locked_until: null };
   let updated: OutboundRow;
   switch (plan.action) {
@@ -180,6 +190,11 @@ async function sendOne(deps: WorkerDeps, row: OutboundRow): Promise<WorkerItemRe
       send_in_flight: false,
       locked_until: null,
     });
+    if (deps.alerts) {
+      // Úspešné odoslanie = kredit aj kľúč sú opäť v poriadku → otvorené alerty sa uzavrú.
+      await deps.alerts.resolve("PROVIDER_INSUFFICIENT_CREDIT", row.environment);
+      await deps.alerts.resolve("PROVIDER_AUTH_FAILED", row.environment);
+    }
     return { outboundId: row.id, from: row.state, to: updated.state, code: null };
   }
   if (result.state === "rejected") {

@@ -41,6 +41,7 @@ import { evaluateAlerts, sanitizeHealth } from "../lib/einvoice/ops/alerts.ts";
 import { maintenanceHttpStatus, runEinvoiceMaintenance } from "../lib/einvoice/ops/maintenance.ts";
 import { downloadStoredDocument } from "../lib/einvoice/ops/download.ts";
 import { OpsStoreError, type OperatorAction, type OperatorBeginResult, type OperatorReasonCode, type OpsStore } from "../lib/einvoice/ops/store.ts";
+import { EINVOICE_MANDATE_MIGRATION, SEED_EFFECTIVE_MANDATES_SQL } from "./einvoice-mandate-test-seed.ts";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (p: string) => readFileSync(path.join(ROOT, p), "utf8");
@@ -128,6 +129,8 @@ for (const migration of [
   "20261008100009_taxed_advance_deduction_lines.sql",
   "20261008100010_received_advance_match_safeupdate.sql",
   "20261008100011_einvoice_outbound_transport_ids.sql",
+  // 20261122100000: bez účinného mandátu sa nič neodošle (seed nižšie)
+  EINVOICE_MANDATE_MIGRATION,
 ]) {
   try {
     await db.exec(read(`supabase/migrations/${migration}`));
@@ -467,6 +470,7 @@ await locked(() => db.exec(`
   insert into public.einvoice_rollout (company_id, environment, stage, changed_by)
     values ('${CA}', 'sandbox', 'internal', 'test'), ('${CB}', 'sandbox', 'internal', 'test');
 `));
+await locked(() => db.exec(SEED_EFFECTIVE_MANDATES_SQL));
 
 const ITEMS = [
   { description: "Práca", quantity: 2, unit: "hod", unit_code: "HUR", unit_price: 50, price_mode: "net",

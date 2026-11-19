@@ -45,6 +45,7 @@ import { processInboundRow, runInboundPoll, runInboundProcessBatch } from "../li
 import type { InboundRow } from "../lib/einvoice/inbound/store.ts";
 import type { EinvoiceProvider } from "../lib/einvoice/provider/types.ts";
 import { parseInboundUbl } from "../lib/einvoice/ubl/parse.ts";
+import { SEED_EFFECTIVE_MANDATES_SQL } from "./einvoice-mandate-test-seed.ts";
 
 // -----------------------------------------------------------------------------
 // Argumenty a poistky (pred čímkoľvek iným)
@@ -387,6 +388,9 @@ let SENT_SHA = "";
 let SENT_UBL = "";
 let SENT_NUMBER = "";
 let SUBMISSION = "";
+// 20261122100000: odosielanie vyžaduje účinný mandát. Tento skript aktivuje príjem priamo cez enrollCompany
+// (nie cez route s dôkazom poverenia) — mandát sa preto doplní testovacím seedom (iba lokálny PGlite).
+await h.exec(SEED_EFFECTIVE_MANDATES_SQL);
 await step("I1", "faktúra A → B (syntetická): readiness ready, UBL EN 16931, identifikátory a sumy", ["E1", "E2"], async () => {
   const { rows } = await as(U.A, () => h.db.query<{ id: string }>(
     "insert into public.invoices (company_id, direction, kind, issue_date, currency, customer_business_partner_id, source) values ($1, 'issued', 'regular_invoice', $2, 'EUR', $3, 'manual') returning id",

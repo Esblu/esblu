@@ -3,6 +3,8 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { enrollCompany, provisionCompany, receptionView, type OnboardingDeps, type OrganizationState, type ReceptionStatus, type ReceptionView } from "../onboarding.ts";
 import type { EinvoiceAccess } from "./types.ts";
+import { EINVOICE_MANDATE_STATEMENT_VERSION } from "../mandate-statement.ts";
+import { enrollEffectiveScope, mandateReasonCode, type MandateEvidence, type MandateStatement, type MandateStore } from "../mandate.ts";
 import { accessFailure, type AccessResult } from "./summary-server.ts";
 
 // =============================================================================
@@ -18,7 +20,11 @@ import { accessFailure, type AccessResult } from "./summary-server.ts";
 //     poskytovateľ; employee nikdy (esblu_my_finance_manage = false),
 //   - overovací kód FS: iba formát (hex), použije sa v jednom volaní enroll a zahodí;
 //     neukladá sa, nevracia sa, nelogovaný, nie je v chybových kódoch,
-//   - telo presne {verification_code, confirm_enroll:true}; iné polia = 400 PRED čímkoľvek.
+//   - telo presne {verification_code, confirm_enroll:true, mandate_version}; iné polia = 400 PRED čímkoľvek,
+//   - mandát (20261122100000): PRED volaním poskytovateľa sa zapíše udelenie poverenia
+//     (verzia + SHA-256 zobrazeného textu, snapshot používateľa, pseudonymizované dôkazy);
+//     bez zápisu sa enroll NEVYKONÁ. Úspešný enroll → mandát účinný (SHA-256 odpovede
+//     poskytovateľa); neúspech → udelenie zanikne (revoked, kind = system).
 // =============================================================================
 
 export type ReceptionDto = {
@@ -69,17 +75,24 @@ export async function loadReception(deps: ReceptionDeps): Promise<Result<Recepti
   return { status: 200, body: { access: { ...acc.access, financeView: true }, environment: deps.environment, reception } };
 }
 
-/** Striktné telo: presne dva kľúče. Kód sa NIKDY neobjaví v odpovedi ani v chybe. */
-export function parseEnrollBody(raw: unknown): { ok: true; code: string } | { ok: false; code: "INVALID_BODY" | "CONFIRMATION_REQUIRED" | "INVALID_CODE_FORMAT" } {
+/** Striktné telo: presne tri kľúče. Kód sa NIKDY neobjaví v odpovedi ani v chybe. */
+export function parseEnrollBody(
+  raw: unknown
+):
+  | { ok: true; code: string; mandateVersion: string }
+  | { ok: false; code: "INVALID_BODY" | "CONFIRMATION_REQUIRED" | "INVALID_CODE_FORMAT" | "MANDATE_STATEMENT_OUTDATED" } {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ok: false, code: "INVALID_BODY" };
   const keys = Object.keys(raw).sort();
-  if (keys.length !== 2 || keys[0] !== "confirm_enroll" || keys[1] !== "verification_code") return { ok: false, code: "INVALID_BODY" };
-  const b = raw as { verification_code: unknown; confirm_enroll: unknown };
+  if (keys.length !== 3 || keys[0] !== "confirm_enroll" || keys[1] !== "mandate_version" || keys[2] !== "verification_code") {
+    return { ok: false, code: "INVALID_BODY" };
+  }
+  const b = raw as { verification_code: unknown; confirm_enroll: unknown; mandate_version: unknown };
   if (b.confirm_enroll !== true) return { ok: false, code: "CONFIRMATION_REQUIRED" };
+  if (b.mandate_version !== EINVOICE_MANDATE_STATEMENT_VERSION) return { ok: false, code: "MANDATE_STATEMENT_OUTDATED" };
   if (typeof b.verification_code !== "string") return { ok: false, code: "INVALID_CODE_FORMAT" };
   const code = b.verification_code.replace(/\s+/g, "");
   if (!/^[0-9a-fA-F]{2,128}$/.test(code)) return { ok: false, code: "INVALID_CODE_FORMAT" };
-  return { ok: true, code };
+  return { ok: true, code, mandateVersion: b.mandate_version };
 }
 
 /**
@@ -98,11 +111,18 @@ export type EnrollDeps = ReceptionDeps & {
   onboarding: () => OnboardingDeps | null;
   /** Limit pokusov — vytvorí sa lenivo spolu s privilegovanou vrstvou. */
   limiter: () => EnrollAttemptLimiter | null;
+  /** Dôkaz mandátu (20261122100000) — lenivo, privilegovaná vrstva. null = nič sa nevykoná. */
+  mandates: () => MandateStore | null;
+  /** Presný text vyhlásenia v jazyku požiadavky (verzia + SHA-256). */
+  statement: MandateStatement;
+  /** Pseudonymizované dôkazy požiadavky (request id, SHA-256 IP / UA) pre danú firmu. */
+  evidence: (companyId: string) => MandateEvidence;
 };
 
-export async function enrollReception(deps: EnrollDeps, rawBody: unknown): Promise<Result<{ code: string; reception: ReceptionView }>> {
+export async function enrollReception(deps: EnrollDeps, rawBody: unknown): Promise<Result<{ code: string; reception: ReceptionView; mandate?: "EFFECTIVE" | "RECORD_FAILED" }>> {
   const parsed = parseEnrollBody(rawBody);
-  if (!parsed.ok) return { status: 400, body: { code: parsed.code } };
+  if (!parsed.ok) return { status: parsed.code === "MANDATE_STATEMENT_OUTDATED" ? 409 : 400, body: { code: parsed.code } };
+  if (deps.statement.version !== parsed.mandateVersion) return { status: 409, body: { code: "MANDATE_STATEMENT_OUTDATED" } };
 
   const acc = await deps.access(deps.db);
   if (!acc.ok) {
@@ -132,10 +152,50 @@ export async function enrollReception(deps: EnrollDeps, rawBody: unknown): Promi
   if (!gate.allowed || !gate.attemptId) {
     return { status: 429, body: { code: "TOO_MANY_ATTEMPTS", retry_after_seconds: gate.retryAfterSeconds } as unknown as { code: string } };
   }
+  // Mandát: udelenie sa zapíše PRED volaním poskytovateľa. Bez dôkazu sa enroll nevykoná (fail closed).
+  const mandates = deps.mandates();
+  if (!mandates) {
+    await limiter.finish(gate.attemptId, "MANDATE_RECORD_FAILED").catch(() => undefined);
+    return { status: 503, body: { code: "NOT_CONFIGURED" } };
+  }
+  let mandateId: string;
+  try {
+    mandateId = await mandates.grant({
+      actorUserId: deps.userId,
+      companyId,
+      environment: onboarding.environment,
+      scope: ["send", "receive"],
+      statement: deps.statement,
+      channel: "enroll",
+      evidence: deps.evidence(companyId),
+    });
+  } catch {
+    await limiter.finish(gate.attemptId, "MANDATE_RECORD_FAILED").catch(() => undefined);
+    return { status: 500, body: { code: "MANDATE_RECORD_FAILED" } };
+  }
   const res = await enrollCompany(onboarding, companyId, parsed.code);
   // Výsledok pokusu (iba kód výsledku — nikdy FS kód). Chyba zápisu nesmie zmeniť odpoveď.
   await limiter.finish(gate.attemptId, res.ok ? (res.status === "enrolled" ? "ENROLLED" : res.status === "send_only" ? "SEND_ONLY" : "PENDING") : res.code).catch(() => undefined);
-  if (res.ok) return { status: 200, body: { code: res.status === "enrolled" ? "ENROLLED" : res.status === "send_only" ? "SEND_ONLY" : "PENDING", reception: res.reception } };
+  if (res.ok) {
+    // Potvrdenie poskytovateľom → mandát účinný. Zlyhanie zápisu: enroll prebehol, ale odosielanie
+    // ostáva zablokované (DB brána) — používateľ poverenie zopakuje cez /api/einvoice/mandate.
+    let mandate: "EFFECTIVE" | "RECORD_FAILED" = "EFFECTIVE";
+    try {
+      await mandates.confirm({
+        mandateId,
+        scope: enrollEffectiveScope(res.status),
+        providerOutcome: `ENROLL_${res.status.toUpperCase()}`,
+        providerResponseSha256: res.providerResponseSha256,
+        participantId: res.participantId,
+      });
+    } catch {
+      mandate = "RECORD_FAILED";
+    }
+    return { status: 200, body: { code: res.status === "enrolled" ? "ENROLLED" : res.status === "send_only" ? "SEND_ONLY" : "PENDING", reception: res.reception, mandate } };
+  }
+  await mandates
+    .revoke({ companyId, environment: onboarding.environment, kind: "system", actorUserId: null, reasonCode: mandateReasonCode(res.code, "ENROLL_FAILED"), mandateId })
+    .catch(() => undefined);
   const status = res.code === "EINVOICE_ENROLL_TOKEN_INVALID" || res.code === "EINVOICE_ENROLL_TOKEN_FORMAT" ? 422 : res.code === "EINVOICE_ENROLL_CONFLICT" ? 409 : res.retryable ? 503 : 502;
   const reception = res.reception ?? receptionView(await onboarding.store.organization(companyId, onboarding.environment));
   return { status, body: { code: res.code, reception } };

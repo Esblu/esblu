@@ -3,7 +3,9 @@ import "server-only";
 import { createHash } from "node:crypto";
 import {
   EinvoiceProviderError,
+  type DeactivateResult,
   type DeliveryEvidence,
+  type EinvoiceDeregistrationProvider,
   type EinvoiceEnvironment,
   type EinvoiceOnboardingProvider,
   type EinvoiceProvider,
@@ -41,6 +43,7 @@ import { sanitizeDeliveryEvidence } from "../evidence.ts";
 //   POST /v1/agent/organizations                   org:provision, bez X-Organization-Id, idempotentné podľa IČO
 //   GET  /v1/agent/organizations/{id}              partner kľúč, odpoveď NIE JE obalená v `data`
 //   POST /v1/agent/peppol/enroll                   invoice:send, X-Organization-Id, verificationTokenHex
+//   POST /v1/agent/organizations/{id}/peppol/deactivate  offboarding (20261122110000); 409 = rozbehnuté prenosy → retry
 //                                                  (API partner model: príjem aktivuje Esblu FS kódom klienta)
 //   GET  /v1/agent/events?after=                   invoice:read, partnerský feed (telo = telo webhooku)
 //   GET  /v1/agent/peppol/recipient?peppolId=      invoice:read, vždy 200 (found:false nie je chyba)
@@ -290,7 +293,7 @@ type RequestOptions = {
   maxBytes?: number;
 };
 
-export class EfakturaSkProvider implements EinvoiceProvider, EinvoiceOnboardingProvider {
+export class EfakturaSkProvider implements EinvoiceProvider, EinvoiceOnboardingProvider, EinvoiceDeregistrationProvider {
   readonly name = "efaktura_sk";
 
   readonly #apiKey: string;
@@ -484,6 +487,25 @@ export class EfakturaSkProvider implements EinvoiceProvider, EinvoiceOnboardingP
           ? { apHost: scrubProviderText(heldBy?.ap_host), certOrg: scrubProviderText(heldBy?.cert_org) }
           : null,
       warnings,
+      responseSha256: createHash("sha256").update(res.bytes).digest("hex"),
+    };
+  }
+
+  /**
+   * POST /v1/agent/organizations/{id}/peppol/deactivate — ukončenie Peppol registrácie
+   * organizácie (offboarding). Volá ju IBA deregistračný job (lib/einvoice/deregistration.ts).
+   * Chyby sa neprekladajú: 409 (rozbehnuté prenosy) / 5xx / 429 / sieť rozhodne job (retry),
+   * 404 = fail closed (operátor overí, či org naozaj neexistuje — nikdy sa nepredpokladá úspech).
+   */
+  async deactivatePeppol(ctx: ProviderContext): Promise<DeactivateResult> {
+    this.#assertCtx(ctx);
+    const id = assertPathId(ctx.providerOrgId, "providerOrgId");
+    const res = await this.#request({ method: "POST", path: `/v1/agent/organizations/${id}/peppol/deactivate`, json: {} });
+    const root = obj(parseJson(res.bytes));
+    const data = obj(root?.data) ?? root;
+    return {
+      peppolStatus: str(data?.peppol_status) ?? str(data?.status),
+      responseSha256: createHash("sha256").update(res.bytes).digest("hex"),
     };
   }
 

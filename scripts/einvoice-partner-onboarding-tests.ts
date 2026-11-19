@@ -113,7 +113,9 @@ await check("klasifikácia: participant.* PRED outbound (regresia: participant.f
   assert.equal(classifyWebhookEvent("peppol.document.sent"), "outbound");
   assert.equal(classifyWebhookEvent("peppol.document.delivered"), "outbound");
   assert.equal(classifyWebhookEvent("peppol.document.received"), "inbound");
-  assert.equal(classifyWebhookEvent("usage.limit_exceeded"), "other");
+  // 20261122120000: vyčerpaný kredit / limit → prevádzkový alert (predtým ignorované)
+  assert.equal(classifyWebhookEvent("usage.limit_exceeded"), "usage_limit");
+  assert.equal(classifyWebhookEvent("usage.something_else"), "other");
   assert.equal(classifyWebhookEvent("webhook.test"), "other");
 });
 

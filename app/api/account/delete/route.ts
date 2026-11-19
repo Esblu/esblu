@@ -12,6 +12,13 @@ import { orchestrateAccountDeletion, type OrchestrationResult } from "@/lib/acco
 import { supabaseDeletionDeps, supabaseTerminationDeps, type TerminationExportMode } from "@/lib/account-deletion-deps";
 import { resolveActiveMembershipForUser } from "@/lib/active-membership-server";
 import { requestSessionId } from "@/lib/request-session";
+import { ensureCompanyDeregistered } from "@/lib/einvoice/deregistration";
+import { createSupabaseDeregistrationStore } from "@/lib/einvoice/deregistration-supabase-store";
+import { getEinvoiceProvider } from "@/lib/einvoice/provider";
+import { EfakturaSkProvider } from "@/lib/einvoice/provider/efaktura-sk";
+import { createOpsAlertSink } from "@/lib/einvoice/ops/alert-sink";
+import { logOpsAlert } from "@/lib/ops-alert-log";
+import { createSupabaseOpsAlertStore } from "@/lib/einvoice/ops/alert-supabase-store";
 
 // =============================================================================
 // POST /api/account/delete
@@ -386,8 +393,10 @@ export async function POST(req: Request) {
         (body.termination.exportMode === "exported" || body.termination.exportMode === "waived")
           ? body.termination.exportMode
           : null;
+      // 20261122110000: registrácia u poskytovateľa sa ukončí deregistračným jobom (nižšie,
+      // tesne pred výmazom) — preto aj EINVOICE_PROVIDER_ENROLLED smie ísť termination cestou.
       const terminationAllowed =
-        blocker === "FINALIZED_ACCOUNTING_DOCUMENTS" || blocker === "EINVOICE_RECORDS";
+        blocker === "FINALIZED_ACCOUNTING_DOCUMENTS" || blocker === "EINVOICE_RECORDS" || blocker === "EINVOICE_PROVIDER_ENROLLED";
       if (blocker && !(terminationAllowed && terminationMode)) {
         return Response.json(
           {
@@ -451,6 +460,62 @@ export async function POST(req: Request) {
           },
           { status: 409 }
         );
+      }
+
+      // 20261122110000: ukončenie registrácie u poskytovateľa e-Faktúry (peppol/deactivate) PRED
+      // výmazom — idempotentný job s retry; mandáty sa odvolajú hneď (nič nové sa neodošle).
+      // Kým nie je dokončené, nič sa nemaže (409, klient zopakuje). Až potom sa blocker vyhodnotí znova.
+      if (blocker && terminationMode) {
+        let runtime: ReturnType<typeof getEinvoiceProvider> = null;
+        try {
+          runtime = getEinvoiceProvider();
+        } catch {
+          runtime = null;
+        }
+        const provider = runtime && runtime.provider instanceof EfakturaSkProvider ? runtime.provider : null;
+        let dereg: Awaited<ReturnType<typeof ensureCompanyDeregistered>>;
+        try {
+          dereg = await ensureCompanyDeregistered(
+            {
+              store: createSupabaseDeregistrationStore(admin),
+              runtime: runtime && provider
+                ? { provider, environment: runtime.environment, alerts: createOpsAlertSink(createSupabaseOpsAlertStore(admin), logOpsAlert) }
+                : null,
+            },
+            { companyId: membership.company_id, actorUserId: user.id, reason: "company_termination" },
+            runtime?.environment ?? null
+          );
+        } catch (deregError) {
+          console.error("account/delete (owner): deregistrácia e-Faktúry zlyhala:", deregError instanceof Error ? deregError.message : "unknown");
+          return Response.json({ error: translate(locale, "settings.errors.companyDeletionFailedRetry") }, { status: 500 });
+        }
+        if (!dereg.done) {
+          const failedHard = dereg.code === "EINVOICE_DEREGISTRATION_FAILED" || dereg.code === "EINVOICE_PROVIDER_NOT_CONFIGURED";
+          // Bez nakonfigurovaného poskytovateľa a bez registrácie v tomto prostredí rozhodne blocker nižšie.
+          if (!(dereg.code === "EINVOICE_PROVIDER_NOT_CONFIGURED" && dereg.jobId === null)) {
+            return Response.json(
+              {
+                error: translate(locale, failedHard ? "settings.errors.einvoiceDeregistrationFailed" : "settings.errors.einvoiceDeregistrationPending"),
+                code: dereg.code,
+                blocked: "EINVOICE_PROVIDER_ENROLLED",
+                deregistration: { state: dereg.state, job_id: dereg.jobId },
+              },
+              { status: 409 }
+            );
+          }
+        }
+        try {
+          blocker = await findOwnerDeletionBlocker(admin, membership.company_id);
+        } catch {
+          return Response.json({ error: translate(locale, "settings.errors.companyDeletionFailedRetry") }, { status: 500 });
+        }
+        if (blocker === "EINVOICE_PROVIDER_ENROLLED") {
+          // Registrácia v inom prostredí (napr. sandbox org v live nasadení) — iba operátor.
+          return Response.json(
+            { error: translate(locale, ownerDeletionBlockerMessageKey(blocker)), blocked: blocker, code: "ESBLU_ACCOUNTING_RECORDS_BLOCK_DELETION", termination_available: false },
+            { status: 409 }
+          );
+        }
       }
 
       // DB NAJPRV (2026-10-12): Storage sa maže až po úspešnom commite
