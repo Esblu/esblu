@@ -37,3 +37,12 @@ Projekt `assetpilot` / `fkpgvgvsmbpieduoatrt`. Schválené prevádzkovateľom po
 ## 3. Zostáva automaticky
 - 7 cleanup jobov z dnešného dňa má `auth_status/storage_status = pending` (objekty aj Auth identity sú už zmazané). Cron `/api/cron/account-deletion-cleanup` (denne 03:30 UTC) ich idempotentne uzavrie na `done` (remove/deleteUser chýbajúceho objektu nie je chyba). Overiť 20. 11. po 03:30 UTC.
 - Ponechané podľa plánu: `trial_claims`, `legal_acceptance_evidence`, `company_terminations`, `account_deletion_cleanup_jobs`, `esblu_intake_attestations_used`.
+
+## 4. Prevádzkový log — kontrola 2026-11-19 19:09 UTC (read-only)
+- Cron `/api/cron/account-deletion-cleanup` ešte nebežal (najbližší beh 2026-11-20 03:30 UTC).
+- 6 jobov `pending` (5× iba `auth_status`, 1× Anchar Bau `storage+auth` so 7 cieľmi). Job s `delete_account=false` (110376c3) je `done/done`.
+- Ciele jobov sú už fyzicky odstránené: 0 z 7 Storage cieľov existuje, 0 používateľov jobov existuje v `auth.users`. Žiadny job neobsahuje chránené účty ani ich prefixy (e5677bf3, 53b6ed5c, d3cc3714, firmy 8b20e5d7, 38f5f85a).
+- Cron je idempotentný: `deleteUser` s 404/„not found“ = úspech (`lib/account-deletion-deps.ts:112–113`), `remove()` chýbajúcej cesty nie je chyba → joby prejdú na `done` bez ďalšieho zásahu. Ručná úprava stavov sa nerobí.
+- Naplánovaná read-only kontrola: 2026-11-20 06:20 SEČ (úloha `esblu-cleanup-jobs-check-2026-11-20`), výsledok do `release-backups/2026-11-19-cleanup/cleanup-jobs-check-2026-11-20.md`.
+- Overené ukončenia firiem v produkcii: od nasadenia workflowu (12. 11.) existuje iba 5 záznamov `company_terminations`, všetky z 19. 11. (schválené syntetické dáta) → žiadne reálne zákaznícke doklady neboli zmazané (bod R-V1 pre CLIA).
+- Záloha: SHA-256 `c676c9b9…3fc2` nezmenený, opätovne rozšifrovaná a overená 19:09 UTC; nie je v Gite ani v OneDrive. Platformové denné zálohy Supabase (PHYSICAL) 12.–19. 11., posledná 19. 11. 00:33:26 UTC — obsahuje heslové hashe zmazaných účtov; pri 7-dňovej retencii Pro plánu zanikne približne 26. 11. 2026 (potom obnova Auth hesiel zmazaných účtov už nebude možná; reset hesla/opätovná registrácia).

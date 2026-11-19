@@ -33,3 +33,9 @@ Klasifikácia: interný bezpečnostný incident (možné porušenie ochrany osob
 - Faktory znižujúce riziko: prístup iba k účtu samotného prevádzkovateľa (ak sa nepreukáže zdieľanie), krátka doba (~4 min do zmazania lokálnej kópie), malý počet dotknutých osôb, väčšina sú interné/testovacie účty, žiadne heslá ani finančné prístupy; IBAN pochádza z testovacej faktúry.
 - Návrh: zapísať do **internej evidencie porušení** (čl. 33 ods. 5). Oznámenie ÚOOÚ do 72 h (čl. 33 ods. 1) sa javí ako nepotrebné, ak sa potvrdí, že súbor nebol zdieľaný a bol odstránený aj z online koša („nepravdepodobné riziko“); oznámenie dotknutým osobám (čl. 34) nie je potrebné. **Konečné rozhodnutie a jeho zdôvodnenie patrí prevádzkovateľovi**, prípadne CLIA.
 - Lehota 72 h od zistenia (19. 11. 2026 ~19:08) uplynie 22. 11. 2026 ~19:08.
+
+## 6. Doplnenie 2026-11-19 20:10 SEČ
+- Lokálny OneDrive: súbor neexistuje; iný export Esblu v OneDrive ani v Downloads/Desktop/Documents nie je (overené menom aj obsahom).
+- Online kôš a zdieľanie: **neoverené** — prehliadač v aplikácii nie je prihlásený do Microsoft účtu (stránka login.live.com je otvorená).
+- Prevencia: všetky ďalšie exporty idú iba do `C:\Users\roiaj\esblu-backups` (šifrované); exporty cez dialóg „Uložiť ako“ sa nepoužívajú.
+- Upresnenie posúdenia: prevádzkovateľ uvádza, že účty vytváral na testovanie. Súbor však obsahoval aj e-mailové adresy reálnych beta testerov a kontaktov z beta zoznamu / partnerov (identifikovateľné fyzické osoby) → ide o osobné údaje, nie anonymné. Riziko pre práva dotknutých osôb hodnotím ako nízke (úložisko prevádzkovateľa, krátka doba, žiadne heslá ani finančné prístupy). Ak sa potvrdí, že súbor nebol zdieľaný a bude odstránený z online koša, technický podklad podporuje záver „nepravdepodobné riziko“ (iba interná evidencia podľa čl. 33 ods. 5). Rozhodnutie a lehota 22. 11. 2026 ~19:08 patria prevádzkovateľovi.
