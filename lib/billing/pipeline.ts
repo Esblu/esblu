@@ -106,7 +106,15 @@ export async function processWebhook(provider: BillingProvider, rawBody: string,
   } catch (error) {
     return signatureFailure(error) ?? { httpStatus: 400, outcome: "rejected", code: "VERIFY_FAILED" };
   }
+  return processVerifiedEvent(provider, event, db);
+}
 
+/**
+ * Kroky 2–7 pre UŽ OVERENÚ udalosť: webhook (po podpise) aj doťahovanie zmeškaných udalostí
+ * z API providera (S12, lib/billing/event-catchup.ts) — rovnaká deduplikácia podľa ID udalosti,
+ * rovnaká normalizácia (čerstvý stav z API), rovnaká ochrana poradia a terminálnych stavov v DB.
+ */
+export async function processVerifiedEvent(provider: BillingProvider, event: VerifiedProviderEvent, db: BillingDb): Promise<PipelineResult> {
   // 2+3) dedupe + uloženie
   let recorded: { event_id: string; duplicate: boolean; status?: string };
   try {

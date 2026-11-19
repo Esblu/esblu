@@ -684,5 +684,34 @@ await check("stripe-adapter: kľúče — sk_test_/rk_test_/rkcs_test_ (sandbox)
   assert.ok(validateBillingEnv({ ...env, STRIPE_SECRET_KEY: "rkcs_live_A1b2C3d4E5" }).invalid.some((x) => x.startsWith("STRIPE_SECRET_KEY")));
 });
 
+await check("S12 cron: bez CRON_SECRET 401; billing vypnutý / VERCEL_ENV=production → configured:false bez volania Stripe ani DB", async () => {
+  const saved = { ...process.env };
+  const calls: string[] = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (u: string) => { calls.push(String(u)); return new Response("{}", { status: 500 }); }) as unknown as typeof fetch;
+  try {
+    process.env.CRON_SECRET = "c".repeat(32);
+    // atrapy pre import modulov (žiadne spojenie sa nevytvorí — billing je vypnutý skôr)
+    process.env.NEXT_PUBLIC_SUPABASE_URL ||= "http://127.0.0.1:9";
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||= "anon-placeholder";
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||= "service-placeholder";
+    const { GET } = await import("../app/api/cron/billing-stripe-events/route.ts");
+    const req = (auth?: string) => new Request("http://localhost/api/cron/billing-stripe-events", { headers: auth ? { authorization: auth } : {} });
+    assert.equal((await GET(req())).status, 401);
+    assert.equal((await GET(req("Bearer wrong"))).status, 401);
+    delete process.env.ESBLU_BILLING_MODE;
+    let r = await GET(req(`Bearer ${"c".repeat(32)}`));
+    assert.deepEqual(await r.json(), { success: true, configured: false });
+    process.env.ESBLU_BILLING_MODE = "stripe_test";
+    process.env.VERCEL_ENV = "production";
+    r = await GET(req(`Bearer ${"c".repeat(32)}`));
+    assert.deepEqual(await r.json(), { success: true, configured: false }, "produkcia = billing tvrdo vypnutý");
+    assert.deepEqual(calls, [], "žiadne sieťové volanie");
+  } finally {
+    globalThis.fetch = realFetch;
+    process.env = saved;
+  }
+});
+
 console.log(`\nsubscriptions-lifecycle: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

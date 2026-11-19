@@ -27,13 +27,20 @@ export type ReconcileCandidate = {
   status: string;
   current_period_end: string | null;
   cancel_at_period_end: boolean;
+  scheduled_end_at?: string | null;
   plan_code: string | null;
 };
+
+/**
+ * Stav od providera. `providerOpen` = predplatné u providera ešte beží (aj keď kanonický stav je
+ * odvodený z platby, napr. `refunded`); `followUp` = po zápise ukončiť u providera (S12).
+ */
+export type RemoteSubscriptionState = NormalizedSubscriptionState & { providerOpen?: boolean; followUp?: "cancel_provider_now" };
 
 /** Zdroj autoritatívneho stavu jedného providera (Stripe/fake API, Play Developer API, App Store Server API). */
 export interface ReconcileSource {
   readonly provider: BillingProviderId;
-  fetchState(candidate: ReconcileCandidate): Promise<NormalizedSubscriptionState | null>;
+  fetchState(candidate: ReconcileCandidate): Promise<RemoteSubscriptionState | null>;
   /** Okamžité ukončenie u providera (Stripe/fake) — poistka pre terminálny účet s otvoreným predplatným. */
   cancelNow?(candidate: ReconcileCandidate): Promise<NormalizedSubscriptionState>;
 }
@@ -48,8 +55,9 @@ const sameInstant = (a: string | null, b: string | null) =>
   (a === null && b === null) || (a !== null && b !== null && Date.parse(a) === Date.parse(b));
 
 /** Líši sa stav providera od lokálneho kanonického stavu (polia, ktoré menia nároky)? */
-export function hasDrift(local: Pick<ReconcileCandidate, "status" | "current_period_end" | "cancel_at_period_end">, remote: NormalizedSubscriptionState): boolean {
-  return local.status !== remote.status || !sameInstant(local.current_period_end, remote.current_period_end) || local.cancel_at_period_end !== remote.cancel_at_period_end;
+export function hasDrift(local: Pick<ReconcileCandidate, "status" | "current_period_end" | "cancel_at_period_end" | "scheduled_end_at">, remote: NormalizedSubscriptionState): boolean {
+  return local.status !== remote.status || !sameInstant(local.current_period_end, remote.current_period_end) || local.cancel_at_period_end !== remote.cancel_at_period_end
+    || !sameInstant(local.scheduled_end_at ?? null, remote.scheduled_end_at ?? null);
 }
 
 function errorCode(error: unknown): string {
@@ -87,7 +95,7 @@ export async function reconcileOne(
     await record(db, candidate.account_id, "skipped", "PROVIDER_NOT_CONFIGURED");
     return { accountId: candidate.account_id, result: "skipped", errorCode: "PROVIDER_NOT_CONFIGURED" };
   }
-  let remote: NormalizedSubscriptionState | null;
+  let remote: RemoteSubscriptionState | null;
   try {
     remote = await withTimeout(source.fetchState(candidate), options.timeoutMs ?? 15_000);
   } catch (error) {
@@ -105,7 +113,8 @@ export async function reconcileOne(
   }
   // Terminálny účet v Esblu (refunded/revoked), ale predplatné u providera stále beží → ukončiť
   // u providera (inak by firma bez prístupu platila ďalšie obdobia). Stav v Esblu ostáva terminálny.
-  if (isTerminalStatus(candidate.status) && (candidate.status === "refunded" || candidate.status === "revoked") && isOpenStatus(remote.status)) {
+  const providerOpen = remote.providerOpen ?? isOpenStatus(remote.status);
+  if (isTerminalStatus(candidate.status) && (candidate.status === "refunded" || candidate.status === "revoked") && providerOpen) {
     if (!source.cancelNow) {
       await record(db, candidate.account_id, "error", "TERMINAL_PROVIDER_OPEN");
       return { accountId: candidate.account_id, result: "error", errorCode: "TERMINAL_PROVIDER_OPEN" };
@@ -134,6 +143,16 @@ export async function reconcileOne(
     sha256Hex(JSON.stringify(remote)),
   );
   if (applied.outcome === "applied" || applied.outcome === "duplicate" || applied.outcome === "stale") {
+    // S12: chýbajúci webhook o plnej refundácii / prehratom spore → po zápise terminálneho stavu
+    // ukončiť predplatné aj u providera (rovnako ako webhooková cesta), aby sa ďalej neúčtovalo.
+    if (remote.followUp === "cancel_provider_now" && providerOpen && source.cancelNow) {
+      try {
+        const ended = await withTimeout(source.cancelNow(candidate), options.timeoutMs ?? 15_000);
+        await recordProviderAudit(db, { id: candidate.billing_provider, environment: "test" }, "terminal_cancel", ended, "PROVIDER_CANCELED");
+      } catch {
+        // ďalší beh: terminálny účet + otvorené predplatné → cancelNow (vetva vyššie)
+      }
+    }
     await record(db, candidate.account_id, applied.outcome === "applied" ? "corrected" : "in_sync", null);
     return { accountId: candidate.account_id, result: applied.outcome === "applied" ? "corrected" : "in_sync" };
   }

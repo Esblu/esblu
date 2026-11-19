@@ -150,13 +150,14 @@ const H = 3600_000;
 const iso = (ms: number) => new Date(ms).toISOString();
 await su("update public.billing_runtime_config set allow_mock_plans = true");
 /** Firma s plánom Komplet a účtom v danom stave (service zápis = to, čo by zapísal apply_event). */
-async function account(company: string, patch: { status: string; cpe: string | null; ended?: string | null; trialEnd?: string | null; grace?: string | null; cape?: boolean }) {
+async function account(company: string, patch: { status: string; cpe: string | null; ended?: string | null; trialEnd?: string | null; grace?: string | null; cape?: boolean; scheduled?: string | null }) {
   await mock(company, "complete");
   await su(
     `update public.subscription_accounts set status = $2, current_period_start = $3::timestamptz - interval '1 month', current_period_end = $3::timestamptz,
-       ended_at = $4::timestamptz, provider_trial_end = $5::timestamptz, grace_until = $6::timestamptz, cancel_at_period_end = $7
+       ended_at = $4::timestamptz, provider_trial_end = $5::timestamptz, grace_until = $6::timestamptz, cancel_at_period_end = $7,
+       scheduled_end_at = $8::timestamptz
      where company_id = $1`,
-    [company, patch.status, patch.cpe, patch.ended ?? null, patch.trialEnd ?? null, patch.grace ?? null, patch.cape ?? false]);
+    [company, patch.status, patch.cpe, patch.ended ?? null, patch.trialEnd ?? null, patch.grace ?? null, patch.cape ?? false, patch.scheduled ?? null]);
   await su("select public.esblu_billing_sync_entitlements($1)", [company]);
 }
 const subRows = (company: string) => su<{ status: string; valid_until: string }>(
@@ -171,7 +172,7 @@ const ms = (v: unknown) => Date.parse(String(v));
 
 await check("helper: kotva cpe + 48 h, tolerancia 5 min, trial, ukončenie uprostred obdobia, terminálne a dunning stavy bez 48 h", async () => {
   const f = async (st: string, cpe: string | null, ended: string | null, trial: string | null = null) =>
-    (await su<{ v: string | null }>("select to_char(public.esblu_billing_post_period_protection_until($1, $2::timestamptz, $3::timestamptz, $4::timestamptz) at time zone 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') v", [st, cpe, ended, trial]))[0].v;
+    (await su<{ v: string | null }>("select to_char(public.esblu_billing_access_until($1, $2::timestamptz, $3::timestamptz, $4::timestamptz, null) at time zone 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') v", [st, cpe, ended, trial]))[0].v;
   const cpe = "2026-12-18T21:57:52Z", plus48 = "2026-12-20T21:57:52Z";
   assert.equal(await f("active", cpe, null), plus48, "aktívne / zrušené obnovovanie pred koncom");
   assert.equal(await f("trialing", cpe, null), plus48);
@@ -185,7 +186,7 @@ await check("helper: kotva cpe + 48 h, tolerancia 5 min, trial, ukončenie upros
     assert.equal(await f(st, cpe, cpe), null, st);
   }
   assert.equal(await f("canceled", null, cpe), null);
-  for (const who of [ownerA, employeeA, anon]) assert.equal((await attempt(who, "select public.esblu_billing_post_period_protection_until('active', now(), null, null)")).layer, "privilege");
+  for (const who of [ownerA, employeeA, anon]) assert.equal((await attempt(who, "select public.esblu_billing_access_until('active', now(), null, null, null)")).layer, "privilege");
 });
 
 await check("riadny koniec 1 h po cpe: prístup do cpe + 48 h (resolver, celá firma), UI access_until + post_period_protection", async () => {
@@ -298,27 +299,125 @@ await check("dáta firmy po skončení lehoty ostávajú (firma, členovia, úč
   assert.equal(await n("select count(*)::int n from public.company_entitlements where company_id = $1 and source = 'subscription' and status = 'active'"), 0);
 });
 
-await check("migrácia: idempotentná, bez DROP TABLE / DELETE / TRUNCATE, bez zapnutia live", async () => {
-  const sql = read("supabase/migrations/20261119100000_billing_post_period_protection.sql");
-  await db.exec(sql);
-  await db.exec(sql);
-  const low = sql.toLowerCase().replace(/--.*$/gm, "");
-  assert.ok(!/drop\s+table|\btruncate\b|delete\s+from/.test(low));
-  assert.ok(!/environment\s*=\s*'live'/.test(low));
+// ============================================================================= S13 — plánované predčasné ukončenie
+await check("S13 helper: plánovaný koniec uprostred obdobia = presne ten dátum (bez 48 h); po skončení žiadna rezerva", async () => {
+  const f = async (st: string, cpe: string, ended: string | null, sched: string | null) =>
+    (await su<{ v: string | null }>("select to_char(public.esblu_billing_access_until($1, $2::timestamptz, $3::timestamptz, null, $4::timestamptz) at time zone 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') v", [st, cpe, ended, sched]))[0].v;
+  const cpe = "2026-12-18T21:57:52Z";
+  assert.equal(await f("active", cpe, null, "2026-12-05T10:00:00Z"), "2026-12-05T10:00:00Z", "predčasný koniec bez rezervy");
+  assert.equal(await f("trialing", cpe, null, "2026-12-05T10:00:00Z"), "2026-12-05T10:00:00Z");
+  assert.equal(await f("active", cpe, null, "2027-01-05T10:00:00Z"), "2026-12-20T21:57:52Z", "dátum za koncom obdobia → bežné obdobie + 48 h (obnova ho posunie)");
+  assert.equal(await f("canceled", cpe, "2026-12-05T10:00:00Z", "2026-12-05T10:00:00Z"), null, "skončené predčasne");
+  assert.equal(await f("canceled", cpe, cpe, cpe), null, "aj keď Stripe skráti obdobie na cancel_at → bez 48 h");
+  assert.equal(await f("canceled", cpe, cpe, null), "2026-12-20T21:57:52Z", "riadny koniec bez plánovaného dátumu → + 48 h");
+  for (const st of ["refunded", "revoked", "past_due", "unpaid"]) assert.equal(await f(st, cpe, cpe, "2026-12-05T10:00:00Z"), null, st);
+});
+await check("S13: predčasné ukončenie o 3 dni — prístup presne do dátumu; UI scheduled_end_at; po dátume bez prístupu aj bez webhooku", async () => {
+  const cpe = iso(Date.now() + 20 * 24 * H);
+  const sched = iso(Date.now() + 3 * 24 * H);
+  await account(C.a, { status: "active", cpe, cape: true, scheduled: sched });
+  for (const r of await subRows(C.a)) assert.equal(ms(r.valid_until), ms(sched), "valid_until = zvolený dátum");
+  assert.equal(await voice(C.a), true);
+  const s = await mySub(ownerA);
+  assert.equal(ms(s.scheduled_end_at), ms(sched));
+  assert.equal(ms(s.access_until), ms(sched));
+  assert.equal(s.post_period_protection, false);
+  const past = iso(Date.now() - 60_000);
+  await account(C.a, { status: "active", cpe, cape: true, scheduled: past });
+  assert.equal(await voice(C.a), false, "dátum uplynul, webhook o skončení chýba → bez prístupu");
+  await account(C.a, { status: "canceled", cpe, ended: past, cape: true, scheduled: past });
+  assert.equal(await voice(C.a), false, "webhook o skončení → bez rezervy");
+});
+await check("S13: zmeny dátumu — posun neskôr, zrušenie plánu (obnova), zmena na koniec obdobia; opakovaný sync idempotentný", async () => {
+  const cpe = iso(Date.now() + 20 * 24 * H);
+  await account(C.b, { status: "active", cpe, cape: true, scheduled: iso(Date.now() + 2 * 24 * H) });
+  const later = iso(Date.now() + 9 * 24 * H);
+  await account(C.b, { status: "active", cpe, cape: true, scheduled: later });
+  for (const r of await subRows(C.b)) assert.equal(ms(r.valid_until), ms(later));
+  await su("select public.esblu_billing_sync_entitlements($1)", [C.b]);
+  for (const r of await subRows(C.b)) assert.equal(ms(r.valid_until), ms(later), "opakovaný sync nemení výsledok");
+  await account(C.b, { status: "active", cpe, cape: false, scheduled: null });
+  for (const r of await subRows(C.b)) assert.equal(ms(r.valid_until) - ms(cpe), 48 * H, "plán zrušený → obnova, cpe + 48 h");
+  await account(C.b, { status: "active", cpe, cape: true, scheduled: null });
+  for (const r of await subRows(C.b)) assert.equal(ms(r.valid_until) - ms(cpe), 48 * H, "zrušenie ku koncu obdobia → cpe + 48 h");
+});
+await check("S13 pipeline (record_event → apply_event): uloženie dátumu, duplicitný webhook, staršia udalosť je stale, zmena a zrušenie dátumu", async () => {
+  await su("insert into public.billing_provider_links (provider, environment, link_kind, external_id, company_id) values ('fake', 'test', 'subscription', 'sub_s13', $1) on conflict do nothing", [C.t]);
+  const cpe = iso(Date.now() + 20 * 24 * H);
+  let n = 0;
+  const deliver = async (eventId: string, stateAt: number, scheduled: string | null, status = "active") => {
+    const rec = (await su<{ r: Json }>("select public.esblu_billing_record_event('fake', 'test', $1, 'fake.subscription.updated', now(), $2) r",
+      [eventId, "a".repeat(63) + String(n++ % 10)]))[0].r;
+    if (rec.duplicate) return "duplicate";
+    const state = { provider_subscription_id: "sub_s13", provider_customer_id: null, provider_price_id: "fake_price_pro_month", status,
+      current_period_start: iso(Date.now() - 10 * 24 * H), current_period_end: cpe, cancel_at_period_end: scheduled !== null,
+      scheduled_end_at: scheduled, canceled_at: null, ended_at: status === "canceled" ? scheduled : null, trial_start: null, trial_end: null,
+      checkout_ref: null, account_token: null, state_at: iso(stateAt) };
+    return String((await su<{ r: Json }>("select public.esblu_billing_apply_event($1::uuid, $2::jsonb) r", [rec.event_id, JSON.stringify(state)]))[0].r.result);
+  };
+  const acc = async () => (await su<{ s: string | null; st: string }>("select scheduled_end_at::text s, status st from public.subscription_accounts where company_id = $1", [C.t]))[0];
+  const t0 = Date.now();
+  const first = iso(Date.now() + 3 * 24 * H);
+  assert.equal(await deliver("evt_s13_1", t0, first), "applied");
+  assert.equal(ms((await acc()).s), ms(first));
+  for (const r of await subRows(C.t)) assert.equal(ms(r.valid_until), ms(first));
+  assert.equal(await deliver("evt_s13_1", t0, first), "duplicate", "opakovaný webhook");
+  assert.equal(await deliver("evt_s13_old", t0 - 60_000, null), "stale", "staršia udalosť neprepíše dátum");
+  assert.equal(ms((await acc()).s), ms(first));
+  const later = iso(Date.now() + 9 * 24 * H);
+  assert.equal(await deliver("evt_s13_2", t0 + 1000, later), "applied");
+  for (const r of await subRows(C.t)) assert.equal(ms(r.valid_until), ms(later), "posun dátumu");
+  assert.equal(await deliver("evt_s13_3", t0 + 2000, null), "applied");
+  assert.equal((await acc()).s, null, "plán zrušený");
+  for (const r of await subRows(C.t)) assert.equal(ms(r.valid_until) - ms(cpe), 48 * H);
+  const summary = (await su<{ v: Json }>("select summary v from public.billing_events where provider_event_id = 'evt_s13_2'"))[0].v;
+  assert.equal(ms(summary.scheduled_end_at), ms(later), "audit nesie plánovaný dátum");
+});
+await check("časové pásma a DST: + 48 h je presne 172 800 s bez ohľadu na TimeZone relácie (prechod času 25. 10. 2026)", async () => {
+  for (const tz of ["UTC", "Europe/Bratislava", "America/Los_Angeles", "Pacific/Chatham"]) {
+    const r = await db.transaction(async (tx) => {
+      await tx.exec(`set local timezone = '${tz}'`);
+      return (await tx.query<{ d: number; s: number }>(
+        `select extract(epoch from public.esblu_billing_access_until('canceled', '2026-10-24T23:30:00+02', '2026-10-24T23:30:00+02', null, null) - '2026-10-24T23:30:00+02'::timestamptz)::int d,
+                extract(epoch from public.esblu_billing_access_until('active', '2026-10-24T23:30:00+02', null, null, '2026-10-25T03:30:00+01') - '2026-10-25T03:30:00+01'::timestamptz)::int s`)).rows[0];
+    });
+    assert.equal(r.d, 172800, tz);
+    assert.equal(r.s, 0, tz);
+  }
+});
+
+await check("migrácie: idempotentné (opakovaný beh 100000 → 110000), bez DROP TABLE / DELETE / TRUNCATE, bez zapnutia live", async () => {
+  for (const f of ["20261119100000_billing_post_period_protection.sql", "20261119110000_billing_scheduled_end.sql"]) {
+    const low = read(`supabase/migrations/${f}`).toLowerCase().replace(/--.*$/gm, "");
+    assert.ok(!/drop\s+table|\btruncate\b|delete\s+from/.test(low), f);
+    assert.ok(!/environment\s*=\s*'live'/.test(low), f);
+  }
+  for (let i = 0; i < 2; i++) {
+    await db.exec(read("supabase/migrations/20261119100000_billing_post_period_protection.sql"));
+    await db.exec(read("supabase/migrations/20261119110000_billing_scheduled_end.sql"));
+  }
+  const sync = (await su<{ d: string }>("select pg_get_functiondef('public.esblu_billing_sync_entitlements'::regproc) d"))[0].d;
+  assert.ok(sync.includes("esblu_billing_access_until") && !sync.includes("post_period_protection_until"), "sync používa nový helper");
   const cpe = iso(Date.now() - 1 * H);
   await account(C.b, { status: "canceled", cpe, ended: cpe, cape: true });
   assert.equal(await voice(C.b), true);
 });
 
-await check("rollback: obnoví pôvodné správanie (canceled = hneď off) a odstráni helper; forward znova zapne lehotu", async () => {
+await check("rollback: 110000 → plánovaný dátum sa ignoruje; 100000 → canceled hneď off; forward 100000 + 110000 obnoví pravidlá", async () => {
+  await db.exec(read("supabase/rollback/20261119110000_billing_scheduled_end_rollback.sql"));
+  const cpe = iso(Date.now() + 20 * 24 * H);
+  await account(C.b, { status: "active", cpe, cape: true, scheduled: iso(Date.now() - 60_000) });
+  assert.equal(await voice(C.b), true, "po rollbacku 110000 sa scheduled_end_at nečíta");
   await db.exec(read("supabase/rollback/20261119100000_billing_post_period_protection_rollback.sql"));
-  const cpe = iso(Date.now() - 1 * H);
-  await account(C.b, { status: "canceled", cpe, ended: cpe, cape: true });
+  const ended = iso(Date.now() - 1 * H);
+  await account(C.b, { status: "canceled", cpe: ended, ended, cape: true });
   assert.equal(await voice(C.b), false);
-  assert.equal((await su<{ n: number }>("select count(*)::int n from pg_proc where proname = 'esblu_billing_post_period_protection_until'"))[0].n, 0);
   await db.exec(read("supabase/migrations/20261119100000_billing_post_period_protection.sql"));
+  await db.exec(read("supabase/migrations/20261119110000_billing_scheduled_end.sql"));
   await su("select public.esblu_billing_sync_entitlements($1)", [C.b]);
   assert.equal(await voice(C.b), true);
+  await account(C.b, { status: "active", cpe, cape: true, scheduled: iso(Date.now() - 60_000) });
+  assert.equal(await voice(C.b), false);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

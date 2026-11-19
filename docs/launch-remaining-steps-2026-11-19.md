@@ -38,15 +38,15 @@ Hotové: testy v Stripe sandboxe (nákup, obnova, zlyhanie, refundácie, zrušen
 | S1 | ~~Rozhodnúť o rezerve~~ — **schválené 19. 11.: 48 h ochranná lehota** po riadnom skončení; migrácia `20261119100000` na stagingu, testy PASS (`stripe-test-and-reconciliation` § 8.8); produkcia spolu s S4 | — |
 | S2 | Účtovníčka: 12 otázok (DPH § 7a, Stripe poplatky, doklady) + vzor mesačného párovania | V → Ú | `payment-channels-economics-2026-11-18.md` § 6 |
 | S3 | ⛔ Merge vetvy do `main` (kód billing ostáva vypnutý flagmi) | V |
-| S4 | ⛔ Produkčné migrácie `20261118120000`, `20261118130000`, `20261118140000`, `20261119100000` (záloha + dump, po jednej, rollback súbory v repe) | V súhlas → A |
+| S4 | ⛔ Produkčné migrácie `20261118120000`, `20261118130000`, `20261118140000`, `20261119100000`, `20261119110000`, `20261119120000` (záloha + dump, po jednej, rollback súbory v repe) | V súhlas → A |
 | S5 | ⛔ Stripe live účet (Esblu s.r.o., overenie firmy, SEPA), produkt + cena 15,90 €/mes., Billing Portal, daňové nastavenia (§ 7a, OSS ak B2C) | V |
 | S6 | ⛔ Vercel production: `STRIPE_SECRET_KEY` (restricted live), `STRIPE_WEBHOOK_SECRET`, `ESBLU_BILLING_MODE`, `ESBLU_BILLING_RETURN_ORIGIN`, `CRON_SECRET` pre reconciliation; webhook endpoint v Stripe (10 udalostí) | V |
 | S7 | ⛔ Prod DB: `billing_provider_prices` (live cena), `billing_runtime_config.web_provider='stripe'`, `environment='live'` | V súhlas → A |
 | S8 | ⛔ Cron reconciliation v `vercel.json` (dnes zámerne vypnutý) | V súhlas → A |
 | S9 | ⛔ `NEXT_PUBLIC_ESBLU_BILLING_UI=1` až po L5 (VOP) a interný nákup vlastnou kartou + refund | V |
-| S12 | **Bloker:** chýbajúce webhooky — naplánovať reconciliation cron + catch-up udalostí zo Stripe (`/v1/events`, 30 dní); refundácia a prehraný spor dnes bez nápravy, ak webhook úplne chýba (`stripe-test-and-reconciliation` § 8.9) | A (po súhlase) |
-| S13 | Ukončenie k zvolenému dátumu uprostred obdobia: normalizácia zahodí `cancel_at` → oprava (stĺpec `cancel_at`, bez 48 h) + overenie v sandboxe (§ 8.9) | A |
-| S14 | Manifest grantov: doplniť `registration_policy` + explicitné ACL `esblu_ensure_my_owner_company()` (iba dokumentácia/test, ACL v DB je správne) | A |
+| S12 | ~~Chýbajúce webhooky~~ — **implementované 19. 11.** (doťahovanie `/v1/events` + reconciliation platby aktuálnej faktúry + crony); staging DB testy PASS; zostáva overenie so živým sandboxom a produkčné migrácie (S4) | A / V |
+| S13 | ~~Ukončenie k zvolenému dátumu~~ — **implementované 19. 11.** (`scheduled_end_at`, bez 48 h); overiť `cancel_at` v sandboxe | A / V |
+| S14 | ~~Manifest grantov~~ — **hotové 19. 11.** (`registration_policy`, nové tabuľky/funkcie; ACL v DB bez zmeny) | — |
 | S10 | Monitoring: alert na `billing_events` s chybou, `dead_letter` v reconciliation | A |
 | S11 | Upratanie Stripe sandboxov: zrušiť predplatné C v pôvodnom sandboxe (príkaz v § 8.7), potom `stripe sandboxes delete` | V |
 

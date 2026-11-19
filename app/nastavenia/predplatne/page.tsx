@@ -524,7 +524,9 @@ export default function SubscriptionPage() {
               {view.canViewDetails && view.billingProvider && <p className="mt-1 text-sm text-muted-esblu">{t(`subscription.provider.${view.billingProvider}`)}</p>}
               {view.canViewDetails && paid && view.currentPeriodEnd && (
                 <p className="mt-1 text-sm text-muted-esblu">
-                  {view.cancelAtPeriodEnd ? t("subscription.endsOn", { date: fmt(view.currentPeriodEnd) }) : t("subscription.renewsOn", { date: fmt(view.currentPeriodEnd) })}
+                  {view.scheduledEndAt
+                    ? t("subscription.endsOn", { date: fmt(view.scheduledEndAt) })
+                    : view.cancelAtPeriodEnd ? t("subscription.endsOn", { date: fmt(view.currentPeriodEnd) }) : t("subscription.renewsOn", { date: fmt(view.currentPeriodEnd) })}
                 </p>
               )}
               {!paid && view.trial.endsAt && (

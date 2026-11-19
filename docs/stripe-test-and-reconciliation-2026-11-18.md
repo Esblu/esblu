@@ -442,6 +442,52 @@ RLS** — chýba iba (a) položka `registration_policy` v `supabase/grants/publi
 Návrh: doplniť manifest (`access: D`, service CRUD — ako `beta_allowlist`) a pridať no-op forward migráciu, ktorá ACL
 funkcie iba explicitne zopakuje (alebo výnimku v guarde). Bezpečnostná zmena nie je potrebná.
 
+### 8.10 S12 + S13 implementované (19. 11. 2026, schválené vlastníkom; iba staging)
+
+**S12 — chýbajúce udalosti sa doťahujú dvoma nezávislými cestami:**
+
+| Cesta | Čo robí | Spoľahlivosť |
+|---|---|---|
+| `GET /api/cron/billing-stripe-events` (každých 15 min) | číta `GET /v1/events` (stav predplatného, faktúry, `charge.refunded`, `charge.dispute.*`) od posledného kurzora dopredu (`ending_before`), spracuje od najstaršej po najnovšiu **tou istou pipeline ako webhook** (`processVerifiedEvent`: dedupe podľa ID udalosti, čerstvý stav z API, poradie podľa `state_at`, terminálne stavy) | kurzor v `billing_event_cursors` po každej udalosti; dočasná chyba = stop bez posunu (zopakuje sa); lease proti súbehu; max 200 udalostí / 20 strán / 45 s na beh (pokračuje ďalší beh); iný Stripe účet → `ACCOUNT_MISMATCH` (nič sa nespracuje, reset iba operátor); `livemode: true` sa nikdy nespracuje; kurzor mimo retencie (30 dní) → bootstrap okna + signál `CURSOR_EXPIRED` |
+| `GET /api/cron/billing-reconcile` (každých 6 h) | pri Stripe overí okrem predplatného aj **platbu aktuálnej faktúry** (`invoice_payments` → `payment_intent.latest_charge`, spor cez `/v1/disputes`): plná refundácia → `refunded`, prehraný spor → `revoked`, hneď ukončiť u Stripe | nezávislé od retencie udalostí (aj po výpadku > 30 dní); refundácia staršej faktúry prístup nemení; opakovaný beh `in_sync` |
+
+Oba crony: `CRON_SECRET` (časovo konštantné porovnanie), billing vypnutý / `VERCEL_ENV=production` / DB `web_provider ≠ stripe` →
+`configured:false` bez volania Stripe aj DB. **Vercel Cron beží iba na produkčnom nasadení**, kde je billing tvrdo vypnutý →
+dnes no-op; na stagingu/Preview sa spúšťa ručne (`curl -H "Authorization: Bearer $CRON_SECRET" …`). Plán Pro (100 cronov,
+min. 1 / min): projekt má 11 cronov. Náklady: ~96 + 4 krátkych volaní funkcie denne (pri vypnutom billingu < 50 ms, inak
+jednotky sekúnd) — v rámci kreditu Pro; Stripe API bez poplatkov (limit test mode ~25 req/s, beh je sekvenčný).
+
+**S13 — ukončenie k zvolenému dátumu:** Stripe `cancel_at` mimo konca obdobia (± 5 min) a bez `cancel_at_period_end=true`
+→ `scheduled_end_at` (stav, účet, audit, reconciliation drift). Prístup:
+
+| Prípad | Prístup |
+|---|---|
+| riadny koniec obdobia / zrušenie obnovovania | koniec obdobia + 48 h |
+| plánované predčasné ukončenie | presne do zvoleného dátumu, bez rezervy (aj keď webhook o skončení chýba) |
+| okamžité ukončenie | hneď |
+| plná refundácia, prehraný spor | hneď, bez rezervy |
+| neúspešná platba | `grace_until` (7 dní), nesčítava sa |
+
+UI: „Končí dňa“ ukazuje zvolený dátum. Reconciliation kontroluje účet skôr, keď sa blíži plánovaný koniec.
+
+**Migrácie (staging aplikované, md5 tiel funkcií = repo):** `20261119110000_billing_scheduled_end`,
+`20261119120000_billing_event_catchup` (+ rollbacky). Manifest grantov: `registration_policy`, `billing_event_cursors`,
+4 nové service-only funkcie; guard: zdokumentovaná výnimka pre už aplikovanú `20261117100000` (ACL overené).
+
+**Testy (DB úroveň — PGlite / staging transakcie s rollbackom, NIE end-to-end so živým Stripe):**
+`test:subscriptions-lifecycle-db` 82/82 (+8 `stripe-catchup`: úplne chýbajúci webhook refundácie, oneskorená refundácia,
+prehraný spor, výpadok `/events` a výpadok uprostred, stránkovanie + limit + pokračovanie, kurzor mimo retencie, súbeh dvoch
+behov + webhook naraz, iný účet, live udalosť, klient bez prístupu, reconciliation refund/spor bez udalostí, migrácia/rollback),
+`test:billing-post-period-db` 16/16 (+ S13: helper, predčasný koniec, zmeny dátumu, pipeline duplicita/stale, časové pásma
+a DST), `test:subscriptions` 28/28 (normalizácia `cancel_at`), `test:subscriptions-lifecycle` 52/52 (route: 401, billing off,
+produkcia), `test:subscriptions-db` 60/60, `test:pricing-entitlements-db` 35/35, `test:grants-replay-db` 43/43,
+`test:grants-guard` 10/10, `test:prelaunch-blockers` 21/21, `test:cost-control` 18/18, `test:i18n` 114/114, `tsc` 0, `eslint` 0.
+Staging (transakcia s rollbackom, účet QA-STRIPE E): `apply_event` uloží `scheduled_end_at`, nároky = zvolený dátum;
+cursor RPC claim / advance / busy / release; `anon`/`authenticated` bez prístupu k tabuľke a RPC. Advisors: 0 ERROR.
+
+**Zostáva overiť so živým Stripe sandboxom (PC vlastníka):** `GET /v1/account` a `/v1/events` s restricted kľúčom
+(oprávnenia Events: read, Account: read), sémantika `ending_before` a správanie `cancel_at` (či Stripe neskracuje obdobie).
+
 ### 8.7 Upratanie stagingu (19. 11. 2026, dôkazy zachované)
 
 | Položka | Stav |

@@ -101,7 +101,8 @@ a doplnenie Resend do kontextu e-mailovej adresy (Account management).
    prístup do konca zaplateného obdobia, 7-dňová lehota po neúspešnej platbe, zmena ceny a oznámenie vopred.
    **Nové (schválené vlastníkom 19. 11. 2026, zatiaľ iba v testovacom prostredí):** po riadnom skončení zaplateného obdobia
    (aj po zrušení automatického obnovovania) ponechávame prístup ešte **48 hodín** ako ochrannú lehotu; nevzťahuje sa na
-   neúspešnú platbu (tam platí 7-dňová lehota, nesčítavajú sa), na plnú refundáciu, prehraný spor ani na skúšobné obdobie.
+   neúspešnú platbu (tam platí 7-dňová lehota, nesčítavajú sa), na plnú refundáciu, prehraný spor, skúšobné obdobie ani na
+   ukončenie k skoršiemu zvolenému dátumu (prístup končí presne k tomuto dátumu).
    Otázka: je ochranná lehota dobrovoľným plnením bez nároku na úhradu (bez vplyvu na DPH a fakturáciu) a stačí ju uviesť vo
    VOP takto? Návrh znenia — pozri prílohu A nižšie.
 5. **Refundácie:** kedy má zákazník nárok (zákonne iba výnimky v B2B?), že **plná refundácia ukončí prístup okamžite**
@@ -120,7 +121,8 @@ a doplnenie Resend do kontextu e-mailovej adresy (Account management).
 > k plateným funkciám zachovaný do konca zaplateného obdobia. Po skončení zaplateného obdobia Poskytovateľ bezodplatne
 > ponecháva prístup ešte 48 hodín (ochranná lehota), aby mohol Zákazník predplatné obnoviť bez prerušenia práce. Ochranná
 > lehota sa neuplatní pri skúšobnom období, pri vrátení celej platby za aktuálne obdobie, pri úspešne uplatnenej námietke
-> platby (chargeback) ani pri ukončení zmluvy z dôvodu porušenia VOP.
+> platby (chargeback), pri ukončení predplatného k skoršiemu dohodnutému dátumu (prístup trvá do tohto dátumu) ani pri
+> ukončení zmluvy z dôvodu porušenia VOP.
 >
 > **12.y Neúspešná platba.** Ak sa platbu za ďalšie obdobie nepodarí uhradiť, prístup zostáva zachovaný najviac 7 dní od
 > prvého neúspešného pokusu, počas ktorých môže Zákazník platobnú metódu aktualizovať. Táto lehota a ochranná lehota podľa

@@ -41,6 +41,11 @@ export type NormalizedSubscriptionState = {
   current_period_start: string | null;
   current_period_end: string | null;
   cancel_at_period_end: boolean;
+  /**
+   * Plánované PREDČASNÉ ukončenie k zvolenému dátumu (Stripe `cancel_at` mimo konca obdobia).
+   * Null = žiadne. Prístup končí k tomuto dátumu bez 48 h ochrannej lehoty (S13, 2026-11-19).
+   */
+  scheduled_end_at?: string | null;
   canceled_at: string | null;
   ended_at: string | null;
   trial_start: string | null;
@@ -161,6 +166,8 @@ export interface BillingProvider {
   resumeSubscription(ref: ProviderSubscriptionRef): Promise<NormalizedSubscriptionState>;
   changePlan(ref: ProviderSubscriptionRef, newProviderPriceId: string): Promise<NormalizedSubscriptionState>;
   createPortalSession(providerCustomerId: string, returnUrl: string): Promise<{ url: string }>;
+  /** S12: stav pre reconciliation vrátane platby aktuálneho obdobia (refund / spor bez webhooku). */
+  getReconcileState?(ref: ProviderSubscriptionRef): Promise<NormalizedSubscriptionState & { providerOpen: boolean; followUp?: "cancel_provider_now" }>;
   verifyWebhook(rawBody: string, headers: Headers): Promise<VerifiedProviderEvent>;
   normalizeEvent(event: VerifiedProviderEvent): Promise<NormalizationResult>;
 }

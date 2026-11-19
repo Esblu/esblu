@@ -46,6 +46,17 @@ export const STRIPE_STATE_EVENTS = new Set([
   "invoice.payment_action_required",
 ]);
 
+/**
+ * S12: typy udalostí, ktoré doťahovanie zmeškaných webhookov číta z `GET /v1/events`
+ * (stav predplatného, platby, refundácie, spory). Rovnaká množina ako odoberá webhook.
+ */
+export const STRIPE_CATCHUP_EVENT_TYPES = [
+  ...STRIPE_STATE_EVENTS,
+  "charge.refunded",
+  "charge.dispute.created",
+  "charge.dispute.closed",
+] as const;
+
 /** Iba audit — žiadna automatická zmena nároku (rozhoduje operátor). */
 export const STRIPE_AUDIT_EVENTS = new Set([
   "checkout.session.async_payment_failed",
@@ -131,6 +142,12 @@ export function normalizeStripeSubscription(sub: unknown, stateAt: string, check
     current_period_end: periodEnd,
     cancel_at_period_end:
       sub.cancel_at_period_end === true || (cancelAt !== null && periodEndUnix !== null && cancelAt <= periodEndUnix),
+    // S13: `cancel_at` mimo konca obdobia (± 5 min) = plánované predčasné ukončenie k zvolenému dátumu.
+    // Riadne zrušenie ku koncu obdobia (Esblu „Zrušiť“, portál) má cancel_at_period_end=true → null.
+    scheduled_end_at:
+      cancelAt !== null && sub.cancel_at_period_end !== true && !(periodEndUnix !== null && Math.abs(cancelAt - periodEndUnix) <= 300)
+        ? isoFromUnix(cancelAt)
+        : null,
     canceled_at: isoFromUnix(sub.canceled_at),
     ended_at: isoFromUnix(sub.ended_at),
     trial_start: isoFromUnix(sub.trial_start),
@@ -336,6 +353,92 @@ export class StripeTestProvider implements BillingProvider {
     const url = str(session.url);
     if (!url) throw new BillingProviderError("PROVIDER_ERROR", "portal session without url");
     return { url };
+  }
+
+  /** S12: identifikátor Stripe účtu, ku ktorému patrí kľúč (kontrola, že doťahujeme zo SPRÁVNEHO účtu). */
+  async accountRef(): Promise<string> {
+    const account = await this.request("GET", "/account");
+    const id = str(account.id);
+    if (!id || !/^acct_[A-Za-z0-9]+$/.test(id)) throw new BillingProviderError("PROVIDER_ERROR", "account id missing");
+    return id;
+  }
+
+  /**
+   * S12: jedna stránka udalostí (Stripe vracia od najnovšej). `endingBefore` = udalosti NOVŠIE ako
+   * kurzor (stránka bezprostredne pred ním), `startingAfter` + `createdGte` = bootstrap odzadu.
+   * Chýbajúci kurzor (udalosť staršia ako retencia Stripe) → `cursor_missing`.
+   */
+  async listEvents(params: { endingBefore?: string; startingAfter?: string; createdGte?: number; limit?: number }): Promise<{ events: Obj[]; hasMore: boolean } | "cursor_missing"> {
+    const query: Record<string, string | number> = { limit: Math.min(Math.max(params.limit ?? 100, 1), 100) };
+    STRIPE_CATCHUP_EVENT_TYPES.forEach((type, i) => { query[`types[${i}]`] = type; });
+    if (params.endingBefore) query.ending_before = params.endingBefore;
+    if (params.startingAfter) query.starting_after = params.startingAfter;
+    if (params.createdGte !== undefined) query["created[gte]"] = params.createdGte;
+    let page: Obj;
+    try {
+      page = await this.request("GET", "/events", query);
+    } catch (error) {
+      if (params.endingBefore && error instanceof BillingProviderError && / (400|404)$/.test(error.message)) return "cursor_missing";
+      throw error;
+    }
+    const events = Array.isArray(page.data) ? (page.data.filter(isObj) as Obj[]) : [];
+    return { events, hasMore: page.has_more === true };
+  }
+
+  /** S12: udalosť načítaná z API (autentická — kľúčom overený kanál) → rovnaký tvar ako po overení podpisu. */
+  eventFromApi(event: Obj): VerifiedProviderEvent {
+    if (event.object !== "event" || !str(event.id) || !str(event.type) || typeof event.created !== "number") {
+      throw new BillingProviderError("MALFORMED_PAYLOAD");
+    }
+    if (event.livemode !== false) throw new BillingProviderError("LIVE_MODE_FORBIDDEN");
+    return {
+      provider: "stripe",
+      environment: "test",
+      eventId: str(event.id)!,
+      eventType: str(event.type)!,
+      createdAt: new Date((event.created as number) * 1000).toISOString(),
+      payloadSha256: sha256Hex(JSON.stringify(event)),
+      data: isObj(event.data) ? event.data.object : null,
+    };
+  }
+
+  /**
+   * S12: autoritatívny stav pre reconciliation VRÁTANE platby aktuálneho obdobia. Predplatné ostáva u
+   * Stripe `active` aj po plnej refundácii či prehratom spore — bez tejto kontroly by úplne chýbajúci
+   * webhook `charge.refunded` / `charge.dispute.closed` ostal neodhalený (prístup aj účtovanie by bežali).
+   *   plná refundácia platby aktuálnej faktúry → `refunded` + ukončiť u providera
+   *   prehraný spor platby aktuálnej faktúry    → `revoked`  + ukončiť u providera
+   */
+  async getReconcileState(ref: ProviderSubscriptionRef): Promise<NormalizedSubscriptionState & { providerOpen: boolean; followUp?: "cancel_provider_now" }> {
+    const sub = await this.request("GET", `/subscriptions/${encodeURIComponent(ref.providerSubscriptionId)}`);
+    const stateAt = this.now().toISOString();
+    const state = normalizeStripeSubscription(sub, stateAt);
+    const providerOpen = !["canceled", "expired"].includes(state.status);
+    const invoiceId = idOf(sub.latest_invoice);
+    if (!invoiceId) return { ...state, providerOpen };
+    const payments = await this.request("GET", "/invoice_payments", { invoice: invoiceId, limit: 3 });
+    const list = Array.isArray(payments.data) ? (payments.data.filter(isObj) as Obj[]) : [];
+    for (const p of list) {
+      const payment = isObj(p.payment) ? p.payment : null;
+      const pi = payment ? idOf(payment.payment_intent) : null;
+      if (!pi) continue;
+      const intent = await this.request("GET", `/payment_intents/${encodeURIComponent(pi)}`, { "expand[0]": "latest_charge" });
+      const charge = isObj(intent.latest_charge) ? intent.latest_charge : null;
+      if (!charge) continue;
+      const amount = typeof charge.amount === "number" ? charge.amount : null;
+      const refunded = typeof charge.amount_refunded === "number" ? charge.amount_refunded : 0;
+      if (charge.refunded === true || (amount !== null && amount > 0 && refunded >= amount)) {
+        return { ...state, status: "refunded", ended_at: stateAt, review_flag: null, providerOpen, followUp: "cancel_provider_now" };
+      }
+      if (charge.disputed === true && str(charge.id)) {
+        const disputes = await this.request("GET", "/disputes", { charge: str(charge.id)!, limit: 1 });
+        const dispute = Array.isArray(disputes.data) && isObj(disputes.data[0]) ? (disputes.data[0] as Obj) : null;
+        if (dispute && dispute.status === "lost") {
+          return { ...state, status: "revoked", ended_at: stateAt, review_flag: null, providerOpen, followUp: "cancel_provider_now" };
+        }
+      }
+    }
+    return { ...state, providerOpen };
   }
 
   async verifyWebhook(rawBody: string, headers: Headers): Promise<VerifiedProviderEvent> {

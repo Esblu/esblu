@@ -10,13 +10,15 @@ import type { BillingProviderId } from "@/lib/billing/types";
 // -----------------------------------------------------------------------------
 // GET /api/cron/billing-reconcile — self-healing: overí otvorené predplatné
 // u providera a opraví drift tou istou pipeline ako webhook.
-// Chránené CRON_SECRET. ZÁMERNE nie je vo vercel.json (žiadny produkčný cron) —
-// zapína sa až po schválení (docs/subscriptions-production-readiness-2026-10-11.md).
+// Chránené CRON_SECRET. Vo vercel.json od 2026-11-19 (S12, schválené vlastníkom): každých 6 h.
+// Vercel Cron beží iba na produkčnom nasadení, kde je billing tvrdo vypnutý (VERCEL_ENV=production
+// → režim off) → `configured:false`, žiadne volanie providera, kým sa billing výslovne nezapne.
 // Odpoveď obsahuje iba počty a kódy výsledkov (žiadne identifikátory).
 // -----------------------------------------------------------------------------
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+export const maxDuration = 60;
 
 function authorized(req: Request): boolean {
   const secret = process.env.CRON_SECRET?.trim();

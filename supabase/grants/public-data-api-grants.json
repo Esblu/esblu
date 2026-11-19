@@ -113,6 +113,14 @@
       "service_role": "SELECT,INSERT,UPDATE,DELETE",
       "note": "billing interne — klient iba cez owner-only RPC (esblu_billing_*)"
     },
+    "billing_event_cursors": {
+      "domain": "billing",
+      "access": "D",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "S12: kurzor doťahovania zmeškaných Stripe udalostí — iba server (cron) cez esblu_billing_event_cursor_*"
+    },
     "billing_events": {
       "domain": "billing",
       "access": "D",
@@ -689,6 +697,14 @@
       "service_role": "SELECT,INSERT,UPDATE,DELETE",
       "note": "zapis cez received_advance_* RPC"
     },
+    "registration_policy": {
+      "domain": "auth",
+      "access": "D",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "singleton režimu registrácie (open / closed_beta) — číta auth hook a esblu_ensure_my_owner_company (definer); overené staging aj prod 2026-11-19: RLS zapnutá, 0 politík, iba service_role"
+    },
     "session_active_company": {
       "domain": "membership",
       "access": "B",
@@ -829,6 +845,7 @@
     "esblu_account_deletion_commit(text,uuid,uuid,boolean)",
     "esblu_active_membership_for_user(uuid)",
     "esblu_active_membership_for_user(uuid,uuid)",
+    "esblu_billing_access_until(text,timestamp with time zone,timestamp with time zone,timestamp with time zone,timestamp with time zone)",
     "esblu_billing_apply_charge(uuid,text,jsonb)",
     "esblu_billing_apply_event(uuid,jsonb)",
     "esblu_billing_attach_checkout_session(uuid,text)",
@@ -839,6 +856,9 @@
     "esblu_billing_claim_store_reports(integer)",
     "esblu_billing_close_event(uuid,text,text,jsonb)",
     "esblu_billing_complete_store_report(uuid,boolean,text)",
+    "esblu_billing_event_cursor_advance(text,text,uuid,text,timestamp with time zone)",
+    "esblu_billing_event_cursor_claim(text,text,text,uuid,integer)",
+    "esblu_billing_event_cursor_release(text,text,uuid,boolean,text)",
     "esblu_billing_create_checkout_intent(text,text)",
     "esblu_billing_create_purchase_intent(text,text,text,text,text,text,text)",
     "esblu_billing_explain_my_entitlements()",

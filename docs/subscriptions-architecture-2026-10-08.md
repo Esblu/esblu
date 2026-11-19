@@ -58,6 +58,7 @@
 |---|---|
 | `active` / `trialing` | platia do `current_period_end` + 48 h (od 2026-11-19, migrácia `20261119100000`) |
 | `canceled` / `expired` — riadny koniec na konci zaplateného obdobia | platia do `current_period_end` + 48 h (ochranná lehota; nie pri trialu ani ukončení uprostred obdobia) |
+| plánované predčasné ukončenie k zvolenému dátumu (`scheduled_end_at`, S13) | platia presne do zvoleného dátumu — bez 48 h |
 | `past_due` | platia do `grace_until` (7 dní od prvého zlyhania) — 48 h sa nepripočítava |
 | ostatné stavy | odvolané (`status='revoked'`) |
 
