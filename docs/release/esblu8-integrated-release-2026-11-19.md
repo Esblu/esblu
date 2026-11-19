@@ -58,6 +58,8 @@ Poradie kódu: migrácie 1–12 → merge `release/esblu8` do `main` → push �
 
 ## 5. Produkčný smoke test (po schválenom deployi)
 
+Pred produkciou: staging smoke test podľa `docs/release/staging-smoke-test-esblu8.md` (Preview + staging, sandbox Stripe / eFaktura).
+
 1. `GET https://www.esblu.com/` a `/login` → 200; Vercel deployment `readyState=READY` pre presné SHA.
 2. Prihlásenie troch chránených účtov (playreview, gdpresblu, zamestnanec) — dashboard, moduly, foto, AI náhľad.
 3. `/api/cron/billing-ops-monitor` (s CRON_SECRET) → 200 a bez kritického alertu; `billing_runtime_config.web_provider = none`.
