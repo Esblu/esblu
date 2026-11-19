@@ -90,10 +90,65 @@ export type VerifiedProviderEvent = {
   eventId: string;
   eventType: string;
   createdAt: string;
-  payloadSha256: string;
+  /**
+   * SHA-256 surového tela webhooku (ochrana „rovnaké ID, iné telo“). `null` = udalosť načítaná
+   * priamo z API providera (doťahovanie / retry): je autentická (kľúčom overený kanál), ale jej
+   * serializácia sa od webhooku vždy líši → porovnanie hashov sa preskočí (P4, nález § 2.3).
+   */
+  payloadSha256: string | null;
+  /** API verzia, v ktorej provider udalosť serializoval (Stripe `api_version`), ak ju uvádza. */
+  apiVersion?: string | null;
   /** Provider-špecifický objekt (iba v pamäti servera, nikdy sa neukladá celý). */
   data: unknown;
 };
+
+/**
+ * P4: účtovná kópia dokladu providera (Stripe faktúra / dobropis). Iba údaje potrebné pre účtovníctvo:
+ * žiadne meno, e-mail ani adresa odberateľa (iba krajina a daňové identifikátory tak, ako ich Stripe
+ * na doklade uvádza). Sumy v najmenších jednotkách meny.
+ */
+export type BillingDocumentRecord = {
+  kind: "invoice" | "credit_note";
+  provider_document_id: string;
+  /** Dobropis → pôvodná faktúra. */
+  related_invoice_id: string | null;
+  provider_customer_id: string | null;
+  provider_subscription_id: string | null;
+  payment_intent_id: string | null;
+  document_number: string | null;
+  status: string | null;
+  currency: string | null;
+  subtotal_minor: number | null;
+  subtotal_excl_tax_minor: number | null;
+  total_minor: number | null;
+  total_excl_tax_minor: number | null;
+  tax_minor: number | null;
+  amount_paid_minor: number | null;
+  customer_country: string | null;
+  customer_tax_exempt: string | null;
+  customer_tax_ids: Array<{ type: string; value: string }>;
+  /** Daňové riadky tak, ako ich provider poslal (iba primitívne polia, orezané). */
+  tax_details: Array<Record<string, unknown>>;
+  service_period_start: string | null;
+  service_period_end: string | null;
+  issued_at: string | null;
+  paid_at: string | null;
+  voided_at: string | null;
+  hosted_url: string | null;
+  pdf_url: string | null;
+  credit_reason: string | null;
+  credit_type: string | null;
+};
+
+/** P4: refundácia platby (charge.refunded) — kontrola, že k nej vznikol dobropis. */
+export type BillingRefundObservation = {
+  payment_intent_id: string;
+  amount_refunded_minor: number;
+  currency: string | null;
+  observed_at: string;
+};
+
+export type BillingDocumentCapture = { documents: BillingDocumentRecord[]; refunds: BillingRefundObservation[] };
 
 /** Výsledok normalizácie: buď zmena stavu, alebo vedome ignorovaný typ. */
 export type NormalizationResult =
@@ -172,4 +227,8 @@ export interface BillingProvider {
   getReconcileState?(ref: ProviderSubscriptionRef): Promise<NormalizedSubscriptionState & { providerOpen: boolean; followUp?: "cancel_provider_now" }>;
   verifyWebhook(rawBody: string, headers: Headers): Promise<VerifiedProviderEvent>;
   normalizeEvent(event: VerifiedProviderEvent): Promise<NormalizationResult>;
+  /** P4: účtovné doklady z udalosti (faktúra / dobropis / refundácia); null = udalosť doklad nenesie. */
+  captureDocuments?(event: VerifiedProviderEvent): Promise<BillingDocumentCapture | null>;
+  /** P4: API verzia, ktorú provider posiela (Stripe-Version) — na kontrolu verzie webhook endpointu. */
+  readonly apiVersion?: string | null;
 }

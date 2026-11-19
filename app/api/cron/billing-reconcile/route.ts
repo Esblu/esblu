@@ -1,5 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
 import { getBillingServerMode } from "@/lib/billing/config";
+import { recordHeartbeat } from "@/lib/billing/ops-alerts";
 import { runReconciliation, type ReconcileSource } from "@/lib/billing/reconciliation";
 import { appleReconcileSource, googleReconcileSource, providerReconcileSource } from "@/lib/billing/reconcile-sources";
 import { getWebBillingProvider } from "@/lib/billing/server";
@@ -43,12 +44,17 @@ export async function GET(req: Request) {
     if (apple && verifier) sources.apple = appleReconcileSource(apple, verifier);
   }
   if (Object.keys(sources).length === 0) return Response.json({ success: true, configured: false, checked: 0 });
+  const admin = getSupabaseAdmin();
+  // P4: heartbeat pre ops alert CRON_RECONCILE_FAILING (prostredie webového providera; obchody sú vždy test).
+  const heartbeatEnv = sources.stripe?.environment ?? sources.fake?.environment ?? "test";
   try {
-    const { checked, results } = await runReconciliation(getSupabaseAdmin(), sources, { limit: 50 });
+    const { checked, results } = await runReconciliation(admin, sources, { limit: 50 });
     const summary: Record<string, number> = {};
     for (const r of results) summary[r.result] = (summary[r.result] ?? 0) + 1;
+    await recordHeartbeat(admin, "reconcile", heartbeatEnv, true);
     return Response.json({ success: true, checked, summary });
   } catch {
+    await recordHeartbeat(admin, "reconcile", heartbeatEnv, false, "RECONCILE_FAILED");
     return Response.json({ success: false, code: "RECONCILE_FAILED" }, { status: 500 });
   }
 }

@@ -46,6 +46,9 @@ const TERMINAL_PRECEDENCE = "supabase/migrations/20261118130000_billing_terminal
 const REFUND_AUDIT = "supabase/migrations/20261118140000_billing_refund_audit.sql";
 const CATCHUP = "supabase/migrations/20261119120000_billing_event_catchup.sql";
 const CATCHUP_ROLLBACK = "supabase/rollback/20261119120000_billing_event_catchup_rollback.sql";
+// P4: retry zlyhaných udalostí + účtovná kópia dokladov (pipeline zapisuje doklady pred zmenou stavu).
+const EVENT_RETRY = "supabase/migrations/20261123100000_billing_event_retry.sql";
+const INVOICE_DOCUMENTS = "supabase/migrations/20261123110000_billing_invoice_documents.sql";
 const SUITE = (process.argv[2] ?? process.env.SUITE ?? "").replace(/^--suite=/, "").trim() || null;
 
 type Row = Record<string, unknown>;
@@ -199,6 +202,12 @@ await db.exec(read(SINGLE_OPEN));
 await db.exec(read(TERMINAL_PRECEDENCE));
 await db.exec(read(REFUND_AUDIT));
 await db.exec(read(CATCHUP));
+// Lokálny baseline nemá Storage tabuľky (P4 migrácia zakladá privátny bucket billing-documents).
+await db.exec(`create table if not exists storage.buckets (id text primary key, name text, public boolean,
+  file_size_limit bigint, allowed_mime_types text[]);
+  create table if not exists storage.objects (id uuid primary key default gen_random_uuid(), bucket_id text, name text);`);
+await db.exec(read(EVENT_RETRY));
+await db.exec(read(INVOICE_DOCUMENTS));
 await db.exec(`update public.billing_runtime_config set web_provider = 'fake',
   enabled_methods = array['stripe_web_checkout','apple_iap','google_play']`);
 
@@ -277,6 +286,10 @@ await check("subscription-migrations: obe migrácie sú idempotentné (re-run be
   await serialized(() => db.exec(read(REFUND_AUDIT)));
   await serialized(() => db.exec(read(CATCHUP)));
   await serialized(() => db.exec(read(CATCHUP)));
+  await serialized(() => db.exec(read(EVENT_RETRY)));
+  await serialized(() => db.exec(read(EVENT_RETRY)));
+  await serialized(() => db.exec(read(INVOICE_DOCUMENTS)));
+  await serialized(() => db.exec(read(INVOICE_DOCUMENTS)));
   assert.equal((await accountOf(co)).status, "active");
   assert.equal((await ent(co.owner, "voice")).active, true);
 });

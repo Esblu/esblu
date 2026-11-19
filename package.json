@@ -62,6 +62,7 @@
     "test:pricing-entitlements-db": "node --experimental-strip-types --no-warnings scripts/pricing-entitlements-pglite-tests.ts",
     "test:billing-post-period-db": "node --experimental-strip-types --no-warnings scripts/billing-post-period-pglite-tests.ts",
     "test:billing-live-mode-db": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/billing-live-mode-pglite-tests.ts",
+    "test:billing-ops-db": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/billing-ops-pglite-tests.ts",
     "test:cost-control-db": "node --experimental-strip-types --no-warnings scripts/cost-control-pglite-tests.ts",
     "test:clia-gdpr": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/clia-gdpr-tests.ts",
     "test:clia-gdpr-db": "node --experimental-strip-types --no-warnings scripts/clia-gdpr-retention-pglite-tests.ts",

@@ -40,10 +40,15 @@ bez zmeny, md5 tiel funkcií = repo.
    `https://www.esblu.com/api/billing/webhooks/stripe` s udalosťami: `checkout.session.completed`,
    `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`, `checkout.session.expired`,
    `customer.subscription.created/updated/deleted/paused/resumed`, `invoice.paid`, `invoice.payment_failed`,
-   `invoice.payment_action_required`, `charge.refunded`, `charge.dispute.created`, `charge.dispute.closed`.
+   `invoice.payment_action_required`, `charge.refunded`, `charge.dispute.created`, `charge.dispute.closed`
+   a (P4, účtovná kópia dokladov) `invoice.finalized`, `invoice.voided`, `invoice.marked_uncollectible`,
+   `credit_note.created`, `credit_note.updated`, `credit_note.voided`. **API verzia endpointu = `2025-03-31.basil`**
+   (konštanta `STRIPE_API_VERSION` v `lib/billing/stripe-api-version.ts`; nezhoda → ops alert `WEBHOOK_API_VERSION_MISMATCH`).
 6. Restricted live kľúč (`rk_live_`) s minimom oprávnení: Account (read), Events (read), Customers (write),
    Checkout Sessions (write), Subscriptions (write), Prices (read), Invoices (read), Invoice payments (read),
    PaymentIntents (read), Charges (read), Disputes (read), Billing portal sessions (write).
+   P4: **samostatný** read-only kľúč `STRIPE_LIVE_REPORTING_KEY` (`rk_live_`, iba Balance transactions read + Payouts read)
+   pre mesačný účtovný export; runtime kľúč tieto práva nedostane.
 
 ## 3. Postup zapnutia (každý krok ⛔, v tomto poradí)
 
@@ -67,7 +72,8 @@ bez zmeny, md5 tiel funkcií = repo.
 6. ⛔ **Otvorenie predaja:** `update billing_runtime_config set live_purchase_scope = 'all';` (allowlist ostáva ako záznam).
    Crony (`billing-stripe-events` 15 min, `billing-reconcile` 6 h) bežia od kroku 3.
 
-Monitoring prvých 14 dní: `billing_events` so `status='failed'`, `billing_event_cursors.consecutive_failures > 0`,
+Monitoring (P4, automaticky): cron `billing-ops-monitor` (15 min) → `billing_ops_alerts` + e-mail (§ 9.3).
+Ručne prvých 14 dní navyše: `billing_events` so `status='failed'`, `billing_event_cursors.consecutive_failures > 0`,
 `billing_reconciliation.dead_letter`, Vercel runtime chyby na `/api/billing/*` a `/api/cron/billing-*`, Stripe
 upozornenia na zlyhané doručenia webhooku.
 
@@ -151,3 +157,71 @@ Aplikácia nepotrebuje výpadok: billing je v produkcii vypnutý a tabuľky sú 
   mimo produkcie live premenné → `LIVE_OUTSIDE_PRODUCTION` a live režim sa nikdy nezapne; test provider live kľúč a live
   provider test kľúč odmietne aj samostatne.
 
+
+## 9. P4 (2026-11-23) — doklady, refundácie, monitoring, API verzia
+
+### 9.1 Nové migrácie (po `20261120100000`, v tomto poradí, každá ⛔)
+
+| # | Migrácia | Čo robí | Rollback |
+|---|---|---|---|
+| 1 | `20261123100000_billing_event_retry` | stĺpce `next_retry_at`, `dead_letter`, `dead_lettered_at` na `billing_events`, trigger plánu opakovania (backoff 5 min → 6 h, max. 8 pokusov), RPC `esblu_billing_event_retry_claim` / `_dead_letter` | `supabase/rollback/20261123100000_…` — stĺpce **ponechá** (auditná stopa) |
+| 2 | `20261123110000_billing_invoice_documents` | `billing_invoice_documents`, `billing_refund_observations`, `billing_balance_transactions`, `billing_ops_admins`, `billing_accounting_export_log`, privátny bucket `billing-documents`, RPC dokladov a exportu | neprázdne tabuľky → `esblu_audit_archive.*_rb_<ts>`; bucket s PDF ostáva |
+| 3 | `20261123120000_billing_ops_alerts` | `billing_ops_alerts`, `billing_ops_heartbeats`, RPC `esblu_billing_ops_*` | história → `esblu_audit_archive` |
+
+Rollback v opačnom poradí (3 → 2 → 1). **Deploy kódu až po migráciách 1–2**: nová pipeline zapisuje doklady pred
+zmenou stavu; bez migrácie 2 by udalosti `invoice.*`, `credit_note.*` a `charge.refunded` končili `DOCUMENT_FAILED`
+(opakujú sa, nič sa nestratí, ale zmena stavu pri refundácii čaká). Grants manifest `supabase/grants/public-data-api-grants.json`
+je doplnený (tabuľky aj service RPC).
+
+### 9.2 Refundácia = VŽDY cez dobropis (credit note)
+
+Esblu refundácie **nevystavuje v kóde** (žiadne `POST /v1/refunds`); robí ich iba operátor v Stripe Dashboarde. Povinný postup:
+
+1. Stripe Dashboard → **Invoices** → pôvodná faktúra → **Issue credit note** (nie *Payments → Refund*).
+2. Suma = refundovaná suma, dôvod podľa skutočnosti, voľba **Refund to customer's payment method** (vrátenie peňazí
+   a dobropis jedným krokom). Pri čiastočnej refundácii iba príslušná suma (prístup sa nemení).
+3. Text / číslovanie dobropisu podľa rozhodnutia účtovníčky (`docs/accountant-questions-billing-2026-11-19.md`).
+4. Kontrola: v `billing_invoice_documents` vznikne riadok `kind='credit_note'` s `related_invoice_id` pôvodnej faktúry;
+   PDF sa archivuje cronom `billing-documents`.
+
+Poistka: ak príde `charge.refunded` a do 24 h k faktúre neexistuje dobropis aspoň v sume refundácie, monitor otvorí
+alert `REFUND_WITHOUT_CREDIT_NOTE` → operátor vystaví dobropis dodatočne (Invoices → faktúra → Issue credit note,
+**bez** ďalšej refundácie — s väzbou na už vykonanú refundáciu, ak ju Dashboard ponúkne, inak spôsobom, ktorý určí
+účtovníčka; nikdy nie druhé vrátenie peňazí).
+Spory (chargeback): Stripe dobropis nevytvorí; postup určí účtovníčka (otázka v dokumente otázok).
+
+### 9.3 Monitoring a alerty
+
+- Cron `GET /api/cron/billing-ops-monitor` (`7,22,37,52 * * * *`, `CRON_SECRET`): vyhodnotí `EVENT_PROCESSING_FAILED`,
+  `EVENT_DEAD_LETTER` (kritický), `CATCHUP_LAG` (> 1 h bez úspechu, kritický), `CATCHUP_ACCOUNT_MISMATCH`,
+  `CATCHUP_CURSOR_EXPIRED`, `RECONCILE_DEAD_LETTER`, `RECONCILE_MISMATCH`, `RECONCILE_ERRORS`,
+  `CRON_STRIPE_EVENTS_FAILING` / `CRON_RECONCILE_FAILING` / `CRON_DOCUMENTS_FAILING` (heartbeat),
+  `REFUND_WITHOUT_CREDIT_NOTE`, `DOCUMENT_ARCHIVE_FAILED`; z webhooku `WEBHOOK_SIGNATURE_FAILURES` (≥ 10 / h) a
+  `WEBHOOK_API_VERSION_MISMATCH`. Deduplikácia = 1 riadok a najviac 1 notifikácia na kód, prostredie a okno; podmienkové
+  alerty sa samy uzavrú (`resolved`).
+- Doručenie: vždy riadok v `billing_ops_alerts` a HTTP **503** cronu pri otvorenom kritickom alerte (Vercel cron
+  monitoring / log drain). Voliteľne e-mail cez Resend REST API — premenné (iba názvy, Production, Sensitive pri kľúči):
+  `RESEND_API_KEY`, `ESBLU_OPS_ALERT_EMAIL_TO`, `ESBLU_OPS_ALERT_EMAIL_FROM`. Bez nich sa e-mail neposiela.
+- Obsah alertu: iba kód, závažnosť, prostredie, počty a časy. Žiadne ID firiem / zákazníkov / predplatných, sumy,
+  e-maily, telo udalosti ani tajomstvá (sanitizácia v DB aj v kóde, testy).
+- Dead-letter udalosť: zistiť príčinu (`error_code`), opraviť (cena, väzba, konfigurácia) a vrátiť do opakovania:
+  `update billing_events set dead_letter = false, status = 'failed', error_code = 'MANUAL_RETRY', attempts = 1 where provider_event_id = '<evt_…>';`
+  (⛔ produkcia so súhlasom, zápis do `docs/ops/service-intervention-log.md`).
+
+### 9.4 Účtovná kópia a mesačný export
+
+- Každá Stripe faktúra a dobropis → `billing_invoice_documents` (idempotentne z webhooku, doťahovania aj retry; stav iba
+  dopredu), PDF → bucket `billing-documents` (`<env>/<YYYY>/<MM>/<kind>/<id>.pdf`, SHA-256, nemenné) cronom
+  `GET /api/cron/billing-documents` (`41 * * * *`).
+- Export: `GET /api/billing/admin/accounting-export?month=YYYY-MM&refresh=1` (Bearer JWT používateľa zapísaného v
+  `billing_ops_admins`; zápis iba SQL: `insert into billing_ops_admins (user_id, note) values ('<auth uuid>', '<kto>');`).
+  `refresh=1` najprv načíta balance transactions a výplaty kľúčom `STRIPE_LIVE_REPORTING_KEY`. CSV (`;`, UTF-8 BOM):
+  doklady (číslo, dátum, sumy, DPH polia, krajina a IČ DPH odberateľa, hrubá suma, poplatok Stripe, čistá suma, payout)
+  + všetky balance transactions mesiaca. Každý export je v `billing_accounting_export_log`.
+
+### 9.5 Pred prvým LIVE predajom (doplnok k § 3)
+
+- [ ] Sandbox: zopakovať S12/S13 integračné testy s hlavičkou `Stripe-Version: 2025-03-31.basil` (kód ju posiela vždy).
+- [ ] Webhook endpoint v Stripe na rovnakej API verzii + udalosti z § 2 bod 5.
+- [ ] Overiť, že `invoice_pdf` / `credit_note.pdf` sa dá stiahnuť bez API kľúča (sandbox; inak archív zlyhá → alert).
+- [ ] Rozhodnutia účtovníčky a variant dokladov (`docs/billing-invoicing-architecture-2026-11-19.md`).

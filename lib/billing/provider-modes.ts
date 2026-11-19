@@ -14,6 +14,7 @@
 
 import { getBillingServerMode } from "@/lib/billing/config";
 import { getStoreMode } from "@/lib/billing/stores/store-config";
+import { isValidatedStripeApiVersion } from "@/lib/billing/stripe-api-version";
 
 export type ProviderMode = "disabled" | "fake" | "sandbox" | "live";
 type Env = Record<string, string | undefined>;
@@ -50,7 +51,15 @@ export const BILLING_ENV_SCHEMA: readonly EnvRule[] = [
   { name: "STRIPE_LIVE_WEBHOOK_SECRET", secret: true, required: (m) => m.web === "live", valid: (v) => /^whsec_[A-Za-z0-9+/=_-]{8,}$/.test(v) },
   { name: "STRIPE_SECRET_KEY", secret: true, required: (m) => m.web === "sandbox", valid: (v) => /^(sk|rk|rkcs)_test_[A-Za-z0-9]{8,}$/.test(v) },
   { name: "STRIPE_WEBHOOK_SECRET", secret: true, required: (m) => m.web === "sandbox", valid: (v) => /^whsec_[A-Za-z0-9+/=_-]{8,}$/.test(v) },
-  { name: "STRIPE_API_VERSION", secret: false, required: () => false, valid: (v) => /^\d{4}-\d{2}-\d{2}(\.[a-z]+)?$/.test(v) },
+  // P4: voliteľný override pripnutej verzie — iba výslovne overená verzia (lib/billing/stripe-api-version.ts).
+  { name: "STRIPE_API_VERSION", secret: false, required: () => false, valid: (v) => isValidatedStripeApiVersion(v) },
+  // P4: samostatný read-only live kľúč pre účtovný export (Balance transactions + Payouts read). Runtime kľúč
+  // STRIPE_LIVE_SECRET_KEY tieto práva nemá a nemá ich dostať.
+  { name: "STRIPE_LIVE_REPORTING_KEY", secret: true, required: () => false, valid: (v) => /^rk_live_[A-Za-z0-9]{8,}$/.test(v) },
+  // P4: doručenie ops alertov e-mailom (voliteľné; bez nich ostávajú alerty v DB + cron 503).
+  { name: "ESBLU_OPS_ALERT_EMAIL_TO", secret: false, required: () => false, valid: (v) => /^[^@\s,]+@[^@\s,]+\.[a-z]{2,}$/i.test(v) },
+  { name: "ESBLU_OPS_ALERT_EMAIL_FROM", secret: false, required: () => false, valid: (v) => /^([^<>]{1,60} )?<?[^@\s<>]+@[^@\s<>]+\.[a-z]{2,}>?$/i.test(v) },
+  { name: "RESEND_API_KEY", secret: true, required: () => false, valid: (v) => /^re_[A-Za-z0-9_]{8,}$/.test(v) },
   { name: "GOOGLE_PLAY_PACKAGE_NAME", secret: false, required: (m) => m.stores === "sandbox", valid: (v) => v === "com.esblu.app" },
   { name: "GOOGLE_PLAY_SERVICE_ACCOUNT_JSON", secret: true, required: (m) => m.stores === "sandbox", valid: (v) => { try { const j = JSON.parse(v) as Record<string, unknown>; return typeof j.client_email === "string" && typeof j.private_key === "string"; } catch { return false; } } },
   { name: "GOOGLE_RTDN_AUDIENCE", secret: false, required: (m) => m.stores === "sandbox", valid: (v) => /^https:\/\//.test(v) },
@@ -80,7 +89,7 @@ export function validateBillingEnv(env: Env = process.env): { modes: ProviderMod
   if (/^(sk|rk|rkcs)_live_/.test((env.STRIPE_SECRET_KEY ?? "").trim())) invalid.push("STRIPE_SECRET_KEY:LIVE_FORBIDDEN");
   // S15: live kľúče a schválenie existujú IBA v produkcii; v live režime nesmú byť v prostredí test kľúče.
   if (!modes.productionLocked) {
-    for (const name of ["STRIPE_LIVE_SECRET_KEY", "STRIPE_LIVE_WEBHOOK_SECRET", "ESBLU_BILLING_LIVE_APPROVED"]) {
+    for (const name of ["STRIPE_LIVE_SECRET_KEY", "STRIPE_LIVE_WEBHOOK_SECRET", "STRIPE_LIVE_REPORTING_KEY", "ESBLU_BILLING_LIVE_APPROVED"]) {
       if ((env[name] ?? "").trim()) invalid.push(`${name}:LIVE_OUTSIDE_PRODUCTION`);
     }
   }
