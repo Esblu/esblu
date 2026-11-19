@@ -660,6 +660,12 @@ if ($Step -ne "start") {
       }
       if ($paid -gt 1) { Fail "Stripe: $paid zaplatene relacie pre firmu E." }
       $acc = (Get-Rows "subscription_accounts?company_id=eq.$CompanyE&select=status,provider_subscription_id,provider_customer_id,current_period_end,cancel_at_period_end")[0]
+      if ($acc -and $acc.provider_subscription_id) {
+        # Po uspesnom nakupe: PRESNE 1 dokonceny zamer a PRESNE 1 zaplatena relacia (nie iba "najviac").
+        if ($done.Count -ne 1) { Fail "Po nakupe ocakavany presne 1 dokonceny zamer, je $($done.Count)." }
+        if ($paid -ne 1) { Fail "Po nakupe ocakavana presne 1 zaplatena Stripe relacia, je $paid." }
+        Say "Nakup: presne 1 dokonceny zamer a 1 zaplatena relacia"
+      }
       if ($acc) {
         Say "Esblu: stav=$($acc.status) predplatne=$($acc.provider_subscription_id) koniec=$($acc.current_period_end) cancel_at_period_end=$($acc.cancel_at_period_end)"
         if ($acc.provider_customer_id) {
@@ -678,7 +684,7 @@ if ($Step -ne "start") {
           if ($acc.status -eq "active" -and $n -lt 1) { Fail "Aktivne predplatne bez narokov." }
         }
       } else { Say "Esblu: firma E zatial nema predplatne." }
-      Say "OK: firma E - najviac 1 otvoreny zamer, najviac 1 zaplatena relacia, Esblu a Stripe zhodne."
+      Say "OK: firma E - najviac 1 otvoreny zamer; po nakupe presne 1 dokonceny zamer a 1 zaplatena relacia; Esblu a Stripe zhodne."
     }
     "status" {
       $subId = if ($Subscription) { $Subscription } elseif (Test-Path $ClockFile) { (Get-ClockState).subscription } else { "" }

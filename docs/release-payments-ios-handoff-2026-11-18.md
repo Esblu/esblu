@@ -35,19 +35,25 @@ Vetva `android-release-payments-ios-2026-11-18` z `origin/main` @ `12da726c843b`
 
 ## 2. Platby — Stripe
 
-- Stripe test účet ani kľúče **nie sú dostupné** (žiadne `STRIPE_*` vo Verceli, Stripe Dashboard neprihlásený) → podľa pokynu
-  vlastníka sú **všetky testy priamo v Stripe označené ako NEOVERENÉ**; scenáre sú overené simuláciami (mock Stripe API +
-  PGlite s produkčnými migráciami): `test:subscriptions` 28/28, `test:subscriptions-db` 60/60, `test:subscriptions-lifecycle-db`
-  69/69 a 10 pomenovaných súborov PASS.
-- Tabuľka scenárov S1–S10b, W1–W4, C1–C2, I1, R1, postupy vlastníka, runbook na reálny test a **vzor mesačného párovania**:
-  `docs/stripe-test-and-reconciliation-2026-11-18.md`, CSV `docs/finance/stripe-monthly-reconciliation-template.csv`.
-- Zistenia: dvojitá platba pri súbežnom nákupe potrebuje operátorský postup (refund); čiastočná refundácia nemení prístup
-  (potvrdiť VOP); DB Esblu neukladá poplatky ani výplaty (párovanie zo Stripe reportov); adaptér prijíma 1 položku na predplatné.
+**Reálne testy v Stripe sandboxe (test mode) — dokončené 18.–19. 11. 2026** (lokálne Esblu + oficiálny Stripe CLI
+`stripe listen` + staging DB `esblu-test`; ostré platby vypnuté, syntetické firmy bez osobných údajov). Podrobne:
+`docs/stripe-test-and-reconciliation-2026-11-18.md` § 7–8.7, skript `scripts/stripe-local-sandbox.ps1`.
 
-- **Oprava (2026-11-18, `bac46e4`):** firma má najviac jednu zaplatiteľnú webovú checkout reláciu (DB reuse pod zámkom,
-  Idempotency-Key, `expires_at`, unikátny index, zrušenie). Overené: PGlite, unit, staging 10 paralelných spojení a test
-  v dvoch kartách prehliadača na Preview (vrátane opakovania po výpadku) — `docs/stripe-test-and-reconciliation-2026-11-18.md` § 7.
-  Migrácia `20261118120000` je aplikovaná **iba na stagingu**; produkcia čaká na súhlas (billing je tam vypnutý).
+| Oblasť | Výsledok |
+|---|---|
+| Nákup cez Stripe Checkout, zamietnutá karta | PASS (L1) |
+| Obnova, zlyhanie obnovy, oprava platby (Test Clock) | PASS (L7) |
+| Refund staršej faktúry → prístup aj obnova ostávajú | PASS (L12) |
+| Refund aktuálneho obdobia → Esblu `refunded`, Stripe `canceled`, 0 nárokov, ďalšie účtovanie zastavené | PASS (L13, L14 do 22. 2. 2027: 2 faktúry, 2 platby) |
+| Konečný stav pri `customer.subscription.deleted` a 2× reconciliation | PASS (L15, `in_sync`) |
+| Dve karty naraz → 1 zámer, 1 zaplatená relácia, 1 predplatné | PASS (E1–E2; skôr aj fake Preview B1–B7, staging 10 spojení) |
+| Zrušenie v aplikácii → `cancel_at_period_end` v Esblu aj Stripe, prístup do konca obdobia | PASS (E3); +2 dni rezerva nárokov podľa pravidla (§ 8.6) |
+| Simulácie | `test:subscriptions` 28, `-db` 60, `-lifecycle` 51, `-lifecycle-db` 74 |
+
+Opravy v tejto vetve: jedna zaplatiteľná relácia na firmu (`20261118120000`), prednosť konečných stavov (`20261118130000`),
+audit refundácie s faktúrou a obdobím (`20261118140000`), ukončenie predplatného u Stripe pri plnej refundácii aktuálneho
+obdobia (pipeline + reconciliation). Migrácie sú **iba na stagingu**; produkcia čaká na súhlas vlastníka (billing je tam vypnutý).
+Staging po teste uprataný (`web_provider='none'`, QA používatelia zablokovaní) — § 8.7.
 
 ## 3. Ekonomika a dane
 
@@ -74,7 +80,7 @@ v Android appke, nesúlad dátumov na `/subprocessors`, otázky k Apple prihlás
 |---|---|---|
 | Play Console Data safety | bez zmeny; pripravené odpovede v `04-data-safety.md` | — |
 | App access | vložiť text 6B do Play Console (heslo vlastník) | vlastník |
-| Stripe reálny test | Stripe test účet + cena 15,90 € + restricted key a webhook do Vercel Preview (runbook § 4) | vlastník → agent |
+| Stripe | testy v sandboxe hotové; pred produkciou: schváliť 3 migrácie, live účet + kľúče, rozhodnúť rezervu pri `cancel_at_period_end` | vlastník |
 | Účtovníčka | poslať otázky § 6 ekonomiky + vzor párovania | vlastník |
 | Apple | D-U-N-S → Apple Developer (99 $/rok, schválenie) | vlastník |
 | CLIA | skontrolovať a odoslať návrh do 24. 11. | vlastník |
