@@ -85,6 +85,30 @@ Rozhodnutie urobiť **pred** prvým LIVE predajom; neskorá zmena = migrácia ro
 | Ops alerty (DB, dedupe, e-mail Resend voliteľne, 503) | `lib/billing/ops-alerts.ts`, `app/api/cron/billing-ops-monitor`, migrácia `20261123120000` |
 | Testy | `scripts/billing-ops-pglite-tests.ts` (`npm run test:billing-ops-db`), `scripts/subscriptions-lifecycle-tests.ts` |
 
+### 7.1 Overenie esblu8 (2026-11-19) — väzby, prístup zákazníka, `web_provider='none'`
+
+- **Väzby dokladu** (`billing_invoice_documents`): `provider_document_id` (Stripe `in_…` / `cn_…`) ↔ `company_id`
+  (cez `billing_provider_links`; **`on delete set null`** — po ukončení firmy ostane doklad bez väzby na firmu, väzba
+  ostáva cez `provider_subscription_id` / `payment_intent_id`) ↔ `provider_subscription_id` ↔ `status` + `paid_at`
+  (stav iba dopredu) ↔ `service_period_start` / `service_period_end`. Unikát `(provider, environment,
+  provider_document_id)` zabráni duplicitnému riadku aj mimo RPC. Dobropis: `related_invoice_id` (+ číslo v exporte).
+  Export: `gross` / `stripe_fee` / `net` / refundácie (`bt_type`, `reporting_category`) / `payout_ids` /
+  `payout_arrival_date`; výplaty v `billing_balance_transactions.payout_id` + `payout_arrival_date`. Testy:
+  `test:billing-ops-db` (doklady, export, unikát, obdobie).
+- **Prístup zákazníka k histórii faktúr:** v aplikácii **nie je** vlastný zoznam dokladov. Zákazník (iba **owner**
+  aktívnej firmy — `esblu_billing_authorize_manage`) otvorí Stripe Customer Portal cez `POST /api/billing/manage
+  {action:"portal"}` (návrat na `/nastavenia/predplatne`); históriu faktúr v Portáli zobrazí Stripe podľa nastavenia
+  Portálu v Dashboarde (pri variante B ju treba skryť — § 4). `hosted_url` / `pdf_url` sa ukladajú iba do účtovnej
+  kópie Esblu (tabuľka bez prístupu klientov, RLS bez politík). **Gap (vedome neriešený v esblu8):** účtovník
+  (finance.view/manage bez role owner) históriu nevidí; zoznam v aplikácii by vyžadoval nové RPC s overením
+  aktívnej firmy + finance oprávnenia a rozhodnutie variant A/B (pri B je daňový doklad faktúra Esblu, nie Stripe).
+- **`billing_runtime_config.web_provider = 'none'`** = pozastavený PREDAJ, nie synchronizácia: cron
+  `/api/cron/billing-stripe-events` doťahovanie aj retry **beží** (existujúce predplatné, refundácie, spory);
+  `configured:false` (žiadne volanie Stripe) iba pri režime servera mimo `stripe_test`/`stripe_live` alebo
+  `web_provider='fake'`. Testy: `billing-ops-pglite-tests` (retry + doťahovanie pri `none` → spracované práve raz,
+  podvrh rovnakého ID s iným telom odmietnutý), `billing-live-mode-pglite-tests` S15b, statický test v
+  `subscriptions-lifecycle-tests`.
+
 ## 8. Otvorené (rozhodne prevádzkovateľ / účtovníčka)
 
 Variant A/B; náležitosti a text o DPH; Stripe Tax áno/nie; rozsah predaja pri spustení (SK B2B / EÚ / B2C); číslovanie;

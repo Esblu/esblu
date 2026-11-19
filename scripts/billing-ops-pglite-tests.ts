@@ -313,6 +313,42 @@ await check("retry: zlyhaná udalosť bez doťahovania → backoff 5 min, potom 
   assert.ok(f.st.calls.some((c) => c.path === `/events/${e.id}`));
 });
 
+await check("web_provider='none' (pozastavený predaj): retry aj doťahovanie zlyhanú udalosť spracujú PRÁVE RAZ; opakovaný beh / znovu-doručenie = duplicate", async () => {
+  await su("update public.billing_runtime_config set web_provider = 'none'");
+  try {
+    await su("delete from public.billing_event_cursors");
+    const f = await fixture(C.b, "sub_ops_cu");
+    await runEventCatchup(serviceDb, f.provider, f.provider, { timeBudgetMs: 60_000 }); // bootstrap kurzora
+    f.st.sub = { ...f.st.sub, cancel_at_period_end: true };
+    const e = ev("customer.subscription.updated", f.st.sub);
+    f.st.eventStore.set(String(e.id), e);
+    f.st.events.push(e);
+    f.st.failSubscription = true;
+    assert.equal((await webhook(f.provider, e)).outcome, "retry");
+    f.st.failSubscription = false;
+    await su("update public.billing_events set next_retry_at = now() - interval '1 second' where provider_event_id = $1", [e.id]);
+    const r = await runFailedEventRetry(serviceDb, f.provider, f.provider);
+    assert.deepEqual([r.claimed, r.outcomes.applied], [1, 1], JSON.stringify(r));
+    const done = await evRow(String(e.id));
+    assert.deepEqual([done.status, done.attempts], ["processed", 2]);
+    // ten istý beh znova + doťahovanie (udalosť je aj v /v1/events) + znovu-doručenie webhookom → nič druhýkrát
+    assert.equal((await runFailedEventRetry(serviceDb, f.provider, f.provider)).claimed, 0);
+    const c = await runEventCatchup(serviceDb, f.provider, f.provider, { timeBudgetMs: 60_000 });
+    assert.equal(c.outcomes.applied ?? 0, 0, JSON.stringify(c));
+    const again = await webhook(f.provider, e);
+    assert.equal(again.outcome, "duplicate", JSON.stringify(again));
+    const fin = await evRow(String(e.id));
+    assert.deepEqual([fin.status, fin.attempts], ["processed", 2], "spracovaná práve raz");
+    assert.equal(await n("select count(*)::int n from public.billing_events where provider_event_id = $1", [e.id]), 1);
+    // rovnaké ID s iným telom (podvrh) → odmietnuté, stav sa nezmení
+    const forged = await webhook(f.provider, { ...e, type: "customer.subscription.deleted" }, false);
+    assert.deepEqual([forged.outcome, forged.code], ["duplicate", "payload_mismatch"]);
+    assert.equal((await su<Json>("select cancel_at_period_end c from public.subscription_accounts where company_id = $1", [C.b]))[0].c, true);
+  } finally {
+    await su("update public.billing_runtime_config set web_provider = 'stripe'");
+  }
+});
+
 await check("retry: backoff rastie, po 8 pokusoch dead-letter; trvalá chyba = hneď dead-letter; udalosť mimo retencie = EVENT_UNAVAILABLE", async () => {
   const f = await fixture(C.b, "sub_ops_cu");
   const e = ev("customer.subscription.updated", f.st.sub);
@@ -453,6 +489,15 @@ await check("doklady: invoice.finalized → paid (webhook) + replay + staršia u
   d = await doc("in_sub_ops_doc");
   assert.deepEqual([d.status, Number(d.total_minor)], ["paid", 1590]);
   assert.equal(await n("select count(*)::int n from public.billing_invoice_documents where provider_document_id = 'in_sub_ops_doc'"), 1);
+  // väzba faktúra ↔ firma ↔ predplatné ↔ stav platby ↔ obdobie služby (z položky faktúry)
+  const link = (await su<Json>(`select company_id, provider_subscription_id, status, paid_at is not null paid, service_period_start, service_period_end
+    from public.billing_invoice_documents where provider_document_id = 'in_sub_ops_doc'`))[0];
+  assert.deepEqual([link.company_id, link.provider_subscription_id, link.status, link.paid], [C.t, "sub_ops_doc", "paid", true]);
+  assert.ok(link.service_period_start && link.service_period_end, "obdobie služby vyplnené");
+  assert.ok(Date.parse(String(link.service_period_end)) > Date.parse(String(link.service_period_start)));
+  // unikát (provider, environment, provider_document_id) aj mimo RPC → žiadny duplicitný riadok dokladu
+  await fails(() => su(`insert into public.billing_invoice_documents (provider, environment, kind, provider_document_id)
+    values ('stripe', 'test', 'invoice', 'in_sub_ops_doc')`), /billing_invoice_documents_unique|duplicate key/);
   // iné prostredie sa nezapíše
   await fails(() => su("select public.esblu_billing_upsert_document('live', null, $1::jsonb)", [JSON.stringify({ kind: "invoice", provider_document_id: "in_x" })]), /ENVIRONMENT_MISMATCH/);
 });
