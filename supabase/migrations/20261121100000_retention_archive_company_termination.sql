@@ -28,6 +28,10 @@
 --    pôvodné správanie (výmaz bez archívu) IBA pre syntetické testovacie dáta;
 --    povinný príznak + referencia + odôvodnenie, iba postgres (žiadny grant,
 --    odmietne JWT kontext Data API), zapísané v company_terminations a access_log.
+--    Guard: company_id s už dokončeným ukončením (status = 'completed', aj
+--    historické riadky z 2026-11-19 bez termination_mode) sa druhýkrát
+--    nepurguje → idempotentné already_completed + access_log
+--    'synthetic_test_data_purge_skipped' (všeobecne, bez natvrdo zadaných ID).
 -- 4. Operátorské funkcie (security definer, service_role/postgres, mimo Data
 --    API): operator_list_archives, export_archive, set_legal_hold,
 --    approve_retention_period (iba postgres), purge_expired (dry-run default).
@@ -156,8 +160,15 @@ create table if not exists esblu_retention.access_log (
   details jsonb not null default '{}'::jsonb,
   constraint access_log_action_check check (action in (
     'archive_created', 'list', 'export', 'legal_hold_set', 'legal_hold_clear',
-    'purge_dry_run', 'purge', 'retention_period_approved', 'synthetic_test_data_purge'))
+    'purge_dry_run', 'purge', 'retention_period_approved', 'synthetic_test_data_purge',
+    'synthetic_test_data_purge_skipped'))
 );
+-- Re-apply na DB s pôvodným zoznamom akcií (create table if not exists ho nezmení) → constraint obnoviť.
+alter table esblu_retention.access_log drop constraint if exists access_log_action_check;
+alter table esblu_retention.access_log add constraint access_log_action_check check (action in (
+  'archive_created', 'list', 'export', 'legal_hold_set', 'legal_hold_clear',
+  'purge_dry_run', 'purge', 'retention_period_approved', 'synthetic_test_data_purge',
+  'synthetic_test_data_purge_skipped'));
 create index if not exists access_log_archive_idx on esblu_retention.access_log (archive_id, at);
 
 -- Žiadne granty na tabuľky (ani service_role) — iba cez funkcie nižšie.
@@ -767,6 +778,7 @@ set search_path = ''
 as $function$
 declare
   v_claims_role text := nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'role';
+  v_done public.company_terminations;
 begin
   if v_claims_role is not null then
     raise exception using errcode = '42501', message = 'ESBLU_OPERATOR_ONLY';
@@ -780,6 +792,30 @@ begin
   if p_justification is null or length(btrim(p_justification)) not between 20 and 1000 then
     raise exception using errcode = 'P0001', message = 'ESBLU_SYNTHETIC_PURGE_JUSTIFICATION_REQUIRED';
   end if;
+  if p_company_id is null then
+    raise exception using errcode = 'P0001', message = 'ESBLU_ACCOUNT_DELETION_INVALID_REQUEST';
+  end if;
+
+  -- Guard proti opakovanému purge: firma, ktorá už má DOKONČENÉ ukončenie (akýmkoľvek režimom,
+  -- akýmkoľvek žiadateľom, vrátane historických riadkov bez termination_mode), sa druhýkrát
+  -- nepurguje. Vráti idempotentné already_completed, nič nemaže, pokus zapíše do access_log.
+  -- Zámok serializuje súbežné volania pre to isté company_id.
+  perform pg_advisory_xact_lock(hashtextextended('esblu_synthetic_purge:' || p_company_id::text, 0));
+  select * into v_done from public.company_terminations t
+  where t.company_id = p_company_id and t.status = 'completed'
+  order by t.completed_at desc nulls last limit 1;
+  if v_done.id is not null then
+    perform esblu_retention.log_access('synthetic_test_data_purge_skipped', v_done.archive_id, p_company_id,
+      p_reference, btrim(p_justification),
+      jsonb_build_object('reason', 'already_completed', 'termination_id', v_done.id,
+                         'termination_mode', v_done.termination_mode));
+    return jsonb_build_object(
+      'already_completed', true, 'skipped', true, 'termination_id', v_done.id, 'job_id', v_done.cleanup_job_id,
+      'storage_targets', '[]'::jsonb, 'summary', null, 'delete_account', false,
+      'archive_id', v_done.archive_id, 'termination_mode', v_done.termination_mode
+    );
+  end if;
+
   return esblu_retention.termination_execute(p_user_id, p_company_id, p_delete_account, p_export_mode,
     'synthetic_test_data_purge', p_reference, btrim(p_justification));
 end;
@@ -788,7 +824,9 @@ $function$;
 comment on function public.esblu_company_termination_synthetic_purge(uuid, uuid, boolean, text, boolean, text, text) is
   'Auditovaná výnimka (postgres only, nie Data API): výmaz firmy so SYNTETICKÝMI testovacími dokladmi bez archívu. '
   'Povinné p_synthetic_test_data_purge = true, referencia (schválenie) a odôvodnenie; zapísané v company_terminations '
-  '(termination_mode, operator_reference, justification) a esblu_retention.access_log. Nikdy pre skutočné doklady.';
+  '(termination_mode, operator_reference, justification) a esblu_retention.access_log. Nikdy pre skutočné doklady. '
+  'Firma s už dokončeným ukončením (company_terminations.status = completed) sa znova nepurguje → already_completed '
+  '+ access_log synthetic_test_data_purge_skipped.';
 
 revoke all on function public.esblu_company_termination_synthetic_purge(uuid, uuid, boolean, text, boolean, text, text)
   from public, anon, authenticated, service_role;

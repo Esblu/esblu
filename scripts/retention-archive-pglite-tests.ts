@@ -55,7 +55,22 @@ async function check(label: string, fn: () => Promise<void>) {
 await db.exec(read("scripts/sql/pglite/supabase-platform-stub.sql"));
 const files = replayOrder(readdirSync(path.join(ROOT, MIGRATIONS)).filter((f) => f.endsWith(".sql")));
 assert.ok(files.includes(path.basename(MIGRATION)));
-for (const f of files) await db.exec(read(`${MIGRATIONS}/${f}`));
+// Storage politiky / buckety: snapshot tesne pred a po retenčnej migrácii (nesmie ich meniť).
+const storagePolicySnapshot = async () =>
+  JSON.stringify((await db.query<Row>(`
+    select 'policy' k, policyname n, cmd c, coalesce(qual, '') q, coalesce(with_check, '') w, roles::text r
+      from pg_policies where schemaname = 'storage'
+    union all
+    select 'bucket', id, coalesce(public::text, ''), coalesce(file_size_limit::text, ''), coalesce(allowed_mime_types::text, ''), ''
+      from storage.buckets
+    order by 1, 2`)).rows);
+let storageBefore = "";
+let storageAfter = "";
+for (const f of files) {
+  if (f === path.basename(MIGRATION)) storageBefore = await storagePolicySnapshot();
+  await db.exec(read(`${MIGRATIONS}/${f}`));
+  if (f === path.basename(MIGRATION)) storageAfter = await storagePolicySnapshot();
+}
 
 type Who = { role: "authenticated" | "service_role" | "anon" | "postgres"; uid?: string; session?: string; jwt?: boolean };
 type Outcome = { layer: "ok" | "privilege" | "error"; message: string; data: Row[] };
@@ -93,12 +108,14 @@ const U = {
   ownerB: "e5000000-0000-4000-8000-0000000000b1",
   ownerS: "e5000000-0000-4000-8000-0000000000c1",
   ownerO: "e5000000-0000-4000-8000-0000000000d1",
+  ownerH: "e5000000-0000-4000-8000-0000000000e1",
 };
 const C = {
   a: "e6000000-0000-4000-8000-00000000000a",
   b: "e6000000-0000-4000-8000-00000000000b",
   s: "e6000000-0000-4000-8000-00000000000c",
   o: "e6000000-0000-4000-8000-00000000000d",
+  h: "e6000000-0000-4000-8000-00000000000e",
 };
 const S = {
   owner: "e7000000-0000-4000-8000-0000000000a1", admin: "e7000000-0000-4000-8000-0000000000a2",
@@ -116,17 +133,20 @@ await db.exec(`
   insert into auth.users (id, email, email_confirmed_at) values
     ('${U.owner}', 'owner@example.invalid', now()), ('${U.admin}', 'admin@example.invalid', now()),
     ('${U.employee}', 'emp@example.invalid', now()), ('${U.ownerB}', 'ownerb@example.invalid', now()),
-    ('${U.ownerS}', 'owners@example.invalid', now()), ('${U.ownerO}', 'ownero@example.invalid', now());
+    ('${U.ownerS}', 'owners@example.invalid', now()), ('${U.ownerO}', 'ownero@example.invalid', now()),
+    ('${U.ownerH}', 'ownerh@example.invalid', now());
   insert into auth.sessions (id, user_id) values ('${S.owner}', '${U.owner}'), ('${S.admin}', '${U.admin}'),
     ('${S.employee}', '${U.employee}'), ('${S.ownerB}', '${U.ownerB}');
   set session_replication_role = replica;
   insert into public.companies (id, owner_id, name) values
     ('${C.a}', '${U.owner}', 'Firma A s.r.o.'), ('${C.b}', '${U.ownerB}', 'Firma B s.r.o.'),
-    ('${C.s}', '${U.ownerS}', 'Syntetická test s.r.o.'), ('${C.o}', '${U.ownerO}', 'Stará firma s.r.o.');
+    ('${C.s}', '${U.ownerS}', 'Syntetická test s.r.o.'), ('${C.o}', '${U.ownerO}', 'Stará firma s.r.o.'),
+    ('${C.h}', '${U.ownerH}', 'Historicky ukončená s.r.o.');
   insert into public.company_members (company_id, user_id, role, status, permissions) values
     ('${C.a}', '${U.owner}', 'owner', 'active', '{}'), ('${C.a}', '${U.admin}', 'admin', 'active', '{}'),
     ('${C.a}', '${U.employee}', 'employee', 'active', '{}'), ('${C.b}', '${U.ownerB}', 'owner', 'active', '{}'),
-    ('${C.s}', '${U.ownerS}', 'owner', 'active', '{}'), ('${C.o}', '${U.ownerO}', 'owner', 'active', '{}');
+    ('${C.s}', '${U.ownerS}', 'owner', 'active', '{}'), ('${C.o}', '${U.ownerO}', 'owner', 'active', '{}'),
+    ('${C.h}', '${U.ownerH}', 'owner', 'active', '{}');
   insert into public.company_legal_identities (company_id, country_code, registration_id, legal_entity_key)
     values ('${C.a}', 'SK', '12345678', 'SK:12345678');
   insert into public.company_billing_profile (company_id, legal_name, ico, dic, city, country_code, contact_email, iban, updated_by)
@@ -179,6 +199,16 @@ await db.exec(`
     values ('${id("d", 1)}', '${C.o}', 'issued', 'regular_invoice', 'finalized', '2014-03-01', 'FA-2014-1', '2014-03-01');
   insert into public.invoice_items (invoice_id, position, description, quantity, unit_price, vat_category_code)
     values ('${id("d", 1)}', 1, 'Stará služba', 1, 10, 'S');
+  set session_replication_role = origin;
+`);
+// Historicky ukončená firma: dokončený riadok company_terminations zo starého workflow (bez termination_mode,
+// ako 5 syntetických firiem vyčistených v produkcii 2026-11-19), firma + doklad v DB stále existujú.
+await db.exec(`
+  set session_replication_role = replica;
+  insert into public.invoices (id, company_id, direction, kind, document_status, finalized_at, invoice_number, issue_date)
+    values ('${id("e", 1)}', '${C.h}', 'issued', 'regular_invoice', 'finalized', '2026-10-01', 'FA-H-1', '2026-10-01');
+  insert into public.company_terminations (id, company_id, requested_by, status, export_mode, completed_at)
+    values ('${id("e", 9)}', '${C.h}', '${U.ownerH}', 'completed', 'waived', '2026-11-19T10:00:00Z');
   set session_replication_role = origin;
 `);
 
@@ -405,6 +435,71 @@ await check("výnimka syntetických dát: s príznakom + referenciou + odôvodne
   const log = await su<Row>(`select action, operator_ref, db_session_user from esblu_retention.access_log where source_company_id = $1`, [C.s]);
   assert.deepEqual(log, [{ action: "synthetic_test_data_purge", operator_ref: REF, db_session_user: "postgres" }]);
   // bežná cesta (4-arg, service_role) výnimku nepozná — vždy archive (overené vyššie pre firmu A)
+});
+
+await check("guard: opakovaný synthetic purge tej istej firmy → already_completed, žiadny druhý výmaz, pokus v access_log", async () => {
+  const termsBefore = await count(`select count(*)::int n from public.company_terminations where company_id = $1`, [C.s]);
+  const jobsBefore = await count("select count(*)::int n from public.account_deletion_cleanup_jobs");
+  for (const user of [U.ownerS, U.owner]) {
+    const o = await run(pg, syntheticSql, [user, C.s, true, "OPS-2026-11-20-rerun", JUST], true);
+    assert.equal(o.layer, "ok", o.message);
+    const r = o.data[0].r as Record<string, unknown>;
+    assert.equal(r.already_completed, true, `žiadateľ ${user}`);
+    assert.equal(r.skipped, true);
+    assert.equal(r.termination_mode, "synthetic_test_data_purge");
+    assert.deepEqual(r.storage_targets, [], "žiadne nové Storage ciele");
+  }
+  assert.equal(await count(`select count(*)::int n from public.company_terminations where company_id = $1`, [C.s]), termsBefore);
+  assert.equal(await count("select count(*)::int n from public.account_deletion_cleanup_jobs"), jobsBefore, "žiadny nový cleanup job");
+  const log = await su<Row>(`select action, operator_ref from esblu_retention.access_log where source_company_id = $1 order by id`, [C.s]);
+  assert.deepEqual(log.map((x) => `${x.action}|${x.operator_ref}`), [
+    `synthetic_test_data_purge|${REF}`, "synthetic_test_data_purge_skipped|OPS-2026-11-20-rerun", "synthetic_test_data_purge_skipped|OPS-2026-11-20-rerun",
+  ]);
+  // validácia (príznak / referencia / odôvodnenie) a JWT zákaz platia aj pre už ukončenú firmu
+  assert.match((await run(pg, syntheticSql, [U.ownerS, C.s, false, REF, JUST])).message, /ESBLU_SYNTHETIC_PURGE_FLAG_REQUIRED/);
+  assert.match((await run({ role: "postgres", jwt: true }, syntheticSql, [U.ownerS, C.s, true, REF, JUST])).message, /ESBLU_OPERATOR_ONLY/);
+});
+
+await check("guard: historický dokončený riadok (bez termination_mode) aj archivovaná firma → synthetic purge nič nezmaže", async () => {
+  const h = await run(pg, syntheticSql, [U.ownerH, C.h, true, REF, JUST], true);
+  assert.equal(h.layer, "ok", h.message);
+  const hr = h.data[0].r as Record<string, unknown>;
+  assert.equal(hr.already_completed, true);
+  assert.equal(hr.termination_id, id("e", 9));
+  assert.equal(hr.termination_mode, null);
+  assert.equal(await count(`select count(*)::int n from public.companies where id = $1`, [C.h]), 1, "firma nedotknutá");
+  assert.equal(await count(`select count(*)::int n from public.invoices where company_id = $1`, [C.h]), 1, "doklad nedotknutý");
+  assert.equal(await count(`select count(*)::int n from public.company_terminations where company_id = $1`, [C.h]), 1);
+  // firma A bola ukončená režimom archive → výnimka ju nepurguje a archív ostáva celý
+  const nA = await count(`select count(*)::int n from esblu_retention.archived_records where archive_id = $1`, [archiveA]);
+  const a = await run(pg, syntheticSql, [U.owner, C.a, true, REF, JUST], true);
+  assert.equal(a.layer, "ok", a.message);
+  const ar = a.data[0].r as Record<string, unknown>;
+  assert.equal(ar.already_completed, true);
+  assert.equal(ar.archive_id, archiveA);
+  assert.equal(ar.termination_mode, "archive");
+  assert.equal(await count(`select count(*)::int n from esblu_retention.archived_records where archive_id = $1`, [archiveA]), nA);
+  const skipped = await su<Row>(`select source_company_id c, archive_id a, details->>'reason' r from esblu_retention.access_log
+    where action = 'synthetic_test_data_purge_skipped' and source_company_id in ($1, $2) order by id`, [C.h, C.a]);
+  assert.deepEqual(skipped, [{ c: C.h, a: null, r: "already_completed" }, { c: C.a, a: archiveA, r: "already_completed" }]);
+});
+
+await check("Storage: retenčná migrácia nemení storage politiky ani buckety; ponechané XML/sken firmy A nečíta nikto z tenantov", async () => {
+  assert.ok(storageBefore.length > 2, "snapshot existuje");
+  assert.equal(storageAfter, storageBefore, "storage.objects politiky / buckety pred = po migrácii");
+  const mig = read(MIGRATION);
+  assert.doesNotMatch(mig, /(create|alter|drop)\s+policy[^;]*on\s+storage\./i);
+  assert.doesNotMatch(mig, /(insert\s+into|update|delete\s+from)\s+storage\.(buckets|objects)/i);
+  await db.exec(`
+    insert into storage.buckets (id, name, public) values ('einvoice-documents', 'einvoice-documents', false), ('ai-inbox-documents', 'ai-inbox-documents', false)
+      on conflict (id) do nothing;
+    insert into storage.objects (bucket_id, name, owner) values
+      ('einvoice-documents', '${C.a}/out-a.xml', null), ('einvoice-documents', '${C.a}/in-a.xml', null),
+      ('ai-inbox-documents', '${C.a}/scan-a.pdf', '${U.owner}');`);
+  for (const w of [owner, admin, employee, ownerB, anon]) {
+    const o = await run(w, `select bucket_id, name from storage.objects where name like $1`, [`${C.a}/%`]);
+    assert.ok(o.layer === "privilege" || (o.layer === "ok" && o.data.length === 0), `${w.role}/${w.uid ?? ""}: ${JSON.stringify(o.data)} ${o.message}`);
+  }
 });
 
 let archiveO = "";

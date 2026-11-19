@@ -17,6 +17,8 @@
 --   - ponechá operátorské čítanie: operator_list_archives, export_archive, set_legal_hold
 --     (+ assert_operator, log_access, compute_retention_until) — archív sa dá stále
 --     vydať úradu / účtovníkovi a každý prístup sa loguje,
+--   - nemení access_log_action_check (akcia 'synthetic_test_data_purge_skipped' ostáva
+--     povolená, aby zapísané audit riadky ostali platné),
 --   - nemaže stĺpce company_terminations (termination_mode, operator_reference,
 --     justification, archive_id, archived_counts) — sú súčasťou auditu.
 -- Opätovná forward migrácia je idempotentná (create if not exists / or replace).

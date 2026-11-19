@@ -77,7 +77,7 @@ a pri čítaní/exporte účel (≥ 10 znakov). Odmietnu kontext `anon`/`authent
 
 **Access log** (`esblu_retention.access_log`, append-only — UPDATE/DELETE/TRUNCATE blokované triggerom aj pre postgres):
 `archive_created`, `list`, `export` (+ SHA-256 exportu), `legal_hold_set/clear`, `purge_dry_run`, `purge`,
-`retention_period_approved`, `synthetic_test_data_purge`; s `db_session_user`, `invoker_role`, `jwt_role`, `operator_ref`, účelom.
+`retention_period_approved`, `synthetic_test_data_purge`, `synthetic_test_data_purge_skipped`; s `db_session_user`, `invoker_role`, `jwt_role`, `operator_ref`, účelom.
 
 **Nemennosť archívu:** `archived_records` — UPDATE iba prepočtu `retention_until` (pri schválení lehoty), DELETE iba počas
 behu `purge_expired` (GUC + necommitnutý `executing` riadok `purge_runs`, rovnaký vzor ako termination — podvrhnuté GUC
@@ -153,6 +153,15 @@ Zapíše `company_terminations.termination_mode = 'synthetic_test_data_purge'`, 
 (CHECK vynúti ich prítomnosť) a `access_log` akciu `synthetic_test_data_purge`. Správa sa ako pôvodný workflow
 (vrátane XML v cleanup jobe). Nikdy z UI / route.
 
+**Guard proti opakovanému purge (doplnené 2026-11-19, esblu8):** ak `company_id` už má riadok
+`company_terminations` so `status = 'completed'` (akýkoľvek režim a žiadateľ — vrátane historických riadkov
+s `termination_mode = null`, napr. 5 syntetických firiem vyčistených v produkcii 2026-11-19), funkcia po validácii
+príznaku/referencie/odôvodnenia **nič nemaže** a vráti `already_completed: true, skipped: true` + pôvodné
+`termination_id` / `archive_id` / `termination_mode`. Pokus sa zapíše do `access_log` ako
+`synthetic_test_data_purge_skipped` (`details.reason = 'already_completed'`). Súbežné volania pre to isté
+`company_id` serializuje `pg_advisory_xact_lock`. Implementované všeobecne, bez natvrdo zadaných ID.
+Rollback tento CHECK zoznam akcií nemení (zapísané audit riadky ostávajú platné).
+
 **Vyčistenie 2026-11-19 (5 testovacích firiem vrátane Anchar Bau, FA20260001 / TEST-2026-002):** beží v produkcii
 **na pôvodných funkciách** (táto migrácia nie je nasadená) cez `esblu_company_termination_commit(…, 'waived')` podľa
 `prod-cleanup-and-operator-plan-2026-11-19.md` §4 — správanie je identické s touto výnimkou. Vzniknuté riadky
@@ -178,7 +187,10 @@ Schéma a ACL; bežné ukončenie archivuje (14 záznamov / 12 tabuliek, koncept
 neúčtovná fotka); minimalizácia + SHA-256; izolácia owner/admin/employee/iný tenant/anon (tabuľky aj funkcie) a
 service_role bez priameho prístupu; access log pri list/export + odmietnutie bez referencie/účelu; append-only a
 nemennosť aj pre postgres, podvrhnuté GUC; idempotencia; rollback celku pri chybe; bežné zrušenie ostáva blokované;
-výnimka (bez príznaku/referencie/odôvodnenia/JWT/service_role → stop; s nimi → výmaz + audit); purge (PROPOSED sa
+výnimka (bez príznaku/referencie/odôvodnenia/JWT/service_role → stop; s nimi → výmaz + audit); guard opakovaného
+purge (tá istá firma iným/rovnakým žiadateľom, historický riadok bez `termination_mode`, firma ukončená archívom →
+`already_completed`, nič sa nezmaže, `synthetic_test_data_purge_skipped` v logu); Storage politiky a buckety pred = po
+migrácii a ponechané XML/sken nečíta žiadny tenant ani anon; purge (PROPOSED sa
 nemaže, schválenie iba postgres, legal hold, budúci dátum iba dry-run, maže iba po `retention_until`, uzavretie firmy,
 idempotentná); rollback migrácie bez straty archívu + re-apply. Upravený `company-termination-pglite-tests.ts`
 (cleanup job už neobsahuje XML).
