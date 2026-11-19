@@ -351,7 +351,9 @@ chyba): pri `cancel_at_period_end=true` nepridávať rezervu (obnova už nenasta
 | Otvorené checkout zámery | 0 |
 | Zachované dôkazy | `billing_events` (42: 34 processed, 5 stale, 3 ignored), 4 účty QA (A fake `active`, C `active`, D `refunded`, E `active` + `cancel_at_period_end`), `billing_reconciliation`, nároky |
 | Vercel Preview vetvy | `ESBLU_BILLING_MODE=off`, `NEXT_PUBLIC_ESBLU_BILLING_UI=0`, fake secret prázdny (bez zmeny); Stripe kľúče vo Verceli nikdy neboli |
-| Stripe sandboxy (test mode) | bez zmeny — žiadne skutočné platby. Predplatné C (pôvodný sandbox `B5dmk5ax59`) sa v test mode obnovuje bez webhookov do Esblu (nároky C vypršia cez `valid_until`); E sa ukončí 18. 12. Vlastník môže sandboxy zmazať (`stripe sandboxes delete`) |
+| Stripe sandboxy (test mode) | žiadne skutočné platby. E: Stripe ukončí 18. 12. (`cancel_at`); webhook už nepríde (staging billing vypnutý) → nároky E vypršia 20. 12. (fail closed) |
+| Firma C (19. 11. 2026) | Esblu: syntetická operátorská udalosť `esblu.sync.operator_cancel` (`operator:qa-cleanup:sub_1UdChQB5dmk5ax59OxkKJaun`, cez `esblu_billing_record_event` + `esblu_billing_apply_event`, `processed`) → účet `canceled`, `ended_at` 08:58 UTC, 0 účinných nárokov. Stripe (pôvodný sandbox `B5dmk5ax59`, predvolený profil CLI) — **vlastník**: `npx --yes @stripe/cli@1.55.12 subscriptions cancel sub_1UdChQB5dmk5ax59OxkKJaun` (ak kľúč sandboxu už neplatí, sandbox zmazať: `stripe sandboxes delete`) |
+| Kontrola Preview `729de27` (19. 11.) | `dpl_GnaBT839QpRvtDcC5tGLQL3QsL1V` READY; `/api/billing/purchase-options` → 404 `ESBLU_BILLING_DISABLED`; stránka Predplatné: „Online predplatné zatiaľ nie je dostupné.“, `subscription` aj `purchase-options` 404; panel „Plán a čerpanie firmy“ preložený v sk/en/de, 0 surových kľúčov. Prihlásenie: dočasne odblokovaný owner E, potom znova zablokovaný, heslo zneplatnené, relácie zmazané |
 
 
 ### 8.4 Runbook — reálny Stripe test (sandbox + Vercel Preview + staging DB)
