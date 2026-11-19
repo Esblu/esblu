@@ -13,6 +13,8 @@ import { EfakturaSkProvider } from "../lib/einvoice/provider/efaktura-sk.ts";
 import { enrollReception, loadReception, parseEnrollBody } from "../lib/einvoice/ui/reception-server.ts";
 import { classifyAccessError, loadAccessFlags, type RpcLike } from "../lib/einvoice/ui/access.ts";
 import { accessFailure, loadAccessResult } from "../lib/einvoice/ui/summary-server.ts";
+import { EINVOICE_MANDATE_STATEMENT_VERSION } from "../lib/einvoice/mandate-statement.ts";
+import { mandateStatement, type MandateStore } from "../lib/einvoice/mandate.ts";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (p: string) => readFileSync(path.join(ROOT, p), "utf8");
@@ -42,14 +44,17 @@ const CODE_OK = "a1b2c3d4e5";
 const CODE_BAD = "000000000000dead";
 const CODE_SENDONLY = "000000000000beef";
 
-await check("telo: presne {verification_code, confirm_enroll:true}; formát hex; kód sa nevráti v chybe", () => {
-  assert.deepEqual(parseEnrollBody({ verification_code: "a1b2", confirm_enroll: true }), { ok: true, code: "a1b2" });
-  assert.deepEqual(parseEnrollBody({ verification_code: "a1 b2", confirm_enroll: true }), { ok: true, code: "a1b2" });
-  assert.equal((parseEnrollBody({ verification_code: "a1b2", confirm_enroll: true, company_id: "x" }) as { code: string }).code, "INVALID_BODY");
-  assert.equal((parseEnrollBody({ verification_code: "a1b2", confirm_enroll: "true" }) as { code: string }).code, "CONFIRMATION_REQUIRED");
-  assert.equal((parseEnrollBody({ verification_code: "zz-not-hex", confirm_enroll: true }) as { code: string }).code, "INVALID_CODE_FORMAT");
+const V = EINVOICE_MANDATE_STATEMENT_VERSION;
+await check("telo: presne {verification_code, confirm_enroll:true, mandate_version}; formát hex; kód sa nevráti v chybe", () => {
+  assert.deepEqual(parseEnrollBody({ verification_code: "a1b2", confirm_enroll: true, mandate_version: V }), { ok: true, code: "a1b2", mandateVersion: V });
+  assert.deepEqual(parseEnrollBody({ verification_code: "a1 b2", confirm_enroll: true, mandate_version: V }), { ok: true, code: "a1b2", mandateVersion: V });
+  assert.equal((parseEnrollBody({ verification_code: "a1b2", confirm_enroll: true, mandate_version: V, company_id: "x" }) as { code: string }).code, "INVALID_BODY");
+  assert.equal((parseEnrollBody({ verification_code: "a1b2", confirm_enroll: true }) as { code: string }).code, "INVALID_BODY", "bez verzie poverenia");
+  assert.equal((parseEnrollBody({ verification_code: "a1b2", confirm_enroll: "true", mandate_version: V }) as { code: string }).code, "CONFIRMATION_REQUIRED");
+  assert.equal((parseEnrollBody({ verification_code: "a1b2", confirm_enroll: true, mandate_version: "old-v0" }) as { code: string }).code, "MANDATE_STATEMENT_OUTDATED");
+  assert.equal((parseEnrollBody({ verification_code: "zz-not-hex", confirm_enroll: true, mandate_version: V }) as { code: string }).code, "INVALID_CODE_FORMAT");
   assert.equal((parseEnrollBody([]) as { code: string }).code, "INVALID_BODY");
-  assert.ok(!JSON.stringify(parseEnrollBody({ verification_code: "SECRETXYZ", confirm_enroll: true })).includes("SECRETXYZ"));
+  assert.ok(!JSON.stringify(parseEnrollBody({ verification_code: "SECRETXYZ", confirm_enroll: true, mandate_version: V })).includes("SECRETXYZ"));
 });
 
 const h = await createPartnerHarness();
@@ -86,19 +91,24 @@ const access = (over: Partial<{ entitlementActive: boolean; rolloutEnabled: bool
   return { ok: true as const, financeView: v.data === true, access: { financeManage: m.data === true, entitlementActive: true, providerConfigured: true, rolloutEnabled: true, ...over } };
 };
 let providerCalls = 0;
+let mandateStore: MandateStore | null = h.mandates;
+const STATEMENT = mandateStatement("sk");
 const deps = (uid: string, over = {}) => ({
   db: h.userDb(uid),
   access: access(over),
   environment: "sandbox" as const,
   userId: uid,
   limiter: () => h.limiter,
+  mandates: () => mandateStore,
+  statement: STATEMENT,
+  evidence: () => ({ requestId: "req-test-1", ipSha256: "1".repeat(64), userAgentSha256: "2".repeat(64) }),
   onboarding: () => {
     providerCalls++;
     return { store: h.onboarding, provider, environment: "sandbox" as const };
   },
 });
 const orgRow = async (c: string) => (await h.sql<Record<string, unknown>>("select * from public.einvoice_organizations where company_id = $1", [c])).rows[0] ?? null;
-const body = (code: string) => ({ verification_code: code, confirm_enroll: true });
+const body = (code: string) => ({ verification_code: code, confirm_enroll: true, mandate_version: V });
 
 await check("employee (aj s finance flagmi), admin bez financií → 403, poskytovateľ sa nevolá, nič sa nezapíše", async () => {
   for (const uid of [U.employee, U.admin]) {
@@ -121,6 +131,7 @@ await check("bez nároku / rolloutu / poskytovateľa → 403 / 503 bez volania p
 await check("neplatné telo → 400 PRED kontrolou oprávnení aj poskytovateľom", async () => {
   const before = providerCalls;
   assert.equal((await enrollReception(deps(U.employee), { verification_code: CODE_OK })).status, 400);
+  assert.equal((await enrollReception(deps(U.owner), { verification_code: CODE_OK, confirm_enroll: true, mandate_version: "efaktura-mandate-old" })).status, 409, "zastaraný text poverenia");
   assert.equal((await enrollReception(deps(U.owner), { verification_code: "xyz!", confirm_enroll: true })).status, 400);
   assert.equal(providerCalls, before);
 });
@@ -142,6 +153,35 @@ await check("neplatný FS kód (owner) → 422, stav failed, príjem neaktívny;
   assert.equal((await orgRow(CA))?.reception_status, "failed");
   assert.equal(await orgRow(CB), null, "iná firma bez zmeny");
 });
+await check("mandát: neúspešný enroll zapísal udelenie (snapshot, hash textu, dôkazy) a hneď ho ukončil (system); kód nikde", async () => {
+  const rows = (await h.sql<Record<string, unknown>>("select * from public.einvoice_mandates where company_id = $1 order by granted_at", [CA])).rows;
+  assert.ok(rows.length >= 1);
+  const m = rows[rows.length - 1];
+  assert.equal(m.granted_by_user_id, U.owner);
+  assert.equal(m.granted_by_role, "owner");
+  assert.equal(m.statement_version, V);
+  assert.equal(m.statement_sha256, STATEMENT.sha256);
+  assert.equal(m.statement_locale, "sk");
+  assert.equal(m.request_id, "req-test-1");
+  assert.equal(m.effective_at, null);
+  assert.equal(m.revoked_by_kind, "system");
+  assert.equal(m.revocation_reason_code, "EINVOICE_ENROLL_TOKEN_INVALID");
+  const dump = JSON.stringify(rows);
+  for (const c of [CODE_OK, CODE_BAD, CODE_SENDONLY]) assert.ok(!dump.includes(c));
+});
+await check("mandát: bez zápisu dôkazu sa enroll nevykoná (500 MANDATE_RECORD_FAILED, poskytovateľ sa nevolá)", async () => {
+  await h.exec("delete from public.einvoice_enroll_attempts");
+  const before = fake.requests.filter((r) => r.path === "/v1/agent/peppol/enroll").length;
+  mandateStore = { ...h.mandates, grant: async () => { throw new Error("DB down"); } };
+  try {
+    const r = await enrollReception(deps(U.owner), body(CODE_OK));
+    assert.equal(r.status, 500);
+    assert.equal((r.body as { code: string }).code, "MANDATE_RECORD_FAILED");
+  } finally {
+    mandateStore = h.mandates;
+  }
+  assert.equal(fake.requests.filter((r) => r.path === "/v1/agent/peppol/enroll").length, before, "enroll sa nevolal");
+});
 await check("platný kód (admin s finance.manage) → 200 ENROLLED, príjem aj odosielanie aktívne", async () => {
   const r = await enrollReception(deps(U.adminFin), body(CODE_OK));
   assert.equal(r.status, 200, JSON.stringify(r.body));
@@ -151,6 +191,16 @@ await check("platný kód (admin s finance.manage) → 200 ENROLLED, príjem aj 
   const g = await loadReception(deps(U.accountant));
   assert.equal((g.body as { reception: { state: string } }).reception.state, "active");
 });
+await check("mandát: úspešný enroll → účinný mandát send+receive so SHA-256 odpovede poskytovateľa; snapshot udeľujúceho", async () => {
+  const [m] = (await h.sql<Record<string, unknown>>("select * from public.einvoice_mandates where company_id = $1 and effective_at is not null", [CA])).rows;
+  assert.ok(m, "účinný mandát existuje");
+  assert.deepEqual(m.effective_scope, ["send", "receive"]);
+  assert.equal(m.granted_by_user_id, U.adminFin);
+  assert.equal(m.granted_by_role, "admin");
+  assert.equal(m.provider_outcome, "ENROLL_ENROLLED");
+  assert.match(String(m.provider_response_sha256), /^[0-9a-f]{64}$/);
+  assert.equal(m.revoked_at, null);
+});
 await check("send_only (iná firma B, vlastný owner) → 200 SEND_ONLY: odosielanie áno, príjem nie; A nevidí B", async () => {
   const r = await enrollReception(deps(U.otherOwner), body(CODE_SENDONLY));
   assert.equal(r.status, 200, JSON.stringify(r.body));
@@ -159,6 +209,10 @@ await check("send_only (iná firma B, vlastný owner) → 200 SEND_ONLY: odosiel
   assert.deepEqual([b.reception.state, b.reception.receivingActive, b.reception.sendingEnabled, b.reception.errorCode], ["send_only", false, true, "PARTICIPANT_HELD_ELSEWHERE"]);
   const ga = await loadReception(deps(U.owner));
   assert.equal((ga.body as { reception: { state: string } }).reception.state, "active", "A vidí iba svoj stav");
+});
+await check("mandát: send_only → účinný iba 'send' (príjem drží iný poskytovateľ)", async () => {
+  const [m] = (await h.sql<Record<string, unknown>>("select effective_scope, provider_outcome from public.einvoice_mandates where company_id = $1 and effective_at is not null", [CB])).rows;
+  assert.deepEqual(m, { effective_scope: ["send"], provider_outcome: "ENROLL_SEND_ONLY" });
 });
 await check("overovací kód sa nikde neuloží ani nezaloguje; odpoveď neobsahuje ID poskytovateľa ani participant ID", async () => {
   const dump = JSON.stringify((await h.sql("select * from public.einvoice_organizations")).rows) + JSON.stringify((await h.sql("select * from public.einvoice_webhook_events")).rows);
@@ -187,7 +241,7 @@ await check("UI: panel bez localStorage/console, input type=password + autocompl
     assert.doesNotMatch(read(f), /console\./, f);
   }
   const client = read("lib/einvoice/ui/client.ts");
-  assert.match(client, /body: \{ verification_code: verificationCode, confirm_enroll: true \}/);
+  assert.match(client, /body: \{ verification_code: verificationCode, confirm_enroll: true, mandate_version: EINVOICE_MANDATE_STATEMENT_VERSION \}/);
 });
 await check("i18n: všetky stavy príjmu majú preklad v sk / en / de", () => {
   for (const lang of ["sk", "en", "de"]) {
@@ -271,7 +325,7 @@ await check("DB (RLS): chýbajúci membership a nedostatočné financie → fina
 });
 await check("route: 401 / 403 / 503 sa prenášajú do odpovede (reception GET aj enroll)", async () => {
   for (const [kind, status] of [["unauthenticated", 401], ["forbidden", 403], ["temporary", 503]] as const) {
-    const d = { db: h.userDb(U.owner), access: async () => ({ ok: false as const, kind }), environment: "sandbox" as const, userId: U.owner, limiter: () => null, onboarding: () => null };
+    const d = { db: h.userDb(U.owner), access: async () => ({ ok: false as const, kind }), environment: "sandbox" as const, userId: U.owner, limiter: () => null, onboarding: () => null, mandates: () => null, statement: STATEMENT, evidence: () => ({ requestId: null, ipSha256: null, userAgentSha256: null }) };
     assert.equal((await loadReception(d)).status, status);
     assert.equal((await enrollReception(d, body(CODE_OK))).status, status);
   }

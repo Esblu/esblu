@@ -31,6 +31,7 @@ import {
 import { generateUbl } from "../lib/einvoice/ubl/generate.ts";
 import { parseInboundUbl } from "../lib/einvoice/ubl/parse.ts";
 import type { UblInvoiceSnapshot, UblParty } from "../lib/einvoice/ubl/model.ts";
+import { EINVOICE_MANDATE_MIGRATION, SEED_EFFECTIVE_MANDATES_SQL } from "./einvoice-mandate-test-seed.ts";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (p: string) => readFileSync(path.join(ROOT, p), "utf8");
@@ -126,6 +127,8 @@ for (const migration of [
   "20261008100009_taxed_advance_deduction_lines.sql",
   "20261008100010_received_advance_match_safeupdate.sql",
   "20261008100011_einvoice_outbound_transport_ids.sql",
+  // 20261122100000: bez účinného mandátu sa nič neodošle (seed nižšie)
+  EINVOICE_MANDATE_MIGRATION,
   "20261113100000_einvoice_webhook_body_sha256_idx.sql",
 ]) {
   try {
@@ -396,6 +399,7 @@ await locked(() => db.exec(`
   insert into public.einvoice_rollout (company_id, environment, stage, changed_by)
     values ('${CA}', 'sandbox', 'internal', 'test'), ('${CB}', 'sandbox', 'internal', 'test');
 `));
+await locked(() => db.exec(SEED_EFFECTIVE_MANDATES_SQL));
 
 // -----------------------------------------------------------------------------
 // Syntetické prijaté UBL (vygenerované naším generátorom — platné EN16931 XML)

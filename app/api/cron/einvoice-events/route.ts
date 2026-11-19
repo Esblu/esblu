@@ -6,6 +6,9 @@ import { EfakturaSkProvider } from "@/lib/einvoice/provider/efaktura-sk";
 import { runPartnerFeedSync } from "@/lib/einvoice/inbound/feed";
 import { createSupabaseEventCursorStore, createSupabaseInboundStore } from "@/lib/einvoice/inbound/supabase-store";
 import { createSupabaseOutboundStore } from "@/lib/einvoice/outbound/supabase-store";
+import { createOpsAlertSink } from "@/lib/einvoice/ops/alert-sink";
+import { logOpsAlert } from "@/lib/ops-alert-log";
+import { createSupabaseOpsAlertStore } from "@/lib/einvoice/ops/alert-supabase-store";
 
 // =============================================================================
 // GET /api/cron/einvoice-events — partnerský feed udalostí s kurzorom v DB.
@@ -51,6 +54,7 @@ export async function GET(req: Request) {
         environment: runtimeConfig.environment,
         secrets: getEfakturaWebhookSecrets(),
         nowSeconds: () => Math.floor(Date.now() / 1000),
+        alerts: createOpsAlertSink(createSupabaseOpsAlertStore(), logOpsAlert),
       },
     },
     { maxPages: 5, pageSize: 100, leaseSeconds: 120 }

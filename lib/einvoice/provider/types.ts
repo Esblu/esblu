@@ -164,6 +164,8 @@ export type EnrollResult = {
   receptionHeldBy: { apHost: string | null; certOrg: string | null } | null;
   /** Kódy varovaní poskytovateľa (napr. SANDBOX_TOKEN_MISSING) — nikdy text s údajmi. */
   warnings: string[];
+  /** SHA-256 surových bajtov odpovede enroll (dôkaz potvrdenia v einvoice_mandates). Telo sa neukladá. */
+  responseSha256?: string | null;
 };
 
 export type EnrollInput = {
@@ -185,6 +187,19 @@ export type PartnerEvent = {
 };
 
 export type PartnerEventPage = { events: PartnerEvent[]; nextAfter: string | null; hasMore: boolean };
+
+/** Výsledok POST /v1/agent/organizations/{id}/peppol/deactivate (ukončenie registrácie). */
+export type DeactivateResult = {
+  peppolStatus: string | null;
+  /** SHA-256 surových bajtov odpovede (dôkaz v einvoice_deregistrations). */
+  responseSha256: string | null;
+};
+
+/** Offboarding firmy u poskytovateľa (20261122110000). Samostatné rozhranie — existujúce fakes ostávajú platné. */
+export interface EinvoiceDeregistrationProvider {
+  readonly name: string;
+  deactivatePeppol(ctx: ProviderContext): Promise<DeactivateResult>;
+}
 
 export interface EinvoiceOnboardingProvider {
   readonly name: string;

@@ -16,6 +16,7 @@ import { InboundStoreError, type InboundRow, type InboundStore } from "../lib/ei
 import type { OnboardingStore, ReceptionStatus } from "../lib/einvoice/onboarding.ts";
 import type { EventCursorStore } from "../lib/einvoice/inbound/feed.ts";
 import type { EnrollAttemptLimiter } from "../lib/einvoice/ui/reception-server.ts";
+import { MandateStoreError, type MandateStore } from "../lib/einvoice/mandate.ts";
 
 export type Row = Record<string, unknown>;
 type Db = {
@@ -73,6 +74,7 @@ export const EINVOICE_MIGRATIONS = [
   "20261008100010_received_advance_match_safeupdate.sql",
   "20261008100011_einvoice_outbound_transport_ids.sql",
   "20261113100000_einvoice_webhook_body_sha256_idx.sql",
+  "20261122100000_einvoice_mandates.sql",
 ];
 
 async function loadPglite(): Promise<Db> {
@@ -93,6 +95,8 @@ async function loadPglite(): Promise<Db> {
 export async function createPartnerHarness() {
   const db = await loadPglite();
   await db.exec(read("scripts/sql/pglite/einvoice-baseline.sql"));
+  // Supabase auth.users má raw_user_meta_data (snapshot mena v einvoice_mandates, 20261122100000); stub ho dopĺňa.
+  await db.exec("alter table auth.users add column if not exists raw_user_meta_data jsonb default '{}'::jsonb");
   for (const m of EINVOICE_MIGRATIONS) {
     try {
       await db.exec(read(`supabase/migrations/${m}`));
@@ -365,7 +369,38 @@ export async function createPartnerHarness() {
     },
   };
 
-  return { db, as, asService, sql, exec, userDb, outbound, inbound, onboarding, cursor, limiter, ublStorage, xmlStorage };
+  // --- mandát (zrkadlo lib/einvoice/mandate-supabase-store.ts, tie isté RPC) ------------------
+  const dbCode = (e: unknown) => /ESBLU_[A-Z0-9_]+|NOT_AUTHENTICATED/.exec(e instanceof Error ? e.message : String(e))?.[0] ?? "DB_ERROR";
+  const mandates: MandateStore = {
+    async grant(i) {
+      try {
+        const [r] = await svcRows<{ id: string }>(
+          "select public.esblu_einvoice_mandate_grant($1, $2, $3, $4::text[], $5, $6, $7, true, $8, $9, $10, $11) id",
+          [i.actorUserId, i.companyId, i.environment, `{${i.scope.join(",")}}`, i.statement.version, i.statement.sha256, i.statement.locale, i.channel, i.evidence.requestId, i.evidence.ipSha256, i.evidence.userAgentSha256]
+        );
+        return r.id;
+      } catch (e) {
+        throw new MandateStoreError(dbCode(e));
+      }
+    },
+    async confirm(i) {
+      try {
+        await svcRows("select 1 from public.esblu_einvoice_mandate_confirm($1, $2::text[], $3, $4, $5)", [i.mandateId, `{${i.scope.join(",")}}`, i.providerOutcome, i.providerResponseSha256, i.participantId]);
+      } catch (e) {
+        throw new MandateStoreError(dbCode(e));
+      }
+    },
+    async revoke(i) {
+      try {
+        const [r] = await svcRows<{ n: number }>("select public.esblu_einvoice_mandate_revoke($1, $2, $3, $4, $5, $6) n", [i.companyId, i.environment, i.kind, i.actorUserId, i.reasonCode, i.mandateId ?? null]);
+        return Number(r.n);
+      } catch (e) {
+        throw new MandateStoreError(dbCode(e));
+      }
+    },
+  };
+
+  return { db, as, asService, sql, exec, userDb, outbound, inbound, onboarding, cursor, limiter, mandates, ublStorage, xmlStorage };
 }
 
 /** Slovenské IČO (8 číslic) s platnou kontrolnou číslicou z 7-ciferného základu. */

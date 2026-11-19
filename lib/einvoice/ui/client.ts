@@ -11,6 +11,7 @@ import { apiUrl } from "@/lib/api-url";
 import { REQUEST_LOCALE_HEADER } from "@/lib/i18n/request-locale";
 import { downloadBlob } from "@/lib/file-actions";
 import type { Locale } from "@/lib/i18n/locales";
+import { EINVOICE_MANDATE_STATEMENT_VERSION } from "@/lib/einvoice/mandate-statement";
 
 export type ApiResult<T> = { status: number; body: T | null; code: string | null };
 
@@ -90,12 +91,13 @@ export async function downloadEinvoiceDocument(path: string, fileName: string, l
 
 /**
  * POST /api/einvoice/reception/enroll — aktivácia príjmu FS overovacím kódom.
- * Telo presne { verification_code, confirm_enroll: true }. Kód sa nikde neukladá
+ * Telo presne { verification_code, confirm_enroll: true, mandate_version } — verzia textu
+ * poverenia, ktorý používateľ videl (checkbox). Kód sa nikde neukladá
  * (ani v klientovi — volajúci ho po odoslaní vymaže z formulára).
  */
 export function enrollEinvoiceReception(verificationCode: string, locale: Locale) {
   return call<{ code: string; reception?: unknown }>("/api/einvoice/reception/enroll", locale, {
     method: "POST",
-    body: { verification_code: verificationCode, confirm_enroll: true },
+    body: { verification_code: verificationCode, confirm_enroll: true, mandate_version: EINVOICE_MANDATE_STATEMENT_VERSION },
   });
 }

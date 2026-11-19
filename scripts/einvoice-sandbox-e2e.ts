@@ -53,6 +53,7 @@ import { runInboundPoll, runInboundProcessBatch } from "../lib/einvoice/inbound/
 import { EfakturaSkProvider } from "../lib/einvoice/provider/efaktura-sk.ts";
 import { runOperatorAction } from "../lib/einvoice/ops/actions.ts";
 import { OpsStoreError, type OperatorBeginResult, type OpsStore } from "../lib/einvoice/ops/store.ts";
+import { EINVOICE_MANDATE_MIGRATION, SEED_EFFECTIVE_MANDATES_SQL } from "./einvoice-mandate-test-seed.ts";
 
 
 // -----------------------------------------------------------------------------
@@ -157,6 +158,8 @@ for (const migration of [
   "20261008100009_taxed_advance_deduction_lines.sql",
   "20261008100010_received_advance_match_safeupdate.sql",
   "20261008100011_einvoice_outbound_transport_ids.sql",
+  // 20261122100000: bez účinného mandátu sa nič neodošle (seed nižšie)
+  EINVOICE_MANDATE_MIGRATION,
 ]) {
   try {
     await db.exec(read(`supabase/migrations/${migration}`));
@@ -544,6 +547,7 @@ await locked(() => db.exec(`
   insert into public.einvoice_rollout (company_id, environment, stage, changed_by)
     values ('${CA}', 'sandbox', 'internal', 'sandbox-e2e'), ('${CB}', 'sandbox', 'internal', 'sandbox-e2e');
 `));
+await locked(() => db.exec(SEED_EFFECTIVE_MANDATES_SQL));
 
 // Unikátne číslovanie PER BEH: sandbox organizácia je trvalá a poskytovateľ odmietne
 // číslo dokladu, ktoré už existuje (connector reason `ingest`). Čerstvá PGlite DB by

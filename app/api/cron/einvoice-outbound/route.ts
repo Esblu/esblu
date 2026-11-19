@@ -4,6 +4,9 @@ import { timingSafeEqual } from "node:crypto";
 import { getEinvoiceProvider } from "@/lib/einvoice/provider";
 import { createSupabaseOutboundStore } from "@/lib/einvoice/outbound/supabase-store";
 import { runOutboundReconcileBatch, runOutboundSendBatch } from "@/lib/einvoice/outbound/worker";
+import { createOpsAlertSink } from "@/lib/einvoice/ops/alert-sink";
+import { logOpsAlert } from "@/lib/ops-alert-log";
+import { createSupabaseOpsAlertStore } from "@/lib/einvoice/ops/alert-supabase-store";
 
 // =============================================================================
 // GET /api/cron/einvoice-outbound — worker E-Faktúry (odoslanie + reconciliation).
@@ -56,7 +59,7 @@ export async function GET(req: Request) {
   // Odosielanie má prednosť; každý riadok sa claimne až keď sa do termínu stihne.
   const mode = new URL(req.url).searchParams.get("mode");
   const startedAt = Date.now();
-  const deps = { store: createSupabaseOutboundStore(), provider: runtimeConfig.provider };
+  const deps = { store: createSupabaseOutboundStore(), provider: runtimeConfig.provider, alerts: createOpsAlertSink(createSupabaseOpsAlertStore(), logOpsAlert) };
   const base = { batchSize: batchSize(), leaseSeconds: 120, reconcileAfterSeconds: 300, deadlineMs: startedAt + RUN_BUDGET_MS };
   const empty = { claimed: 0, results: [] };
   const send = mode === "reconcile" ? empty : await runOutboundSendBatch(deps, { ...base, itemBudgetMs: SEND_ITEM_BUDGET_MS });

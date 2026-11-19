@@ -8,6 +8,7 @@ import type { OutboundStore } from "../outbound/store.ts";
 import { errorCode } from "../outbound/policy.ts";
 import { runInboundProcessBatch, syncInboundList } from "./processor.ts";
 import type { InboundStore } from "./store.ts";
+import type { OpsAlertSink } from "../ops/alert-sink.ts";
 
 // =============================================================================
 // E-Faktúra webhook — overenie, dedupe a spustenie spracovania. SERVER-ONLY.
@@ -35,6 +36,8 @@ export type WebhookDeps = {
   nowSeconds: () => number;
   /** Phase 4: ohraničené počítadlo odmietnutí (bez tela/hlavičiek) — best effort. */
   recordRejection?: (reason: "INVALID_SIGNATURE" | "REPLAYED_WEBHOOK" | "PAYLOAD_TOO_LARGE" | "INVALID_PAYLOAD") => Promise<void>;
+  /** 20261122120000: usage.limit_exceeded → prevádzkový alert (dedupe). Best effort. */
+  alerts?: OpsAlertSink;
 };
 
 export type WebhookResponse = { status: number; body: { code: string } };
@@ -51,7 +54,7 @@ const EVENT = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/;
 /** Terminálne stavy pokusu (DB trigger ich už nedovolí zmeniť). */
 const TERMINAL_OUTBOUND = new Set(["delivered", "failed", "rejected"]);
 
-type EventKind = "inbound" | "outbound" | "participant" | "other";
+type EventKind = "inbound" | "outbound" | "participant" | "usage_limit" | "other";
 
 export const PARTICIPANT_EVENTS = ["participant.activated", "participant.failed", "participant.deactivated"] as const;
 export type ParticipantEvent = (typeof PARTICIPANT_EVENTS)[number];
@@ -65,6 +68,8 @@ export type ParticipantEvent = (typeof PARTICIPANT_EVENTS)[number];
 export function classifyWebhookEvent(event: string): EventKind {
   const e = event.toLowerCase();
   if ((PARTICIPANT_EVENTS as readonly string[]).includes(e)) return "participant";
+  // 20261122120000: vyčerpaný kredit / limit programu → prevádzkový alert (predtým ignorované).
+  if (e === "usage.limit_exceeded") return "usage_limit";
   if (e.startsWith("participant.") || e.startsWith("usage.") || e.startsWith("webhook.")) return "other";
   if (/(^|[._:])(received|inbound|incoming)([._:]|$)/.test(e)) return "inbound";
   if (/(^|[._:])(sent|delivered|deferred|failed|error|status|outbound|transmission)([._:]|$)/.test(e)) return "outbound";
@@ -175,6 +180,28 @@ export async function processProviderEvent(
     if (!record.bodyMatches) return { status: 409, body: { code: "REPLAYED_WEBHOOK" } };
     const retry = record.processingStatus === "failed" && deps.inbound.webhookRetry ? await deps.inbound.webhookRetry(record.webhookEventId) : false;
     if (!retry) return { status: 200, body: { code: "DUPLICATE" } };
+  }
+  if (classifyWebhookEvent(event) === "usage_limit") {
+    // Partnerská (nie firemná) udalosť: z tela sa nič nepoužije okrem typu. Alert je deduplikovaný v DB;
+    // doručenie sa uzavrie ako spracované (ak patrí známej org), inak ostáva rejected/UNKNOWN_ORG.
+    const mode = str(data?.mode);
+    if (!(mode && ((mode === "test") !== (deps.environment === "sandbox")))) {
+      await deps.alerts?.raise({
+        code: "PROVIDER_USAGE_LIMIT_EXCEEDED",
+        severity: "critical",
+        provider: deps.provider.name,
+        environment: deps.environment,
+        detailCode: "USAGE_LIMIT_EXCEEDED",
+      });
+    }
+    if (record.companyId && orgId) {
+      try {
+        await deps.inbound.webhookComplete(record.webhookEventId, "processed", null);
+      } catch {
+        // stav doručenia nie je kritický — alert je zapísaný
+      }
+    }
+    return { status: 200, body: { code: "ALERT_RAISED" } };
   }
   if (!record.companyId || !orgId) {
     // Zaznamenané ako rejected/UNKNOWN_ORG; 200 = poskytovateľ to neopakuje donekonečna.

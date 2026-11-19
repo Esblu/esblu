@@ -854,6 +854,30 @@
       "authenticated": "SELECT",
       "service_role": "SELECT,INSERT,UPDATE,DELETE",
       "note": "VOP 39.2/44.5 in-app oznamenie novej verzie VOP; zapis cez esblu_record_company_terms_notice"
+    },
+    "einvoice_mandates": {
+      "domain": "einvoice",
+      "access": "B",
+      "anon": "",
+      "authenticated": "SELECT",
+      "service_role": "SELECT",
+      "note": "20261122100000: append-only dokaz poverenia (mandatu); SELECT iba aktivna firma + finance.manage; zapis iba RPC"
+    },
+    "einvoice_deregistrations": {
+      "domain": "einvoice",
+      "access": "B",
+      "anon": "",
+      "authenticated": "SELECT",
+      "service_role": "SELECT",
+      "note": "20261122110000: job deregistracie u poskytovatela (stavovy automat); SELECT finance.manage; zapis iba RPC"
+    },
+    "einvoice_ops_alerts": {
+      "domain": "einvoice",
+      "access": "D",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT",
+      "note": "20261122120000: prevadzkove alerty s dedupe; zapis iba RPC"
     }
   },
   "service_role_functions": [
@@ -1006,6 +1030,19 @@
     "esblu_try_claim_company_trial(uuid)",
     "esblu_usage_period_start(uuid,text)",
     "esblu_user_global_cleanup(uuid)",
-    "esblu_voice_usage_status(uuid)"
+    "esblu_voice_usage_status(uuid)",
+    "esblu_einvoice_deregistration_claim(text,text,integer,integer,uuid)",
+    "esblu_einvoice_deregistration_finish(uuid,text,text,text,text,integer)",
+    "esblu_einvoice_deregistration_request(uuid,text,text,uuid,text)",
+    "esblu_einvoice_deregistration_requeue(uuid,text)",
+    "esblu_einvoice_deregistration_status(uuid,text)",
+    "esblu_einvoice_mandate_confirm(uuid,text[],text,text,text)",
+    "esblu_einvoice_mandate_effective(uuid,text,text)",
+    "esblu_einvoice_mandate_grant(uuid,uuid,text,text[],text,text,text,boolean,text,text,text,text)",
+    "esblu_einvoice_mandate_revoke(uuid,text,text,uuid,text,uuid)",
+    "esblu_einvoice_my_mandate(text)",
+    "esblu_einvoice_ops_alert_raise(text,text,text,text,uuid,text,integer)",
+    "esblu_einvoice_ops_alert_resolve(text,text,uuid,text)",
+    "esblu_einvoice_ops_alerts_open()"
   ]
 }
