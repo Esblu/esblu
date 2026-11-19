@@ -444,7 +444,7 @@ await check("deregistrácia: claim → retry (409 v behu) s backoffom; lease zab
 });
 
 await check("deregistrácia: blokuje termination kým nie je completed; completed → snapshot, mapovanie preč, blocker null, idempotentné", async () => {
-  let [b] = await su<{ b: string | null }>(`select public.esblu_company_deletion_retention_blocker($1) b`, [C.a]);
+  const [b] = await su<{ b: string | null }>(`select public.esblu_company_deletion_retention_blocker($1) b`, [C.a]);
   assert.equal(b.b, "FINALIZED_ACCOUNTING_DOCUMENTS");
   const [enrolled] = await su<{ n: number }>(`select count(*)::int n from public.einvoice_organizations where company_id = $1 and provider_org_id is not null`, [C.a]);
   assert.equal(enrolled.n, 1);

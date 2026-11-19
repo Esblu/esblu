@@ -290,7 +290,7 @@ await check("deregistrácia: 404 → failed + kritický alert DEREGISTRATION_FAI
   let raised: string[] = [];
   const alerts = { raise: async (i: OpsAlertInput) => { raised.push(`${i.code}:${i.detailCode ?? ""}`); }, resolve: async () => undefined };
   provider.script.push(new EinvoiceProviderError("EINVOICE_PROVIDER_NOT_FOUND", "404"));
-  let r = await ensureCompanyDeregistered({ store, runtime: { provider, environment: "sandbox", alerts } }, { companyId: "c1", actorUserId: "u1", reason: "owner_request" }, "sandbox");
+  const r = await ensureCompanyDeregistered({ store, runtime: { provider, environment: "sandbox", alerts } }, { companyId: "c1", actorUserId: "u1", reason: "owner_request" }, "sandbox");
   assert.deepEqual(r, { done: false, jobId: "job-1", state: "failed", code: "EINVOICE_DEREGISTRATION_FAILED" });
   assert.deepEqual(raised, ["DEREGISTRATION_FAILED:EINVOICE_PROVIDER_NOT_FOUND"]);
   assert.equal(store.registered, true, "mapovanie ostáva");
