@@ -25,7 +25,8 @@ Mimo tohto workflow sú doklady chránené (triggery, `esblu_company_deletion_re
 | `esblu_company_termination_commit(user, company, delete_account, export_mode)` — route `/api/account/delete` (service_role) | maže doklady, XML, dôkazy | **archivuje** doklady + dôkazy do `esblu_retention`, potom zmaže firmu a ostatné údaje ako doteraz; XML a sken prijatej faktúry **ostávajú** v Storage |
 | `esblu_account_deletion_commit('owner', …)` | blokované, ak má firma doklady | bez zmeny (blokované) |
 | `esblu_company_termination_synthetic_purge(…, p_synthetic_test_data_purge, p_reference, p_justification)` | — | **nová výnimka**: pôvodné správanie (výmaz bez archívu) iba pre syntetické testovacie dáta, iba `postgres` |
-| Retenčná purge archívu | — | `esblu_retention.purge_expired` (dry-run default, iba APPROVED lehoty, legal hold) — **nenaplánovaná** |
+| Retenčná purge archívu | — | `esblu_retention.purge_expired` (dry-run default, iba APPROVED lehoty, legal hold) — **nenaplánovaná**; DELETE záznamu aj v jej behu overuje DB trigger (APPROVED + po `retention_until` + bez legal hold) |
+| Účtovné kópie Esblu (`billing_invoice_documents`, PDF v `billing-documents`) | — | **nie sú** zákaznícke dáta ani súčasť archívu: ukončenie, zrušenie účtu, cleanup joby ani purge ich nemažú (trigger + filtre); `company_id = null`, identifikácia v nemennom snapshote (`docs/billing-invoicing-architecture-2026-11-19.md` §7.1) |
 
 Signatúra aj návratový tvar `esblu_company_termination_commit` ostávajú (pribudli kľúče `archive_id`,
 `termination_mode`, `archived_counts`) → `lib/account-deletion-deps.ts` sa nemení.
@@ -80,8 +81,18 @@ a pri čítaní/exporte účel (≥ 10 znakov). Odmietnu kontext `anon`/`authent
 `retention_period_approved`, `synthetic_test_data_purge`, `synthetic_test_data_purge_skipped`; s `db_session_user`, `invoker_role`, `jwt_role`, `operator_ref`, účelom.
 
 **Nemennosť archívu:** `archived_records` — UPDATE iba prepočtu `retention_until` (pri schválení lehoty), DELETE iba počas
-behu `purge_expired` (GUC + necommitnutý `executing` riadok `purge_runs`, rovnaký vzor ako termination — podvrhnuté GUC
-nič neodomkne); `archived_companies` sa nemaže nikdy (po purge ostane minimalizovaný riadok `status = purged`).
+ostrého behu `purge_expired` (GUC + necommitnutý `executing` riadok `purge_runs`, rovnaký vzor ako termination — podvrhnuté GUC
+nič neodomkne) **a zároveň iba záznam, ktorý trigger `guard_archived_records` overí ako uplynutý**: kategória `APPROVED`,
+`retention_until < as_of` behu (`as_of ≤ dnes`), `retention_until` nie je nižší než výpočet zo schválenej lehoty a archív nie
+je pod legal hold — inak `ESBLU_RETENTION_NOT_EXPIRED` (obrana do hĺbky: ani chyba v `purge_expired`, ani priamy DELETE
+v jeho transakcii nezmaže doklad pred schválenou lehotou); `archived_companies` sa nemaže nikdy (po purge ostane
+minimalizovaný riadok `status = purged`).
+
+**Storage ciele cleanup jobu:** trigger `esblu_cleanup_jobs_protect_retained_storage` (`BEFORE INSERT OR UPDATE OF
+storage_targets` na `account_deletion_cleanup_jobs`) odstráni každý cieľ v bucket `billing-documents` a každý súbor
+uvedený v `archived_records.storage_objects` — bez ohľadu na to, ktorá funkcia job zapísala (ukončenie, zrušenie účtu,
+budúci kolektor). `termination_execute` aj `purge_expired` bucket `billing-documents` navyše filtrujú výslovne; TS
+`DELETION_PROTECTED_BUCKETS` obsahuje `einvoice-documents` aj `billing-documents`.
 
 ## 5. Export pre úrad / účtovníka
 
@@ -105,6 +116,16 @@ z archívu zatiaľ nie je (otvorené O7).
 | `einvoice_document` | 10 r. | 〃 | z. 222/2004 § 71, § 76 |
 | `einvoice_delivery_evidence` | 10 r. | 〃 | z. 222/2004 § 71; oprávnený záujem (právne nároky) |
 | `accounting_handoff` | 10 r. | 〃 | na posúdenie — alternatíva 5 r. (dôkaz zmluvného vzťahu) |
+
+**Všetky lehoty sú PROPOSED** (seed `approval_status = 'PROPOSED'`); ostrá purge nezmaže nič, kým operátor lehotu
+výslovne neschváli, a ani potom nie pred `retention_until`.
+
+**Účtovné kópie Esblu — samostatná lehota (mimo tejto tabuľky):** `billing_invoice_documents`, `billing_refund_observations`,
+`billing_balance_transactions`, `billing_accounting_export_log` a PDF v `billing-documents` sú účtovné záznamy **Esblu**
+(dodávateľ predplatného), nie zákazníka. **PROPOSED: 10 rokov od konca kalendárneho roka dokladu** (z. 431/2002 § 35,
+z. 222/2004 § 76 — **potvrdí účtovníčka**). Nie sú kategóriou `retention_periods`, `purge_expired` ich nevidí a
+automatické mazanie **neexistuje** (DELETE/TRUNCATE blokuje trigger aj pre postgres). Výmaz po schválení = nová
+migrácia s auditovanou výnimkou iba pre záznamy po lehote.
 
 `retention_until = make_date(rok(document_date) + roky, 12, 31)`; `document_date` = dátum vystavenia (fallback prijatie /
 finalizácia / vytvorenie). Ostrá purge maže **iba** kategórie so stavom `APPROVED`. Schválenie (iba postgres, logované,
@@ -181,7 +202,12 @@ testovacie doklady archivovala).
 - Rollback vráti pôvodný commit (**znova maže doklady**) a odstráni výnimku + purge; **archív, logy a stĺpce auditu
   nikdy nemaže**, čítanie/export archívu ostáva. Preferovaný je forward-fix.
 
-## 10. Testy (`scripts/retention-archive-pglite-tests.ts`, 16 kontrol)
+## 10. Testy (`scripts/retention-archive-pglite-tests.ts`, 22 kontrol)
+
+Doplnené (esblu8): cleanup job — archivované súbory ani `billing-documents` sa do `storage_targets` nedostanú (INSERT aj
+UPDATE, akýkoľvek zapisovateľ); DB guard — v simulovanom ostrom behu purge sa nezmaže záznam pred lehotou ani s PROPOSED
+lehotou (`ESBLU_RETENTION_NOT_EXPIRED`); purge + ukončenie firmy sa nedotknú účtovnej kópie Esblu (riadok, PDF cesta,
+snapshot firmy; žiadny `billing-documents` vo výsledkoch purge ani v jobe; DELETE zlyhá aj pre postgres). Pôvodné kontroly:
 
 Schéma a ACL; bežné ukončenie archivuje (14 záznamov / 12 tabuliek, koncept nie, XML a sken ostávajú, maže sa iba
 neúčtovná fotka); minimalizácia + SHA-256; izolácia owner/admin/employee/iný tenant/anon (tabuľky aj funkcie) a
@@ -205,6 +231,7 @@ idempotentná); rollback migrácie bez straty archívu + re-apply. Upravený `co
 | O4 | Rozsah údajov v archíve: stačí minimalizácia (bez user ID), alebo treba pseudonymizovať aj fyzické osoby na dokladoch (SZČO, e-mail strany) — pravdepodobne nie, sú obsahom dokladu. |
 | O5 | Lehota a purge pre `company_terminations` a `company_export_runs` (dnes neobmedzene, návrh 5 r.) — mimo tejto zmeny. |
 | O6 | Plánovanie purge (manuálne vs. cron), mazanie Storage objektov z výsledku, monitoring. |
+| O6b | Lehota vlastnej retencie Esblu pre účtovné kópie Stripe dokladov + PDF (`billing-documents`) — PROPOSED 10 r. od konca roka dokladu, potvrdí účtovníčka; do schválenia bez automatického mazania. |
 | O7 | Generovanie PDF vydaných faktúr z archívu pri žiadosti úradu. |
 | O8 | Znenie UI / `/zrusenie-uctu` / Zásady / DPA (DRAFT v CLIA briefingu) — **brána nasadenia**. |
 | O9 | Či bežné `esblu_account_deletion_commit('owner')` (dnes blokované) prepnúť na rovnaký archív namiesto bloku. |

@@ -9,8 +9,9 @@ Podklad: `docs/audits/stripe-live-audit-2026-11-19.md` § 4–5.
 
 1. Zákazník dostane k **každej platbe práve JEDEN** správny daňový doklad (a k refundácii práve jeden opravný doklad
    naviazaný na pôvodný).
-2. Esblu má vlastnú **účtovnú kópiu** každého dokladu (čísla, sumy, daňové polia, PDF s hashom) nezávisle od Stripe účtu
-   (archivácia 10 rokov — lehotu potvrdí účtovníčka).
+2. Esblu má vlastnú **účtovnú kópiu** každého dokladu (čísla, sumy, daňové polia, PDF s hashom, nemenná identifikácia
+   odberateľa) nezávisle od Stripe účtu aj od existencie firmy v aplikácii (archivácia **PROPOSED** 10 rokov od konca
+   kalendárneho roka dokladu — lehotu potvrdí účtovníčka; do schválenia **žiadne** automatické mazanie).
 3. Ani súbeh, retry, doťahovanie, ručný zásah, ani budúca e-faktúra (eFaktura.sk / Peppol) nesmie vytvoriť druhý doklad
    za to isté plnenie.
 4. Mesačný podklad pre účtovníčku: doklady + hrubá suma, poplatok Stripe, čistá suma, výplata (payout).
@@ -88,13 +89,53 @@ Rozhodnutie urobiť **pred** prvým LIVE predajom; neskorá zmena = migrácia ro
 ### 7.1 Overenie esblu8 (2026-11-19) — väzby, prístup zákazníka, `web_provider='none'`
 
 - **Väzby dokladu** (`billing_invoice_documents`): `provider_document_id` (Stripe `in_…` / `cn_…`) ↔ `company_id`
-  (cez `billing_provider_links`; **`on delete set null`** — po ukončení firmy ostane doklad bez väzby na firmu, väzba
-  ostáva cez `provider_subscription_id` / `payment_intent_id`) ↔ `provider_subscription_id` ↔ `status` + `paid_at`
+  (cez `billing_provider_links`; **`on delete set null`** — po ukončení firmy je živá väzba `null`; identifikácia
+  odberateľa ostáva v **nemennom snapshote** — pozri nižšie) ↔ `provider_subscription_id` ↔ `status` + `paid_at`
   (stav iba dopredu) ↔ `service_period_start` / `service_period_end`. Unikát `(provider, environment,
   provider_document_id)` zabráni duplicitnému riadku aj mimo RPC. Dobropis: `related_invoice_id` (+ číslo v exporte).
   Export: `gross` / `stripe_fee` / `net` / refundácie (`bt_type`, `reporting_category`) / `payout_ids` /
   `payout_arrival_date`; výplaty v `billing_balance_transactions.payout_id` + `payout_arrival_date`. Testy:
   `test:billing-ops-db` (doklady, export, unikát, obdobie).
+- **Identifikačný snapshot odberateľa (esblu8, migrácia `20261123110000` upravená pred nasadením):** riadok
+  s `company_id = null` sa **nikdy** nepoužíva na identifikáciu. Pri prvom zápise dokladu (a pri prvom priradení firmy)
+  trigger `esblu_billing_documents_guard` zachytí: `customer_company_id` (obyčajné uuid **bez FK**, nepodlieha
+  `on delete set null`), `customer_legal_name` (obchodné meno z `company_billing_profile.legal_name`, inak
+  `companies.name`), `customer_ico`, `customer_dic`, `customer_ic_dph`, `customer_registration_country` /
+  `customer_registration_id` (`company_legal_identities`), `customer_address` (ulica, PSČ, mesto, krajina),
+  `customer_billing_country`, `customer_snapshot_at` / `customer_snapshot_source` (`company` | `related_document` |
+  `customer_document`). Spolu s `provider_customer_id` / `provider_subscription_id` sú po nastavení **nemenné** —
+  neskorší upsert iba dopĺňa `null` (napr. IČ DPH doplnené neskôr), priamy UPDATE (aj service_role, aj postgres) →
+  `ESBLU_BILLING_DOCUMENT_SNAPSHOT_IMMUTABLE`; prehodenie na inú firmu → `ESBLU_BILLING_DOCUMENT_COMPANY_IMMUTABLE`
+  (CHECK `company_id is null or company_id = customer_company_id`). Trigger `BEFORE DELETE` na `companies`
+  (`esblu_billing_documents_company_freeze`) doplní chýbajúce polia tesne pred výmazom firmy akoukoľvek cestou.
+  Neskorý dobropis / faktúra po ukončení firmy (väzby `billing_provider_links` už zanikli kaskádou) prevezme snapshot
+  z pôvodnej faktúry (`related_document`) alebo z posledného dokladu toho istého Stripe zákazníka
+  (`customer_document`); doklad bez akejkoľvek väzby ostane bez identifikácie (žiadny odhad). Ukladá sa iba identita
+  právnickej osoby / SZČO, ktorej Esblu fakturuje (obsah účtovného dokladu Esblu) — **bez** e-mailu, IBAN, `owner_id`
+  a bez mena/e-mailu/adresy z objektu zákazníka v Stripe. Export (`esblu_billing_accounting_export` + CSV) má nové
+  stĺpce `customer_company_id`, `customer_legal_name`, `customer_ico`, `customer_dic`, `customer_ic_dph`,
+  `customer_registration_id`, `customer_address`, `customer_billing_country`, `company_linked` (yes/no),
+  `provider_customer_id`, `provider_subscription_id` (na konci riadku — staré stĺpce nezmenené).
+- **Účtovné záznamy Esblu sa nemažú:** `billing_invoice_documents`, `billing_refund_observations`,
+  `billing_balance_transactions`, `billing_accounting_export_log` majú trigger `BEFORE DELETE` + `BEFORE TRUNCATE`
+  (`esblu_billing_accounting_record_retained` → `ESBLU_BILLING_ACCOUNTING_RECORD_RETAINED`, aj pre postgres a
+  security definer funkcie). Ukončenie firmy (`esblu_company_termination_commit` = archív, aj výnimka
+  `esblu_company_termination_synthetic_purge`), `esblu_account_deletion_commit` (vrátane výmazu `auth.users`), cleanup
+  joby ani `esblu_retention.purge_expired` sa ich nedotknú. Refundácie a ledger nemajú FK na firmu (väzba cez
+  PaymentIntent → doklad so snapshotom), ukončenie firmy ich nemení. PDF v bucket `billing-documents`: nikdy nie sú
+  Storage cieľom (DB: `termination_execute` filter + trigger `esblu_cleanup_jobs_protect_retained_storage` na
+  `account_deletion_cleanup_jobs`; TS: `DELETION_PROTECTED_BUCKETS` v `lib/account-deletion-storage.ts`); bucket nemá
+  Storage politiky pre klientov, kód Esblu z neho nikdy nemaže (iba upload bez prepisu).
+- **Vlastná retencia Esblu (PROPOSED):** 10 rokov od konca kalendárneho roka vystavenia dokladu (z. 431/2002 § 35,
+  z. 222/2004 § 76 — **potvrdí účtovníčka**). Je to **samostatná** lehota, nie kategória zákazníckeho archívu
+  `esblu_retention`. Automatické mazanie **neexistuje**; po schválení lehoty treba novú migráciu (výnimka z triggera
+  iba pre záznamy po lehote, auditovaná) + postup pre PDF v Storage. Rollback migrácie presúva neprázdne tabuľky do
+  `esblu_audit_archive` vrátane snapshotu a ochrana pred výmazom ostáva (funkcia sa presunie do `esblu_audit_archive`).
+- Testy: `test:billing-ops-db` (snapshot pri prvom zápise; nemennosť; ukončenie firmy archívom, výnimka syntetických
+  dát, zrušenie účtu vlastníka + výmaz `auth.users` → doklady ostávajú, `company_id = null`, snapshot celý; neskorý
+  dobropis / faktúra; export a CSV s identifikáciou; DELETE/TRUNCATE zlyhá; cleanup job bez `billing-documents`;
+  izolácia tenantov; rollback so zachovanou ochranou), `test:retention-archive-db` (purge a ukončenie sa účtovnej
+  kópie nedotknú), `test:account-deletion-orchestration`.
 - **Prístup zákazníka k histórii faktúr:** v aplikácii **nie je** vlastný zoznam dokladov. Zákazník (iba **owner**
   aktívnej firmy — `esblu_billing_authorize_manage`) otvorí Stripe Customer Portal cez `POST /api/billing/manage
   {action:"portal"}` (návrat na `/nastavenia/predplatne`); históriu faktúr v Portáli zobrazí Stripe podľa nastavenia
@@ -112,4 +153,7 @@ Rozhodnutie urobiť **pred** prvým LIVE predajom; neskorá zmena = migrácia ro
 ## 8. Otvorené (rozhodne prevádzkovateľ / účtovníčka)
 
 Variant A/B; náležitosti a text o DPH; Stripe Tax áno/nie; rozsah predaja pri spustení (SK B2B / EÚ / B2C); číslovanie;
-postup pri spore; retencia archívu; povinnosť e-faktúry a jej forma. Pozri dokument otázok.
+postup pri spore; retencia archívu účtovných kópií Esblu (**PROPOSED** 10 r. od konca roka dokladu, bez automatického
+mazania do schválenia) vrátane PDF v `billing-documents`; rozsah identifikačného snapshotu odberateľa (SZČO = fyzická
+osoba — právny titul: zákonná povinnosť Esblu ako vystaviteľa / príjemcu platby); povinnosť e-faktúry a jej forma.
+Pozri dokument otázok.
