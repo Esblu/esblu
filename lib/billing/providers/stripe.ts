@@ -18,8 +18,11 @@
 // =============================================================================
 
 import { sha256Hex, verifyTimestampedSignature } from "@/lib/billing/signature";
+import { resolveStripeApiVersion } from "@/lib/billing/stripe-api-version";
 import {
   BillingProviderError,
+  type BillingDocumentCapture,
+  type BillingDocumentRecord,
   type BillingProvider,
   type CanonicalStatus,
   type CheckoutExpireResult,
@@ -52,15 +55,33 @@ export const STRIPE_STATE_EVENTS = new Set([
 ]);
 
 /**
+ * P4: udalosti, z ktorých Esblu ukladá účtovnú kópiu dokladu (billing_invoice_documents).
+ * `invoice.paid` je zároveň stavová udalosť; ostatné nemenia nárok (normalizácia → DOCUMENT_ONLY).
+ */
+export const STRIPE_DOCUMENT_EVENTS = new Set([
+  "invoice.finalized",
+  "invoice.paid",
+  "invoice.voided",
+  "invoice.marked_uncollectible",
+  "credit_note.created",
+  "credit_note.updated",
+  "credit_note.voided",
+]);
+
+/**
  * S12: typy udalostí, ktoré doťahovanie zmeškaných webhookov číta z `GET /v1/events`
- * (stav predplatného, platby, refundácie, spory). Rovnaká množina ako odoberá webhook.
+ * (stav predplatného, platby, refundácie, spory, P4: doklady). Rovnaká množina ako odoberá webhook.
+ * Stripe `types[]` prijme najviac 20 typov.
  */
 export const STRIPE_CATCHUP_EVENT_TYPES = [
-  ...STRIPE_STATE_EVENTS,
-  "charge.refunded",
-  "charge.dispute.created",
-  "charge.dispute.closed",
-] as const;
+  ...new Set([
+    ...STRIPE_STATE_EVENTS,
+    "charge.refunded",
+    "charge.dispute.created",
+    "charge.dispute.closed",
+    ...STRIPE_DOCUMENT_EVENTS,
+  ]),
+] as readonly string[];
 
 /** Iba audit — žiadna automatická zmena nároku (rozhoduje operátor). */
 export const STRIPE_AUDIT_EVENTS = new Set([
@@ -214,6 +235,123 @@ export function stripeInvoiceServicePeriod(invoice: unknown): { start: string | 
   return { start: isoFromUnix(p?.start), end: isoFromUnix(p?.end) };
 }
 
+const num = (value: unknown): number | null => (typeof value === "number" && Number.isFinite(value) ? Math.trunc(value) : null);
+const country = (value: unknown): string | null => {
+  const c = str(value);
+  return c && /^[A-Za-z]{2}$/.test(c) ? c.toUpperCase() : null;
+};
+
+/** Iba primitívne polia (orezané) — daňové riadky „tak, ako prišli“, bez vnorených objektov zákazníka. */
+function primitiveFields(value: unknown, depth = 0): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  if (!isObj(value)) return out;
+  for (const [k, v] of Object.entries(value).slice(0, 20)) {
+    if (!/^[a-z_]{1,40}$/.test(k)) continue;
+    if (typeof v === "number" || typeof v === "boolean" || v === null) out[k] = v;
+    else if (typeof v === "string") out[k] = v.slice(0, 80);
+    else if (depth === 0 && isObj(v)) out[k] = primitiveFields(v, 1);
+  }
+  return out;
+}
+
+function taxRows(value: unknown): Array<Record<string, unknown>> {
+  return Array.isArray(value) ? value.slice(0, 20).map((row) => primitiveFields(row)) : [];
+}
+
+function taxIds(value: unknown): Array<{ type: string; value: string }> {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter(isObj)
+    .slice(0, 5)
+    .map((t) => ({ type: (str(t.type) ?? "unknown").slice(0, 20), value: (str(t.value) ?? "").slice(0, 64) }))
+    .filter((t) => t.value.length > 0);
+}
+
+function taxTotal(total: number | null, excl: number | null, rows: Array<Record<string, unknown>>): number | null {
+  if (total !== null && excl !== null) return total - excl;
+  if (rows.length === 0) return null;
+  return rows.reduce((sum, r) => sum + (typeof r.amount === "number" ? r.amount : 0), 0);
+}
+
+/** P4: Stripe Invoice → účtovná kópia (bez mena / e-mailu / adresy odberateľa). */
+export function stripeInvoiceDocument(invoice: unknown): BillingDocumentRecord | null {
+  if (!isObj(invoice) || invoice.object !== "invoice" || !str(invoice.id)) return null;
+  const transitions = isObj(invoice.status_transitions) ? invoice.status_transitions : {};
+  const address = isObj(invoice.customer_address) ? invoice.customer_address : {};
+  const rows = taxRows(invoice.total_taxes ?? invoice.total_tax_amounts);
+  const total = num(invoice.total);
+  const excl = num(invoice.total_excluding_tax);
+  const period = stripeInvoiceServicePeriod(invoice);
+  return {
+    kind: "invoice",
+    provider_document_id: str(invoice.id)!,
+    related_invoice_id: null,
+    provider_customer_id: idOf(invoice.customer),
+    provider_subscription_id: stripeSubscriptionIdFromEvent("invoice.paid", invoice).subscriptionId,
+    payment_intent_id: idOf(invoice.payment_intent),
+    document_number: str(invoice.number)?.slice(0, 64) ?? null,
+    status: str(invoice.status),
+    currency: str(invoice.currency)?.toUpperCase() ?? null,
+    subtotal_minor: num(invoice.subtotal),
+    subtotal_excl_tax_minor: num(invoice.subtotal_excluding_tax),
+    total_minor: total,
+    total_excl_tax_minor: excl,
+    tax_minor: taxTotal(total, excl, rows),
+    amount_paid_minor: num(invoice.amount_paid),
+    customer_country: country(address.country),
+    customer_tax_exempt: str(invoice.customer_tax_exempt),
+    customer_tax_ids: taxIds(invoice.customer_tax_ids),
+    tax_details: rows,
+    service_period_start: period.start,
+    service_period_end: period.end,
+    issued_at: isoFromUnix(transitions.finalized_at) ?? (str(invoice.number) ? isoFromUnix(invoice.created) : null),
+    paid_at: isoFromUnix(transitions.paid_at),
+    voided_at: isoFromUnix(transitions.voided_at),
+    hosted_url: str(invoice.hosted_invoice_url),
+    pdf_url: str(invoice.invoice_pdf),
+    credit_reason: null,
+    credit_type: null,
+  };
+}
+
+/** P4: Stripe Credit Note → účtovná kópia opravného dokladu (väzba na pôvodnú faktúru). */
+export function stripeCreditNoteDocument(note: unknown): BillingDocumentRecord | null {
+  if (!isObj(note) || note.object !== "credit_note" || !str(note.id)) return null;
+  const rows = taxRows(note.total_taxes ?? note.tax_amounts);
+  const total = num(note.total);
+  const excl = num(note.total_excluding_tax);
+  return {
+    kind: "credit_note",
+    provider_document_id: str(note.id)!,
+    related_invoice_id: idOf(note.invoice),
+    provider_customer_id: idOf(note.customer),
+    provider_subscription_id: null,
+    payment_intent_id: null,
+    document_number: str(note.number)?.slice(0, 64) ?? null,
+    status: str(note.status),
+    currency: str(note.currency)?.toUpperCase() ?? null,
+    subtotal_minor: num(note.subtotal),
+    subtotal_excl_tax_minor: num(note.subtotal_excluding_tax),
+    total_minor: total,
+    total_excl_tax_minor: excl,
+    tax_minor: taxTotal(total, excl, rows),
+    amount_paid_minor: null,
+    customer_country: null,
+    customer_tax_exempt: null,
+    customer_tax_ids: [],
+    tax_details: rows,
+    service_period_start: null,
+    service_period_end: null,
+    issued_at: isoFromUnix(note.effective_at) ?? isoFromUnix(note.created),
+    paid_at: null,
+    voided_at: isoFromUnix(note.voided_at),
+    hosted_url: null,
+    pdf_url: str(note.pdf),
+    credit_reason: str(note.reason),
+    credit_type: str(note.type),
+  };
+}
+
 function stripeCheckoutStatus(status: unknown): CheckoutExpireResult {
   return status === "complete" ? "complete" : status === "expired" ? "expired" : "open";
 }
@@ -230,6 +368,7 @@ function formEncode(params: Record<string, string | number | boolean | null | un
 export type StripeTestProviderOptions = {
   secretKey: string | undefined;
   webhookSecret: string | undefined;
+  /** Override pripnutej verzie (lib/billing/stripe-api-version.ts) — iba overená verzia, inak NOT_CONFIGURED. */
   apiVersion?: string | undefined;
   fetchImpl?: typeof fetch;
   now?: () => Date;
@@ -238,6 +377,8 @@ export type StripeTestProviderOptions = {
 export class StripeProvider implements BillingProvider {
   readonly id = "stripe" as const;
   readonly environment: BillingEnvironment;
+  /** P4: verzia posielaná v KAŽDOM requeste (`Stripe-Version`); null = neoverený override → fail closed. */
+  readonly apiVersion: string | null;
   private readonly options: StripeTestProviderOptions;
   private readonly fetchImpl: typeof fetch;
   private readonly now: () => Date;
@@ -245,6 +386,7 @@ export class StripeProvider implements BillingProvider {
   constructor(environment: BillingEnvironment, options: StripeTestProviderOptions) {
     if (environment !== "test" && environment !== "live") throw new BillingProviderError("NOT_CONFIGURED");
     this.environment = environment;
+    this.apiVersion = resolveStripeApiVersion(options.apiVersion);
     this.options = options;
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.now = options.now ?? (() => new Date());
@@ -252,8 +394,8 @@ export class StripeProvider implements BillingProvider {
 
   private async request(method: "GET" | "POST" | "DELETE", path: string, params?: Record<string, string | number | boolean | null | undefined>, idempotencyKey?: string): Promise<Obj> {
     const key = assertStripeKeyFor(this.environment, this.options.secretKey);
-    const headers: Record<string, string> = { Authorization: `Bearer ${key}` };
-    if (this.options.apiVersion) headers["Stripe-Version"] = this.options.apiVersion;
+    if (!this.apiVersion) throw new BillingProviderError("NOT_CONFIGURED", "stripe api version not validated");
+    const headers: Record<string, string> = { Authorization: `Bearer ${key}`, "Stripe-Version": this.apiVersion };
     let url = `${STRIPE_API}${path}`;
     let body: string | undefined;
     if (method === "POST") {
@@ -423,9 +565,83 @@ export class StripeProvider implements BillingProvider {
       eventId: str(event.id)!,
       eventType: str(event.type)!,
       createdAt: new Date((event.created as number) * 1000).toISOString(),
-      payloadSha256: sha256Hex(JSON.stringify(event)),
+      // P4 (nález § 2.3): bez hashu. Serializácia z API sa od tela webhooku vždy líši; s hashom by
+      // DB udalosť, ktorá vo webhooku zlyhala, označila ako `payload_mismatch` a nikdy ju nezopakovala.
+      payloadSha256: null,
+      apiVersion: str(event.api_version),
       data: isObj(event.data) ? event.data.object : null,
     };
+  }
+
+  /**
+   * P4: jedna udalosť podľa ID (retry zlyhanej udalosti, ktorej telo Esblu neukladá). `null` = udalosť
+   * u Stripe už neexistuje (mimo 30-dňovej retencie) → volajúci ju presunie do dead-letter.
+   */
+  async fetchEvent(eventId: string): Promise<Obj | null> {
+    if (!/^evt_[A-Za-z0-9]+$/.test(eventId)) return null;
+    try {
+      return await this.request("GET", `/events/${encodeURIComponent(eventId)}`);
+    } catch (error) {
+      if (error instanceof BillingProviderError && / 404$/.test(error.message)) return null;
+      throw error;
+    }
+  }
+
+  /** P4 reporting: stránka balance transactions (hrubá suma, poplatok, čistá suma, zdroj). */
+  async listBalanceTransactions(params: { createdGte?: number; createdLt?: number; payout?: string; startingAfter?: string; limit?: number }): Promise<{ data: Obj[]; hasMore: boolean }> {
+    const query: Record<string, string | number> = { limit: Math.min(Math.max(params.limit ?? 100, 1), 100), "expand[0]": "data.source" };
+    if (params.createdGte !== undefined) query["created[gte]"] = params.createdGte;
+    if (params.createdLt !== undefined) query["created[lt]"] = params.createdLt;
+    if (params.payout) query.payout = params.payout;
+    if (params.startingAfter) query.starting_after = params.startingAfter;
+    const page = await this.request("GET", "/balance_transactions", query);
+    return { data: Array.isArray(page.data) ? (page.data.filter(isObj) as Obj[]) : [], hasMore: page.has_more === true };
+  }
+
+  /** P4 reporting: stránka výplat (payouts) podľa dátumu vytvorenia. */
+  async listPayouts(params: { createdGte?: number; createdLt?: number; startingAfter?: string; limit?: number }): Promise<{ data: Obj[]; hasMore: boolean }> {
+    const query: Record<string, string | number> = { limit: Math.min(Math.max(params.limit ?? 100, 1), 100) };
+    if (params.createdGte !== undefined) query["created[gte]"] = params.createdGte;
+    if (params.createdLt !== undefined) query["created[lt]"] = params.createdLt;
+    if (params.startingAfter) query.starting_after = params.startingAfter;
+    const page = await this.request("GET", "/payouts", query);
+    return { data: Array.isArray(page.data) ? (page.data.filter(isObj) as Obj[]) : [], hasMore: page.has_more === true };
+  }
+
+  /**
+   * P4: účtovná kópia dokladu z udalosti. Faktúra / dobropis z `event.data` (finalizovaný doklad je
+   * u Stripe nemenný; stav sa v DB posúva iba dopredu). Pri `invoice.paid` sa doplní PaymentIntent
+   * (od API 2025-03-31 nie je na faktúre) cez `/v1/invoice_payments` — väzba na balance transactions.
+   * `charge.refunded` → pozorovanie refundácie (kontrola, že vznikol dobropis).
+   */
+  async captureDocuments(event: VerifiedProviderEvent): Promise<BillingDocumentCapture | null> {
+    if (event.eventType === "charge.refunded") {
+      const charge = event.data;
+      if (!isObj(charge) || charge.object !== "charge") return null;
+      const pi = idOf(charge.payment_intent);
+      const refunded = typeof charge.amount_refunded === "number" ? charge.amount_refunded : null;
+      if (!pi || refunded === null || refunded <= 0) return null;
+      return { documents: [], refunds: [{ payment_intent_id: pi, amount_refunded_minor: refunded, currency: str(charge.currency)?.toUpperCase() ?? null, observed_at: event.createdAt }] };
+    }
+    if (!STRIPE_DOCUMENT_EVENTS.has(event.eventType)) return null;
+    const object = event.data;
+    if (isObj(object) && object.object === "invoice") {
+      const doc = stripeInvoiceDocument(object);
+      if (!doc) return null;
+      if (!doc.payment_intent_id && doc.status === "paid" && doc.provider_document_id) {
+        const payments = await this.request("GET", "/invoice_payments", { invoice: doc.provider_document_id, limit: 3 });
+        const list = Array.isArray(payments.data) ? (payments.data.filter(isObj) as Obj[]) : [];
+        const paid = list.find((p) => p.status === "paid") ?? list[0];
+        const payment = paid && isObj(paid.payment) ? paid.payment : null;
+        doc.payment_intent_id = payment ? idOf(payment.payment_intent) : null;
+      }
+      return { documents: [doc], refunds: [] };
+    }
+    if (isObj(object) && object.object === "credit_note") {
+      const doc = stripeCreditNoteDocument(object);
+      return doc ? { documents: [doc], refunds: [] } : null;
+    }
+    return null;
   }
 
   /**
@@ -491,6 +707,7 @@ export class StripeProvider implements BillingProvider {
       eventType: str(event.type)!,
       createdAt: new Date((event.created as number) * 1000).toISOString(),
       payloadSha256: sha256Hex(rawBody),
+      apiVersion: str(event.api_version),
       data,
     };
   }
@@ -499,7 +716,10 @@ export class StripeProvider implements BillingProvider {
     if (STRIPE_AUDIT_EVENTS.has(event.eventType)) return { kind: "ignore", reason: "AUDIT_ONLY" };
     if (event.eventType === "charge.refunded") return this.normalizeRefund(event);
     if (event.eventType === "charge.dispute.created" || event.eventType === "charge.dispute.closed") return this.normalizeDispute(event);
-    if (!STRIPE_STATE_EVENTS.has(event.eventType)) return { kind: "ignore", reason: "UNSUPPORTED_EVENT" };
+    if (!STRIPE_STATE_EVENTS.has(event.eventType)) {
+      // P4: doklad bez vplyvu na nárok (zápis dokladu robí pipeline cez captureDocuments).
+      return { kind: "ignore", reason: STRIPE_DOCUMENT_EVENTS.has(event.eventType) ? "DOCUMENT_ONLY" : "UNSUPPORTED_EVENT" };
+    }
     const { subscriptionId, checkoutRef } = stripeSubscriptionIdFromEvent(event.eventType, event.data);
     if (!subscriptionId) return { kind: "ignore", reason: "NO_SUBSCRIPTION" };
     // Čerstvý stav z API (nie snapshot z eventu) — ochrana pred nesprávnym poradím.

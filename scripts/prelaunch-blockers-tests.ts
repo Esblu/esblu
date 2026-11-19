@@ -89,7 +89,10 @@ check("pre_rc (61) ∪ rc_tables (37) == grants manifest, disjoint", () => {
   assert.deepEqual(pre.filter((t) => rc.includes(t)), []);
   // Tabuľky po uzavretom release #1–#47 (nový samostatný release runbook).
   // registration_policy: 20261117100000 (už v produkcii); billing_event_cursors: S12 20261119120000 (čaká).
-  const POST_RELEASE_TABLES = ["company_terminations", "company_terms_notices", "company_export_runs", "registration_policy", "billing_event_cursors", "billing_live_purchase_allowlist"];
+  const POST_RELEASE_TABLES = ["company_terminations", "company_terms_notices", "company_export_runs", "registration_policy", "billing_event_cursors", "billing_live_purchase_allowlist",
+    // P4 (20261123110000 / 20261123120000, čakajú): účtovná kópia dokladov, export, ops alerty.
+    "billing_invoice_documents", "billing_refund_observations", "billing_balance_transactions", "billing_ops_admins",
+    "billing_accounting_export_log", "billing_ops_alerts", "billing_ops_heartbeats"];
   assert.deepEqual([...pre, ...rc].sort(), manifest.filter((t) => !POST_RELEASE_TABLES.includes(t)));
 });
 check("every rc table is created by an RC migration file", () => {

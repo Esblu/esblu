@@ -12,6 +12,7 @@
 import { sha256Hex } from "@/lib/billing/signature";
 import {
   BillingProviderError,
+  type BillingDocumentCapture,
   type BillingEnvironment,
   type BillingProvider,
   type BillingProviderId,
@@ -34,6 +35,13 @@ export type PipelineOutcome =
   | "retry";
 
 export type PipelineResult = { httpStatus: number; outcome: PipelineOutcome; code?: string };
+
+/**
+ * P4: prevádzkové signály z webhookovej cesty (ops alerty). Iba kódy — nikdy telo udalosti, podpis,
+ * identifikátory ani tajomstvá. Chyba signálu nikdy neovplyvní spracovanie udalosti.
+ */
+export type OpsSignalCode = "WEBHOOK_SIGNATURE_FAILURES" | "WEBHOOK_API_VERSION_MISMATCH";
+export type OpsSignalSink = { signal(code: OpsSignalCode): Promise<void> };
 
 type ApplyResponse = { result?: string; error?: string };
 
@@ -66,7 +74,7 @@ export function summarizeState(state: NormalizedSubscriptionState | null, reason
   };
 }
 
-async function recordEvent(db: BillingDb, event: Pick<VerifiedProviderEvent, "provider" | "environment" | "eventId" | "eventType" | "createdAt" | "payloadSha256">) {
+async function recordEvent(db: BillingDb, event: Pick<VerifiedProviderEvent, "provider" | "environment" | "eventId" | "eventType" | "createdAt"> & { payloadSha256: string | null }) {
   const { data, error } = await db.rpc("esblu_billing_record_event", {
     p_provider: event.provider,
     p_environment: event.environment,
@@ -100,15 +108,46 @@ async function applyState(db: BillingDb, eventRowId: string, state: NormalizedSu
   }
 }
 
-export async function processWebhook(provider: BillingProvider, rawBody: string, headers: Headers, db: BillingDb): Promise<PipelineResult> {
+async function emit(signals: OpsSignalSink | undefined, code: OpsSignalCode): Promise<void> {
+  if (!signals) return;
+  try {
+    await signals.signal(code);
+  } catch {
+    // monitoring nesmie zablokovať ani zmeniť spracovanie udalosti
+  }
+}
+
+export async function processWebhook(provider: BillingProvider, rawBody: string, headers: Headers, db: BillingDb, signals?: OpsSignalSink): Promise<PipelineResult> {
   // 1) podpis
   let event: VerifiedProviderEvent;
   try {
     event = await provider.verifyWebhook(rawBody, headers);
   } catch (error) {
-    return signatureFailure(error) ?? { httpStatus: 400, outcome: "rejected", code: "VERIFY_FAILED" };
+    const failure = signatureFailure(error) ?? { httpStatus: 400, outcome: "rejected" as const, code: "VERIFY_FAILED" };
+    if (failure.code === "INVALID_SIGNATURE" || failure.code === "STALE_SIGNATURE") await emit(signals, "WEBHOOK_SIGNATURE_FAILURES");
+    return failure;
   }
+  // P4: verzia webhook endpointu ≠ pripnutá verzia → alert (udalosť sa spracuje: stav sa načíta z API s pripnutou verziou).
+  if (provider.apiVersion && event.apiVersion && event.apiVersion !== provider.apiVersion) await emit(signals, "WEBHOOK_API_VERSION_MISMATCH");
   return processVerifiedEvent(provider, event, db);
+}
+
+/** P4: zápis účtovných kópií dokladov a pozorovaní refundácií (idempotentné upserty v DB). */
+async function storeDocuments(db: BillingDb, environment: BillingEnvironment, eventId: string, capture: BillingDocumentCapture): Promise<void> {
+  for (const doc of capture.documents) {
+    const { error } = await db.rpc("esblu_billing_upsert_document", { p_environment: environment, p_event_id: eventId, p_doc: doc });
+    if (error) throw new Error("DOCUMENT_FAILED");
+  }
+  for (const refund of capture.refunds) {
+    const { error } = await db.rpc("esblu_billing_record_refund_observation", {
+      p_environment: environment,
+      p_payment_intent_id: refund.payment_intent_id,
+      p_amount_refunded_minor: refund.amount_refunded_minor,
+      p_currency: refund.currency,
+      p_observed_at: refund.observed_at,
+    });
+    if (error) throw new Error("DOCUMENT_FAILED");
+  }
 }
 
 /**
@@ -125,6 +164,18 @@ export async function processVerifiedEvent(provider: BillingProvider, event: Ver
     return { httpStatus: 500, outcome: "retry", code: "RECORD_FAILED" };
   }
   if (recorded.duplicate) return { httpStatus: 200, outcome: "duplicate", code: recorded.status };
+
+  // 3b) P4: účtovná kópia dokladu (faktúra / dobropis / refundácia) PRED zmenou stavu. Zlyhanie = udalosť
+  //     `failed` (DOCUMENT_FAILED) → automatické opakovanie s backoffom (lib/billing/event-retry.ts).
+  if (provider.captureDocuments) {
+    try {
+      const capture = await provider.captureDocuments(event);
+      if (capture) await storeDocuments(db, provider.environment, event.eventId, capture);
+    } catch {
+      await db.rpc("esblu_billing_close_event", { p_event_id: recorded.event_id, p_status: "failed", p_error_code: "DOCUMENT_FAILED", p_summary: {} });
+      return { httpStatus: 500, outcome: "retry", code: "DOCUMENT_FAILED" };
+    }
+  }
 
   // 4) normalizácia
   let normalized;

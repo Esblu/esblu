@@ -1,6 +1,8 @@
 import { timingSafeEqual } from "node:crypto";
 import { billingEnvironmentForMode, getBillingServerMode } from "@/lib/billing/config";
 import { runEventCatchup } from "@/lib/billing/event-catchup";
+import { runFailedEventRetry } from "@/lib/billing/event-retry";
+import { recordHeartbeat } from "@/lib/billing/ops-alerts";
 import { getWebBillingProvider } from "@/lib/billing/server";
 import { StripeProvider } from "@/lib/billing/providers/stripe";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
@@ -11,6 +13,8 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 // Chránené CRON_SECRET (Vercel Cron posiela `Authorization: Bearer <CRON_SECRET>`).
 // Billing vypnutý (produkcia bez schváleného live režimu je tvrdo off) alebo DB web_provider = fake
 // → `configured:false`, ŽIADNE volanie Stripe. Prostredie servera ≠ DB environment → 503 ENVIRONMENT_MISMATCH.
+// P4: po doťahovaní opakuje zlyhané udalosti (backoff, max. pokusy, dead-letter — lib/billing/event-retry.ts)
+// a zapíše heartbeat (ops alert CRON_STRIPE_EVENTS_FAILING pri opakovanom zlyhaní / výpadku).
 // Odpoveď obsahuje iba počty a kódy (žiadne identifikátory ani osobné údaje).
 // -----------------------------------------------------------------------------
 
@@ -43,8 +47,11 @@ export async function GET(req: Request) {
   const provider = getWebBillingProvider("stripe", config.environment);
   if (!(provider instanceof StripeProvider)) return Response.json({ success: true, configured: false });
 
-  const result = await runEventCatchup(admin, provider, provider, { maxEvents: 200, maxPages: 20, timeBudgetMs: 45_000 });
+  const result = await runEventCatchup(admin, provider, provider, { maxEvents: 200, maxPages: 20, timeBudgetMs: 40_000 });
+  // Retry iba ak doťahovanie neskončilo chybou účtu (cudzí Stripe účet → nič nespracovať).
+  const retry = result.result === "account_mismatch" ? null : await runFailedEventRetry(admin, provider, provider, { limit: 20, timeBudgetMs: 12_000 });
   const status = result.result === "error" || result.result === "account_mismatch" ? 500 : 200;
+  await recordHeartbeat(admin, "stripe_events", provider.environment, status === 200 && !retry?.errorCode, result.errorCode ?? retry?.errorCode ?? null);
   return Response.json(
     {
       success: status === 200,
@@ -55,6 +62,7 @@ export async function GET(req: Request) {
       bootstrap: result.bootstrap,
       cursorExpired: result.cursorExpired,
       code: result.errorCode ?? null,
+      retry: retry ? { claimed: retry.claimed, outcomes: retry.outcomes, code: retry.errorCode ?? null } : null,
     },
     { status },
   );

@@ -33,6 +33,11 @@ import { resolveManageProvider } from "@/lib/billing/manage-guard";
 import { appleReconcileSource, appleStatusCodeToCanonical, googleReconcileSource } from "@/lib/billing/reconcile-sources";
 import { hasDrift, reconcileOne, runReconciliation, type ReconcileCandidate } from "@/lib/billing/reconciliation";
 import { signTimestamped } from "@/lib/billing/signature";
+import { STRIPE_API_VERSION, resolveStripeApiVersion } from "@/lib/billing/stripe-api-version";
+import { STRIPE_CATCHUP_EVENT_TYPES, stripeCreditNoteDocument, stripeInvoiceDocument } from "@/lib/billing/providers/stripe";
+import { buildAccountingCsv, csvText, formatMinor, monthRange } from "@/lib/billing/accounting-export";
+import { formatAlertEmail, resendMailerFromEnv, safeDetails } from "@/lib/billing/ops-alerts";
+import { archivePath, isAllowedStripeUrl } from "@/lib/billing/document-archive";
 import { CANONICAL_STATUSES as PROVIDER_STATUSES, type NormalizedSubscriptionState } from "@/lib/billing/types";
 import type { BillingDb } from "@/lib/billing/pipeline";
 
@@ -885,6 +890,92 @@ await check("S15b doťahovanie: web_provider='none' (pozastavený predaj) synchr
   assert.ok(!/web_provider/.test(webhook), "webhook nezávisí od pozastavenia predaja");
   const rec = read("app/api/cron/billing-reconcile/route.ts");
   assert.ok(!/web_provider/.test(rec), "reconciliation nezávisí od pozastavenia predaja");
+});
+
+// ============================================================================= P4: API verzia, doklady, ops, export
+await check("stripe-adapter: KAŽDÝ request nesie Stripe-Version = pripnutá verzia (GET, POST, DELETE, list)", async () => {
+  const seen: Array<string | undefined> = [];
+  const fetchImpl = (async (url: string, init: RequestInit) => {
+    seen.push((init.headers as Record<string, string>)["Stripe-Version"]);
+    if (url.includes("/checkout/sessions")) return new Response(JSON.stringify({ id: "cs_1", url: "https://checkout.stripe.com/x", livemode: false }), { status: 200 });
+    if (url.includes("/events")) return new Response(JSON.stringify({ object: "list", data: [], has_more: false }), { status: 200 });
+    return new Response(JSON.stringify({ ...SUB, livemode: false }), { status: 200 });
+  }) as unknown as typeof fetch;
+  const p = new StripeTestProvider({ secretKey: KEY, webhookSecret: WHSEC, fetchImpl, now: () => new Date(NOW * 1000) });
+  const ref = { providerSubscriptionId: "sub_r1", providerCustomerId: "cus_1" };
+  await p.getSubscription(ref);
+  await p.cancelSubscription(ref);
+  await p.cancelSubscriptionNow(ref);
+  await p.createCheckout({ checkoutId: "11111111-1111-4111-8111-111111111111", providerPriceId: "price_1", providerCustomerId: null, successUrl: "https://x/s", cancelUrl: "https://x/c" });
+  await p.listEvents({ limit: 1 });
+  await p.listBalanceTransactions({ limit: 1 }).catch(() => null);
+  assert.ok(seen.length >= 6);
+  assert.ok(seen.every((v) => v === STRIPE_API_VERSION), JSON.stringify(seen));
+  assert.equal(p.apiVersion, STRIPE_API_VERSION);
+});
+await check("stripe-adapter: override verzie iba na overenú verziu, inak NOT_CONFIGURED (fail closed) a validateBillingEnv ju hlási", async () => {
+  assert.equal(resolveStripeApiVersion(undefined), STRIPE_API_VERSION);
+  assert.equal(resolveStripeApiVersion(""), STRIPE_API_VERSION);
+  assert.equal(resolveStripeApiVersion(STRIPE_API_VERSION), STRIPE_API_VERSION);
+  assert.equal(resolveStripeApiVersion("2026-09-30.endive"), null);
+  let called = false;
+  const p = new StripeTestProvider({ secretKey: KEY, webhookSecret: WHSEC, apiVersion: "2024-06-20", fetchImpl: (async () => { called = true; return new Response("{}"); }) as unknown as typeof fetch });
+  await assert.rejects(p.getSubscription({ providerSubscriptionId: "sub_1", providerCustomerId: null }), /NOT_CONFIGURED/);
+  assert.equal(called, false, "bez overenej verzie sa Stripe nevolá");
+  const env = { ESBLU_BILLING_MODE: "stripe_test", STRIPE_SECRET_KEY: KEY, STRIPE_WEBHOOK_SECRET: WHSEC, ESBLU_BILLING_RETURN_ORIGIN: "https://staging.esblu.com", CRON_SECRET: "x".repeat(20) };
+  assert.ok(validateBillingEnv({ ...env, STRIPE_API_VERSION }).ok);
+  assert.ok(validateBillingEnv({ ...env, STRIPE_API_VERSION: "2024-06-20" }).invalid.includes("STRIPE_API_VERSION"));
+  assert.ok(validateBillingEnv({ ...env, STRIPE_LIVE_REPORTING_KEY: "rk_live_" + "a".repeat(20) }).invalid.includes("STRIPE_LIVE_REPORTING_KEY:LIVE_OUTSIDE_PRODUCTION"));
+});
+await check("stripe-adapter: udalosť z API (doťahovanie/retry) → payloadSha256 null (§ 2.3), api_version sa prenáša; webhook → hash tela", async () => {
+  const p = stripe({});
+  const e = p.eventFromApi({ object: "event", id: "evt_a", type: "invoice.paid", created: NOW, livemode: false, api_version: STRIPE_API_VERSION, data: { object: {} } });
+  assert.equal(e.payloadSha256, null);
+  assert.equal(e.apiVersion, STRIPE_API_VERSION);
+  const w = stripeEvent("customer.subscription.updated", SUB);
+  assert.match(String((await p.verifyWebhook(w.raw, w.headers)).payloadSha256), /^[0-9a-f]{64}$/);
+  assert.ok(STRIPE_CATCHUP_EVENT_TYPES.length <= 20, "Stripe types[] max 20");
+  for (const t of ["invoice.finalized", "credit_note.created", "credit_note.voided"]) assert.ok(STRIPE_CATCHUP_EVENT_TYPES.includes(t), t);
+});
+await check("stripe-adapter: faktúra / dobropis → účtovná kópia bez mena, e-mailu a adresy; daňové polia tak, ako prišli", () => {
+  const inv = stripeInvoiceDocument({ object: "invoice", id: "in_9", number: "ESB-9", status: "paid", currency: "eur", customer: "cus_9", customer_name: "Jana", customer_email: "j@x.sk",
+    customer_address: { country: "cz", line1: "Ulica 1" }, customer_tax_ids: [{ type: "eu_vat", value: "CZ12345678", verification: { status: "verified" } }],
+    total: 1590, total_excluding_tax: 1590, total_taxes: [{ amount: 0, tax_behavior: "exclusive", taxability_reason: "reverse_charge", taxable_amount: 1590, nested: { deep: { x: 1 } } }],
+    status_transitions: { finalized_at: NOW, paid_at: NOW }, invoice_pdf: "https://pay.stripe.com/x/pdf", parent: { subscription_details: { subscription: "sub_9" } } })!;
+  assert.deepEqual([inv.kind, inv.customer_country, inv.tax_minor, inv.provider_subscription_id, inv.issued_at], ["invoice", "CZ", 0, "sub_9", new Date(NOW * 1000).toISOString()]);
+  assert.deepEqual(inv.customer_tax_ids, [{ type: "eu_vat", value: "CZ12345678" }]);
+  assert.equal(inv.tax_details[0].taxability_reason, "reverse_charge");
+  assert.doesNotMatch(JSON.stringify(inv), /Jana|j@x|Ulica|deep/);
+  const cn = stripeCreditNoteDocument({ object: "credit_note", id: "cn_9", invoice: "in_9", number: "ESB-9-CN", status: "issued", total: 1590, total_excluding_tax: 1590, created: NOW, memo: "Jana" })!;
+  assert.deepEqual([cn.kind, cn.related_invoice_id, cn.status], ["credit_note", "in_9", "issued"]);
+  assert.doesNotMatch(JSON.stringify(cn), /Jana/);
+});
+await check("billing-ops: CSV — sumy z centov, ochrana pred formula injection, BOM + ; ; mesiac", () => {
+  assert.equal(formatMinor(1590, "EUR"), "15.90");
+  assert.equal(formatMinor(-47, "EUR"), "-0.47");
+  assert.equal(formatMinor(500, "JPY"), "500");
+  assert.equal(csvText("=HYPERLINK(1)"), `"'=HYPERLINK(1)"`);
+  assert.equal(csvText('a"b'), `"a""b"`);
+  const csv = buildAccountingCsv([{ record_type: "invoice", document_number: "@evil", currency: "EUR", total_minor: 1590, customer_tax_ids: [{ type: "eu_vat", value: "SK1" }], pdf_archived: false }]);
+  assert.ok(csv.startsWith("\uFEFFrecord_type;"));
+  assert.match(csv, /"'@evil"/);
+  assert.match(csv, /;15\.90;/);
+  assert.deepEqual(monthRange("2026-12"), { from: new Date(Date.UTC(2026, 11, 1)), to: new Date(Date.UTC(2027, 0, 1)) });
+  assert.equal(monthRange("2026-1"), null);
+});
+await check("billing-ops: e-mail alertu iba s kódmi a číslami; Resend iba pri všetkých troch premenných; archív iba *.stripe.com", () => {
+  assert.deepEqual(safeDetails({ count: 2, email: "a@b.sk", code: "NORMALIZE_FAILED", id: "sub_1", x: { y: 1 } }), { count: 2, code: "NORMALIZE_FAILED" });
+  const m = formatAlertEmail({ id: "1", environment: "live", code: "CATCHUP_LAG", severity: "critical", occurrences: 3, first_seen_at: "2026-11-23T10:00:00Z", last_seen_at: "2026-11-23T11:00:00Z", details: { minutes_since_success: 75, who: "jana@x.sk" } });
+  assert.equal(m.subject, "[Esblu billing][live] CRITICAL: CATCHUP_LAG");
+  assert.match(m.text, /minutes_since_success: 75/);
+  assert.doesNotMatch(m.text, /jana/);
+  assert.equal(resendMailerFromEnv({}), null);
+  assert.equal(resendMailerFromEnv({ RESEND_API_KEY: "re_" + "a".repeat(20), ESBLU_OPS_ALERT_EMAIL_TO: "ops@esblu.com" }), null);
+  assert.ok(resendMailerFromEnv({ RESEND_API_KEY: "re_" + "a".repeat(20), ESBLU_OPS_ALERT_EMAIL_TO: "ops@esblu.com", ESBLU_OPS_ALERT_EMAIL_FROM: "Esblu <ops@esblu.com>" }));
+  assert.ok(isAllowedStripeUrl("https://pay.stripe.com/invoice/x/pdf"));
+  for (const u of ["http://pay.stripe.com/x", "https://stripe.com.evil.io/x", "https://evil.io/stripe.com/", "https://u:p@pay.stripe.com/x", "https://pay.stripe.com:8443/x"]) assert.equal(isAllowedStripeUrl(u), false, u);
+  assert.equal(archivePath("live", "invoice", "in_1A", "2026-11-23T10:00:00Z"), "live/2026/11/invoice/in_1A.pdf");
+  assert.equal(archivePath("live", "invoice", "../x", "2026-11-23T10:00:00Z"), null);
 });
 
 console.log(`\nsubscriptions-lifecycle: ${passed} passed, ${failed} failed`);
