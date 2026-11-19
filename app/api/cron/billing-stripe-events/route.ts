@@ -9,7 +9,7 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 // GET /api/cron/billing-stripe-events — S12: doťahovanie zmeškaných Stripe udalostí
 // (refundácie, spory, zmeny a ukončenie predplatného) tou istou pipeline ako webhook.
 // Chránené CRON_SECRET (Vercel Cron posiela `Authorization: Bearer <CRON_SECRET>`).
-// Billing vypnutý (produkcia bez schváleného live režimu je tvrdo off) alebo DB web_provider ≠ stripe
+// Billing vypnutý (produkcia bez schváleného live režimu je tvrdo off) alebo DB web_provider = fake
 // → `configured:false`, ŽIADNE volanie Stripe. Prostredie servera ≠ DB environment → 503 ENVIRONMENT_MISMATCH.
 // Odpoveď obsahuje iba počty a kódy (žiadne identifikátory ani osobné údaje).
 // -----------------------------------------------------------------------------
@@ -33,7 +33,9 @@ export async function GET(req: Request) {
   const admin = getSupabaseAdmin();
   const { data: config, error } = await admin.from("billing_runtime_config").select("web_provider, environment").maybeSingle();
   if (error) return Response.json({ success: false, code: "CONFIG_READ_FAILED" }, { status: 500 });
-  if (config?.web_provider !== "stripe") return Response.json({ success: true, configured: false });
+  // web_provider = PREDAJ (nové nákupy). `none` = predaj pozastavený, ale existujúce predplatné sa ďalej
+  // synchronizujú (doťahovanie beží). Vypína ho iba režim servera alebo iný provider (fake).
+  if (config?.web_provider !== "stripe" && config?.web_provider !== "none") return Response.json({ success: true, configured: false });
   // S15: prostredie servera (test / live) sa musí zhodovať s DB — inak nič (fail closed, prevádzkový alarm).
   if (config.environment !== billingEnvironmentForMode(mode)) {
     return Response.json({ success: false, configured: true, code: "ENVIRONMENT_MISMATCH" }, { status: 503 });

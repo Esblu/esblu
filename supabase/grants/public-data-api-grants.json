@@ -129,6 +129,14 @@
       "service_role": "SELECT,INSERT,UPDATE,DELETE",
       "note": "billing interne — klient iba cez owner-only RPC (esblu_billing_*)"
     },
+    "billing_live_purchase_allowlist": {
+      "domain": "billing",
+      "access": "D",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "S15b: firmy oprávnené na prvé LIVE nákupy (spravuje iba operátor / service)"
+    },
     "billing_provider_links": {
       "domain": "billing",
       "access": "D",
@@ -863,6 +871,7 @@
     "esblu_billing_create_purchase_intent(text,text,text,text,text,text,text)",
     "esblu_billing_explain_my_entitlements()",
     "esblu_billing_issue_account_token(text)",
+    "esblu_billing_live_purchase_allowed(uuid)",
     "esblu_billing_list_plans()",
     "esblu_billing_manage_here(text,text)",
     "esblu_billing_managed_via(text)",
@@ -870,6 +879,7 @@
     "esblu_billing_method_info(text)",
     "esblu_billing_my_access()",
     "esblu_billing_my_intent(uuid)",
+    "esblu_billing_my_live_purchase_allowed()",
     "esblu_billing_ops_status(uuid)",
     "esblu_billing_plan_targets(uuid,text)",
     "esblu_billing_post_period_protection_until(text,timestamp with time zone,timestamp with time zone,timestamp with time zone)",

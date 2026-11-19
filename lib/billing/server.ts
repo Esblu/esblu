@@ -35,6 +35,8 @@ export const BILLING_ERROR_STATUS: Record<string, number> = {
   ESBLU_BILLING_STORE_TOKEN_REQUIRED: 400,
   ESBLU_BILLING_CHANGE_NOT_ALLOWED: 409,
   ESBLU_BILLING_MODE_INVALID: 400,
+  ESBLU_BILLING_ENVIRONMENT_MISMATCH: 409,
+  ESBLU_BILLING_LIVE_NOT_ALLOWED: 403,
 };
 
 export function billingErrorCode(error: { message?: string } | null | undefined): string {

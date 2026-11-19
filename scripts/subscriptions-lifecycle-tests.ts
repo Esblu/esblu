@@ -6,7 +6,7 @@
 // Voliteľný filter: SUITE=stripe-adapter npm run test:subscriptions-lifecycle
 // =============================================================================
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import {
   appleNotificationStatus,
   CANONICAL_STATUSES,
@@ -29,6 +29,7 @@ import { normalizeAppleNotification, normalizeGoogleSubscription, GooglePlayProv
 import { assertStripeKeyFor, assertStripeTestKey, mapStripeStatus, stripeExpiresAt, StripeLiveProvider, StripeTestProvider } from "@/lib/billing/providers/stripe";
 import { billingEnvironmentForMode, getBillingServerMode } from "@/lib/billing/config";
 import { startWebCheckout } from "@/lib/billing/web-checkout";
+import { resolveManageProvider } from "@/lib/billing/manage-guard";
 import { appleReconcileSource, appleStatusCodeToCanonical, googleReconcileSource } from "@/lib/billing/reconcile-sources";
 import { hasDrift, reconcileOne, runReconciliation, type ReconcileCandidate } from "@/lib/billing/reconciliation";
 import { signTimestamped } from "@/lib/billing/signature";
@@ -473,7 +474,11 @@ await check("provider-gate: kanál bez zapojeného providera sa neponúkne ani n
   assert.deepEqual(gatePurchaseOptions("garbage", webOnly), { methods: [], purchase_allowed: false, view_only: true });
 });
 await check("provider-gate: routy purchase-options a purchase-intent bránu naozaj používajú", () => {
-  assert.match(read("app/api/billing/purchase-options/route.ts"), /gatePurchaseOptions\(data, providerGateFromEnv\(\)\)/);
+  const opts = read("app/api/billing/purchase-options/route.ts");
+  assert.match(opts, /const gate = providerGateFromEnv\(\)/);
+  assert.match(opts, /gatePurchaseOptions\(data, gate\)/);
+  assert.match(opts, /esblu_billing_my_live_purchase_allowed/, "S15b: LIVE allowlist pred ponukou kanálov");
+  assert.match(opts, /if \(live\.error \|\| live\.data !== true\) gate\.webEnabled = false/, "fail closed");
   const intent = read("app/api/billing/purchase-intent/route.ts");
   assert.match(intent, /methodAllowedByServer\(method, providerGateFromEnv\(\)\)/);
   assert.ok(intent.indexOf("methodAllowedByServer") < intent.indexOf("esblu_billing_create_purchase_intent"), "brána pred zápisom do DB");
@@ -824,6 +829,62 @@ await check("S15 getWebBillingProvider: live iba pri platnej produkčnej konfigu
   } finally {
     process.env = saved;
   }
+});
+
+await check("S15b manage: provider iba z prostredia predplatného; nesúlad / neznáme prostredie = 409 bez volania providera", () => {
+  const live = new StripeLiveProvider({ secretKey: LIVE_K, webhookSecret: WH });
+  const test = new StripeTestProvider({ secretKey: TEST_K, webhookSecret: WH });
+  const calls: Array<[string | null | undefined, string | null | undefined]> = [];
+  const serverIs = (p: StripeLiveProvider | StripeTestProvider | null) => (expected?: string | null, env?: string | null) => {
+    calls.push([expected, env]);
+    if (!p) return null;
+    if (env && env !== p.environment) return null;
+    return p;
+  };
+  const acc = (env: string | null, sub = "sub_1") => ({ billing_provider: "stripe", provider_environment: env, provider_customer_id: "cus_1", provider_subscription_id: sub });
+  const ok = resolveManageProvider(acc("live"), serverIs(live));
+  assert.ok(ok.ok && ok.provider === live);
+  const r1 = resolveManageProvider(acc("test"), serverIs(live));
+  assert.deepEqual(r1.ok ? null : [r1.status, r1.code], [409, "ESBLU_BILLING_ENVIRONMENT_MISMATCH"], "test predplatné na live serveri");
+  const r2 = resolveManageProvider(acc("live"), serverIs(test));
+  assert.deepEqual(r2.ok ? null : [r2.status, r2.code], [409, "ESBLU_BILLING_ENVIRONMENT_MISMATCH"], "live predplatné na test serveri");
+  const r3 = resolveManageProvider(acc(null), serverIs(test));
+  assert.deepEqual(r3.ok ? null : r3.code, "ESBLU_BILLING_ENVIRONMENT_MISMATCH", "neznáme prostredie");
+  const r4 = resolveManageProvider(acc("test"), serverIs(null));
+  assert.deepEqual(r4.ok ? null : [r4.status, r4.code], [503, "ESBLU_BILLING_DISABLED"]);
+  const r5 = resolveManageProvider({ billing_provider: "google", provider_environment: "test", provider_customer_id: null, provider_subscription_id: "tok" }, serverIs(test));
+  assert.equal(r5.ok ? null : r5.code, "ESBLU_BILLING_MANAGE_IN_STORE");
+  const none = resolveManageProvider({ billing_provider: null, provider_environment: null, provider_customer_id: null, provider_subscription_id: null }, serverIs(test));
+  assert.ok(none.ok, "bez predplatného: route vráti NO_ACTIVE_SUBSCRIPTION bez volania providera");
+});
+await check("S15b secrets: live/test Stripe premenné iba v serverových moduloch; žiadny klientsky (.tsx) import billing servera, žiadne NEXT_PUBLIC_*STRIPE*/LIVE", () => {
+  const walk = (dir: string): string[] => readdirSync(dir).flatMap((n) => {
+    const p = `${dir}/${n}`;
+    if (n === "node_modules" || n.startsWith(".")) return [];
+    return statSync(p).isDirectory() ? walk(p) : [p];
+  });
+  const files = ["app", "lib"].flatMap(walk).filter((f) => /\.(ts|tsx)$/.test(f));
+  const bad: string[] = [];
+  for (const f of files) {
+    const src = readFileSync(f, "utf8");
+    const client = f.endsWith(".tsx") || /^["']use client["']/m.test(src);
+    if (/NEXT_PUBLIC_[A-Z_]*(STRIPE|LIVE)/.test(src)) bad.push(`${f}: NEXT_PUBLIC stripe/live`);
+    if (client && /STRIPE_(LIVE_)?(SECRET_KEY|WEBHOOK_SECRET)|ESBLU_BILLING_LIVE_APPROVED/.test(src)) bad.push(`${f}: secret v klientskom module`);
+    if (client && /@\/lib\/billing\/(server|provider-modes|config|providers\/stripe)"/.test(src)) bad.push(`${f}: klient importuje serverový billing`);
+    if (/console\.(log|info|warn|error)\([^)]*(STRIPE_|secretKey|webhookSecret)/.test(src)) bad.push(`${f}: log tajomstva`);
+  }
+  const readers = files.filter((f) => /process\.env\.STRIPE_LIVE_(SECRET_KEY|WEBHOOK_SECRET)/.test(readFileSync(f, "utf8")));
+  assert.deepEqual(readers, ["lib/billing/server.ts"], "live secrety číta iba lib/billing/server.ts");
+  assert.deepEqual(bad, []);
+});
+
+await check("S15b doťahovanie: web_provider='none' (pozastavený predaj) synchronizáciu nevypína; vypína ju iba režim servera alebo fake", () => {
+  const src = read("app/api/cron/billing-stripe-events/route.ts");
+  assert.match(src, /config\?\.web_provider !== "stripe" && config\?\.web_provider !== "none"/);
+  const webhook = read("app/api/billing/webhooks/stripe/route.ts");
+  assert.ok(!/web_provider/.test(webhook), "webhook nezávisí od pozastavenia predaja");
+  const rec = read("app/api/cron/billing-reconcile/route.ts");
+  assert.ok(!/web_provider/.test(rec), "reconciliation nezávisí od pozastavenia predaja");
 });
 
 console.log(`\nsubscriptions-lifecycle: ${passed} passed, ${failed} failed`);

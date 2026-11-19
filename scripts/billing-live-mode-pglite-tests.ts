@@ -374,6 +374,89 @@ await check("live adaptér: objekt s livemode=false z API (test účet za live k
   await setEnv("test", "none");
 });
 
+// ============================================================================= S15b allowlist prvých LIVE nákupov
+const liveIntent = (company: string, owner: string) => su(
+  `insert into public.billing_checkout_sessions (company_id, created_by, provider, environment, plan_code, billing_interval, provider_price_id, expires_at)
+   values ($1, $2, 'stripe', (select environment from public.billing_runtime_config), 'esblu_complete', 'month', 'price_live_complete_m', now() + interval '1 hour') returning id`, [company, owner]);
+await check("S15b allowlist: v live prostredí vytvorí LIVE zámer / Checkout iba povolená firma (každá cesta, aj priame API); test prostredie bez zmeny", async () => {
+  await su("update public.billing_checkout_sessions set status = 'expired' where status in ('created', 'open')");
+  const t = await liveIntent(C.b, U.ownerB);
+  assert.equal(t.length, 1, "test prostredie: trigger nič nemení");
+  await su("update public.billing_checkout_sessions set status = 'expired' where status in ('created', 'open')");
+  await setEnv("live");
+  assert.equal((await su<{ s: string }>("select live_purchase_scope s from public.billing_runtime_config"))[0].s, "allowlist", "default = allowlist (fail closed)");
+  await fails(() => liveIntent(C.b, U.ownerB), /ESBLU_BILLING_LIVE_NOT_ALLOWED/);
+  // klientska cesta (RPC nákupného zámeru) — rovnaká poistka v DB
+  await su("update public.billing_runtime_config set web_provider = 'stripe'");
+  // firma A2 (bez otvoreného predplatného, mimo allowlistu) — owner A v relácii s aktívnou firmou A2
+  const rpc = await attempt(as(U.ownerA, S.ownerA2), "select public.esblu_billing_create_purchase_intent('esblu_complete', 'month', 'web', 'stripe_web_checkout', null, 'new', null)");
+  assert.notEqual(rpc.layer, "ok", "nepovolená firma nevytvorí LIVE zámer ani cez RPC");
+  assert.match(rpc.message, /ESBLU_BILLING_LIVE_NOT_ALLOWED/, rpc.message);
+  // UI: ponuka kanálov
+  const mine = await attempt(ownerB, "select public.esblu_billing_my_live_purchase_allowed() a");
+  assert.equal(mine.data[0]?.a, false);
+  // povolenie internej firmy
+  await su("insert into public.billing_live_purchase_allowlist (company_id, note) values ($1, 'interný test')", [C.b]);
+  const ok = await liveIntent(C.b, U.ownerB);
+  assert.equal(ok.length, 1, "povolená firma vytvorí LIVE zámer");
+  assert.equal((await attempt(ownerB, "select public.esblu_billing_my_live_purchase_allowed() a")).data[0]?.a, true);
+  // odobratie z allowlistu: k existujúcemu zámeru sa už nepriradí Stripe relácia
+  await su("delete from public.billing_live_purchase_allowlist where company_id = $1", [C.b]);
+  await fails(() => su("update public.billing_checkout_sessions set provider_session_id = 'cs_live_x' where id = $1", [(ok[0] as Json).id]), /ESBLU_BILLING_LIVE_NOT_ALLOWED/);
+  await su("update public.billing_checkout_sessions set status = 'expired' where id = $1", [(ok[0] as Json).id]); // iná zmena prejde
+  // otvorenie predaja všetkým = vedomé prepnutie
+  await su("update public.billing_runtime_config set live_purchase_scope = 'all'");
+  assert.equal((await liveIntent(C.a2, U.ownerA)).length, 1);
+  await fails(() => su("update public.billing_runtime_config set live_purchase_scope = 'everyone'"), /live_scope_check/);
+  await su("update public.billing_runtime_config set live_purchase_scope = 'allowlist'");
+  await su("update public.billing_checkout_sessions set status = 'expired' where status in ('created', 'open')");
+  await setEnv("test", "none");
+});
+await check("S15b allowlist: existujúce LIVE predplatné firmy mimo allowlistu sa ďalej synchronizuje (webhook, nároky); klient allowlist nečíta ani nemení", async () => {
+  await setEnv("live");
+  const f = await liveFixture(C.b, "sub_live_b", Math.floor(Date.now() / 1000) + 20 * 86400);
+  assert.equal(Number((await su<{ n: number }>("select count(*)::int n from public.billing_live_purchase_allowlist where company_id = $1", [C.b]))[0].n), 0);
+  const r = await sendWebhook(f.provider, ev("customer.subscription.updated", { ...f.st.sub, cancel_at_period_end: true }, true), WHSEC_LIVE);
+  assert.ok(["applied", "stale"].includes(r.outcome), JSON.stringify(r));
+  assert.equal(await subActive(C.b), true, "nároky existujúceho predplatného bez zmeny");
+  for (const who of [ownerA, ownerB, employeeA, anon]) {
+    for (const sql of ["select * from public.billing_live_purchase_allowlist", `insert into public.billing_live_purchase_allowlist (company_id) values ('${C.a}')`,
+      "update public.billing_runtime_config set live_purchase_scope = 'all'", `select public.esblu_billing_live_purchase_allowed('${C.a}')`]) {
+      const o = await attempt(who, sql);
+      assert.ok(o.layer === "privilege" || o.layer === "rls" || (o.layer === "ok" && o.rows === 0), `${who.uid ?? who.role}: ${sql} → ${o.layer}`);
+    }
+  }
+  await setEnv("test", "none");
+});
+await check("S15b pozastavenie predaja (web_provider='none'): nové nákupy nie, ale webhook / doťahovanie / reconciliation existujúcich predplatných áno — bez predĺženia prístupu", async () => {
+  await setEnv("live", "none");
+  await su("insert into public.billing_live_purchase_allowlist (company_id) values ($1) on conflict do nothing", [C.a2]);
+  const rpc = await attempt(as(U.ownerA, S.ownerA2), "select public.esblu_billing_create_purchase_intent('esblu_complete', 'month', 'web', 'stripe_web_checkout', null, 'new', null)");
+  assert.notEqual(rpc.layer, "ok", "predaj pozastavený aj pre povolenú firmu");
+  // existujúce predplatné: webhook obnovy prejde, prístup = nové obdobie + 48 h (nie viac)
+  const newEnd = Math.floor(Date.now() / 1000) + 30 * 86400;
+  const f = await liveFixture(C.b, "sub_live_b", newEnd);
+  const r = await sendWebhook(f.provider, ev("invoice.paid", { object: "invoice", id: "in_x", livemode: true, parent: { subscription_details: { subscription: "sub_live_b" } } }, true), WHSEC_LIVE);
+  assert.equal(r.outcome, "applied", JSON.stringify(r));
+  const until = (await su<{ v: string }>("select max(valid_until)::text v from public.company_entitlements where company_id = $1 and source = 'subscription' and status = 'active'", [C.b]))[0].v;
+  assert.equal(ms(until) - newEnd * 1000, 48 * H, "prístup kotvený na obdobie od Stripe + 48 h");
+  await su("delete from public.billing_event_cursors");
+  const c = await runEventCatchup(serviceDb, f.provider, f.provider, { timeBudgetMs: 60_000 });
+  assert.notEqual(c.result, "error", "doťahovanie beží aj pri pozastavenom predaji");
+  await su("delete from public.billing_event_cursors");
+  await su("delete from public.billing_live_purchase_allowlist");
+  await setEnv("test", "none");
+});
+await check("S15b migrácia 20261119140000: idempotentná, rollback a znovu-forward", async () => {
+  const sql = read("supabase/migrations/20261119140000_billing_live_purchase_allowlist.sql");
+  await db.exec(sql);
+  await db.exec(sql);
+  await db.exec(read("supabase/rollback/20261119140000_billing_live_purchase_allowlist_rollback.sql"));
+  assert.equal((await su<{ n: number }>("select count(*)::int n from information_schema.columns where table_name = 'billing_runtime_config' and column_name = 'live_purchase_scope'"))[0].n, 0);
+  await db.exec(sql);
+  assert.equal((await su<{ s: string }>("select live_purchase_scope s from public.billing_runtime_config"))[0].s, "allowlist");
+});
+
 await check("migrácia 20261119130000: idempotentná; rollback (pri test prostredí) a znovu-forward", async () => {
   const sql = read("supabase/migrations/20261119130000_billing_live_mode.sql");
   await su("delete from public.billing_event_cursors where environment = 'live'");

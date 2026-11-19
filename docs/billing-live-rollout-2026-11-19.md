@@ -32,7 +32,8 @@ bez zmeny, md5 tiel funkcií = repo.
 1. CLIA: schválené znenie VOP (predplatné, 48 h lehota, refundácie), Zásad, DPA a `/subprocessors` (Stripe) a ich publikácia.
 2. Účtovníčka: DPH § 7a, doklady, mesačné párovanie (`docs/finance/stripe-monthly-reconciliation-template.csv`).
 3. ⛔ Produkčné migrácie v poradí `20261118120000`, `20261118130000`, `20261118140000`, `20261119100000`,
-   `20261119110000`, `20261119120000`, `20261119130000` — čerstvý backup + logický dump, po jednej, kontrola po každej.
+   `20261119110000`, `20261119120000`, `20261119130000`, `20261119140000` — čerstvý backup + logický dump, po jednej,
+   kontrola po každej (audit § 7).
 4. ⛔ Merge vetvy do `main` a produkčný deploy (billing ostáva `off`, kým nie sú nastavené premenné z kroku 6).
 5. Stripe live účet Esblu s.r.o.: overená firma, výplatný účet, DPH nastavenia, produkt „Esblu Komplet" a cena
    15,90 €/mesiac (EUR), Billing Portal (zrušenie **ku koncu obdobia**), webhook endpoint
@@ -56,13 +57,15 @@ bez zmeny, md5 tiel funkcií = repo.
    (`web_provider` ostáva `none`).
 3. **Schválenie:** `ESBLU_BILLING_LIVE_APPROVED=true` + redeploy. Webhook je aktívny, `/api/billing/purchase-options`
    stále bez kanálov (DB `web_provider='none'`).
-4. **Prod DB:** `update billing_runtime_config set web_provider = 'stripe';` — nákup možný iba cez API (UI je vypnuté).
-5. **Interný test vlastnou kartou** na internej firme (live sa nedá testovať na Preview — tam je live vždy `off`):
-   krátke okno so zapnutým UI alebo priame volanie `/api/billing/purchase-intent`; nákup → aktivácia, zrušenie ku koncu
-   obdobia, plná refundácia → `refunded` + ukončenie v Stripe, cron doťahovania (`billing_event_cursors` = live účet,
-   bez chýb).
-6. **UI:** `NEXT_PUBLIC_ESBLU_BILLING_UI=1` + redeploy. Crony (`billing-stripe-events` 15 min, `billing-reconcile` 6 h)
-   bežia už od kroku 3.
+4. **Prod DB (allowlist, S15b):** `insert into billing_live_purchase_allowlist (company_id, note) values ('<interná firma Esblu>', 'prvý live test');`
+   `live_purchase_scope` ostáva `allowlist` (default). Potom `update billing_runtime_config set web_provider = 'stripe';`.
+   LIVE zámer / Checkout vytvorí **iba** firma z allowlistu — DB trigger to vynúti pre každú cestu (UI aj priame API);
+   ostatné firmy nemajú webové kanály v ponuke a priamy pokus skončí `403 ESBLU_BILLING_LIVE_NOT_ALLOWED`.
+5. **UI:** `NEXT_PUBLIC_ESBLU_BILLING_UI=1` + redeploy (ostatné firmy vidia „Online predplatné zatiaľ nie je dostupné“ —
+   bez kanálov). **Interný test vlastnou kartou** na internej firme: nákup → aktivácia, zrušenie ku koncu obdobia, plná
+   refundácia → `refunded` + ukončenie v Stripe, cron doťahovania (`billing_event_cursors` = live účet, bez chýb).
+6. ⛔ **Otvorenie predaja:** `update billing_runtime_config set live_purchase_scope = 'all';` (allowlist ostáva ako záznam).
+   Crony (`billing-stripe-events` 15 min, `billing-reconcile` 6 h) bežia od kroku 3.
 
 Monitoring prvých 14 dní: `billing_events` so `status='failed'`, `billing_event_cursors.consecutive_failures > 0`,
 `billing_reconciliation.dead_letter`, Vercel runtime chyby na `/api/billing/*` a `/api/cron/billing-*`, Stripe
@@ -73,7 +76,7 @@ upozornenia na zlyhané doručenia webhooku.
 | Úroveň | Kedy | Postup | Dopad |
 |---|---|---|---|
 | R1 kill switch | akákoľvek pochybnosť | odstrániť `ESBLU_BILLING_LIVE_APPROVED` (alebo nastaviť ≠ `true`) + redeploy | režim `off`: nové nákupy nemožné, webhook 404 (Stripe opakuje 3 dni, potom doťahovanie po znovuzapnutí), crony `configured:false`. **Pozor:** obnovy predplatných sa nespracúvajú → zaplatení zákazníci stratia prístup po konci obdobia + 48 h, ak R1 trvá dlhšie; preto R1 iba krátkodobo |
-| R2 DB | chyba v nákupe | `update billing_runtime_config set web_provider = 'none';` | žiadne nové zámery; webhooky a obnovy bežia ďalej (odporúčané namiesto R1 pri chybe nákupu) |
+| R2 pozastavenie predaja | chyba v nákupe | `update billing_runtime_config set web_provider = 'none';` (alebo `live_purchase_scope = 'allowlist'` = predaj iba internej firme) | žiadne nové zámery ani Checkout; **webhooky, doťahovanie (S15b oprava), reconciliation a obnovy bežia ďalej**; prístup ostáva kotvený na obdobie od Stripe + 48 h (nič sa nepredlžuje). Odporúčané namiesto R1 |
 | R3 kód | chyba v aplikácii | Vercel Instant Rollback na predchádzajúci deploy | starý kód má produkciu tvrdo `off` (= R1) |
 | R4 migrácia | iba ak live nikdy nebežal | `supabase/rollback/20261119130000_billing_live_mode_rollback.sql` (vyžaduje `environment='test'` a žiadny live kurzor) | po reálnych live platbách sa **nerobí** — live dáta (udalosti, účty) sa nemažú (účtovníctvo) |
 
@@ -82,7 +85,7 @@ Zmena Stripe live účtu (iný `acct_…`): doťahovanie vráti `ACCOUNT_MISMATC
 
 ## 5. Testy S15 (DB a simulované Stripe API — NIE end-to-end so živým Stripe)
 
-- `test:billing-live-mode-db` 9/9 (čistý replay všetkých migrácií + skutočná TS pipeline s mockom live Stripe):
+- `test:billing-live-mode-db` 13/13 (S15 9 + S15b 4; čistý replay všetkých migrácií + skutočná TS pipeline s mockom live Stripe):
   constraint live konfigurácie; `record_event` odmietne iné prostredie (test ← live, live ← test, obchody v live);
   nároky iba z účtu prostredia DB (+ 48 h riadny koniec v live, test účet v live DB nič neodomkne); kandidáti
   reconciliation per prostredie; live kurzor; live webhook applied, test udalosť / test secret / test provider odmietnuté
@@ -90,7 +93,7 @@ Zmena Stripe live účtu (iný `acct_…`): doťahovanie vráti `ACCOUNT_MISMATC
   (`cancel_at`, skrátené obdobie) bez 48 h; live doťahovanie (test udalosť v zozname preskočená, `TEST_EVENT_SKIPPED`);
   reconciliation test zdroja nad live účtom = `ENVIRONMENT_MISMATCH`, live zdroj `in_sync`; live API objekt
   s `livemode=false` → nič sa neaplikuje; migrácia idempotentná, rollback a znovu-forward.
-- `test:subscriptions-lifecycle` 57/57 (+5 S15): matica režimov (produkcia / preview / development / lokálne,
+- `test:subscriptions-lifecycle` 60/60 (+5 S15, +3 S15b: správa podľa prostredia, tajomstvá, pozastavenie predaja): matica režimov (produkcia / preview / development / lokálne,
   schválenie presne `true`), kľúče per prostredie, `livemode` webhooku, `/v1/events` a API objektov v oboch smeroch,
   env schéma (iba názvy, žiadne hodnoty), `getWebBillingProvider` (live iba pri platnej produkčnej konfigurácii,
   test kľúč vedľa live = `null`, zámer iného prostredia = `null`), checkout iného prostredia sa nevolá.
@@ -106,8 +109,45 @@ Zmena Stripe live účtu (iný `acct_…`): doťahovanie vráti `ACCOUNT_MISMATC
 1. Live režim nebol overený so skutočným live Stripe účtom (žiadny neexistuje) — prvý reálny dôkaz je interný nákup (krok 5).
 2. R1 (kill switch) zastaví aj spracovanie obnov — dlhodobé vypnutie by zákazníkom po období + 48 h odobralo prístup;
    pri chybe nákupu použiť R2.
-3. Interný test pred zapnutím UI nemá samostatný „iba pre jednu firmu" prepínač — rozhodnúť, či stačí krátke okno so
-   zapnutým UI, alebo doplniť allowlist (samostatná úloha).
-4. `/api/billing/manage` nevie prostredie účtu (RPC ho nevracia); chybné prostredie zachytí DB (`record_event`) a Stripe
-   (neznáme ID) — bez zápisu, ale s chybovou odpoveďou.
+3. ~~Interný test bez allowlistu~~ — doplnené (S15b, migrácia `20261119140000`): `live_purchase_scope='allowlist'` je default.
+4. ~~`/api/billing/manage` nevie prostredie účtu~~ — opravené (S15b): route čaká prostredie predplatného z
+   `esblu_billing_authorize_manage` a provider musí byť z rovnakého prostredia, inak `409 ESBLU_BILLING_ENVIRONMENT_MISMATCH`
+   **pred** akýmkoľvek volaním Stripe.
 5. Apple / Google live billing nie je súčasťou S15 (constraint ho v live DB blokuje).
+
+## 7. S15b — read-only audit 8 čakajúcich produkčných migrácií (19. 11. 2026)
+
+Produkcia (`assetpilot`, read-only metadáta a počty, bez osobných údajov; záznam v `docs/ops/service-intervention-log.md`):
+posledná migrácia `20261117213219`; billing tabuľky existujú, RLS zapnutá; **0** zámerov, **0** udalostí, **0** účtov,
+**0** nárokov zo `subscription`; 12 cien (test fixtures obchodov / fake); `billing_runtime_config` = `test / none`, bez mock
+plánov; žiadna z nových funkcií / tabuliek / stĺpca / indexu ešte neexistuje. **Všetkých 8 nahrádzaných funkcií má v produkcii
+md5 tela totožné s poslednou verziou v repe pred 18. 11.** (`apply_event`, `apply_charge`, `attach_checkout_session`,
+`create_purchase_intent`, `reconcile_candidates`, `record_event`, `sync_entitlements`, `get_my_subscription`) → žiadny drift.
+
+| # | Migrácia | Mimo funkcií (DDL / dáta) | Závislosti v produkcii | Idempotencia / rollback | Riziko prestoja |
+|---|---|---|---|---|---|
+| 1 | `20261118120000_billing_single_open_checkout` | update duplicitných otvorených zámerov → `expired` (prod: 0 riadkov), unikátny čiastočný index | `billing_checkout_sessions` ✓ | `if not exists`, rollback súbor | index nad prázdnou tabuľkou — okamžité |
+| 2 | `20261118130000_billing_terminal_precedence` | — (iba funkcie) | ✓ | replay test, rollback | žiadne |
+| 3 | `20261118140000_billing_refund_audit` | — | ✓ | replay, rollback | žiadne |
+| 4 | `20261119100000_billing_post_period_protection` | — | `esblu_billing_plan_targets` ✓ | replay, rollback | žiadne |
+| 5 | `20261119110000_billing_scheduled_end` | `add column if not exists scheduled_end_at` (nullable) | ✓ | replay, rollback (stĺpec ponechá) | metadátová zmena, okamžitá |
+| 6 | `20261119120000_billing_event_catchup` | nová tabuľka (RLS, service-only) | ✓ | `if not exists`, rollback | žiadne |
+| 7 | `20261119130000_billing_live_mode` | constrainty `billing_runtime_config` / kurzor (existujúci riadok `test/none` ich spĺňa) | ✓ | replay, rollback (iba pri `test`) | 1 riadok — okamžité |
+| 8 | `20261119140000_billing_live_purchase_allowlist` | stĺpec s defaultom, tabuľka, trigger na `billing_checkout_sessions` | `companies`, `esblu_billing_my_access` ✓ | replay, rollback | 0 riadkov — okamžité |
+
+Poradie je povinné (7 a 8 nahrádzajú funkcie z 4–6). Všetky sú testované čistým replayom všetkých migrácií
+(`test:grants-replay-db`: idempotencia, rollback → re-apply = rovnaké ACL a politiky) a na stagingu (md5 = repo).
+Aplikácia nepotrebuje výpadok: billing je v produkcii vypnutý a tabuľky sú prázdne.
+
+## 8. S15b — tajomstvá a súbežné test/live premenné
+
+- Live secrety (`STRIPE_LIVE_SECRET_KEY`, `STRIPE_LIVE_WEBHOOK_SECRET`) číta **iba** `lib/billing/server.ts`; žiadny klientsky
+  modul (`.tsx` / `"use client"`) neimportuje billing server, konfiguráciu ani Stripe adaptér; neexistuje `NEXT_PUBLIC_*`
+  so Stripe / live; `lib/billing` nič nelogovaním nevypisuje; chyby Stripe nesú iba metódu, cestu a HTTP kód
+  (statický test v `test:subscriptions-lifecycle`).
+- Vercel: Preview ani Production nemajú žiadnu premennú `STRIPE_*` (19. 11.); repo a dokumentácia neobsahujú reálne kľúče
+  (iba zjavné testovacie atrapy v testoch).
+- Súbežne test + live premenné: v produkcii s live režimom → `TEST_CONFIG_IN_LIVE` → provider `null` (billing nebeží);
+  mimo produkcie live premenné → `LIVE_OUTSIDE_PRODUCTION` a live režim sa nikdy nezapne; test provider live kľúč a live
+  provider test kľúč odmietne aj samostatne.
+
