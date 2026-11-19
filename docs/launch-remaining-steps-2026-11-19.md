@@ -48,7 +48,7 @@ Hotové: testy v Stripe sandboxe (nákup, obnova, zlyhanie, refundácie, zrušen
 | S13 | ~~Ukončenie k zvolenému dátumu~~ — **implementované 19. 11.** (`scheduled_end_at`, bez 48 h); overiť `cancel_at` v sandboxe | A / V |
 | S14 | ~~Manifest grantov~~ — **hotové 19. 11.** (`registration_policy`, nové tabuľky/funkcie; ACL v DB bez zmeny) | — |
 | S15 | **Live režim Stripe (pred ostrým billingom):** provider s očakávaným `livemode` podľa prostredia, `ESBLU_BILLING_MODE=stripe_live` iba v produkcii, DB `environment=live` (config, ceny, kurzor), testy oddelenia sandbox ↔ live (`stripe-test-and-reconciliation` § 8.11) | A (po súhlase) |
-| S16 | Overenie S12/S13 so skutočným sandboxom (minimum, bez nových predplatných): okno 1 `-NoListen`, `s12-events`, `s12-catchup`, `verify-terminal`, `s13-existing` (§ 8.12); potom staging `web_provider=none` | V → A |
+| S16 | ~~Overenie S12/S13 so skutočným sandboxom~~ — **PASS 4/4 (19. 11.)**: `s12-events`, `s12-catchup`, `verify-terminal`, `s13-existing`; Stripe skracuje obdobie pri `cancel_at` → oprava S13 (`af55a4d`) potvrdená; staging vrátený na `web_provider=none` (§ 8.13) | — |
 | S10 | Monitoring: alert na `billing_events` s chybou, `dead_letter` v reconciliation | A |
 | S11 | Upratanie Stripe sandboxov: zrušiť predplatné C v pôvodnom sandboxe (príkaz v § 8.7), potom `stripe sandboxes delete` | V |
 

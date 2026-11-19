@@ -555,6 +555,30 @@ a `s12-refund-missing` netreba (vytvárali by nové predplatné bez nového dôk
 **Staging pred testom (pôvodné hodnoty zachované):** pred 19. 11. `web_provider='none'`, všetky ceny stripe neaktívne;
 pre test `web_provider='stripe'`, aktívna `price_1UdE7t…`; po teste vrátiť `none` a cenu neaktívnu.
 
+### 8.13 Výsledky reálnych integračných testov S12/S13 (19. 11. 2026, PC vlastníka) — PASS 4/4
+
+Prostredie: lokálne Esblu (`af55a4d`) v okne 1 s **`-NoListen`** (žiadny webhook), staging DB, Stripe sandbox profilu
+`esblu-qa2` — účet `acct_1UdCxsRKE4QKs2UL` (test mode), cena `price_1UdE7t…`. Bez nových predplatných a zákazníkov.
+
+| # | Krok | Výsledok | Dôkaz (staging DB, read-only SQL) |
+|---|---|---|---|
+| I1 | `s12-events` | **PASS** — skutočné stránkovanie `ending_before` = rovnaké poradie ako plný zoznam, bez medzier a duplicít; neexistujúci kurzor → 400/404 | výstup vlastníka |
+| I2 | `s12-catchup` | **PASS** — kľúč číta `/v1/account` a `/v1/events`; bootstrap nad reálnymi udalosťami 18. 11. (už spracované → `duplicate`), opakovaný beh bez zmeny stavu | `billing_event_cursors`: účet `acct_1UdCxsRKE4QKs2UL`, 34 spracovaných, `consecutive_failures` 0, bez chyby, lease uvoľnený |
+| I3 | `verify-terminal` (D) | **PASS** — reálne volania novej reconciliation (platba aktuálnej faktúry) nad refundovaným D, výsledok `in_sync`, stav `refunded` bez zmeny | `billing_reconciliation` D: 12:34:18 UTC `in_sync` |
+| I4 | `s13-existing` (E, prioritný) | **PASS** — Stripe pri `cancel_at` uprostred obdobia **skrátil `current_period_end`** na `cancel_at` a vrátil `cancel_at_period_end=false`; Esblu uložilo `scheduled_end_at`, nároky iba do 12:40:57 UTC (**bez 48 h**); po ukončení v Stripe `canceled`, 0 účinných nárokov; obe zmeny prišli **iba doťahovaním** | E: `customer.subscription.updated` 12:36:04 (`scheduled_end_at` 12:40:57) a `customer.subscription.deleted` 12:41:32, oba `processed`; účet `canceled`, `ended_at` = `scheduled_end_at` = `current_period_end` 12:40:57; 9/9 nárokov `revoked`, 0 účinných |
+
+**Význam opravy S13 (`af55a4d`):** keďže Stripe obdobie skutočne skracuje (`current_period_end` = `cancel_at`),
+pôvodná normalizácia z `ab8f186` (porovnanie `cancel_at` s koncom obdobia ± 5 min) by predčasné ukončenie vyhodnotila
+ako riadny koniec a Esblu by **omylom pridalo 48 h**. Oprava (rozhoduje príznak `cancel_at_period_end`) to reálne
+potvrdzuje I4. Bez opravy by test zlyhal.
+
+**Po teste (19. 11. 2026 ~12:56 UTC):** staging vrátený do pôvodného stavu — `web_provider='none'`, všetky Stripe ceny
+neaktívne (3 riadky ponechané ako dôkaz), 0 otvorených zámerov, 0 držaných lease, všetci QA používatelia zablokovaní.
+Kurzor doťahovania ponechaný (technický stav, bez osobných údajov). Preview `dpl_2icCeeg6CrjwS6KotKrnVUXz3nuV` →
+`ESBLU_BILLING_DISABLED`. Produkcia nedotknutá: nasadenie `main` @ `12da726` (17. 11.), posledná migrácia
+`20261117213219`, žiadna z `20261118*` / `20261119*`, `billing_event_cursors` neexistuje, `web_provider='none'`
+(read-only metadáta, záznam v `docs/ops/service-intervention-log.md`).
+
 ### 8.7 Upratanie stagingu (19. 11. 2026, dôkazy zachované)
 
 | Položka | Stav |
