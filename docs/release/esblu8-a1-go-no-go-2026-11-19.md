@@ -58,3 +58,9 @@ Instant Rollback Vercelu **nie je** databázový rollback.
 2. Stripe sandbox E2E na Preview (pripnutá verzia, webhook, replay, doklad) PASS — vyžaduje prístupy podľa `staging-sandbox-access-setup.md`.
 3. Čerstvá záloha (§ 2.1).
 4. Výslovné schválenie A1 prevádzkovateľom.
+
+## 7. Aktualizácia 2026-11-19 (konečný stav pred sandbox testom)
+- Bypass secret pre testovacie webhooky vytvorený a overený (ochrana Preview zachovaná, podpisy sa overujú nezávisle) — `staging-sandbox-access-setup.md` § 5.
+- Bez zmeny: produkcia `12da726`, posledná migrácia `20261117213219`, LIVE vypnutý.
+- **Verdikt: NO-GO** — chýba jediný technický dôkaz: skutočný Stripe sandbox beh s pripnutou `Stripe-Version` (A1 obsahuje kód, ktorý ju posiela pri každom volaní; pri vypnutom billingu sa však v produkcii nevolá). Ostatné podmienky: push vetvy, čerstvá záloha, schválenie.
+- **Alternatíva (rozhodnutie prevádzkovateľa):** keďže v A1 ostáva `web_provider='none'` a Stripe sa v produkcii nevolá, A1 možno nasadiť ako „GO s podmienkou“ a sandbox overenie verzie presunúť pred zapnutie Stripe LIVE (nie pred A1). Riziko pre produkciu: nízke; nedá sa ho však vylúčiť pre crony `billing-stripe-events`/`billing-reconcile`, ktoré pri `none` bez kľúča končia `NOT_CONFIGURED`.

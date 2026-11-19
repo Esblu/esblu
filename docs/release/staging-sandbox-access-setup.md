@@ -35,3 +35,22 @@ Bypass secret môže po schválení vygenerovať Claude cez Vercel API a zapísa
 
 ## 4. Čo Claude spraví po nastavení (bez ďalších zásahov)
 Staging smoke test `docs/release/staging-smoke-test-esblu8.md` § 2–4: pripnutá API verzia (`Stripe-Version` vs verzia webhook endpointu), checkout test kartou 4242 v prehliadači, replay zlyhanej udalosti, faktúra → účtovná kópia + PDF archív, dobropis po ukončení firmy, export; eFaktura mandát → enroll → odoslanie → odvolanie → deregistrácia, opakovaný webhook, duplicitné odoslanie, cudzia firma (RLS). Výsledky iba ako stavy/kódy/počty/prefixy hashov.
+
+## 5. Stav 2026-11-19 (vykonané po schválení prevádzkovateľa)
+- **Bypass secret vytvorený** cez Vercel API: typ `automation-bypass`, poznámka `staging-webhooks-esblu8 (2026-11-19, Stripe/eFaktura sandbox only; revoke after tests)`, jediný secret v projekte. Hodnota nebola vypísaná ani uložená (pri použití sa číta z Vercel API priamo do požiadavky). Nájdete ju vo Vercel → Settings → Deployment Protection → Protection Bypass for Automation.
+- **Rozsah:** Vercel viaže bypass na projekt (všetky Preview deploymenty), nie na jednu vetvu. Mitigácia: všetky Preview používajú staging DB `esblu-test` a nemajú Stripe/eFaktura live kľúče; secret sa použije iba vo webhook URL sandboxov; po testoch sa zruší.
+- **Overenie ochrany (deployment `dpl_GCPCUpFv…`):**
+  | Požiadavka | Výsledok |
+  |---|---|
+  | bez bypass: `GET /login`, `POST /api/billing/webhooks/stripe` | 302 na prihlásenie Vercel (ochrana zachovaná) |
+  | s bypass: `GET /login` | 200 |
+  | s bypass: Stripe webhook bez podpisu / so zlým podpisom | 404 (billing na Preview nie je nakonfigurovaný → fail closed, nič sa nespracuje) |
+  | s bypass: eFaktura webhook bez podpisu | 503 `NOT_CONFIGURED` |
+  | s bypass: cron bez `CRON_SECRET` | 401 |
+  Overenie podpisu po nastavení kľúčov: Stripe `stripe-signature` (HMAC, tolerancia času) a eFaktura HMAC + časové okno + replay ochrana — nezávislé od bypass secretu; offline testy `stripe-adapter`, `webhook-idempotency`, `einvoice-reception` PASS.
+- **Deaktivácia po testoch:** `PATCH /v1/projects/{id}/protection-bypass` s `{"revoke":{"secret":<hodnota>,"regenerate":false}}` (vykoná Claude cez API) + vypnutie webhook endpointov v sandboxoch.
+
+## 6. Zostávajúce predpoklady pre skutočný sandbox test
+1. **Push vetvy** z PC prevádzkovateľa — premenné so scope „Git Branch = release/esblu8“ sa uplatnia iba na Git deploymenty tejto vetvy (deployment vytvorený cez API ich nedostane).
+2. **Kľúče** podľa § 1 (Stripe sandbox „Esblu s.r.o.“, eFaktura sandbox).
+3. **Iniciovanie platieb:** Stripe Checkout s testovacou kartou vyžaduje prihlásenie do Preview syntetickým QA účtom a zadanie testovacej karty v prehliadači. Doména `*.vercel.app` nie je označená ako testovacia → Claude na nej nezadáva heslá ani kartové údaje. Možnosti: (a) prevádzkovateľ pridá Preview doménu s označením testu (napr. `staging.esblu.com` → Preview vetvy `release/esblu8`) a výslovne ju určí na testy, alebo (b) scenáre s test clock spustí existujúci skript `scripts/stripe-local-sandbox.ps1` na PC prevádzkovateľa (S12/S13 postup z 18.–19. 11.) s kódom `release/esblu8`. Overenie pripnutej API verzie, doťahovania udalostí a ops monitora (iba čítanie zo Stripe) Claude spraví cez Preview crony aj bez platby.
