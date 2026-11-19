@@ -7,8 +7,11 @@
 //     reportingový kľúč (live: STRIPE_LIVE_REPORTING_KEY), nie runtime kľúč.
 //   buildAccountingCsv — CSV (UTF-8 s BOM, oddeľovač `;`, desatinná čiarka nie — bodka, sumy v menových
 //     jednotkách) z esblu_billing_accounting_export. Ochrana pred CSV/formula injection v textových poliach.
-// Export obsahuje iba údaje z dokladu (číslo, dátum, sumy, DPH polia, krajina a IČ DPH odberateľa tak, ako
-// sú na doklade) a Stripe ID — žiadne meno, e-mail ani adresu.
+// Export obsahuje údaje z dokladu (číslo, dátum, sumy, DPH polia, krajina a IČ DPH odberateľa tak, ako sú
+// na doklade), Stripe ID a identifikáciu odberateľa (firmy) z NEMENNÉHO snapshotu účtovnej kópie
+// (customer_company_id, obchodné meno, IČO, DIČ, IČ DPH, registrácia, fakturačná adresa, krajina) —
+// platí aj po ukončení firmy (company_id = null, company_linked = no). Žiadny e-mail, IBAN ani údaje
+// osoby z objektu zákazníka v Stripe.
 // =============================================================================
 
 import type { BillingDb } from "@/lib/billing/pipeline";
@@ -136,6 +139,9 @@ export const ACCOUNTING_CSV_COLUMNS = [
   "customer_tax_exempt", "tax_details", "service_period_start", "service_period_end", "paid_at", "payment_intent_id",
   "gross", "stripe_fee", "net", "balance_transaction_ids", "bt_type", "reporting_category", "payout_ids", "payout_arrival_date",
   "pdf_archived", "pdf_sha256", "pdf_storage_path",
+  "customer_company_id", "customer_legal_name", "customer_ico", "customer_dic", "customer_ic_dph",
+  "customer_registration_id", "customer_address", "customer_billing_country", "company_linked",
+  "provider_customer_id", "provider_subscription_id",
 ] as const;
 
 const MONEY_FIELDS: Record<string, string> = {
@@ -169,6 +175,13 @@ function taxIdsText(v: unknown): string {
   return v.filter(isObj).map((t) => `${str(t.type) ?? ""}:${str(t.value) ?? ""}`).join(" ");
 }
 
+/** Fakturačná adresa zo snapshotu → jeden riadok („ulica, ulica 2, PSČ mesto, krajina“). */
+export function addressText(v: unknown): string {
+  if (!isObj(v)) return "";
+  const city = [str(v.postal_code), str(v.city)].filter(Boolean).join(" ");
+  return [str(v.line1), str(v.line2), city || null, str(v.country_code)].filter(Boolean).join(", ");
+}
+
 export function buildAccountingCsv(rows: unknown[]): string {
   const lines = [ACCOUNTING_CSV_COLUMNS.join(";")];
   for (const raw of rows) {
@@ -178,6 +191,8 @@ export function buildAccountingCsv(rows: unknown[]): string {
       if (col === "customer_tax_ids") return csvText(taxIdsText(raw.customer_tax_ids));
       if (col === "tax_details") return csvText(Array.isArray(raw.tax_details) && raw.tax_details.length ? raw.tax_details : "");
       if (col === "pdf_archived") return raw.pdf_archived === true ? "yes" : raw.record_type === "balance_transaction" ? "" : "no";
+      if (col === "customer_address") return csvText(addressText(raw.customer_address));
+      if (col === "company_linked") return raw.record_type === "balance_transaction" ? "" : raw.company_linked === true ? "yes" : "no";
       return csvText(raw[RENAMED[col] ?? col]);
     });
     lines.push(cells.join(";"));

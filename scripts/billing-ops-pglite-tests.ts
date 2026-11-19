@@ -638,6 +638,179 @@ await check("prístup: owner / admin / employee / iná firma / anon — žiadne 
   assert.equal((await attempt(service, "insert into public.billing_ops_admins (user_id) values (gen_random_uuid())")).layer, "privilege");
 });
 
+// ============================================================================= 7b) snapshot odberateľa + ukončenie firmy
+// Účtovná kópia Esblu musí identifikovať odberateľa aj po ukončení firmy (company_id FK → null).
+const SU = { x: "c6000000-0000-4000-8000-0000000000f1", y: "c6000000-0000-4000-8000-0000000000f2", z: "c6000000-0000-4000-8000-0000000000f3" };
+const SC = { x: "c7000000-0000-4000-8000-0000000000f1", y: "c7000000-0000-4000-8000-0000000000f2", z: "c7000000-0000-4000-8000-0000000000f3" };
+await db.exec(`
+  insert into auth.users (id, email) values ('${SU.x}', 'sx@example.invalid'), ('${SU.y}', 'sy@example.invalid'), ('${SU.z}', 'sz@example.invalid');
+  set session_replication_role = replica;
+  insert into public.companies (id, owner_id, name) values
+    ('${SC.x}', '${SU.x}', 'Xeno appka'), ('${SC.y}', '${SU.y}', 'Ypsilon test'), ('${SC.z}', '${SU.z}', 'Zeta appka');
+  insert into public.company_members (company_id, user_id, role, status, permissions) values
+    ('${SC.x}', '${SU.x}', 'owner', 'active', '{}'), ('${SC.y}', '${SU.y}', 'owner', 'active', '{}'), ('${SC.z}', '${SU.z}', 'owner', 'active', '{}');
+  insert into public.company_legal_identities (company_id, country_code, registration_id, legal_entity_key) values
+    ('${SC.x}', 'SK', '50111222', 'SK:50111222'), ('${SC.y}', 'SK', '50333444', 'SK:50333444'), ('${SC.z}', 'CZ', '27082440', 'CZ:27082440');
+  insert into public.company_billing_profile (company_id, legal_name, ico, dic, ic_dph, address_line1, city, postal_code, country_code, contact_email, iban) values
+    ('${SC.x}', 'Xeno s.r.o.', '50111222', '2120111222', null, 'Hlavná 1', 'Košice', '04001', 'SK', 'fakturacia@xeno.invalid', 'SK1100000000000000000001'),
+    ('${SC.y}', 'Ypsilon s.r.o.', '50333444', '2120333444', 'SK2120333444', 'Dlhá 2', 'Žilina', '01001', 'SK', null, null),
+    ('${SC.z}', 'Zeta a.s.', '27082440', 'CZ27082440', 'CZ27082440', 'Václavské nám. 1', 'Praha', '11000', 'CZ', null, null);
+  set session_replication_role = origin;
+`);
+for (const [c, k] of [[SC.x, "x"], [SC.y, "y"], [SC.z, "z"]] as const) {
+  await su(`insert into public.billing_provider_links (provider, environment, link_kind, external_id, company_id) values
+    ('stripe', 'test', 'subscription', $1, $3), ('stripe', 'test', 'customer', $2, $3)`, [`sub_snap_${k}`, `cus_snap_${k}`, c]);
+}
+const upsertDoc = async (event: string, d: Record<string, unknown>) =>
+  (await su<Json>("select public.esblu_billing_upsert_document('test', $1, $2::jsonb) r", [event, JSON.stringify(d)]))[0].r;
+const snapInvoice = (k: string, n2: number, extra: Record<string, unknown> = {}) => ({
+  kind: "invoice", provider_document_id: `in_snap_${k}${n2}`, provider_customer_id: `cus_snap_${k}`, provider_subscription_id: `sub_snap_${k}`,
+  payment_intent_id: `pi_snap_${k}${n2}`, document_number: `ESB-SNAP-${k.toUpperCase()}${n2}`, status: "paid", currency: "EUR",
+  total_minor: 1590, total_excl_tax_minor: 1590, tax_minor: 0, customer_country: "SK", issued_at: new Date().toISOString(),
+  paid_at: new Date().toISOString(), pdf_url: "https://pay.stripe.com/invoice/acct_x/snap/pdf", ...extra,
+});
+const SNAP_COLS = `company_id, customer_company_id, customer_legal_name, customer_ico, customer_dic, customer_ic_dph,
+  customer_registration_country, customer_registration_id, customer_address, customer_billing_country, customer_snapshot_source,
+  provider_customer_id, provider_subscription_id, customer_snapshot_at is not null snap_at`;
+const snapOf = async (docId: string) => (await su<Json>(`select ${SNAP_COLS} from public.billing_invoice_documents where provider_document_id = $1`, [docId]))[0];
+
+await check("snapshot: prvý zápis zachytí identifikáciu firmy (company_id kópia, meno, IČO, DIČ, adresa, registrácia, Stripe ID); bez e-mailu/IBAN", async () => {
+  for (const k of ["x", "y", "z"]) await upsertDoc(`evt_snap_${k}1`, snapInvoice(k, 1));
+  const x = await snapOf("in_snap_x1");
+  assert.deepEqual(
+    [x.company_id, x.customer_company_id, x.customer_legal_name, x.customer_ico, x.customer_dic, x.customer_ic_dph,
+      x.customer_registration_country, x.customer_registration_id, x.customer_billing_country, x.customer_snapshot_source,
+      x.provider_customer_id, x.provider_subscription_id, x.snap_at],
+    [SC.x, SC.x, "Xeno s.r.o.", "50111222", "2120111222", null, "SK", "50111222", "SK", "company", "cus_snap_x", "sub_snap_x", true]);
+  assert.deepEqual(x.customer_address, { line1: "Hlavná 1", city: "Košice", postal_code: "04001", country_code: "SK" });
+  assert.doesNotMatch(JSON.stringify(await su("select * from public.billing_invoice_documents where provider_document_id like 'in_snap_%'")),
+    /fakturacia@xeno|SK1100000000000000000001/, "e-mail ani IBAN firmy sa do účtovnej kópie neukladajú");
+  assert.equal((await snapOf("in_snap_z1")).customer_billing_country, "CZ");
+});
+
+await check("snapshot: neskorší upsert NEPREPÍŠE (iba doplní null); priama zmena snapshotu / firmy / Stripe ID = chyba", async () => {
+  await su("update public.company_billing_profile set legal_name = 'Premenovaná s.r.o.', ico = '99999999', ic_dph = 'SK2120111222' where company_id = $1", [SC.x]);
+  await upsertDoc("evt_snap_x1b", snapInvoice("x", 1, { status: "paid", total_minor: 1590 }));
+  const x = await snapOf("in_snap_x1");
+  assert.deepEqual([x.customer_legal_name, x.customer_ico, x.customer_ic_dph], ["Xeno s.r.o.", "50111222", "SK2120111222"], "meno/IČO ostávajú, chýbajúce IČ DPH sa doplnilo");
+  for (const sql of [
+    "update public.billing_invoice_documents set customer_legal_name = 'Iná s.r.o.' where provider_document_id = 'in_snap_x1'",
+    "update public.billing_invoice_documents set customer_ico = null where provider_document_id = 'in_snap_x1'",
+    "update public.billing_invoice_documents set customer_company_id = gen_random_uuid() where provider_document_id = 'in_snap_x1'",
+    "update public.billing_invoice_documents set customer_address = '{}'::jsonb where provider_document_id = 'in_snap_x1'",
+    "update public.billing_invoice_documents set provider_customer_id = 'cus_other' where provider_document_id = 'in_snap_x1'",
+    "update public.billing_invoice_documents set provider_subscription_id = 'sub_other' where provider_document_id = 'in_snap_x1'",
+    "update public.billing_invoice_documents set customer_snapshot_at = now() - interval '1 day' where provider_document_id = 'in_snap_x1'",
+  ]) await fails(() => su(sql), /ESBLU_BILLING_DOCUMENT_SNAPSHOT_IMMUTABLE/);
+  await fails(() => su("update public.billing_invoice_documents set company_id = $1 where provider_document_id = 'in_snap_x1'", [SC.y]),
+    /ESBLU_BILLING_DOCUMENT_COMPANY_IMMUTABLE/);
+  // ani service_role (pipeline) to nezmení
+  const o = await attempt(service, "update public.billing_invoice_documents set customer_legal_name = 'Iná' where provider_document_id = 'in_snap_x1'");
+  assert.match(o.message, /SNAPSHOT_IMMUTABLE/);
+  // insert s cudzou firmou v snapshote = chyba (živá väzba a snapshot musia sedieť)
+  await fails(() => su(`insert into public.billing_invoice_documents (environment, kind, provider_document_id, company_id, customer_company_id)
+    values ('test', 'invoice', 'in_snap_bad', $1, $2)`, [SC.x, SC.y]), /COMPANY_IMMUTABLE|customer_company_check/);
+});
+
+let pdfPathX = "";
+await check("ukončenie firmy (esblu_company_termination_commit, archív): doklad ostáva, company_id = null, snapshot celý; Storage ciele bez billing-documents", async () => {
+  // archivované PDF účtovnej kópie (cesta v bucket billing-documents)
+  const row = (await su<{ id: string }>("select id from public.billing_invoice_documents where provider_document_id = 'in_snap_x1'"))[0];
+  pdfPathX = `test/${new Date().toISOString().slice(0, 4)}/${new Date().toISOString().slice(5, 7)}/invoice/in_snap_x1.pdf`;
+  await su("select public.esblu_billing_document_archive_result($1, true, $2, $3, null)", [row.id, "f".repeat(64), pdfPathX]);
+  const before = await snapOf("in_snap_x1");
+  const o = await commitAs(service, "select public.esblu_company_termination_commit($1, $2, false, 'waived') r", [SU.x, SC.x]);
+  assert.equal(o.layer, "ok", o.message);
+  const r = o.data[0].r as Json;
+  assert.equal(r.termination_mode, "archive");
+  assert.equal(await n("select count(*)::int n from public.companies where id = $1", [SC.x]), 0, "firma zrušená");
+  assert.equal(await n("select count(*)::int n from public.billing_provider_links where company_id = $1", [SC.x]), 0, "väzby na Stripe zanikli");
+  const after = await snapOf("in_snap_x1");
+  assert.equal(after.company_id, null, "FK on delete set null");
+  assert.deepEqual({ ...after, company_id: undefined }, { ...before, company_id: undefined }, "snapshot nezmenený");
+  assert.equal(after.customer_company_id, SC.x);
+  const d = await doc("in_snap_x1");
+  assert.deepEqual([d.pdf_storage_path, d.status, Number(d.total_minor)], [pdfPathX, "paid", 1590]);
+  const all = JSON.stringify([r.storage_targets, await su("select storage_targets from public.account_deletion_cleanup_jobs")]);
+  assert.doesNotMatch(all, /billing-documents|in_snap_/, "Storage ciele nikdy neobsahujú účtovné PDF Esblu");
+});
+
+await check("po ukončení: neskorý dobropis / nová faktúra toho istého Stripe zákazníka prevezmú snapshot (nie riadok s company_id = null)", async () => {
+  const cn = { kind: "credit_note", provider_document_id: "cn_snap_x1", related_invoice_id: "in_snap_x1", provider_customer_id: "cus_snap_x",
+    document_number: "ESB-SNAP-X1-CN", status: "issued", currency: "EUR", total_minor: 1590, issued_at: new Date().toISOString() };
+  assert.equal((await upsertDoc("evt_snap_cn1", cn)).result, "inserted");
+  const c = await snapOf("cn_snap_x1");
+  assert.deepEqual([c.company_id, c.customer_company_id, c.customer_legal_name, c.customer_ico, c.customer_snapshot_source],
+    [null, SC.x, "Xeno s.r.o.", "50111222", "related_document"]);
+  await upsertDoc("evt_snap_x2", snapInvoice("x", 2));
+  const i2 = await snapOf("in_snap_x2");
+  assert.deepEqual([i2.company_id, i2.customer_company_id, i2.customer_dic, i2.customer_snapshot_source], [null, SC.x, "2120111222", "customer_document"]);
+  // dokument bez akejkoľvek väzby ostane bez identifikácie (žiadny odhad z cudzej firmy)
+  await upsertDoc("evt_snap_orphan", { kind: "invoice", provider_document_id: "in_snap_orphan", provider_customer_id: "cus_unknown", status: "open" });
+  assert.equal((await snapOf("in_snap_orphan")).customer_company_id, null);
+});
+
+await check("export po ukončení: riadok dokladu obsahuje identifikáciu odberateľa (snapshot), CSV s menom/IČO/DIČ/adresou, company_linked = no", async () => {
+  const range = monthRange(new Date().toISOString().slice(0, 7))!;
+  const rows = (await su<Json>("select public.esblu_billing_accounting_export('test', $1, $2, null) r", [range.from.toISOString(), range.to.toISOString()]))[0].r as Json[];
+  const x = rows.find((r) => r.stripe_document_id === "in_snap_x1")!;
+  assert.deepEqual([x.customer_company_id, x.customer_legal_name, x.customer_ico, x.customer_dic, x.customer_ic_dph, x.customer_registration_id,
+    x.customer_billing_country, x.company_linked, x.provider_customer_id, x.provider_subscription_id],
+    [SC.x, "Xeno s.r.o.", "50111222", "2120111222", "SK2120111222", "50111222", "SK", false, "cus_snap_x", "sub_snap_x"]);
+  const cn = rows.find((r) => r.stripe_document_id === "cn_snap_x1")!;
+  assert.deepEqual([cn.customer_legal_name, cn.related_invoice_number], ["Xeno s.r.o.", "ESB-SNAP-X1"]);
+  const live = rows.find((r) => r.stripe_document_id === "in_snap_y1")!;
+  assert.equal(live.company_linked, true);
+  const csv = buildAccountingCsv(rows.filter((r) => String(r.stripe_document_id ?? "").startsWith("in_snap_x1")));
+  assert.match(csv, new RegExp(`"${SC.x}";"Xeno s\\.r\\.o\\.";"50111222";"2120111222";"SK2120111222";"50111222";"Hlavná 1, 04001 Košice, SK";"SK";no;"cus_snap_x";"sub_snap_x"`));
+  assert.ok(csv.split("\r\n")[0].endsWith("customer_billing_country;company_linked;provider_customer_id;provider_subscription_id"));
+  assert.doesNotMatch(csv, /fakturacia@xeno|SK1100000000000000000001/);
+});
+
+await check("výnimka syntetických dát (pôvodný výmaz) aj zrušenie účtu vlastníka (+ výmaz auth.users) → účtovné kópie ostávajú so snapshotom", async () => {
+  const y = await su<Json>(`select public.esblu_company_termination_synthetic_purge($1, $2, false, 'waived', true, 'OPS-2026-11-19-billing-test',
+    'Syntetické testovacie dáta — test, že účtovná kópia Esblu prežije výnimku.') r`, [SU.y, SC.y]);
+  assert.equal(y[0].r.termination_mode, "synthetic_test_data_purge");
+  const ys = await snapOf("in_snap_y1");
+  assert.deepEqual([ys.company_id, ys.customer_company_id, ys.customer_legal_name, ys.customer_ic_dph], [null, SC.y, "Ypsilon s.r.o.", "SK2120333444"]);
+  const z = await commitAs(service, "select public.esblu_account_deletion_commit('owner', $1, $2, true) r", [SU.z, SC.z]);
+  assert.equal(z.layer, "ok", z.message);
+  assert.doesNotMatch(JSON.stringify(z.data[0].r), /billing-documents/);
+  await su("delete from auth.users where id = $1", [SU.z]);
+  const zs = await snapOf("in_snap_z1");
+  assert.deepEqual([zs.company_id, zs.customer_company_id, zs.customer_legal_name, zs.customer_ico, zs.customer_registration_country],
+    [null, SC.z, "Zeta a.s.", "27082440", "CZ"]);
+  assert.equal(await n("select count(*)::int n from public.billing_invoice_documents where customer_company_id = any($1)", [[SC.x, SC.y, SC.z]]), 5);
+});
+
+await check("ochrana: DELETE / TRUNCATE účtovných záznamov Esblu zlyhá aj pre postgres; cleanup job nikdy neobsahuje billing-documents", async () => {
+  for (const t of ["billing_invoice_documents", "billing_refund_observations", "billing_balance_transactions", "billing_accounting_export_log"]) {
+    await su(`insert into public.billing_refund_observations (environment, payment_intent_id, amount_refunded_minor) values ('test', 'pi_snap_guard', 1) on conflict do nothing`);
+    await fails(() => su(`delete from public.${t}`), /ESBLU_BILLING_ACCOUNTING_RECORD_RETAINED/);
+    await fails(() => su(`truncate public.${t}`), /ESBLU_BILLING_ACCOUNTING_RECORD_RETAINED/);
+  }
+  await fails(() => su("delete from public.billing_invoice_documents where customer_company_id = $1", [SC.x]), /RETAINED/);
+  const job = await su<Json>(`insert into public.account_deletion_cleanup_jobs (kind, user_id, storage_targets, storage_target_count, storage_status, auth_status)
+    values ('owner', $1, $2::jsonb, 2, 'pending', 'done') returning storage_targets, storage_target_count, storage_status, completed_at is not null done`,
+    [SU.x, JSON.stringify([{ bucket: "billing-documents", path: pdfPathX }, { bucket: "vehicle-photos", path: "x/1.jpg" }])]);
+  assert.deepEqual([job[0].storage_targets, job[0].storage_target_count, job[0].storage_status], [[{ bucket: "vehicle-photos", path: "x/1.jpg" }], 1, "pending"]);
+  const upd = await su<Json>(`update public.account_deletion_cleanup_jobs set storage_targets = $1::jsonb where user_id = $2 and kind = 'owner' and company_id is null
+    returning storage_targets, storage_target_count, storage_status, completed_at is not null done`, [JSON.stringify([{ bucket: "billing-documents", path: pdfPathX }]), SU.x]);
+  assert.deepEqual([upd[0].storage_targets, upd[0].storage_target_count, upd[0].storage_status, upd[0].done], [[], 0, "done", true]);
+});
+
+await check("izolácia nezmenená: snapshot ani identitu nevidí žiadny tenant/anon; nové funkcie nie sú volateľné z Data API", async () => {
+  for (const who of [ownerA, adminA, accountantA, employeeA, ownerB, anon]) {
+    const o = await attempt(who, "select customer_legal_name, customer_ico from public.billing_invoice_documents");
+    assert.ok(o.layer === "privilege" || (o.layer === "ok" && o.rows === 0), `${who.uid ?? who.role}: ${o.layer}`);
+    for (const f of [`select public.esblu_billing_customer_identity('${C.a}')`, "select public.esblu_billing_accounting_record_retained()",
+      "select public.esblu_billing_documents_company_freeze()", "select public.esblu_cleanup_jobs_protect_retained_storage()"])
+      assert.equal((await attempt(who, f)).layer, "privilege", `${who.uid ?? who.role}: ${f}`);
+  }
+  for (const f of [`select public.esblu_billing_customer_identity('${C.a}')`])
+    assert.equal((await attempt(service, f)).layer, "privilege", "ani service_role nevolá identitu priamo");
+});
+
 // ============================================================================= 8) migrácie + rollback
 await check("migrácie 20261123100000–20261123120000: idempotentné; rollback NEMAŽE auditné/účtovné dáta (esblu_audit_archive); znovu-forward", async () => {
   const fwd = ["20261123100000_billing_event_retry", "20261123110000_billing_invoice_documents", "20261123120000_billing_ops_alerts"];
@@ -655,6 +828,11 @@ await check("migrácie 20261123100000–20261123120000: idempotentné; rollback 
     return n(`select count(*)::int n from esblu_audit_archive.${t[0].t}`);
   };
   assert.equal(await archived("billing_invoice_documents"), docs);
+  // ochrana pred výmazom ostáva aj na presunutej tabuľke (vrátane snapshotu odberateľa)
+  const rb = (await su<{ t: string }>("select c.relname::text t from pg_class c join pg_namespace s on s.oid = c.relnamespace where s.nspname = 'esblu_audit_archive' and c.relname like 'billing_invoice_documents_rb_%'"))[0].t;
+  await fails(() => su(`delete from esblu_audit_archive.${rb}`), /ESBLU_BILLING_ACCOUNTING_RECORD_RETAINED/);
+  assert.ok(await n(`select count(*)::int n from esblu_audit_archive.${rb} where company_id is null and customer_company_id is not null and customer_legal_name is not null`) >= 3);
+  assert.equal(await n("select count(*)::int n from pg_trigger where tgname = 'esblu_billing_documents_company_freeze'"), 0);
   assert.equal(await archived("billing_ops_alerts"), alertsN);
   assert.ok((await archived("billing_balance_transactions")) >= 2);
   assert.equal(await archived("billing_ops_admins"), 1);

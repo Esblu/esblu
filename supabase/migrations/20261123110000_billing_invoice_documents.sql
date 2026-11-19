@@ -21,7 +21,22 @@
 --   billing_accounting_export_log — kto a kedy exportoval (audit).
 --   Storage bucket billing-documents (privátny, iba PDF, iba server).
 -- Žiadna tabuľka nemá prístup cez Data API pre anon / authenticated; service_role nemá DELETE.
--- Neukladá sa meno, e-mail ani adresa odberateľa — iba krajina a daňové identifikátory z dokladu.
+-- Z dát Stripe sa neukladá meno, e-mail ani adresa odberateľa (iba krajina a daňové identifikátory z dokladu).
+--
+-- Identifikačný snapshot odberateľa (esblu8, 2026-11-19): company_id je FK s ON DELETE SET NULL — po
+-- ukončení firmy by doklad stratil väzbu na zákazníka. Preto sa pri prvom zápise (a pri prvom priradení
+-- firmy) zachytí NEMENNÝ snapshot: customer_company_id (obyčajné uuid bez FK), obchodné meno, IČO, DIČ,
+-- IČ DPH, registrácia (krajina + číslo), fakturačná adresa a krajina z company_billing_profile /
+-- company_legal_identities / companies (identita právnickej osoby / SZČO, ktorej Esblu fakturuje — obsah
+-- účtovného dokladu Esblu, nie kontaktné údaje osoby: bez e-mailu, IBAN, owner_id). Snapshot sa neskôr
+-- iba DOPĹŇA (null → hodnota), nikdy neprepíše (trigger). provider_customer_id / provider_subscription_id
+-- sú po nastavení tiež nemenné.
+-- Účtovné záznamy Esblu (billing_invoice_documents, billing_refund_observations,
+-- billing_balance_transactions, billing_accounting_export_log) sa NEDAJÚ zmazať ani TRUNCATE (trigger,
+-- aj pre postgres): ukončenie firmy, zrušenie účtu, cleanup joby ani retenčná purge zákazníckych dát
+-- (esblu_retention.purge_expired) sa ich nedotknú. Vlastná retencia Esblu pre tieto záznamy a PDF v
+-- bucket billing-documents = samostatná lehota, PROPOSED 10 rokov od konca kalendárneho roka dokladu
+-- (potvrdí účtovníčka); automatické mazanie NEEXISTUJE, kým lehota a postup nie sú schválené.
 -- =============================================================================
 
 -- ----------------------------------------------------------------------------- 1) doklady
@@ -58,6 +73,18 @@ create table if not exists public.billing_invoice_documents (
   pdf_url text null,
   credit_reason text null,
   credit_type text null,
+  -- Nemenný identifikačný snapshot odberateľa (prežije ukončenie firmy; nie je FK).
+  customer_company_id uuid null,
+  customer_legal_name text null,
+  customer_ico text null,
+  customer_dic text null,
+  customer_ic_dph text null,
+  customer_registration_country text null,
+  customer_registration_id text null,
+  customer_address jsonb null,
+  customer_billing_country text null,
+  customer_snapshot_at timestamptz null,
+  customer_snapshot_source text null,
   -- Kto je zákonným vystaviteľom daňového dokladu (variant A = 'stripe', variant B = 'esblu').
   legal_issuer text not null default 'stripe',
   -- Budúca väzba na štruktúrovanú e-faktúru (eFaktura.sk / Peppol) — najviac jedna na doklad.
@@ -94,6 +121,18 @@ create table if not exists public.billing_invoice_documents (
     (hosted_url is null or hosted_url ~ '^https://[a-z0-9.-]*stripe\.com/') and (pdf_url is null or pdf_url ~ '^https://[a-z0-9.-]*stripe\.com/')),
   constraint billing_invoice_documents_json_size check (
     pg_column_size(customer_tax_ids) <= 2048 and pg_column_size(tax_details) <= 8192),
+  -- Živá väzba (FK) a snapshot ukazujú na tú istú firmu; po ukončení firmy ostane iba snapshot.
+  constraint billing_invoice_documents_customer_company_check check (
+    company_id is null or company_id = customer_company_id),
+  constraint billing_invoice_documents_snapshot_check check (
+    (customer_snapshot_source is null or customer_snapshot_source in ('company', 'related_document', 'customer_document'))
+    and (customer_snapshot_at is null) = (customer_snapshot_source is null)
+    and (customer_address is null or (jsonb_typeof(customer_address) = 'object' and pg_column_size(customer_address) <= 2048))
+    and (customer_billing_country is null or customer_billing_country ~ '^[A-Z]{2}$')
+    and (customer_registration_country is null or customer_registration_country ~ '^[A-Z]{2}$')
+    and coalesce(char_length(customer_legal_name), 0) <= 300 and coalesce(char_length(customer_ico), 0) <= 32
+    and coalesce(char_length(customer_dic), 0) <= 32 and coalesce(char_length(customer_ic_dph), 0) <= 32
+    and coalesce(char_length(customer_registration_id), 0) <= 32),
   constraint billing_invoice_documents_unique unique (provider, environment, provider_document_id)
 );
 
@@ -104,41 +143,186 @@ create index if not exists billing_invoice_documents_issued_idx on public.billin
 create index if not exists billing_invoice_documents_pi_idx on public.billing_invoice_documents (environment, payment_intent_id) where payment_intent_id is not null;
 create index if not exists billing_invoice_documents_related_idx on public.billing_invoice_documents (environment, related_invoice_id) where related_invoice_id is not null;
 create index if not exists billing_invoice_documents_company_idx on public.billing_invoice_documents (company_id);
+create index if not exists billing_invoice_documents_customer_company_idx on public.billing_invoice_documents (customer_company_id);
+create index if not exists billing_invoice_documents_customer_idx
+  on public.billing_invoice_documents (environment, provider_customer_id) where provider_customer_id is not null;
 create index if not exists billing_invoice_documents_archive_due_idx
   on public.billing_invoice_documents (environment, pdf_next_attempt_at) where pdf_archived_at is null and pdf_url is not null;
 
 comment on table public.billing_invoice_documents is
   'P4: účtovná kópia Stripe faktúr a dobropisov (sumy a daňové polia tak, ako ich poslal Stripe) + archív PDF. '
-  'Service-only, bez DELETE. Retencia: účtovné doklady 10 rokov — firma sa pri zrušení iba odpojí (company_id = null).';
+  'Service-only, DELETE/TRUNCATE zakázané triggerom (aj pre postgres). Po ukončení firmy company_id = null, '
+  'identifikácia odberateľa ostáva v nemennom snapshote customer_* (customer_company_id bez FK). '
+  'Retencia Esblu: PROPOSED 10 r. od konca roka dokladu (potvrdí účtovníčka); automatické mazanie neexistuje.';
 
--- Archivované PDF je nemenné (SHA-256 aj cesta). Zmena = chyba (auditná stopa).
+-- Identita firmy pre snapshot (bez e-mailu, IBAN, owner_id). Tabuľky profilu môžu v minimálnych
+-- testovacích baseline chýbať → to_regclass (statický SQL v nevykonanej vetve sa neplánuje).
+create or replace function public.esblu_billing_customer_identity(p_company_id uuid)
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path to ''
+as $function$
+declare
+  v_out jsonb;
+  v_profile jsonb := '{}'::jsonb;
+  v_legal jsonb := '{}'::jsonb;
+begin
+  if p_company_id is null then
+    return null;
+  end if;
+  select jsonb_build_object('company_name', c.name) into v_out from public.companies c where c.id = p_company_id;
+  if v_out is null then
+    return null;
+  end if;
+  if to_regclass('public.company_billing_profile') is not null then
+    select coalesce(jsonb_strip_nulls(jsonb_build_object(
+             'legal_name', nullif(btrim(b.legal_name), ''), 'ico', nullif(btrim(b.ico), ''), 'dic', nullif(btrim(b.dic), ''),
+             'ic_dph', nullif(btrim(b.ic_dph), ''), 'country_code', b.country_code,
+             'address', nullif(jsonb_strip_nulls(jsonb_build_object(
+               'line1', nullif(btrim(b.address_line1), ''), 'line2', nullif(btrim(b.address_line2), ''),
+               'city', nullif(btrim(b.city), ''), 'postal_code', nullif(btrim(b.postal_code), ''),
+               'country_code', b.country_code)), '{}'::jsonb))), '{}'::jsonb)
+      into v_profile
+    from public.company_billing_profile b where b.company_id = p_company_id;
+  end if;
+  if to_regclass('public.company_legal_identities') is not null then
+    select coalesce(jsonb_build_object('registration_country', l.country_code, 'registration_id', l.registration_id), '{}'::jsonb)
+      into v_legal
+    from public.company_legal_identities l where l.company_id = p_company_id;
+  end if;
+  return v_out || coalesce(v_profile, '{}'::jsonb) || coalesce(v_legal, '{}'::jsonb);
+end
+$function$;
+
+-- Guard (INSERT aj UPDATE): archivované PDF je nemenné (SHA-256 aj cesta), identita dokladu nemenná,
+-- e-faktúra po nastavení nemenná, snapshot odberateľa sa iba dopĺňa (null → hodnota), firma sa nedá
+-- prehodiť na inú (iba X → null cez ON DELETE SET NULL, alebo null → customer_company_id).
 create or replace function public.esblu_billing_documents_guard()
 returns trigger
 language plpgsql
+security definer
 set search_path to ''
 as $function$
+declare
+  v_id jsonb;
 begin
-  if old.pdf_sha256 is not null and (new.pdf_sha256 is distinct from old.pdf_sha256
-      or new.pdf_storage_path is distinct from old.pdf_storage_path
-      or new.pdf_archived_at is distinct from old.pdf_archived_at) then
-    raise exception using errcode = 'P0001', message = 'ESBLU_BILLING_DOCUMENT_ARCHIVE_IMMUTABLE';
+  if tg_op = 'UPDATE' then
+    if old.pdf_sha256 is not null and (new.pdf_sha256 is distinct from old.pdf_sha256
+        or new.pdf_storage_path is distinct from old.pdf_storage_path
+        or new.pdf_archived_at is distinct from old.pdf_archived_at) then
+      raise exception using errcode = 'P0001', message = 'ESBLU_BILLING_DOCUMENT_ARCHIVE_IMMUTABLE';
+    end if;
+    if new.provider_document_id is distinct from old.provider_document_id or new.kind is distinct from old.kind
+       or new.environment is distinct from old.environment then
+      raise exception using errcode = 'P0001', message = 'ESBLU_BILLING_DOCUMENT_IDENTITY_IMMUTABLE';
+    end if;
+    if old.einvoice_outbound_id is not null and new.einvoice_outbound_id is distinct from old.einvoice_outbound_id then
+      raise exception using errcode = 'P0001', message = 'ESBLU_BILLING_DOCUMENT_EINVOICE_IMMUTABLE';
+    end if;
+    if (old.customer_company_id is not null and new.customer_company_id is distinct from old.customer_company_id)
+       or (old.customer_legal_name is not null and new.customer_legal_name is distinct from old.customer_legal_name)
+       or (old.customer_ico is not null and new.customer_ico is distinct from old.customer_ico)
+       or (old.customer_dic is not null and new.customer_dic is distinct from old.customer_dic)
+       or (old.customer_ic_dph is not null and new.customer_ic_dph is distinct from old.customer_ic_dph)
+       or (old.customer_registration_country is not null and new.customer_registration_country is distinct from old.customer_registration_country)
+       or (old.customer_registration_id is not null and new.customer_registration_id is distinct from old.customer_registration_id)
+       or (old.customer_address is not null and new.customer_address is distinct from old.customer_address)
+       or (old.customer_billing_country is not null and new.customer_billing_country is distinct from old.customer_billing_country)
+       or (old.customer_snapshot_at is not null and new.customer_snapshot_at is distinct from old.customer_snapshot_at)
+       or (old.customer_snapshot_source is not null and new.customer_snapshot_source is distinct from old.customer_snapshot_source)
+       or (old.provider_customer_id is not null and new.provider_customer_id is distinct from old.provider_customer_id)
+       or (old.provider_subscription_id is not null and new.provider_subscription_id is distinct from old.provider_subscription_id) then
+      raise exception using errcode = 'P0001', message = 'ESBLU_BILLING_DOCUMENT_SNAPSHOT_IMMUTABLE';
+    end if;
+    if old.company_id is not null and new.company_id is not null and new.company_id <> old.company_id then
+      raise exception using errcode = 'P0001', message = 'ESBLU_BILLING_DOCUMENT_COMPANY_IMMUTABLE';
+    end if;
   end if;
-  if new.provider_document_id is distinct from old.provider_document_id or new.kind is distinct from old.kind
-     or new.environment is distinct from old.environment then
-    raise exception using errcode = 'P0001', message = 'ESBLU_BILLING_DOCUMENT_IDENTITY_IMMUTABLE';
+
+  -- Živá firma → snapshot (customer_company_id + doplnenie chýbajúcich identifikátorov).
+  if new.company_id is not null then
+    if new.customer_company_id is not null and new.customer_company_id <> new.company_id then
+      raise exception using errcode = 'P0001', message = 'ESBLU_BILLING_DOCUMENT_COMPANY_IMMUTABLE';
+    end if;
+    new.customer_company_id := new.company_id;
+    if new.customer_snapshot_at is null or new.customer_legal_name is null or new.customer_ico is null
+       or new.customer_dic is null or new.customer_ic_dph is null or new.customer_address is null
+       or new.customer_billing_country is null or new.customer_registration_id is null then
+      v_id := public.esblu_billing_customer_identity(new.company_id);
+      if v_id is not null then
+        new.customer_legal_name := coalesce(new.customer_legal_name, v_id ->> 'legal_name', v_id ->> 'company_name');
+        new.customer_ico := coalesce(new.customer_ico, v_id ->> 'ico');
+        new.customer_dic := coalesce(new.customer_dic, v_id ->> 'dic');
+        new.customer_ic_dph := coalesce(new.customer_ic_dph, v_id ->> 'ic_dph');
+        new.customer_registration_country := coalesce(new.customer_registration_country, v_id ->> 'registration_country');
+        new.customer_registration_id := coalesce(new.customer_registration_id, v_id ->> 'registration_id');
+        new.customer_address := coalesce(new.customer_address, v_id -> 'address');
+        new.customer_billing_country := coalesce(new.customer_billing_country, v_id ->> 'country_code', v_id ->> 'registration_country');
+        new.customer_snapshot_at := coalesce(new.customer_snapshot_at, now());
+        new.customer_snapshot_source := coalesce(new.customer_snapshot_source, 'company');
+      end if;
+    end if;
   end if;
-  if old.einvoice_outbound_id is not null and new.einvoice_outbound_id is distinct from old.einvoice_outbound_id then
-    raise exception using errcode = 'P0001', message = 'ESBLU_BILLING_DOCUMENT_EINVOICE_IMMUTABLE';
+
+  if tg_op = 'UPDATE' then
+    new.updated_at := now();
   end if;
-  new.updated_at := now();
   return new;
 end
 $function$;
 
 drop trigger if exists esblu_billing_documents_guard on public.billing_invoice_documents;
 create trigger esblu_billing_documents_guard
-  before update on public.billing_invoice_documents
+  before insert or update on public.billing_invoice_documents
   for each row execute function public.esblu_billing_documents_guard();
+
+-- Pred výmazom firmy (akákoľvek cesta: ukončenie s archívom, výnimka syntetických dát, owner delete,
+-- priamy DELETE) sa doplní snapshot dokladov, kým sú údaje firmy ešte čitateľné. Nič nemaže ani neblokuje.
+create or replace function public.esblu_billing_documents_company_freeze()
+returns trigger
+language plpgsql
+security definer
+set search_path to ''
+as $function$
+begin
+  if to_regclass('public.billing_invoice_documents') is not null then
+    update public.billing_invoice_documents d
+       set company_id = d.company_id
+     where d.company_id = old.id
+       and (d.customer_snapshot_at is null or d.customer_legal_name is null or d.customer_ico is null
+            or d.customer_dic is null or d.customer_ic_dph is null or d.customer_address is null);
+  end if;
+  return old;
+end
+$function$;
+
+drop trigger if exists esblu_billing_documents_company_freeze on public.companies;
+create trigger esblu_billing_documents_company_freeze
+  before delete on public.companies
+  for each row execute function public.esblu_billing_documents_company_freeze();
+
+-- Účtovné záznamy Esblu sa nemažú (ani postgres, ani security definer funkcie ukončenia / zrušenia
+-- účtu / purge). Vlastná retencia Esblu je samostatné, explicitne schválené rozhodnutie (PROPOSED 10 r.);
+-- výmaz by vyžadoval novú migráciu so schválením — automatická cesta neexistuje.
+create or replace function public.esblu_billing_accounting_record_retained()
+returns trigger
+language plpgsql
+set search_path to ''
+as $function$
+begin
+  raise exception using errcode = 'P0001', message = 'ESBLU_BILLING_ACCOUNTING_RECORD_RETAINED',
+    hint = 'Účtovná kópia Esblu (vlastná retencia Esblu, PROPOSED 10 r. — potvrdí účtovníčka); nemaže sa pri ukončení firmy, zrušení účtu ani retenčnej purge.';
+end
+$function$;
+
+drop trigger if exists esblu_billing_documents_retained on public.billing_invoice_documents;
+create trigger esblu_billing_documents_retained before delete on public.billing_invoice_documents
+  for each row execute function public.esblu_billing_accounting_record_retained();
+drop trigger if exists esblu_billing_documents_no_truncate on public.billing_invoice_documents;
+create trigger esblu_billing_documents_no_truncate before truncate on public.billing_invoice_documents
+  for each statement execute function public.esblu_billing_accounting_record_retained();
 
 -- ----------------------------------------------------------------------------- 2) refundácie
 create table if not exists public.billing_refund_observations (
@@ -211,6 +395,26 @@ create table if not exists public.billing_accounting_export_log (
   created_at timestamptz not null default now()
 );
 
+-- Ochrana pred výmazom aj pre refundácie, ledger a audit exportu.
+drop trigger if exists esblu_billing_refunds_retained on public.billing_refund_observations;
+create trigger esblu_billing_refunds_retained before delete on public.billing_refund_observations
+  for each row execute function public.esblu_billing_accounting_record_retained();
+drop trigger if exists esblu_billing_refunds_no_truncate on public.billing_refund_observations;
+create trigger esblu_billing_refunds_no_truncate before truncate on public.billing_refund_observations
+  for each statement execute function public.esblu_billing_accounting_record_retained();
+drop trigger if exists esblu_billing_ledger_retained on public.billing_balance_transactions;
+create trigger esblu_billing_ledger_retained before delete on public.billing_balance_transactions
+  for each row execute function public.esblu_billing_accounting_record_retained();
+drop trigger if exists esblu_billing_ledger_no_truncate on public.billing_balance_transactions;
+create trigger esblu_billing_ledger_no_truncate before truncate on public.billing_balance_transactions
+  for each statement execute function public.esblu_billing_accounting_record_retained();
+drop trigger if exists esblu_billing_export_log_retained on public.billing_accounting_export_log;
+create trigger esblu_billing_export_log_retained before delete on public.billing_accounting_export_log
+  for each row execute function public.esblu_billing_accounting_record_retained();
+drop trigger if exists esblu_billing_export_log_no_truncate on public.billing_accounting_export_log;
+create trigger esblu_billing_export_log_no_truncate before truncate on public.billing_accounting_export_log
+  for each statement execute function public.esblu_billing_accounting_record_retained();
+
 -- ----------------------------------------------------------------------------- 5) RLS + granty
 alter table public.billing_invoice_documents enable row level security;
 alter table public.billing_refund_observations enable row level security;
@@ -255,6 +459,8 @@ declare
   v_id text := p_doc ->> 'provider_document_id';
   v_old public.billing_invoice_documents;
   v_company uuid;
+  v_src public.billing_invoice_documents;
+  v_src_kind text;
   v_forward boolean;
   v_row_id uuid;
 begin
@@ -277,6 +483,20 @@ begin
     select d.company_id into v_company from public.billing_invoice_documents d
     where d.provider = 'stripe' and d.environment = p_environment and d.provider_document_id = p_doc ->> 'related_invoice_id';
   end if;
+  -- Firma už neexistuje (ukončená → väzby billing_provider_links zanikli): identifikačný snapshot sa
+  -- prevezme z pôvodnej faktúry (dobropis) alebo z posledného dokladu toho istého Stripe zákazníka.
+  -- Nikdy sa nespolieha na riadok s company_id = null.
+  if v_company is null then
+    select d.* into v_src from public.billing_invoice_documents d
+    where d.provider = 'stripe' and d.environment = p_environment and d.customer_company_id is not null
+      and ((v_kind = 'credit_note' and d.provider_document_id = p_doc ->> 'related_invoice_id')
+        or (p_doc ->> 'provider_customer_id' is not null and d.provider_customer_id = p_doc ->> 'provider_customer_id'))
+    order by (d.provider_document_id = coalesce(p_doc ->> 'related_invoice_id', '')) desc, d.created_at desc
+    limit 1;
+    if v_src.id is not null then
+      v_src_kind := case when v_src.provider_document_id = p_doc ->> 'related_invoice_id' then 'related_document' else 'customer_document' end;
+    end if;
+  end if;
 
   select * into v_old from public.billing_invoice_documents d
   where d.provider = 'stripe' and d.environment = p_environment and d.provider_document_id = v_id
@@ -288,7 +508,9 @@ begin
       provider_subscription_id, payment_intent_id, document_number, status, currency, subtotal_minor,
       subtotal_excl_tax_minor, total_minor, total_excl_tax_minor, tax_minor, amount_paid_minor, customer_country,
       customer_tax_exempt, customer_tax_ids, tax_details, service_period_start, service_period_end, issued_at,
-      paid_at, voided_at, hosted_url, pdf_url, credit_reason, credit_type, pdf_next_attempt_at, first_event_id, last_event_id)
+      paid_at, voided_at, hosted_url, pdf_url, credit_reason, credit_type, pdf_next_attempt_at, first_event_id, last_event_id,
+      customer_company_id, customer_legal_name, customer_ico, customer_dic, customer_ic_dph, customer_registration_country,
+      customer_registration_id, customer_address, customer_billing_country, customer_snapshot_at, customer_snapshot_source)
     values (
       p_environment, v_kind, v_id, p_doc ->> 'related_invoice_id', v_company, p_doc ->> 'provider_customer_id',
       p_doc ->> 'provider_subscription_id', p_doc ->> 'payment_intent_id', p_doc ->> 'document_number', p_doc ->> 'status',
@@ -299,7 +521,10 @@ begin
       (p_doc ->> 'service_period_start')::timestamptz, (p_doc ->> 'service_period_end')::timestamptz,
       (p_doc ->> 'issued_at')::timestamptz, (p_doc ->> 'paid_at')::timestamptz, (p_doc ->> 'voided_at')::timestamptz,
       p_doc ->> 'hosted_url', p_doc ->> 'pdf_url', p_doc ->> 'credit_reason', p_doc ->> 'credit_type',
-      case when p_doc ->> 'pdf_url' is not null then now() end, p_event_id, p_event_id)
+      case when p_doc ->> 'pdf_url' is not null then now() end, p_event_id, p_event_id,
+      v_src.customer_company_id, v_src.customer_legal_name, v_src.customer_ico, v_src.customer_dic, v_src.customer_ic_dph,
+      v_src.customer_registration_country, v_src.customer_registration_id, v_src.customer_address, v_src.customer_billing_country,
+      case when v_src.id is not null then now() end, v_src_kind)
     on conflict (provider, environment, provider_document_id) do nothing
     returning id into v_row_id;
     if v_row_id is not null then
@@ -349,6 +574,18 @@ begin
                                then coalesce(d.pdf_next_attempt_at, now()) else d.pdf_next_attempt_at end,
     credit_reason = coalesce(d.credit_reason, p_doc ->> 'credit_reason'),
     credit_type = coalesce(d.credit_type, p_doc ->> 'credit_type'),
+    -- snapshot z iného dokladu iba ak riadok ešte nemá žiadnu identifikáciu (inak by sa miešali firmy)
+    customer_company_id = case when d.customer_company_id is null then v_src.customer_company_id else d.customer_company_id end,
+    customer_legal_name = case when d.customer_company_id is null then v_src.customer_legal_name else d.customer_legal_name end,
+    customer_ico = case when d.customer_company_id is null then v_src.customer_ico else d.customer_ico end,
+    customer_dic = case when d.customer_company_id is null then v_src.customer_dic else d.customer_dic end,
+    customer_ic_dph = case when d.customer_company_id is null then v_src.customer_ic_dph else d.customer_ic_dph end,
+    customer_registration_country = case when d.customer_company_id is null then v_src.customer_registration_country else d.customer_registration_country end,
+    customer_registration_id = case when d.customer_company_id is null then v_src.customer_registration_id else d.customer_registration_id end,
+    customer_address = case when d.customer_company_id is null then v_src.customer_address else d.customer_address end,
+    customer_billing_country = case when d.customer_company_id is null then v_src.customer_billing_country else d.customer_billing_country end,
+    customer_snapshot_at = case when d.customer_company_id is null and v_src.id is not null then now() else d.customer_snapshot_at end,
+    customer_snapshot_source = case when d.customer_company_id is null and v_src.id is not null then v_src_kind else d.customer_snapshot_source end,
     first_event_id = coalesce(d.first_event_id, p_event_id),
     last_event_id = coalesce(p_event_id, d.last_event_id)
   where d.id = v_old.id;
@@ -499,7 +736,8 @@ $function$;
 
 -- Mesačný export: (1) doklady vystavené v období s väzbou na platbu (hrubá suma / poplatok / čistá suma /
 -- výplata podľa PaymentIntent), (2) VŠETKY balance transactions obdobia (poplatky, refundácie, spory,
--- výplaty, úpravy) s väzbou na číslo dokladu, ak existuje. Iba čísla, ID Stripe a daňové polia dokladu.
+-- výplaty, úpravy) s väzbou na číslo dokladu, ak existuje. Čísla, ID Stripe, daňové polia dokladu a
+-- identifikácia odberateľa (firmy) zo snapshotu dokladu.
 create or replace function public.esblu_billing_accounting_export(p_environment text, p_from timestamptz, p_to timestamptz, p_actor uuid)
 returns jsonb
 language plpgsql
@@ -525,7 +763,13 @@ begin
         'tax_details', d.tax_details, 'service_period_start', d.service_period_start, 'service_period_end', d.service_period_end,
         'paid_at', d.paid_at, 'payment_intent_id', coalesce(d.payment_intent_id, ri2.payment_intent_id),
         'gross_minor', bt.gross, 'fee_minor', bt.fee, 'net_minor', bt.net, 'bt_ids', bt.ids, 'payout_ids', bt.payouts,
-        'pdf_archived', d.pdf_archived_at is not null, 'pdf_sha256', d.pdf_sha256, 'pdf_storage_path', d.pdf_storage_path) as row
+        'pdf_archived', d.pdf_archived_at is not null, 'pdf_sha256', d.pdf_sha256, 'pdf_storage_path', d.pdf_storage_path,
+        -- identifikácia odberateľa zo snapshotu (platí aj po ukončení firmy, keď company_id = null)
+        'customer_company_id', d.customer_company_id, 'customer_legal_name', d.customer_legal_name,
+        'customer_ico', d.customer_ico, 'customer_dic', d.customer_dic, 'customer_ic_dph', d.customer_ic_dph,
+        'customer_registration_id', d.customer_registration_id, 'customer_address', d.customer_address,
+        'customer_billing_country', d.customer_billing_country, 'company_linked', d.company_id is not null,
+        'provider_customer_id', d.provider_customer_id, 'provider_subscription_id', d.provider_subscription_id) as row
     from public.billing_invoice_documents d
     left join public.billing_invoice_documents ri2
       on d.kind = 'credit_note' and ri2.environment = d.environment and ri2.provider_document_id = d.related_invoice_id
@@ -570,7 +814,10 @@ as $function$
   select auth.uid() is not null and exists (select 1 from public.billing_ops_admins a where a.user_id = auth.uid())
 $function$;
 
-revoke all on function public.esblu_billing_documents_guard() from public, anon, authenticated;
+revoke all on function public.esblu_billing_documents_guard() from public, anon, authenticated, service_role;
+revoke all on function public.esblu_billing_customer_identity(uuid) from public, anon, authenticated, service_role;
+revoke all on function public.esblu_billing_documents_company_freeze() from public, anon, authenticated, service_role;
+revoke all on function public.esblu_billing_accounting_record_retained() from public, anon, authenticated, service_role;
 revoke all on function public.esblu_billing_document_status_rank(text, text) from public, anon, authenticated;
 revoke all on function public.esblu_billing_upsert_document(text, text, jsonb) from public, anon, authenticated;
 revoke all on function public.esblu_billing_record_refund_observation(text, text, bigint, text, timestamptz) from public, anon, authenticated;

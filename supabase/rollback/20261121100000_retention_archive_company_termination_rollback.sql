@@ -19,6 +19,10 @@
 --     vydať úradu / účtovníkovi a každý prístup sa loguje,
 --   - nemení access_log_action_check (akcia 'synthetic_test_data_purge_skipped' ostáva
 --     povolená, aby zapísané audit riadky ostali platné),
+--   - ponechá ochranu Storage v cleanup jobe (trigger esblu_cleanup_jobs_protect_retained_storage
+--     na account_deletion_cleanup_jobs: nikdy billing-documents ani súbory archivovaných dokladov)
+--     a prísnejší guard_archived_records (DELETE iba po APPROVED lehote, bez legal hold) — chránia
+--     dáta, nič nemažú; pôvodná funkcia ukončenia tak ani po rollbacku nezmaže archivované súbory,
 --   - nemaže stĺpce company_terminations (termination_mode, operator_reference,
 --     justification, archive_id, archived_counts) — sú súčasťou auditu.
 -- Opätovná forward migrácia je idempotentná (create if not exists / or replace).

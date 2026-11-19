@@ -37,6 +37,17 @@
 --    approve_retention_period (iba postgres), purge_expired (dry-run default).
 -- 5. esblu_account_deletion_commit a retention blocker sa NEMENIA (bežné
 --    zrušenie firmy s dokladmi ostáva blokované).
+-- 6. Retenčná bezpečnosť (esblu8, 2026-11-19):
+--    - archived_records sa dá zmazať IBA v ostrom behu purge_expired a IBA záznam,
+--      ktorého kategória je APPROVED, retention_until < as_of behu (as_of ≤ dnes)
+--      a archív nie je pod legal hold — overuje to DB trigger, nie iba purge_expired;
+--    - účtovné kópie Esblu (public.billing_invoice_documents + PDF v bucket
+--      billing-documents) NIE SÚ zákaznícke dáta: purge, ukončenie firmy ani cleanup
+--      joby ich nikdy nezahrnú (vlastná retencia Esblu, PROPOSED 10 r., bez
+--      automatického mazania — migrácia 20261123110000);
+--    - account_deletion_cleanup_jobs: trigger odstráni zo storage_targets každý cieľ
+--      v bucket billing-documents a každý súbor uchovávaný v archíve (archived_records.
+--      storage_objects) — bez ohľadu na to, ktorá funkcia job zapísala.
 --
 -- Nasadenie: produkčné vyčistenie 2026-11-19 beží ešte na PÔVODNÝCH funkciách
 -- (táto migrácia nie je nasadená) — riadky company_terminations bez
@@ -249,10 +260,27 @@ returns trigger
 language plpgsql
 set search_path = ''
 as $function$
+declare
+  v_raw text;
+  v_as_of date;
 begin
   if tg_op = 'DELETE' then
     if esblu_retention.purge_in_progress() then
-      return old;
+      -- Aj počas ostrého behu: iba záznam po APPROVED lehote, bez legal hold (obrana do hĺbky —
+      -- chyba v purge_expired ani priamy DELETE v jeho transakcii nezmaže doklad pred lehotou).
+      v_raw := current_setting('esblu.retention_purge_run', true);
+      select r.as_of into v_as_of from esblu_retention.purge_runs r where r.id = v_raw::uuid;
+      if v_as_of is not null and v_as_of <= current_date
+         and old.retention_until < v_as_of
+         and exists (select 1 from esblu_retention.retention_periods p
+                     where p.category = old.category and p.approval_status = 'APPROVED')
+         and old.retention_until >= esblu_retention.compute_retention_until(old.category, old.document_date)
+         and not exists (select 1 from esblu_retention.archived_companies a
+                         where a.id = old.archive_id and a.legal_hold) then
+        return old;
+      end if;
+      raise exception using errcode = 'P0001', message = 'ESBLU_RETENTION_NOT_EXPIRED',
+        hint = 'Záznam nie je po schválenej (APPROVED) lehote alebo je pod legal hold.';
     end if;
     raise exception using errcode = 'P0001', message = 'ESBLU_RETENTION_ARCHIVE_IMMUTABLE',
       hint = 'Archív sa maže iba cez esblu_retention.purge_expired po uplynutí retention_until (bez legal hold).';
@@ -694,10 +722,12 @@ begin
   v_res := public.esblu_account_deletion_commit('owner', p_user_id, p_company_id, coalesce(p_delete_account, false));
   v_job := nullif(v_res->>'job_id', '')::uuid;
 
-  -- Storage ciele: (zber firmy + XML pri výnimke) MÍNUS súbory archivovaných dokladov.
+  -- Storage ciele: (zber firmy + XML pri výnimke) MÍNUS súbory archivovaných dokladov a MÍNUS
+  -- účtovné kópie Esblu (bucket billing-documents — nikdy nie sú cieľom ukončenia firmy).
   select coalesce(jsonb_agg(distinct x.value), '[]'::jsonb) into v_targets
   from jsonb_array_elements(coalesce(v_res->'storage_targets', '[]'::jsonb) || v_xml) x
-  where not exists (select 1 from jsonb_array_elements(v_keep) k
+  where coalesce(x.value->>'bucket', '') <> 'billing-documents'
+    and not exists (select 1 from jsonb_array_elements(v_keep) k
                     where k.value->>'bucket' = x.value->>'bucket' and k.value->>'path' = x.value->>'path');
 
   if v_job is not null and v_targets is distinct from coalesce(v_res->'storage_targets', '[]'::jsonb) then
@@ -830,6 +860,47 @@ comment on function public.esblu_company_termination_synthetic_purge(uuid, uuid,
 
 revoke all on function public.esblu_company_termination_synthetic_purge(uuid, uuid, boolean, text, boolean, text, text)
   from public, anon, authenticated, service_role;
+
+-- ----------------------------------------------------------------------------- 5b. ochrana Storage v cleanup jobe
+-- Žiadny cleanup job (zrušenie účtu / ukončenie firmy / budúci kolektor) nesmie zmazať účtovnú kópiu
+-- Esblu (bucket billing-documents) ani súbor dokladu uchovávaný v retenčnom archíve.
+create or replace function public.esblu_cleanup_jobs_protect_retained_storage()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $function$
+declare
+  v_clean jsonb;
+begin
+  if new.storage_targets is null or jsonb_typeof(new.storage_targets) <> 'array' then
+    return new;
+  end if;
+  select coalesce(jsonb_agg(x.value order by x.ord), '[]'::jsonb) into v_clean
+  from jsonb_array_elements(new.storage_targets) with ordinality x(value, ord)
+  where coalesce(x.value->>'bucket', '') <> 'billing-documents'
+    and not exists (select 1 from esblu_retention.archived_records r, jsonb_array_elements(r.storage_objects) o
+                    where o.value->>'bucket' = x.value->>'bucket' and o.value->>'path' = x.value->>'path');
+  if v_clean is distinct from new.storage_targets then
+    new.storage_targets := v_clean;
+    new.storage_target_count := jsonb_array_length(v_clean);
+    if jsonb_array_length(v_clean) = 0 then
+      new.storage_status := 'done';
+      if new.auth_status = 'done' then
+        new.completed_at := coalesce(new.completed_at, now());
+      end if;
+    end if;
+  end if;
+  return new;
+end;
+$function$;
+
+revoke all on function public.esblu_cleanup_jobs_protect_retained_storage() from public, anon, authenticated, service_role;
+
+drop trigger if exists esblu_cleanup_jobs_protect_retained_storage on public.account_deletion_cleanup_jobs;
+create trigger esblu_cleanup_jobs_protect_retained_storage
+  before insert or update of storage_targets on public.account_deletion_cleanup_jobs
+  for each row execute function public.esblu_cleanup_jobs_protect_retained_storage();
 
 -- ----------------------------------------------------------------------------- 6. operátorský prístup
 create or replace function esblu_retention.operator_list_archives(p_operator_ref text, p_purpose text, p_source_company_id uuid default null)
@@ -1035,8 +1106,10 @@ begin
 
   select coalesce(jsonb_object_agg(c.category, c.n), '{}'::jsonb) into v_by_cat
   from (select r.category, count(*) n from esblu_retention.archived_records r where r.id = any(v_ids) group by 1) c;
+  -- Účtovné kópie Esblu (billing-documents) nie sú súčasťou zákazníckeho archívu → nikdy na výmaz.
   select coalesce(jsonb_agg(distinct o.value), '[]'::jsonb) into v_storage
-  from esblu_retention.archived_records r, jsonb_array_elements(r.storage_objects) o where r.id = any(v_ids);
+  from esblu_retention.archived_records r, jsonb_array_elements(r.storage_objects) o
+  where r.id = any(v_ids) and coalesce(o.value->>'bucket', '') <> 'billing-documents';
   select coalesce(array_agg(distinct r.archive_id), '{}') into v_archives
   from esblu_retention.archived_records r where r.id = any(v_ids);
 

@@ -212,6 +212,14 @@ await db.exec(`
   set session_replication_role = origin;
 `);
 
+// Účtovná kópia Esblu (Stripe faktúra) firmy O s archivovaným PDF v bucket billing-documents — nie je
+// zákaznícky doklad: purge ani ukončenie firmy sa jej nesmú dotknúť.
+const BILLING_PDF_O = "test/2014/03/invoice/in_ret_o1.pdf";
+await db.query(`insert into public.billing_invoice_documents (environment, kind, provider_document_id, company_id, provider_customer_id,
+    document_number, status, currency, total_minor, issued_at, pdf_sha256, pdf_storage_path, pdf_archived_at)
+  values ('test', 'invoice', 'in_ret_o1', $1, 'cus_ret_o', 'ESB-2014-1', 'paid', 'EUR', 990, '2014-03-01', $2, $3, now())`,
+  [C.o, "e".repeat(64), BILLING_PDF_O]);
+
 const commitSql = "select public.esblu_company_termination_commit($1, $2, false, $3) r";
 const syntheticSql = "select public.esblu_company_termination_synthetic_purge($1, $2, false, 'waived', $3, $4, $5) r";
 const REF = "OPS-2026-11-19-synthetic-cleanup";
@@ -502,6 +510,21 @@ await check("Storage: retenčná migrácia nemení storage politiky ani buckety;
   }
 });
 
+await check("cleanup job: súbory archivovaných dokladov ani billing-documents sa nikdy nedostanú do storage_targets (trigger, akýkoľvek zapisovateľ)", async () => {
+  const targets = [
+    { bucket: "ai-inbox-documents", path: `${C.a}/scan-a.pdf` }, { bucket: "einvoice-documents", path: `${C.a}/out-a.xml` },
+    { bucket: "billing-documents", path: "test/2026/11/invoice/in_x.pdf" }, { bucket: "vehicle-photos", path: `${C.a}/v1.jpg` },
+  ];
+  const ins = await su<Row>(`insert into public.account_deletion_cleanup_jobs (kind, user_id, company_id, storage_targets, storage_target_count, storage_status, auth_status)
+    values ('owner', $1, $2, $3::jsonb, 4, 'pending', 'done') returning id, storage_targets, storage_target_count c, storage_status s`, [U.owner, C.a, JSON.stringify(targets)]);
+  assert.deepEqual([ins[0].storage_targets, ins[0].c, ins[0].s], [[{ bucket: "vehicle-photos", path: `${C.a}/v1.jpg` }], 1, "pending"]);
+  const upd = await su<Row>(`update public.account_deletion_cleanup_jobs set storage_targets = $2::jsonb where id = $1
+    returning storage_targets, storage_target_count c, storage_status s, completed_at is not null done`, [ins[0].id, JSON.stringify(targets.slice(0, 3))]);
+  assert.deepEqual([upd[0].storage_targets, upd[0].c, upd[0].s, upd[0].done], [[], 0, "done", true]);
+  const all = JSON.stringify(await su("select storage_targets from public.account_deletion_cleanup_jobs"));
+  assert.doesNotMatch(all, /scan-a\.pdf|out-a\.xml|in-a\.xml|billing-documents/, "žiadny job neobsahuje archivovaný súbor ani účtovné PDF Esblu");
+});
+
 let archiveO = "";
 await check("purge dry-run: PROPOSED lehoty sa nemažú (skipped_unapproved), nič sa nezmaže, beh je auditovaný", async () => {
   const o = await run(svc, commitSql, [U.ownerO, C.o, "waived"], true);
@@ -521,6 +544,25 @@ await check("purge dry-run: PROPOSED lehoty sa nemažú (skipped_unapproved), ni
   assert.equal((live.data[0].x as Record<string, number>).purged, 0, "neschválená lehota = nič");
   assert.equal(await count("select count(*)::int n from esblu_retention.purge_runs where status = 'completed'"), 2);
   assert.equal(await count("select count(*)::int n from esblu_retention.purge_runs where status = 'executing'"), 0);
+});
+
+await check("DB guard: ani v ostrom behu purge (GUC + executing run) sa nezmaže záznam pred APPROVED lehotou / s PROPOSED lehotou", async () => {
+  const tryDelete = async (archive: string) => {
+    await db.exec("begin");
+    try {
+      const r = await db.query<{ id: string }>(`insert into esblu_retention.purge_runs (status, dry_run, as_of, operator_ref) values ('executing', false, current_date, 'TEST-GUARD-0001') returning id`);
+      await db.query("select set_config('esblu.retention_purge_run', $1, true)", [r.rows[0].id]);
+      await db.query("delete from esblu_retention.archived_records where archive_id = $1", [archive]);
+      return "deleted";
+    } catch (e) {
+      return String((e as Error).message);
+    } finally {
+      await db.exec("rollback");
+    }
+  };
+  assert.match(await tryDelete(archiveA), /ESBLU_RETENTION_NOT_EXPIRED/, "firma A: lehota (2036) neuplynula");
+  assert.match(await tryDelete(archiveO), /ESBLU_RETENTION_NOT_EXPIRED/, "firma O: lehota uplynula, ale je iba PROPOSED");
+  assert.equal(await count(`select count(*)::int n from esblu_retention.archived_records where archive_id = $1`, [archiveO]), 2);
 });
 
 await check("schválenie lehoty: iba postgres (nie service_role / JWT), logované, prepočíta retention_until", async () => {
@@ -569,6 +611,21 @@ await check("purge: po zrušení legal hold maže IBA záznamy po retention_unti
   assert.equal(run6[0].result.purged, 2);
   const again = await run(svc, "select esblu_retention.purge_expired('PURGE-2026-0007', false) x", [], true);
   assert.equal((again.data[0].x as Record<string, number>).purged, 0, "idempotentné");
+});
+
+await check("purge + ukončenie: účtovná kópia Esblu (billing_invoice_documents + PDF v billing-documents) nedotknutá, snapshot firmy ostáva", async () => {
+  const d = await su<Row>(`select company_id, customer_company_id, customer_legal_name, customer_registration_id, pdf_storage_path, status
+    from public.billing_invoice_documents where provider_document_id = 'in_ret_o1'`);
+  assert.deepEqual(d[0], { company_id: null, customer_company_id: C.o, customer_legal_name: "Stará firma s.r.o.", customer_registration_id: null,
+    pdf_storage_path: BILLING_PDF_O, status: "paid" });
+  const runs = JSON.stringify(await su("select result from esblu_retention.purge_runs"));
+  assert.doesNotMatch(runs, /billing-documents|in_ret_o1/, "purge nikdy nevráti účtovné PDF Esblu na výmaz");
+  assert.doesNotMatch(JSON.stringify(await su("select storage_targets from public.account_deletion_cleanup_jobs")), /billing-documents|in_ret_o1/);
+  assert.doesNotMatch(JSON.stringify(await su("select payload from esblu_retention.archived_records")), /in_ret_o1/, "nie je súčasťou zákazníckeho archívu");
+  // ani ostrý purge k ďalekej budúcnosti (dry-run) ich nevidí; DELETE zlyhá aj pre postgres
+  const dry = await run(svc, "select esblu_retention.purge_expired('PURGE-2026-0008', true, '2099-01-01') x", [], true);
+  assert.doesNotMatch(JSON.stringify(dry.data[0].x), /billing-documents/);
+  assert.match((await run(pg, "delete from public.billing_invoice_documents where provider_document_id = 'in_ret_o1'")).message, /ESBLU_BILLING_ACCOUNTING_RECORD_RETAINED/);
 });
 
 await check("rollback migrácie: archív, logy a audit ostávajú; purge a výnimka zaniknú; čítanie archívu funguje; re-apply idempotentný", async () => {
