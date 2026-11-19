@@ -6,7 +6,8 @@
 //   - owner-only, potvrdenie exportu, registrácia u providera = stop
 //   - zlyhanie uprostred → rollback celku (žiadny partial delete)
 //   - úspech → firma A celá preč, firma B nedotknutá, cleanup job so Storage
-//     cieľmi (vrátane XML e-faktúr), auditný záznam bez obsahu
+//     cieľmi (od 20261121100000 BEZ XML e-faktúr — doklady idú do retenčného
+//     archívu, pozri retention-archive-pglite-tests.ts), auditný záznam bez obsahu
 //   - opakované / dvojité spustenie → already_completed
 //   - rollback migrácie + re-apply
 //
@@ -357,11 +358,14 @@ await check("retry po zlyhaní → úspech: firma A celá preč, Storage ciele v
   terminationId = String(r.termination_id);
   assert.ok(r.job_id);
   const targets = (r.storage_targets as Array<{ bucket: string; path: string }>).map((t) => `${t.bucket}:${t.path}`).sort();
-  assert.deepEqual(targets, [`ai-inbox-documents:${C.a}/doc-a.pdf`, `einvoice-documents:${C.a}/in-a.xml`, `einvoice-documents:${C.a}/out-a.xml`].sort());
+  // 20261121100000: XML e-faktúr sa NEMAŽE (retenčný archív esblu_retention); maže sa iba neúčtovný dokument.
+  assert.deepEqual(targets, [`ai-inbox-documents:${C.a}/doc-a.pdf`]);
+  assert.ok(r.archive_id, "doklady sú v retenčnom archíve");
+  assert.equal(r.termination_mode, "archive");
   assert.deepEqual(await companyRows(C.a), { invoices: 0, items: 0, einvoice: 0, documents: 0, vehicles: 0, company: 0 });
   const job = await su<{ storage_status: string; storage_target_count: number }>(`select storage_status, storage_target_count from public.account_deletion_cleanup_jobs where id = '${r.job_id}'`);
   assert.equal(job[0].storage_status, "pending");
-  assert.equal(job[0].storage_target_count, 3);
+  assert.equal(job[0].storage_target_count, 1);
   const t = await su<{ status: string; export_mode: string; deleted_counts: Record<string, number>; storage_target_count: number }>(
     `select status, export_mode, deleted_counts, storage_target_count from public.company_terminations where id = '${terminationId}'`);
   assert.equal(t[0].status, "completed");
@@ -371,7 +375,7 @@ await check("retry po zlyhaní → úspech: firma A celá preč, Storage ciele v
   assert.equal(await count(`select count(*)::int n from public.company_export_runs where id = '${exportRunId}'`), 1, "dôkaz exportu prežije výmaz firmy");
   assert.equal(t[0].deleted_counts.invoices, 2);
   assert.equal(t[0].deleted_counts.einvoice_events, 1);
-  assert.equal(t[0].storage_target_count, 3);
+  assert.equal(t[0].storage_target_count, 1);
   const cols = (await su<{ c: string }>(`select column_name c from information_schema.columns where table_schema = 'public' and table_name = 'company_terminations'`)).map((x) => x.c);
   for (const bad of ["email", "name", "legal_name", "path", "storage_targets"]) assert.ok(!cols.includes(bad), bad);
   assert.equal(await count(`select count(*)::int n from public.company_terminations where status = 'executing'`), 0);
