@@ -92,7 +92,9 @@ check("pre_rc (61) ∪ rc_tables (37) == grants manifest, disjoint", () => {
   const POST_RELEASE_TABLES = ["company_terminations", "company_terms_notices", "company_export_runs", "registration_policy", "billing_event_cursors", "billing_live_purchase_allowlist",
     // P4 (20261123110000 / 20261123120000, čakajú): účtovná kópia dokladov, export, ops alerty.
     "billing_invoice_documents", "billing_refund_observations", "billing_balance_transactions", "billing_ops_admins",
-    "billing_accounting_export_log", "billing_ops_alerts", "billing_ops_heartbeats"];
+    "billing_accounting_export_log", "billing_ops_alerts", "billing_ops_heartbeats",
+    // f8262b4 (20261120100000) interný tarif; P3 (20261122100000–120000) eFaktúra mandát / deregistrácia / alerty — čakajú.
+    "internal_operator_grants", "einvoice_mandates", "einvoice_deregistrations", "einvoice_ops_alerts"];
   assert.deepEqual([...pre, ...rc].sort(), manifest.filter((t) => !POST_RELEASE_TABLES.includes(t)));
 });
 check("every rc table is created by an RC migration file", () => {

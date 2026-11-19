@@ -150,7 +150,7 @@ check("cookies 1.1: každý esblu localStorage/sessionStorage kľúč v kóde je
     for (const m of src.matchAll(/["'`](esblu[._][A-Za-z0-9._-]*?)(?:["'`]|\$\{|:\$\{)/g)) keys.add(m[1].replace(/[.:]$/, ""));
   }
   // kľúče, ktoré nie sú úložisko prehliadača (iné identifikátory s prefixom esblu)
-  const NOT_STORAGE = /^(esblu_(secure_storage|before_|accept|get_|my_|purge|record|push|list|account|company|owner|member|user|consume|reserve|finalize|require|raise|usage|einvoice|intake|claim|create|media|role|set|ensure|switch|session|resolve|preview|billing|subscription|trial|plan|legal|ai_|document|invoice|chat|vehicle|machine|inventory|partner|fx|deadline|notification|storage)|esblu\.(com|office|client_purchase|sync|einvoice)|esblu_locale_cookie)/;
+  const NOT_STORAGE = /^(esblu_(secure_storage|before_|accept|get_|my_|purge|record|push|list|account|company|owner|member|user|consume|reserve|finalize|require|raise|usage|einvoice|intake|claim|create|media|role|set|ensure|switch|session|resolve|preview|billing|subscription|trial|plan|legal|ai_|document|invoice|chat|vehicle|machine|inventory|partner|fx|deadline|notification|storage)|esblu\.(com|office|client_purchase|sync|einvoice|audit)|esblu_locale_cookie)/;
   const storageKeys = [...keys].filter((k) => !NOT_STORAGE.test(k) && /^(esblu\.[a-zA-Z]|esblu_locale$)/.test(k));
   assert.ok(storageKeys.length >= 8, `nájdené: ${storageKeys.join(", ")}`);
   for (const loc of ["", ".en", ".de"]) {
