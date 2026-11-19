@@ -20,6 +20,11 @@ export async function GET(req: Request) {
   const storefront = (url.searchParams.get("storefront") ?? "").slice(0, 3);
   const { data, error } = await who.db.rpc("esblu_billing_purchase_options", { p_platform: platform, p_storefront: storefront || null });
   if (error) return billingErrorResponse(error);
+  // S15b: LIVE nákup iba pre firmy z allowlistu — inak sa webové kanály neponúknu (DB ich aj tak odmietne).
+  // Chyba kontroly = fail closed (bez webových kanálov).
+  const live = await who.db.rpc("esblu_billing_my_live_purchase_allowed");
+  const gate = providerGateFromEnv();
+  if (live.error || live.data !== true) gate.webEnabled = false;
   // Kanál bez zapojeného providera na tomto serveri sa neponúkne (fail closed).
-  return Response.json({ success: true, options: gatePurchaseOptions(data, providerGateFromEnv()) }, { headers: { "Cache-Control": "no-store" } });
+  return Response.json({ success: true, options: gatePurchaseOptions(data, gate) }, { headers: { "Cache-Control": "no-store" } });
 }

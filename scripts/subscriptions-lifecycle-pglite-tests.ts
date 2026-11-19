@@ -19,6 +19,7 @@ import { FakeBillingProvider, MemoryFakeStateStore } from "@/lib/billing/provide
 import { StripeTestProvider } from "@/lib/billing/providers/stripe";
 import { providerReconcileSource } from "@/lib/billing/reconcile-sources";
 import { runReconciliation, type ReconcileSource } from "@/lib/billing/reconciliation";
+import { runEventCatchup } from "@/lib/billing/event-catchup";
 import { signTimestamped } from "@/lib/billing/signature";
 import { FakeGooglePlayApi, fakeGooglePurchase } from "@/lib/billing/stores/fake-stores";
 import { parseSubscriptionView } from "@/lib/billing/client-model";
@@ -40,6 +41,14 @@ const DELETION_GUARD = "supabase/migrations/20261012120000_account_deletion_subs
 const DELETION_GUARD_ROLLBACK = "supabase/rollback/20261012120000_account_deletion_subscription_guard_rollback.sql";
 const POST_COMMIT = "supabase/migrations/20261012130000_account_deletion_post_commit_cleanup.sql";
 const POST_COMMIT_ROLLBACK = "supabase/rollback/20261012130000_account_deletion_post_commit_cleanup_rollback.sql";
+const SINGLE_OPEN = "supabase/migrations/20261118120000_billing_single_open_checkout.sql";
+const TERMINAL_PRECEDENCE = "supabase/migrations/20261118130000_billing_terminal_precedence.sql";
+const REFUND_AUDIT = "supabase/migrations/20261118140000_billing_refund_audit.sql";
+const CATCHUP = "supabase/migrations/20261119120000_billing_event_catchup.sql";
+const CATCHUP_ROLLBACK = "supabase/rollback/20261119120000_billing_event_catchup_rollback.sql";
+// P4: retry zlyhaných udalostí + účtovná kópia dokladov (pipeline zapisuje doklady pred zmenou stavu).
+const EVENT_RETRY = "supabase/migrations/20261123100000_billing_event_retry.sql";
+const INVOICE_DOCUMENTS = "supabase/migrations/20261123110000_billing_invoice_documents.sql";
 const SUITE = (process.argv[2] ?? process.env.SUITE ?? "").replace(/^--suite=/, "").trim() || null;
 
 type Row = Record<string, unknown>;
@@ -189,6 +198,16 @@ await db.exec(`
   end $f$;
 `);
 await db.exec(read(POST_COMMIT));
+await db.exec(read(SINGLE_OPEN));
+await db.exec(read(TERMINAL_PRECEDENCE));
+await db.exec(read(REFUND_AUDIT));
+await db.exec(read(CATCHUP));
+// Lokálny baseline nemá Storage tabuľky (P4 migrácia zakladá privátny bucket billing-documents).
+await db.exec(`create table if not exists storage.buckets (id text primary key, name text, public boolean,
+  file_size_limit bigint, allowed_mime_types text[]);
+  create table if not exists storage.objects (id uuid primary key default gen_random_uuid(), bucket_id text, name text);`);
+await db.exec(read(EVENT_RETRY));
+await db.exec(read(INVOICE_DOCUMENTS));
 await db.exec(`update public.billing_runtime_config set web_provider = 'fake',
   enabled_methods = array['stripe_web_checkout','apple_iap','google_play']`);
 
@@ -259,6 +278,18 @@ await check("subscription-migrations: obe migrácie sú idempotentné (re-run be
   await serialized(() => db.exec(read(LIFECYCLE)));
   await serialized(() => db.exec(read(REDACTION)));
   await serialized(() => db.exec(read(OWNED_METHODS)));
+  await serialized(() => db.exec(read(SINGLE_OPEN)));
+  await serialized(() => db.exec(read(SINGLE_OPEN)));
+  await serialized(() => db.exec(read(TERMINAL_PRECEDENCE)));
+  await serialized(() => db.exec(read(TERMINAL_PRECEDENCE)));
+  await serialized(() => db.exec(read(REFUND_AUDIT)));
+  await serialized(() => db.exec(read(REFUND_AUDIT)));
+  await serialized(() => db.exec(read(CATCHUP)));
+  await serialized(() => db.exec(read(CATCHUP)));
+  await serialized(() => db.exec(read(EVENT_RETRY)));
+  await serialized(() => db.exec(read(EVENT_RETRY)));
+  await serialized(() => db.exec(read(INVOICE_DOCUMENTS)));
+  await serialized(() => db.exec(read(INVOICE_DOCUMENTS)));
   assert.equal((await accountOf(co)).status, "active");
   assert.equal((await ent(co.owner, "voice")).active, true);
 });
@@ -745,8 +776,11 @@ await check("subscription-concurrency: dve rôzne predplatné súbežne pre jedn
   const co = await newCompany({ trialEnded: true });
   const c1 = String(((await rpcAs(co.owner, "esblu_billing_create_checkout_intent", ["test_pro", "month"])) as Row).checkout_id);
   const c2 = String(((await rpcAs(co.billingAdmin, "esblu_billing_create_checkout_intent", ["test_pro", "month"])) as Row).checkout_id);
+  // 2026-11-18: druhý pokus dostane TEN ISTÝ zámer (jedna zaplatiteľná relácia).
+  assert.equal(c2, c1);
+  // DB poistka pre anomáliu na strane providera: dve rôzne predplatné pre ten istý zámer.
   const s1 = await fake.simulateCheckoutPaid({ checkoutId: c1, providerPriceId: "fake_price_pro_month", interval: "month" });
-  const s2 = await fake.simulateCheckoutPaid({ checkoutId: c2, providerPriceId: "fake_price_pro_month", interval: "month" });
+  const s2 = { ...(await fake.simulateCheckoutPaid({ checkoutId: c1, providerPriceId: "fake_price_pro_month", interval: "month" })), provider_subscription_id: "fake_sub_second_anomaly" };
   const [r1, r2] = await Promise.all([deliver("fake.checkout.completed", s1), deliver("fake.checkout.completed", s2)]);
   assert.deepEqual([r1.outcome, r2.outcome].sort(), ["applied", "conflict"], JSON.stringify([r1, r2]));
   assert.equal(Number((await one<{ n: number }>(`select count(*)::int n from public.company_entitlements where company_id = '${co.id}' and source = 'subscription' and entitlement_key = 'voice'`)).n), 1);
@@ -770,6 +804,77 @@ await check("subscription-concurrency: DB ochrana — unique (provider, env, eve
   assert.match(intentSrc, /pg_advisory_xact_lock/);
 });
 
+// ============================================================================= checkout-single-open (2026-11-18)
+const openWebIntents = async (co: Co) =>
+  Number((await one<{ n: number }>(`select count(*)::int n from public.billing_checkout_sessions where company_id = '${co.id}' and status in ('created','open') and provider in ('stripe','fake')`)).n);
+await check("checkout-single-open: dve karty / dvaja manažéri súbežne, ten istý plán → jeden zámer (reused), jedna relácia", async () => {
+  const co = await newCompany({ trialEnded: true });
+  const results = (await Promise.all([
+    rpcAs(co.owner, "esblu_billing_create_checkout_intent", ["test_pro", "month"]),
+    rpcAs(co.owner, "esblu_billing_create_checkout_intent", ["test_pro", "month"]),
+    rpcAs(co.billingAdmin, "esblu_billing_create_checkout_intent", ["test_pro", "month"]),
+  ])) as Row[];
+  assert.equal(new Set(results.map((r) => String(r.checkout_id))).size, 1, JSON.stringify(results));
+  assert.deepEqual(results.map((r) => r.reused).sort(), [false, true, true]);
+  assert.equal(await openWebIntents(co), 1);
+  // Relácia (fake = deterministická podľa zámeru) — attach 2× tou istou reláciou je idempotentné.
+  const id = String(results[0].checkout_id);
+  const session = await fake.createCheckout({ checkoutId: id, providerPriceId: "fake_price_pro_month", providerCustomerId: null, successUrl: "https://x/s", cancelUrl: "https://x/c" });
+  await su(`select public.esblu_billing_attach_checkout_session($1::uuid, $2)`, [id, session.providerSessionId]);
+  await su(`select public.esblu_billing_attach_checkout_session($1::uuid, $2)`, [id, session.providerSessionId]);
+  await fails(() => su(`select public.esblu_billing_attach_checkout_session($1::uuid, $2)`, [id, "fake_cs_other"]), /CHECKOUT_STATE/);
+  // Otvorená relácia (status open) sa znova použije aj po ďalšom pokuse.
+  const again = (await rpcAs(co.owner, "esblu_billing_create_checkout_intent", ["test_pro", "month"])) as Row;
+  assert.equal(String(again.checkout_id), id);
+  assert.equal(again.reused, true);
+});
+await check("checkout-single-open: iný plán počas otvorenej relácie → CHECKOUT_IN_PROGRESS; po zrušení nový zámer", async () => {
+  const co = await newCompany({ trialEnded: true });
+  const first = (await rpcAs(co.owner, "esblu_billing_create_checkout_intent", ["test_pro", "month"])) as Row;
+  await fails(() => rpcAs(co.owner, "esblu_billing_create_checkout_intent", ["test_starter", "month"]), /CHECKOUT_IN_PROGRESS/);
+  await fails(() => rpcAs(co.owner, "esblu_billing_create_checkout_intent", ["test_pro", "year"]), /CHECKOUT_IN_PROGRESS/);
+  // zrušenie: owner krok 1 (iba čítanie), cudzí/nevlastník nič
+  const info = (await rpcAs(co.owner, "esblu_billing_checkout_for_cancel", [first.checkout_id])) as Row;
+  assert.equal(info.found, true);
+  await fails(() => rpcAs(co.emp, "esblu_billing_checkout_for_cancel", [first.checkout_id]), /FORBIDDEN/);
+  const other = await newCompany({ trialEnded: true });
+  assert.equal(((await rpcAs(other.owner, "esblu_billing_checkout_for_cancel", [first.checkout_id])) as Row).found, false);
+  await fails(() => rpcAs(co.owner, "esblu_billing_mark_checkout_expired", [first.checkout_id]), /permission denied|not allowed|42501/i);
+  const st = await one<{ s: string }>(`select public.esblu_billing_mark_checkout_expired($1::uuid) s`, [first.checkout_id]);
+  assert.equal(st.s, "expired");
+  const second = (await rpcAs(co.owner, "esblu_billing_create_checkout_intent", ["test_starter", "month"])) as Row;
+  assert.notEqual(String(second.checkout_id), String(first.checkout_id));
+  assert.equal(await openWebIntents(co), 1);
+});
+await check("checkout-single-open: výpadok providera → opakovanie použije ten istý zámer; neskoro (< 31 min) nový zámer", async () => {
+  const co = await newCompany({ trialEnded: true });
+  const a = (await rpcAs(co.owner, "esblu_billing_create_checkout_intent", ["test_pro", "month"])) as Row;
+  // výpadok: relácia sa nepriradila (status created) → opakovanie = ten istý zámer
+  const b = (await rpcAs(co.owner, "esblu_billing_create_checkout_intent", ["test_pro", "month"])) as Row;
+  assert.equal(String(b.checkout_id), String(a.checkout_id));
+  assert.ok(Date.parse(String(a.expires_at)) - Date.now() > 55 * 60 * 1000, "zámer platí 1 h");
+  // zámer bez relácie tesne pred koncom platnosti → nový zámer (Stripe min. 30 min)
+  await su(`update public.billing_checkout_sessions set expires_at = now() + interval '20 minutes' where id = $1::uuid`, [a.checkout_id]);
+  const c = (await rpcAs(co.owner, "esblu_billing_create_checkout_intent", ["test_pro", "month"])) as Row;
+  assert.notEqual(String(c.checkout_id), String(a.checkout_id));
+  assert.equal((await one<{ status: string }>(`select status from public.billing_checkout_sessions where id = $1::uuid`, [a.checkout_id])).status, "expired");
+  // expirovaný otvorený zámer sa uzavrie automaticky
+  await su(`update public.billing_checkout_sessions set expires_at = now() - interval '1 minute' where id = $1::uuid`, [c.checkout_id]);
+  const d = (await rpcAs(co.owner, "esblu_billing_create_checkout_intent", ["test_starter", "month"])) as Row;
+  assert.notEqual(String(d.checkout_id), String(c.checkout_id));
+  assert.equal(await openWebIntents(co), 1);
+});
+await check("checkout-single-open: DB poistka — unikátny index (company) pre created/open stripe/fake; store kanály bez zmeny", async () => {
+  const idx = await one<{ d: string }>(`select indexdef d from pg_indexes where indexname = 'billing_checkout_sessions_one_open_web_idx'`);
+  assert.match(idx.d, /UNIQUE/i);
+  const co = await newCompany({ trialEnded: true });
+  await rpcAs(co.owner, "esblu_billing_create_checkout_intent", ["test_pro", "month"]);
+  await fails(() => su(`insert into public.billing_checkout_sessions (company_id, created_by, provider, environment, plan_code, billing_interval, provider_price_id)
+    values ('${co.id}', '${co.owner}', 'fake', 'test', 'test_pro', 'month', 'fake_price_pro_month')`), /duplicate key|unique/i);
+  const sql = read(SINGLE_OPEN).toLowerCase();
+  assert.doesNotMatch(sql, /drop table|truncate|delete from/);
+});
+
 // ============================================================================= stripe-adapter (cez DB pipeline)
 await check("stripe-adapter: Stripe test webhook → DB (checkout, full refund → refunded, dispute lost → revoked)", async () => {
   const KEY = "sk_test_" + "a".repeat(24);
@@ -784,9 +889,15 @@ await check("stripe-adapter: Stripe test webhook → DB (checkout, full refund �
     let remote: Row = {
       object: "subscription", id: "sub_db_1", customer: "cus_db_1", status: "active", cancel_at_period_end: false, cancel_at: null, canceled_at: null, ended_at: null,
       metadata: { esblu_checkout_id: checkout }, items: { data: [{ id: "si_1", price: { id: "price_test_pro_m" }, current_period_start: nowS, current_period_end: nowS + 30 * 86400 }] },
+      latest_invoice: "in_db_1",
     };
     const charge = { object: "charge", id: "ch_db_1", amount: 1218, currency: "eur", payment_intent: "pi_1" };
-    const fetchImpl = (async (url: string) => {
+    const deletes: string[] = [];
+    const fetchImpl = (async (url: string, init?: RequestInit) => {
+      if (init?.method === "DELETE") {
+        deletes.push(url);
+        remote = { ...remote, status: "canceled", canceled_at: nowS, ended_at: nowS };
+      }
       const body = url.includes("/subscriptions/sub_db_1") ? remote
         : url.includes("/invoice_payments") ? { data: [{ invoice: "in_db_1" }] }
         : url.includes("/invoices/in_db_1") ? { object: "invoice", id: "in_db_1", subscription: "sub_db_1" }
@@ -810,11 +921,98 @@ await check("stripe-adapter: Stripe test webhook → DB (checkout, full refund �
     assert.equal(r3.outcome, "applied", JSON.stringify(r3));
     assert.equal((await accountOf(co)).status, "refunded");
     assert.equal((await ent(co.owner, "voice")).active, false);
+    // 2026-11-18: plná refundácia aktuálneho obdobia → predplatné ukončené aj u Stripe (žiadne ďalšie účtovanie)
+    assert.equal(r3.code, "PROVIDER_CANCELED", JSON.stringify(r3));
+    assert.equal(deletes.length, 1);
+    assert.equal((await accountOf(co)).status, "refunded", "stav ostáva terminálny refunded");
+    // 2026-11-18 (e2): Stripe po ukončení pošle customer.subscription.deleted (canceled) → refunded ostáva
+    const del1 = await send("customer.subscription.deleted", remote, "evt_db_del");
+    assert.equal(del1.outcome, "stale", JSON.stringify(del1));
+    assert.equal(del1.code, "TERMINAL_STATE");
+    assert.equal((await accountOf(co)).status, "refunded");
+    assert.equal((await ent(co.owner, "voice")).active, false);
+    // opakované doručenie tej istej udalosti → duplicate, nič sa nemení
+    assert.equal((await send("customer.subscription.deleted", remote, "evt_db_del")).outcome, "duplicate");
+    // oneskorená udalosť (iné ID, Stripe stav po refetchi = canceled) → stale, refunded ostáva
+    assert.equal((await send("customer.subscription.updated", remote, "evt_db_late")).outcome, "stale");
+    assert.equal((await accountOf(co)).status, "refunded");
     // late dispute lost na už refundovanom = terminálny (refunded→revoked je stále terminálny, nič sa neoživí)
     const r4 = await send("charge.dispute.closed", { object: "dispute", id: "dp_1", charge: "ch_db_1", status: "lost" }, "evt_db_4");
     assert.ok(["applied", "stale"].includes(r4.outcome), JSON.stringify(r4));
     assert.equal((await ent(co.owner, "voice")).active, false);
+    // refunded → revoked (prehraný spor) je povolený; následné canceled už revoked neprepíše
+    assert.equal((await accountOf(co)).status, "revoked");
+    assert.equal((await send("customer.subscription.deleted", remote, "evt_db_del2")).outcome, "stale");
+    assert.equal((await accountOf(co)).status, "revoked");
+    const subEnts = await one<{ n: number }>(`select count(*)::int n from public.company_entitlements where company_id = '${co.id}' and source = 'subscription' and status = 'active'`);
+    assert.equal(Number(subEnts.n), 0, "žiadny aktívny nárok zo subscription");
     remote = { ...remote };
+  } finally {
+    await su(`update public.billing_runtime_config set web_provider = 'fake'`);
+  }
+});
+
+await check("stripe-adapter: plná refundácia staršej faktúry → prístup ostáva; terminálny účet + otvorené predplatné → reconciliation ukončí u providera", async () => {
+  const KEY = "sk_test_" + "a".repeat(24);
+  const WHSEC = "whsec_" + "b".repeat(32);
+  await su(`insert into public.billing_provider_prices (provider, environment, plan_code, billing_interval, provider_price_id, active)
+    values ('stripe', 'test', 'test_pro', 'month', 'price_test_pro_m', true) on conflict do nothing`);
+  await su(`update public.billing_runtime_config set web_provider = 'stripe'`);
+  try {
+    const co = await newCompany({ trialEnded: true });
+    const checkout = String(((await rpcAs(co.owner, "esblu_billing_create_checkout_intent", ["test_pro", "month"])) as Row).checkout_id);
+    let nowS = Math.floor(Date.now() / 1000);
+    let remote: Row = {
+      object: "subscription", id: "sub_db_2", customer: "cus_db_2", status: "active", cancel_at_period_end: false, cancel_at: null, canceled_at: null, ended_at: null,
+      metadata: { esblu_checkout_id: checkout }, items: { data: [{ id: "si_2", price: { id: "price_test_pro_m" }, current_period_start: nowS, current_period_end: nowS + 30 * 86400 }] },
+      latest_invoice: "in_new",
+    };
+    const deletes: string[] = [];
+    const fetchImpl = (async (url: string, init?: RequestInit) => {
+      if (init?.method === "DELETE") { deletes.push(url); remote = { ...remote, status: "canceled", canceled_at: nowS, ended_at: nowS }; }
+      const body = url.includes("/subscriptions/sub_db_2") ? remote
+        : url.includes("/invoice_payments") ? { data: [{ invoice: url.includes("pi_old") ? "in_old" : "in_new" }] }
+        : url.includes("/invoices/in_old") ? { object: "invoice", id: "in_old", subscription: "sub_db_2", lines: { data: [{ period: { start: 1797000000, end: 1799600000 } }] } }
+        : url.includes("/invoices/in_new") ? { object: "invoice", id: "in_new", subscription: "sub_db_2" } : null;
+      return new Response(JSON.stringify(body ?? { error: {} }), { status: body ? 200 : 404 });
+    }) as unknown as typeof fetch;
+    let wallMs = Date.now();
+    const stripe = new StripeTestProvider({ secretKey: KEY, webhookSecret: WHSEC, fetchImpl, now: () => new Date(wallMs) });
+    const send = (type: string, object: unknown, id: string) => {
+      wallMs += 5000; nowS = Math.floor(wallMs / 1000);
+      const raw = JSON.stringify({ object: "event", id, type, created: nowS, livemode: false, data: { object } });
+      return processWebhook(stripe, raw, new Headers({ "stripe-signature": signTimestamped(raw, WHSEC, nowS) }), serviceDb);
+    };
+    assert.equal((await send("checkout.session.completed", { object: "checkout.session", id: "cs_2", mode: "subscription", subscription: "sub_db_2", client_reference_id: checkout }, "evt_o_1")).outcome, "applied");
+    // plná refundácia STARŠEJ faktúry → iba záznam; aktívne predplatné a nároky ostávajú, nič sa neruší u Stripe
+    const old = await send("charge.refunded", { object: "charge", id: "ch_old", amount: 1590, currency: "eur", payment_intent: "pi_old", amount_refunded: 1590, refunded: true }, "evt_o_2");
+    assert.equal(old.outcome, "applied", JSON.stringify(old));
+    assert.equal((await accountOf(co)).status, "active");
+    assert.equal((await ent(co.owner, "voice")).active, true);
+    assert.equal(deletes.length, 0);
+    // audit: väzba refundácie na faktúru, obdobie a rozsah
+    const audit = await one<{ s: Row }>(`select summary s from public.billing_events where provider_event_id = 'evt_o_2'`);
+    const refund = (audit.s as { refund?: Row }).refund as Row;
+    assert.equal(refund.scope, "older_invoice");
+    assert.equal(refund.invoice, "in_old");
+    assert.equal(refund.invoice_period_start, new Date(1797000000 * 1000).toISOString());
+    assert.equal((audit.s as Row).subscription, "sub_db_2");
+    // Stav ako po pôvodnom kóde: Esblu refunded, Stripe stále active → reconciliation ukončí predplatné u Stripe
+    await su(`update public.subscription_accounts set status = 'refunded', ended_at = now() where company_id = '${co.id}'`);
+    await su(`select public.esblu_billing_sync_entitlements('${co.id}'::uuid)`);
+    const out = await runReconciliation(serviceDb, { stripe: providerReconcileSource(stripe) }, { limit: 500 });
+    const mine = out.results.find((x) => x.errorCode === "PROVIDER_CANCELED");
+    assert.ok(mine, JSON.stringify(out.results.slice(0, 5)));
+    assert.equal(deletes.length, 1);
+    assert.equal(remote.status, "canceled");
+    assert.equal((await accountOf(co)).status, "refunded", "Esblu ostáva refunded, prístup sa nevracia");
+    assert.equal((await ent(co.owner, "voice")).active, false);
+    // opakovaná reconciliation: Stripe canceled vs. Esblu refunded → oprava sa zapíše ako stale (e2), stav ostáva
+    await su(`update public.billing_reconciliation set next_check_at = now() - interval '1 minute', last_checked_at = now() - interval '2 days' where account_id = (select id from public.subscription_accounts where company_id = '${co.id}')`);
+    const again = await runReconciliation(serviceDb, { stripe: providerReconcileSource(stripe) }, { limit: 500 });
+    assert.ok(again.results.length > 0);
+    assert.equal(deletes.length, 1, "druhý beh už nič neruší");
+    assert.equal((await accountOf(co)).status, "refunded");
   } finally {
     await su(`update public.billing_runtime_config set web_provider = 'fake'`);
   }
@@ -1270,7 +1468,312 @@ await check("subscription-migrations: lifecycle rollback zachová dáta, zmapuje
   assert.equal(Number((await one<{ n: number }>(`select count(*)::int n from public.billing_events`)).n), before, "rollback nemaže eventy");
   await fails(() => su(`select public.esblu_billing_explain_my_entitlements()`), /does not exist/);
   await serialized(() => db.exec(read(LIFECYCLE)));
+  await serialized(() => db.exec(read(SINGLE_OPEN)));
+  await serialized(() => db.exec(read(TERMINAL_PRECEDENCE)));
+  await serialized(() => db.exec(read(REFUND_AUDIT)));
   assert.equal((await ent(dash.owner, "voice")).active, true);
+});
+
+// ============================================================================= stripe-catchup (S12)
+type Ev = Row & { id: string; created: number; type: string };
+function stripeBackend(sub: Row) {
+  const st = {
+    acct: "acct_TESTCATCHUP01",
+    sub,
+    charge: { object: "charge", id: "ch_cu_1", amount: 1590, amount_refunded: 0, refunded: false, disputed: false, currency: "eur", payment_intent: "pi_cu_1" } as Row,
+    dispute: null as Row | null,
+    events: [] as Ev[],
+    deletes: 0,
+    calls: { events: 0, total: 0 },
+    pageSize: 100,
+    fail: { events: 0, sub: 0, all: false },
+  };
+  const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
+  const fetchImpl = (async (url: string, init?: RequestInit) => {
+    st.calls.total++;
+    if (st.fail.all) return json({ error: { type: "api_error" } }, 500);
+    const u = new URL(url);
+    const p = u.pathname.replace(/^\/v1/, "");
+    const q = u.searchParams;
+    if (init?.method === "DELETE" && p.startsWith("/subscriptions/")) {
+      st.deletes++;
+      const now = Math.floor(Date.now() / 1000);
+      st.sub = { ...st.sub, status: "canceled", canceled_at: now, ended_at: now };
+      return json(st.sub);
+    }
+    if (p === "/account") return json({ object: "account", id: st.acct });
+    if (p === "/events") {
+      st.calls.events++;
+      if (st.fail.events > 0) { st.fail.events--; return json({ error: { type: "api_error" } }, 500); }
+      const types = [...q.entries()].filter(([k]) => k.startsWith("types[")).map(([, v]) => v);
+      const gte = q.get("created[gte]");
+      let list = [...st.events].sort((a, b) => b.created - a.created || (b.id < a.id ? -1 : 1));
+      if (types.length) list = list.filter((e) => types.includes(e.type));
+      if (gte) list = list.filter((e) => e.created >= Number(gte));
+      const eb = q.get("ending_before");
+      const sa = q.get("starting_after");
+      if (eb) {
+        const i = list.findIndex((e) => e.id === eb);
+        if (i < 0) return json({ error: { type: "invalid_request_error", code: "resource_missing" } }, 404);
+        const newer = list.slice(0, i);
+        return json({ object: "list", data: newer.slice(Math.max(0, newer.length - st.pageSize)), has_more: newer.length > st.pageSize });
+      }
+      if (sa) {
+        const i = list.findIndex((e) => e.id === sa);
+        const older = list.slice(i + 1);
+        return json({ object: "list", data: older.slice(0, st.pageSize), has_more: older.length > st.pageSize });
+      }
+      return json({ object: "list", data: list.slice(0, st.pageSize), has_more: list.length > st.pageSize });
+    }
+    if (p.startsWith("/subscriptions/")) {
+      if (st.fail.sub > 0) { st.fail.sub--; return json({ error: { type: "api_error" } }, 500); }
+      return json(st.sub);
+    }
+    if (p === "/invoice_payments") return json({ object: "list", data: [{ invoice: st.sub.latest_invoice, payment: { type: "payment_intent", payment_intent: "pi_cu_1" } }] });
+    if (p.startsWith("/invoices/")) return json({ object: "invoice", id: st.sub.latest_invoice, parent: { subscription_details: { subscription: st.sub.id } }, lines: { data: [] } });
+    if (p.startsWith("/payment_intents/")) return json({ object: "payment_intent", id: "pi_cu_1", latest_charge: st.charge });
+    if (p.startsWith("/charges/")) return json(st.charge);
+    if (p === "/disputes") return json({ object: "list", data: st.dispute ? [st.dispute] : [] });
+    return json({ error: {} }, 404);
+  }) as unknown as typeof fetch;
+  return { st, fetchImpl };
+}
+let evSeq = 0;
+const stripeEvent = (type: string, object: unknown, createdS: number, livemode = false): Ev =>
+  ({ object: "event", id: `evt_cu_${String(++evSeq).padStart(4, "0")}`, type, created: createdS, livemode, data: { object } }) as Ev;
+const cursorRow = () => one<Row>(`select * from public.billing_event_cursors where provider = 'stripe' and environment = 'test'`);
+
+async function stripeCatchupFixture(subId: string) {
+  const KEY = "sk_test_" + "a".repeat(24);
+  await su(`insert into public.billing_provider_prices (provider, environment, plan_code, billing_interval, provider_price_id, active)
+    values ('stripe', 'test', 'test_pro', 'month', 'price_test_pro_m', true) on conflict do nothing`);
+  await su(`update public.billing_runtime_config set web_provider = 'stripe'`);
+  await su(`delete from public.billing_event_cursors`);
+  const co = await newCompany({ trialEnded: true });
+  const checkout = String(((await rpcAs(co.owner, "esblu_billing_create_checkout_intent", ["test_pro", "month"])) as Row).checkout_id);
+  const nowS = Math.floor(Date.now() / 1000);
+  const sub: Row = {
+    object: "subscription", id: subId, customer: `cus_${subId}`, status: "active", cancel_at_period_end: false, cancel_at: null, canceled_at: null, ended_at: null,
+    metadata: { esblu_checkout_id: checkout }, items: { data: [{ id: "si_1", price: { id: "price_test_pro_m" }, current_period_start: nowS - 86400, current_period_end: nowS + 29 * 86400 }] },
+    latest_invoice: `in_${subId}`,
+  };
+  const be = stripeBackend(sub);
+  let wall = Date.now();
+  const stripe = new StripeTestProvider({ secretKey: KEY, webhookSecret: "whsec_" + "b".repeat(32), fetchImpl: be.fetchImpl, now: () => new Date((wall += 1000)) });
+  // Nákup dorazil webhookom normálne (udalosť je aj v zozname /v1/events, ako u Stripe).
+  const created = stripeEvent("checkout.session.completed", { object: "checkout.session", id: `cs_${subId}`, mode: "subscription", subscription: subId, client_reference_id: checkout, metadata: { esblu_checkout_id: checkout } }, nowS - 60);
+  be.st.events.push(created);
+  const raw = JSON.stringify(created);
+  const ts = Math.floor(Date.now() / 1000);
+  const r = await processWebhook(stripe, raw, new Headers({ "stripe-signature": signTimestamped(raw, "whsec_" + "b".repeat(32), ts) }), serviceDb);
+  assert.equal(r.outcome, "applied", JSON.stringify(r));
+  return { co, be, stripe, nowS };
+}
+const catchup = (stripe: StripeTestProvider, opts = {}) => runEventCatchup(serviceDb, stripe, stripe, { timeBudgetMs: 60_000, ...opts });
+
+await check("stripe-catchup: ÚPLNE chýbajúci webhook plnej refundácie → doťahovanie ho spracuje (refunded, ukončené u Stripe, bez prístupu); opakovaný beh nič nezmení", async () => {
+  const { co, be, stripe, nowS } = await stripeCatchupFixture("sub_cu_refund");
+  try {
+    assert.equal((await ent(co.owner, "voice")).active, true);
+    const first = await catchup(stripe);
+    assert.equal(first.result, "ok", JSON.stringify(first));
+    assert.equal(first.bootstrap, true, "prvý beh = bootstrap okna");
+    assert.equal(first.outcomes.duplicate, 1, "nákup už spracovaný webhookom → duplicate");
+    be.st.charge = { ...be.st.charge, amount_refunded: 1590, refunded: true };
+    be.st.events.push(stripeEvent("charge.refunded", be.st.charge, nowS + 10)); // webhook NEPRIŠIEL
+    const second = await catchup(stripe);
+    assert.equal(second.result, "ok", JSON.stringify(second));
+    assert.equal(second.bootstrap, false, "pokračuje od kurzora (ending_before)");
+    assert.equal(second.outcomes.applied, 1);
+    assert.equal((await accountOf(co)).status, "refunded");
+    assert.equal((await ent(co.owner, "voice")).active, false);
+    assert.equal(be.st.deletes, 1, "predplatné ukončené u Stripe → žiadne ďalšie účtovanie");
+    const cur = await cursorRow();
+    assert.equal(cur.last_event_id, be.st.events[be.st.events.length - 1].id);
+    assert.equal(cur.lease_owner, null);
+    assert.equal(cur.consecutive_failures, 0);
+    const third = await catchup(stripe);
+    assert.equal(third.processed, 0, "nič nové");
+    assert.equal((await accountOf(co)).status, "refunded");
+    // oneskorený webhook tej istej refundácie (Stripe retry po obnove endpointu) → duplicate
+    const late = JSON.stringify(be.st.events[be.st.events.length - 1]);
+    const ts = Math.floor(Date.now() / 1000);
+    const r = await processWebhook(stripe, late, new Headers({ "stripe-signature": signTimestamped(late, "whsec_" + "b".repeat(32), ts) }), serviceDb);
+    assert.equal(r.outcome, "duplicate");
+    // Stripe po ukončení pošle deleted (canceled) → refunded ostáva, prístup sa neobnoví
+    be.st.events.push(stripeEvent("customer.subscription.deleted", be.st.sub, nowS + 20));
+    await catchup(stripe);
+    assert.equal((await accountOf(co)).status, "refunded");
+    assert.equal((await ent(co.owner, "voice")).active, false);
+  } finally {
+    await su(`update public.billing_runtime_config set web_provider = 'fake'`);
+  }
+});
+
+await check("stripe-catchup: prehraný spor bez webhooku → revoked + ukončenie; oneskorená refundácia neskôr nič neoživí", async () => {
+  const { co, be, stripe, nowS } = await stripeCatchupFixture("sub_cu_dispute");
+  try {
+    await catchup(stripe);
+    be.st.charge = { ...be.st.charge, disputed: true };
+    be.st.dispute = { object: "dispute", id: "dp_cu_1", charge: "ch_cu_1", status: "lost" };
+    be.st.events.push(stripeEvent("charge.dispute.closed", be.st.dispute, nowS + 10));
+    const r = await catchup(stripe);
+    assert.equal(r.outcomes.applied, 1, JSON.stringify(r));
+    assert.equal((await accountOf(co)).status, "revoked");
+    assert.equal((await ent(co.owner, "voice")).active, false);
+    assert.equal(be.st.deletes, 1);
+    be.st.charge = { ...be.st.charge, amount_refunded: 1590, refunded: true };
+    be.st.events.push(stripeEvent("charge.refunded", be.st.charge, nowS + 30));
+    await catchup(stripe);
+    assert.equal((await accountOf(co)).status, "revoked", "revoked > refunded");
+    assert.equal((await ent(co.owner, "voice")).active, false);
+  } finally {
+    await su(`update public.billing_runtime_config set web_provider = 'fake'`);
+  }
+});
+
+await check("stripe-catchup: výpadok Stripe API — /events 500 → chyba, kurzor sa neposunie; výpadok uprostred (stav predplatného 500) → stop pred udalosťou, ďalší beh pokračuje", async () => {
+  const { co, be, stripe, nowS } = await stripeCatchupFixture("sub_cu_outage");
+  try {
+    await catchup(stripe);
+    const before = await cursorRow();
+    be.st.fail.events = 1;
+    be.st.events.push(stripeEvent("customer.subscription.updated", be.st.sub, nowS + 5));
+    const down = await catchup(stripe);
+    assert.equal(down.result, "error");
+    const afterDown = await cursorRow();
+    assert.equal(afterDown.last_event_id, before.last_event_id, "kurzor bez zmeny");
+    assert.equal(afterDown.consecutive_failures, 1);
+    assert.equal(afterDown.lease_owner, null, "lease uvoľnený");
+    be.st.sub = { ...be.st.sub, cancel_at_period_end: true };
+    be.st.events.push(stripeEvent("customer.subscription.updated", be.st.sub, nowS + 6));
+    be.st.fail.sub = 1; // prvá udalosť: GET subscription 500
+    const mid = await catchup(stripe);
+    assert.equal(mid.result, "error");
+    assert.equal(mid.processed, 0);
+    assert.equal((await cursorRow()).last_event_id, before.last_event_id, "udalosť sa zopakuje");
+    const ok = await catchup(stripe);
+    assert.equal(ok.result, "ok", JSON.stringify(ok));
+    assert.equal(ok.processed, 2);
+    assert.equal((await accountOf(co)).cancel_at_period_end, true);
+    assert.equal((await cursorRow()).consecutive_failures, 0);
+  } finally {
+    await su(`update public.billing_runtime_config set web_provider = 'fake'`);
+  }
+});
+
+await check("stripe-catchup: stránkovanie, limit na beh (pokračovanie po prerušení), kurzor mimo retencie → bootstrap okna", async () => {
+  const { be, stripe, nowS } = await stripeCatchupFixture("sub_cu_pages");
+  try {
+    await catchup(stripe);
+    be.st.pageSize = 2;
+    for (let i = 0; i < 7; i++) be.st.events.push(stripeEvent("customer.subscription.updated", be.st.sub, nowS + 100 + i));
+    const part = await catchup(stripe, { maxEvents: 3 });
+    assert.equal(part.result, "partial", JSON.stringify(part));
+    assert.equal(part.processed, 3, JSON.stringify(part));
+    const rest = await catchup(stripe);
+    assert.equal(rest.result, "ok", JSON.stringify(rest));
+    assert.equal(rest.processed, 4, "pokračuje presne za poslednou spracovanou udalosťou " + JSON.stringify(rest));
+    assert.equal((await cursorRow()).last_event_id, be.st.events[be.st.events.length - 1].id, "kurzor na poslednej");
+    // kurzor zmizol (staršie ako retencia Stripe) → bootstrap, výsledok to signalizuje
+    await su(`update public.billing_event_cursors set last_event_id = 'evt_gone_long_ago'`);
+    be.st.events.push(stripeEvent("customer.subscription.updated", be.st.sub, nowS + 200));
+    const boot = await catchup(stripe);
+    assert.equal(boot.cursorExpired, true, JSON.stringify(boot));
+    assert.equal(boot.bootstrap, true);
+    assert.ok((boot.outcomes.duplicate ?? 0) >= 1, "staršie udalosti z okna = duplicate (dedupe podľa ID)");
+    assert.equal((await cursorRow()).last_error_code, "CURSOR_EXPIRED", JSON.stringify(await cursorRow()));
+  } finally {
+    await su(`update public.billing_runtime_config set web_provider = 'fake'`);
+  }
+});
+
+await check("stripe-catchup: súbeh — dva behy naraz (lease: jeden busy); rovnaká udalosť webhookom aj doťahovaním naraz → jedno spracovanie", async () => {
+  const { co, be, stripe, nowS } = await stripeCatchupFixture("sub_cu_race");
+  try {
+    await catchup(stripe);
+    be.st.sub = { ...be.st.sub, cancel_at_period_end: true };
+    const ev = stripeEvent("customer.subscription.updated", be.st.sub, nowS + 10);
+    be.st.events.push(ev);
+    const raw = JSON.stringify(ev);
+    const ts = Math.floor(Date.now() / 1000);
+    const [a, b, w] = await Promise.all([
+      catchup(stripe),
+      catchup(stripe),
+      processWebhook(stripe, raw, new Headers({ "stripe-signature": signTimestamped(raw, "whsec_" + "b".repeat(32), ts) }), serviceDb),
+    ]);
+    const results = [a.result, b.result].sort();
+    assert.ok(results.includes("busy") || (a.processed + b.processed) <= 1, JSON.stringify({ a, b }));
+    const applied = [a.outcomes.applied ?? 0, b.outcomes.applied ?? 0, w.outcome === "applied" ? 1 : 0].reduce((x, y) => x + y, 0);
+    assert.equal(applied, 1, `udalosť spracovaná práve raz ${JSON.stringify({ a, b, w })}`);
+    const n = Number((await one<{ n: number }>(`select count(*)::int n from public.billing_events where provider_event_id = '${ev.id}'`)).n);
+    assert.equal(n, 1);
+    assert.equal((await accountOf(co)).cancel_at_period_end, true);
+  } finally {
+    await su(`update public.billing_runtime_config set web_provider = 'fake'`);
+  }
+});
+
+await check("stripe-catchup: iný Stripe účet → ACCOUNT_MISMATCH (nič sa nespracuje); live udalosť sa nikdy nespracuje; klient nemá prístup ku kurzoru ani RPC", async () => {
+  const { co, be, stripe, nowS } = await stripeCatchupFixture("sub_cu_acct");
+  try {
+    await catchup(stripe);
+    be.st.acct = "acct_OTHERSANDBOX9";
+    be.st.charge = { ...be.st.charge, amount_refunded: 1590, refunded: true };
+    be.st.events.push(stripeEvent("charge.refunded", be.st.charge, nowS + 10));
+    const r = await catchup(stripe);
+    assert.equal(r.result, "account_mismatch");
+    assert.equal(r.processed, 0);
+    assert.equal((await accountOf(co)).status, "active", "udalosť z cudzieho účtu sa nespracovala");
+    assert.equal((await cursorRow()).last_error_code, "ACCOUNT_MISMATCH");
+    be.st.acct = "acct_TESTCATCHUP01";
+    be.st.events.pop();
+    be.st.charge = { ...be.st.charge, amount_refunded: 0, refunded: false };
+    be.st.events.push(stripeEvent("charge.refunded", { ...be.st.charge, amount_refunded: 1590, refunded: true }, nowS + 11, true));
+    const live = await catchup(stripe);
+    assert.equal(live.outcomes.rejected, 1);
+    assert.equal((await accountOf(co)).status, "active", "live udalosť ignorovaná");
+    for (const uid of [co.owner, co.emp]) {
+      await fails(() => as(uid, () => db.query(`select * from public.billing_event_cursors`)));
+      await fails(() => as(uid, () => db.query(`select public.esblu_billing_event_cursor_claim('stripe', 'test', 'acct_X', gen_random_uuid(), 60)`)));
+    }
+  } finally {
+    await su(`update public.billing_runtime_config set web_provider = 'fake'`);
+  }
+});
+
+await check("stripe-catchup: reconciliation bez udalostí (výpadok dlhší ako retencia) odhalí plnú refundáciu aj prehraný spor z platby aktuálnej faktúry", async () => {
+  for (const kind of ["refund", "dispute"] as const) {
+    const { co, be, stripe } = await stripeCatchupFixture(`sub_cu_rec_${kind}`);
+    try {
+      await su(`update public.billing_reconciliation set next_check_at = now() + interval '1 day'`);
+      await su(`update public.billing_reconciliation set next_check_at = now() - interval '1 minute', last_checked_at = null where account_id = '${(await accountOf(co)).id}'`);
+      if (kind === "refund") be.st.charge = { ...be.st.charge, amount_refunded: 1590, refunded: true };
+      else { be.st.charge = { ...be.st.charge, disputed: true }; be.st.dispute = { object: "dispute", id: "dp_r", charge: "ch_cu_1", status: "lost" }; }
+      const accId = String((await accountOf(co)).id);
+      const out = await runReconciliation(serviceDb, { stripe: providerReconcileSource(stripe) }, { limit: 50 });
+      const mine = out.results.find((x) => x.accountId === accId);
+      assert.equal(mine?.result, "corrected", JSON.stringify(out));
+      assert.equal((await accountOf(co)).status, kind === "refund" ? "refunded" : "revoked");
+      assert.equal((await ent(co.owner, "voice")).active, false);
+      assert.equal(be.st.deletes, 1, "ukončené u Stripe hneď");
+      await su(`update public.billing_reconciliation set next_check_at = now() - interval '1 minute', last_checked_at = null where account_id = '${(await accountOf(co)).id}'`);
+      const again = await runReconciliation(serviceDb, { stripe: providerReconcileSource(stripe) }, { limit: 50 });
+      assert.equal(again.results.find((x) => x.accountId === accId)?.result, "in_sync", "opakovaná reconciliation nič nemení");
+      assert.equal(be.st.deletes, 1);
+      assert.equal((await ent(co.owner, "voice")).active, false, "prístup sa neobnoví");
+    } finally {
+      await su(`update public.billing_runtime_config set web_provider = 'fake'`);
+    }
+  }
+});
+
+await check("stripe-catchup: migrácia idempotentná a rollback čistý", async () => {
+  await serialized(() => db.exec(read(CATCHUP)));
+  await serialized(() => db.exec(read(CATCHUP_ROLLBACK)));
+  await fails(() => su(`select * from public.billing_event_cursors`), /does not exist/);
+  await serialized(() => db.exec(read(CATCHUP)));
+  assert.equal(Number((await one<{ n: number }>(`select count(*)::int n from public.billing_event_cursors`)).n), 0);
 });
 
 console.log(`\nsubscriptions-lifecycle-db: ${passed} passed, ${failed} failed`);

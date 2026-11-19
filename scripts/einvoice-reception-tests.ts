@@ -10,9 +10,13 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { createPartnerHarness } from "./einvoice-partner-harness.ts";
 import { createFakeSandbox } from "./einvoice-partner-fake-sandbox.ts";
 import { EfakturaSkProvider } from "../lib/einvoice/provider/efaktura-sk.ts";
+import { EinvoiceProviderError } from "../lib/einvoice/provider/types.ts";
+import { changeMandate } from "../lib/einvoice/ui/mandate-server.ts";
 import { enrollReception, loadReception, parseEnrollBody } from "../lib/einvoice/ui/reception-server.ts";
 import { classifyAccessError, loadAccessFlags, type RpcLike } from "../lib/einvoice/ui/access.ts";
 import { accessFailure, loadAccessResult } from "../lib/einvoice/ui/summary-server.ts";
+import { EINVOICE_MANDATE_STATEMENT_VERSION } from "../lib/einvoice/mandate-statement.ts";
+import { mandateStatement, type MandateStore } from "../lib/einvoice/mandate.ts";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (p: string) => readFileSync(path.join(ROOT, p), "utf8");
@@ -42,19 +46,23 @@ const CODE_OK = "a1b2c3d4e5";
 const CODE_BAD = "000000000000dead";
 const CODE_SENDONLY = "000000000000beef";
 
-await check("telo: presne {verification_code, confirm_enroll:true}; formát hex; kód sa nevráti v chybe", () => {
-  assert.deepEqual(parseEnrollBody({ verification_code: "a1b2", confirm_enroll: true }), { ok: true, code: "a1b2" });
-  assert.deepEqual(parseEnrollBody({ verification_code: "a1 b2", confirm_enroll: true }), { ok: true, code: "a1b2" });
-  assert.equal((parseEnrollBody({ verification_code: "a1b2", confirm_enroll: true, company_id: "x" }) as { code: string }).code, "INVALID_BODY");
-  assert.equal((parseEnrollBody({ verification_code: "a1b2", confirm_enroll: "true" }) as { code: string }).code, "CONFIRMATION_REQUIRED");
-  assert.equal((parseEnrollBody({ verification_code: "zz-not-hex", confirm_enroll: true }) as { code: string }).code, "INVALID_CODE_FORMAT");
+const V = EINVOICE_MANDATE_STATEMENT_VERSION;
+await check("telo: presne {verification_code, confirm_enroll:true, mandate_version}; formát hex; kód sa nevráti v chybe", () => {
+  assert.deepEqual(parseEnrollBody({ verification_code: "a1b2", confirm_enroll: true, mandate_version: V }), { ok: true, code: "a1b2", mandateVersion: V });
+  assert.deepEqual(parseEnrollBody({ verification_code: "a1 b2", confirm_enroll: true, mandate_version: V }), { ok: true, code: "a1b2", mandateVersion: V });
+  assert.equal((parseEnrollBody({ verification_code: "a1b2", confirm_enroll: true, mandate_version: V, company_id: "x" }) as { code: string }).code, "INVALID_BODY");
+  assert.equal((parseEnrollBody({ verification_code: "a1b2", confirm_enroll: true }) as { code: string }).code, "INVALID_BODY", "bez verzie poverenia");
+  assert.equal((parseEnrollBody({ verification_code: "a1b2", confirm_enroll: "true", mandate_version: V }) as { code: string }).code, "CONFIRMATION_REQUIRED");
+  assert.equal((parseEnrollBody({ verification_code: "a1b2", confirm_enroll: true, mandate_version: "old-v0" }) as { code: string }).code, "MANDATE_STATEMENT_OUTDATED");
+  assert.equal((parseEnrollBody({ verification_code: "zz-not-hex", confirm_enroll: true, mandate_version: V }) as { code: string }).code, "INVALID_CODE_FORMAT");
   assert.equal((parseEnrollBody([]) as { code: string }).code, "INVALID_BODY");
-  assert.ok(!JSON.stringify(parseEnrollBody({ verification_code: "SECRETXYZ", confirm_enroll: true })).includes("SECRETXYZ"));
+  assert.ok(!JSON.stringify(parseEnrollBody({ verification_code: "SECRETXYZ", confirm_enroll: true, mandate_version: V })).includes("SECRETXYZ"));
 });
 
 const h = await createPartnerHarness();
 const CA = "a2000000-0000-4000-8000-0000000000aa";
 const CB = "b2000000-0000-4000-8000-0000000000bb";
+const CC = "c2000000-0000-4000-8000-0000000000cc";
 const U = {
   owner: "12000000-0000-4000-8000-000000000001",
   adminFin: "12000000-0000-4000-8000-000000000002",
@@ -62,20 +70,23 @@ const U = {
   employee: "12000000-0000-4000-8000-000000000004",
   accountant: "12000000-0000-4000-8000-000000000005",
   otherOwner: "22000000-0000-4000-8000-000000000001",
+  ownerC: "42000000-0000-4000-8000-000000000001",
 };
 await h.exec(`
   insert into auth.users (id) values ${Object.values(U).map((u) => `('${u}')`).join(", ")};
-  insert into public.companies (id, name) values ('${CA}', 'A'), ('${CB}', 'B');
+  insert into public.companies (id, name) values ('${CA}', 'A'), ('${CB}', 'B'), ('${CC}', 'C');
   insert into public.company_members (company_id, user_id, role, permissions) values
     ('${CA}', '${U.owner}', 'owner', '{}'),
     ('${CA}', '${U.adminFin}', 'admin', '{"finance":{"view":true,"manage":true}}'),
     ('${CA}', '${U.admin}', 'admin', '{}'),
     ('${CA}', '${U.employee}', 'employee', '{"finance":{"view":true,"manage":true}}'),
     ('${CA}', '${U.accountant}', 'accountant', '{}'),
-    ('${CB}', '${U.otherOwner}', 'owner', '{}');
+    ('${CB}', '${U.otherOwner}', 'owner', '{}'),
+    ('${CC}', '${U.ownerC}', 'owner', '{}');
   insert into public.company_billing_profile (company_id, legal_name, ico, dic, ic_dph, address_line1, city, postal_code, country_code)
     values ('${CA}', 'Recepcia A s.r.o.', '35759500', '2021111111', 'SK2021111111', 'Ulica 1', 'Bratislava', '81101', 'SK'),
-           ('${CB}', 'Recepcia B s.r.o.', '36421928', '2022222220', 'SK2022222220', 'Ulica 2', 'Košice', '04001', 'SK');
+           ('${CB}', 'Recepcia B s.r.o.', '36421928', '2022222220', 'SK2022222220', 'Ulica 2', 'Košice', '04001', 'SK'),
+           ('${CC}', 'Recepcia C s.r.o.', '47111222', '2023333330', 'SK2023333330', 'Ulica 3', 'Žilina', '01001', 'SK');
 `);
 
 const fake = createFakeSandbox();
@@ -86,19 +97,25 @@ const access = (over: Partial<{ entitlementActive: boolean; rolloutEnabled: bool
   return { ok: true as const, financeView: v.data === true, access: { financeManage: m.data === true, entitlementActive: true, providerConfigured: true, rolloutEnabled: true, ...over } };
 };
 let providerCalls = 0;
+let mandateStore: MandateStore | null = h.mandates;
+const STATEMENT = mandateStatement("sk");
+let providerOverride: (EfakturaSkProvider & Record<string, unknown>) | null = null;
 const deps = (uid: string, over = {}) => ({
   db: h.userDb(uid),
   access: access(over),
   environment: "sandbox" as const,
   userId: uid,
   limiter: () => h.limiter,
+  mandates: () => mandateStore,
+  statement: STATEMENT,
+  evidence: () => ({ requestId: "req-test-1", ipSha256: "1".repeat(64), userAgentSha256: "2".repeat(64) }),
   onboarding: () => {
     providerCalls++;
-    return { store: h.onboarding, provider, environment: "sandbox" as const };
+    return { store: h.onboarding, provider: providerOverride ?? provider, environment: "sandbox" as const };
   },
 });
 const orgRow = async (c: string) => (await h.sql<Record<string, unknown>>("select * from public.einvoice_organizations where company_id = $1", [c])).rows[0] ?? null;
-const body = (code: string) => ({ verification_code: code, confirm_enroll: true });
+const body = (code: string) => ({ verification_code: code, confirm_enroll: true, mandate_version: V });
 
 await check("employee (aj s finance flagmi), admin bez financií → 403, poskytovateľ sa nevolá, nič sa nezapíše", async () => {
   for (const uid of [U.employee, U.admin]) {
@@ -121,6 +138,7 @@ await check("bez nároku / rolloutu / poskytovateľa → 403 / 503 bez volania p
 await check("neplatné telo → 400 PRED kontrolou oprávnení aj poskytovateľom", async () => {
   const before = providerCalls;
   assert.equal((await enrollReception(deps(U.employee), { verification_code: CODE_OK })).status, 400);
+  assert.equal((await enrollReception(deps(U.owner), { verification_code: CODE_OK, confirm_enroll: true, mandate_version: "efaktura-mandate-old" })).status, 409, "zastaraný text poverenia");
   assert.equal((await enrollReception(deps(U.owner), { verification_code: "xyz!", confirm_enroll: true })).status, 400);
   assert.equal(providerCalls, before);
 });
@@ -142,6 +160,66 @@ await check("neplatný FS kód (owner) → 422, stav failed, príjem neaktívny;
   assert.equal((await orgRow(CA))?.reception_status, "failed");
   assert.equal(await orgRow(CB), null, "iná firma bez zmeny");
 });
+await check("mandát: neúspešný enroll zapísal udelenie (snapshot, hash textu, dôkazy) a hneď ho ukončil (system); kód nikde", async () => {
+  const rows = (await h.sql<Record<string, unknown>>("select * from public.einvoice_mandates where company_id = $1 order by granted_at", [CA])).rows;
+  assert.ok(rows.length >= 1);
+  const m = rows[rows.length - 1];
+  assert.equal(m.granted_by_user_id, U.owner);
+  assert.equal(m.granted_by_role, "owner");
+  assert.equal(m.statement_version, V);
+  assert.equal(m.statement_sha256, STATEMENT.sha256);
+  assert.equal(m.statement_locale, "sk");
+  assert.equal(m.request_id, "req-test-1");
+  assert.equal(m.effective_at, null);
+  assert.equal(m.revoked_by_kind, "system");
+  assert.equal(m.revocation_reason_code, "EINVOICE_ENROLL_TOKEN_INVALID");
+  const dump = JSON.stringify(rows);
+  for (const c of [CODE_OK, CODE_BAD, CODE_SENDONLY]) assert.ok(!dump.includes(c));
+});
+await check("mandát: bez zápisu dôkazu sa enroll nevykoná (500 MANDATE_RECORD_FAILED, poskytovateľ sa nevolá)", async () => {
+  await h.exec("delete from public.einvoice_enroll_attempts");
+  const before = fake.requests.filter((r) => r.path === "/v1/agent/peppol/enroll").length;
+  mandateStore = { ...h.mandates, grant: async () => { throw new Error("DB down"); } };
+  try {
+    const r = await enrollReception(deps(U.owner), body(CODE_OK));
+    assert.equal(r.status, 500);
+    assert.equal((r.body as { code: string }).code, "MANDATE_RECORD_FAILED");
+  } finally {
+    mandateStore = h.mandates;
+  }
+  assert.equal(fake.requests.filter((r) => r.path === "/v1/agent/peppol/enroll").length, before, "enroll sa nevolal");
+});
+await check("text poverenia DRAFT: enroll v live → 409 MANDATE_STATEMENT_NOT_APPROVED bez zápisu mandátu a bez volania poskytovateľa", async () => {
+  const before = { calls: providerCalls, http: fake.requests.length, m: (await h.sql("select id from public.einvoice_mandates")).rows.length };
+  const r = await enrollReception({ ...deps(U.owner), environment: "live" as const }, body(CODE_OK));
+  assert.deepEqual([r.status, (r.body as { code: string }).code], [409, "MANDATE_STATEMENT_NOT_APPROVED"]);
+  assert.equal(providerCalls, before.calls);
+  assert.equal(fake.requests.length, before.http);
+  assert.equal((await h.sql("select id from public.einvoice_mandates")).rows.length, before.m);
+});
+await check("výpadok poskytovateľa pri enroll (503, retryable): udelenie zapísané a ukončené (system), stav org nezmenený, odosielanie blokované", async () => {
+  const orgBefore = await orgRow(CA);
+  const enrollCallsBefore = fake.requests.filter((r) => r.path === "/v1/agent/peppol/enroll").length;
+  providerOverride = Object.assign(Object.create(provider), {
+    enrollPeppol: async () => { throw new EinvoiceProviderError("EINVOICE_PROVIDER_UNAVAILABLE", "503", true); },
+  });
+  let r;
+  try {
+    r = await enrollReception(deps(U.owner), body(CODE_OK));
+  } finally {
+    providerOverride = null;
+  }
+  assert.equal(r.status, 503, JSON.stringify(r.body));
+  assert.equal((r.body as { code: string }).code, "EINVOICE_PROVIDER_UNAVAILABLE");
+  assert.equal(fake.requests.filter((x) => x.path === "/v1/agent/peppol/enroll").length, enrollCallsBefore, "sieťová chyba nezmenila nič u poskytovateľa");
+  const after = await orgRow(CA);
+  assert.deepEqual([after?.reception_status, after?.reception_error_code, after?.provider_org_id], [orgBefore?.reception_status, orgBefore?.reception_error_code, orgBefore?.provider_org_id], "503 nemení stav org");
+  const [m] = (await h.sql<Record<string, unknown>>("select * from public.einvoice_mandates where company_id = $1 order by granted_at desc, created_at desc limit 1", [CA])).rows;
+  assert.deepEqual([m.effective_at, m.revoked_by_kind, m.revocation_reason_code], [null, "system", "EINVOICE_PROVIDER_UNAVAILABLE"]);
+  const eff = (await h.sql<{ e: boolean }>("select public.esblu_einvoice_mandate_effective($1, 'sandbox', 'send') e", [CA])).rows[0].e;
+  assert.equal(eff, false, "bez účinného mandátu sa nič neodošle");
+  // nasledujúci test = opakovanie (retry) tou istou firmou → ENROLLED + nový účinný mandát
+});
 await check("platný kód (admin s finance.manage) → 200 ENROLLED, príjem aj odosielanie aktívne", async () => {
   const r = await enrollReception(deps(U.adminFin), body(CODE_OK));
   assert.equal(r.status, 200, JSON.stringify(r.body));
@@ -151,6 +229,16 @@ await check("platný kód (admin s finance.manage) → 200 ENROLLED, príjem aj 
   const g = await loadReception(deps(U.accountant));
   assert.equal((g.body as { reception: { state: string } }).reception.state, "active");
 });
+await check("mandát: úspešný enroll → účinný mandát send+receive so SHA-256 odpovede poskytovateľa; snapshot udeľujúceho", async () => {
+  const [m] = (await h.sql<Record<string, unknown>>("select * from public.einvoice_mandates where company_id = $1 and effective_at is not null", [CA])).rows;
+  assert.ok(m, "účinný mandát existuje");
+  assert.deepEqual(m.effective_scope, ["send", "receive"]);
+  assert.equal(m.granted_by_user_id, U.adminFin);
+  assert.equal(m.granted_by_role, "admin");
+  assert.equal(m.provider_outcome, "ENROLL_ENROLLED");
+  assert.match(String(m.provider_response_sha256), /^[0-9a-f]{64}$/);
+  assert.equal(m.revoked_at, null);
+});
 await check("send_only (iná firma B, vlastný owner) → 200 SEND_ONLY: odosielanie áno, príjem nie; A nevidí B", async () => {
   const r = await enrollReception(deps(U.otherOwner), body(CODE_SENDONLY));
   assert.equal(r.status, 200, JSON.stringify(r.body));
@@ -159,6 +247,36 @@ await check("send_only (iná firma B, vlastný owner) → 200 SEND_ONLY: odosiel
   assert.deepEqual([b.reception.state, b.reception.receivingActive, b.reception.sendingEnabled, b.reception.errorCode], ["send_only", false, true, "PARTICIPANT_HELD_ELSEWHERE"]);
   const ga = await loadReception(deps(U.owner));
   assert.equal((ga.body as { reception: { state: string } }).reception.state, "active", "A vidí iba svoj stav");
+});
+await check("mandát: send_only → účinný iba 'send' (príjem drží iný poskytovateľ)", async () => {
+  const [m] = (await h.sql<Record<string, unknown>>("select effective_scope, provider_outcome from public.einvoice_mandates where company_id = $1 and effective_at is not null", [CB])).rows;
+  assert.deepEqual(m, { effective_scope: ["send"], provider_outcome: "ENROLL_SEND_ONLY" });
+});
+await check("enroll OK, ale zápis potvrdenia mandátu zlyhá → 200 + mandate RECORD_FAILED; odosielanie blokované; regrant (/api/einvoice/mandate) to opraví", async () => {
+  mandateStore = { ...h.mandates, confirm: async () => { throw new Error("DB down"); } };
+  let r;
+  try {
+    r = await enrollReception(deps(U.ownerC), body(CODE_OK));
+  } finally {
+    mandateStore = h.mandates;
+  }
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.deepEqual([(r.body as { code: string }).code, (r.body as { mandate?: string }).mandate], ["ENROLLED", "RECORD_FAILED"]);
+  const eff = async () => (await h.sql<{ e: boolean }>("select public.esblu_einvoice_mandate_effective($1, 'sandbox', 'send') e", [CC])).rows[0].e;
+  assert.equal(await eff(), false, "enroll prebehol, ale bez účinného mandátu sa neodosiela");
+  const pending = (await h.sql<Record<string, unknown>>("select effective_at, revoked_at, provider_org_id from public.einvoice_mandates where company_id = $1", [CC])).rows;
+  assert.equal(pending.length, 1);
+  assert.deepEqual([pending[0].effective_at, pending[0].revoked_at], [null, null]);
+  assert.equal(pending[0].provider_org_id, (await orgRow(CC))?.provider_org_id, "mandát je viazaný na org poskytovateľa firmy");
+  const g = await changeMandate({
+    db: h.userDb(U.ownerC), access: access(), userId: U.ownerC, runtime: { provider, environment: "sandbox" },
+    store: () => h.mandates, statement: STATEMENT, evidence: () => ({ requestId: "req-regrant", ipSha256: null, userAgentSha256: null }),
+  }, { action: "grant", confirm_mandate: true, mandate_version: V });
+  assert.deepEqual([g.status, g.body.code], [200, "GRANTED"], JSON.stringify(g.body));
+  assert.equal(await eff(), true);
+  const [m] = (await h.sql<Record<string, unknown>>("select grant_channel, provider_outcome, provider_org_id from public.einvoice_mandates where company_id = $1 and effective_at is not null", [CC])).rows;
+  assert.deepEqual([m.grant_channel, m.provider_outcome], ["regrant", "ORG_VERIFIED"]);
+  assert.equal(m.provider_org_id, (await orgRow(CC))?.provider_org_id);
 });
 await check("overovací kód sa nikde neuloží ani nezaloguje; odpoveď neobsahuje ID poskytovateľa ani participant ID", async () => {
   const dump = JSON.stringify((await h.sql("select * from public.einvoice_organizations")).rows) + JSON.stringify((await h.sql("select * from public.einvoice_webhook_events")).rows);
@@ -187,7 +305,7 @@ await check("UI: panel bez localStorage/console, input type=password + autocompl
     assert.doesNotMatch(read(f), /console\./, f);
   }
   const client = read("lib/einvoice/ui/client.ts");
-  assert.match(client, /body: \{ verification_code: verificationCode, confirm_enroll: true \}/);
+  assert.match(client, /body: \{ verification_code: verificationCode, confirm_enroll: true, mandate_version: EINVOICE_MANDATE_STATEMENT_VERSION \}/);
 });
 await check("i18n: všetky stavy príjmu majú preklad v sk / en / de", () => {
   for (const lang of ["sk", "en", "de"]) {
@@ -271,7 +389,7 @@ await check("DB (RLS): chýbajúci membership a nedostatočné financie → fina
 });
 await check("route: 401 / 403 / 503 sa prenášajú do odpovede (reception GET aj enroll)", async () => {
   for (const [kind, status] of [["unauthenticated", 401], ["forbidden", 403], ["temporary", 503]] as const) {
-    const d = { db: h.userDb(U.owner), access: async () => ({ ok: false as const, kind }), environment: "sandbox" as const, userId: U.owner, limiter: () => null, onboarding: () => null };
+    const d = { db: h.userDb(U.owner), access: async () => ({ ok: false as const, kind }), environment: "sandbox" as const, userId: U.owner, limiter: () => null, onboarding: () => null, mandates: () => null, statement: STATEMENT, evidence: () => ({ requestId: null, ipSha256: null, userAgentSha256: null }) };
     assert.equal((await loadReception(d)).status, status);
     assert.equal((await enrollReception(d, body(CODE_OK))).status, status);
   }

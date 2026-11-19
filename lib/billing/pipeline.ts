@@ -9,8 +9,11 @@
 // NEURČUJE — robí to DB z vlastných tabuliek.
 // =============================================================================
 
+import { sha256Hex } from "@/lib/billing/signature";
 import {
   BillingProviderError,
+  type BillingDocumentCapture,
+  type BillingEnvironment,
   type BillingProvider,
   type BillingProviderId,
   type NormalizedSubscriptionState,
@@ -33,6 +36,13 @@ export type PipelineOutcome =
 
 export type PipelineResult = { httpStatus: number; outcome: PipelineOutcome; code?: string };
 
+/**
+ * P4: prevádzkové signály z webhookovej cesty (ops alerty). Iba kódy — nikdy telo udalosti, podpis,
+ * identifikátory ani tajomstvá. Chyba signálu nikdy neovplyvní spracovanie udalosti.
+ */
+export type OpsSignalCode = "WEBHOOK_SIGNATURE_FAILURES" | "WEBHOOK_API_VERSION_MISMATCH";
+export type OpsSignalSink = { signal(code: OpsSignalCode): Promise<void> };
+
 type ApplyResponse = { result?: string; error?: string };
 
 function signatureFailure(error: unknown): PipelineResult | null {
@@ -42,6 +52,7 @@ function signatureFailure(error: unknown): PipelineResult | null {
     case "STALE_SIGNATURE":
     case "MALFORMED_PAYLOAD":
     case "LIVE_MODE_FORBIDDEN":
+    case "TEST_MODE_FORBIDDEN":
       return { httpStatus: 400, outcome: "rejected", code: error.code };
     case "NOT_CONFIGURED":
       return { httpStatus: 503, outcome: "rejected", code: error.code };
@@ -63,7 +74,7 @@ export function summarizeState(state: NormalizedSubscriptionState | null, reason
   };
 }
 
-async function recordEvent(db: BillingDb, event: Pick<VerifiedProviderEvent, "provider" | "environment" | "eventId" | "eventType" | "createdAt" | "payloadSha256">) {
+async function recordEvent(db: BillingDb, event: Pick<VerifiedProviderEvent, "provider" | "environment" | "eventId" | "eventType" | "createdAt"> & { payloadSha256: string | null }) {
   const { data, error } = await db.rpc("esblu_billing_record_event", {
     p_provider: event.provider,
     p_environment: event.environment,
@@ -97,15 +108,54 @@ async function applyState(db: BillingDb, eventRowId: string, state: NormalizedSu
   }
 }
 
-export async function processWebhook(provider: BillingProvider, rawBody: string, headers: Headers, db: BillingDb): Promise<PipelineResult> {
+async function emit(signals: OpsSignalSink | undefined, code: OpsSignalCode): Promise<void> {
+  if (!signals) return;
+  try {
+    await signals.signal(code);
+  } catch {
+    // monitoring nesmie zablokovať ani zmeniť spracovanie udalosti
+  }
+}
+
+export async function processWebhook(provider: BillingProvider, rawBody: string, headers: Headers, db: BillingDb, signals?: OpsSignalSink): Promise<PipelineResult> {
   // 1) podpis
   let event: VerifiedProviderEvent;
   try {
     event = await provider.verifyWebhook(rawBody, headers);
   } catch (error) {
-    return signatureFailure(error) ?? { httpStatus: 400, outcome: "rejected", code: "VERIFY_FAILED" };
+    const failure = signatureFailure(error) ?? { httpStatus: 400, outcome: "rejected" as const, code: "VERIFY_FAILED" };
+    if (failure.code === "INVALID_SIGNATURE" || failure.code === "STALE_SIGNATURE") await emit(signals, "WEBHOOK_SIGNATURE_FAILURES");
+    return failure;
   }
+  // P4: verzia webhook endpointu ≠ pripnutá verzia → alert (udalosť sa spracuje: stav sa načíta z API s pripnutou verziou).
+  if (provider.apiVersion && event.apiVersion && event.apiVersion !== provider.apiVersion) await emit(signals, "WEBHOOK_API_VERSION_MISMATCH");
+  return processVerifiedEvent(provider, event, db);
+}
 
+/** P4: zápis účtovných kópií dokladov a pozorovaní refundácií (idempotentné upserty v DB). */
+async function storeDocuments(db: BillingDb, environment: BillingEnvironment, eventId: string, capture: BillingDocumentCapture): Promise<void> {
+  for (const doc of capture.documents) {
+    const { error } = await db.rpc("esblu_billing_upsert_document", { p_environment: environment, p_event_id: eventId, p_doc: doc });
+    if (error) throw new Error("DOCUMENT_FAILED");
+  }
+  for (const refund of capture.refunds) {
+    const { error } = await db.rpc("esblu_billing_record_refund_observation", {
+      p_environment: environment,
+      p_payment_intent_id: refund.payment_intent_id,
+      p_amount_refunded_minor: refund.amount_refunded_minor,
+      p_currency: refund.currency,
+      p_observed_at: refund.observed_at,
+    });
+    if (error) throw new Error("DOCUMENT_FAILED");
+  }
+}
+
+/**
+ * Kroky 2–7 pre UŽ OVERENÚ udalosť: webhook (po podpise) aj doťahovanie zmeškaných udalostí
+ * z API providera (S12, lib/billing/event-catchup.ts) — rovnaká deduplikácia podľa ID udalosti,
+ * rovnaká normalizácia (čerstvý stav z API), rovnaká ochrana poradia a terminálnych stavov v DB.
+ */
+export async function processVerifiedEvent(provider: BillingProvider, event: VerifiedProviderEvent, db: BillingDb): Promise<PipelineResult> {
   // 2+3) dedupe + uloženie
   let recorded: { event_id: string; duplicate: boolean; status?: string };
   try {
@@ -114,6 +164,18 @@ export async function processWebhook(provider: BillingProvider, rawBody: string,
     return { httpStatus: 500, outcome: "retry", code: "RECORD_FAILED" };
   }
   if (recorded.duplicate) return { httpStatus: 200, outcome: "duplicate", code: recorded.status };
+
+  // 3b) P4: účtovná kópia dokladu (faktúra / dobropis / refundácia) PRED zmenou stavu. Zlyhanie = udalosť
+  //     `failed` (DOCUMENT_FAILED) → automatické opakovanie s backoffom (lib/billing/event-retry.ts).
+  if (provider.captureDocuments) {
+    try {
+      const capture = await provider.captureDocuments(event);
+      if (capture) await storeDocuments(db, provider.environment, event.eventId, capture);
+    } catch {
+      await db.rpc("esblu_billing_close_event", { p_event_id: recorded.event_id, p_status: "failed", p_error_code: "DOCUMENT_FAILED", p_summary: {} });
+      return { httpStatus: 500, outcome: "retry", code: "DOCUMENT_FAILED" };
+    }
+  }
 
   // 4) normalizácia
   let normalized;
@@ -157,7 +219,64 @@ export async function processWebhook(provider: BillingProvider, rawBody: string,
   }
 
   // 5+6) kanonický stav + nároky
-  return applyState(db, recorded.event_id, normalized.state);
+  const applied = await applyState(db, recorded.event_id, normalized.state);
+
+  // 7) Terminálny stav v Esblu (plná refundácia aktuálneho obdobia, prehraný spor) → ukončiť
+  //    predplatné U PROVIDERA, aby firma bez prístupu nebola ďalej účtovaná. Zlyhanie nevracia
+  //    retry (event je zapísaný); poistkou je reconciliation (účet refunded/revoked + otvorené
+  //    predplatné u providera → okamžité ukončenie).
+  if (normalized.followUp === "cancel_provider_now" && (applied.outcome === "applied" || applied.outcome === "stale")) {
+    const followUp = await cancelAtProvider(db, provider, normalized.state);
+    return { ...applied, code: followUp };
+  }
+  return applied;
+}
+
+/**
+ * Auditný záznam akcie u providera BEZ zmeny kanonického stavu (napr. terminálny `refunded`
+ * ostáva `refunded`, hoci Stripe po ukončení hlási `canceled`). Idempotentné podľa event ID.
+ */
+export async function recordProviderAudit(
+  db: BillingDb,
+  provider: { id: BillingProviderId; environment: BillingEnvironment },
+  action: string,
+  state: NormalizedSubscriptionState,
+  reason: string,
+): Promise<void> {
+  try {
+    const recorded = await recordEvent(db, {
+      provider: provider.id,
+      environment: provider.environment,
+      eventId: `audit:${action}:${state.provider_subscription_id ?? "none"}`.slice(0, 256),
+      eventType: `esblu.audit.${action}`,
+      createdAt: state.state_at,
+      payloadSha256: sha256Hex(JSON.stringify(state)),
+    });
+    if (recorded.duplicate) return;
+    await db.rpc("esblu_billing_close_event", {
+      p_event_id: recorded.event_id,
+      p_status: "ignored",
+      p_error_code: null,
+      p_summary: summarizeState(state, reason),
+    });
+  } catch {
+    // audit je best-effort; stav u providera je rozhodujúci a reconciliation ho overí znova
+  }
+}
+
+/** Okamžité ukončenie predplatného u providera + auditný záznam (stav ostáva terminálny). */
+export async function cancelAtProvider(db: BillingDb, provider: BillingProvider, state: NormalizedSubscriptionState): Promise<string> {
+  if (!provider.cancelSubscriptionNow || !state.provider_subscription_id) return "PROVIDER_CANCEL_UNSUPPORTED";
+  try {
+    const ended = await provider.cancelSubscriptionNow({
+      providerSubscriptionId: state.provider_subscription_id,
+      providerCustomerId: state.provider_customer_id,
+    });
+    await recordProviderAudit(db, { id: provider.id, environment: provider.environment }, "terminal_cancel", ended, "PROVIDER_CANCELED");
+    return "PROVIDER_CANCELED";
+  } catch {
+    return "PROVIDER_CANCEL_FAILED";
+  }
 }
 
 /**
@@ -168,7 +287,7 @@ export async function processWebhook(provider: BillingProvider, rawBody: string,
 /** Overený nákup z mobilu (StoreKit / Play) — rovnaká cesta record → apply. */
 export async function applyVerifiedStorePurchase(
   db: BillingDb,
-  provider: { id: BillingProviderId; environment: "test" },
+  provider: { id: BillingProviderId; environment: BillingEnvironment },
   eventId: string,
   state: NormalizedSubscriptionState,
   payloadSha256: string,
@@ -192,7 +311,7 @@ export async function applyVerifiedStorePurchase(
 
 export async function applyProviderState(
   db: BillingDb,
-  provider: { id: BillingProviderId; environment: "test" },
+  provider: { id: BillingProviderId; environment: BillingEnvironment },
   action: string,
   state: NormalizedSubscriptionState,
   payloadSha256: string,

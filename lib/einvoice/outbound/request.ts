@@ -8,12 +8,14 @@ import { generateUbl } from "../ubl/generate.ts";
 import type { EinvoiceEnvironment, EinvoiceProvider, PreflightIssue } from "../provider/types.ts";
 import { errorCode } from "./policy.ts";
 import { dbErrorCode, outboundUblPath, OutboundStoreError, type OutboundStore } from "./store.ts";
+import { mandateAllows } from "../mandate-statement.ts";
 
 // =============================================================================
 // E-Faktúra outbound — používateľská požiadavka „odoslať". SERVER-ONLY.
 //
 //   JWT (route) → readiness (finance.manage, nárok einvoice, organizácia,
-//   EN16931/SK pravidlá — pod RLS volajúceho) → kanonické UBL z NEMENNÉHO
+//   EN16931/SK pravidlá — pod RLS volajúceho) → rollout → účinný mandát 'send'
+//   (20261122100000) → kanonické UBL z NEMENNÉHO
 //   snapshotu → SHA-256 → overenie príjemcu u poskytovateľa → preflight →
 //   uloženie presných bajtov (cesta adresovaná obsahom, nikdy neprepisuje) →
 //   RPC esblu_einvoice_request_outbound (riadok `queued`).
@@ -83,6 +85,7 @@ function preflightIssues(issues: PreflightIssue[]): OutboundApiBody["issues"] {
 function statusForDbCode(code: string): number {
   if (code.startsWith("ENTITLEMENT_DENIED")) return 403;
   if (code === "ESBLU_EINVOICE_ROLLOUT_NOT_ENABLED") return 403;
+  if (code === "ESBLU_EINVOICE_MANDATE_REQUIRED") return 403;
   if (code === "ESBLU_FORBIDDEN_FINANCE_MANAGE_REQUIRED" || code === "ESBLU_NO_ACTIVE_COMPANY") return 403;
   if (code === "NOT_AUTHENTICATED") return 401;
   if (code === "ESBLU_INVOICE_NOT_FOUND") return 404;
@@ -150,6 +153,11 @@ export async function requestOutboundForInvoice(deps: OutboundRequestDeps, input
   const rollout = await deps.userDb.rpc("esblu_einvoice_my_rollout", { p_environment: runtime.environment });
   if (rollout.error) return { status: 500, body: { code: "QUERY_FAILED" } };
   if (rollout.data !== true) return { status: 403, body: { code: "ROLLOUT_NOT_ENABLED", readiness } };
+  // 20261122100000: elektronické poverenie (mandát) 'send' musí byť účinné — PRED akýmkoľvek
+  // volaním poskytovateľa. DB to vynúti znova (BEFORE INSERT trigger + claim). Chyba = fail closed.
+  const mandate = await deps.userDb.rpc("esblu_einvoice_my_mandate", { p_environment: runtime.environment });
+  if (mandate.error) return { status: 500, body: { code: "QUERY_FAILED" } };
+  if (!mandateAllows(mandate.data, "send")) return { status: 403, body: { code: "MANDATE_REQUIRED", readiness } };
 
   const ctx = { environment: runtime.environment, providerOrgId: org.providerOrgId };
 

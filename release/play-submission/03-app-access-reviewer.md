@@ -1,4 +1,11 @@
-# 03 — App access / reviewer balík (finálny, 2026-10-11)
+# 03 — App access / reviewer balík (finálny, 2026-10-11; aktualizované 2026-11-18)
+
+**Stav 2026-11-18 (produkcia, read-only metadáta, bez osobných údajov):** kontrolórsky účet `info+playreview@esblu.com`
+— 1 účet, e-mail potvrdený, posledné prihlásenie 18. 11. 2026; **owner** jedinej firmy Esblu Demo s.r.o.; 1 aktívny člen;
+9 ručných nárokov bez `valid_until` (invoicing, vehicles, machines, inventory, team_members 3, ai_documents 20, voice,
+voice_minutes 15, storage_mb 1024); VOP/DPA prijaté (2 riadky DPA).
+**Demo dáta reálne:** vozidlá 2, stroje 1, sklad 3, obchodní partneri 1, fakturačný profil 1 — **faktúry 0, chat 0, Inbox 0**.
+Sekcia 6 preto obsahuje **dve verzie** textu: (A) po doplnení dát podľa sekcie 4 (odporúčané), (B) podľa dnešného stavu.
 
 **Stav 2026-11-17:** účet **existuje** ako `info+playre…@esblu.com` (presná adresa v Play Console → App access), owner firmy Esblu Demo s.r.o., VOP 1.2 + DPA 1.3 prijaté, 9 ručných nárokov aktívnych, chýba druhý člen pre chat — pozri `docs/android-release-vc4-2026-11-17.md` § 4. Do App access textu (sekcia 6) vložiť skutočnú adresu, nie `play-review@esblu.com`.
 
@@ -10,7 +17,7 @@ Bez súhlasu sa nevytvára žiadny produkčný účet, firma, allowlist ani gran
 
 | Položka | Hodnota |
 |---|---|
-| Prihlásenie | `play-review@esblu.com` + heslo (e-mail/heslo, **nie** Google login) |
+| Prihlásenie | `info+playreview@esblu.com` (pôvodný návrh `play-review@esblu.com` sa nepoužil) + heslo (e-mail/heslo, **nie** Google login) |
 | 2FA | žiadne (Esblu 2FA nemá; e-mailový OTP sa pri prihlásení nevyžaduje) |
 | Rola | **owner** vo vlastnej demo firme: vidí všetky moduly, financie aj nastavenia firmy/tímu, ktoré reviewer musí otvoriť. Zrušenie účtu je v Nastaveniach pre každého používateľa; pri ownerovi preflight navyše chráni firmu (potvrdzovací text) |
 | Demo firma | **Esblu Demo s.r.o.** (fiktívna) |
@@ -148,10 +155,16 @@ Nahrať 1 fiktívny doklad (napr. vlastnoručne vytvorený PDF „Bloček – Do
 | Nastavenia | Notifikácie, Ochrana údajov, **Zrušiť účet** — iba zobraziť |
 
 ## 6. App access text pre Play Console (EN, vložiť do „Instructions")
+
+Play Console → Policy and programs → App content → **App access** → „All or some functionality is restricted“ →
+Add instructions: *Username* = `info+playreview@esblu.com`, *Password* = iba v tomto poli (zadáva vlastník),
+*Any other information* = text nižšie. Heslo nikdy nie do repozitára ani do chatu.
+
+### 6A — po doplnení demo dát (odporúčané; vlastník v appke ~20 min: 3 faktúry vrátane 1 finalizovanej, 1 doklad v Inboxe na kontrolu, pozvať 2. člena a 4 chatové správy podľa § 4)
 ```
 All functionality requires sign-in.
 On the login screen, sign in with the e-mail and password below (do not use "Continue with Google").
-E-mail: play-review@esblu.com
+E-mail: info+playreview@esblu.com
 Password: <entered only in this Play Console field>
 
 The account is the owner of a demo company ("Esblu Demo s.r.o.") with fictional sample data. Main areas (bottom navigation and "More"): Overview, Inbox (upload a document; AI-read values are always reviewed and confirmed by the user before saving), Vehicles, Machines, Inventory, Business partners, Invoices (open the finalized invoice to see its PDF), Company chat, Settings.
@@ -161,4 +174,19 @@ Account deletion is in Settings > Delete account — please do not confirm it, o
 No payments, subscriptions, bank connections or 2-factor authentication are involved.
 ```
 
-Ak hlas nie je pre demo firmu zapnutý, vetu „Voice commands…" vynechať.
+Ak hlas nie je pre demo firmu zapnutý, vetu „Voice commands…" vynechať. (2026-11-18: `voice` + 15 min je zapnutý.)
+
+### 6B — podľa dnešného stavu demo firmy (bez faktúr, Inboxu a chatu)
+```
+All functionality requires sign-in.
+On the login screen, sign in with the e-mail and password below (do not use "Continue with Google").
+E-mail: info+playreview@esblu.com
+Password: <entered only in this Play Console field>
+
+The account is the owner of a demo company ("Esblu Demo s.r.o.") with fictional sample data: Vehicles (2), Machines (1), Inventory (3) and Business partners (1).
+You can try the other areas yourself: Invoices (create an invoice for the sample partner and open its PDF), Inbox (upload any document; AI-read values are always reviewed and confirmed before saving) and Company chat (available to team members of the company).
+Voice commands: tap the microphone in the search field and say e.g. "Otvor faktúry" (open invoices). Changes requested by voice are only proposed and must be confirmed.
+Push notifications are optional (Settings > Notifications).
+Account deletion is in Settings > Delete account — please do not confirm it, otherwise this review account is permanently removed.
+No payments, subscriptions, bank connections or 2-factor authentication are involved.
+```

@@ -5,6 +5,9 @@ import { handleEinvoiceWebhook, WEBHOOK_MAX_BODY_BYTES } from "@/lib/einvoice/in
 import { createSupabaseInboundStore } from "@/lib/einvoice/inbound/supabase-store";
 import { createSupabaseOutboundStore } from "@/lib/einvoice/outbound/supabase-store";
 import { createSupabaseOpsStore } from "@/lib/einvoice/ops/supabase-store";
+import { createOpsAlertSink } from "@/lib/einvoice/ops/alert-sink";
+import { logOpsAlert } from "@/lib/ops-alert-log";
+import { createSupabaseOpsAlertStore } from "@/lib/einvoice/ops/alert-supabase-store";
 
 // =============================================================================
 // POST /api/einvoice/webhook — webhook poskytovateľa (eFaktura.sk).
@@ -74,6 +77,7 @@ export async function POST(req: Request) {
       secrets,
       nowSeconds: () => Math.floor(Date.now() / 1000),
       recordRejection: (reason) => ops.recordWebhookRejection(runtimeConfig.provider.name, runtimeConfig.environment, reason),
+      alerts: createOpsAlertSink(createSupabaseOpsAlertStore(), logOpsAlert),
     },
     {
       rawBody,

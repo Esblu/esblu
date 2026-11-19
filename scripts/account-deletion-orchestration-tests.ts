@@ -15,7 +15,7 @@ import {
   type JobPatch,
 } from "@/lib/account-deletion-orchestrator";
 import { isMissingFunctionError, subscriptionGuardCode, supabaseDeletionDeps } from "@/lib/account-deletion-deps";
-import { parseStorageTargets, type StorageTarget } from "@/lib/account-deletion-storage";
+import { parseStorageTargets, removeStorageTargets, type StorageTarget } from "@/lib/account-deletion-storage";
 
 let passed = 0;
 let failed = 0;
@@ -121,6 +121,19 @@ await check("backoff: 15 min → … → max 24 h", () => {
 await check("parseStorageTargets: iba {bucket,path} stringy, žiadne '..'", () => {
   assert.deepEqual(parseStorageTargets([{ bucket: "a", path: "x/y" }, { bucket: "a", path: "../etc" }, { bucket: 1, path: "z" }, null]), [{ bucket: "a", path: "x/y" }]);
   assert.deepEqual(parseStorageTargets("nope"), []);
+});
+await check("parseStorageTargets: účtovné kópie Esblu (billing-documents) ani e-faktúry nikdy nie sú cieľom výmazu", () => {
+  assert.deepEqual(parseStorageTargets([
+    { bucket: "billing-documents", path: "live/2026/11/invoice/in_x.pdf" },
+    { bucket: "einvoice-documents", path: "c/x.xml" },
+    { bucket: "documents", path: "c/a.pdf" },
+  ]), [{ bucket: "documents", path: "c/a.pdf" }]);
+});
+await check("removeStorageTargets: billing-documents sa nezmaže ani pri priamom volaní (obrana do hĺbky)", async () => {
+  const removed: string[] = [];
+  const fake = { storage: { from: (bucket: string) => ({ remove: async (paths: string[]) => { removed.push(...paths.map((p) => `${bucket}/${p}`)); return { data: paths, error: null }; } }) } } as never;
+  await removeStorageTargets(fake, [{ bucket: "billing-documents", path: "live/2026/11/invoice/in_x.pdf" }, { bucket: "documents", path: "c/a.pdf" }]);
+  assert.deepEqual(removed, ["documents/c/a.pdf"]);
 });
 
 // ----------------------------------------------------------------------------- Supabase deps

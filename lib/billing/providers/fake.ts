@@ -91,6 +91,12 @@ export class FakeBillingProvider implements BillingProvider {
     };
   }
 
+  /** Fake hosted checkout nemá stav u providera — zámer uzavrie DB. */
+  async expireCheckout(): Promise<"expired"> {
+    this.requireSecret();
+    return "expired";
+  }
+
   /** Simuluje dokončenú platbu: vytvorí aktívne predplatné (nie je to webhook — ten treba podpísať zvlášť). */
   async simulateCheckoutPaid(input: { checkoutId: string; providerPriceId: string; interval: "month" | "year"; customerId?: string }): Promise<NormalizedSubscriptionState> {
     const start = this.now();
@@ -140,6 +146,11 @@ export class FakeBillingProvider implements BillingProvider {
 
   cancelSubscription(ref: ProviderSubscriptionRef) {
     return this.mutate(ref, { cancel_at_period_end: true, canceled_at: this.now().toISOString() });
+  }
+
+  cancelSubscriptionNow(ref: ProviderSubscriptionRef) {
+    const now = this.now().toISOString();
+    return this.mutate(ref, { status: "canceled", cancel_at_period_end: false, canceled_at: now, ended_at: now });
   }
 
   resumeSubscription(ref: ProviderSubscriptionRef) {

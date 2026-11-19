@@ -19,7 +19,13 @@ export type StorageTarget = { bucket: string; path: string };
  * zrušiť ani nedá (20261013100000). Obrana do hĺbky: aj keby sa cieľ do jobu
  * dostal (ručná úprava, budúci kolektor), tu sa zahodí.
  */
-export const DELETION_PROTECTED_BUCKETS: ReadonlySet<string> = new Set(["einvoice-documents"]);
+/**
+ * esblu8 (2026-11-19): billing-documents = archív PDF účtovných kópií Esblu (Stripe faktúry / dobropisy,
+ * billing_invoice_documents). Sú to účtovné záznamy Esblu, nie dáta zákazníka — zrušenie účtu ani ukončenie
+ * firmy ich nikdy nemaže (vlastná retencia Esblu, PROPOSED 10 r., bez automatického mazania). DB trigger
+ * esblu_cleanup_jobs_protect_retained_storage ich (aj súbory retenčného archívu) z jobu odstráni tiež.
+ */
+export const DELETION_PROTECTED_BUCKETS: ReadonlySet<string> = new Set(["einvoice-documents", "billing-documents"]);
 
 /** Validácia jobu z DB (jsonb) — iba {bucket, path} stringy, bez prázdnych ciest. */
 export function parseStorageTargets(value: unknown): StorageTarget[] {

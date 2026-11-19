@@ -3,6 +3,7 @@ import { applyProviderState } from "@/lib/billing/pipeline";
 import { authorizeBillingCaller, billingErrorResponse, getWebBillingProvider } from "@/lib/billing/server";
 import { sha256Hex } from "@/lib/billing/signature";
 import { BillingProviderError } from "@/lib/billing/types";
+import { resolveManageProvider } from "@/lib/billing/manage-guard";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 
 // -----------------------------------------------------------------------------
@@ -35,16 +36,18 @@ export async function POST(req: Request) {
   const account = auth.data as {
     status: string;
     billing_provider: string | null;
+    provider_environment: string | null;
     provider_customer_id: string | null;
     provider_subscription_id: string | null;
     billing_interval: "month" | "year" | null;
   };
 
-  if (account.billing_provider === "apple" || account.billing_provider === "google") {
-    return Response.json({ success: false, code: "ESBLU_BILLING_MANAGE_IN_STORE", store: account.billing_provider }, { status: 409 });
+  // S15: provider iba z prostredia predplatného (test ↔ live); nesúlad = odmietnutie bez volania providera.
+  const resolved = resolveManageProvider(account, getWebBillingProvider);
+  if (!resolved.ok) {
+    return Response.json({ success: false, code: resolved.code, ...(resolved.store ? { store: resolved.store } : {}) }, { status: resolved.status });
   }
-  const provider = getWebBillingProvider(account.billing_provider);
-  if (!provider) return Response.json({ success: false, code: "ESBLU_BILLING_DISABLED" }, { status: 503 });
+  const provider = resolved.provider;
 
   try {
     if (action === "portal") {

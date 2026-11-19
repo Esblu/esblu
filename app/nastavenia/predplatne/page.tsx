@@ -53,6 +53,7 @@ const ERROR_KEYS: Record<string, string> = {
   ESBLU_BILLING_ALREADY_SUBSCRIBED: "subscription.errors.alreadySubscribed",
   ESBLU_BILLING_ACTIVE_ON_OTHER_PROVIDER: "subscription.errors.otherProvider",
   ESBLU_BILLING_RATE_LIMITED: "subscription.errors.rateLimited",
+  ESBLU_BILLING_CHECKOUT_IN_PROGRESS: "subscription.errors.checkoutInProgress",
 };
 
 const BANNER_KEYS: Record<Exclude<Banner, null>, string> = {
@@ -216,8 +217,19 @@ export default function SubscriptionPage() {
       const params = new URLSearchParams(window.location.search);
       const checkoutId = params.get("checkout_id");
       if (checkoutId) {
-        if (params.get("checkout") === "canceled") setBanner("canceled");
-        else {
+        if (params.get("checkout") === "canceled") {
+          setBanner("canceled");
+          // Zrušená platba: server expiruje reláciu u providera a uzavrie zámer, aby
+          // ďalší pokus (aj iný plán) nenarazil na rozpracovanú platbu. Chyba = nič sa nemení.
+          const headers = await authHeaders();
+          if (headers) {
+            await fetchWithTimeout(apiUrl(`/api/billing/checkout/${encodeURIComponent(checkoutId)}`), {
+              method: "POST",
+              headers,
+              body: JSON.stringify({ action: "cancel" }),
+            });
+          }
+        } else {
           // Počas čakania na webhook nesmie vzniknúť druhý checkout.
           inFlightRef.current = true;
           setBusy(true);
@@ -505,11 +517,16 @@ export default function SubscriptionPage() {
               <p className="mt-1 text-sm text-muted-esblu">
                 {t("subscription.status")}: {t(`subscription.statuses.${view.status}`, { date: fmt(view.graceUntil) })}
               </p>
+              {view.postPeriodProtection && view.accessUntil && (
+                <p className="mt-1 text-sm text-primary">{t("subscription.protectionUntil", { date: fmt(view.accessUntil) })}</p>
+              )}
               {view.canViewDetails && view.billingInterval && <p className="mt-1 text-sm text-muted-esblu">{t(`subscription.interval.${view.billingInterval}`)}</p>}
               {view.canViewDetails && view.billingProvider && <p className="mt-1 text-sm text-muted-esblu">{t(`subscription.provider.${view.billingProvider}`)}</p>}
               {view.canViewDetails && paid && view.currentPeriodEnd && (
                 <p className="mt-1 text-sm text-muted-esblu">
-                  {view.cancelAtPeriodEnd ? t("subscription.endsOn", { date: fmt(view.currentPeriodEnd) }) : t("subscription.renewsOn", { date: fmt(view.currentPeriodEnd) })}
+                  {view.scheduledEndAt
+                    ? t("subscription.endsOn", { date: fmt(view.scheduledEndAt) })
+                    : view.cancelAtPeriodEnd ? t("subscription.endsOn", { date: fmt(view.currentPeriodEnd) }) : t("subscription.renewsOn", { date: fmt(view.currentPeriodEnd) })}
                 </p>
               )}
               {!paid && view.trial.endsAt && (

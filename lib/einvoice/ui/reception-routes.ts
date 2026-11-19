@@ -6,6 +6,8 @@ import { getRequestLocale } from "@/lib/i18n/request-locale";
 import { getEinvoiceProvider } from "../provider/index.ts";
 import { EfakturaSkProvider } from "../provider/efaktura-sk.ts";
 import { createSupabaseEnrollLimiter, createSupabaseOnboardingStore } from "../onboarding-supabase-store.ts";
+import { createSupabaseMandateStore } from "../mandate-supabase-store.ts";
+import { mandateStatement, requestEvidence } from "../mandate.ts";
 import { loadAccessResult } from "./summary-server.ts";
 import { enrollReception, loadReception } from "./reception-server.ts";
 
@@ -58,6 +60,9 @@ export async function handleReceptionEnroll(req: Request): Promise<Response> {
       environment: serverEnvironment(),
       userId: auth.userId,
       limiter: () => createSupabaseEnrollLimiter(),
+      mandates: () => createSupabaseMandateStore(),
+      statement: mandateStatement(getRequestLocale(req)),
+      evidence: (companyId) => requestEvidence(req.headers, companyId),
       onboarding: () => {
         let rt = null;
         try {

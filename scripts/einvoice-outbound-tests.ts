@@ -36,6 +36,7 @@ import {
 } from "../lib/einvoice/provider/types.ts";
 import { generateUbl } from "../lib/einvoice/ubl/generate.ts";
 import { loadFinalizedIssuedInvoiceSnapshot } from "../lib/einvoice/load-finalized-invoice.ts";
+import { EINVOICE_MANDATE_MIGRATION, SEED_EFFECTIVE_MANDATES_SQL } from "./einvoice-mandate-test-seed.ts";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (p: string) => readFileSync(path.join(ROOT, p), "utf8");
@@ -122,6 +123,8 @@ for (const migration of [
   "20261008100009_taxed_advance_deduction_lines.sql",
   "20261008100010_received_advance_match_safeupdate.sql",
   "20261008100011_einvoice_outbound_transport_ids.sql",
+  // 20261122100000: bez účinného mandátu sa nič neodošle (seed nižšie)
+  EINVOICE_MANDATE_MIGRATION,
 ]) {
   try {
     await db.exec(read(`supabase/migrations/${migration}`));
@@ -443,6 +446,7 @@ await locked(() => db.exec(`
   insert into public.einvoice_rollout (company_id, environment, stage, changed_by)
     values ('${CA}', 'sandbox', 'internal', 'test'), ('${CB}', 'sandbox', 'internal', 'test');
 `));
+await locked(() => db.exec(SEED_EFFECTIVE_MANDATES_SQL));
 
 const ITEMS = [
   { description: "Práca", quantity: 2, unit: "hod", unit_code: "HUR", unit_price: 50, price_mode: "net",
@@ -1198,6 +1202,47 @@ await check("rollout: firma bez povolenia → 403 ROLLOUT_NOT_ENABLED PRED volan
   }
 });
 
+await check("mandát (20261122100000): bez účinného poverenia → 403 MANDATE_REQUIRED PRED volaním poskytovateľa; DB odmietne priame RPC; worker neodošle zaradený riadok", async () => {
+  const { outboundId } = await freshQueued();
+  await sql("select public.esblu_einvoice_mandate_revoke($1, 'sandbox', 'operator', null, 'TEST_REVOKE')", [CA]);
+  try {
+    const invoiceId = await invoice(U.owner, CA, PARTNER_A);
+    provider.calls = [];
+    const r = await requestAs(U.owner, invoiceId);
+    assert.equal(r.status, 403, JSON.stringify(r.body));
+    assert.equal(r.body.code, "MANDATE_REQUIRED");
+    assert.deepEqual(provider.calls, [], "žiadny lookup, preflight ani send");
+    const msg = await errorOf(() => store.requestOutbound({
+      actorUserId: U.owner, invoiceId, environment: "sandbox", ublSha256: "c".repeat(64),
+      ublStoragePath: outboundUblPath(CA, invoiceId, "c".repeat(64)), ublSizeBytes: 10, receiverParticipantId: BUYER,
+    }));
+    assert.match(msg, /ESBLU_EINVOICE_MANDATE_REQUIRED/);
+    const w = await sendOnly(outboundId);
+    assert.equal(w.claimed, 0, "zaradený (čerstvý) riadok sa po odvolaní neodošle");
+    assert.ok(!provider.calls.includes("sendUbl"));
+  } finally {
+    await locked(() => db.exec(SEED_EFFECTIVE_MANDATES_SQL));
+  }
+  const w2 = await sendOnly(outboundId);
+  assert.equal(w2.claimed, 1, "po novom poverení sa odošle");
+});
+
+await check("alert (20261122120000): 402 INSUFFICIENT_CREDIT → jeden deduplikovaný kritický alert; úspech ho uzavrie", async () => {
+  const raised: string[] = [];
+  const resolved: string[] = [];
+  const alerts = { async raise(i: { code: string }) { raised.push(i.code); }, async resolve(code: string) { resolved.push(code); } };
+  const { outboundId } = await freshQueued();
+  provider.sendScript.push(new EinvoiceProviderError("EINVOICE_PROVIDER_INSUFFICIENT_CREDIT", "402"));
+  await sql("update public.einvoice_outbound set next_retry_at = now() + interval '1 day' where id <> $1 and state in ('queued','sending') and provider_submission_id is null and next_retry_at is not null", [outboundId]);
+  const r = await runOutboundSendBatch({ ...workerDeps(), alerts }, WOPTS);
+  assert.equal(r.results[0]?.code, "EINVOICE_PROVIDER_INSUFFICIENT_CREDIT");
+  assert.deepEqual(raised, ["PROVIDER_INSUFFICIENT_CREDIT"]);
+  const { outboundId: ok } = await freshQueued();
+  await sql("update public.einvoice_outbound set next_retry_at = now() + interval '1 day' where id <> $1 and state in ('queued','sending') and provider_submission_id is null and next_retry_at is not null", [ok]);
+  await runOutboundSendBatch({ ...workerDeps(), alerts }, WOPTS);
+  assert.ok(resolved.includes("PROVIDER_INSUFFICIENT_CREDIT"));
+});
+
 await check("rollout: povolené iba sandbox — live prostredie ostáva zamietnuté (iné prostredie = iný záznam)", async () => {
   const allowed = (await sql<{ a: boolean; b: boolean }>("select public.esblu_einvoice_rollout_allowed($1, 'sandbox') a, public.esblu_einvoice_rollout_allowed($1, 'live') b", [CA])).rows[0];
   assert.deepEqual(allowed, { a: true, b: false });
@@ -1382,7 +1427,8 @@ await check("service_role iba v privilegovanej vrstve: supabase-store.ts; route/
   const admin = files.filter((f) => /supabase-admin|getSupabaseAdmin|SUPABASE_SERVICE_ROLE_KEY/.test(read(f)));
   // app/api/einvoice/staging-e2e: STAGING-ONLY driver (hard guard → 404 mimo preview einvoice-port so staging DB);
   // staging-e2e/guard.ts iba overuje ref v SUPABASE_SERVICE_ROLE_KEY (nevytvára klienta).
-  assert.deepEqual(admin.sort(), ["app/api/einvoice/staging-e2e/route.ts", "lib/einvoice/inbound/supabase-store.ts", "lib/einvoice/onboarding-supabase-store.ts", "lib/einvoice/ops/supabase-store.ts", "lib/einvoice/outbound/supabase-store.ts", "lib/einvoice/staging-e2e/guard.ts"]);
+  // 20261122100000–120000: mandát, deregistrácia a prevádzkové alerty majú vlastnú privilegovanú vrstvu (*-supabase-store.ts).
+  assert.deepEqual(admin.sort(), ["app/api/einvoice/staging-e2e/route.ts", "lib/einvoice/deregistration-supabase-store.ts", "lib/einvoice/inbound/supabase-store.ts", "lib/einvoice/mandate-supabase-store.ts", "lib/einvoice/onboarding-supabase-store.ts", "lib/einvoice/ops/alert-supabase-store.ts", "lib/einvoice/ops/supabase-store.ts", "lib/einvoice/outbound/supabase-store.ts", "lib/einvoice/staging-e2e/guard.ts"]);
   for (const f of files.filter((x) => x.startsWith("app/") || /(outbound|inbound)\/(worker|request|supabase-store|processor|webhook)\.ts$/.test(x))) {
     assert.match(read(f), /^import "server-only";/, f);
   }

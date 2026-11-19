@@ -113,6 +113,14 @@
       "service_role": "SELECT,INSERT,UPDATE,DELETE",
       "note": "billing interne — klient iba cez owner-only RPC (esblu_billing_*)"
     },
+    "billing_event_cursors": {
+      "domain": "billing",
+      "access": "D",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "S12: kurzor doťahovania zmeškaných Stripe udalostí — iba server (cron) cez esblu_billing_event_cursor_*"
+    },
     "billing_events": {
       "domain": "billing",
       "access": "D",
@@ -120,6 +128,14 @@
       "authenticated": "",
       "service_role": "SELECT,INSERT,UPDATE,DELETE",
       "note": "billing interne — klient iba cez owner-only RPC (esblu_billing_*)"
+    },
+    "billing_live_purchase_allowlist": {
+      "domain": "billing",
+      "access": "D",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "S15b: firmy oprávnené na prvé LIVE nákupy (spravuje iba operátor / service)"
     },
     "billing_provider_links": {
       "domain": "billing",
@@ -497,6 +513,14 @@
       "service_role": "SELECT,INSERT",
       "note": "oficialne kurzy — import cez esblu_fx_import_ecb_batch"
     },
+    "internal_operator_grants": {
+      "domain": "billing",
+      "access": "D",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT",
+      "note": "audit interneho tarifu prevadzkovatela — zapis iba rola postgres cez esblu_operator_grant_internal_plan"
+    },
     "inventory_items": {
       "domain": "assets",
       "access": "A",
@@ -689,6 +713,14 @@
       "service_role": "SELECT,INSERT,UPDATE,DELETE",
       "note": "zapis cez received_advance_* RPC"
     },
+    "registration_policy": {
+      "domain": "auth",
+      "access": "D",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT,INSERT,UPDATE,DELETE",
+      "note": "singleton režimu registrácie (open / closed_beta) — číta auth hook a esblu_ensure_my_owner_company (definer); overené staging aj prod 2026-11-19: RLS zapnutá, 0 politík, iba service_role"
+    },
     "session_active_company": {
       "domain": "membership",
       "access": "B",
@@ -822,6 +854,86 @@
       "authenticated": "SELECT",
       "service_role": "SELECT,INSERT,UPDATE,DELETE",
       "note": "VOP 39.2/44.5 in-app oznamenie novej verzie VOP; zapis cez esblu_record_company_terms_notice"
+    },
+    "einvoice_mandates": {
+      "domain": "einvoice",
+      "access": "B",
+      "anon": "",
+      "authenticated": "SELECT",
+      "service_role": "SELECT",
+      "note": "20261122100000: append-only dokaz poverenia (mandatu); SELECT iba aktivna firma + finance.manage; zapis iba RPC"
+    },
+    "einvoice_deregistrations": {
+      "domain": "einvoice",
+      "access": "B",
+      "anon": "",
+      "authenticated": "SELECT",
+      "service_role": "SELECT",
+      "note": "20261122110000: job deregistracie u poskytovatela (stavovy automat); SELECT finance.manage; zapis iba RPC"
+    },
+    "einvoice_ops_alerts": {
+      "domain": "einvoice",
+      "access": "D",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT",
+      "note": "20261122120000: prevadzkove alerty s dedupe; zapis iba RPC"
+    },
+    "billing_invoice_documents": {
+      "domain": "billing",
+      "access": "D",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT,INSERT,UPDATE",
+      "note": "P4: účtovná kópia Stripe faktúr / dobropisov + archív PDF — iba server (pipeline, cron), bez DELETE"
+    },
+    "billing_refund_observations": {
+      "domain": "billing",
+      "access": "D",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT,INSERT,UPDATE",
+      "note": "P4: refundácie podľa PaymentIntent (kontrola dobropisu) — iba server"
+    },
+    "billing_balance_transactions": {
+      "domain": "billing",
+      "access": "D",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT,INSERT,UPDATE",
+      "note": "P4: Stripe balance transactions pre účtovný export — iba server"
+    },
+    "billing_ops_admins": {
+      "domain": "billing",
+      "access": "D",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT",
+      "note": "P4: prevádzkovatelia s prístupom k účtovnému exportu — zápis iba SQL (postgres)"
+    },
+    "billing_accounting_export_log": {
+      "domain": "billing",
+      "access": "D",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT,INSERT",
+      "note": "P4: audit účtovných exportov — iba server"
+    },
+    "billing_ops_alerts": {
+      "domain": "billing",
+      "access": "D",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT",
+      "note": "P4: deduplikované billing ops alerty — zápis iba cez esblu_billing_ops_* RPC"
+    },
+    "billing_ops_heartbeats": {
+      "domain": "billing",
+      "access": "D",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT",
+      "note": "P4: heartbeat billing cronov — zápis iba cez esblu_billing_ops_heartbeat"
     }
   },
   "service_role_functions": [
@@ -829,27 +941,36 @@
     "esblu_account_deletion_commit(text,uuid,uuid,boolean)",
     "esblu_active_membership_for_user(uuid)",
     "esblu_active_membership_for_user(uuid,uuid)",
+    "esblu_billing_access_until(text,timestamp with time zone,timestamp with time zone,timestamp with time zone,timestamp with time zone)",
     "esblu_billing_apply_charge(uuid,text,jsonb)",
     "esblu_billing_apply_event(uuid,jsonb)",
     "esblu_billing_attach_checkout_session(uuid,text)",
     "esblu_billing_authorize_manage()",
     "esblu_billing_blocks_account_deletion(text,text,boolean)",
     "esblu_billing_canonical_statuses()",
+    "esblu_billing_checkout_for_cancel(uuid)",
     "esblu_billing_claim_store_reports(integer)",
     "esblu_billing_close_event(uuid,text,text,jsonb)",
     "esblu_billing_complete_store_report(uuid,boolean,text)",
+    "esblu_billing_event_cursor_advance(text,text,uuid,text,timestamp with time zone)",
+    "esblu_billing_event_cursor_claim(text,text,text,uuid,integer)",
+    "esblu_billing_event_cursor_release(text,text,uuid,boolean,text)",
     "esblu_billing_create_checkout_intent(text,text)",
     "esblu_billing_create_purchase_intent(text,text,text,text,text,text,text)",
     "esblu_billing_explain_my_entitlements()",
     "esblu_billing_issue_account_token(text)",
+    "esblu_billing_live_purchase_allowed(uuid)",
     "esblu_billing_list_plans()",
     "esblu_billing_manage_here(text,text)",
     "esblu_billing_managed_via(text)",
+    "esblu_billing_mark_checkout_expired(uuid)",
     "esblu_billing_method_info(text)",
     "esblu_billing_my_access()",
     "esblu_billing_my_intent(uuid)",
+    "esblu_billing_my_live_purchase_allowed()",
     "esblu_billing_ops_status(uuid)",
     "esblu_billing_plan_targets(uuid,text)",
+    "esblu_billing_post_period_protection_until(text,timestamp with time zone,timestamp with time zone,timestamp with time zone)",
     "esblu_billing_purchase_options(text,text)",
     "esblu_billing_queue_store_report(uuid,jsonb)",
     "esblu_billing_reconcile_candidates(integer)",
@@ -965,6 +1086,35 @@
     "esblu_try_claim_company_trial(uuid)",
     "esblu_usage_period_start(uuid,text)",
     "esblu_user_global_cleanup(uuid)",
-    "esblu_voice_usage_status(uuid)"
+    "esblu_voice_usage_status(uuid)",
+    "esblu_einvoice_deregistration_claim(text,text,integer,integer,uuid)",
+    "esblu_einvoice_deregistration_finish(uuid,text,text,text,text,integer)",
+    "esblu_einvoice_deregistration_request(uuid,text,text,uuid,text)",
+    "esblu_einvoice_deregistration_requeue(uuid,text)",
+    "esblu_einvoice_deregistration_status(uuid,text)",
+    "esblu_einvoice_mandate_confirm(uuid,text[],text,text,text)",
+    "esblu_einvoice_mandate_effective(uuid,text,text)",
+    "esblu_einvoice_mandate_grant(uuid,uuid,text,text[],text,text,text,boolean,text,text,text,text)",
+    "esblu_einvoice_mandate_revoke(uuid,text,text,uuid,text,uuid)",
+    "esblu_einvoice_my_mandate(text)",
+    "esblu_einvoice_ops_alert_raise(text,text,text,text,uuid,text,integer)",
+    "esblu_einvoice_ops_alert_resolve(text,text,uuid,text)",
+    "esblu_einvoice_ops_alerts_open()",
+    "esblu_billing_event_retry_claim(text,text,integer)",
+    "esblu_billing_event_dead_letter(text,text,text,text)",
+    "esblu_billing_upsert_document(text,text,jsonb)",
+    "esblu_billing_record_refund_observation(text,text,bigint,text,timestamp with time zone)",
+    "esblu_billing_refunds_without_credit_note(text,interval)",
+    "esblu_billing_document_archive_claim(text,integer)",
+    "esblu_billing_document_archive_result(uuid,boolean,text,text,text)",
+    "esblu_billing_upsert_balance_transactions(text,jsonb)",
+    "esblu_billing_accounting_export(text,timestamp with time zone,timestamp with time zone,uuid)",
+    "esblu_billing_is_ops_admin()",
+    "esblu_billing_ops_raise(text,text,text,integer,integer,jsonb)",
+    "esblu_billing_ops_heartbeat(text,text,boolean,text)",
+    "esblu_billing_ops_collect(text)",
+    "esblu_billing_ops_pending(text,integer)",
+    "esblu_billing_ops_mark_notified(uuid,boolean,text,text)",
+    "esblu_billing_ops_open_summary(text)"
   ]
 }

@@ -1,0 +1,6 @@
+obdobie;typ;stripe_balance_txn_id;stripe_source_id;stripe_invoice_id;stripe_subscription_id;esblu_firma_ico;datum_vytvorenia;datum_dostupnosti;mena;kurz;hruba_suma;poplatok;cista_suma;payout_id;datum_payoutu;bankovy_pohyb_id;doklad_esblu;stav_parovania;poznamka
+2026-12;charge;txn_TEST001;ch_TEST001;in_TEST001;sub_TEST001;99999991;2026-12-01;2026-12-04;EUR;1;15,90;-0,70;15,20;po_TEST001;2026-12-04;FIO-TEST-01;TEST-2026120001;OK;syntetický príklad
+2026-12;refund;txn_TEST002;re_TEST002;in_TEST001;sub_TEST001;99999991;2026-12-10;2026-12-10;EUR;1;-15,90;0,00;-15,90;po_TEST002;2026-12-14;FIO-TEST-02;TEST-OD-2026120001;OK;plná refundácia, poplatok 0,70 sa nevracia
+2026-12;dispute;txn_TEST003;du_TEST003;in_TEST003;sub_TEST003;99999992;2026-12-15;2026-12-15;EUR;1;-15,90;-20,00;-35,90;po_TEST002;2026-12-14;FIO-TEST-02;;ROZDIEL;spor otvorený — doklad po rozhodnutí
+2026-12;stripe_fee;txn_TEST004;;;;;2026-12-31;2026-12-31;EUR;1;0,00;-1,11;-1,11;po_TEST003;2027-01-05;FIO-TEST-03;STRIPE-TAX-INV-2026-12;OK;Billing 0,7 % — DPH 23 % podľa účtovníčky
+2026-12;payout;txn_TEST005;po_TEST001;;;;2026-12-04;2026-12-04;EUR;1;-15,20;0,00;-15,20;po_TEST001;2026-12-04;FIO-TEST-01;;OK;výplata na účet

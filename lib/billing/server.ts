@@ -10,10 +10,12 @@ import { verifyRequestUser } from "@/lib/server-auth";
 import { getUserScopedSupabaseClient } from "@/lib/server-supabase-user-client";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { getRequestLocale } from "@/lib/i18n/request-locale";
-import { getBillingServerMode, webProviderForMode } from "@/lib/billing/config";
+import { billingEnvironmentForMode, getBillingServerMode, webProviderForMode } from "@/lib/billing/config";
 import { getStoreMode } from "@/lib/billing/stores/store-config";
 import { FakeBillingProvider, type FakeStateStore } from "@/lib/billing/providers/fake";
-import { StripeTestProvider } from "@/lib/billing/providers/stripe";
+import { StripeLiveProvider, StripeTestProvider, type StripeProvider } from "@/lib/billing/providers/stripe";
+import type { ArchiveStorage } from "@/lib/billing/document-archive";
+import { validateBillingEnv } from "@/lib/billing/provider-modes";
 import type { BillingProvider, NormalizedSubscriptionState } from "@/lib/billing/types";
 
 export const BILLING_ERROR_STATUS: Record<string, number> = {
@@ -28,11 +30,14 @@ export const BILLING_ERROR_STATUS: Record<string, number> = {
   ESBLU_BILLING_ACTIVE_ON_OTHER_PROVIDER: 409,
   ESBLU_BILLING_RATE_LIMITED: 429,
   ESBLU_BILLING_CHECKOUT_STATE: 409,
+  ESBLU_BILLING_CHECKOUT_IN_PROGRESS: 409,
   ESBLU_BILLING_PLATFORM_INVALID: 400,
   ESBLU_BILLING_METHOD_NOT_ALLOWED: 403,
   ESBLU_BILLING_STORE_TOKEN_REQUIRED: 400,
   ESBLU_BILLING_CHANGE_NOT_ALLOWED: 409,
   ESBLU_BILLING_MODE_INVALID: 400,
+  ESBLU_BILLING_ENVIRONMENT_MISMATCH: 409,
+  ESBLU_BILLING_LIVE_NOT_ALLOWED: 403,
 };
 
 export function billingErrorCode(error: { message?: string } | null | undefined): string {
@@ -94,11 +99,28 @@ class DbBackedFakeStore implements FakeStateStore {
   }
 }
 
-/** Webový provider podľa režimu servera. `provider` z DB musí súhlasiť. */
-export function getWebBillingProvider(expected?: string | null): BillingProvider | null {
+/**
+ * Webový provider podľa režimu servera. `provider` (a ak je zadané, aj `environment`) z DB musí súhlasiť,
+ * inak null → volajúci odpovie „billing vypnutý" (fail closed).
+ * S15: TEST a LIVE používajú ODDELENÉ premenné — test STRIPE_SECRET_KEY / STRIPE_WEBHOOK_SECRET,
+ * live STRIPE_LIVE_SECRET_KEY / STRIPE_LIVE_WEBHOOK_SECRET. Live provider vzniká iba v režime
+ * `stripe_live` (produkcia + schválenie); zlý typ kľúča odmietne samotný provider.
+ */
+export function getWebBillingProvider(expected?: string | null, expectedEnvironment?: string | null): BillingProvider | null {
   const mode = getBillingServerMode();
   const id = webProviderForMode(mode);
-  if (!id || (expected && expected !== id)) return null;
+  const environment = billingEnvironmentForMode(mode);
+  if (!id || !environment || (expected && expected !== id)) return null;
+  if (expectedEnvironment && expectedEnvironment !== environment) return null;
+  if (mode === "stripe_live") {
+    // Live = celá env schéma musí byť platná (žiadne test kľúče vedľa live, https návrat, schválenie).
+    if (!validateBillingEnv().ok) return null;
+    return new StripeLiveProvider({
+      secretKey: process.env.STRIPE_LIVE_SECRET_KEY,
+      webhookSecret: process.env.STRIPE_LIVE_WEBHOOK_SECRET,
+      apiVersion: process.env.STRIPE_API_VERSION || undefined,
+    });
+  }
   if (id === "stripe") {
     return new StripeTestProvider({
       secretKey: process.env.STRIPE_SECRET_KEY,
@@ -112,4 +134,42 @@ export function getWebBillingProvider(expected?: string | null): BillingProvider
 export function getFakeProviderForStaging(): FakeBillingProvider | null {
   if (getBillingServerMode() !== "fake") return null;
   return new FakeBillingProvider(process.env.ESBLU_FAKE_BILLING_SECRET, new DbBackedFakeStore());
+}
+
+/**
+ * P4: read-only reportingový Stripe klient pre účtovný export (balance transactions, payouts).
+ * live: IBA schválený live režim + samostatný kľúč STRIPE_LIVE_REPORTING_KEY (rk_live_, práva Balance
+ * transactions read + Payouts read); runtime kľúč STRIPE_LIVE_SECRET_KEY sa na reporting nepoužíva.
+ * test: sandbox kľúč STRIPE_SECRET_KEY v režime stripe_test. Inak null (export iba z dát v DB).
+ */
+export function getStripeReportingProvider(environment: "test" | "live"): StripeProvider | null {
+  const mode = getBillingServerMode();
+  const apiVersion = process.env.STRIPE_API_VERSION || undefined;
+  if (environment === "live") {
+    const key = (process.env.STRIPE_LIVE_REPORTING_KEY ?? "").trim();
+    if (mode !== "stripe_live" || !key || !validateBillingEnv().ok) return null;
+    return new StripeLiveProvider({ secretKey: key, webhookSecret: undefined, apiVersion });
+  }
+  if (mode !== "stripe_test") return null;
+  return new StripeTestProvider({ secretKey: process.env.STRIPE_SECRET_KEY, webhookSecret: undefined, apiVersion });
+}
+
+export const BILLING_DOCUMENTS_BUCKET = "billing-documents";
+
+/** P4: privátny Storage bucket pre archív PDF dokladov (bez prepisu). */
+export function supabaseArchiveStorage(admin: SupabaseClient = getSupabaseAdmin()): ArchiveStorage {
+  const bucket = () => admin.storage.from(BILLING_DOCUMENTS_BUCKET);
+  return {
+    async upload(path, bytes) {
+      const { error } = await bucket().upload(path, bytes, { contentType: "application/pdf", upsert: false, cacheControl: "31536000" });
+      if (!error) return "ok";
+      const status = (error as { statusCode?: string | number }).statusCode;
+      return String(status) === "409" || /exists/i.test(error.message ?? "") ? "exists" : "error";
+    },
+    async download(path) {
+      const { data, error } = await bucket().download(path);
+      if (error || !data) return null;
+      return new Uint8Array(await data.arrayBuffer());
+    },
+  };
 }

@@ -1,6 +1,7 @@
 import { billingReturnOrigin } from "@/lib/billing/config";
 import { authorizeBillingCaller, billingErrorResponse, getWebBillingProvider } from "@/lib/billing/server";
 import { methodAllowedByServer, providerGateFromEnv } from "@/lib/billing/server-gates";
+import { startWebCheckout } from "@/lib/billing/web-checkout";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 
 // -----------------------------------------------------------------------------
@@ -60,6 +61,9 @@ export async function POST(req: Request) {
     provider_customer_id: string | null;
     account_token: string | null;
     replaces_subscription_id: string | null;
+    expires_at?: string | null;
+    reused?: boolean;
+    environment?: string | null;
   };
 
   if (data.provider === "apple" || data.provider === "google") {
@@ -77,27 +81,22 @@ export async function POST(req: Request) {
     });
   }
 
-  const provider = getWebBillingProvider(data.provider);
+  const provider = getWebBillingProvider(data.provider, data.environment);
   const origin = billingReturnOrigin();
   if (!provider || !origin) return Response.json({ success: false, code: "ESBLU_BILLING_DISABLED" }, { status: 503 });
   // Návrat na https URL — na mobile ju zachytí App Link / Universal Link (deep-link-resolve).
-  const returnBase = `${origin}/nastavenia/predplatne?checkout_id=${encodeURIComponent(data.checkout_id)}`;
-  try {
-    const session = await provider.createCheckout({
-      checkoutId: data.checkout_id,
-      providerPriceId: data.provider_price_id,
-      providerCustomerId: data.provider_customer_id,
-      mobileApp: platform !== "web",
-      successUrl: `${returnBase}&checkout=returned`,
-      cancelUrl: `${returnBase}&checkout=canceled`,
-    });
-    const attach = await getSupabaseAdmin().rpc("esblu_billing_attach_checkout_session", {
-      p_checkout_id: data.checkout_id,
-      p_provider_session_id: session.providerSessionId,
-    });
-    if (attach.error) return billingErrorResponse(attach.error);
-    return Response.json({ success: true, kind: "redirect", checkoutId: data.checkout_id, url: session.url });
-  } catch {
-    return Response.json({ success: false, code: "ESBLU_BILLING_PROVIDER_ERROR" }, { status: 502 });
+  // Súbežný / opakovaný pokus dostane ten istý zámer → tú istú reláciu (lib/billing/web-checkout.ts).
+  const result = await startWebCheckout({
+    provider,
+    intent: data,
+    origin,
+    mobileApp: platform !== "web",
+    attach: async (checkoutId, sessionId) =>
+      getSupabaseAdmin().rpc("esblu_billing_attach_checkout_session", { p_checkout_id: checkoutId, p_provider_session_id: sessionId }),
+  });
+  if (!result.ok) {
+    if (result.code === "ESBLU_BILLING_CHECKOUT_STATE") return billingErrorResponse(result.error as { message?: string } | null);
+    return Response.json({ success: false, code: result.code }, { status: 502 });
   }
+  return Response.json({ success: true, kind: "redirect", checkoutId: result.checkoutId, url: result.url, reused: result.reused });
 }

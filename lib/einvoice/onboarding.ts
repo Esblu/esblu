@@ -168,7 +168,15 @@ export async function provisionCompany(deps: OnboardingDeps, companyId: string):
 }
 
 export type EnrollOutcome =
-  | { ok: true; status: EnrollResult["status"]; reception: ReceptionView; warnings: string[] }
+  | {
+      ok: true;
+      status: EnrollResult["status"];
+      reception: ReceptionView;
+      warnings: string[];
+      /** Pre dôkaz mandátu (einvoice_mandates): participant a SHA-256 odpovede poskytovateľa. */
+      participantId: string | null;
+      providerResponseSha256: string | null;
+    }
   | { ok: false; code: string; retryable: boolean; reception: ReceptionView | null };
 
 /**
@@ -224,6 +232,8 @@ export async function enrollCompany(deps: OnboardingDeps, companyId: string, ver
     ok: true,
     status: result.status,
     warnings: result.warnings,
+    participantId: result.participantId ?? org.participantId,
+    providerResponseSha256: result.responseSha256 ?? null,
     reception: receptionView({
       ...org,
       participantId: result.participantId ?? org.participantId,

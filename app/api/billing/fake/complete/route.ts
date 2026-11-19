@@ -32,13 +32,14 @@ export async function POST(req: Request) {
   }
   const { data: checkout } = await getSupabaseAdmin()
     .from("billing_checkout_sessions")
-    .select("id, company_id, provider, provider_price_id, billing_interval, status")
+    .select("id, company_id, provider, provider_price_id, billing_interval, status, expires_at")
     .eq("id", checkoutId)
     .maybeSingle();
   if (!checkout || checkout.company_id !== companyId || checkout.provider !== "fake") {
     return Response.json({ success: false }, { status: 404 });
   }
-  if (checkout.status !== "created" && checkout.status !== "open") {
+  // Rovnako ako Stripe: relácia po uplynutí platnosti zámeru už nie je zaplatiteľná.
+  if (checkout.status !== "created" && checkout.status !== "open" || Date.parse(String(checkout.expires_at)) <= Date.now()) {
     return Response.json({ success: false, code: "ESBLU_BILLING_CHECKOUT_STATE" }, { status: 409 });
   }
   if (body?.outcome === "failed") {

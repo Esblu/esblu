@@ -113,6 +113,22 @@ await check("Stripe: normalizácia (period na položke — nové API; na sub —
   assert.equal(old.current_period_end, new Date((NOW + 86400) * 1000).toISOString());
   const cancelAt = normalizeStripeSubscription({ ...SUB_NEW_API, cancel_at: NOW + 30 * 86400 }, "x");
   assert.equal(cancelAt.cancel_at_period_end, true);
+  assert.equal(cancelAt.scheduled_end_at, new Date((NOW + 30 * 86400) * 1000).toISOString(),
+    "cancel_at bez príznaku = zvolený dátum (aj keď sa rovná koncu obdobia — Stripe ho mohol skrátiť) → bez 48 h");
+  const truncated = normalizeStripeSubscription({ ...SUB_NEW_API, cancel_at: NOW + 3 * 86400,
+    items: { data: [{ ...SUB_NEW_API.items.data[0], current_period_end: NOW + 3 * 86400 }] } }, "x");
+  assert.equal(truncated.scheduled_end_at, new Date((NOW + 3 * 86400) * 1000).toISOString(), "Stripe skrátil obdobie na cancel_at → stále predčasný koniec");
+  const early = normalizeStripeSubscription({ ...SUB_NEW_API, cancel_at: NOW + 3 * 86400 }, "x");
+  assert.equal(early.cancel_at_period_end, true, "neobnovuje sa");
+  assert.equal(early.scheduled_end_at, new Date((NOW + 3 * 86400) * 1000).toISOString(), "S13: predčasné ukončenie k dátumu");
+  const flagged = normalizeStripeSubscription({ ...SUB_NEW_API, cancel_at_period_end: true, cancel_at: NOW + 30 * 86400 }, "x");
+  assert.equal(flagged.scheduled_end_at, null, "Esblu/portál: cancel_at_period_end=true → riadny koniec");
+  const beyond = normalizeStripeSubscription({ ...SUB_NEW_API, cancel_at: NOW + 45 * 86400 }, "x");
+  assert.equal(beyond.cancel_at_period_end, false, "dátum v ďalšom období → teraz sa ešte obnoví");
+  assert.equal(beyond.scheduled_end_at, new Date((NOW + 45 * 86400) * 1000).toISOString());
+  const immediate = normalizeStripeSubscription({ ...SUB_NEW_API, status: "canceled", canceled_at: NOW + 86400, ended_at: NOW + 86400 }, "x");
+  assert.equal(immediate.scheduled_end_at, null);
+  assert.equal(immediate.ended_at, new Date((NOW + 86400) * 1000).toISOString(), "okamžité ukončenie: ended_at < koniec obdobia");
   const multi = normalizeStripeSubscription({ ...SUB_NEW_API, items: { data: [SUB_NEW_API.items.data[0], SUB_NEW_API.items.data[0]] } }, "x");
   assert.equal(multi.provider_price_id, null, "viac položiek → DB odmietne UNKNOWN_PRICE");
 });

@@ -155,9 +155,19 @@ check("repo: reconciliation migrácia existuje a je posledná pred novými migr�
   assert.ok(files.some((f) => f.startsWith(`${RECONCILE_VERSION}_`)));
 });
 
+// Výnimky pre UŽ APLIKOVANÉ migrácie (súbor sa po aplikovaní nemení). Každá s dôkazom skutočného ACL.
+//  - 20261117100000: `create or replace` funkcie esblu_ensure_my_owner_company() bez explicitného
+//    GRANT/REVOKE ponechal pôvodné ACL. Overené 2026-11-19 (staging aj produkcia, read-only metadáta):
+//    EXECUTE iba postgres, authenticated, service_role (= manifest); žiadne anon/PUBLIC.
+//    test:grants-replay-db overuje skutočný stav po replayi.
+const APPLIED_EXCEPTIONS = new Set([
+  "20261117100000_open_public_registration.sql: public.esblu_ensure_my_owner_company(): chýba explicitný GRANT/REVOKE EXECUTE",
+]);
+
 check(`repo: každá migrácia po ${RECONCILE_VERSION} má explicitné rozhodnutie o grantoch`, () => {
   const problems = files.filter((f) => f.slice(0, 14) > RECONCILE_VERSION)
-    .flatMap((f) => auditMigration(readFileSync(path.join(MIG_DIR, f), "utf8")).map((p) => `${f}: ${p}`));
+    .flatMap((f) => auditMigration(readFileSync(path.join(MIG_DIR, f), "utf8")).map((p) => `${f}: ${p}`))
+    .filter((p) => !APPLIED_EXCEPTIONS.has(p));
   assert.deepEqual(problems, []);
 });
 

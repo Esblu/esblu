@@ -4,16 +4,17 @@
 //   disabled — default; nič sa nepredáva ani nespracúva
 //   fake     — staging emulácia (HMAC fake provider / fake obchody)
 //   sandbox  — Stripe test mode / Apple Sandbox / Google license testing
-//   live     — V TEJTO FÁZE NEPODPOROVANÉ: požiadavka na live → disabled
-//              + issue LIVE_NOT_APPROVED (fail closed). Zapnutie live =
-//              nová migrácia (billing_runtime_config.environment='live'),
-//              nový kód a výslovný súhlas vlastníka.
-// VERCEL_ENV=production → vždy disabled.
+//   live     — S15: iba Stripe web, iba VERCEL_ENV=production + ESBLU_BILLING_MODE=stripe_live
+//              + ESBLU_BILLING_LIVE_APPROVED=true; inak disabled + issue LIVE_NOT_APPROVED.
+//              Live kľúče sú v ODDELENÝCH premenných (STRIPE_LIVE_*); obchody (Apple/Google)
+//              ostávajú bez live režimu.
+// VERCEL_ENV=production → okrem schváleného Stripe live vždy disabled.
 // validateBillingEnv vracia iba NÁZVY chýbajúcich/neplatných premenných.
 // =============================================================================
 
 import { getBillingServerMode } from "@/lib/billing/config";
 import { getStoreMode } from "@/lib/billing/stores/store-config";
+import { isValidatedStripeApiVersion } from "@/lib/billing/stripe-api-version";
 
 export type ProviderMode = "disabled" | "fake" | "sandbox" | "live";
 type Env = Record<string, string | undefined>;
@@ -30,12 +31,12 @@ export function resolveProviderModes(env: Env = process.env): ProviderModes {
   const productionLocked = env.VERCEL_ENV === "production";
   const rawWeb = (env.ESBLU_BILLING_MODE ?? "").trim();
   const rawStores = (env.ESBLU_BILLING_STORE_MODE ?? "").trim();
-  if (rawWeb === "live" || rawStores === "live") issues.push("LIVE_NOT_APPROVED");
   const webServer = getBillingServerMode(env);
-  const web: ProviderMode = webServer === "fake" ? "fake" : webServer === "stripe_test" ? "sandbox" : "disabled";
+  if (rawWeb === "live" || rawStores === "live" || (rawWeb === "stripe_live" && webServer !== "stripe_live")) issues.push("LIVE_NOT_APPROVED");
+  const web: ProviderMode = webServer === "fake" ? "fake" : webServer === "stripe_test" ? "sandbox" : webServer === "stripe_live" ? "live" : "disabled";
   const storeMode = getStoreMode(env);
   const stores: ProviderMode = storeMode === "fake" ? "fake" : storeMode === "sandbox" ? "sandbox" : "disabled";
-  if (productionLocked && (rawWeb || rawStores)) issues.push("PRODUCTION_LOCKED");
+  if (productionLocked && ((rawWeb && webServer !== "stripe_live") || rawStores)) issues.push("PRODUCTION_LOCKED");
   return { web, stores, productionLocked, issues };
 }
 
@@ -45,9 +46,20 @@ type EnvRule = { name: string; secret: boolean; required: (m: ProviderModes) => 
 export const BILLING_ENV_SCHEMA: readonly EnvRule[] = [
   { name: "ESBLU_FAKE_BILLING_SECRET", secret: true, required: (m) => m.web === "fake" || m.stores === "fake", valid: (v) => v.length >= 16 },
   { name: "ESBLU_BILLING_RETURN_ORIGIN", secret: false, required: (m) => m.web !== "disabled", valid: (v) => /^https:\/\/[^/]+$/.test(v) || /^http:\/\/localhost(:\d+)?$/.test(v) },
-  { name: "STRIPE_SECRET_KEY", secret: true, required: (m) => m.web === "sandbox", valid: (v) => /^(sk|rk)_test_[A-Za-z0-9]{8,}$/.test(v) },
+  { name: "ESBLU_BILLING_LIVE_APPROVED", secret: false, required: (m) => m.web === "live", valid: (v) => v === "true" },
+  { name: "STRIPE_LIVE_SECRET_KEY", secret: true, required: (m) => m.web === "live", valid: (v) => /^(sk|rk)_live_[A-Za-z0-9]{8,}$/.test(v) },
+  { name: "STRIPE_LIVE_WEBHOOK_SECRET", secret: true, required: (m) => m.web === "live", valid: (v) => /^whsec_[A-Za-z0-9+/=_-]{8,}$/.test(v) },
+  { name: "STRIPE_SECRET_KEY", secret: true, required: (m) => m.web === "sandbox", valid: (v) => /^(sk|rk|rkcs)_test_[A-Za-z0-9]{8,}$/.test(v) },
   { name: "STRIPE_WEBHOOK_SECRET", secret: true, required: (m) => m.web === "sandbox", valid: (v) => /^whsec_[A-Za-z0-9+/=_-]{8,}$/.test(v) },
-  { name: "STRIPE_API_VERSION", secret: false, required: () => false, valid: (v) => /^\d{4}-\d{2}-\d{2}(\.[a-z]+)?$/.test(v) },
+  // P4: voliteľný override pripnutej verzie — iba výslovne overená verzia (lib/billing/stripe-api-version.ts).
+  { name: "STRIPE_API_VERSION", secret: false, required: () => false, valid: (v) => isValidatedStripeApiVersion(v) },
+  // P4: samostatný read-only live kľúč pre účtovný export (Balance transactions + Payouts read). Runtime kľúč
+  // STRIPE_LIVE_SECRET_KEY tieto práva nemá a nemá ich dostať.
+  { name: "STRIPE_LIVE_REPORTING_KEY", secret: true, required: () => false, valid: (v) => /^rk_live_[A-Za-z0-9]{8,}$/.test(v) },
+  // P4: doručenie ops alertov e-mailom (voliteľné; bez nich ostávajú alerty v DB + cron 503).
+  { name: "ESBLU_OPS_ALERT_EMAIL_TO", secret: false, required: () => false, valid: (v) => /^[^@\s,]+@[^@\s,]+\.[a-z]{2,}$/i.test(v) },
+  { name: "ESBLU_OPS_ALERT_EMAIL_FROM", secret: false, required: () => false, valid: (v) => /^([^<>]{1,60} )?<?[^@\s<>]+@[^@\s<>]+\.[a-z]{2,}>?$/i.test(v) },
+  { name: "RESEND_API_KEY", secret: true, required: () => false, valid: (v) => /^re_[A-Za-z0-9_]{8,}$/.test(v) },
   { name: "GOOGLE_PLAY_PACKAGE_NAME", secret: false, required: (m) => m.stores === "sandbox", valid: (v) => v === "com.esblu.app" },
   { name: "GOOGLE_PLAY_SERVICE_ACCOUNT_JSON", secret: true, required: (m) => m.stores === "sandbox", valid: (v) => { try { const j = JSON.parse(v) as Record<string, unknown>; return typeof j.client_email === "string" && typeof j.private_key === "string"; } catch { return false; } } },
   { name: "GOOGLE_RTDN_AUDIENCE", secret: false, required: (m) => m.stores === "sandbox", valid: (v) => /^https:\/\//.test(v) },
@@ -74,6 +86,18 @@ export function validateBillingEnv(env: Env = process.env): { modes: ProviderMod
     if (!rule.valid(value)) invalid.push(rule.name);
   }
   // Live kľúč omylom v prostredí = vždy chyba (aj keď by sa nepoužil).
-  if (/^(sk|rk)_live_/.test((env.STRIPE_SECRET_KEY ?? "").trim())) invalid.push("STRIPE_SECRET_KEY:LIVE_FORBIDDEN");
+  if (/^(sk|rk|rkcs)_live_/.test((env.STRIPE_SECRET_KEY ?? "").trim())) invalid.push("STRIPE_SECRET_KEY:LIVE_FORBIDDEN");
+  // S15: live kľúče a schválenie existujú IBA v produkcii; v live režime nesmú byť v prostredí test kľúče.
+  if (!modes.productionLocked) {
+    for (const name of ["STRIPE_LIVE_SECRET_KEY", "STRIPE_LIVE_WEBHOOK_SECRET", "STRIPE_LIVE_REPORTING_KEY", "ESBLU_BILLING_LIVE_APPROVED"]) {
+      if ((env[name] ?? "").trim()) invalid.push(`${name}:LIVE_OUTSIDE_PRODUCTION`);
+    }
+  }
+  if (modes.web === "live") {
+    for (const name of ["STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET", "ESBLU_FAKE_BILLING_SECRET"]) {
+      if ((env[name] ?? "").trim()) invalid.push(`${name}:TEST_CONFIG_IN_LIVE`);
+    }
+    if (!/^https:\/\/[^/]+$/.test((env.ESBLU_BILLING_RETURN_ORIGIN ?? "").trim())) invalid.push("ESBLU_BILLING_RETURN_ORIGIN:HTTPS_REQUIRED");
+  }
   return { modes, missing, invalid, ok: missing.length === 0 && invalid.length === 0 && !modes.issues.includes("LIVE_NOT_APPROVED") };
 }

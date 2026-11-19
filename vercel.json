@@ -35,6 +35,22 @@
     {
       "path": "/api/cron/telemetry-maintenance",
       "schedule": "40 3 * * *"
+    },
+    {
+      "path": "/api/cron/billing-stripe-events",
+      "schedule": "*/15 * * * *"
+    },
+    {
+      "path": "/api/cron/billing-reconcile",
+      "schedule": "23 */6 * * *"
+    },
+    {
+      "path": "/api/cron/billing-ops-monitor",
+      "schedule": "7,22,37,52 * * * *"
+    },
+    {
+      "path": "/api/cron/billing-documents",
+      "schedule": "41 * * * *"
     }
   ]
 }

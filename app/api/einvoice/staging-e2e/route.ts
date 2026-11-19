@@ -1,5 +1,6 @@
 import "server-only";
 
+import { EINVOICE_MANDATE_STATEMENT_VERSION } from "@/lib/einvoice/mandate-statement";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
@@ -291,7 +292,7 @@ export async function POST(req: Request) {
               ...(op === "enroll" ? { "content-type": "application/json" } : {}),
               ...(bypass ? { "x-vercel-protection-bypass": bypass } : {}),
             },
-            body: op === "enroll" ? JSON.stringify({ verification_code: STAGING_E2E_TOKENS[tokenKey as keyof typeof STAGING_E2E_TOKENS], confirm_enroll: true }) : undefined,
+            body: op === "enroll" ? JSON.stringify({ verification_code: STAGING_E2E_TOKENS[tokenKey as keyof typeof STAGING_E2E_TOKENS], confirm_enroll: true, mandate_version: EINVOICE_MANDATE_STATEMENT_VERSION }) : undefined,
           });
           let parsed: unknown = null;
           try {

@@ -48,6 +48,12 @@ export type SubscriptionView = {
   /** Server: oprávňuje aktuálny stav na nároky? (zobrazenie; autoritou ostáva resolver). */
   entitles: boolean;
   reviewFlag: string | null;
+  /** Koniec prístupu z predplatného, ako ho vynucuje server (null = bez platného nároku). */
+  accessUntil: string | null;
+  /** Beží 48 h ochranná lehota po riadnom skončení predplatného. */
+  postPeriodProtection: boolean;
+  /** Plánované predčasné ukončenie k zvolenému dátumu (bez 48 h lehoty). */
+  scheduledEndAt: string | null;
 };
 
 export type PlanOption = { planCode: string; intervals: ("month" | "year")[]; entitlements: PlanEntitlement[] };
@@ -87,6 +93,9 @@ export function parseSubscriptionView(data: unknown): SubscriptionView | null {
     billingProvider: strOrNull(data.billing_provider),
     currentPeriodEnd: strOrNull(data.current_period_end),
     graceUntil: strOrNull(data.grace_until),
+    accessUntil: strOrNull(data.access_until),
+    postPeriodProtection: data.post_period_protection === true,
+    scheduledEndAt: strOrNull(data.scheduled_end_at),
     version: typeof data.version === "number" ? data.version : null,
     managedVia: MANAGED_VIA.includes(data.managed_via as ManagedVia) ? (data.managed_via as ManagedVia) : null,
     entitles: typeof data.entitles === "boolean" ? data.entitles : isEntitlingStatus(status),
