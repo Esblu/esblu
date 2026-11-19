@@ -12,6 +12,22 @@
 export const EINVOICE_MANDATE_STATEMENT_VERSION = "efaktura-mandate-2026-11-19";
 export const EINVOICE_MANDATE_STATEMENT_KEY = "invoices.einvoice.reception.confirm";
 
+/**
+ * Stav textu poverenia. Text verzie EINVOICE_MANDATE_STATEMENT_VERSION je NÁVRH (DRAFT), kým ho
+ * prevádzkovateľ (po konzultácii s CLIA) výslovne neschváli — docs/einvoice-mandate-and-safety-2026-11-19.md §9.1.
+ * DRAFT: udelenie poverenia (enroll aj regrant) je povolené IBA v prostredí sandbox; v live sa odmietne
+ * (409 MANDATE_STATEMENT_NOT_APPROVED) PRED akýmkoľvek zápisom alebo volaním poskytovateľa.
+ * Prepnutie na "APPROVED" = vedomé rozhodnutie prevádzkovateľa (commit + záznam v dokumentácii).
+ */
+export type MandateStatementStatus = "DRAFT_PENDING_OPERATOR_APPROVAL" | "APPROVED";
+export const EINVOICE_MANDATE_STATEMENT_STATUS = "DRAFT_PENDING_OPERATOR_APPROVAL" as MandateStatementStatus;
+
+/** Smie sa v danom prostredí zbierať poverenie s aktuálnym textom? live iba so schváleným textom (fail closed). */
+export function mandateStatementUsableIn(environment: string, status: MandateStatementStatus = EINVOICE_MANDATE_STATEMENT_STATUS): boolean {
+  if (environment === "sandbox") return true;
+  return environment === "live" && status === "APPROVED";
+}
+
 export type MandateScope = "send" | "receive";
 
 /** Z odpovede esblu_einvoice_my_mandate: obsahuje účinný rozsah `scope`? Čokoľvek iné = nie (fail closed). */

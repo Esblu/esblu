@@ -1,7 +1,7 @@
 import "server-only";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { EINVOICE_MANDATE_STATEMENT_VERSION } from "../mandate-statement.ts";
+import { EINVOICE_MANDATE_STATEMENT_VERSION, mandateStatementUsableIn } from "../mandate-statement.ts";
 import { canonicalSha256, regrantEffectiveScope, type MandateEvidence, type MandateStatement, type MandateStore } from "../mandate.ts";
 import type { EinvoiceEnvironment, EinvoiceProvider } from "../provider/types.ts";
 import { accessFailure, type AccessResult } from "./summary-server.ts";
@@ -100,6 +100,8 @@ export async function changeMandate(deps: MandateRouteDeps, raw: unknown): Promi
   // grant (regrant) — organizácia musí byť registrovaná a spôsobilá odosielať.
   if (!acc.access.entitlementActive) return { status: 403, body: { code: "ENTITLEMENT_REQUIRED" } };
   if (!acc.access.rolloutEnabled) return { status: 403, body: { code: "ROLLOUT_NOT_ENABLED" } };
+  // Text poverenia je DRAFT, kým ho prevádzkovateľ neschváli → v live sa poverenie neudelí (odvolanie áno).
+  if (!mandateStatementUsableIn(environment)) return { status: 409, body: { code: "MANDATE_STATEMENT_NOT_APPROVED" } };
   const org = await deps.db
     .from("einvoice_organizations")
     .select("provider, provider_org_id, reception_status")

@@ -155,6 +155,13 @@ op cez HTTP reception route alebo regrant.
 ## 9. Rozhodnutia pre prevádzkovateľa
 
 1. **Text poverenia** (sk/en/de) bol rozšírený o vyhlásenie o oprávnení konať za firmu a poverenie Esblu — schváliť / upraviť s CLIA (zmena = nová verzia).
+   **Stav: DRAFT** — verzia `efaktura-mandate-2026-11-19` je v kóde označená
+   `EINVOICE_MANDATE_STATEMENT_STATUS = "DRAFT_PENDING_OPERATOR_APPROVAL"` (`lib/einvoice/mandate-statement.ts`).
+   Kým je DRAFT, udelenie poverenia (enroll aj regrant) funguje iba v `sandbox`; v `live` route vráti
+   409 `MANDATE_STATEMENT_NOT_APPROVED` pred akýmkoľvek zápisom či volaním poskytovateľa (odvolanie funguje vždy).
+   Každý zapísaný mandát nesie `statement_version` + SHA-256 presného textu, takže sandbox mandáty s DRAFT textom sú
+   jednoznačne odlíšiteľné. Schválenie = prevádzkovateľ zmení konštantu na `APPROVED` (commit) a zapíše rozhodnutie sem;
+   zmena textu = nová verzia + nové pripnuté hashe (`scripts/einvoice-mandate-tests.ts`).
 2. Kto smie udeliť mandát: dnes `finance.manage` (owner, účtovník, admin s oprávnením); deregistráciu iba owner. Obmedziť udelenie na ownera?
 3. **Retencia** `einvoice_mandates` / `einvoice_deregistrations` / `einvoice_ops_alerts` (vrátane pseudonymizovaného IP hashu) a jej zosúladenie s archívom pri ukončení firmy (D-G1).
 4. Politika 402: ponechať terminálne `failed` + alert, alebo meniť na „hold“ do doplnenia kreditu.
@@ -162,3 +169,29 @@ op cez HTTP reception route alebo regrant.
 6. Frekvencia deregistračného jobu: dnes hodinový maintenance cron (+ okamžitý pokus v route); `vercel.json` sa nemenil.
 7. Deregistrácia je nevratná aj keď následný výmaz firmy zlyhá (napr. iná kontrola) — akceptovať, alebo pridať samostatné potvrdenie.
 8. UI pre odvolanie / opätovné udelenie mandátu (dnes iba API) a notifikácia ownera pri `participant.deactivated`.
+9. Odchod / výmaz používateľa, ktorý mandát udelil, mandát **automaticky neodvoláva** (poverenie je firmy; dôkaz so
+   snapshotom ostáva). Ak má odchod udeľujúceho mandát ukončiť, treba to doplniť (trigger na `company_members`).
+10. DB vrstva (`esblu_einvoice_mandate_grant`) neoveruje `statement_version` voči aktuálnej verzii ani `reception_status`
+    org (`deactivated`) — to robí route (409 `MANDATE_STATEMENT_OUTDATED` / `ORGANIZATION_NOT_READY`). RPC je iba
+    service_role, takže ide o obranu do hĺbky, nie o otvorenú cestu.
+
+## 10. Overenie pokrytia testami (esblu8, 2026-11-19)
+
+| Scenár | Test |
+|---|---|
+| Neplatný text (zastaraná verzia → 409, chybný hash / rozsah → CHECK) | `einvoice-reception-tests`, `einvoice-mandate-tests`, `einvoice-mandate-safety-pglite-tests` |
+| Text = DRAFT → live grant/enroll 409 `MANDATE_STATEMENT_NOT_APPROVED`, sandbox OK, revoke vždy | `einvoice-mandate-tests`, `einvoice-reception-tests` |
+| Odvolaný mandát (claim, INSERT, UPDATE in-flight, re-confirm zakázaný) | `einvoice-mandate-safety-pglite-tests` |
+| Zmena firmy (2 členstvá, prepnutie aktívnej firmy v session, mandát C neplatí pre B) | `einvoice-mandate-safety-pglite-tests` |
+| Zlá identita (nečlen, `disabled` členstvo, neexistujúci / zmazaný používateľ, employee, admin bez financií, null) | `einvoice-mandate-safety-pglite-tests`, `einvoice-reception-tests` |
+| Duplicitné udelenie (nový auditný riadok, confirm idempotentný, revoke všetkých) | `einvoice-mandate-safety-pglite-tests` |
+| Replay webhooku (`participant.deactivated` 2×, starší / novší `participant.activated`) | `einvoice-mandate-safety-pglite-tests`; dedupe / replay webhooku (rovnaké ID, iné telo → 409): `einvoice-inbound`, `einvoice-hardening` |
+| Cudzia firma (RLS mandátov, outbound, org, faktúr) | `einvoice-mandate-safety-pglite-tests` |
+| Výpadok poskytovateľa pri enroll (503) → mandát ukončený `system`, org nezmenená, retry → ENROLLED | `einvoice-reception-tests` |
+| Enroll OK, zápis potvrdenia zlyhá → `RECORD_FAILED`, odosielanie blokované, regrant opraví | `einvoice-reception-tests` |
+| Väzba na org poskytovateľa (`provider_org_id` z `einvoice_organizations`, bez org → `ORGANIZATION_NOT_READY`, sandbox org neplatí pre live) | `einvoice-mandate-safety-pglite-tests`, `einvoice-reception-tests` |
+
+Akcie vyžadujúce mandát: **odoslanie** (DB brána INSERT/UPDATE + claim + app-level `MANDATE_REQUIRED` v
+`lib/einvoice/outbound/request.ts`); **enroll / aktivácia príjmu** (udelenie sa zapíše pred volaním poskytovateľa, inak
+sa enroll nevykoná). Rozsah `receive` sa zaznamenáva, ale **príjem (inbound) nie je mandátom blokovaný** — doručenie
+riadi poskytovateľ (Peppol registrácia); odvolanie príjmu = deregistrácia (bod 3) alebo `participant.deactivated`.

@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { EINVOICE_MANDATE_STATEMENT_VERSION, mandateAllows } from "../lib/einvoice/mandate-statement.ts";
+import { EINVOICE_MANDATE_STATEMENT_STATUS, EINVOICE_MANDATE_STATEMENT_VERSION, mandateAllows, mandateStatementUsableIn } from "../lib/einvoice/mandate-statement.ts";
 import { canonicalSha256, enrollEffectiveScope, mandateReasonCode, mandateStatement, regrantEffectiveScope, requestEvidence, type MandateStore } from "../lib/einvoice/mandate.ts";
 import { classifyDeactivateError, ensureCompanyDeregistered, runDeregistrationBatch, type DeregistrationJob, type DeregistrationStore } from "../lib/einvoice/deregistration.ts";
 import { alertForProviderError, createOpsAlertSink, type OpsAlertInput, type OpsAlertNotification, type OpsAlertStore } from "../lib/einvoice/ops/alert-sink.ts";
@@ -131,6 +131,28 @@ await check("route mandátu: telo striktne; revoke = finance.manage, kind user; 
   // deactivated org → nie
   r = await changeMandate({ ...base, db: fakeDb({ company: "c1", org: { provider: "efaktura_sk", provider_org_id: "org-1", reception_status: "deactivated" } }), access: okAccess(), store: () => m.store }, { action: "grant", confirm_mandate: true, mandate_version: EINVOICE_MANDATE_STATEMENT_VERSION });
   assert.equal(r.status, 409);
+});
+
+await check("text poverenia = DRAFT čakajúci na schválenie prevádzkovateľa: live grant/enroll 409 bez zápisu a bez volania poskytovateľa; sandbox a revoke OK", async () => {
+  assert.equal(EINVOICE_MANDATE_STATEMENT_STATUS, "DRAFT_PENDING_OPERATOR_APPROVAL", "schválenie = vedomá zmena konštanty + záznam v docs");
+  assert.equal(mandateStatementUsableIn("sandbox"), true);
+  assert.equal(mandateStatementUsableIn("live"), false);
+  assert.equal(mandateStatementUsableIn("live", "APPROVED"), true);
+  assert.equal(mandateStatementUsableIn("prod"), false, "neznáme prostredie = fail closed");
+  let providerCalls = 0;
+  const liveProvider = { name: "efaktura_sk", getOrganization: async () => { providerCalls++; return {}; } } as never;
+  const base = { userId: "u1", runtime: { provider: liveProvider, environment: "live" as const }, statement: mandateStatement("sk"), evidence: () => ({ requestId: null, ipSha256: null, userAgentSha256: null }) };
+  const m = memoryMandates();
+  const org = { provider: "efaktura_sk", provider_org_id: "org-1", reception_status: "active" };
+  let r = await changeMandate({ ...base, db: fakeDb({ company: "c1", org }), access: okAccess(), store: () => m.store }, { action: "grant", confirm_mandate: true, mandate_version: EINVOICE_MANDATE_STATEMENT_VERSION });
+  assert.deepEqual([r.status, r.body.code], [409, "MANDATE_STATEMENT_NOT_APPROVED"]);
+  assert.deepEqual(m.log, [], "nič sa nezapísalo");
+  assert.equal(providerCalls, 0, "poskytovateľ sa nevolal");
+  r = await changeMandate({ ...base, db: fakeDb({ company: "c1", org }), access: okAccess(), store: () => m.store }, { action: "revoke", confirm_revoke: true });
+  assert.deepEqual([r.status, r.body.code], [200, "REVOKED"], "odvolanie je vždy možné");
+  const doc = read("docs/einvoice-mandate-and-safety-2026-11-19.md");
+  assert.match(doc, /DRAFT_PENDING_OPERATOR_APPROVAL/);
+  assert.match(doc, new RegExp(EINVOICE_MANDATE_STATEMENT_VERSION));
 });
 
 // ----------------------------------------------------------------------------- alerty

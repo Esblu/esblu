@@ -3,7 +3,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { enrollCompany, provisionCompany, receptionView, type OnboardingDeps, type OrganizationState, type ReceptionStatus, type ReceptionView } from "../onboarding.ts";
 import type { EinvoiceAccess } from "./types.ts";
-import { EINVOICE_MANDATE_STATEMENT_VERSION } from "../mandate-statement.ts";
+import { EINVOICE_MANDATE_STATEMENT_VERSION, mandateStatementUsableIn } from "../mandate-statement.ts";
 import { enrollEffectiveScope, mandateReasonCode, type MandateEvidence, type MandateStatement, type MandateStore } from "../mandate.ts";
 import { accessFailure, type AccessResult } from "./summary-server.ts";
 
@@ -133,6 +133,8 @@ export async function enrollReception(deps: EnrollDeps, rawBody: unknown): Promi
   if (!acc.access.entitlementActive) return { status: 403, body: { code: "ENTITLEMENT_REQUIRED" } };
   if (!acc.access.providerConfigured || !deps.environment) return { status: 503, body: { code: "NOT_CONFIGURED" } };
   if (!acc.access.rolloutEnabled) return { status: 403, body: { code: "ROLLOUT_NOT_ENABLED" } };
+  // Text poverenia je DRAFT, kým ho prevádzkovateľ neschváli → v live sa poverenie nezbiera (nič sa nezapíše, poskytovateľ sa nevolá).
+  if (!mandateStatementUsableIn(deps.environment)) return { status: 409, body: { code: "MANDATE_STATEMENT_NOT_APPROVED" } };
 
   const company = await deps.db.rpc("esblu_my_active_company_id");
   const companyId = typeof company.data === "string" ? company.data : null;

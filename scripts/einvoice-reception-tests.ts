@@ -10,6 +10,8 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { createPartnerHarness } from "./einvoice-partner-harness.ts";
 import { createFakeSandbox } from "./einvoice-partner-fake-sandbox.ts";
 import { EfakturaSkProvider } from "../lib/einvoice/provider/efaktura-sk.ts";
+import { EinvoiceProviderError } from "../lib/einvoice/provider/types.ts";
+import { changeMandate } from "../lib/einvoice/ui/mandate-server.ts";
 import { enrollReception, loadReception, parseEnrollBody } from "../lib/einvoice/ui/reception-server.ts";
 import { classifyAccessError, loadAccessFlags, type RpcLike } from "../lib/einvoice/ui/access.ts";
 import { accessFailure, loadAccessResult } from "../lib/einvoice/ui/summary-server.ts";
@@ -60,6 +62,7 @@ await check("telo: presne {verification_code, confirm_enroll:true, mandate_versi
 const h = await createPartnerHarness();
 const CA = "a2000000-0000-4000-8000-0000000000aa";
 const CB = "b2000000-0000-4000-8000-0000000000bb";
+const CC = "c2000000-0000-4000-8000-0000000000cc";
 const U = {
   owner: "12000000-0000-4000-8000-000000000001",
   adminFin: "12000000-0000-4000-8000-000000000002",
@@ -67,20 +70,23 @@ const U = {
   employee: "12000000-0000-4000-8000-000000000004",
   accountant: "12000000-0000-4000-8000-000000000005",
   otherOwner: "22000000-0000-4000-8000-000000000001",
+  ownerC: "42000000-0000-4000-8000-000000000001",
 };
 await h.exec(`
   insert into auth.users (id) values ${Object.values(U).map((u) => `('${u}')`).join(", ")};
-  insert into public.companies (id, name) values ('${CA}', 'A'), ('${CB}', 'B');
+  insert into public.companies (id, name) values ('${CA}', 'A'), ('${CB}', 'B'), ('${CC}', 'C');
   insert into public.company_members (company_id, user_id, role, permissions) values
     ('${CA}', '${U.owner}', 'owner', '{}'),
     ('${CA}', '${U.adminFin}', 'admin', '{"finance":{"view":true,"manage":true}}'),
     ('${CA}', '${U.admin}', 'admin', '{}'),
     ('${CA}', '${U.employee}', 'employee', '{"finance":{"view":true,"manage":true}}'),
     ('${CA}', '${U.accountant}', 'accountant', '{}'),
-    ('${CB}', '${U.otherOwner}', 'owner', '{}');
+    ('${CB}', '${U.otherOwner}', 'owner', '{}'),
+    ('${CC}', '${U.ownerC}', 'owner', '{}');
   insert into public.company_billing_profile (company_id, legal_name, ico, dic, ic_dph, address_line1, city, postal_code, country_code)
     values ('${CA}', 'Recepcia A s.r.o.', '35759500', '2021111111', 'SK2021111111', 'Ulica 1', 'Bratislava', '81101', 'SK'),
-           ('${CB}', 'Recepcia B s.r.o.', '36421928', '2022222220', 'SK2022222220', 'Ulica 2', 'Košice', '04001', 'SK');
+           ('${CB}', 'Recepcia B s.r.o.', '36421928', '2022222220', 'SK2022222220', 'Ulica 2', 'Košice', '04001', 'SK'),
+           ('${CC}', 'Recepcia C s.r.o.', '47111222', '2023333330', 'SK2023333330', 'Ulica 3', 'Žilina', '01001', 'SK');
 `);
 
 const fake = createFakeSandbox();
@@ -93,6 +99,7 @@ const access = (over: Partial<{ entitlementActive: boolean; rolloutEnabled: bool
 let providerCalls = 0;
 let mandateStore: MandateStore | null = h.mandates;
 const STATEMENT = mandateStatement("sk");
+let providerOverride: (EfakturaSkProvider & Record<string, unknown>) | null = null;
 const deps = (uid: string, over = {}) => ({
   db: h.userDb(uid),
   access: access(over),
@@ -104,7 +111,7 @@ const deps = (uid: string, over = {}) => ({
   evidence: () => ({ requestId: "req-test-1", ipSha256: "1".repeat(64), userAgentSha256: "2".repeat(64) }),
   onboarding: () => {
     providerCalls++;
-    return { store: h.onboarding, provider, environment: "sandbox" as const };
+    return { store: h.onboarding, provider: providerOverride ?? provider, environment: "sandbox" as const };
   },
 });
 const orgRow = async (c: string) => (await h.sql<Record<string, unknown>>("select * from public.einvoice_organizations where company_id = $1", [c])).rows[0] ?? null;
@@ -182,6 +189,37 @@ await check("mandát: bez zápisu dôkazu sa enroll nevykoná (500 MANDATE_RECOR
   }
   assert.equal(fake.requests.filter((r) => r.path === "/v1/agent/peppol/enroll").length, before, "enroll sa nevolal");
 });
+await check("text poverenia DRAFT: enroll v live → 409 MANDATE_STATEMENT_NOT_APPROVED bez zápisu mandátu a bez volania poskytovateľa", async () => {
+  const before = { calls: providerCalls, http: fake.requests.length, m: (await h.sql("select id from public.einvoice_mandates")).rows.length };
+  const r = await enrollReception({ ...deps(U.owner), environment: "live" as const }, body(CODE_OK));
+  assert.deepEqual([r.status, (r.body as { code: string }).code], [409, "MANDATE_STATEMENT_NOT_APPROVED"]);
+  assert.equal(providerCalls, before.calls);
+  assert.equal(fake.requests.length, before.http);
+  assert.equal((await h.sql("select id from public.einvoice_mandates")).rows.length, before.m);
+});
+await check("výpadok poskytovateľa pri enroll (503, retryable): udelenie zapísané a ukončené (system), stav org nezmenený, odosielanie blokované", async () => {
+  const orgBefore = await orgRow(CA);
+  const enrollCallsBefore = fake.requests.filter((r) => r.path === "/v1/agent/peppol/enroll").length;
+  providerOverride = Object.assign(Object.create(provider), {
+    enrollPeppol: async () => { throw new EinvoiceProviderError("EINVOICE_PROVIDER_UNAVAILABLE", "503", true); },
+  });
+  let r;
+  try {
+    r = await enrollReception(deps(U.owner), body(CODE_OK));
+  } finally {
+    providerOverride = null;
+  }
+  assert.equal(r.status, 503, JSON.stringify(r.body));
+  assert.equal((r.body as { code: string }).code, "EINVOICE_PROVIDER_UNAVAILABLE");
+  assert.equal(fake.requests.filter((x) => x.path === "/v1/agent/peppol/enroll").length, enrollCallsBefore, "sieťová chyba nezmenila nič u poskytovateľa");
+  const after = await orgRow(CA);
+  assert.deepEqual([after?.reception_status, after?.reception_error_code, after?.provider_org_id], [orgBefore?.reception_status, orgBefore?.reception_error_code, orgBefore?.provider_org_id], "503 nemení stav org");
+  const [m] = (await h.sql<Record<string, unknown>>("select * from public.einvoice_mandates where company_id = $1 order by granted_at desc, created_at desc limit 1", [CA])).rows;
+  assert.deepEqual([m.effective_at, m.revoked_by_kind, m.revocation_reason_code], [null, "system", "EINVOICE_PROVIDER_UNAVAILABLE"]);
+  const eff = (await h.sql<{ e: boolean }>("select public.esblu_einvoice_mandate_effective($1, 'sandbox', 'send') e", [CA])).rows[0].e;
+  assert.equal(eff, false, "bez účinného mandátu sa nič neodošle");
+  // nasledujúci test = opakovanie (retry) tou istou firmou → ENROLLED + nový účinný mandát
+});
 await check("platný kód (admin s finance.manage) → 200 ENROLLED, príjem aj odosielanie aktívne", async () => {
   const r = await enrollReception(deps(U.adminFin), body(CODE_OK));
   assert.equal(r.status, 200, JSON.stringify(r.body));
@@ -213,6 +251,32 @@ await check("send_only (iná firma B, vlastný owner) → 200 SEND_ONLY: odosiel
 await check("mandát: send_only → účinný iba 'send' (príjem drží iný poskytovateľ)", async () => {
   const [m] = (await h.sql<Record<string, unknown>>("select effective_scope, provider_outcome from public.einvoice_mandates where company_id = $1 and effective_at is not null", [CB])).rows;
   assert.deepEqual(m, { effective_scope: ["send"], provider_outcome: "ENROLL_SEND_ONLY" });
+});
+await check("enroll OK, ale zápis potvrdenia mandátu zlyhá → 200 + mandate RECORD_FAILED; odosielanie blokované; regrant (/api/einvoice/mandate) to opraví", async () => {
+  mandateStore = { ...h.mandates, confirm: async () => { throw new Error("DB down"); } };
+  let r;
+  try {
+    r = await enrollReception(deps(U.ownerC), body(CODE_OK));
+  } finally {
+    mandateStore = h.mandates;
+  }
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.deepEqual([(r.body as { code: string }).code, (r.body as { mandate?: string }).mandate], ["ENROLLED", "RECORD_FAILED"]);
+  const eff = async () => (await h.sql<{ e: boolean }>("select public.esblu_einvoice_mandate_effective($1, 'sandbox', 'send') e", [CC])).rows[0].e;
+  assert.equal(await eff(), false, "enroll prebehol, ale bez účinného mandátu sa neodosiela");
+  const pending = (await h.sql<Record<string, unknown>>("select effective_at, revoked_at, provider_org_id from public.einvoice_mandates where company_id = $1", [CC])).rows;
+  assert.equal(pending.length, 1);
+  assert.deepEqual([pending[0].effective_at, pending[0].revoked_at], [null, null]);
+  assert.equal(pending[0].provider_org_id, (await orgRow(CC))?.provider_org_id, "mandát je viazaný na org poskytovateľa firmy");
+  const g = await changeMandate({
+    db: h.userDb(U.ownerC), access: access(), userId: U.ownerC, runtime: { provider, environment: "sandbox" },
+    store: () => h.mandates, statement: STATEMENT, evidence: () => ({ requestId: "req-regrant", ipSha256: null, userAgentSha256: null }),
+  }, { action: "grant", confirm_mandate: true, mandate_version: V });
+  assert.deepEqual([g.status, g.body.code], [200, "GRANTED"], JSON.stringify(g.body));
+  assert.equal(await eff(), true);
+  const [m] = (await h.sql<Record<string, unknown>>("select grant_channel, provider_outcome, provider_org_id from public.einvoice_mandates where company_id = $1 and effective_at is not null", [CC])).rows;
+  assert.deepEqual([m.grant_channel, m.provider_outcome], ["regrant", "ORG_VERIFIED"]);
+  assert.equal(m.provider_org_id, (await orgRow(CC))?.provider_org_id);
 });
 await check("overovací kód sa nikde neuloží ani nezaloguje; odpoveď neobsahuje ID poskytovateľa ani participant ID", async () => {
   const dump = JSON.stringify((await h.sql("select * from public.einvoice_organizations")).rows) + JSON.stringify((await h.sql("select * from public.einvoice_webhook_events")).rows);

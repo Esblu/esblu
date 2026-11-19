@@ -504,6 +504,149 @@ await check("4. dôkazy prežijú ukončenie firmy: termination A (waived) po de
   assert.ok(before[0].m > 0 && before[0].d > 0);
 });
 
+// ============================================================================= 8. identita, zmena firmy, duplicity, replay
+// Firma C (org-c): ownerC; multi = owner C + employee B (dve členstvá → aktívna firma podľa session);
+// stranger = bez členstva; disabled = admin s financiami, členstvo 'disabled'; gone = admin s financiami, neskôr zmazaný.
+const X = {
+  c: "f3000000-0000-4000-8000-00000000000c",
+  invC: "f4000000-0000-4000-8000-0000000000c1",
+  ownerC: "f1000000-0000-4000-8000-0000000000c1",
+  multi: "f1000000-0000-4000-8000-0000000000c2",
+  stranger: "f1000000-0000-4000-8000-0000000000c3",
+  disabled: "f1000000-0000-4000-8000-0000000000c4",
+  gone: "f1000000-0000-4000-8000-0000000000c5",
+  sMulti: "f2000000-0000-4000-8000-0000000000c2",
+};
+const multiWho: Who = { role: "authenticated", uid: X.multi, session: X.sMulti };
+await check("príprava: firma C + používatelia s rôznou identitou (syntetické)", async () => {
+  await db.exec(`
+    insert into auth.users (id, email, email_confirmed_at, raw_user_meta_data) values
+      ('${X.ownerC}', 'ownerc@example.invalid', now(), '{}'), ('${X.multi}', 'multi@example.invalid', now(), '{}'),
+      ('${X.stranger}', 'stranger@example.invalid', now(), '{}'), ('${X.disabled}', 'disabled@example.invalid', now(), '{}'),
+      ('${X.gone}', 'gone@example.invalid', now(), '{"full_name":"Gustáv Odídený"}');
+    insert into auth.sessions (id, user_id) values ('${X.sMulti}', '${X.multi}');
+    set session_replication_role = replica;
+    insert into public.companies (id, owner_id, name) values ('${X.c}', '${X.ownerC}', 'Firma C s.r.o.');
+    insert into public.company_members (company_id, user_id, role, status, permissions) values
+      ('${X.c}', '${X.ownerC}', 'owner', 'active', '{}'),
+      ('${X.c}', '${X.multi}', 'admin', 'active', '{"finance":{"view":true,"manage":true}}'),
+      ('${C.b}', '${X.multi}', 'employee', 'active', '{}'),
+      ('${X.c}', '${X.disabled}', 'admin', 'disabled', '{"finance":{"view":true,"manage":true}}'),
+      ('${X.c}', '${X.gone}', 'admin', 'active', '{"finance":{"view":true,"manage":true}}');
+    insert into public.company_entitlements (company_id, entitlement_key, source, status, limit_value, limit_period) values
+      ('${X.c}', 'einvoice', 'manual', 'active', null, null);
+    insert into public.invoices (id, company_id, direction, kind, document_status, finalized_at, invoice_number) values
+      ('${X.invC}', '${X.c}', 'issued', 'regular_invoice', 'finalized', now(), 'C-1');
+    insert into public.einvoice_rollout (company_id, environment, stage, changed_by) values ('${X.c}', 'sandbox', 'internal', 'test');
+    set session_replication_role = origin;
+  `);
+});
+
+await check("identita: grant bez org u poskytovateľa → ORGANIZATION_NOT_READY (mandát vždy viazaný na provider_org_id)", async () => {
+  const o = await grant(X.ownerC, X.c);
+  assert.match(o.message, /ESBLU_EINVOICE_ORGANIZATION_NOT_READY/);
+  // seed obchádza DPA trigger (ako seed firiem A/B vyššie) — testuje sa mandát, nie onboarding
+  await db.exec(`set session_replication_role = replica;
+    insert into public.einvoice_organizations (company_id, provider, environment, provider_org_id, participant_id, peppol_eligible, reception_status, onboarding_snapshot)
+    values ('${X.c}', 'efaktura_sk', 'sandbox', 'org-c', '9915:c0000009', true, 'active', '{"ico":"11223344"}');
+    set session_replication_role = origin;`);
+  const live = await svcCommit(`select public.esblu_einvoice_mandate_grant($1, $2, 'live', '{send}', 'efaktura-mandate-2026-11-19', $3, 'sk', true, 'enroll', null, null, null)`, [X.ownerC, X.c, SHA("a")]);
+  assert.match(live.message, /ESBLU_EINVOICE_ORGANIZATION_NOT_READY/, "sandbox org neplatí pre live");
+});
+
+await check("identita: nečlen, deaktivované členstvo, neexistujúci používateľ, null aktér → zamietnuté; nič sa nezapíše", async () => {
+  const before = Number((await su<{ n: number }>(`select count(*)::int n from public.einvoice_mandates where company_id = $1`, [X.c]))[0].n);
+  for (const actor of [X.stranger, X.disabled, "f1000000-0000-4000-8000-0000000000ff"]) {
+    const o = await grant(actor, X.c);
+    assert.match(o.message, /ESBLU_FORBIDDEN_FINANCE_MANAGE_REQUIRED/, actor);
+    const r = await svcCommit(`select public.esblu_einvoice_mandate_revoke($1, 'sandbox', 'user', $2, 'USER_REVOKED')`, [X.c, actor]);
+    assert.match(r.message, /ESBLU_FORBIDDEN_FINANCE_MANAGE_REQUIRED/, actor);
+  }
+  const n = await svcCommit(`select public.esblu_einvoice_mandate_grant(null, $1, 'sandbox', '{send}', 'v', $2, 'sk', true, 'enroll', null, null, null)`, [X.c, SHA("a")]);
+  assert.match(n.message, /NOT_AUTHENTICATED/);
+  assert.equal(Number((await su<{ n: number }>(`select count(*)::int n from public.einvoice_mandates where company_id = $1`, [X.c]))[0].n), before);
+});
+
+let mandateGone = "";
+await check("identita: zmazaný používateľ — po výmaze nemôže udeliť; jeho skorší mandát ostáva ako dôkaz (snapshot, bez FK)", async () => {
+  const g = await grant(X.gone, X.c, ["send"]);
+  assert.equal(g.layer, "ok", g.message);
+  mandateGone = String(g.data[0].id);
+  await confirm(mandateGone, ["send"]);
+  await db.exec(`delete from auth.users where id = '${X.gone}'`);
+  const again = await grant(X.gone, X.c);
+  assert.match(again.message, /ESBLU_FORBIDDEN_FINANCE_MANAGE_REQUIRED/);
+  const [m] = await su(`select granted_by_user_id, granted_by_name, granted_by_email, provider_org_id from public.einvoice_mandates where id = $1`, [mandateGone]);
+  assert.deepEqual(m, { granted_by_user_id: X.gone, granted_by_name: "Gustáv Odídený", granted_by_email: "gone@example.invalid", provider_org_id: "org-c" });
+  // Pozn.: odchod udeľujúceho mandát automaticky NEodvoláva (poverenie je firmy) — rozhodnutie prevádzkovateľa (docs §9).
+  assert.equal(await effective(X.c), true);
+});
+
+await check("duplicitné udelenie: druhý grant = nový auditný riadok (nie prepis); confirm idempotentný; revoke odvolá všetky", async () => {
+  const g1 = await grant(X.ownerC, X.c);
+  const g2 = await grant(X.ownerC, X.c);
+  assert.equal(g1.layer, "ok", g1.message);
+  assert.equal(g2.layer, "ok", g2.message);
+  assert.notEqual(g1.data[0].id, g2.data[0].id);
+  for (const id of [g1.data[0].id, g2.data[0].id, g2.data[0].id]) assert.equal((await confirm(String(id))).layer, "ok");
+  const [{ n }] = await su<{ n: number }>(`select count(*)::int n from public.einvoice_mandates where company_id = $1 and effective_at is not null and revoked_at is null`, [X.c]);
+  assert.equal(n, 3, "gone + 2× owner");
+  const r = await svcCommit(`select public.esblu_einvoice_mandate_revoke($1, 'sandbox', 'user', $2, 'USER_REVOKED') n`, [X.c, X.ownerC]);
+  assert.equal(Number(r.data[0].n), 3);
+  assert.equal(await effective(X.c), false);
+  assert.equal(await effective(X.c, "receive"), false);
+  const ins = await insertOutbound(X.c, X.invC);
+  assert.match(ins.message, /ESBLU_EINVOICE_MANDATE_REQUIRED/);
+});
+
+await check("zmena firmy: používateľ v 2 firmách — my_mandate podľa aktívnej firmy session; mandát C neplatí pre B; grant pre B ako employee zamietnutý", async () => {
+  const g = await grant(X.multi, X.c, ["send"]);
+  assert.equal(g.layer, "ok", g.message);
+  await confirm(String(g.data[0].id), ["send"]);
+  // bez kontextu (2 členstvá) → žiadna aktívna firma → 42501
+  let o = await run(multiWho, `select public.esblu_einvoice_my_mandate('sandbox') m`);
+  assert.match(o.message, /ESBLU_FORBIDDEN/);
+  await db.exec(`insert into public.session_active_company (session_id, user_id, company_id) values ('${X.sMulti}', '${X.multi}', '${X.c}')`);
+  o = await run(multiWho, `select public.esblu_einvoice_my_mandate('sandbox') m`);
+  assert.deepEqual((o.data[0].m as { effective_scope: string[] }).effective_scope, ["send"]);
+  o = await run(multiWho, `select company_id from public.einvoice_mandates`);
+  assert.ok(o.data.length > 0 && o.data.every((r) => r.company_id === X.c), "RLS: iba aktívna firma C");
+  await db.exec(`update public.session_active_company set company_id = '${C.b}' where session_id = '${X.sMulti}'`);
+  o = await run(multiWho, `select public.esblu_einvoice_my_mandate('sandbox') m`);
+  assert.match(o.message, /ESBLU_FORBIDDEN/, "v B je employee (bez finance.view)");
+  o = await run(multiWho, `select company_id from public.einvoice_mandates`);
+  assert.equal(o.data.length, 0, "po prepnutí na B nevidí mandáty C ani B");
+  assert.match((await grant(X.multi, C.b)).message, /ESBLU_FORBIDDEN_FINANCE_MANAGE_REQUIRED/);
+  assert.equal(await effective(C.b), false, "mandát C sa neprenáša na B");
+  assert.match((await insertOutbound(C.b, INV.b1)).message, /ESBLU_EINVOICE_MANDATE_REQUIRED/);
+  const okC = await insertOutbound(X.c, X.invC);
+  assert.equal(okC.layer, "ok", `C so svojím mandátom áno: ${okC.message}`);
+});
+
+await check("replay webhooku poskytovateľa: opakovaný participant.deactivated nič nezmení; starší participant.activated sa neaplikuje; mandát ostane odvolaný", async () => {
+  const ev = (event: string, at: string) =>
+    svcCommit(`select applied, reception_status from public.esblu_einvoice_org_participant_event('efaktura_sk', 'sandbox', 'org-c', $1, null, null, $2::timestamptz)`, [event, at]);
+  const t1 = "2026-11-19T10:00:00Z";
+  const first = await ev("participant.deactivated", t1);
+  assert.equal(first.layer, "ok", first.message);
+  const snap = async () => JSON.stringify(await su(`select id, revoked_at, revoked_by_kind, revocation_reason_code from public.einvoice_mandates where company_id = $1 order by id`, [X.c]));
+  const s1 = await snap();
+  assert.equal(await effective(X.c), false);
+  const replay = await ev("participant.deactivated", t1);
+  assert.equal(replay.layer, "ok", replay.message);
+  assert.equal(await snap(), s1, "replay nezmenil odvolania");
+  const old = await ev("participant.activated", "2026-11-19T09:00:00Z");
+  assert.equal(old.layer, "ok", old.message);
+  assert.equal(old.data[0].applied, false, "staršia udalosť sa neaplikuje");
+  assert.equal(await effective(X.c), false);
+  const [{ rs }] = await su<{ rs: string }>(`select reception_status rs from public.einvoice_organizations where company_id = $1`, [X.c]);
+  assert.equal(rs, "deactivated");
+  // aj novší participant.activated mandát neobnoví — odvolanie je write-once, treba nový grant
+  const newer = await ev("participant.activated", "2026-11-19T11:00:00Z");
+  assert.equal(newer.layer, "ok", newer.message);
+  assert.equal(await effective(X.c), false);
+});
+
 // ============================================================================= 6. alerty
 await check("alerty: dedupe — opakovaný 402 zvýši počítadlo, notifikácia iba raz za okno; resolve; nový výskyt = nový alert", async () => {
   const raise = () => svcCommit(`select * from public.esblu_einvoice_ops_alert_raise('PROVIDER_INSUFFICIENT_CREDIT', 'critical', 'efaktura_sk', 'sandbox', null, 'EINVOICE_PROVIDER_INSUFFICIENT_CREDIT')`);
