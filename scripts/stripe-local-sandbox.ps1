@@ -20,6 +20,12 @@
       qa-login     - prihlasenie syntetickeho ownera QA-STRIPE E (qa-stripe-e-owner@example.invalid): nove nahodne
                      heslo cez Supabase Admin API stagingu, iba do schranky (nevypisuje sa), odblokovanie pouzivatela
       qa-check     - firma E: zamery checkoutu, relacie v Stripe, predplatne, zrusenie; invarianty dvoch kariet
+      s12-account  - S12: ucet a typ kluca (bez vypisu), test mode, opravnenie citat ucet a udalosti
+      s12-events   - S12: skutocne strankovanie /v1/events (ending_before) a poradie od najstarsej
+      s12-catchup  - S12: 2x lokalny cron /api/cron/billing-stripe-events (druhy beh = nic nove) + kurzor v DB
+      s12-cancel-at - S13: cancel_at uprostred obdobia (test clock) -> Esblu scheduled_end_at, naroky do datumu;
+                     posun hodin za datum -> Stripe ukonci, Esblu canceled bez 48 h (cez dotahovanie, ak -NoListen)
+      s12-refund-missing - S12: plna refundacia aktualnej faktury BEZ webhooku (okno 1 s -NoListen) -> dotahovanie
       status       - stav v Stripe aj v Esblu + posledne riadky stripe listen (tajomstva zamaskovane)
     Kazdy krok vypise OK AZ ked je vysledok overeny v Stripe AJ v testovacej DB Esblu.
 
@@ -35,8 +41,11 @@
 #>
 param(
   [ValidateSet("start", "status", "new-sandbox", "clock-setup", "renew", "fail-renew", "fix-payment", "refund-partial", "refund-full",
-               "refund-old", "refund-current", "reconcile", "advance-check", "verify-terminal", "qa-login", "qa-check")]
+               "refund-old", "refund-current", "reconcile", "advance-check", "verify-terminal", "qa-login", "qa-check",
+               "s12-account", "s12-events", "s12-catchup", "s12-cancel-at", "s12-refund-missing")]
   [string]$Step = "start",
+  # Okno 1 BEZ stripe listen: ziadny webhook sa nedoruci, synchronizacia iba cez dotahovanie (S12).
+  [switch]$NoListen,
   [string]$Project = "esblu-qa2",
   [string]$Email = "",
   [string]$CheckoutId = "",
@@ -58,6 +67,7 @@ $ClockFile = Join-Path $StateDir "clock-$Project.json"
 $SandboxFile = Join-Path $StateDir "sandbox-$Project.json"     # cena sandboxu (nie je tajna)
 $ExposedFile = Join-Path $StateDir "exposed.sha256"             # SHA-256 vystaveneho whsec (nie tajomstvo)
 $CronFile = Join-Path $StateDir "cron-$Project.secret"          # nahodny lokalny CRON_SECRET (iba pocas behu okna 1)
+$NoListenFile = Join-Path $StateDir "nolisten-$Project.flag"     # okno 1 bezi bez stripe listen (S12 testy)
 $CompanyD = "5a5a0000-0000-4000-8000-0000000000d0"              # QA-STRIPE D (test clock)
 $OwnerD = "5a5a0000-0000-4000-8000-000000000031"
 $CompanyE = "5a5a0000-0000-4000-8000-0000000000e0"              # QA-STRIPE E (dve karty + zrusenie v aplikacii)
@@ -224,13 +234,24 @@ function Get-ListenSecret([string[]]$cli) {
 function Get-EsbluAccount([string]$subId) {
   $k = Get-ServiceRole
   $h = @{ apikey = $k; Authorization = "Bearer $k" }
-  $u = "$StagingUrl/rest/v1/subscription_accounts?provider_subscription_id=eq.$subId&select=status,plan_code,current_period_end,cancel_at_period_end,company_id"
+  $u = "$StagingUrl/rest/v1/subscription_accounts?provider_subscription_id=eq.$subId&select=status,plan_code,current_period_end,cancel_at_period_end,scheduled_end_at,company_id"
   $rows = Invoke-RestMethod -Uri $u -Headers $h -Method Get
   if ($rows -and $rows.Count -gt 0) { return $rows[0] } else { return $null }
 }
 
+function Invoke-Catchup {
+  # Lokalny cron S12 (okno 1). Vracia JSON odpovede (iba pocty a kody).
+  if (-not (Test-Path $CronFile)) { Fail "Okno 1 nebezi s novou verziou skriptu (chyba lokalny CRON_SECRET) - restartuj okno 1." }
+  $cron = (Get-Content $CronFile -Raw).Trim()
+  try {
+    return Invoke-RestMethod -Uri "http://localhost:$Port/api/cron/billing-stripe-events" -Headers @{ Authorization = "Bearer $cron" } -Method Get
+  } catch { Fail "GET /api/cron/billing-stripe-events zlyhal: $(Get-HttpErrorText $_)" }
+}
+
 function Wait-Esblu([string]$subId, [scriptblock]$ok, [string]$what) {
   for ($i = 0; $i -lt 40; $i++) {
+    # Bez stripe listen (okno 1 -NoListen) prichadzaju zmeny IBA cez dotahovanie udalosti.
+    if (Test-Path $NoListenFile) { Invoke-Catchup | Out-Null }
     $acc = Get-EsbluAccount $subId
     if ($acc -and (& $ok $acc)) { return $acc }
     Start-Sleep -Seconds 3
@@ -686,6 +707,128 @@ if ($Step -ne "start") {
       } else { Say "Esblu: firma E zatial nema predplatne." }
       Say "OK: firma E - najviac 1 otvoreny zamer; po nakupe presne 1 dokonceny zamer a 1 zaplatena relacia; Esblu a Stripe zhodne."
     }
+    "s12-account" {
+      # Ucet a kluc bez vypisu tajomstva: iba prefix typu kluca a ID uctu (nie je tajne).
+      $h = @{ Authorization = "Bearer $k" }
+      $kind = if ($k -match "^rkcs_test_") { "rkcs_test (claimable sandbox)" } elseif ($k -match "^rk_test_") { "rk_test (restricted)" } elseif ($k -match "^sk_test_") { "sk_test (secret)" } else { "?" }
+      Say "Kluc: $kind (test mode; live kluce skript odmieta)"
+      try { $acct = Invoke-RestMethod -Uri "https://api.stripe.com/v1/account" -Headers $h -Method Get }
+      catch { Fail "GET /v1/account zlyhal: $(Get-HttpErrorText $_). Restricted kluc potrebuje opravnenie Account: Read (S12 kontrola uctu)." }
+      if ($acct.id -notmatch "^acct_[A-Za-z0-9]+$") { Fail "Neplatne ID uctu." }
+      Say "Ucet: $($acct.id) (zhoda s cenou profilu overena vyssie)"
+      try { $ev = Invoke-RestMethod -Uri "https://api.stripe.com/v1/events?limit=1" -Headers $h -Method Get }
+      catch { Fail "GET /v1/events zlyhal: $(Get-HttpErrorText $_). Restricted kluc potrebuje Events: Read." }
+      $first = @($ev.data | ForEach-Object { $_ })[0]
+      if ($first -and $first.livemode -ne $false) { Fail "Udalost nie je test mode." }
+      Say "Udalosti: citanie OK (posledna livemode=$(if ($first) { $first.livemode } else { '-' }))"
+      $cur = (Get-Rows "billing_event_cursors?provider=eq.stripe&environment=eq.test&select=account_ref,last_event_id,last_success_at,last_error_code,consecutive_failures")[0]
+      if ($cur) {
+        Say "Esblu kurzor: ucet=$($cur.account_ref) posledna=$($cur.last_event_id) uspech=$($cur.last_success_at) chyba=$($cur.last_error_code) zlyhania=$($cur.consecutive_failures)"
+        if ($cur.account_ref -ne $acct.id) { Say "POZOR: kurzor patri inemu uctu ($($cur.account_ref)) -> dotahovanie vrati ACCOUNT_MISMATCH (ocakavane pri zmene sandboxu; reset kurzora iba vedome)." }
+      } else { Say "Esblu kurzor: zatial nevznikol (prvy beh dotahovania = bootstrap)" }
+      Say "OK: test mode, ucet a opravnenia na citanie uctu a udalosti."
+    }
+    "s12-events" {
+      # Skutocne strankovanie Stripe: plny zoznam (od najnovsej) vs. prechod dopredu cez ending_before po 2.
+      $h = @{ Authorization = "Bearer $k" }
+      $all = @((Invoke-RestMethod -Uri "https://api.stripe.com/v1/events?limit=30" -Headers $h -Method Get).data | ForEach-Object { $_ })
+      if ($all.Count -lt 6) { Fail "Malo udalosti ($($all.Count)) - spusti najprv clock-setup / renew." }
+      $asc = @($all); [array]::Reverse($asc)
+      $start = $asc[0]
+      $cursor = $start.id; $walked = @()
+      for ($i = 0; $i -lt 30; $i++) {
+        $pg = Invoke-RestMethod -Uri "https://api.stripe.com/v1/events?limit=2&ending_before=$cursor" -Headers $h -Method Get
+        $page = @($pg.data | ForEach-Object { $_ })
+        if ($page.Count -eq 0) { break }
+        [array]::Reverse($page)
+        $walked += $page
+        $cursor = $page[$page.Count - 1].id
+        if (-not $pg.has_more) { break }
+      }
+      $expect = @($asc | Select-Object -Skip 1)
+      $n = [Math]::Min($expect.Count, $walked.Count)
+      for ($i = 0; $i -lt $n; $i++) {
+        if ($walked[$i].id -ne $expect[$i].id) { Fail "Poradie sa lisi na pozicii $($i): $($walked[$i].id) vs $($expect[$i].id) (ending_before nevracia bezprostredne novsie udalosti)." }
+        if ($i -gt 0 -and $walked[$i].created -lt $walked[$i - 1].created) { Fail "Udalosti nie su vzostupne podla casu." }
+      }
+      if ($walked.Count -lt $expect.Count) { Fail "Prechod dopredu nasiel $($walked.Count) z $($expect.Count) udalosti." }
+      $dupes = @($walked | Group-Object id | Where-Object { $_.Count -gt 1 }).Count
+      if ($dupes) { Fail "Duplicitne udalosti v prechode: $dupes." }
+      Say "Stripe: $($all.Count) udalosti; prechod od najstarsej cez ending_before (strany po 2) = $($walked.Count) udalosti, rovnake poradie, bez medzier a duplicit"
+      $badStatus = "200"
+      try { Invoke-RestMethod -Uri "https://api.stripe.com/v1/events?limit=1&ending_before=evt_neexistuje000000000000" -Headers $h -Method Get | Out-Null }
+      catch { $badStatus = (Get-HttpErrorText $_) }
+      Say "Neexistujuci kurzor: $badStatus (Esblu ocakava 400/404 -> cursor_missing -> bootstrap)"
+      if ($badStatus -notmatch "HTTP (400|404)") { Fail "Stripe pri neexistujucom kurzore nevratil 400/404 - upravit detekciu cursor_missing." }
+      Say "OK: strankovanie a poradie zodpovedaju implementacii S12."
+    }
+    "s12-catchup" {
+      $r1 = Invoke-Catchup
+      Say "Dotahovanie #1: result=$($r1.result) processed=$($r1.processed) outcomes=$(($r1.outcomes | ConvertTo-Json -Compress)) bootstrap=$($r1.bootstrap) cursorExpired=$($r1.cursorExpired) code=$($r1.code)"
+      if (-not $r1.configured) { Fail "Dotahovanie nie je nakonfigurovane (ESBLU_BILLING_MODE / DB web_provider)." }
+      if ($r1.result -ne "ok" -and $r1.result -ne "partial") { Fail "Dotahovanie skoncilo $($r1.result) ($($r1.code))." }
+      $r2 = Invoke-Catchup
+      Say "Dotahovanie #2: result=$($r2.result) processed=$($r2.processed) outcomes=$(($r2.outcomes | ConvertTo-Json -Compress))"
+      $applied2 = if ($r2.outcomes.applied) { [int]$r2.outcomes.applied } else { 0 }
+      if ($r1.result -eq "ok" -and $applied2 -ne 0) { Fail "Opakovany beh zmenil stav ($applied2 applied) - nie je idempotentny." }
+      $cur = (Get-Rows "billing_event_cursors?provider=eq.stripe&environment=eq.test&select=account_ref,last_event_id,events_processed,last_success_at,last_error_code,consecutive_failures,lease_owner")[0]
+      Say "Kurzor: ucet=$($cur.account_ref) posledna=$($cur.last_event_id) spracovanych=$($cur.events_processed) chyba=$($cur.last_error_code) zlyhania=$($cur.consecutive_failures) lease=$($cur.lease_owner)"
+      if ($cur.lease_owner) { Fail "Lease ostal drzany po skonceni behu." }
+      Say "OK: dotahovanie zo skutocneho Stripe API, opakovany beh bez zmeny."
+    }
+    "s12-cancel-at" {
+      $st = Get-ClockState; $subId = if ($Subscription) { $Subscription } else { $st.subscription }
+      $s = Get-Sub $subId
+      if ($s.status -ne "active") { Fail "Predplatne $subId nie je active ($($s.status)) - spusti clock-setup." }
+      $p = Get-Period $s
+      $clock = Get-StripeJson @("test_helpers", "test_clocks", "retrieve", $st.clock)
+      $cancelAt = [long]$clock.frozen_time + 3 * 86400
+      if ($cancelAt -ge $p.end - 600) { Fail "Obdobie konci prilis skoro na test uprostred obdobia." }
+      Invoke-Stripe @("subscriptions", "update", $subId, "-d", "cancel_at=$cancelAt", "-d", "proration_behavior=none") | Out-Null
+      $s1 = Get-Sub $subId; $p1 = Get-Period $s1
+      Say ("Stripe: cancel_at={0} cancel_at_period_end={1} obdobie {2} -> {3} (povodny koniec {4})" -f (Utc $s1.cancel_at), $s1.cancel_at_period_end, (Utc $p1.start), (Utc $p1.end), (Utc $p.end))
+      $truncated = ($p1.end -ne $p.end)
+      if ($truncated) { Say "ZISTENIE: Stripe skratil koniec obdobia na cancel_at -> Esblu to MUSI brat ako predcasny koniec (scheduled_end_at podla cancel_at_period_end=false)." }
+      $acc = Wait-Esblu $subId { param($a) $a.scheduled_end_at } "ulozenie scheduled_end_at"
+      $sched = [DateTime]::Parse($acc.scheduled_end_at).ToUniversalTime()
+      if ($sched -ne [DateTimeOffset]::FromUnixTimeSeconds($cancelAt).UtcDateTime) { Fail "Esblu scheduled_end_at $($acc.scheduled_end_at) != cancel_at $(Utc $cancelAt)." }
+      $ents = Get-Rows "company_entitlements?company_id=eq.$($acc.company_id)&source=eq.subscription&status=eq.active&select=valid_until"
+      $okUntil = @($ents | Where-Object { [DateTime]::Parse($_.valid_until).ToUniversalTime() -eq $sched }).Count
+      Say "Esblu: scheduled_end_at=$($acc.scheduled_end_at); naroky s valid_until = zvoleny datum: $okUntil / $($ents.Count)"
+      if ($ents.Count -eq 0 -or $okUntil -ne $ents.Count) { Fail "Naroky nekoncia k zvolenemu datumu (bez 48 h)." }
+      Move-Clock $st.clock ($cancelAt + 3600)
+      $s2 = Get-Sub $subId
+      for ($i = 0; $i -lt 30 -and $s2.status -ne "canceled"; $i++) { Start-Sleep -Seconds 3; $s2 = Get-Sub $subId }
+      Say "Stripe po posune hodin: stav=$($s2.status) ended_at=$(if ($s2.ended_at) { Utc $s2.ended_at } else { '-' })"
+      if ($s2.status -ne "canceled") { Fail "Stripe predplatne neukoncil k cancel_at." }
+      $acc2 = Wait-Esblu $subId { param($a) $a.status -eq "canceled" } "ukoncenie k zvolenemu datumu"
+      $n = Get-ActiveSubEnts $acc2.company_id
+      Say "Esblu: stav=$($acc2.status), ucinnych narokov $n (ocakavane 0 - predcasny koniec bez 48 h)"
+      if ($n -ne 0) { Fail "Po predcasnom konci ostali ucinne naroky." }
+      Say "OK: cancel_at uprostred obdobia = pristup presne do datumu, po skonceni bez rezervy."
+    }
+    "s12-refund-missing" {
+      if (-not (Test-Path $NoListenFile)) { Fail "Okno 1 musi bezat s -NoListen (webhook sa nesmie dorucit)." }
+      $st = Get-ClockState; $subId = if ($Subscription) { $Subscription } else { $st.subscription }
+      $sub = Get-Sub $subId
+      if ($sub.status -ne "active") { Fail "Predplatne $subId nie je active." }
+      $inv = (Get-PaidInvoices $subId) | Where-Object { $_.id -eq $sub.latest_invoice.id } | Select-Object -First 1
+      if (-not $inv) { Fail "Aktualna faktura nie je zaplatena." }
+      $pi = Get-InvoicePaymentIntent $inv
+      Invoke-Stripe @("refunds", "create", "-d", "payment_intent=$pi") | Out-Null
+      Say "Stripe: plna refundacia aktualnej faktury $($inv.id) (webhook sa NEdorucuje)"
+      $acc = Wait-Esblu $subId { param($a) $a.status -eq "refunded" } "refundacia cez dotahovanie"
+      $s = Get-Sub $subId
+      for ($i = 0; $i -lt 20 -and $s.status -ne "canceled"; $i++) { Start-Sleep -Seconds 3; $s = Get-Sub $subId }
+      $n = Get-ActiveSubEnts $acc.company_id
+      Say "Esblu: stav=$($acc.status), ucinnych narokov $n; Stripe: $($s.status)"
+      if ($s.status -ne "canceled" -or $n -ne 0) { Fail "Refundacia bez webhooku nebola uplne dotiahnuta." }
+      $r = Invoke-Catchup
+      $applied = if ($r.outcomes.applied) { [int]$r.outcomes.applied } else { 0 }
+      Say "Opakovane dotahovanie: processed=$($r.processed) applied=$applied (refunded ostava: $((Get-EsbluAccount $subId).status))"
+      if ((Get-EsbluAccount $subId).status -ne "refunded") { Fail "Stav sa zmenil po opakovanom dotahovani." }
+      Say "OK: chybajuci webhook plnej refundacie dotiahnuty, pristup aj uctovanie ukoncene, opakovanie bez zmeny."
+    }
     "status" {
       $subId = if ($Subscription) { $Subscription } elseif (Test-Path $ClockFile) { (Get-ClockState).subscription } else { "" }
       if (-not $subId) { $subId = (Get-StripeJson @("subscriptions", "list", "--limit", "1", "-d", "status=all")).data[0].id }
@@ -747,9 +890,16 @@ Remove-Item Env:VERCEL_ENV -ErrorAction SilentlyContinue
 Say "4/5 Zavislosti..."
 if (-not (Test-Path "node_modules\.bin\next.cmd")) { npm ci --no-audit --no-fund; if ($LASTEXITCODE -ne 0) { Fail "npm ci zlyhal" } }
 
-Say "5/5 stripe listen -> http://localhost:$Port/api/billing/webhooks/stripe"
-$listen = Start-Process -FilePath "npx.cmd" -ArgumentList @("--yes", "@stripe/cli@1.55.12", "--project-name", $Project, "listen", "--events", $Events, "--forward-to", "http://localhost:$Port/api/billing/webhooks/stripe") `
-  -RedirectStandardOutput (Join-Path $StateDir "listen.out.log") -RedirectStandardError (Join-Path $StateDir "listen.log") -NoNewWindow -PassThru
+$listen = $null
+if ($NoListen) {
+  Set-Content -Path $NoListenFile -Value "1" -Encoding ASCII
+  Say "5/5 BEZ stripe listen (-NoListen): webhooky sa nedorucia, synchronizacia iba cez /api/cron/billing-stripe-events"
+} else {
+  Remove-Item $NoListenFile -Force -ErrorAction SilentlyContinue
+  Say "5/5 stripe listen -> http://localhost:$Port/api/billing/webhooks/stripe"
+  $listen = Start-Process -FilePath "npx.cmd" -ArgumentList @("--yes", "@stripe/cli@1.55.12", "--project-name", $Project, "listen", "--events", $Events, "--forward-to", "http://localhost:$Port/api/billing/webhooks/stripe") `
+    -RedirectStandardOutput (Join-Path $StateDir "listen.out.log") -RedirectStandardError (Join-Path $StateDir "listen.log") -NoNewWindow -PassThru
+}
 
 Say ""
 Say "=================================================================="
@@ -762,7 +912,7 @@ try {
   npx next dev -p $Port
 } finally {
   if ($listen -and -not $listen.HasExited) { Stop-Process -Id $listen.Id -Force -ErrorAction SilentlyContinue }
-  Remove-Item (Join-Path $StateDir "listen*.log"), $CronFile -Force -ErrorAction SilentlyContinue
+  Remove-Item (Join-Path $StateDir "listen*.log"), $CronFile, $NoListenFile -Force -ErrorAction SilentlyContinue
   Remove-Item Env:CRON_SECRET, Env:STRIPE_SECRET_KEY, Env:STRIPE_API_KEY, Env:STRIPE_WEBHOOK_SECRET, Env:SUPABASE_SERVICE_ROLE_KEY, Env:ESBLU_QA_SERVICE_ROLE -ErrorAction SilentlyContinue
   Say "Zastavene."
 }

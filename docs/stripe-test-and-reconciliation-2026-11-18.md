@@ -488,6 +488,37 @@ cursor RPC claim / advance / busy / release; `anon`/`authenticated` bez prístup
 **Zostáva overiť so živým Stripe sandboxom (PC vlastníka):** `GET /v1/account` a `/v1/events` s restricted kľúčom
 (oprávnenia Events: read, Account: read), sémantika `ending_before` a správanie `cancel_at` (či Stripe neskracuje obdobie).
 
+### 8.11 Validácia po pushi `ab8f186` (19. 11. 2026)
+
+**Preview:** `dpl_2icCeeg6CrjwS6KotKrnVUXz3nuV` (`ab8f186`) READY; premenné vetvy `ESBLU_BILLING_MODE=off`,
+`NEXT_PUBLIC_ESBLU_BILLING_UI=0`; žiadne `STRIPE_*` v Preview ani v produkcii; `/api/billing/purchase-options` → 404
+`ESBLU_BILLING_DISABLED`; `/api/cron/billing-stripe-events` bez `CRON_SECRET` → 401. DB Preview = staging (overené
+prihlásením syntetického QA účtu, ktorý existuje iba na stagingu). Ručný beh cronu na Preview nebol možný (hodnota Preview
+`CRON_SECRET` je *sensitive* a nečitateľná) — pri vypnutom billingu by aj tak vrátil `configured:false` (pokryté testom).
+
+**Skutočný Stripe sandbox:** z prostredia agenta **nedostupný** (proxy blokuje `api.stripe.com`, HTTP 000). Testy
+so skutočným API sa spúšťajú na PC vlastníka novými krokmi skriptu (`scripts/stripe-local-sandbox.ps1`, sandbox profilu
+`esblu-qa2`, cena `price_1UdE7t…`, účet so segmentom `RKE4QKs2UL`; pôvodný sandbox firmy C sa nepoužíva):
+
+| Krok | Overuje |
+|---|---|
+| okno 1 `-NoListen` | Esblu bez `stripe listen` → webhooky sa nedoručia; všetko ide iba cez doťahovanie (aj aktivácia v `clock-setup`) |
+| `-Step s12-account` | typ kľúča (iba prefix), test mode, `GET /v1/account` a `GET /v1/events` (oprávnenia), zhoda účtu s kurzorom |
+| `-Step s12-events` | skutočné stránkovanie `ending_before` po 2 = rovnaké poradie ako plný zoznam, bez medzier a duplicít; neexistujúci kurzor → 400/404 |
+| `-Step s12-catchup` | 2× lokálny cron; druhý beh bez zmeny stavu (idempotencia); kurzor a lease v DB |
+| `-Step s12-cancel-at` | `cancel_at` uprostred obdobia na test clock: či Stripe skracuje obdobie, Esblu `scheduled_end_at`, nároky do dátumu; po posune hodín `canceled` a 0 nárokov |
+| `-Step s12-refund-missing` | plná refundácia bez webhooku → doťahovanie: `refunded`, Stripe `canceled`, 0 nárokov, opakovanie bez zmeny |
+
+Staging pripravený na tento test: `web_provider='stripe'`, aktívna cena `price_1UdE7t…` (po teste vrátiť `none` / neaktívna).
+
+**Produkčná konfigurácia (zistenie, nie chyba):** live Stripe dnes v kóde **neexistuje** — 4 nezávislé tvrdé zámky:
+(1) `VERCEL_ENV=production` → režim billingu `off`; (2) `StripeTestProvider` prijme iba `sk_/rk_/rkcs_test_` a odmietne
+každý objekt / udalosť s `livemode:true`; (3) DB `billing_runtime_config.environment` iba `test`; (4) `billing_event_cursors`
+iba `environment='test'`. Ochrana proti live udalostiam je teda trvalo **zapnutá** (nie vypnutá), ale pre ostré spustenie
+treba vedomú implementáciu live režimu (S15): provider s očakávaným `livemode` podľa prostredia (live odmieta test udalosti
+a test kľúče, test odmieta live), explicitný príznak `ESBLU_BILLING_MODE=stripe_live` iba pri `VERCEL_ENV=production`,
+DB `environment='live'` (config, ceny, kurzor) a test, že sandbox kľúč v produkcii a live kľúč v Preview zlyhá.
+
 ### 8.7 Upratanie stagingu (19. 11. 2026, dôkazy zachované)
 
 | Položka | Stav |
