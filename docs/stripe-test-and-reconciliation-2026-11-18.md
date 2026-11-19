@@ -338,8 +338,59 @@ Rozdiel 18. 12. (UI) vs. 20. 12. (nároky) je teda **v súlade s pravidlom**: ú
 z 18. 12. (→ `canceled` → nároky okamžite `revoked`, overené na D v L9/L13); 20. 12. je iba poistka (fail closed), ak by webhook
 nedorazil. Overené na stagingu v transakcii s **rollbackom** nad účtom E: (A) obdobie skončilo, webhook chýba → 9 účinných nárokov
 do konca + 2 dní; (B) po uplynutí 2 dní bez webhooku → 0; (C) stav `canceled` → 0 okamžite. Reconciliation by v okne A
-predplatné skontrolovala (kandidát pri `current_period_end < now + 1 deň`) a stav opravila. Rozhodnutie na zváženie (nie
-chyba): pri `cancel_at_period_end=true` nepridávať rezervu (obnova už nenastane) — zmena migrácie, na rozhodnutie vlastníka.
+predplatné skontrolovala (kandidát pri `current_period_end < now + 1 deň`) a stav opravila.
+**Rozhodnutie vlastníka 19. 11. 2026:** 48-hodinová ochranná lehota platí aj po riadnom skončení — pozri § 8.8.
+
+### 8.8 48-hodinová ochranná lehota po skončení zaplateného obdobia (schválené 19. 11. 2026)
+
+**Audit pred zmenou** (staging = repo `20261026100000`, `esblu_billing_sync_entitlements`):
+
+| Situácia | Pred zmenou | Problém |
+|---|---|---|
+| `active` / `trialing` (aj so zrušeným obnovovaním) | nároky do `current_period_end + 2 days` | iba poistka na oneskorený webhook; `interval '2 days'` ≠ presne 48 h pri inej časovej zóne relácie |
+| riadny koniec (`customer.subscription.deleted` na konci obdobia → `canceled`) | nároky **okamžite** odvolané | 48 h dostal iba ten, komu webhook meškal — nejednotné |
+| `past_due` | do `grace_until` (7 dní od 1. zlyhania) | OK, bez sčítavania |
+| ukončenie po neúspešných platbách | okamžite | OK |
+| `refunded` / `revoked` | okamžite | OK |
+| čiastočná refundácia | bez zmeny stavu (`review_flag`) | OK |
+| dáta | nikdy sa nemažú (iba `status='revoked'`) | OK |
+| vynucovanie | `esblu_resolve_entitlement`: `status='active' AND valid_until > now()` (bez cronu) | OK |
+| UI | `status=canceled` → „Ukončené“, bez informácie o dobiehajúcom prístupe | doplniť |
+
+**Zmena** — migrácia `20261119100000_billing_post_period_protection` (+ rollback), **aplikovaná iba na staging**:
+
+| Stav účtu | Prístup (valid_until) |
+|---|---|
+| `active`, `trialing` | `current_period_end + 48 h` |
+| `canceled`, `expired` — riadny koniec (`ended_at ≥ current_period_end − 5 min`, obdobie nebolo trial) | `current_period_end + 48 h` (**nové**) |
+| `canceled`, `expired` — uprostred obdobia (dunning: Stripe pri obnove posunie obdobie, potom ukončí; okamžité zrušenie; koniec trialu) | žiadny |
+| `past_due` | `grace_until` (7 dní) — **bez** ďalších 48 h |
+| `grace_period` (obchody) | `grace_until` |
+| `refunded`, `revoked`, `unpaid`, `account_hold`, `paused`, `incomplete`, `none` | žiadny, okamžite |
+
+Jediná kotva = `current_period_end` (nie čas webhooku) → neskorý alebo chýbajúci webhook nič nepredlžuje, lehoty sa
+nesčítavajú. `esblu_get_my_subscription` vracia `access_until` a `post_period_protection`; stránka Predplatné zobrazí
+„Predplatné skončilo. Prístup ponechávame ešte 48 hodín — do …. Vaše dáta zostávajú uložené.“ (sk/en/de).
+Manifest grantov doplnený o 3 service-only funkcie (`checkout_for_cancel`, `mark_checkout_expired`, nový helper).
+
+**Testy:** nový `test:billing-post-period-db` 11/11 (čistý replay všetkých migrácií): hranice 47 h 58 min / 48 h 1 min,
+riadny koniec vs. uprostred obdobia, tolerancia 5 min, trial, past_due bez sčítavania, dunning, úplná refundácia a spor aj
+počas lehoty, čiastočná refundácia bez zmeny, neskorý webhook neposúva koniec, resolver bez cronu, klient nepredĺži ani
+nespustí sync, dáta ostávajú, idempotencia, rollback a znovu-forward. Regresia: `test:pricing-entitlements-db` 35/35,
+`test:subscriptions-db` 60/60, `test:subscriptions-lifecycle-db` 74/74, `test:subscriptions` 28/28,
+`test:subscriptions-lifecycle` 51/51 (+ parsovanie `access_until`), `test:i18n` 114/114, `tsc` 0 chýb, `eslint` 0 chýb.
+`test:grants-guard` / `test:grants-replay-db`: zostávajú iba zlyhania zdedené z `main` (`registration_policy` z `20261117100000`,
+`fx_rate_publication_exceptions` nie sú v manifeste) — mimo tejto zmeny.
+
+**Staging (skutočná pipeline, transakcia s rollbackom, účet QA-STRIPE E):** obdobie skončilo pred 1 h, webhook ešte nie →
+`active`, nároky do cpe + 48 h; `customer.subscription.deleted` cez `esblu_billing_record_event` + `esblu_billing_apply_event`
+→ `applied`, `canceled`, 9/9 nárokov aktívnych do cpe + 48 h (hlas aj vozidlá povolené); následne úplná refundácia →
+`refunded`, 0 aktívnych, 9 riadkov ostáva. Advisors: 0 ERROR.
+
+**Otvorené riziká:** (1) Portál Stripe s `cancel_at` uprostred obdobia → koniec pred `current_period_end` → bez 48 h
+(zámer: zákazník zvolil skorší koniec). (2) Obchody (Apple/Google) — `expired` po vypršaní obdobia dostane 48 h; po
+`account_hold` je kotva v minulosti → bez efektu. (3) Zrušenie účtu/firmy počas lehoty lehotu prepadá (existujúci
+forfeit text). (4) Produkcia: migrácia čaká na súhlas spolu s `20261118120000–140000`.
 
 ### 8.7 Upratanie stagingu (19. 11. 2026, dôkazy zachované)
 

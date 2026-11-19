@@ -517,6 +517,9 @@ export default function SubscriptionPage() {
               <p className="mt-1 text-sm text-muted-esblu">
                 {t("subscription.status")}: {t(`subscription.statuses.${view.status}`, { date: fmt(view.graceUntil) })}
               </p>
+              {view.postPeriodProtection && view.accessUntil && (
+                <p className="mt-1 text-sm text-primary">{t("subscription.protectionUntil", { date: fmt(view.accessUntil) })}</p>
+              )}
               {view.canViewDetails && view.billingInterval && <p className="mt-1 text-sm text-muted-esblu">{t(`subscription.interval.${view.billingInterval}`)}</p>}
               {view.canViewDetails && view.billingProvider && <p className="mt-1 text-sm text-muted-esblu">{t(`subscription.provider.${view.billingProvider}`)}</p>}
               {view.canViewDetails && paid && view.currentPeriodEnd && (

@@ -4064,6 +4064,7 @@ const en = {
     trialRemaining: "Your company trial ends on {{date}}.",
     trialEnded: "Your company trial has ended. Your data is kept.",
     renewsOn: "Renews on {{date}}",
+    protectionUntil: "Your subscription has ended. Access remains for another 48 hours — until {{date}}. Your data stays stored.",
     endsOn: "Subscription ends on {{date}} (renewal canceled).",
     interval: { month: "Monthly", year: "Yearly" },
     provider: { stripe: "Web payment", apple: "App Store", google: "Google Play", fake: "Test provider", manual: "Manual" },

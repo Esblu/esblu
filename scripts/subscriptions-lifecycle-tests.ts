@@ -328,6 +328,12 @@ await check("cross-provider: klientsky model — zobrazenie podľa servera, canc
   assert.equal(hasPaidAccess(hold), false);
   assert.equal(canStartCheckout(hold), false, "account_hold je otvorený vzťah — žiadny druhý nákup");
   assert.equal(parseSubscriptionView({ status: "weird" }), null, "neznámy stav → fail closed");
+  const ended = parseSubscriptionView({ status: "canceled", entitles: false, access_until: "2026-12-20T21:57:52Z", post_period_protection: true })!;
+  assert.equal(ended.postPeriodProtection, true, "48 h ochranná lehota sa zobrazí");
+  assert.equal(ended.accessUntil, "2026-12-20T21:57:52Z");
+  const plain = parseSubscriptionView({ status: "canceled", entitles: false })!;
+  assert.equal(plain.postPeriodProtection, false, "bez poľa zo servera → bez lehoty (fail closed)");
+  assert.equal(plain.accessUntil, null);
   assert.equal(isOpenStatus("refunded"), false);
 });
 

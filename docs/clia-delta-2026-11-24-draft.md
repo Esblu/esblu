@@ -90,13 +90,41 @@ a doplnenie Resend do kontextu e-mailovej adresy (Account management).
    neukladá číslo karty (Stripe Checkout). Zákaznícke ID a ID predplatného v DB Esblu.
 4. **Podmienky predplatného (VOP):** automatické obnovovanie mesačne, kde a ako sa vypína (Nastavenia → Predplatné),
    prístup do konca zaplateného obdobia, 7-dňová lehota po neúspešnej platbe, zmena ceny a oznámenie vopred.
+   **Nové (schválené vlastníkom 19. 11. 2026, zatiaľ iba v testovacom prostredí):** po riadnom skončení zaplateného obdobia
+   (aj po zrušení automatického obnovovania) ponechávame prístup ešte **48 hodín** ako ochrannú lehotu; nevzťahuje sa na
+   neúspešnú platbu (tam platí 7-dňová lehota, nesčítavajú sa), na plnú refundáciu, prehraný spor ani na skúšobné obdobie.
+   Otázka: je ochranná lehota dobrovoľným plnením bez nároku na úhradu (bez vplyvu na DPH a fakturáciu) a stačí ju uviesť vo
+   VOP takto? Návrh znenia — pozri prílohu A nižšie.
 5. **Refundácie:** kedy má zákazník nárok (zákonne iba výnimky v B2B?), že **plná refundácia ukončí prístup okamžite**
-   (dáta ostávajú), že **čiastočná refundácia prístup nemení**, a že spor (chargeback) môže viesť k ukončeniu prístupu.
+   (dáta ostávajú, žiadna 48-hodinová lehota), že **čiastočná refundácia prístup nemení**, a že spor (chargeback) môže viesť
+   k ukončeniu prístupu.
 6. **Spotrebitelia a SZČO:** ak sa predplatné ponúkne spotrebiteľom, odstúpenie od zmluvy (14 dní) a súhlas so začatím
    plnenia pri digitálnej službe; dnes cielime na firmy a SZČO.
 7. **Retencia:** účtovné a platobné záznamy (faktúry, `billing_events`) sa nemažú ani pri zrušení účtu — formulácia v zásadách
    a na `/zrusenie-uctu` (dnes uvádza iba finalizované faktúry).
 8. **DPA:** treba novú verziu DPA alebo stačí oznámenie zmeny sprostredkovateľov (Resend, Stripe, Apple)?
+
+## Príloha A — návrh znenia do VOP (na posúdenie CLIA, neodoslané, nezverejnené)
+
+> **12.x Skončenie predplatného a ochranná lehota.** Predplatné sa automaticky obnovuje na ďalšie obdobie, kým ho
+> Zákazník nezruší v Aplikácii (Nastavenia → Predplatné) alebo v obchode, cez ktorý ho zakúpil. Po zrušení zostáva prístup
+> k plateným funkciám zachovaný do konca zaplateného obdobia. Po skončení zaplateného obdobia Poskytovateľ bezodplatne
+> ponecháva prístup ešte 48 hodín (ochranná lehota), aby mohol Zákazník predplatné obnoviť bez prerušenia práce. Ochranná
+> lehota sa neuplatní pri skúšobnom období, pri vrátení celej platby za aktuálne obdobie, pri úspešne uplatnenej námietke
+> platby (chargeback) ani pri ukončení zmluvy z dôvodu porušenia VOP.
+>
+> **12.y Neúspešná platba.** Ak sa platbu za ďalšie obdobie nepodarí uhradiť, prístup zostáva zachovaný najviac 7 dní od
+> prvého neúspešného pokusu, počas ktorých môže Zákazník platobnú metódu aktualizovať. Táto lehota a ochranná lehota podľa
+> 12.x sa nesčítavajú. Ak platba nie je uhradená ani v tejto lehote, predplatné sa ukončí a prístup k plateným funkciám
+> zanikne.
+>
+> **12.z Dáta po skončení predplatného.** Skončením predplatného alebo ochrannej lehoty sa dáta Zákazníka nevymazávajú;
+> zostávajú uložené a dostupné po obnovení predplatného, kým Zákazník nepožiada o zrušenie účtu alebo firmy podľa čl. … a
+> Zásad ochrany osobných údajov. Vrátenie celej platby ukončí prístup okamžite; vrátenie časti platby prístup nemení.
+
+Dopad na ďalšie dokumenty: Zásady (účel „platby a fakturácia predplatného“, doba uchovávania údajov firmy po skončení
+predplatného), `/zrusenie-uctu` (zrušenie účtu počas ochrannej lehoty ju prepadá — existujúci text o prepadnutí zvyšku
+obdobia doplniť o lehotu). DPA sa nemení (nové spracovanie nevzniká).
 
 ## 4. Navrhovaný ďalší postup
 

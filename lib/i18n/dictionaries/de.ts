@@ -4084,6 +4084,7 @@ const de = {
     trialRemaining: "Die Testphase Ihrer Firma endet am {{date}}.",
     trialEnded: "Die Testphase Ihrer Firma ist beendet. Ihre Daten bleiben erhalten.",
     renewsOn: "Verlängerung am {{date}}",
+    protectionUntil: "Ihr Abonnement ist beendet. Der Zugang bleibt noch 48 Stunden bestehen — bis {{date}}. Ihre Daten bleiben gespeichert.",
     endsOn: "Das Abonnement endet am {{date}} (Verlängerung gekündigt).",
     interval: { month: "Monatlich", year: "Jährlich" },
     provider: { stripe: "Zahlung im Web", apple: "App Store", google: "Google Play", fake: "Test-Anbieter", manual: "Manuell" },

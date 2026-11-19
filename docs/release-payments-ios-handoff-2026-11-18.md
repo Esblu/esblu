@@ -47,7 +47,7 @@ Vetva `android-release-payments-ios-2026-11-18` z `origin/main` @ `12da726c843b`
 | Refund aktuálneho obdobia → Esblu `refunded`, Stripe `canceled`, 0 nárokov, ďalšie účtovanie zastavené | PASS (L13, L14 do 22. 2. 2027: 2 faktúry, 2 platby) |
 | Konečný stav pri `customer.subscription.deleted` a 2× reconciliation | PASS (L15, `in_sync`) |
 | Dve karty naraz → 1 zámer, 1 zaplatená relácia, 1 predplatné | PASS (E1–E2; skôr aj fake Preview B1–B7, staging 10 spojení) |
-| Zrušenie v aplikácii → `cancel_at_period_end` v Esblu aj Stripe, prístup do konca obdobia | PASS (E3); +2 dni rezerva nárokov podľa pravidla (§ 8.6) |
+| Zrušenie v aplikácii → `cancel_at_period_end` v Esblu aj Stripe, prístup do konca obdobia | PASS (E3); po skončení **48 h ochranná lehota** (schválené 19. 11., § 8.8, staging) |
 | Simulácie | `test:subscriptions` 28, `-db` 60, `-lifecycle` 51, `-lifecycle-db` 74 |
 
 Opravy v tejto vetve: jedna zaplatiteľná relácia na firmu (`20261118120000`), prednosť konečných stavov (`20261118130000`),
@@ -80,7 +80,7 @@ v Android appke, nesúlad dátumov na `/subprocessors`, otázky k Apple prihlás
 |---|---|---|
 | Play Console Data safety | bez zmeny; pripravené odpovede v `04-data-safety.md` | — |
 | App access | vložiť text 6B do Play Console (heslo vlastník) | vlastník |
-| Stripe | testy v sandboxe hotové; pred produkciou: schváliť 3 migrácie, live účet + kľúče, rozhodnúť rezervu pri `cancel_at_period_end` | vlastník |
+| Stripe | testy v sandboxe hotové; pred produkciou: schváliť 3 migrácie, live účet + kľúče, 4. migrácia `20261119100000` (48 h lehota) | vlastník |
 | Účtovníčka | poslať otázky § 6 ekonomiky + vzor párovania | vlastník |
 | Apple | D-U-N-S → Apple Developer (99 $/rok, schválenie) | vlastník |
 | CLIA | skontrolovať a odoslať návrh do 24. 11. | vlastník |

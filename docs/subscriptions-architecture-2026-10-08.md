@@ -56,8 +56,9 @@
 
 | Stav | Nároky |
 |---|---|
-| `active` / `trialing` | platia do `current_period_end` + 2 dni (buffer na oneskorený renewal webhook) |
-| `past_due` | platia do `grace_until` (7 dní od prvého zlyhania) |
+| `active` / `trialing` | platia do `current_period_end` + 48 h (od 2026-11-19, migrácia `20261119100000`) |
+| `canceled` / `expired` — riadny koniec na konci zaplateného obdobia | platia do `current_period_end` + 48 h (ochranná lehota; nie pri trialu ani ukončení uprostred obdobia) |
+| `past_due` | platia do `grace_until` (7 dní od prvého zlyhania) — 48 h sa nepripočítava |
 | ostatné stavy | odvolané (`status='revoked'`) |
 
 Bez webhooku nárok sám vyprší cez `valid_until` (**fail closed**).

@@ -4094,6 +4094,7 @@ const sk = {
     trialRemaining: "Skúšobná verzia firmy končí {{date}}.",
     trialEnded: "Skúšobná verzia firmy skončila. Údaje ostávajú zachované.",
     renewsOn: "Obnovenie: {{date}}",
+    protectionUntil: "Predplatné skončilo. Prístup ponechávame ešte 48 hodín — do {{date}}. Vaše dáta zostávajú uložené.",
     endsOn: "Predplatné skončí {{date}} (obnovenie je zrušené).",
     interval: { month: "Mesačne", year: "Ročne" },
     provider: { stripe: "Platba na webe", apple: "App Store", google: "Google Play", fake: "Testovací provider", manual: "Ručne" },

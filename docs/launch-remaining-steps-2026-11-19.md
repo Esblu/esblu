@@ -35,10 +35,10 @@ Hotové: testy v Stripe sandboxe (nákup, obnova, zlyhanie, refundácie, zrušen
 
 | # | Krok | Kto |
 |---|---|---|
-| S1 | Rozhodnúť: rezerva 2 dni pri `cancel_at_period_end=true` ponechať / zrušiť (zmena migrácie) | V |
+| S1 | ~~Rozhodnúť o rezerve~~ — **schválené 19. 11.: 48 h ochranná lehota** po riadnom skončení; migrácia `20261119100000` na stagingu, testy PASS (`stripe-test-and-reconciliation` § 8.8); produkcia spolu s S4 | — |
 | S2 | Účtovníčka: 12 otázok (DPH § 7a, Stripe poplatky, doklady) + vzor mesačného párovania | V → Ú | `payment-channels-economics-2026-11-18.md` § 6 |
 | S3 | ⛔ Merge vetvy do `main` (kód billing ostáva vypnutý flagmi) | V |
-| S4 | ⛔ Produkčné migrácie `20261118120000`, `20261118130000`, `20261118140000` (záloha + dump, po jednej, rollback súbory v repe) | V súhlas → A |
+| S4 | ⛔ Produkčné migrácie `20261118120000`, `20261118130000`, `20261118140000`, `20261119100000` (záloha + dump, po jednej, rollback súbory v repe) | V súhlas → A |
 | S5 | ⛔ Stripe live účet (Esblu s.r.o., overenie firmy, SEPA), produkt + cena 15,90 €/mes., Billing Portal, daňové nastavenia (§ 7a, OSS ak B2C) | V |
 | S6 | ⛔ Vercel production: `STRIPE_SECRET_KEY` (restricted live), `STRIPE_WEBHOOK_SECRET`, `ESBLU_BILLING_MODE`, `ESBLU_BILLING_RETURN_ORIGIN`, `CRON_SECRET` pre reconciliation; webhook endpoint v Stripe (10 udalostí) | V |
 | S7 | ⛔ Prod DB: `billing_provider_prices` (live cena), `billing_runtime_config.web_provider='stripe'`, `environment='live'` | V súhlas → A |
