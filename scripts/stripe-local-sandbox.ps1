@@ -26,6 +26,9 @@
       s12-cancel-at - S13: cancel_at uprostred obdobia (test clock) -> Esblu scheduled_end_at, naroky do datumu;
                      posun hodin za datum -> Stripe ukonci, Esblu canceled bez 48 h (cez dotahovanie, ak -NoListen)
       s12-refund-missing - S12: plna refundacia aktualnej faktury BEZ webhooku (okno 1 s -NoListen) -> dotahovanie
+      s13-existing - S13 na EXISTUJUCOM predplatnom firmy E (bez noveho objektu): cancel_at = teraz + 5 min,
+                     zistenie ci Stripe skrati koniec obdobia, Esblu scheduled_end_at cez dotahovanie (-NoListen),
+                     po ukonceni v Stripe: canceled a 0 narokov (bez 48 h)
       status       - stav v Stripe aj v Esblu + posledne riadky stripe listen (tajomstva zamaskovane)
     Kazdy krok vypise OK AZ ked je vysledok overeny v Stripe AJ v testovacej DB Esblu.
 
@@ -42,7 +45,7 @@
 param(
   [ValidateSet("start", "status", "new-sandbox", "clock-setup", "renew", "fail-renew", "fix-payment", "refund-partial", "refund-full",
                "refund-old", "refund-current", "reconcile", "advance-check", "verify-terminal", "qa-login", "qa-check",
-               "s12-account", "s12-events", "s12-catchup", "s12-cancel-at", "s12-refund-missing")]
+               "s12-account", "s12-events", "s12-catchup", "s12-cancel-at", "s12-refund-missing", "s13-existing")]
   [string]$Step = "start",
   # Okno 1 BEZ stripe listen: ziadny webhook sa nedoruci, synchronizacia iba cez dotahovanie (S12).
   [switch]$NoListen,
@@ -763,7 +766,12 @@ if ($Step -ne "start") {
       Say "OK: strankovanie a poradie zodpovedaju implementacii S12."
     }
     "s12-catchup" {
+      # Prvy beh moze byt bootstrap realneho 30-dnoveho okna (limit 200 udalosti na beh) -> opakovat do "ok".
       $r1 = Invoke-Catchup
+      for ($i = 0; $i -lt 10 -and $r1.result -eq "partial"; $i++) {
+        Say "    ciastocny beh: processed=$($r1.processed) outcomes=$(($r1.outcomes | ConvertTo-Json -Compress)) -> pokracujem"
+        $r1 = Invoke-Catchup
+      }
       Say "Dotahovanie #1: result=$($r1.result) processed=$($r1.processed) outcomes=$(($r1.outcomes | ConvertTo-Json -Compress)) bootstrap=$($r1.bootstrap) cursorExpired=$($r1.cursorExpired) code=$($r1.code)"
       if (-not $r1.configured) { Fail "Dotahovanie nie je nakonfigurovane (ESBLU_BILLING_MODE / DB web_provider)." }
       if ($r1.result -ne "ok" -and $r1.result -ne "partial") { Fail "Dotahovanie skoncilo $($r1.result) ($($r1.code))." }
@@ -828,6 +836,43 @@ if ($Step -ne "start") {
       Say "Opakovane dotahovanie: processed=$($r.processed) applied=$applied (refunded ostava: $((Get-EsbluAccount $subId).status))"
       if ((Get-EsbluAccount $subId).status -ne "refunded") { Fail "Stav sa zmenil po opakovanom dotahovani." }
       Say "OK: chybajuci webhook plnej refundacie dotiahnuty, pristup aj uctovanie ukoncene, opakovanie bez zmeny."
+    }
+    "s13-existing" {
+      # Existujuce predplatne firmy E (z testu E1-E3), ziadne nove predplatne ani zakaznik.
+      if (-not (Test-Path $NoListenFile)) { Fail "Okno 1 musi bezat s -NoListen (zmeny maju prist iba cez dotahovanie)." }
+      $accE = (Get-Rows "subscription_accounts?company_id=eq.$CompanyE&select=provider_subscription_id,status")[0]
+      $subId = if ($Subscription) { $Subscription } else { $accE.provider_subscription_id }
+      if (-not $subId) { Fail "Firma E nema predplatne." }
+      $s0 = Get-Sub $subId; $p0 = Get-Period $s0
+      Say ("Stripe pred: {0} stav={1} cancel_at={2} cancel_at_period_end={3} obdobie {4} -> {5}" -f $subId, $s0.status, $(if ($s0.cancel_at) { Utc $s0.cancel_at } else { '-' }), $s0.cancel_at_period_end, (Utc $p0.start), (Utc $p0.end))
+      if ($s0.status -ne "active") { Fail "Predplatne E nie je active ($($s0.status))." }
+      $cancelAt = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() + 300
+      Invoke-Stripe @("subscriptions", "update", $subId, "-d", "cancel_at=$cancelAt", "-d", "proration_behavior=none") | Out-Null
+      $s1 = Get-Sub $subId; $p1 = Get-Period $s1
+      Say ("Stripe po: cancel_at={0} cancel_at_period_end={1} obdobie {2} -> {3}" -f (Utc $s1.cancel_at), $s1.cancel_at_period_end, (Utc $p1.start), (Utc $p1.end))
+      $truncated = ($p1.end -ne $p0.end)
+      Say ("ZISTENIE S13: Stripe {0} koniec obdobia (povodny {1}, teraz {2}); cancel_at_period_end={3}" -f $(if ($truncated) { "SKRATIL" } else { "NESKRATIL" }), (Utc $p0.end), (Utc $p1.end), $s1.cancel_at_period_end)
+      if ($s1.cancel_at_period_end -eq $true) { Fail "Stripe hlasi cancel_at_period_end=true pre datum uprostred obdobia - Esblu by to bralo ako riadny koniec (+48 h). OPRAVA NUTNA." }
+      $acc = Wait-Esblu $subId { param($a) $a.scheduled_end_at } "ulozenie scheduled_end_at (dotahovanie)"
+      $sched = [DateTime]::Parse($acc.scheduled_end_at).ToUniversalTime()
+      if ($sched -ne [DateTimeOffset]::FromUnixTimeSeconds($cancelAt).UtcDateTime) { Fail "Esblu scheduled_end_at $($acc.scheduled_end_at) != cancel_at $(Utc $cancelAt)." }
+      $ents = Get-Rows "company_entitlements?company_id=eq.$($acc.company_id)&source=eq.subscription&status=eq.active&select=valid_until"
+      $okUntil = @($ents | Where-Object { [DateTime]::Parse($_.valid_until).ToUniversalTime() -eq $sched }).Count
+      Say "Esblu: scheduled_end_at=$($acc.scheduled_end_at); naroky do zvoleneho datumu: $okUntil / $($ents.Count) (bez 48 h)"
+      if ($ents.Count -eq 0 -or $okUntil -ne $ents.Count) { Fail "Naroky nekoncia k zvolenemu datumu." }
+      Say "Cakam, kym Stripe predplatne ukonci (cancel_at $(Utc $cancelAt), max 30 min)..."
+      $s2 = Get-Sub $subId
+      for ($i = 0; $i -lt 60 -and $s2.status -ne "canceled"; $i++) { Start-Sleep -Seconds 30; $s2 = Get-Sub $subId; if ($i % 4 -eq 3) { Say "    stav $($s2.status) ($(Get-Date -Format HH:mm:ss))" } }
+      if ($s2.status -ne "canceled") { Fail "Stripe predplatne do 30 min po cancel_at neukoncil." }
+      Say ("Stripe: canceled, ended_at={0} (cancel_at {1}, koniec obdobia {2})" -f (Utc $s2.ended_at), (Utc $cancelAt), (Utc (Get-Period $s2).end))
+      $acc2 = Wait-Esblu $subId { param($a) $a.status -eq "canceled" } "ukoncenie (dotahovanie customer.subscription.deleted)"
+      $n = Get-ActiveSubEnts $acc2.company_id
+      Say "Esblu: stav=$($acc2.status), scheduled_end_at=$($acc2.scheduled_end_at), ucinnych narokov $n (ocakavane 0)"
+      if ($n -ne 0) { Fail "Po predcasnom konci ostali ucinne naroky (riziko +48 h)." }
+      $r = Invoke-Catchup
+      Say "Opakovane dotahovanie: processed=$($r.processed) outcomes=$(($r.outcomes | ConvertTo-Json -Compress)); Esblu stav=$((Get-EsbluAccount $subId).status)"
+      if ((Get-EsbluAccount $subId).status -ne "canceled") { Fail "Stav sa zmenil po opakovanom dotahovani." }
+      Say "OK: S13 na skutocnom Stripe - predcasny koniec bez 48 h, zmeny dorucene iba dotahovanim."
     }
     "status" {
       $subId = if ($Subscription) { $Subscription } elseif (Test-Path $ClockFile) { (Get-ClockState).subscription } else { "" }

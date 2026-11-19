@@ -142,12 +142,12 @@ export function normalizeStripeSubscription(sub: unknown, stateAt: string, check
     current_period_end: periodEnd,
     cancel_at_period_end:
       sub.cancel_at_period_end === true || (cancelAt !== null && periodEndUnix !== null && cancelAt <= periodEndUnix),
-    // S13: `cancel_at` mimo konca obdobia (± 5 min) = plánované predčasné ukončenie k zvolenému dátumu.
-    // Riadne zrušenie ku koncu obdobia (Esblu „Zrušiť“, portál) má cancel_at_period_end=true → null.
-    scheduled_end_at:
-      cancelAt !== null && sub.cancel_at_period_end !== true && !(periodEndUnix !== null && Math.abs(cancelAt - periodEndUnix) <= 300)
-        ? isoFromUnix(cancelAt)
-        : null,
+    // S13: `cancel_at` BEZ príznaku cancel_at_period_end=true = ukončenie k zvolenému dátumu (bez 48 h).
+    // Rozhoduje iba príznak Stripe, nie porovnanie s koncom obdobia: ak by Stripe pri `cancel_at`
+    // skrátil current_period_end na tento dátum, porovnanie by predčasný koniec vydávalo za riadny
+    // a Esblu by omylom pridalo 48 h. Riadne zrušenie ku koncu obdobia (Esblu „Zrušiť“, portál) nesie
+    // cancel_at_period_end=true (overené na skutočnom Stripe 18. 11., test E3) → null.
+    scheduled_end_at: cancelAt !== null && sub.cancel_at_period_end !== true ? isoFromUnix(cancelAt) : null,
     canceled_at: isoFromUnix(sub.canceled_at),
     ended_at: isoFromUnix(sub.ended_at),
     trial_start: isoFromUnix(sub.trial_start),

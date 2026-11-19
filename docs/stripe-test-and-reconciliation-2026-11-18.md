@@ -519,6 +519,42 @@ treba vedomú implementáciu live režimu (S15): provider s očakávaným `livem
 a test kľúče, test odmieta live), explicitný príznak `ESBLU_BILLING_MODE=stripe_live` iba pri `VERCEL_ENV=production`,
 DB `environment='live'` (config, ceny, kurzor) a test, že sandbox kľúč v produkcii a live kľúč v Preview zlyhá.
 
+### 8.12 Audit dôkazov a minimálne zostávajúce testy S12/S13 (19. 11. 2026)
+
+Legenda: **R** = overené skutočným Stripe sandboxom 18. 11. (ostáva platné), **DB** = PGlite / staging transakcie
+s mockom Stripe API, **API** = vyžaduje skutočné Stripe API, **—** = nepodstatné pre prvé spustenie.
+
+| Scenár | Stav | Dôkaz |
+|---|---|---|
+| nákup, obnova, zlyhanie obnovy, oprava platby | R | L1, L7 |
+| refundácia staršej / aktuálnej faktúry, ukončenie u Stripe, terminálne stavy | R | L12–L15 |
+| zrušenie obnovovania → Stripe `cancel_at_period_end=true` + `cancel_at` = koniec obdobia | R | E3 (rozhoduje príznak, nie dátum) |
+| dve karty, 1 zaplatená relácia | R | E1–E2 |
+| 48 h lehota (pravidlá, hranice, DST) | DB | `test:billing-post-period-db` 16/16 + staging pipeline |
+| doťahovanie: chýbajúci webhook, refund, spor, výpadok, prerušenie, súbeh, iný účet, live udalosť | DB | `stripe-catchup` 8/8 |
+| reconciliation platby aktuálnej faktúry (refund / spor bez udalostí) | DB | `stripe-catchup` |
+| **skutočné stránkovanie `ending_before` a poradie** | API | `s12-events` — iba čítanie existujúcich udalostí |
+| **oprávnenie kľúča na `/v1/account` a `/v1/events`, bootstrap nad reálnymi udalosťami 18. 11., idempotencia** | API | `s12-catchup` — bez nových objektov (udalosti 18. 11. → `duplicate`) |
+| **reálne volania reconciliation (`invoice_payments?invoice=`, `payment_intents` + `latest_charge`, `disputes?charge=`)** | API | `verify-terminal` nad existujúcou refundovanou D — iba čítanie Stripe |
+| **`cancel_at` uprostred obdobia: skráti Stripe `current_period_end`? (riziko + 48 h)** | API, **prioritný** | `s13-existing` — existujúce predplatné E, bez nového objektu |
+| plná refundácia bez webhooku na skutočnom Stripe | — (nie je nutné) | normalizácia refundácie R (L13) + generická cesta doťahovania API (`s12-catchup`) + DB |
+| výpadok / prerušenie na skutočnom Stripe | — | nereprodukovateľné bez zásahu do siete; DB testy |
+| obmedzený kľúč `rk_test_` s minimálnymi právami | — (pred live: S15) | — |
+
+**Oprava pred testom (S13, nájdená pri audite):** normalizácia brala `cancel_at` rovné koncu obdobia (± 5 min) ako
+riadne zrušenie. Ak by Stripe pri `cancel_at` skrátil `current_period_end`, predčasný koniec by dostal + 48 h. Teraz
+rozhoduje iba príznak Stripe `cancel_at_period_end` (overený na skutočnom Stripe v E3): bez neho = zvolený dátum bez 48 h.
+Unit testy rozšírené (skrátené obdobie), `test:subscriptions` 28/28, `test:subscriptions-lifecycle` 52/52,
+`test:subscriptions-lifecycle-db` 82/82, `tsc` 0, `eslint` 0. DB pravidlá sa nemenili.
+
+**Minimálny postup (PC vlastníka, sandbox `esblu-qa2`):** okno 1 `-NoListen` → `s12-events` → `s12-catchup` →
+`verify-terminal` → `s13-existing`. Nové predplatné ani nový zákazník nevzniká; jediná zmena v Stripe je `cancel_at`
+na existujúcom predplatnom E (ukončí sa po 5 min — E bolo už zrušené ku 18. 12.). `clock-setup`, `s12-cancel-at`
+a `s12-refund-missing` netreba (vytvárali by nové predplatné bez nového dôkazu).
+
+**Staging pred testom (pôvodné hodnoty zachované):** pred 19. 11. `web_provider='none'`, všetky ceny stripe neaktívne;
+pre test `web_provider='stripe'`, aktívna `price_1UdE7t…`; po teste vrátiť `none` a cenu neaktívnu.
+
 ### 8.7 Upratanie stagingu (19. 11. 2026, dôkazy zachované)
 
 | Položka | Stav |
