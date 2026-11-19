@@ -285,5 +285,25 @@ await check("odvolanie: nároky revoked, audit zachovaný, plan späť na free",
   }
 });
 
+// ----------------------------------------------------------------------------- rollback chráni audit
+await check("rollback 20261120100000: neprázdny audit sa nezmaže (archív), re-apply vytvorí čistú tabuľku", async () => {
+  const before = (await db.query<{ n: number }>("select count(*)::int n from public.internal_operator_grants")).rows[0].n;
+  assert.ok(before > 0, "precondition: existuje grant");
+  await db.exec(read("supabase/rollback/20261120100000_internal_operator_entitlement_rollback.sql"));
+  assert.equal((await db.query<{ t: string | null }>("select to_regclass('public.internal_operator_grants')::text t")).rows[0].t, null);
+  const arch = (await db.query<{ t: string }>(
+    "select c.relname::text t from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'esblu_audit_archive' and c.relname like 'internal_operator_grants_rb_%' and c.relkind = 'r'")).rows;
+  assert.equal(arch.length, 1);
+  assert.equal((await db.query<{ n: number }>(`select count(*)::int n from esblu_audit_archive.${arch[0].t}`)).rows[0].n, before);
+  assert.equal((await db.query<{ n: number }>("select count(*)::int n from public.company_entitlements where external_ref like 'internal_operator_grant:%' and status <> 'revoked'")).rows[0].n, 0);
+  assert.equal((await attempt({ role: "service_role" }, `select * from esblu_audit_archive.${arch[0].t}`)).ok, false, "archív bez prístupu service_role");
+  await db.exec(read(`${MIGRATIONS}/20261120100000_internal_operator_entitlement.sql`));
+  assert.equal((await db.query<{ n: number }>("select count(*)::int n from public.internal_operator_grants")).rows[0].n, 0);
+  assert.equal((await db.query<{ n: number }>("select count(*)::int n from pg_indexes where schemaname = 'public' and indexname = 'internal_operator_grants_single_active_idx'")).rows[0].n, 1);
+  await db.exec(read("supabase/rollback/20261120100000_internal_operator_entitlement_rollback.sql"));
+  assert.equal((await db.query<{ t: string | null }>("select to_regclass('public.internal_operator_grants')::text t")).rows[0].t, null, "prázdna tabuľka sa zmaže");
+  await db.exec(read(`${MIGRATIONS}/20261120100000_internal_operator_entitlement.sql`));
+});
+
 console.log(`\ninternal-operator-entitlement: ${passed} ok, ${failed} fail`);
 if (failed > 0) process.exit(1);

@@ -457,6 +457,18 @@ await check("S15b migrácia 20261119140000: idempotentná, rollback a znovu-forw
   assert.equal((await su<{ s: string }>("select live_purchase_scope s from public.billing_runtime_config"))[0].s, "allowlist");
 });
 
+await check("S15b rollback: neprázdny allowlist sa nezmaže (archív esblu_audit_archive), re-apply = čistá tabuľka", async () => {
+  await su("insert into public.billing_live_purchase_allowlist (company_id, note) values ($1, 'rb test')", [C.b]);
+  await db.exec(read("supabase/rollback/20261119140000_billing_live_purchase_allowlist_rollback.sql"));
+  assert.equal((await su<{ t: string | null }>("select to_regclass('public.billing_live_purchase_allowlist')::text t"))[0].t, null);
+  const arch = await su<{ t: string }>(
+    "select c.relname::text t from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'esblu_audit_archive' and c.relname like 'billing_live_purchase_allowlist_rb_%'");
+  assert.equal(arch.length, 1);
+  assert.equal((await su<{ n: number }>(`select count(*)::int n from esblu_audit_archive.${arch[0].t}`))[0].n, 1);
+  await db.exec(read("supabase/migrations/20261119140000_billing_live_purchase_allowlist.sql"));
+  assert.equal((await su<{ n: number }>("select count(*)::int n from public.billing_live_purchase_allowlist"))[0].n, 0);
+});
+
 await check("migrácia 20261119130000: idempotentná; rollback (pri test prostredí) a znovu-forward", async () => {
   const sql = read("supabase/migrations/20261119130000_billing_live_mode.sql");
   await su("delete from public.billing_event_cursors where environment = 'live'");
