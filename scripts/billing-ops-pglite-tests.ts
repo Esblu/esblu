@@ -814,7 +814,7 @@ await check("izolácia nezmenená: snapshot ani identitu nevidí žiadny tenant/
 // S17-4 (2026-11-20, skutočný Stripe sandbox): prvá faktúra NOVÉHO predplatného — väzba predplatné/zákazník → firma
 // ešte neexistuje (vzniká až pri zápise stavu z nákupného zámeru), doklad sa ukladá pred stavom. Doklad musí
 // skončiť s company_id a nemenným snapshotom odberateľa (source = company), v oboch poradiach udalostí.
-const NEW1 = "c7000000-0000-4000-8000-0000000000f1", NEW2 = "c7000000-0000-4000-8000-0000000000f2";
+const NEW1 = "c7000000-0000-4000-8000-000000000101", NEW2 = "c7000000-0000-4000-8000-000000000102";
 async function freshPurchase(company: string, owner: string, subId: string) {
   // vlastná firma bez predchádzajúceho predplatného (iné testy nechávajú aktívne predplatné → conflict)
   await db.exec(`set session_replication_role = replica;
@@ -862,6 +862,188 @@ await check("S17-4: invoice.finalized (DOCUMENT_ONLY, ešte bez firmy) → invoi
   assert.deepEqual([other.company_id, other.customer_company_id], [NEW1, NEW1]);
   // firma dokladu je nemenná ani pri opätovnom zápise
   await fails(() => su("update public.billing_invoice_documents set company_id = $1 where provider_document_id = 'in_sub_ops_first2'", [NEW1]), /COMPANY_IMMUTABLE/);
+});
+
+// S17-4 úplná oprava (migrácia 20261124100000): väzba dokladu na firmu nezávisle od poradia udalostí Stripe.
+const NEW = (i: number) => `c7000000-0000-4000-8000-0000000002${String(i).padStart(2, "0")}`;
+const acct = async (company: string) => (await su<Json>(`select status, grace_until, current_period_end, provider_state_at from public.subscription_accounts where company_id = $1`, [company]))[0];
+const ent = async (company: string) => (await su<Json>(`select count(*) filter (where status = 'active')::int active, max(valid_until) filter (where status = 'active') until
+  from public.company_entitlements where company_id = $1 and source = 'subscription'`, [company]))[0];
+const docsOf = async (sub: string) => n("select count(*)::int n from public.billing_invoice_documents where provider_subscription_id = $1 or provider_customer_id = $2", [sub, `cus_${sub}`]);
+
+await check("S17-4: NEZAPLATENÁ prvá faktúra — finalized pred väzbou → subscription.created doplní firmu + snapshot; payment_failed; voided; bez duplicít", async () => {
+  const f = await freshPurchase(NEW(1), U.ownerB, "sub_ops_unpaid");
+  f.st.sub.status = "incomplete";
+  const fin = ev("invoice.finalized", invoice("sub_ops_unpaid", "open"));
+  assert.equal((await webhook(f.provider, fin)).code, "DOCUMENT_ONLY");
+  let d = await doc("in_sub_ops_unpaid");
+  assert.deepEqual([d.status, d.company_id], ["open", null], "pred väzbou firma neznáma");
+  const created = await webhook(f.provider, ev("customer.subscription.created", f.st.sub));
+  assert.equal(created.outcome, "applied", JSON.stringify(created));
+  d = await doc("in_sub_ops_unpaid");
+  assert.deepEqual([d.status, d.company_id, d.customer_company_id, d.customer_snapshot_source], ["open", NEW(1), NEW(1), "company"], "väzba doplnila firmu aj snapshot nezaplatenej faktúry");
+  assert.ok(String(d.customer_legal_name ?? "").trim());
+  const snap = JSON.stringify(await snapOf("in_sub_ops_unpaid"));
+  assert.equal((await webhook(f.provider, ev("invoice.payment_failed", invoice("sub_ops_unpaid", "open")))).outcome, "applied");
+  assert.equal((await acct(NEW(1))).status, "pending", "incomplete → pending");
+  assert.equal((await webhook(f.provider, ev("invoice.voided", invoice("sub_ops_unpaid", "void")))).code, "DOCUMENT_ONLY");
+  d = await doc("in_sub_ops_unpaid");
+  assert.deepEqual([d.status, d.company_id], ["void", NEW(1)]);
+  assert.equal(JSON.stringify(await snapOf("in_sub_ops_unpaid")), snap, "snapshot nemenný");
+  assert.equal((await webhook(f.provider, fin)).outcome, "duplicate");
+  assert.equal(await docsOf("sub_ops_unpaid"), 1, "1 doklad");
+});
+
+await check("S17-4: subscription.created → finalized → paid; obnova: payment_failed (past_due, 7 dní) → opakovaná úspešná platba (+48 h) → dobropis + refundácia → zrušenie", async () => {
+  const f = await freshPurchase(NEW(2), U.ownerB, "sub_ops_cycle");
+  assert.equal((await webhook(f.provider, ev("customer.subscription.created", f.st.sub))).outcome, "applied");
+  assert.equal((await webhook(f.provider, ev("invoice.finalized", invoice("sub_ops_cycle", "open")))).code, "DOCUMENT_ONLY");
+  assert.equal((await doc("in_sub_ops_cycle")).company_id, NEW(2), "väzba existuje → firma hneď");
+  assert.equal((await webhook(f.provider, ev("invoice.paid", invoice("sub_ops_cycle", "paid")))).outcome, "applied");
+  const cpe = Date.parse(String((await acct(NEW(2))).current_period_end));
+  let e = await ent(NEW(2));
+  assert.ok(e.active > 0);
+  assert.equal(Date.parse(String(e.until)) - cpe, 48 * 3600_000, "zaplatené obdobie: nároky do konca obdobia + 48 h");
+  // obnova zlyhá
+  const inv2 = { id: "in_ops_cycle2", billing_reason: "subscription_cycle" };
+  f.st.sub.status = "past_due";
+  assert.equal((await webhook(f.provider, ev("invoice.finalized", invoice("sub_ops_cycle", "open", inv2)))).code, "DOCUMENT_ONLY");
+  const failed = await webhook(f.provider, ev("invoice.payment_failed", invoice("sub_ops_cycle", "open", inv2)));
+  assert.equal(failed.outcome, "applied", JSON.stringify(failed));
+  const a = await acct(NEW(2));
+  assert.equal(a.status, "past_due");
+  assert.equal(Date.parse(String(a.grace_until)) - Date.parse(String(a.provider_state_at)), 7 * 86400_000, "past_due: 7 dní od prvého zlyhania (bez +48 h)");
+  e = await ent(NEW(2));
+  assert.ok(e.active > 0, "nároky sa pri prvom zlyhaní neodoberú");
+  assert.equal(Date.parse(String(e.until)), Date.parse(String(a.grace_until)), "past_due: nároky do konca 7-dňovej lehoty (nie koniec obdobia + 48 h)");
+  assert.ok(Date.parse(String(e.until)) < Date.parse(String(a.current_period_end)), "7-dňová lehota je kratšia ako zaplatené obdobie");
+  const d2a = await doc("in_ops_cycle2");
+  assert.deepEqual([d2a.status, d2a.company_id], ["open", NEW(2)]);
+  // opakovaná úspešná platba
+  f.st.sub.status = "active";
+  assert.equal((await webhook(f.provider, ev("invoice.paid", invoice("sub_ops_cycle", "paid", inv2)))).outcome, "applied");
+  const a2 = await acct(NEW(2));
+  assert.deepEqual([a2.status, a2.grace_until], ["active", null]);
+  e = await ent(NEW(2));
+  assert.equal(Date.parse(String(e.until)) - Date.parse(String(a2.current_period_end)), 48 * 3600_000, "po zaplatení opäť koniec obdobia + 48 h");
+  const d2 = await doc("in_ops_cycle2");
+  assert.deepEqual([d2.status, d2.company_id, d2.customer_snapshot_source], ["paid", NEW(2), "company"]);
+  // dobropis + refundácia prvej faktúry
+  const note = { object: "credit_note", id: "cn_ops_cycle", livemode: false, number: "ESB-CYC-CN", invoice: "in_sub_ops_cycle", status: "issued", currency: "eur",
+    customer: "cus_sub_ops_cycle", subtotal: 1590, subtotal_excluding_tax: 1590, total: 1590, total_excluding_tax: 1590, total_taxes: [], reason: "requested_by_customer",
+    type: "post_payment", created: NOW_S(), effective_at: NOW_S(), pdf: "https://pay.stripe.com/credit_notes/acct_x/test_cn2/pdf" };
+  assert.equal((await webhook(f.provider, ev("credit_note.created", note))).code, "DOCUMENT_ONLY");
+  const cn = await doc("cn_ops_cycle");
+  assert.deepEqual([cn.kind, cn.related_invoice_id, cn.company_id, cn.customer_company_id], ["credit_note", "in_sub_ops_cycle", NEW(2), NEW(2)]);
+  // zrušenie predplatného: doklady ostávajú bez zmeny firmy
+  f.st.sub.status = "canceled"; f.st.sub.canceled_at = NOW_S(); f.st.sub.ended_at = NOW_S();
+  assert.equal((await webhook(f.provider, ev("customer.subscription.deleted", f.st.sub))).outcome, "applied");
+  for (const id of ["in_sub_ops_cycle", "in_ops_cycle2", "cn_ops_cycle"]) assert.equal((await doc(id)).company_id, NEW(2), id);
+  assert.equal(await n("select count(*)::int n from public.billing_invoice_documents where company_id = $1", [NEW(2)]), 3, "3 doklady, žiadne duplicity");
+});
+
+await check("S17-4: nikdy cudzia firma — konflikt väzieb: priradená firma sa nemení, upsert s konfliktom zlyhá (retry + alert), snapshot ukončenej firmy sa neprepíše", async () => {
+  await freshPurchase(NEW(3), U.ownerB, "sub_ops_cf");
+  await freshPurchase(NEW(4), U.ownerB, "sub_ops_cf_other");
+  const base = { kind: "invoice", provider_document_id: "in_ops_cf", provider_subscription_id: "sub_ops_cf", provider_customer_id: "cus_ops_cf", status: "open", currency: "EUR", total_minor: 1590 };
+  await su("select public.esblu_billing_upsert_document('test', 'evt_opscf1', $1::jsonb)", [JSON.stringify(base)]);
+  await su(`insert into public.billing_provider_links (provider, environment, link_kind, external_id, company_id) values ('stripe', 'test', 'customer', 'cus_ops_cf', $1)`, [NEW(4)]);
+  assert.equal((await doc("in_ops_cf")).company_id, NEW(4), "jediná väzba → firma");
+  // druhá väzba (predplatné → iná firma) priradený doklad nezmení
+  await su(`insert into public.billing_provider_links (provider, environment, link_kind, external_id, company_id) values ('stripe', 'test', 'subscription', 'sub_ops_cf', $1)`, [NEW(3)]);
+  assert.equal((await doc("in_ops_cf")).company_id, NEW(4), "priradená firma sa nemení");
+  // nový doklad s konfliktnými väzbami: upsert zlyhá, nič sa neuloží potichu
+  const b2 = { ...base, provider_document_id: "in_ops_cf2" };
+  await fails(() => su("select public.esblu_billing_upsert_document('test', 'evt_opscf2', $1::jsonb)", [JSON.stringify(b2)]), /ESBLU_BILLING_DOCUMENT_COMPANY_CONFLICT/);
+  assert.equal(await n("select count(*)::int n from public.billing_invoice_documents where provider_document_id = 'in_ops_cf2'"), 0);
+  // cez pipeline: DOCUMENT_FAILED → udalosť failed (retry s backoffom) → alert EVENT_PROCESSING_FAILED
+  const f = stripeMock("sub_ops_cf", NOW_S() + 86400);
+  const e = ev("invoice.finalized", invoice("sub_ops_cf", "open", { id: "in_ops_cf3", customer: "cus_ops_cf" }));
+  const r = await webhook(f.provider, e);
+  assert.deepEqual([r.outcome, r.code], ["retry", "DOCUMENT_FAILED"]);
+  const row = await evRow(String(e.id));
+  assert.deepEqual([row.status, row.error_code], ["failed", "DOCUMENT_FAILED"]);
+  const col = (await su<Json>("select public.esblu_billing_ops_collect('test') r"))[0].r;
+  assert.ok(col.raised.includes("EVENT_PROCESSING_FAILED"), JSON.stringify(col));
+  // upratanie pre ďalšie testy (konfliktné väzby a zlyhaná udalosť)
+  await su("update public.billing_events set status = 'ignored', error_code = null where provider_event_id = $1", [e.id]);
+  await su("delete from public.billing_provider_links where external_id in ('sub_ops_cf', 'cus_ops_cf')");
+  // doklad ukončenej firmy (snapshot SC.x, company_id null): nová väzba toho istého zákazníka na inú firmu ho NEPREVEZME
+  const before = JSON.stringify(await snapOf("in_snap_x1"));
+  await su(`insert into public.billing_provider_links (provider, environment, link_kind, external_id, company_id) values ('stripe', 'test', 'customer', 'cus_snap_x', $1)`, [NEW(3)]);
+  const after = await doc("in_snap_x1");
+  assert.deepEqual([after.company_id, after.customer_company_id], [null, SC.x]);
+  assert.equal(JSON.stringify(await snapOf("in_snap_x1")), before, "snapshot ukončenej firmy nezmenený");
+  await su("delete from public.billing_provider_links where external_id = 'cus_snap_x'");
+});
+
+await check("S17-4: alert DOCUMENT_WITHOUT_COMPANY (> 60 min bez firmy aj snapshotu) cez runOpsMonitor; po doplnení väzby auto-resolve", async () => {
+  const d0 = { kind: "invoice", provider_document_id: "in_ops_orphan", provider_subscription_id: "sub_ops_orphan", provider_customer_id: "cus_ops_orphan", status: "open", currency: "EUR", total_minor: 1590 };
+  await su("select public.esblu_billing_upsert_document('test', 'evt_opsorph', $1::jsonb)", [JSON.stringify(d0)]);
+  let m = await runOpsMonitor(serviceDb, "test", null);
+  assert.ok(!m.raised.includes("DOCUMENT_WITHOUT_COMPANY"), "čerstvý doklad (udalosti mimo poradia) ešte nie");
+  await su("update public.billing_invoice_documents set created_at = now() - interval '61 minutes' where provider_document_id = 'in_ops_orphan'");
+  m = await runOpsMonitor(serviceDb, "test", null);
+  assert.ok(m.raised.includes("DOCUMENT_WITHOUT_COMPANY"), JSON.stringify(m));
+  const al = (await alerts("DOCUMENT_WITHOUT_COMPANY")).at(-1)!;
+  assert.deepEqual([al.state, al.severity], ["open", "critical"]);
+  assert.doesNotMatch(JSON.stringify(al.details), /in_ops|sub_ops|cus_ops/, "bez identifikátorov");
+  await freshPurchase(NEW(5), U.ownerB, "sub_ops_orphan");
+  await su(`insert into public.billing_provider_links (provider, environment, link_kind, external_id, company_id) values ('stripe', 'test', 'subscription', 'sub_ops_orphan', $1)`, [NEW(5)]);
+  assert.equal((await doc("in_ops_orphan")).company_id, NEW(5));
+  m = await runOpsMonitor(serviceDb, "test", null);
+  assert.ok(!m.raised.includes("DOCUMENT_WITHOUT_COMPANY") && m.resolved >= 1, JSON.stringify(m));
+  assert.equal((await alerts("DOCUMENT_WITHOUT_COMPANY")).at(-1)!.state, "resolved");
+});
+
+await check("S17-4: jednorazové doplnenie (migrácia) — doklad bez firmy pri existujúcej väzbe (stav QA-STRIPE D na stagingu) → firma + snapshot; nejednoznačný ostáva; idempotentné", async () => {
+  await freshPurchase(NEW(6), U.ownerB, "sub_ops_bf");
+  const mk = (id: string, sub: string, cus: string) => su("select public.esblu_billing_upsert_document('test', $1, $2::jsonb)",
+    [`evt_${id}`, JSON.stringify({ kind: "invoice", provider_document_id: id, provider_subscription_id: sub, provider_customer_id: cus, status: "paid", currency: "EUR", total_minor: 1590 })]);
+  await mk("in_ops_bf", "sub_ops_bf", "cus_ops_bf");
+  await mk("in_ops_bf_amb", "sub_ops_bf_amb", "cus_ops_bf_amb");
+  await db.exec(`alter table public.billing_provider_links disable trigger esblu_billing_documents_link_company;
+    insert into public.billing_provider_links (provider, environment, link_kind, external_id, company_id) values
+      ('stripe', 'test', 'subscription', 'sub_ops_bf', '${NEW(6)}'), ('stripe', 'test', 'customer', 'cus_ops_bf', '${NEW(6)}'),
+      ('stripe', 'test', 'subscription', 'sub_ops_bf_amb', '${NEW(6)}'), ('stripe', 'test', 'customer', 'cus_ops_bf_amb', '${NEW(5)}');
+    alter table public.billing_provider_links enable trigger esblu_billing_documents_link_company;`);
+  let d = await doc("in_ops_bf");
+  assert.deepEqual([d.company_id, d.customer_snapshot_source], [null, null], "presne stav dokladu in_1UdzQr… na stagingu");
+  const firstEvent = d.first_event_id;
+  await db.exec(read(`${MIGRATIONS}/20261124100000_billing_document_company_link.sql`));
+  d = await doc("in_ops_bf");
+  assert.deepEqual([d.company_id, d.customer_company_id, d.customer_snapshot_source, d.status, Number(d.total_minor), d.first_event_id],
+    [NEW(6), NEW(6), "company", "paid", 1590, firstEvent], "doplnená firma + snapshot, účtovná história nezmenená");
+  assert.equal((await doc("in_ops_bf_amb")).company_id, null, "nejednoznačná firma → nedoplní sa");
+  await db.exec(read(`${MIGRATIONS}/20261124100000_billing_document_company_link.sql`));
+  assert.equal((await doc("in_ops_bf")).company_id, NEW(6), "opakované spustenie bez zmeny");
+  assert.equal(await n("select count(*)::int n from public.billing_invoice_documents where provider_document_id = 'in_ops_bf'"), 1);
+  await su("delete from public.billing_provider_links where external_id in ('sub_ops_bf_amb', 'cus_ops_bf_amb')");
+});
+
+await check("S17-4: nové funkcie nie sú volateľné klientom; triggery iba interné", async () => {
+  for (const who of [ownerA, ownerB, anon]) {
+    const o = await attempt(who, "select public.esblu_billing_ops_collect_documents('test')");
+    assert.equal(o.layer, "privilege", o.message);
+  }
+  assert.equal((await attempt(service, "select public.esblu_billing_ops_collect_documents('test')")).layer, "ok");
+  for (const fn of ["esblu_billing_documents_link_company", "esblu_billing_documents_company_consistency"]) {
+    const o = await attempt(service, `select public.${fn}()`);
+    assert.notEqual(o.layer, "ok", fn);
+  }
+});
+
+await check("S17-4: rollback 20261124100000 odstráni iba triggery/funkcie, doplnené firmy a snapshoty ostávajú; znovu-forward", async () => {
+  const before = await n("select count(*)::int n from public.billing_invoice_documents where company_id is not null");
+  const snapBefore = JSON.stringify(await snapOf("in_ops_bf"));
+  await db.exec(read("supabase/rollback/20261124100000_billing_document_company_link_rollback.sql"));
+  assert.equal(await n("select count(*)::int n from pg_trigger where tgname in ('esblu_billing_documents_link_company', 'esblu_billing_documents_company_consistency')"), 0);
+  assert.equal(await n("select count(*)::int n from public.billing_invoice_documents where company_id is not null"), before);
+  assert.equal(JSON.stringify(await snapOf("in_ops_bf")), snapBefore);
+  const m = await runOpsMonitor(serviceDb, "test", null); // monitor beží aj bez funkcie (pred nasadením migrácie)
+  assert.ok(Array.isArray(m.raised));
+  await db.exec(read(`${MIGRATIONS}/20261124100000_billing_document_company_link.sql`));
+  assert.equal(await n("select count(*)::int n from pg_trigger where tgname in ('esblu_billing_documents_link_company', 'esblu_billing_documents_company_consistency')"), 2);
 });
 
 // ============================================================================= 8) migrácie + rollback

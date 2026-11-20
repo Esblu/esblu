@@ -143,6 +143,11 @@ export type OpsMonitorResult = {
   open: { critical: number; warning: number; codes: string[] };
 };
 
+/** PostgREST / Postgres: RPC funkcia neexistuje (migrácia ešte nie je nasadená). */
+function isMissingFunction(error: { message?: string; code?: string }): boolean {
+  return error.code === "PGRST202" || error.code === "42883" || /could not find the function|does not exist/i.test(error.message ?? "");
+}
+
 /** Jeden beh monitoru: vyhodnotiť stav DB, doručiť nové otvorené alerty, vrátiť súhrn (iba kódy a počty). */
 export async function runOpsMonitor(db: BillingDb, environment: BillingEnvironment, mailer: AlertMailer | null): Promise<OpsMonitorResult> {
   const collected = await db.rpc("esblu_billing_ops_collect", { p_environment: environment });
@@ -156,6 +161,16 @@ export async function runOpsMonitor(db: BillingDb, environment: BillingEnvironme
     channel: mailer ? "email" : "none",
     open: { critical: 0, warning: 0, codes: [] },
   };
+  // S17-4: účtovná kópia bez firmy aj bez snapshotu odberateľa (> 60 min) → DOCUMENT_WITHOUT_COMPANY.
+  // Funkcia z migrácie 20261124100000; pred jej nasadením chýba → monitor beží ďalej bez tejto kontroly.
+  const docs = await db.rpc("esblu_billing_ops_collect_documents", { p_environment: environment });
+  if (docs.error) {
+    if (!isMissingFunction(docs.error)) throw new Error("OPS_COLLECT_FAILED");
+  } else {
+    const d = (docs.data ?? {}) as { raised?: unknown; resolved?: unknown };
+    if (Array.isArray(d.raised)) out.raised.push(...d.raised.filter((x): x is string => typeof x === "string"));
+    if (typeof d.resolved === "number") out.resolved += d.resolved;
+  }
   if (mailer) {
     const pending = await db.rpc("esblu_billing_ops_pending", { p_environment: environment, p_limit: 20 });
     const alerts = (Array.isArray(pending.data) ? pending.data : []) as PendingAlert[];
