@@ -1,0 +1,34 @@
+# SABLONA (neaktivna): aktivuje sa skopirovanim do .github/workflows/uptime.yml - vyzaduje token so scope `workflow` alebo upload cez GitHub web.
+# Esblu - externy monitoring dostupnosti (zadarmo: GitHub Actions minuty, upozornenie = e-mail GitHubu
+# pri zlyhanom behu adminom repozitara). Iba GET na verejne adresy, ziadne tajomstva, ziadne osobne udaje.
+# Kontroluje aj, ze platby su stale vypnute a chranene API nie je otvorene bez prihlasenia.
+name: uptime
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch: {}
+permissions: {}
+concurrency: { group: uptime, cancel-in-progress: true }
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: www.esblu.com
+        shell: bash
+        run: |
+          set -u
+          fail=0
+          check() { # url expected_status [body_regex]
+            for i in 1 2 3; do
+              code=$(curl -s -o /tmp/b -w '%{http_code}' --max-time 20 "$1") && [ "$code" = "$2" ] && { [ -z "${3:-}" ] || grep -Eq "$3" /tmp/b; } && { echo "OK   $code $1"; return 0; }
+              sleep 10
+            done
+            echo "FAIL $1 -> $code (ocakavane $2 ${3:-})"; fail=1
+          }
+          check https://www.esblu.com/ 200
+          check https://www.esblu.com/login 200
+          check https://www.esblu.com/api/push/preferences 401
+          check https://www.esblu.com/api/cron/billing-stripe-events 401
+          check https://www.esblu.com/api/billing/purchase-options 404 'ESBLU_BILLING_DISABLED'
+          exit $fail
