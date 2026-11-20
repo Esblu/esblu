@@ -5,7 +5,7 @@
     powershell -ExecutionPolicy Bypass -File .\scripts\stripe-local-sandbox.ps1
   Okno 2 (scenare):
     powershell -ExecutionPolicy Bypass -File .\scripts\stripe-local-sandbox.ps1 -Step <krok> [-CheckoutId <uuid>] [-Subscription <sub_...>]
-      mark-exposed - bez platieb: overi Stripe CLI (natívny stripe v PATH ma prednost pred npx) a ulozi SHA-256
+      mark-exposed - bez platieb: overi Stripe CLI (nativny stripe v PATH ma prednost pred npx) a ulozi SHA-256
                      aktualneho whsec_ profilu -Project medzi kompromitovane (start s nim sa uz nespusti)
       new-sandbox  - NOVY anonymny sandbox v samostatnom profile CLI (-Project, default esblu-qa2) -Email <adresa>:
                      test kluce, nova cena 15,90 EUR/mes., mapovanie ceny na stagingu, odtlacok vystaveneho tajomstva
@@ -46,6 +46,8 @@
 
   Bezpecnost:
   - Stripe kluc: $env:STRIPE_API_KEY -> profil CLI -> skryta vyzva (po prevzati sandboxu). Nikdy sa nevypisuje.
+    Profily v $CompromisedKeyProjects (esblu-qa3: CLI kluc zverejneny): IBA novy sk_test_/rk_test_ zo skrytej vyzvy,
+    SHA-256 sa nesmie zhodovat s klucom profilu. -Project je povinny vzdy (docs par. 8.14c).
     Overenie: kluc vidi cenu profilu (spravny ucet) a ma pristup k Test Clocks. Iba test mode.
   - Webhook secret zo `stripe listen` je viazany na Stripe UCET (sandbox), nie na zariadenie. Novy secret
     = novy sandbox (-Step new-sandbox). Skript porovnava iba SHA-256 s odtlackom vystaveneho tajomstva
@@ -111,9 +113,20 @@ $CompanyE = "5a5a0000-0000-4000-8000-0000000000e0"              # QA-STRIPE E (d
 $OwnerE = "5a5a0000-0000-4000-8000-000000000041"
 $OwnerEEmail = "qa-stripe-e-owner@example.invalid"
 $PriceId = $null
-if (Test-Path $SandboxFile) { $PriceId = (Get-Content $SandboxFile -Raw | ConvertFrom-Json).price }
+$SandboxAccount = ""   # account v sandbox-<profil>.json (starsie verzie skriptu ho nezapisovali)
+if (Test-Path $SandboxFile) {
+  $sbx = Get-Content $SandboxFile -Raw | ConvertFrom-Json
+  $PriceId = $sbx.price
+  if ($sbx.PSObject.Properties["account"] -and $sbx.account) { $SandboxAccount = [string]$sbx.account }
+}
+# Windows PowerShell 5.1 (.NET Framework): Stripe API vyzaduje TLS 1.2+.
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 # S17 bezpecnost: profil sa musi zadat VYSLOVNE (-Project), default 'esblu-qa2' sa uz nesmie pouzit omylom.
 $CompromisedProjects = @("esblu-qa2")   # whsec_ zverejnene v konverzacii 2026-11-20 (odtlacok v exposed.sha256)
+# CLI test kluc profilu (test_mode_api_key, rkcs_test_) zverejneny v konverzacii 2026-11-20: profil sa smie pouzit
+# IBA s NOVYM klucom sandboxu zo skrytej vyzvy (sk_test_/rk_test_), nikdy s klucom z profilu ani zdedenym STRIPE_API_KEY.
+$CompromisedKeyProjects = @("esblu-qa3")
+$CompromisedKeyFile = Join-Path $StateDir "compromised-keys.sha256"   # SHA-256 kompromitovanych Stripe klucov (nie tajomstvo)
 if (-not $PSBoundParameters.ContainsKey("Project")) {
   Write-Host "CHYBA: zadaj profil vyslovne, napr. -Project esblu-qa3 (default sa nepouziva)." -ForegroundColor Red; exit 1
 }
@@ -146,10 +159,10 @@ function Format-Eur([long]$minor, [string]$cur = "EUR") {
   $sign = if ($minor -lt 0) { "-" } else { "" }; $a = [Math]::Abs($minor)
   return ("{0}{1},{2:D2} {3}" -f $sign, [Math]::Floor($a / 100), ($a % 100), $cur.ToUpper())
 }
-function Utc([long]$ts) { return [DateTimeOffset]::FromUnixTimeSeconds($ts).UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss 'UTC'") }
+function Utc([long]$ts) { return [DateTimeOffset]::FromUnixTimeSeconds($ts).UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss 'UTC'", [Globalization.CultureInfo]::InvariantCulture) }
 
 function Get-CliRest([string[]]$cli) {
-  # Pozor: pre 1-prvkove pole by $cli[1..0] vratilo prvky [1] a [0] (opacny rozsah) -> natívny stripe.exe by dostal sam seba ako argument.
+  # Pozor: pre 1-prvkove pole by $cli[1..0] vratilo prvky [1] a [0] (opacny rozsah) -> nativny stripe.exe by dostal sam seba ako argument.
   if ($cli.Length -gt 1) { return @($cli[1..($cli.Length - 1)]) }
   return @()
 }
@@ -223,6 +236,19 @@ function Get-Rows([string]$path) {
   return @(Invoke-Staging "GET" $path | ForEach-Object { $_ })
 }
 
+function Read-HiddenText([string]$prompt) {
+  # Read-Host -AsSecureString -> text iba v pamati procesu (BSTR sa hned vynuluje); nikdy sa nevypisuje.
+  $sec = Read-Host -AsSecureString $prompt
+  $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec)
+  try { $t = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
+  if ($null -eq $t) { return "" }
+  return $t.Trim()
+}
+function Get-CompromisedKeyHashes {
+  if (-not (Test-Path $CompromisedKeyFile)) { return @() }
+  return @(Get-Content $CompromisedKeyFile | ForEach-Object { "$_".Trim().ToLower() } | Where-Object { $_ -match "^[0-9a-f]{64}$" })
+}
+
 function Get-StripeTestKey {
   # Kluc sa NIKDY nevypisuje. Poradie:
   #  1) $env:STRIPE_API_KEY (test) z tohto okna,
@@ -233,7 +259,31 @@ function Get-StripeTestKey {
   $testRe = "(?:sk|rk|rkcs)_test_[A-Za-z0-9]+"
   $liveRe = "(?:sk|rk|rkcs)_live_"
   $key = $null; $src = ""
-  if ($env:STRIPE_API_KEY) {
+  if ($CompromisedKeyProjects -contains $Project) {
+    # Kompromitovany CLI kluc profilu: porovnavaju sa IBA odtlacky SHA-256 (kluc sa nikdy nevypisuje ani neuklada).
+    $cfg = Invoke-StripeRaw $StripeCli @("config", "--list")
+    if ($cfg -match "test_mode_api_key\s*=\s*['`"]?$liveRe") { Fail "V profile je LIVE kluc - skript pracuje iba s test mode." }
+    $bad = @(Get-CompromisedKeyHashes)
+    $m = [regex]::Match($cfg, "test_mode_api_key\s*=\s*['`"]?($testRe)")
+    if ($m.Success) {
+      $h = Get-Sha256 $m.Groups[1].Value
+      if ($bad -notcontains $h) { Add-Content -Path $CompromisedKeyFile -Value $h -Encoding ASCII; $bad += $h }
+    }
+    if ($bad.Count -eq 0) { Say "    POZOR: odtlacok kompromitovaneho kluca profilu '$Project' nie je dostupny (kluc nie je v profile) - porovnanie sa preskoci." }
+    if ($env:STRIPE_API_KEY) {
+      $inh = if ($bad -contains (Get-Sha256 $env:STRIPE_API_KEY.Trim())) { "= kompromitovany kluc" } else { "nepouzije sa" }
+      Remove-Item Env:STRIPE_API_KEY
+      Say "    zdedena premenna STRIPE_API_KEY ignorovana ($inh) - profil '$Project' vyzaduje novy kluc zo skrytej vyzvy"
+    }
+    Say "    Profil '$Project': CLI kluc je KOMPROMITOVANY - pouzije sa iba NOVY kluc tohto sandboxu."
+    Say "    Stripe Dashboard -> sandbox profilu '$Project' -> Developers -> API keys -> Secret key (sk_test_, po rotacii) alebo novy Restricted key (rk_test_)."
+    $key = Read-HiddenText "    Vloz NOVY testovaci kluc sk_test_/rk_test_ (nezobrazi sa)"
+    if ($key -match "^$liveRe") { Fail "Zadany kluc je LIVE - skript pracuje iba s test mode." }
+    if ($key -notmatch "^(?:sk|rk)_test_[A-Za-z0-9]+$") { Fail "Zadany kluc nie je novy sandbox kluc sk_test_/rk_test_ (CLI kluc rkcs_ sa pre '$Project' nepouziva)." }
+    if ($bad -contains (Get-Sha256 $key)) { Fail "Zadany kluc je KOMPROMITOVANY kluc profilu '$Project' - vytvor/rotuj novy kluc v Dashboarde sandboxu." }
+    $src = "skryta vyzva (novy kluc; SHA-256 != kompromitovany)"
+  }
+  elseif ($env:STRIPE_API_KEY) {
     if ($env:STRIPE_API_KEY -match "^$liveRe") { Fail "STRIPE_API_KEY je LIVE kluc - skript pracuje iba s test mode." }
     if ($env:STRIPE_API_KEY -match "^$testRe$") { $key = $env:STRIPE_API_KEY; $src = "STRIPE_API_KEY" }
   }
@@ -246,8 +296,7 @@ function Get-StripeTestKey {
   if (-not $key) {
     Say "    Profil '$Project' nema citatelny testovaci kluc (po stripe login je v systemovom trezore)."
     Say "    Stripe Dashboard -> tvoj sandbox (prepinac vlavo hore) -> Developers -> API keys -> Secret key (sk_test_...)."
-    $sec = Read-Host -AsSecureString "    Vloz testovaci Secret key (nezobrazi sa)"
-    $key = ([Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec))).Trim()
+    $key = Read-HiddenText "    Vloz testovaci Secret key (nezobrazi sa)"
     if ($key -match "^$liveRe") { Fail "Zadany kluc je LIVE - skript pracuje iba s test mode." }
     if ($key -notmatch "^$testRe$") { Fail "Zadany kluc nie je testovaci Stripe kluc (sk_test_/rk_test_/rkcs_test_)." }
     $src = "skryta vyzva"
@@ -266,7 +315,23 @@ function Assert-StripeAccount([string]$key) {
   if ($pr.unit_amount -ne 1590 -or $pr.currency -ne "eur" -or $pr.recurring.interval -ne "month") { Fail "Cena $PriceId nie je 15,90 EUR / mesiac." }
   try { Invoke-RestMethod -Uri "https://api.stripe.com/v1/test_helpers/test_clocks?limit=1" -Headers $h -Method Get | Out-Null }
   catch { Fail "Kluc nema opravnenie na Test Clocks (test_helpers). Pouzi Secret key (sk_test_) sandboxu. ($($_.Exception.Message))" }
-  Say "    ucet OK: kluc vidi cenu $PriceId (15,90 EUR / mesiac, test) a ma pristup k Test Clocks"
+  # Identita uctu: account zo sandbox-<profil>.json, inak account_id profilu CLI (starsi subor bez "account").
+  $expAcct = $SandboxAccount
+  $acctSrc = "sandbox-$Project.json"
+  if (-not $expAcct) { $expAcct = Get-ProfileAccountId $StripeCli; $acctSrc = "profil CLI '$Project'" }
+  if (-not $expAcct) { Fail "Neviem urcit ucet profilu '$Project' (sandbox subor bez account, profil bez account_id)." }
+  $acctNote = ""
+  try {
+    $a = Invoke-RestMethod -Uri "https://api.stripe.com/v1/account" -Headers $h -Method Get
+    if ([string]$a.id -ne $expAcct) { Fail "Kluc patri uctu $($a.id), ocakavany $expAcct ($acctSrc) - zastavene." }
+    $acctNote = "/v1/account = $expAcct"
+  } catch {
+    $code = $null; try { $code = [int]$_.Exception.Response.StatusCode } catch { }
+    if ($code -eq 403) { $acctNote = "kluc bez prava na /v1/account (403) - ucet $expAcct overeny cez cenu" }
+    elseif ($code) { Fail "Overenie uctu kluca zlyhalo (HTTP $code)." }
+    else { throw }
+  }
+  Say "    ucet OK: $acctNote ($acctSrc); kluc vidi cenu $PriceId (15,90 EUR / mesiac, test) a ma pristup k Test Clocks"
 }
 
 function Get-Sha256([string]$s) {
@@ -277,8 +342,7 @@ function Get-Sha256([string]$s) {
 function Get-ServiceRole {
   if ($env:ESBLU_QA_SERVICE_ROLE) { $k = $env:ESBLU_QA_SERVICE_ROLE }
   else {
-    $sec = Read-Host -AsSecureString "Staging service_role kluc (esblu-test, nezobrazi sa)"
-    $k = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec))
+    $k = Read-HiddenText "Staging service_role kluc (esblu-test, nezobrazi sa)"
     $env:ESBLU_QA_SERVICE_ROLE = $k   # iba pre tento proces
   }
   if ($k.Length -lt 20) { Fail "Kluc je prilis kratky." }
@@ -525,7 +589,7 @@ function Get-ShortId([string]$id) {
   if ($id.Length -le 16) { return $id }
   return $id.Substring(0, 16) + "..."
 }
-function Get-UtcIso { return [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ") }
+function Get-UtcIso { return [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ", [Globalization.CultureInfo]::InvariantCulture) }
 function ConvertTo-UtcDate($v) {
   # PS 5.1 vracia casy z JSON ako text, PS 7 ako DateTime.
   if ($null -eq $v -or "$v" -eq "") { return $null }
@@ -739,16 +803,26 @@ function Stop-S17Listen {
 
 function Enable-S17Billing($st) {
   # Staging billing iba pre test: web_provider='stripe' + aktivna cena sandboxu. Predchadzajuci stav sa ulozi PRED zmenou.
+  $null = Assert-StagingAccess   # READ-ONLY (URL, service_role, environment=test) pred prvym zapisom S17
   $cfg = @(Get-Rows "billing_runtime_config?select=web_provider,environment")[0]
   if (-not $cfg) { Fail "Staging billing_runtime_config nema riadok." }
   if ($cfg.environment -ne "test") { Fail "Staging billing_runtime_config.environment=$($cfg.environment) (ocakavane test)." }
-  $prices = Get-Rows "billing_provider_prices?provider=eq.stripe&environment=eq.test&select=provider_price_id,plan_code,billing_interval,active"
-  if (-not (@($prices | Where-Object { $_.provider_price_id -eq $PriceId }).Count)) { Fail "Cena $PriceId nie je namapovana na stagingu (spusti -Step new-sandbox)." }
+  if ([string]$cfg.web_provider -ne "none") { Fail "Staging web_provider=$($cfg.web_provider) (ocakavane none = billing vypnuty). Najprv -Step s17-cleanup alebo over stav stagingu." }
+  $prices = @(Get-Rows "billing_provider_prices?provider=eq.stripe&environment=eq.test&select=provider_price_id,plan_code,billing_interval,active")
   $st.prev_web_provider = [string]$cfg.web_provider
   $st.prev_prices = @($prices | ForEach-Object { [ordered]@{ price = [string]$_.provider_price_id; active = [bool]$_.active } })
+  $st.mapping_created = $false
   $st.enabled = $true
   $st.restored = $false
   Save-S17State $st
+  if (-not (@($prices | Where-Object { $_.provider_price_id -eq $PriceId }).Count)) {
+    # Staging nema riadok pre cenu sandboxu -> obnovitelne mapovanie (novy riadok, presne 1 aktivna); obnova S17-11
+    # vrati aktivne ceny na stav PRED tymto krokom (prev_prices) a web_provider na 'none'.
+    Say17 "    staging nema mapovanie pre $(Get-ShortId $PriceId) -> vytvaram (Set-StagingPriceMapping)"
+    $st.mapping_created = $true
+    Save-S17State $st
+    Set-StagingPriceMapping $PriceId
+  }
   foreach ($p in @($prices | Where-Object { $_.active -and $_.provider_price_id -ne $PriceId -and $_.plan_code -eq "esblu_complete" -and $_.billing_interval -eq "month" })) {
     Invoke-Staging "PATCH" "billing_provider_prices?provider=eq.stripe&environment=eq.test&provider_price_id=eq.$($p.provider_price_id)" @{ active = $false } | Out-Null
   }
@@ -757,7 +831,7 @@ function Enable-S17Billing($st) {
   $cfg2 = @(Get-Rows "billing_runtime_config?select=web_provider,environment")[0]
   $act = @(Get-Rows "billing_provider_prices?provider=eq.stripe&environment=eq.test&active=eq.true&select=provider_price_id")
   if ($cfg2.web_provider -ne "stripe" -or $act.Count -ne 1 -or $act[0].provider_price_id -ne $PriceId) { Fail "Zapnutie billingu na stagingu sa neprejavilo (web_provider=$($cfg2.web_provider), aktivnych cien $($act.Count))." }
-  return [ordered]@{ prev_web_provider = $st.prev_web_provider; prev_active_prices = @($st.prev_prices | Where-Object { $_.active }).Count; now_web_provider = "stripe"; now_active_price = (Get-ShortId $PriceId) }
+  return [ordered]@{ prev_web_provider = $st.prev_web_provider; prev_active_prices = @($st.prev_prices | Where-Object { $_.active }).Count; mapping_created = [bool]$st.mapping_created; now_web_provider = "stripe"; now_active_price = (Get-ShortId $PriceId) }
 }
 
 function Restore-S17Staging($st) {
@@ -791,9 +865,17 @@ function Restore-S17Staging($st) {
   if ($st.enabled -and -not $st.restored) {
     try {
       Invoke-Staging "PATCH" "billing_runtime_config?id=eq.true" @{ web_provider = [string]$st.prev_web_provider } | Out-Null
-      # najprv vypnut (false), az potom zapnut povodne aktivne -> nikdy 2 aktivne ceny naraz
-      foreach ($p in @(@($st.prev_prices) | Sort-Object { [bool]$_.active })) {
-        Invoke-Staging "PATCH" "billing_provider_prices?provider=eq.stripe&environment=eq.test&provider_price_id=eq.$($p.price)" @{ active = [bool]$p.active } | Out-Null
+      # najprv vypnut kazdu aktivnu cenu, ktora PRED S17 aktivna nebola (aj riadok vytvoreny S17), az potom zapnut
+      # povodne aktivne -> nikdy 2 aktivne ceny naraz (unikatny index). Riadok mapovania S17 ostava (neaktivny).
+      $prevActive = @(@($st.prev_prices) | Where-Object { $_ -and [bool]$_.active } | ForEach-Object { [string]$_.price })
+      $nowActive = @(Get-Rows "billing_provider_prices?provider=eq.stripe&environment=eq.test&active=eq.true&select=provider_price_id")
+      foreach ($r in $nowActive) {
+        if ($prevActive -notcontains [string]$r.provider_price_id) {
+          Invoke-Staging "PATCH" "billing_provider_prices?provider=eq.stripe&environment=eq.test&provider_price_id=eq.$($r.provider_price_id)" @{ active = $false } | Out-Null
+        }
+      }
+      foreach ($pid0 in $prevActive) {
+        Invoke-Staging "PATCH" "billing_provider_prices?provider=eq.stripe&environment=eq.test&provider_price_id=eq.$pid0" @{ active = $true } | Out-Null
       }
       $st.restored = $true
       Save-S17State $st
@@ -806,7 +888,9 @@ function Restore-S17Staging($st) {
     $d["active_stripe_test_prices"] = $act.Count
     if ($st.enabled) {
       $expActive = @(@($st.prev_prices) | Where-Object { $_.active }).Count
-      if ([string]$cfg.web_provider -ne [string]$st.prev_web_provider -or $act.Count -ne $expActive) { $errors += "konfiguracia: web_provider=$($cfg.web_provider) (povodne $($st.prev_web_provider)), aktivnych cien $($act.Count) (povodne $expActive)" }
+      $prevActiveIds = @(@($st.prev_prices) | Where-Object { $_ -and [bool]$_.active } | ForEach-Object { [string]$_.price })
+      $unexpected = @($act | Where-Object { $prevActiveIds -notcontains [string]$_.provider_price_id })
+      if ([string]$cfg.web_provider -ne [string]$st.prev_web_provider -or $act.Count -ne $expActive -or $unexpected.Count -gt 0) { $errors += "konfiguracia: web_provider=$($cfg.web_provider) (povodne $($st.prev_web_provider)), aktivnych cien $($act.Count) (povodne $expActive)" }
     }
   } catch { $errors += "kontrola konfiguracie: $($_.Exception.Message)" }
   $d["test_clocks_kept"] = @(@($st.clocks) | Where-Object { $_ }).Count
@@ -1341,6 +1425,7 @@ function Invoke-S17Cleanup {
   $st = Get-Content $S17StateFile -Raw | ConvertFrom-Json
   $S17Ctx.pinned = Get-S17PinnedVersion
   $S17Ctx.state = $st
+  $null = Assert-StagingAccess   # READ-ONLY pred obnovou stagingu
   Say17 "S17 cleanup: predplatne $(Get-ShortId ([string]$st.subscription)), staging konfiguracia (enabled=$($st.enabled) restored=$($st.restored)), Test Clocks $(@(@($st.clocks) | Where-Object { $_ }).Count)"
   $d = Restore-S17Staging $st
   $deleted = @()
@@ -1973,6 +2058,8 @@ Say "    tajomstvo whsec_*** (SHA-256 $($newHash.Substring(0,8))...) - lisi sa o
 Say "3/5 Staging Supabase service role kluc (esblu-test)."
 Say "    Supabase Dashboard -> projekt esblu-test -> Project Settings -> API Keys -> service_role (secret)."
 $ServiceRole = Get-ServiceRole
+# READ-ONLY overenie stagingu (URL esblu-test, service_role, billing environment=test) pred spustenim Esblu proti nemu.
+$null = Assert-StagingAccess
 
 # Iba premenne TOHTO procesu (dedi ich Next.js a nikam sa neukladaju).
 $env:NEXT_PUBLIC_SUPABASE_URL = $StagingUrl
@@ -2017,7 +2104,8 @@ Say "=================================================================="
 try {
   npx next dev -p $Port
 } finally {
-  if ($listen -and -not $listen.HasExited) { Stop-Process -Id $listen.Id -Force -ErrorAction SilentlyContinue }
+  # cely strom (npx.cmd -> node -> stripe), nie iba prvy proces
+  if ($listen -and -not $listen.HasExited) { $ErrorActionPreference = "Continue"; & taskkill.exe /PID $listen.Id /T /F 2>&1 | Out-Null }
   Remove-Item (Join-Path $StateDir "listen*.log"), $CronFile, $NoListenFile, $ListenPidFile, $HeadFile -Force -ErrorAction SilentlyContinue
   Remove-Item Env:CRON_SECRET, Env:STRIPE_SECRET_KEY, Env:STRIPE_API_KEY, Env:STRIPE_WEBHOOK_SECRET, Env:SUPABASE_SERVICE_ROLE_KEY, Env:ESBLU_QA_SERVICE_ROLE -ErrorAction SilentlyContinue
   Say "Zastavene."
