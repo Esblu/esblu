@@ -31,7 +31,7 @@ Bez produkčných zmien, bez LIVE, bez nových sandboxov. Právne závery nie s�
 | @capacitor/android 8.5.0 | critical (obsah na origin appky cez interný proxy) | **áno v APK** (npm ho hlási ako dev) | CapacitorHttp nie je zapnutý (nízka), Android vc4 je ale postavený s 8.5.0 | **Capacitor 8.6.2** + nový AAB |
 | zod, source-map-js, brace-expansion | high DoS | čiastočne | server validuje vstupy zodom → aktualizovať | `npm audit fix` (bez --force) |
 | browserslist, js-yaml, glob, minimatch, typescript-eslint | high/moderate | iba dev/build | nie pri behu | `npm audit fix` |
-| exceljs → uuid | moderate | áno | Esblu volá exceljs bez `buf` pre uuid v3/v5/v6 → nezneužiteľné | ponechať (oprava = downgrade exceljs 3.4.0) |
+| exceljs → uuid | moderate | áno | chyba je iba vo v3/v5/v6 s parametrom `buf`; použitie v exceljs neoverené do detailu → pravdepodobne nízka | ponechať (oprava = downgrade exceljs 3.4.0) |
 Po oprave: 0 critical, 0 high, 2 moderate (exceljs/uuid).
 
 ## 4. Čo skutočne blokuje komerčné spustenie
