@@ -224,5 +224,16 @@ for (const [re, name] of ps7) {
   })());
 }
 
+// --- 14) S17-12..14 (2026-11-20): obnova, zlyhana platba + opakovanie, uplna refundacia dobropisom
+{
+  const idx = (n) => code.indexOf(`Invoke-S17Step "${n}"`);
+  check("S17: kroky 12, 13, 14 existuju a bezia pred kontrolou duplicit (10) a obnovou (11)", [12, 13, 14].every((n) => idx(n) > idx(9)) && idx(12) < idx(13) && idx(13) < idx(14) && idx(14) < idx(10));
+  check("S17-12: posun Test Clock za koniec obdobia, faktura subscription_cycle, cislovanie a obdobie dokladu", /test_clocks\/\$clockId\/advance/.test(code) && /billing_reason -eq "subscription_cycle"/.test(code) && /cislo faktury obnovy nie je vyssie/.test(code) && /obdobie dokladu != Stripe/.test(code));
+  check("S17-13: zlyhavajuca karta, past_due bez okamziteho odobratia narokov, opakovanie /pay, doklad presne 1x", /pm_card_chargeCustomerFail/.test(code) && /invoices\/\$\(\$S17Ctx\.inv3\)\/pay/.test(code) && /naroky odobrate uz pri prvom zlyhani/.test(code) && /doklad faktury \$\(\$rows\.Count\)x/.test(code));
+  check("S17-14: uplna refundacia cez credit note (nie Payments -> Refund), Esblu refunded, Stripe canceled, 0 narokov", /refund_amount = \$amount/.test(code) && /ocakavane refunded/.test(code) && /ocakavane canceled/.test(code));
+  check("S17-10: kontrola duplicit zahrna doklady krokov 12-14", /\$S17Ctx\.inv2, \$S17Ctx\.inv3, \$S17Ctx\.cn3/.test(code));
+  check("S17: ziadne nove Stripe ucty ani sandboxy v novych krokoch (iba zakaznik S17 na jeho Test Clock)", (() => { const seg = code.slice(idx(12), idx(10)); return !/sandboxes create|\/v1\/accounts|"\/customers" /.test(seg); })());
+}
+
 console.log(`\n${passed} PASS, ${failed} FAIL`);
 process.exit(failed ? 1 : 0);

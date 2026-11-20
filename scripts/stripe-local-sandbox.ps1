@@ -1201,6 +1201,7 @@ function Invoke-S17 {
       $st.customer = [string]$cus.id
       Save-S17State $st
       $pm = Invoke-StripeApi "POST" "/payment_methods/pm_card_visa/attach" ([ordered]@{ customer = $cus.id }) "$tag-pm"
+      $S17Ctx.pmOk = [string]$pm.id
       Invoke-StripeApi "POST" "/customers/$($cus.id)" ([ordered]@{ "invoice_settings[default_payment_method]" = $pm.id }) "$tag-cus-pm" | Out-Null
       $sub = Invoke-StripeApi "POST" "/subscriptions" ([ordered]@{ customer = $cus.id; "items[0][price]" = $PriceId; "metadata[esblu_checkout_id]" = $checkoutId; default_payment_method = $pm.id }) "$tag-sub"
       $st.subscription = [string]$sub.id
@@ -1540,6 +1541,135 @@ function Invoke-S17 {
       Add-S17Result "9b" "Vyplata (payout) - v sandboxe nie je" "LIMITATION" $pd
     }
 
+    # ------------------------------------------------------------------- S17-12..14 (2026-11-20): doklady pri obnove,
+    # zlyhanej platbe s opakovanim a uplnej refundacii dobropisom. Vsetko na Test Clock zakaznika S17 (ziadne nove ucty).
+    Invoke-S17Step "12" "Obnovenie predplatneho (Test Clock) -> nova faktura, doklad, cislovanie, obdobie" {
+      param($d)
+      $clockId = [string]$S17Ctx.state.clock
+      $to = [long]$S17Ctx.period.end + 3600
+      Invoke-StripeApi "POST" "/test_helpers/test_clocks/$clockId/advance" ([ordered]@{ frozen_time = $to }) | Out-Null
+      for ($i = 0; $i -lt 60; $i++) { $c = Invoke-StripeApi "GET" "/test_helpers/test_clocks/$clockId"; if ($c.status -eq "ready") { break }; if ($c.status -eq "internal_failure") { Fail "Test Clock internal_failure" }; Start-Sleep -Seconds 2 }
+      $inv2 = $null
+      for ($i = 0; $i -lt 40; $i++) {
+        $list = Invoke-StripeApi "GET" "/invoices" ([ordered]@{ subscription = $S17Ctx.sub; limit = 5 })
+        $inv2 = @($list.data | Where-Object { $_.id -ne $S17Ctx.inv -and $_.billing_reason -eq "subscription_cycle" } | Select-Object -First 1)[0]
+        if ($inv2 -and $inv2.status -eq "paid") { break }
+        Start-Sleep -Seconds 3
+      }
+      if (-not $inv2 -or $inv2.status -ne "paid") { Fail "Stripe: faktura obnovy nie je zaplatena (stav=$($inv2.status))." }
+      $S17Ctx.inv2 = [string]$inv2.id
+      $inv1 = Invoke-StripeApi "GET" "/invoices/$($S17Ctx.inv)"
+      $e = Find-StripeEvent "invoice.paid" $inv2.id
+      $S17Ctx.events["invoice.paid#renewal"] = [string]$e.id
+      $row = Wait-BillingEvent $e.id 90
+      if (-not $row -or $row.status -ne "processed") { Fail "Esblu DB: invoice.paid obnovy $(Get-ShortId $e.id) status=$($row.status)." }
+      $doc = Wait-Doc $S17Ctx.inv2 { param($r) $r.status -eq "paid" -and $r.customer_snapshot_at } 90
+      if (-not $doc) { Fail "Doklad faktury obnovy chyba alebo nie je zaplateny." }
+      $bad = @()
+      $p1 = [regex]::Match([string]$inv1.number, '^(.*)-(\d+)$'); $p2 = [regex]::Match([string]$inv2.number, '^(.*)-(\d+)$')
+      if (-not $p1.Success -or -not $p2.Success) { $bad += "cislo faktury nema tvar PREFIX-NNNN" }
+      elseif ($p1.Groups[1].Value -ne $p2.Groups[1].Value) { $d["numbering"] = "customer-level (rozne prefixy) - v SK/EU sa ocakava account-level, nastavenie Dashboardu" }
+      elseif ([long]$p2.Groups[2].Value -le [long]$p1.Groups[2].Value) { $bad += "cislo faktury obnovy nie je vyssie" }
+      else { $d["numbering"] = "account-level, rastuce" }
+      $line = @($inv2.lines.data | ForEach-Object { $_ }) | Where-Object { $_.period } | Select-Object -First 1
+      if ([long]$line.period.start -ne [long]$S17Ctx.period.end) { $bad += "obdobie obnovy nenadvazuje" }
+      $ps = ConvertTo-UtcDate $doc.service_period_start
+      if ($ps -ne [DateTimeOffset]::FromUnixTimeSeconds([long]$line.period.start).UtcDateTime) { $bad += "obdobie dokladu != Stripe" }
+      if ([long]$doc.total_minor -ne [long]$inv2.total -or [string]$doc.currency -notmatch '^(?i)eur$') { $bad += "suma/mena dokladu" }
+      if ([string]$doc.company_id -ne $CompanyD) { $bad += "doklad inej firme" }
+      $periodEnd = [DateTimeOffset]::FromUnixTimeSeconds([long]$line.period.end).UtcDateTime.AddMinutes(-5)
+      $acc = Wait-Esblu $S17Ctx.sub { param($a) $a.status -eq "active" -and (ConvertTo-UtcDate $a.current_period_end) -ge $periodEnd } "posun obdobia po obnove"
+      $S17Ctx.period2 = @{ start = [long]$line.period.start; end = [long]$line.period.end }
+      $d["renewal_invoice"] = Get-ShortId $S17Ctx.inv2
+      $d["renewal_period"] = "$(Utc $line.period.start) -> $(Utc $line.period.end)"
+      $d["invoice_numbers_prefix_equal"] = ($p1.Groups[1].Value -eq $p2.Groups[1].Value)
+      $d["doc_total_minor"] = [long]$doc.total_minor
+      $d["tax_lines"] = @($inv2.total_taxes | Where-Object { $_ }).Count
+      $d["esblu_status"] = [string]$acc.status
+      Say17 "    obnova: faktura $(Get-ShortId $S17Ctx.inv2) zaplatena, doklad OK, obdobie $($d['renewal_period']), cislovanie $($d['numbering'])"
+      if ($bad.Count) { Fail ($bad -join "; ") }
+    }
+
+    Invoke-S17Step "13" "Zlyhana platba pri obnove -> past_due, doklad otvoreny; opakovanie platby -> paid, 1 doklad" {
+      param($d)
+      $tag = "s17-fail-" + $S17Ctx.sub
+      $badPm = Invoke-StripeApi "POST" "/payment_methods/pm_card_chargeCustomerFail/attach" ([ordered]@{ customer = $S17Ctx.state.customer }) "$tag-pm"
+      Invoke-StripeApi "POST" "/subscriptions/$($S17Ctx.sub)" ([ordered]@{ default_payment_method = $badPm.id }) "$tag-sub" | Out-Null
+      $clockId = [string]$S17Ctx.state.clock
+      Invoke-StripeApi "POST" "/test_helpers/test_clocks/$clockId/advance" ([ordered]@{ frozen_time = [long]$S17Ctx.period2.end + 3600 }) | Out-Null
+      for ($i = 0; $i -lt 60; $i++) { $c = Invoke-StripeApi "GET" "/test_helpers/test_clocks/$clockId"; if ($c.status -eq "ready") { break }; Start-Sleep -Seconds 2 }
+      $inv3 = $null
+      for ($i = 0; $i -lt 40; $i++) {
+        $list = Invoke-StripeApi "GET" "/invoices" ([ordered]@{ subscription = $S17Ctx.sub; limit = 5 })
+        $inv3 = @($list.data | Where-Object { $_.id -ne $S17Ctx.inv -and $_.id -ne $S17Ctx.inv2 -and $_.billing_reason -eq "subscription_cycle" } | Select-Object -First 1)[0]
+        if ($inv3 -and $inv3.status -eq "open" -and [int]$inv3.attempt_count -ge 1) { break }
+        Start-Sleep -Seconds 3
+      }
+      if (-not $inv3 -or $inv3.status -ne "open") { Fail "Stripe: faktura so zlyhanou platbou nie je open (stav=$($inv3.status))." }
+      $S17Ctx.inv3 = [string]$inv3.id
+      $ef = Find-StripeEvent "invoice.payment_failed" $inv3.id
+      $S17Ctx.events["invoice.payment_failed"] = [string]$ef.id
+      $rf = Wait-BillingEvent $ef.id 90
+      if (-not $rf -or $rf.status -notin @("processed", "ignored")) { Fail "Esblu DB: invoice.payment_failed status=$($rf.status)." }
+      $acc = Wait-Esblu $S17Ctx.sub { param($a) $a.status -in @("past_due", "grace_period", "unpaid") } "stav po zlyhanej platbe"
+      $d["after_failure_status"] = [string]$acc.status
+      $d["after_failure_entitlements"] = Get-ActiveSubEnts $CompanyD
+      $docOpen = Wait-Doc $S17Ctx.inv3 { param($r) $r.status -eq "open" } 60
+      $d["doc_status_after_failure"] = $(if ($docOpen) { "open" } else { "chyba" })
+      # Opakovanie: platna karta + POST /invoices/{id}/pay (ako Smart Retry / zakaznik v portali)
+      Invoke-StripeApi "POST" "/subscriptions/$($S17Ctx.sub)" ([ordered]@{ default_payment_method = $S17Ctx.pmOk }) "$tag-sub-ok" | Out-Null
+      $paid = Invoke-StripeApi "POST" "/invoices/$($S17Ctx.inv3)/pay" ([ordered]@{ payment_method = $S17Ctx.pmOk }) "$tag-pay"
+      if ($paid.status -ne "paid") { Fail "Stripe: opakovana platba nepresla (stav=$($paid.status))." }
+      $ep = Find-StripeEvent "invoice.paid" $S17Ctx.inv3
+      $S17Ctx.events["invoice.paid#retry"] = [string]$ep.id
+      $rp = Wait-BillingEvent $ep.id 90
+      if (-not $rp -or $rp.status -ne "processed") { Fail "Esblu DB: invoice.paid po opakovani status=$($rp.status)." }
+      $acc2 = Wait-Esblu $S17Ctx.sub { param($a) $a.status -eq "active" } "aktivacia po opakovanej platbe"
+      $doc = Wait-Doc $S17Ctx.inv3 { param($r) $r.status -eq "paid" } 60
+      $rows = @(Get-DocRows $S17Ctx.inv3)
+      $problems = @()
+      if (-not $docOpen) { $problems += "doklad pred zaplatenim nebol open" }
+      if (-not $doc) { $problems += "doklad po zaplateni nie je paid" }
+      if ($rows.Count -ne 1) { $problems += "doklad faktury $($rows.Count)x" }
+      if ($d["after_failure_entitlements"] -lt 1) { $problems += "naroky odobrate uz pri prvom zlyhani (ocakavana 7-dnova lehota)" }
+      $d["failed_invoice"] = Get-ShortId $S17Ctx.inv3
+      $d["final_status"] = [string]$acc2.status
+      $d["document_rows"] = $rows.Count
+      Say17 "    zlyhanie: Esblu $($d['after_failure_status']) (naroky $($d['after_failure_entitlements'])), doklad open; po opakovani Stripe paid, Esblu $($acc2.status), doklad 1x paid"
+      if ($problems.Count) { Fail ($problems -join "; ") }
+    }
+
+    Invoke-S17Step "14" "Uplna refundacia aktualneho obdobia dobropisom -> credit note doklad, Esblu refunded, Stripe ukoncene" {
+      param($d)
+      $inv3 = Invoke-StripeApi "GET" "/invoices/$($S17Ctx.inv3)"
+      $amount = [long]$inv3.amount_paid
+      $cn = Invoke-StripeApi "POST" "/credit_notes" ([ordered]@{ invoice = $S17Ctx.inv3; amount = $amount; refund_amount = $amount; reason = "order_change"; memo = "Esblu S17 QA uplna refundacia" }) "s17-cn3-$($S17Ctx.sub)"
+      $S17Ctx.cn3 = [string]$cn.id
+      if ($cn.status -ne "issued" -or [long]$cn.total -ne $amount) { Fail "Stripe dobropis: status=$($cn.status) total=$($cn.total) (ocakavane $amount)." }
+      $ecn = Find-StripeEvent "credit_note.created" $cn.id
+      $S17Ctx.events["credit_note.created#3"] = [string]$ecn.id
+      $rcn = Wait-BillingEvent $ecn.id 90
+      if (-not $rcn -or $rcn.status -notin @("processed", "ignored")) { Fail "credit_note.created status=$($rcn.status)." }
+      $doc = Wait-Doc $S17Ctx.cn3 { param($r) $r.related_invoice_id -and $r.company_id } 60
+      $acc = Wait-Esblu $S17Ctx.sub { param($a) $a.status -in @("refunded", "canceled") } "ukoncenie po uplnej refundacii"
+      $s = $null
+      for ($i = 0; $i -lt 20; $i++) { $s = Invoke-StripeApi "GET" "/subscriptions/$($S17Ctx.sub)"; if ($s.status -eq "canceled") { break }; if (Test-Path $NoListenFile) { Invoke-S17Catchup | Out-Null }; Start-Sleep -Seconds 3 }
+      $ents = Get-ActiveSubEnts $CompanyD
+      $problems = @()
+      if (-not $doc) { $problems += "doklad dobropisu chyba" }
+      elseif ([string]$doc.kind -ne "credit_note" -or [long]$doc.total_minor -ne $amount -or [string]$doc.related_invoice_id -ne $S17Ctx.inv3) { $problems += "doklad dobropisu nesedi (druh/suma/vazba)" }
+      if ($acc.status -ne "refunded") { $problems += "Esblu stav $($acc.status) (ocakavane refunded)" }
+      if ($s.status -ne "canceled") { $problems += "Stripe predplatne $($s.status) (ocakavane canceled - inak by sa dalej uctovalo)" }
+      if ($ents -ne 0) { $problems += "firma ma $ents ucinnych narokov po uplnej refundacii" }
+      $d["credit_note"] = Get-ShortId $S17Ctx.cn3
+      $d["refunded_minor"] = $amount
+      $d["esblu_status"] = [string]$acc.status
+      $d["stripe_subscription_status"] = [string]$s.status
+      $d["active_entitlements"] = $ents
+      Say17 "    uplna refundacia: dobropis $(Get-ShortId $S17Ctx.cn3) $(Format-Eur $amount), Esblu $($acc.status), Stripe $($s.status), naroky $ents"
+      if ($problems.Count) { Fail ($problems -join "; ") }
+    }
+
     Invoke-S17Step "10" "Izolacia a duplicity (1 doklad / Stripe doklad, 1 udalost / Stripe udalost, iba firma QA-STRIPE D)" {
       param($d)
       $cus = $S17Ctx.state.customer
@@ -1547,7 +1677,7 @@ function Invoke-S17 {
       $dupDocs = @($docs | Group-Object provider_document_id | Where-Object { $_.Count -gt 1 })
       $foreign = @($docs | Where-Object { [string]$_.company_id -ne $CompanyD -or [string]$_.customer_company_id -ne $CompanyD })
       $bad = @()
-      foreach ($id in @($S17Ctx.inv, $S17Ctx.cn1, $S17Ctx.cn2)) {
+      foreach ($id in @(@($S17Ctx.inv, $S17Ctx.cn1, $S17Ctx.cn2, $S17Ctx.inv2, $S17Ctx.inv3, $S17Ctx.cn3) | Where-Object { $_ })) {
         $c = @($docs | Where-Object { $_.provider_document_id -eq $id }).Count
         if ($c -ne 1) { $bad += "doklad $(Get-ShortId $id): $c riadkov" }
       }
