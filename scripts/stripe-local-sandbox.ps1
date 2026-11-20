@@ -862,6 +862,7 @@ function Enable-S17Billing($st) {
   $st.enabled = $true
   $st.restored = $false
   Save-S17State $st
+  $cur = Reset-S17EventCursor $st
   if (-not (@($prices | Where-Object { $_.provider_price_id -eq $PriceId }).Count)) {
     # Staging nema riadok pre cenu sandboxu -> obnovitelne mapovanie (novy riadok, presne 1 aktivna); obnova S17-11
     # vrati aktivne ceny na stav PRED tymto krokom (prev_prices) a web_provider na 'none'.
@@ -878,7 +879,66 @@ function Enable-S17Billing($st) {
   $cfg2 = @(Get-Rows "billing_runtime_config?select=web_provider,environment")[0]
   $act = @(Get-Rows "billing_provider_prices?provider=eq.stripe&environment=eq.test&active=eq.true&select=provider_price_id")
   if ($cfg2.web_provider -ne "stripe" -or $act.Count -ne 1 -or $act[0].provider_price_id -ne $PriceId) { Fail "Zapnutie billingu na stagingu sa neprejavilo (web_provider=$($cfg2.web_provider), aktivnych cien $($act.Count))." }
-  return [ordered]@{ prev_web_provider = $st.prev_web_provider; prev_active_prices = @($st.prev_prices | Where-Object { $_.active }).Count; mapping_created = [bool]$st.mapping_created; now_web_provider = "stripe"; now_active_price = (Get-ShortId $PriceId) }
+  return [ordered]@{ prev_web_provider = $st.prev_web_provider; prev_active_prices = @($st.prev_prices | Where-Object { $_.active }).Count; mapping_created = [bool]$st.mapping_created; now_web_provider = "stripe"; now_active_price = (Get-ShortId $PriceId); event_cursor = $cur }
+}
+
+$S17CursorPath = "billing_event_cursors?provider=eq.stripe&environment=eq.test"
+$S17CursorCols = @("provider", "environment", "account_ref", "last_event_id", "last_event_created", "events_processed", "last_run_at", "last_success_at", "last_error_code", "consecutive_failures", "created_at", "updated_at")
+
+function Reset-S17EventCursor($st) {
+  # Kurzor dotahovania udalosti (billing_event_cursors) je v aplikacii viazany na Stripe ucet: iny ucet -> cron vrati
+  # ACCOUNT_MISMATCH a nic nespracuje (zamerna ochrana, NEMENI sa). Reset je podla migracie vedomy krok operatora:
+  # ak kurzor patri inemu (staremu) sandboxu, povodny riadok sa ULOZI do stavu S17 a az potom zmaze; cron ho pri
+  # prvom behu zalozi pre ucet testovaneho sandboxu. S17-11 / s17-cleanup povodny riadok vrati (Restore-S17EventCursor).
+  $acct = $SandboxAccount
+  if (-not $acct) { $acct = Get-ProfileAccountId $StripeCli }
+  if ($acct -notmatch '^acct_[A-Za-z0-9]{1,64}$') { Fail "Neviem urcit Stripe ucet profilu '$Project' pre kurzor udalosti." }
+  $st.cursor_account = $acct
+  Save-S17State $st
+  $cur = @(Get-Rows "$($S17CursorPath)&select=*")[0]
+  if (-not $cur) { return [ordered]@{ action = "none (kurzor neexistuje, cron ho zalozi pre $acct)" } }
+  if ([string]$cur.account_ref -eq $acct) { return [ordered]@{ action = "none (kurzor uz patri $acct)" } }
+  if ($cur.lease_until -and [DateTimeOffset]::Parse([string]$cur.lease_until) -gt [DateTimeOffset]::UtcNow) {
+    Fail "Kurzor udalosti na stagingu ma aktivny lease (prave bezi iny beh catch-up) - zopakuj neskor."
+  }
+  $prev = [ordered]@{}
+  foreach ($c in $S17CursorCols) { $prev[$c] = $cur.$c }
+  $st.prev_cursor = $prev
+  $st.cursor_reset = $true
+  $st.cursor_restored = $false
+  Save-S17State $st   # zaloha PRED zmazanim
+  $del = @(Invoke-Staging "DELETE" "$($S17CursorPath)&account_ref=eq.$($cur.account_ref)")
+  if ($del.Count -ne 1) { Fail "Reset kurzora udalosti: zmazanych riadkov $($del.Count) (ocakavany 1)." }
+  if (@(Get-Rows "$($S17CursorPath)&select=account_ref").Count -ne 0) { Fail "Reset kurzora udalosti sa neprejavil." }
+  Say17 "    kurzor udalosti: ucet $($cur.account_ref) -> reset pre $acct (povodny riadok ulozeny, S17-11 ho vrati)" "Yellow"
+  return [ordered]@{ action = "reset"; prev_account = [string]$cur.account_ref; prev_last_event = (Get-ShortId ([string]$cur.last_event_id)); prev_events_processed = $cur.events_processed; test_account = $acct }
+}
+
+function Restore-S17EventCursor($st) {
+  # Idempotentne vrati povodny riadok kurzora (ak ho S17 resetoval). Zmaze iba kurzor testovaneho uctu.
+  if (-not $st.cursor_reset -or $st.cursor_restored) { return "nic (kurzor S17 neresetoval alebo uz obnoveny)" }
+  $prev = $st.prev_cursor
+  $prevAcct = [string]$prev.account_ref
+  $testAcct = [string]$st.cursor_account
+  if ($prevAcct -notmatch '^acct_' -or $testAcct -notmatch '^acct_') { throw "stav S17 nema povodny kurzor / ucet testu." }
+  $now = @(Get-Rows "$($S17CursorPath)&select=account_ref,lease_until")[0]
+  if ($now -and [string]$now.account_ref -ne $prevAcct) {
+    if ([string]$now.account_ref -ne $testAcct) { throw "kurzor patri neocakavanemu uctu $($now.account_ref) - nemenim, over rucne." }
+    Invoke-Staging "DELETE" "$($S17CursorPath)&account_ref=eq.$testAcct" | Out-Null
+    $now = $null
+  }
+  if (-not $now) {
+    $body = [ordered]@{}
+    foreach ($c in $S17CursorCols) { $body[$c] = $prev.$c }
+    $body["lease_owner"] = $null
+    $body["lease_until"] = $null
+    Invoke-Staging "POST" "billing_event_cursors" $body | Out-Null
+  }
+  $chk = @(Get-Rows "$($S17CursorPath)&select=account_ref,last_event_id,events_processed")
+  if ($chk.Count -ne 1 -or [string]$chk[0].account_ref -ne $prevAcct -or [string]$chk[0].last_event_id -ne [string]$prev.last_event_id) { throw "obnova kurzora sa neprejavila." }
+  $st.cursor_restored = $true
+  Save-S17State $st
+  return "obnoveny (ucet $prevAcct, posledna udalost $(Get-ShortId ([string]$prev.last_event_id)))"
 }
 
 function Restore-S17Staging($st) {
@@ -928,6 +988,7 @@ function Restore-S17Staging($st) {
       Save-S17State $st
     } catch { $errors += "konfiguracia: $($_.Exception.Message)" }
   }
+  try { $d["event_cursor"] = Restore-S17EventCursor $st } catch { $errors += "kurzor udalosti: $($_.Exception.Message)" }
   try {
     $cfg = @(Get-Rows "billing_runtime_config?select=web_provider,environment")[0]
     $act = @(Get-Rows "billing_provider_prices?provider=eq.stripe&environment=eq.test&active=eq.true&select=provider_price_id")
@@ -968,7 +1029,7 @@ function Invoke-S17 {
     if ($old.enabled -and -not $old.restored) { Fail "Predchadzajuci beh S17 neupratal staging - spusti najprv -Step s17-cleanup." }
     $clocks = @(@($old.clocks) | Where-Object { $_ })
   }
-  $st = [ordered]@{ started_at = $S17Ctx.t0; enabled = $false; restored = $false; prev_web_provider = $null; prev_prices = @(); clocks = $clocks; clock = $null; customer = $null; subscription = $null; invoice = $null }
+  $st = [ordered]@{ started_at = $S17Ctx.t0; enabled = $false; restored = $false; prev_web_provider = $null; prev_prices = @(); clocks = $clocks; clock = $null; customer = $null; subscription = $null; invoice = $null; cursor_account = $null; prev_cursor = $null; cursor_reset = $false; cursor_restored = $false }
   $S17Ctx.state = $st
   Save-S17State $st
   $failed = $false
