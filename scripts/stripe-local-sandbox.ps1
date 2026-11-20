@@ -60,7 +60,7 @@ param(
   [ValidateSet("start", "status", "mark-exposed", "new-sandbox", "map-price", "s17-auto", "clock-setup", "renew", "fail-renew", "fix-payment", "refund-partial", "refund-full",
                "refund-old", "refund-current", "reconcile", "advance-check", "verify-terminal", "qa-login", "qa-check",
                "s12-account", "s12-events", "s12-catchup", "s12-cancel-at", "s12-refund-missing", "s13-existing",
-               "s17", "s17-cleanup")]
+               "s17", "s17-cleanup", "s17-preflight")]
   [string]$Step = "start",
   # Okno 1 BEZ stripe listen: ziadny webhook sa nedoruci, synchronizacia iba cez dotahovanie (S12).
   [switch]$NoListen,
@@ -147,9 +147,9 @@ $KnownAccounts = @{ "esblu-qa2" = "acct_1UdCxsRKE4QKs2UL" }   # z dokazov S12 (s
 $NoListenOnly = $WhsecOnlyCompromised -contains $Project
 if (-not $SandboxAccount -and $KnownAccounts.ContainsKey($Project)) { $SandboxAccount = $KnownAccounts[$Project] }
 if ($CompromisedProjects -contains $Project) {
-  $okQa2 = $NoListenOnly -and ((@("mark-exposed", "status", "s17-auto", "s17", "s17-cleanup") -contains $Step) -or ($Step -eq "start" -and $NoListen))
+  $okQa2 = $NoListenOnly -and ((@("mark-exposed", "status", "s17-preflight", "s17-auto", "s17", "s17-cleanup") -contains $Step) -or ($Step -eq "start" -and $NoListen))
   if (-not $okQa2) {
-    if ($NoListenOnly) { Write-Host "CHYBA: profil '$Project' ma zverejnene whsec_ - povolene iba s17-auto, s17, s17-cleanup, status a start -NoListen." -ForegroundColor Red }
+    if ($NoListenOnly) { Write-Host "CHYBA: profil '$Project' ma zverejnene whsec_ - povolene iba s17-preflight, s17-auto, s17, s17-cleanup, status a start -NoListen." -ForegroundColor Red }
     else { Write-Host "CHYBA: profil '$Project' je kompromitovany (API kluc) - nepouziva sa." -ForegroundColor Red }
     exit 1
   }
@@ -174,6 +174,7 @@ function Hide-Secrets([string]$s) {
   $s = $s -replace "whsec_[A-Za-z0-9]+", "whsec_***"
   $s = $s -replace "((?:sk|rk|rkcs|pk)_(?:test|live)_)[A-Za-z0-9]+", '$1***'
   $s = $s -replace "eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+", "eyJ***"
+  $s = $s -replace "sb_(secret|publishable)_[A-Za-z0-9_-]+", 'sb_$1_***'
   return $s
 }
 function Say([string]$s) { Write-Host (Hide-Secrets $s) }
@@ -649,7 +650,7 @@ function Show-Logs {
 # S17 overuje P4 funkcie (pripnuta verzia Stripe API, doklady + snapshot, archiv PDF, refundacia dobropisom,
 # dotahovanie zmeskanej udalosti, mesacny export, poplatok/cista suma) na kode origin/main $S17ExpectedMain.
 # Aplikacny kod checkoutu musi byt zhodny s tymto commitom - lisit sa smu IBA harness subory nizsie a docs/.
-$S17HarnessFiles = @("scripts/stripe-local-sandbox.ps1", "scripts/s17-accounting-export.ts")
+$S17HarnessFiles = @("scripts/stripe-local-sandbox.ps1", "scripts/s17-accounting-export.ts", "scripts/stripe-local-sandbox-static-tests.mjs")
 $S17Ctx = @{ events = [ordered]@{} }
 $S17Evidence = [ordered]@{}
 $S17Steps = New-Object System.Collections.ArrayList
@@ -680,15 +681,25 @@ function ConvertTo-UtcDate($v) {
 
 function Invoke-Git([string[]]$GitArgs) {
   $ErrorActionPreference = "Continue"
-  $out = @(& git -C $RepoRoot @GitArgs 2>&1 | ForEach-Object { "$_" })
-  return @{ code = $LASTEXITCODE; out = (($out | Where-Object { $_ }) -join "`n").Trim() }
+  # stdout a stderr oddelene: varovania gitu (CRLF, safe.directory) sa nesmu citat ako nazvy suborov / SHA.
+  $errFile = [IO.Path]::GetTempFileName()
+  try {
+    $out = @(& git -C $RepoRoot @GitArgs 2> $errFile | ForEach-Object { "$_" })
+    $code = $LASTEXITCODE
+    $err = (Get-Content $errFile -Raw -ErrorAction SilentlyContinue)
+  } finally { Remove-Item $errFile -Force -ErrorAction SilentlyContinue }
+  $txt = (($out | Where-Object { $_ }) -join "`n").Trim()
+  if ($code -ne 0 -and $err) { $txt = ($txt + "`n" + $err).Trim() }
+  return @{ code = $code; out = $txt }
 }
 function Test-S17HarnessPath([string]$p) {
   return (($S17HarnessFiles -contains $p) -or $p.StartsWith("docs/"))
 }
 function Get-S17HeadInfo {
   # Aplikacny kod HEAD (+ necommitnute zmeny) vs. ocakavany origin/main. Bez siete (ziadny git fetch).
-  $head = (Invoke-Git @("rev-parse", "HEAD")).out
+  $hr = Invoke-Git @("rev-parse", "HEAD")
+  if ($hr.code -ne 0 -or $hr.out -notmatch "^[0-9a-f]{40}$") { Fail "git rev-parse HEAD zlyhal v $RepoRoot ($($hr.out)) - checkout nie je funkcny." }
+  $head = $hr.out
   $tree = (Invoke-Git @("rev-parse", "HEAD^{tree}")).out
   $origin = Invoke-Git @("rev-parse", "--verify", "--quiet", "origin/main")
   $expectedOk = ((Invoke-Git @("cat-file", "-e", "$S17ExpectedMain^{commit}")).code -eq 0)
@@ -942,7 +953,7 @@ function Reset-S17EventCursor($st) {
   $st.cursor_reset = $true
   $st.cursor_restored = $false
   Save-S17State $st   # zaloha PRED zmazanim
-  $del = @(Invoke-Staging "DELETE" "$($S17CursorPath)&account_ref=eq.$($cur.account_ref)")
+  $del = @(Invoke-Staging "DELETE" "$($S17CursorPath)&account_ref=eq.$($cur.account_ref)" | ForEach-Object { $_ })
   if ($del.Count -ne 1) { Fail "Reset kurzora udalosti: zmazanych riadkov $($del.Count) (ocakavany 1)." }
   if (@(Get-Rows "$($S17CursorPath)&select=account_ref").Count -ne 0) { Fail "Reset kurzora udalosti sa neprejavil." }
   Say17 "    kurzor udalosti: ucet $($cur.account_ref) -> reset pre $acct (povodny riadok ulozeny, S17-11 ho vrati)" "Yellow"
@@ -983,25 +994,38 @@ function Restore-S17Staging($st) {
   $errors = @()
   if ($st.subscription) {
     try {
-      $s = Invoke-StripeApi "GET" "/subscriptions/$($st.subscription)"
+      $s = $null
+      try { $s = Invoke-StripeApi "GET" "/subscriptions/$($st.subscription)" }
+      catch {
+        # Zmazanie Test Clock (predchadzajuci cleanup) zmaze aj zakaznika a predplatne -> 404 = v Stripe uz neexistuje.
+        if ($_.Exception.Message -match "HTTP 404") { $s = [pscustomobject]@{ status = "canceled"; note = "404 (zmazane s Test Clock)" } } else { throw }
+      }
       if ($s.status -ne "canceled" -and $s.status -ne "incomplete_expired") { $s = Invoke-StripeApi "DELETE" "/subscriptions/$($st.subscription)" }
       for ($i = 0; $i -lt 20 -and $s.status -ne "canceled" -and $s.status -ne "incomplete_expired"; $i++) { Start-Sleep -Seconds 3; $s = Invoke-StripeApi "GET" "/subscriptions/$($st.subscription)" }
       $d["stripe_subscription"] = Get-ShortId $st.subscription
       $d["stripe_subscription_status"] = [string]$s.status
       if ($s.status -ne "canceled" -and $s.status -ne "incomplete_expired") { throw "Stripe predplatne nie je ukoncene (stav=$($s.status))." }
       # stripe listen je po S17-7 zastaveny -> ukoncenie prenesie dotahovanie (ako by webhook vypadol).
+      # Dotahovanie vyzaduje okno 1 (CRON_SECRET) a zapnuty billing na stagingu (pred obnovou konfiguracie).
+      $cfgNow = @(Get-Rows "billing_runtime_config?select=web_provider")[0]
+      $canCatchup = (Test-Path $CronFile) -and ([string]$cfgNow.web_provider -eq "stripe")
       $acc = $null
       for ($i = 0; $i -lt 20; $i++) {
         $acc = Get-EsbluAccount $st.subscription
         if (-not $acc -or $acc.status -in @("canceled", "expired", "refunded", "revoked")) { break }
+        if (-not $canCatchup) { break }
         Invoke-S17Catchup | Out-Null
         Start-Sleep -Seconds 3
       }
       $d["esblu_account_status"] = $(if ($acc) { [string]$acc.status } else { "none" })
-      if ($acc -and $acc.status -notin @("canceled", "expired", "refunded", "revoked")) { throw "Esblu ucet ostal $($acc.status) po ukonceni v Stripe." }
+      if ($acc -and $acc.status -notin @("canceled", "expired", "refunded", "revoked")) {
+        if ($canCatchup) { throw "Esblu ucet ostal $($acc.status) po ukonceni v Stripe." }
+        # Billing uz vypnuty / okno 1 nebezi: Stripe je ukonceny, Esblu (iba QA-STRIPE D na stagingu) sa nedotiahne -> upozornenie.
+        $d["warning"] = "QA-STRIPE D: Esblu ucet $($acc.status) - dotahovanie nedostupne (billing vypnuty alebo okno 1 nebezi); Stripe predplatne ukoncene."
+      }
       $ents = Get-ActiveSubEnts $CompanyD
       $d["company_d_active_entitlements"] = $ents
-      if ($ents -ne 0) { throw "Firma QA-STRIPE D ma po ukonceni $ents ucinnych narokov." }
+      if ($ents -ne 0 -and -not $d.Contains("warning")) { throw "Firma QA-STRIPE D ma po ukonceni $ents ucinnych narokov." }
     } catch { $errors += "predplatne: $($_.Exception.Message)" }
   }
   if ($st.enabled -and -not $st.restored) {
@@ -1028,7 +1052,7 @@ function Restore-S17Staging($st) {
     # Zamer checkoutu QA-STRIPE D z tohto behu, ktory po zlyhani ostal 'created'/'open' -> expired (iba od zaciatku S17).
     if ($st.started_at) {
       $since = [Uri]::EscapeDataString([string]$st.started_at)
-      $ex = @(Invoke-Staging "PATCH" "billing_checkout_sessions?company_id=eq.$CompanyD&status=in.(created,open)&created_at=gte.$since" @{ status = "expired" })
+      $ex = @(Invoke-Staging "PATCH" "billing_checkout_sessions?company_id=eq.$CompanyD&status=in.(created,open)&created_at=gte.$since" @{ status = "expired" } | ForEach-Object { $_ })
       $d["checkout_intents_expired"] = $ex.Count
     }
   } catch { $errors += "zamer checkoutu: $($_.Exception.Message)" }
@@ -1070,6 +1094,8 @@ function Invoke-S17 {
   if (Test-Path $S17StateFile) {
     $old = Get-Content $S17StateFile -Raw | ConvertFrom-Json
     if ($old.enabled -and -not $old.restored) { Fail "Predchadzajuci beh S17 neupratal staging - spusti najprv -Step s17-cleanup." }
+    if ($old.cursor_reset -and -not $old.cursor_restored) { Fail "Predchadzajuci beh S17 neobnovil kurzor udalosti (zaloha je iba v $S17StateFile) - spusti najprv -Step s17-cleanup." }
+    if ($old.subscription) { Fail "Predchadzajuci beh S17 nema dokonceny cleanup (predplatne $(Get-ShortId ([string]$old.subscription))) - spusti najprv -Step s17-cleanup." }
     $clocks = @(@($old.clocks) | Where-Object { $_ })
   }
   $st = [ordered]@{ started_at = $S17Ctx.t0; enabled = $false; restored = $false; prev_web_provider = $null; prev_prices = @(); clocks = $clocks; clock = $null; customer = $null; subscription = $null; invoice = $null; cursor_account = $null; prev_cursor = $null; cursor_reset = $false; cursor_restored = $false }
@@ -1596,7 +1622,9 @@ function Invoke-S17Cleanup {
   Say17 "S17 cleanup: predplatne $(Get-ShortId ([string]$st.subscription)), staging konfiguracia (enabled=$($st.enabled) restored=$($st.restored)), Test Clocks $(@(@($st.clocks) | Where-Object { $_ }).Count)"
   $d = Restore-S17Staging $st
   $deleted = @()
-  foreach ($c in @(@($st.clocks) | Where-Object { $_ })) {
+  # Pri chybe obnovy sa Test Clocks NEMAZU (zmazanie odstrani aj predplatne -> opakovany cleanup by nemal co overit).
+  $clocksToDelete = $(if ($d.Contains("errors")) { @() } else { @(@($st.clocks) | Where-Object { $_ }) })
+  foreach ($c in $clocksToDelete) {
     try {
       Invoke-StripeApi "DELETE" "/test_helpers/test_clocks/$c" | Out-Null
       $deleted += (Get-ShortId $c)
@@ -1618,6 +1646,27 @@ function Invoke-S17Cleanup {
 }
 
 # ----------------------------------------------------------------------------- scenare (okno 2)
+function Assert-HarnessCheckout {
+  # 2026-11-20: worktree s pokazenymi git metadatami ("fatal: not a git repository") + PowerShell ';' pokracoval
+  # po zlyhanom `git checkout` -> bezala STARA verzia skriptu. Kazdy S17 krok preto overi, ze (1) priecinok je funkcny
+  # git checkout a (2) bezi presne commit vetvy ops/s17-sandbox (inak STOP; -Force iba vedome).
+  $r = Invoke-Git @("rev-parse", "--is-inside-work-tree")
+  if ($r.code -ne 0 -or $r.out -ne "true") { Fail "Priecinok $RepoRoot nie je funkcny git checkout (git: $($r.out)). Oprava worktree: docs par. 8.14i." }
+  $h = Invoke-Git @("rev-parse", "HEAD")
+  $t = Invoke-Git @("rev-parse", "--verify", "--quiet", "refs/heads/ops/s17-sandbox")
+  if ($h.code -ne 0) { Fail "git rev-parse HEAD zlyhal ($($h.out))." }
+  if ($t.code -ne 0) { Fail "Vetva ops/s17-sandbox v repozitari chyba." }
+  if ($h.out -ne $t.out) {
+    if (-not $Force) { Fail "Skript bezi z commitu $($h.out.Substring(0, 7)), vetva ops/s17-sandbox je $($t.out.Substring(0, 7)) - najprv: git checkout --detach ops/s17-sandbox (a over vysledok)." }
+    Say "POZOR -Force: skript bezi z $($h.out.Substring(0, 7)) namiesto ops/s17-sandbox $($t.out.Substring(0, 7))."
+  }
+  return $h.out
+}
+if (@("start", "s17-preflight", "s17-auto", "s17", "s17-cleanup") -contains $Step) {
+  $HarnessHead = Assert-HarnessCheckout
+  Say "Harness: commit $($HarnessHead.Substring(0, 7)) = ops/s17-sandbox (git OK)"
+}
+
 if ($Step -eq "mark-exposed") {
   # Bez platieb a bez vypisu tajomstva: overi Stripe CLI a ulozi SHA-256 aktualneho whsec_ profilu '$Project'
   # medzi kompromitovane -> -Step start s tymto profilom sa uz nespusti (treba novy sandbox: -Step new-sandbox).
@@ -1634,7 +1683,9 @@ if ($Step -eq "mark-exposed") {
   exit 0
 }
 
-if ($Step -eq "s17-auto") {
+if ($Step -eq "s17-auto" -or $Step -eq "s17-preflight") {
+  # s17-preflight = IBA CITANIE (git, Stripe kluc/ucet/opravnenia vratane sondy zapisu bez vytvorenia objektu,
+  # staging konfiguracia, kurzor, ceny). Ziadny zapis do Stripe ani stagingu, Esblu sa nespusta.
   # JEDEN prikaz: (a) existujuci sandbox s cenou (nove sa nezakladaju), (b) okno 1 v novom okne, (c) S17, (d) upratanie, (e) stop okna 1.
   # Tajomstva sa zadaju raz (skryta vyzva) a podprocesy ich zdedia iba cez premenne tohto procesu.
   $self = $PSCommandPath
@@ -1648,13 +1699,51 @@ if ($Step -eq "s17-auto") {
   }
   $k = Get-StripeTestKey
   Assert-StripeAccount $k
-  $null = Test-StripeKeyAccess $k (Get-S17PinnedVersion)
+  $acc = Test-StripeKeyAccess $k (Get-S17PinnedVersion)
+  if ($Step -eq "s17-preflight") {
+    $hi = Get-S17HeadInfo
+    $cfg = @(Get-Rows "billing_runtime_config?select=web_provider,environment")[0]
+    $prices = @(Get-Rows "billing_provider_prices?provider=eq.stripe&environment=eq.test&select=provider_price_id,active")
+    $cur = @(Get-Rows "billing_event_cursors?provider=eq.stripe&environment=eq.test&select=account_ref,last_error_code,lease_until")[0]
+    $open = @(Get-Rows "billing_checkout_sessions?company_id=eq.$CompanyD&status=in.(created,open)&select=id")
+    $pre = [ordered]@{
+      at = (Get-UtcIso); project = $Project; harness_head = $HarnessHead; app_matches_expected_main = $hi.app_matches
+      stripe_account = $SandboxAccount; key_kind = $(if ($k -match "^sk_test_") { "sk_test" } elseif ($k -match "^rk_test_") { "rk_test" } else { "?" })
+      stripe_probe = "citanie OK + zapis Test Clocks opravneny (400 bez vytvorenia)"; balance_transactions = $acc["balance_transactions"]; payouts = $acc["payouts"]
+      delivery = $(if ($NoListen -or $NoListenOnly) { "iba dotahovanie (-NoListen)" } else { "stripe listen" })
+      staging_web_provider = [string]$cfg.web_provider; staging_environment = [string]$cfg.environment
+      staging_price_row_exists = (@($prices | Where-Object { $_.provider_price_id -eq $PriceId }).Count -eq 1)
+      staging_active_prices = @($prices | Where-Object { $_.active } | ForEach-Object { Get-ShortId ([string]$_.provider_price_id) })
+      cursor_account = $(if ($cur) { [string]$cur.account_ref } else { "-" })
+      cursor_action_in_s17 = $(if (-not $cur) { "zalozi cron" } elseif ([string]$cur.account_ref -eq $SandboxAccount) { "ziadny reset" } else { "reset + obnova" })
+      qa_d_open_checkout_intents = $open.Count
+      node_modules = (Test-Path (Join-Path $RepoRoot "node_modules\next\package.json"))
+    }
+    $problems = @()
+    if (-not $hi.app_matches) { $problems += "aplikacny kod != $($S17ExpectedMain.Substring(0, 7))" }
+    if ($pre.staging_web_provider -ne "none") { $problems += "staging web_provider=$($pre.staging_web_provider) (ocakavane none)" }
+    if (-not $pre.staging_price_row_exists) { $problems += "staging nema riadok ceny $(Get-ShortId $PriceId) (S17-1 ho vytvori)" }
+    $pre["result"] = $(if ($problems.Count) { "POZOR: " + ($problems -join "; ") } else { "OK - S17 moze bezat" })
+    $pf = Join-Path (Split-Path -Parent (Get-S17EvidenceFile)) "s17-preflight.json"
+    Set-Content -Path $pf -Value (Hide-S17 ($pre | ConvertTo-Json -Depth 6)) -Encoding UTF8
+    Say ""
+    Say "S17 PREFLIGHT (iba citanie): $($pre.result)"
+    Say "    dokaz: $pf"
+    if ($problems | Where-Object { $_ -notmatch "S17-1 ho vytvori" }) { exit 1 }
+    exit 0
+  }
   if (-not (Test-Path (Join-Path $RepoRoot "node_modules\next\package.json"))) {
     Say "node_modules chyba -> npm ci (jednorazovo, niekolko minut)..."
     Push-Location $RepoRoot; try { & npm.cmd ci --no-audit --no-fund; if ($LASTEXITCODE -ne 0) { Fail "npm ci zlyhal." } } finally { Pop-Location }
   }
-  Say "Okno 1 (Esblu + stripe listen) sa spusta v novom okne..."
-  $w1Args = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$self`"", "-Step", "start", "-Project", $Project, "-Port", "$Port")
+  $fwd = @()
+  if ($Force) { $fwd += "-Force" }
+  if ($Month) { $fwd += @("-Month", $Month) }
+  $busy = $false
+  try { Invoke-WebRequest -Uri "http://localhost:$Port/" -UseBasicParsing -TimeoutSec 3 | Out-Null; $busy = $true } catch { if ($_.Exception.Response) { $busy = $true } }
+  if ($busy) { Fail "Port $Port uz pouziva iny server (stare okno 1?) - zatvor ho, inak by test bezal proti nemu." }
+  Say "Okno 1 (Esblu) sa spusta v novom okne..."
+  $w1Args = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$self`"", "-Step", "start", "-Project", $Project, "-Port", "$Port") + $fwd
   if ($NoListen -or $NoListenOnly) { $w1Args += "-NoListen"; Say "    okno 1 BEZ stripe listen (-NoListen): udalosti iba cez dotahovanie" }
   $w1 = Start-Process -FilePath $ps -ArgumentList $w1Args -PassThru
   $ready = $false
@@ -1667,11 +1756,12 @@ if ($Step -eq "s17-auto") {
   try {
     if (-not $ready) { Fail "Okno 1 nenabehlo do 10 min (pozri okno 1) - S17 sa nespustil." }
     Start-Sleep -Seconds 10   # stripe listen sa pripaja
-    & $ps -NoProfile -ExecutionPolicy Bypass -File $self -Step s17 -Project $Project -Port $Port
+    if ($w1.HasExited) { Fail "Okno 1 skoncilo hned po starte (pozri okno 1) - S17 sa nespustil." }
+    & $ps -NoProfile -ExecutionPolicy Bypass -File $self -Step s17 -Project $Project -Port $Port @fwd
     $s17Exit = $LASTEXITCODE
   } finally {
     if ($ready) {
-      & $ps -NoProfile -ExecutionPolicy Bypass -File $self -Step s17-cleanup -Project $Project -Port $Port
+      & $ps -NoProfile -ExecutionPolicy Bypass -File $self -Step s17-cleanup -Project $Project -Port $Port @fwd
       $cleanExit = $LASTEXITCODE
     }
     if (-not $w1.HasExited) { $ErrorActionPreference = "Continue"; & taskkill.exe /PID $w1.Id /T /F 2>&1 | Out-Null }
