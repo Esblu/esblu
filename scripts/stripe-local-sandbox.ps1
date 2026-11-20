@@ -71,7 +71,11 @@ param(
   [int]$Port = 3000,
   # S17: mesiac exportu (default aktualny mesiac UTC) a vedome prepisanie kontroly HEAD = origin/main.
   [string]$Month = "",
-  [switch]$Force
+  [switch]$Force,
+  # Pokracovanie na existujucom profile: odtlacok whsec_ tohto profilu, ktory do zoznamu kompromitovanych
+  # omylom pridala chyba "default profil" (2026-11-20, CLI s nastavenym project-name), sa odstrani - iba ak
+  # tajomstvo NEBOLO zverejnene (vedome rozhodnutie operatora; zapise sa do exposed-released.log).
+  [switch]$ReleaseAutoMarked
 )
 $ErrorActionPreference = "Stop"
 
@@ -91,6 +95,9 @@ $StripeCliBase = @(Resolve-StripeCliBase)
 # Samostatny profil Stripe CLI pre QA sandbox (default profil = povodny sandbox s vystavenym tajomstvom).
 $StripeProfileArgs = @("--project-name", $Project)
 $StripeCli = @($StripeCliBase) + $StripeProfileArgs
+# Profil "default" VZDY vyslovne: bez --project-name pouzije Stripe CLI aktualny `project-name` z config.toml
+# (po `sandboxes create --project-name X` je to X) -> "default" by ukazoval na prave testovany profil.
+$StripeDefaultCli = @($StripeCliBase) + @("--project-name", "default")
 $StagingRef = "cjbdijbbcujvmrzezusd"
 $ProdRef = "fkpgvgvsmbpieduoatrt"
 $StagingUrl = "https://$StagingRef.supabase.co"
@@ -1528,7 +1535,9 @@ if ($Step -eq "s17-auto") {
   $null = Assert-StagingAccess
   if (-not $PriceId) {
     if ($Email -notmatch "^[^@\s]+@[^@\s]+\.[^@\s]+$") { Fail "Profil '$Project' nema sandbox - zadaj -Email <adresa> (vytvori sa novy izolovany sandbox)." }
-    & $ps -NoProfile -ExecutionPolicy Bypass -File $self -Step new-sandbox -Project $Project -Email $Email
+    $nsArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $self, "-Step", "new-sandbox", "-Project", $Project, "-Email", $Email)
+    if ($ReleaseAutoMarked) { $nsArgs += "-ReleaseAutoMarked" }
+    & $ps @nsArgs
     if ($LASTEXITCODE -ne 0) { Fail "new-sandbox zlyhal (vystup vyssie) - S17 sa nespustil, staging je v povodnom stave." }
     $script:PriceId = (Get-Content $SandboxFile -Raw | ConvertFrom-Json).price
   }
@@ -1580,15 +1589,19 @@ if ($Step -eq "new-sandbox") {
     Say "    esblu-qa2: whsec_*** evidovane ako kompromitovane (SHA-256 $((Get-Sha256 $qa2).Substring(0,8))...)"
   } elseif ($known.Count -lt 2) { Fail "Neviem overit tajomstvo esblu-qa2 a evidovane su len $($known.Count) odtlacky - spusti -Step mark-exposed -Project esblu-qa2." }
   else { Say "    esblu-qa2: tajomstvo sa nedalo nacitat, evidovane odtlacky: $($known.Count) (z mark-exposed)" }
-  $exposed = Get-ListenSecret $StripeCliBase -Quiet
-  if ($exposed) { Add-ExposedHash (Get-Sha256 $exposed) }
+  # Povodne vystavene tajomstvo = profil "default" (vyslovne, nie aktualny project-name CLI).
+  if ($Project -ne "default") {
+    $exposed = Get-ListenSecret $StripeDefaultCli -Quiet
+    if ($exposed) { Add-ExposedHash (Get-Sha256 $exposed) }
+  }
   # 2) Ucty existujucich profilov (novy sandbox sa od nich musi lisit).
-  $oldAccounts = @(@((Get-ProfileAccountId $StripeCliBase)) + @($CompromisedProjects | ForEach-Object { Get-ProfileAccountId (@($StripeCliBase) + @("--project-name", $_)) }) | Where-Object { $_ })
+  $oldAccounts = @(@((Get-ProfileAccountId $StripeDefaultCli)) + @($CompromisedProjects | ForEach-Object { Get-ProfileAccountId (@($StripeCliBase) + @("--project-name", $_)) }) | Where-Object { $_ })
   Register-CompromisedProfileKeys
   # 3) Staging READ-ONLY (URL, service_role, billing test) - pred prvym zapisom.
   $null = Assert-StagingAccess
   # 4) Novy profil musi byt prazdny, inak by `sandboxes create` iba otvoril Dashboard povodneho uctu.
   $cfg = Invoke-StripeRaw $StripeCli @("config", "--list")
+  $acctBefore = Get-ProfileAccountId $StripeCli   # ucet profilu PRED zapisom (pokracovanie = ten isty ucet)
   $resume = $false
   if ($cfg -match "(?:sk|rk|rkcs)_live_") { Fail "Profil '$Project' obsahuje LIVE kluc." }
   if ($cfg -match "(?:sk|rk|rkcs)_test_" -or $cfg -match "account_id\s*=\s*['`"]?acct_") {
@@ -1603,7 +1616,16 @@ if ($Step -eq "new-sandbox") {
   # 2/5 Identita noveho sandboxu: ucet z profilu, kluc IBA z profilu (ziadna vyzva, ziadna premenna), /v1/account.
   $acct = Get-ProfileAccountId $StripeCli
   if (-not $acct) { Fail "Profil '$Project' po vytvoreni nema account_id - sandbox nevznikol." }
-  if ($oldAccounts -contains $acct) { Fail "Novy profil ukazuje na EXISTUJUCI ucet $acct - zastavene pred vytvorenim ceny." }
+  # Identita: nikdy ucet profilu default ani kompromitovanych profilov (esblu-qa2, esblu-qa3).
+  if ($oldAccounts -contains $acct) { Fail "Profil '$Project' ukazuje na ucet profilu default/kompromitovaneho profilu ($acct) - zastavene pred vytvorenim ceny." }
+  if ($resume) {
+    # Pokracovanie: povoleny IBA ucet, ktory profil mal uz pred tymto behom (ziadna zmena uctu).
+    if (-not $acctBefore -or $acct -ne $acctBefore) { Fail "Pokracovanie: ucet profilu '$Project' sa zmenil ($acctBefore -> $acct) - zastavene." }
+    $idMode = "pokracovanie na existujucom ucte profilu"
+  } else {
+    if ($acctBefore) { Fail "Profil '$Project' mal ucet uz pred vytvorenim - zastavene." }
+    $idMode = "novy ucet"
+  }
   $cfg = Invoke-StripeRaw $StripeCli @("config", "--list")
   if ($cfg -match "test_mode_api_key\s*=\s*['`"]?(?:sk|rk|rkcs)_live_") { Fail "V profile je LIVE kluc." }
   $km = [regex]::Match($cfg, "test_mode_api_key\s*=\s*['`"]?((?:sk|rk|rkcs)_test_[A-Za-z0-9]+)")
@@ -1621,8 +1643,18 @@ if ($Step -eq "new-sandbox") {
   else { Fail "Overenie uctu noveho sandboxu zlyhalo (HTTP $code)." }
   $w = Get-ListenSecret $StripeCli
   if (-not $w) { Fail "stripe listen --print-secret v novom profile nevratil whsec_." }
-  if (@(Get-ExposedHashes) -contains (Get-Sha256 $w)) { Fail "Novy sandbox ma kompromitovane tajomstvo - zastavene." }
-  Say "2/5 identita OK: novy ucet $acct (lisi sa od $($oldAccounts.Count) existujucich), $idNote; whsec_*** nove (SHA-256 $((Get-Sha256 $w).Substring(0,8))...)"
+  $wh = Get-Sha256 $w
+  if (@(Get-ExposedHashes) -contains $wh) {
+    if ($resume -and $ReleaseAutoMarked -and ($CompromisedProjects -notcontains $Project)) {
+      $keep = @(Get-ExposedHashes | Where-Object { $_ -ne $wh })
+      Set-Content -Path $ExposedFile -Value $keep -Encoding ASCII
+      Add-Content -Path (Join-Path $StateDir "exposed-released.log") -Value ("{0} {1} {2} auto-marked by default-profile bug, operator confirmed not disclosed (-ReleaseAutoMarked)" -f (Get-Date).ToUniversalTime().ToString("o"), $Project, $wh.Substring(0, 8)) -Encoding ASCII
+      Say "    whsec_*** profilu '$Project' (SHA-256 $($wh.Substring(0,8))...) bolo v zozname omylom (chyba default profilu) - odstranene, zaznam v exposed-released.log"
+    } else {
+      Fail "Tajomstvo profilu '$Project' je v zozname kompromitovanych. Ak ho NIKTO nezverejnil a pridala ho iba chyba default profilu (2026-11-20), spusti znova s -ReleaseAutoMarked; inak novy sandbox."
+    }
+  }
+  Say "2/5 identita OK ($idMode): ucet $acct (nie default ani kompromitovany: $($oldAccounts.Count) kontrolovanych), $idNote; whsec_*** (SHA-256 $($wh.Substring(0,8))...) nie je kompromitovane"
   $null = Test-StripeKeyAccess $newKey (Get-S17PinnedVersion)
   # 3/5 Cena Esblu Komplet 15,90 EUR / mesiac v novom sandboxe + kontrola, ze ju vidi kluc noveho uctu.
   # Bez duplicity: existujuca aktivna cena 15,90 EUR / mesiac s lookup_key S17 sa pouzije znova.
