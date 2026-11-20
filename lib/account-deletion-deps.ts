@@ -18,6 +18,7 @@ import {
   parseStorageTargets,
   removeStorageTargets,
 } from "@/lib/account-deletion-storage";
+import { eraseVaultCopiesBestEffortIfMissing } from "@/lib/storage-vault/worker";
 import type { AuthDeleteResult, CommitResult, DeletionDeps, DeletionRequest, JobPatch } from "@/lib/account-deletion-orchestrator";
 
 type PgError = { code?: string | null; message?: string | null } | null;
@@ -106,7 +107,12 @@ export function supabaseDeletionDeps(admin: SupabaseClient): DeletionDeps {
       return { ok: true, jobId: null, storageTargets: targets, summary: legacy.data ?? null, deleteAccount: true };
     },
 
-    removeStorage: (targets) => removeStorageTargets(admin, targets),
+    async removeStorage(targets) {
+      const removed = await removeStorageTargets(admin, targets);
+      // Definitívny výmaz: aj prevádzkové kópie tých istých súborov v trezore (ak je trezor nainštalovaný).
+      await eraseVaultCopiesBestEffortIfMissing(admin as unknown as Parameters<typeof eraseVaultCopiesBestEffortIfMissing>[0], targets, "ACCOUNT_OR_COMPANY_ERASURE");
+      return removed;
+    },
 
     async deleteAuthUser(userId: string): Promise<AuthDeleteResult> {
       const { error } = await admin.auth.admin.deleteUser(userId);

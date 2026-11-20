@@ -25,7 +25,9 @@ export type StorageTarget = { bucket: string; path: string };
  * firmy ich nikdy nemaže (vlastná retencia Esblu, PROPOSED 10 r., bez automatického mazania). DB trigger
  * esblu_cleanup_jobs_protect_retained_storage ich (aj súbory retenčného archívu) z jobu odstráni tiež.
  */
-export const DELETION_PROTECTED_BUCKETS: ReadonlySet<string> = new Set(["einvoice-documents", "billing-documents"]);
+// Trezor súborov (návrh 2026-11-20): kópie sa nikdy nemažú cez ciele jobu; definitívny výmaz ich rieši
+// lib/storage-vault/worker.ts eraseVaultCopies (podľa cieľov originálov), bežné zmazanie lehota 8 dní.
+export const DELETION_PROTECTED_BUCKETS: ReadonlySet<string> = new Set(["einvoice-documents", "billing-documents", "esblu-file-vault"]);
 
 /** Validácia jobu z DB (jsonb) — iba {bucket, path} stringy, bez prázdnych ciest. */
 export function parseStorageTargets(value: unknown): StorageTarget[] {

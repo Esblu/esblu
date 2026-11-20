@@ -168,7 +168,28 @@ await check("deps: commit funkcia existuje → ciele z DB transakcie (TS kolekto
   const deps = supabaseDeletionDeps(fakeAdmin({ esblu_account_deletion_commit: { data: { job_id: "j9", storage_targets: TARGETS, summary: { ok: 1 }, delete_account: true }, error: null } }, log));
   const r = await orchestrateAccountDeletion(deps, { kind: "owner", userId: "u1", companyId: "c", deleteAccount: true });
   assert.equal(r.status, "deleted");
-  assert.deepEqual(log.filter((l) => !l.startsWith("read:account_deletion_cleanup_jobs")), ["rpc:esblu_account_deletion_commit", "remove:documents:1", "remove:vehicle-photos:1", "auth:delete"]);
+  assert.deepEqual(log.filter((l) => !l.startsWith("read:account_deletion_cleanup_jobs")), ["rpc:esblu_account_deletion_commit", "remove:documents:1", "remove:vehicle-photos:1", "rpc:esblu_storage_vault_erase", "auth:delete"]);
+});
+await check("deps: trezor súborov nainštalovaný → definitívny výmaz zmaže aj kópie TÝCH ISTÝCH cieľov; iná chyba = retry jobu", async () => {
+  const log: string[] = [];
+  let erased: unknown = null;
+  const admin = fakeAdmin({
+    esblu_account_deletion_commit: { data: { job_id: "j9", storage_targets: TARGETS, summary: { ok: 1 }, delete_account: true }, error: null },
+    esblu_storage_vault_mark_purged: { data: 2, error: null },
+  }, log) as unknown as { rpc: (fn: string, args?: Record<string, unknown>) => Promise<unknown>; storage: { from: (b: string) => unknown } };
+  const baseRpc = admin.rpc;
+  admin.rpc = async (fn: string, args?: Record<string, unknown>) => {
+    if (fn === "esblu_storage_vault_erase") { log.push(`rpc:${fn}`); erased = args?.p_targets; return { data: [{ id: 1, vault_name: "documents/v1/c/doc.pdf" }, { id: 2, vault_name: "vehicle-photos/v1/c/v.webp" }], error: null }; }
+    return baseRpc(fn, args);
+  };
+  const deps = supabaseDeletionDeps(admin as never);
+  const commit = await deps.commit({ kind: "owner", userId: "u1", companyId: "c1", deleteAccount: true } as never);
+  assert.ok(commit.ok);
+  await deps.removeStorage((commit as { storageTargets: Array<{ bucket: string; path: string }> }).storageTargets);
+  assert.deepEqual(erased, TARGETS);
+  assert.ok(log.includes("remove:esblu-file-vault:2"), log.join(","));
+  admin.rpc = async (fn: string, args?: Record<string, unknown>) => fn === "esblu_storage_vault_erase" ? { data: null, error: { code: "57014", message: "timeout" } } : baseRpc(fn, args);
+  await assert.rejects(supabaseDeletionDeps(admin as never).removeStorage(TARGETS as never), /ESBLU_VAULT_RPC_FAILED/);
 });
 await check("deps: migrácia ešte neaplikovaná → fallback: TS zber (read-only) → legacy RPC → AŽ POTOM Storage", async () => {
   const log: string[] = [];
