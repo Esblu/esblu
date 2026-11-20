@@ -30,6 +30,16 @@
                      zistenie ci Stripe skrati koniec obdobia, Esblu scheduled_end_at cez dotahovanie (-NoListen),
                      po ukonceni v Stripe: canceled a 0 narokov (bez 48 h)
       status       - stav v Stripe aj v Esblu + posledne riadky stripe listen (tajomstva zamaskovane)
+      s17          - S17 (P4, docs par. 8.14): JEDEN zlozeny krok, plne automaticky - preflight (test mode, staging, aplikacny
+                     kod HEAD = origin/main 1e2ab73, inak odmietne bez -Force) a zapnutie billingu stagingu iba na test;
+                     pripnuta verzia Stripe API + lokalny cron dotahovania; nakup na Test Clock (pm_card_visa) -> invoice.paid;
+                     uctovna kopia faktury + snapshot; archiv PDF (cron billing-documents) + SHA-256 v storage; ciastocna
+                     refundacia dobropisom; ZASTAVI stripe listen okna 1 -> zmeskana udalost -> dotahovanie presne raz;
+                     mesacny export (scripts/s17-accounting-export.ts, CSV do %USERPROFILE%\esblu-backups\s17); poplatok/
+                     cista suma vs. Stripe; izolacia a duplicity; obnova stagingu (billing OFF). [-Month YYYY-MM] [-Force]
+                     Dokazy bez tajomstiev: <hlavny checkout>\release-backups\s17\s17-evidence.json
+      s17-cleanup  - S17: idempotentne upratanie (aj po padnuti) - ukoncenie QA predplatneho, staging billing spat,
+                     zmazanie Test Clocks S17
     Kazdy krok vypise OK AZ ked je vysledok overeny v Stripe AJ v testovacej DB Esblu.
 
   Bezpecnost:
@@ -45,7 +55,8 @@
 param(
   [ValidateSet("start", "status", "new-sandbox", "clock-setup", "renew", "fail-renew", "fix-payment", "refund-partial", "refund-full",
                "refund-old", "refund-current", "reconcile", "advance-check", "verify-terminal", "qa-login", "qa-check",
-               "s12-account", "s12-events", "s12-catchup", "s12-cancel-at", "s12-refund-missing", "s13-existing")]
+               "s12-account", "s12-events", "s12-catchup", "s12-cancel-at", "s12-refund-missing", "s13-existing",
+               "s17", "s17-cleanup")]
   [string]$Step = "start",
   # Okno 1 BEZ stripe listen: ziadny webhook sa nedoruci, synchronizacia iba cez dotahovanie (S12).
   [switch]$NoListen,
@@ -53,7 +64,10 @@ param(
   [string]$Email = "",
   [string]$CheckoutId = "",
   [string]$Subscription = "",
-  [int]$Port = 3000
+  [int]$Port = 3000,
+  # S17: mesiac exportu (default aktualny mesiac UTC) a vedome prepisanie kontroly HEAD = origin/main.
+  [string]$Month = "",
+  [switch]$Force
 )
 $ErrorActionPreference = "Stop"
 
@@ -71,6 +85,11 @@ $SandboxFile = Join-Path $StateDir "sandbox-$Project.json"     # cena sandboxu (
 $ExposedFile = Join-Path $StateDir "exposed.sha256"             # SHA-256 vystaveneho whsec (nie tajomstvo)
 $CronFile = Join-Path $StateDir "cron-$Project.secret"          # nahodny lokalny CRON_SECRET (iba pocas behu okna 1)
 $NoListenFile = Join-Path $StateDir "nolisten-$Project.flag"     # okno 1 bezi bez stripe listen (S12 testy)
+$ListenPidFile = Join-Path $StateDir "listen-$Project.pid"       # PID stripe listen z okna 1 (S17 ho zastavi)
+$HeadFile = Join-Path $StateDir "head-$Project.json"             # commit, z ktoreho bezi okno 1 (S17 porovna)
+$S17StateFile = Join-Path $StateDir "s17-$Project.json"          # povodny stav stagingu + objekty S17 (upratanie)
+$S17ExpectedMain = "1e2ab730ab5caab86ab5a72d1042fbca28748f7b"    # origin/main = produkcny kod, ktory S17 overuje
+$RepoRoot = Split-Path -Parent $PSScriptRoot
 $CompanyD = "5a5a0000-0000-4000-8000-0000000000d0"              # QA-STRIPE D (test clock)
 $OwnerD = "5a5a0000-0000-4000-8000-000000000031"
 $CompanyE = "5a5a0000-0000-4000-8000-0000000000e0"              # QA-STRIPE E (dve karty + zrusenie v aplikacii)
@@ -82,7 +101,10 @@ $Events = @(
   "checkout.session.completed", "checkout.session.async_payment_succeeded", "checkout.session.async_payment_failed",
   "checkout.session.expired", "customer.subscription.created", "customer.subscription.updated",
   "customer.subscription.deleted", "invoice.paid", "invoice.payment_failed", "invoice.payment_action_required",
-  "charge.refunded", "charge.dispute.created", "charge.dispute.closed"
+  "charge.refunded", "charge.dispute.created", "charge.dispute.closed",
+  # P4: doklady (uctovne kopie faktur a dobropisov) a pauza predplatneho - rovnaka mnozina ako dotahovanie
+  "customer.subscription.paused", "customer.subscription.resumed", "invoice.finalized", "invoice.voided",
+  "invoice.marked_uncollectible", "credit_note.created", "credit_note.updated", "credit_note.voided"
 ) -join ","
 New-Item -ItemType Directory -Force -Path $StateDir | Out-Null
 
@@ -374,6 +396,871 @@ function Show-Logs {
     $log = Join-Path $StateDir $name
     if (Test-Path $log) { Say "--- posledne riadky $name (zamaskovane) ---"; Get-Content $log -Tail 12 | ForEach-Object { Say $_ } }
   }
+}
+
+# ----------------------------------------------------------------------------- S17 (P4 na skutocnom Stripe sandboxe)
+# S17 overuje P4 funkcie (pripnuta verzia Stripe API, doklady + snapshot, archiv PDF, refundacia dobropisom,
+# dotahovanie zmeskanej udalosti, mesacny export, poplatok/cista suma) na kode origin/main $S17ExpectedMain.
+# Aplikacny kod checkoutu musi byt zhodny s tymto commitom - lisit sa smu IBA harness subory nizsie a docs/.
+$S17HarnessFiles = @("scripts/stripe-local-sandbox.ps1", "scripts/s17-accounting-export.ts")
+$S17Ctx = @{ events = [ordered]@{} }
+$S17Evidence = [ordered]@{}
+$S17Steps = New-Object System.Collections.ArrayList
+$S17DocSelect = "kind,status,company_id,provider_subscription_id,provider_customer_id,related_invoice_id,payment_intent_id,currency,total_minor,amount_paid_minor,service_period_start,service_period_end,issued_at,paid_at,pdf_url,pdf_sha256,pdf_storage_path,pdf_archived_at,pdf_archive_attempts,pdf_archive_error,customer_company_id,customer_legal_name,customer_ico,customer_dic,customer_ic_dph,customer_registration_id,customer_address,customer_billing_country,customer_snapshot_at,customer_snapshot_source,first_event_id,last_event_id,updated_at"
+$S17ListenRe = "localhost:$Port/api/billing/webhooks/stripe"
+
+function Hide-S17([string]$s) {
+  # Hide-Secrets (kluce, whsec, JWT) + e-maily.
+  $s = Hide-Secrets $s
+  if ($s) { $s = $s -replace "[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}", "***@***" }
+  return $s
+}
+function Say17([string]$s, [string]$color = "") {
+  if ($color) { Write-Host (Hide-S17 $s) -ForegroundColor $color } else { Write-Host (Hide-S17 $s) }
+}
+function Get-ShortId([string]$id) {
+  if (-not $id) { return "" }
+  if ($id.Length -le 16) { return $id }
+  return $id.Substring(0, 16) + "..."
+}
+function Get-UtcIso { return [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ") }
+function ConvertTo-UtcDate($v) {
+  # PS 5.1 vracia casy z JSON ako text, PS 7 ako DateTime.
+  if ($null -eq $v -or "$v" -eq "") { return $null }
+  if ($v -is [DateTime]) { return $v.ToUniversalTime() }
+  return [DateTimeOffset]::Parse([string]$v, [Globalization.CultureInfo]::InvariantCulture).UtcDateTime
+}
+
+function Invoke-Git([string[]]$GitArgs) {
+  $ErrorActionPreference = "Continue"
+  $out = @(& git -C $RepoRoot @GitArgs 2>&1 | ForEach-Object { "$_" })
+  return @{ code = $LASTEXITCODE; out = (($out | Where-Object { $_ }) -join "`n").Trim() }
+}
+function Test-S17HarnessPath([string]$p) {
+  return (($S17HarnessFiles -contains $p) -or $p.StartsWith("docs/"))
+}
+function Get-S17HeadInfo {
+  # Aplikacny kod HEAD (+ necommitnute zmeny) vs. ocakavany origin/main. Bez siete (ziadny git fetch).
+  $head = (Invoke-Git @("rev-parse", "HEAD")).out
+  $tree = (Invoke-Git @("rev-parse", "HEAD^{tree}")).out
+  $origin = Invoke-Git @("rev-parse", "--verify", "--quiet", "origin/main")
+  $expectedOk = ((Invoke-Git @("cat-file", "-e", "$S17ExpectedMain^{commit}")).code -eq 0)
+  $changed = @()
+  $expTree = ""
+  if ($expectedOk) {
+    $changed = @(((Invoke-Git @("diff", "--name-only", $S17ExpectedMain, "HEAD")).out -split "`n") | Where-Object { $_ })
+    $expTree = (Invoke-Git @("rev-parse", "$S17ExpectedMain^{tree}")).out
+  }
+  $dirty = @(((Invoke-Git @("status", "--porcelain")).out -split "`n") | Where-Object { $_.Length -gt 3 } | ForEach-Object { $_.Substring(3).Trim('"') })
+  $appChanged = @($changed | Where-Object { -not (Test-S17HarnessPath $_) })
+  $appDirty = @($dirty | Where-Object { -not (Test-S17HarnessPath $_) })
+  return [ordered]@{
+    head = $head
+    head_tree = $tree
+    origin_main = $(if ($origin.code -eq 0) { $origin.out } else { "" })
+    expected_main = $S17ExpectedMain
+    expected_main_tree = $expTree
+    expected_main_present = $expectedOk
+    harness_or_docs_files_changed = ($changed.Count - $appChanged.Count)
+    app_files_changed = $appChanged.Count
+    app_files_uncommitted = $appDirty.Count
+    app_changed_sample = @($appChanged | Select-Object -First 10)
+    app_uncommitted_sample = @($appDirty | Select-Object -First 10)
+    app_matches = ($expectedOk -and $appChanged.Count -eq 0 -and $appDirty.Count -eq 0)
+  }
+}
+function Get-S17PinnedVersion {
+  $f = Join-Path $RepoRoot "lib\billing\stripe-api-version.ts"
+  if (-not (Test-Path $f)) { Fail "Chyba $f - S17 musi bezat z checkoutu s kodom origin/main (P4)." }
+  $m = [regex]::Match((Get-Content $f -Raw), 'export const STRIPE_API_VERSION = "([^"]+)"')
+  if (-not $m.Success) { Fail "Pripnuta verzia Stripe API sa v $f nenasla." }
+  return $m.Groups[1].Value
+}
+function Get-S17EvidenceFile {
+  # Hlavny checkout (C:\Users\...\assetpilot) aj pri behu z worktree: priecinok release-backups je git-excluded.
+  $main = $RepoRoot
+  $common = (Invoke-Git @("rev-parse", "--path-format=absolute", "--git-common-dir")).out
+  if ($common -and ($common -notmatch "`n") -and (Test-Path $common)) { $main = Split-Path -Parent ($common -replace "/", "\") }
+  $dir = Join-Path $main "release-backups\s17"
+  New-Item -ItemType Directory -Force -Path $dir | Out-Null
+  return (Join-Path $dir "s17-evidence.json")
+}
+function Save-S17Evidence {
+  if (-not $S17Ctx.evidenceFile) { return }
+  $S17Evidence["steps"] = @($S17Steps)
+  $S17Evidence["updated_at"] = Get-UtcIso
+  $json = $S17Evidence | ConvertTo-Json -Depth 12
+  Set-Content -Path $S17Ctx.evidenceFile -Value (Hide-S17 $json) -Encoding UTF8
+}
+function Add-S17Result([string]$n, [string]$name, [string]$status, $details) {
+  [void]$S17Steps.Add([ordered]@{ step = $n; name = $name; status = $status; at = (Get-UtcIso); details = $details })
+  $color = "Cyan"
+  if ($status -eq "PASS") { $color = "Green" } elseif ($status -eq "FAIL") { $color = "Red" } elseif ($status -eq "LIMITATION") { $color = "Yellow" }
+  Say17 ("[{0}] S17-{1} {2}" -f $status, $n, $name) $color
+  Save-S17Evidence
+}
+function Invoke-S17Step([string]$n, [string]$name, [scriptblock]$body) {
+  # Telo nastavuje $d (detaily do dokazu); $d["_status"] = LIMITATION/INFO, inak PASS. Vynimka = FAIL a koniec.
+  Say17 ""
+  Say17 "=== S17-$n $name ==="
+  $details = [ordered]@{}
+  try {
+    & $body $details | Out-Null
+    $status = "PASS"
+    if ($details.Contains("_status")) { $status = [string]$details["_status"]; $details.Remove("_status") }
+    Add-S17Result $n $name $status $details
+  } catch {
+    $details["error"] = Hide-S17 ($_.Exception.Message)
+    Add-S17Result $n $name "FAIL" $details
+    throw
+  }
+}
+
+function Save-S17State($st) {
+  $st | ConvertTo-Json -Depth 6 | Set-Content -Path $S17StateFile -Encoding ASCII
+}
+
+function ConvertTo-FormBody($form) {
+  if (-not $form) { return "" }
+  return (@($form.GetEnumerator() | ForEach-Object { [Uri]::EscapeDataString([string]$_.Key) + "=" + [Uri]::EscapeDataString([string]$_.Value) }) -join "&")
+}
+function Invoke-StripeApi([string]$method, [string]$path, $form = $null, [string]$idem = "") {
+  # Priame volanie Stripe API s PRIPNUTOU verziou (rovnaka hlavicka Stripe-Version ako posiela Esblu).
+  if (-not $S17Ctx.pinned) { Fail "Pripnuta verzia Stripe API nie je nacitana." }
+  if ($env:STRIPE_API_KEY -notmatch "^(?:sk|rk|rkcs)_test_") { Fail "STRIPE_API_KEY nie je testovaci kluc." }
+  $h = @{ Authorization = "Bearer $($env:STRIPE_API_KEY)"; "Stripe-Version" = $S17Ctx.pinned }
+  if ($idem) { $h["Idempotency-Key"] = $idem }
+  $u = "https://api.stripe.com/v1$path"
+  $body = ConvertTo-FormBody $form
+  try {
+    if ($method -eq "POST") {
+      $r = Invoke-RestMethod -Uri $u -Headers $h -Method Post -ContentType "application/x-www-form-urlencoded" -Body $body
+    } else {
+      if ($body) { $u += "?" + $body }
+      $r = Invoke-RestMethod -Uri $u -Headers $h -Method $method
+    }
+  } catch { Fail "Stripe $method $(($path -split '\?')[0]) zlyhal: $(Get-HttpErrorText $_)" }
+  if ($r -and $r.PSObject.Properties["livemode"] -and $r.livemode -eq $true) { Fail "Stripe vratil livemode=true - S17 pracuje iba v test mode." }
+  return $r
+}
+function Find-StripeEvent([string]$type, [string]$objectId, [int]$timeoutSec = 90) {
+  $deadline = (Get-Date).AddSeconds($timeoutSec)
+  do {
+    $r = Invoke-StripeApi "GET" "/events" ([ordered]@{ type = $type; limit = 25 })
+    foreach ($e in @($r.data | ForEach-Object { $_ })) { if ($e.data.object.id -eq $objectId) { return $e } }
+    Start-Sleep -Seconds 3
+  } while ((Get-Date) -lt $deadline)
+  Fail "Stripe: udalost $type pre $(Get-ShortId $objectId) sa do $timeoutSec s neobjavila."
+}
+
+function Invoke-LocalCron([string]$name) {
+  if (-not (Test-Path $CronFile)) { Fail "Okno 1 nebezi (chyba lokalny CRON_SECRET) - spusti okno 1 (-Step start)." }
+  $cron = (Get-Content $CronFile -Raw).Trim()
+  try { return Invoke-RestMethod -Uri "http://localhost:$Port/api/cron/$name" -Headers @{ Authorization = "Bearer $cron" } -Method Get -TimeoutSec 180 }
+  catch { Fail "GET /api/cron/$name zlyhal: $(Get-HttpErrorText $_)" }
+}
+function Invoke-S17Catchup {
+  # Dotahovanie (S12) az po result=ok (prvy beh moze dotahovat starsie udalosti po strankach).
+  $r = Invoke-LocalCron "billing-stripe-events"
+  for ($i = 0; $i -lt 10 -and $r.result -eq "partial"; $i++) { $r = Invoke-LocalCron "billing-stripe-events" }
+  return $r
+}
+function Get-BillingEventRows([string]$evtId) {
+  return (Get-Rows "billing_events?provider=eq.stripe&environment=eq.test&provider_event_id=eq.$evtId&select=provider_event_id,event_type,status,error_code,company_id,received_at,processed_at,dead_letter")
+}
+function Wait-BillingEvent([string]$evtId, [int]$timeoutSec = 90) {
+  # Riadok udalosti v Esblu, ktory uz nie je 'received' (spracovany / ignorovany / zlyhany); inak $null.
+  $deadline = (Get-Date).AddSeconds($timeoutSec)
+  do {
+    $rows = @(Get-BillingEventRows $evtId)
+    if ($rows.Count -ge 1 -and $rows[0].status -ne "received") { return $rows[0] }
+    Start-Sleep -Seconds 3
+  } while ((Get-Date) -lt $deadline)
+  return $null
+}
+function Get-DocRows([string]$docId) {
+  return (Get-Rows "billing_invoice_documents?provider=eq.stripe&environment=eq.test&provider_document_id=eq.$docId&select=$S17DocSelect")
+}
+function Wait-Doc([string]$docId, [scriptblock]$ok, [int]$timeoutSec = 90) {
+  $deadline = (Get-Date).AddSeconds($timeoutSec)
+  do {
+    $rows = @(Get-DocRows $docId)
+    if ($rows.Count -ge 1 -and (& $ok $rows[0])) { return $rows[0] }
+    Start-Sleep -Seconds 3
+  } while ((Get-Date) -lt $deadline)
+  return $null
+}
+function Get-S17StorageSha([string]$objectPath) {
+  # Stiahnutie objektu z privatneho bucketu billing-documents (staging, service role) -> SHA-256. Subor sa hned zmaze.
+  $k = Get-ServiceRole
+  $tmp = Join-Path $StateDir ("s17-" + [Guid]::NewGuid().ToString("N") + ".pdf")
+  $enc = (@($objectPath -split "/" | ForEach-Object { [Uri]::EscapeDataString($_) })) -join "/"
+  try {
+    Invoke-WebRequest -Uri "$StagingUrl/storage/v1/object/billing-documents/$enc" -Headers @{ apikey = $k; Authorization = "Bearer $k" } -OutFile $tmp -UseBasicParsing | Out-Null
+  } catch { Fail "Stiahnutie PDF zo staging storage zlyhalo: $(Get-HttpErrorText $_)" }
+  try {
+    $bytes = [IO.File]::ReadAllBytes($tmp)
+    $magic = ""
+    if ($bytes.Length -ge 5) { $magic = [Text.Encoding]::ASCII.GetString($bytes, 0, 5) }
+    $sha = (Get-FileHash -Path $tmp -Algorithm SHA256).Hash.ToLower()
+    return @{ sha256 = $sha; bytes = $bytes.Length; is_pdf = ($magic -eq "%PDF-") }
+  } finally { Remove-Item $tmp -Force -ErrorAction SilentlyContinue }
+}
+
+function Get-S17ListenProcesses {
+  return @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+      $_.CommandLine -and $_.CommandLine -match "\blisten\b" -and $_.CommandLine -match "forward-to" -and $_.CommandLine.Contains($S17ListenRe) })
+}
+function Test-S17ListenAlive {
+  if (Test-Path $ListenPidFile) {
+    $listenPid = 0
+    if ([int]::TryParse((Get-Content $ListenPidFile -Raw).Trim(), [ref]$listenPid) -and (Get-Process -Id $listenPid -ErrorAction SilentlyContinue)) { return $true }
+  }
+  return ((Get-S17ListenProcesses).Count -gt 0)
+}
+function Stop-S17Listen {
+  # Zastavi `stripe listen` z okna 1 (cely strom procesov npx -> node -> stripe). Esblu (next dev) bezi dalej.
+  $killed = 0
+  if (Test-Path $ListenPidFile) {
+    $listenPid = 0
+    if ([int]::TryParse((Get-Content $ListenPidFile -Raw).Trim(), [ref]$listenPid) -and (Get-Process -Id $listenPid -ErrorAction SilentlyContinue)) {
+      $ErrorActionPreference = "Continue"
+      & taskkill.exe /PID $listenPid /T /F 2>&1 | Out-Null
+      $ErrorActionPreference = "Stop"
+      $killed++
+    }
+  }
+  foreach ($p in (Get-S17ListenProcesses)) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue; $killed++ }
+  Start-Sleep -Seconds 3
+  return @{ killed = $killed; remaining = (Get-S17ListenProcesses).Count }
+}
+
+function Enable-S17Billing($st) {
+  # Staging billing iba pre test: web_provider='stripe' + aktivna cena sandboxu. Predchadzajuci stav sa ulozi PRED zmenou.
+  $cfg = @(Get-Rows "billing_runtime_config?select=web_provider,environment")[0]
+  if (-not $cfg) { Fail "Staging billing_runtime_config nema riadok." }
+  if ($cfg.environment -ne "test") { Fail "Staging billing_runtime_config.environment=$($cfg.environment) (ocakavane test)." }
+  $prices = Get-Rows "billing_provider_prices?provider=eq.stripe&environment=eq.test&select=provider_price_id,plan_code,billing_interval,active"
+  if (-not (@($prices | Where-Object { $_.provider_price_id -eq $PriceId }).Count)) { Fail "Cena $PriceId nie je namapovana na stagingu (spusti -Step new-sandbox)." }
+  $st.prev_web_provider = [string]$cfg.web_provider
+  $st.prev_prices = @($prices | ForEach-Object { [ordered]@{ price = [string]$_.provider_price_id; active = [bool]$_.active } })
+  $st.enabled = $true
+  $st.restored = $false
+  Save-S17State $st
+  foreach ($p in @($prices | Where-Object { $_.active -and $_.provider_price_id -ne $PriceId -and $_.plan_code -eq "esblu_complete" -and $_.billing_interval -eq "month" })) {
+    Invoke-Staging "PATCH" "billing_provider_prices?provider=eq.stripe&environment=eq.test&provider_price_id=eq.$($p.provider_price_id)" @{ active = $false } | Out-Null
+  }
+  Invoke-Staging "PATCH" "billing_provider_prices?provider=eq.stripe&environment=eq.test&provider_price_id=eq.$PriceId" @{ active = $true } | Out-Null
+  Invoke-Staging "PATCH" "billing_runtime_config?id=eq.true" @{ web_provider = "stripe" } | Out-Null
+  $cfg2 = @(Get-Rows "billing_runtime_config?select=web_provider,environment")[0]
+  $act = @(Get-Rows "billing_provider_prices?provider=eq.stripe&environment=eq.test&active=eq.true&select=provider_price_id")
+  if ($cfg2.web_provider -ne "stripe" -or $act.Count -ne 1 -or $act[0].provider_price_id -ne $PriceId) { Fail "Zapnutie billingu na stagingu sa neprejavilo (web_provider=$($cfg2.web_provider), aktivnych cien $($act.Count))." }
+  return [ordered]@{ prev_web_provider = $st.prev_web_provider; prev_active_prices = @($st.prev_prices | Where-Object { $_.active }).Count; now_web_provider = "stripe"; now_active_price = (Get-ShortId $PriceId) }
+}
+
+function Restore-S17Staging($st) {
+  # Idempotentne: (a) ukoncit QA predplatne u Stripe a dotiahnut do Esblu, (b) vratit staging konfiguraciu.
+  # Dokazy (billing_events, doklady, archiv PDF, ledger) ostavaju.
+  $d = [ordered]@{}
+  $errors = @()
+  if ($st.subscription) {
+    try {
+      $s = Invoke-StripeApi "GET" "/subscriptions/$($st.subscription)"
+      if ($s.status -ne "canceled" -and $s.status -ne "incomplete_expired") { $s = Invoke-StripeApi "DELETE" "/subscriptions/$($st.subscription)" }
+      for ($i = 0; $i -lt 20 -and $s.status -ne "canceled" -and $s.status -ne "incomplete_expired"; $i++) { Start-Sleep -Seconds 3; $s = Invoke-StripeApi "GET" "/subscriptions/$($st.subscription)" }
+      $d["stripe_subscription"] = Get-ShortId $st.subscription
+      $d["stripe_subscription_status"] = [string]$s.status
+      if ($s.status -ne "canceled" -and $s.status -ne "incomplete_expired") { throw "Stripe predplatne nie je ukoncene (stav=$($s.status))." }
+      # stripe listen je po S17-7 zastaveny -> ukoncenie prenesie dotahovanie (ako by webhook vypadol).
+      $acc = $null
+      for ($i = 0; $i -lt 20; $i++) {
+        $acc = Get-EsbluAccount $st.subscription
+        if (-not $acc -or $acc.status -in @("canceled", "expired", "refunded", "revoked")) { break }
+        Invoke-S17Catchup | Out-Null
+        Start-Sleep -Seconds 3
+      }
+      $d["esblu_account_status"] = $(if ($acc) { [string]$acc.status } else { "none" })
+      if ($acc -and $acc.status -notin @("canceled", "expired", "refunded", "revoked")) { throw "Esblu ucet ostal $($acc.status) po ukonceni v Stripe." }
+      $ents = Get-ActiveSubEnts $CompanyD
+      $d["company_d_active_entitlements"] = $ents
+      if ($ents -ne 0) { throw "Firma QA-STRIPE D ma po ukonceni $ents ucinnych narokov." }
+    } catch { $errors += "predplatne: $($_.Exception.Message)" }
+  }
+  if ($st.enabled -and -not $st.restored) {
+    try {
+      Invoke-Staging "PATCH" "billing_runtime_config?id=eq.true" @{ web_provider = [string]$st.prev_web_provider } | Out-Null
+      # najprv vypnut (false), az potom zapnut povodne aktivne -> nikdy 2 aktivne ceny naraz
+      foreach ($p in @(@($st.prev_prices) | Sort-Object { [bool]$_.active })) {
+        Invoke-Staging "PATCH" "billing_provider_prices?provider=eq.stripe&environment=eq.test&provider_price_id=eq.$($p.price)" @{ active = [bool]$p.active } | Out-Null
+      }
+      $st.restored = $true
+      Save-S17State $st
+    } catch { $errors += "konfiguracia: $($_.Exception.Message)" }
+  }
+  try {
+    $cfg = @(Get-Rows "billing_runtime_config?select=web_provider,environment")[0]
+    $act = @(Get-Rows "billing_provider_prices?provider=eq.stripe&environment=eq.test&active=eq.true&select=provider_price_id")
+    $d["web_provider"] = [string]$cfg.web_provider
+    $d["active_stripe_test_prices"] = $act.Count
+    if ($st.enabled) {
+      $expActive = @(@($st.prev_prices) | Where-Object { $_.active }).Count
+      if ([string]$cfg.web_provider -ne [string]$st.prev_web_provider -or $act.Count -ne $expActive) { $errors += "konfiguracia: web_provider=$($cfg.web_provider) (povodne $($st.prev_web_provider)), aktivnych cien $($act.Count) (povodne $expActive)" }
+    }
+  } catch { $errors += "kontrola konfiguracie: $($_.Exception.Message)" }
+  $d["test_clocks_kept"] = @(@($st.clocks) | Where-Object { $_ }).Count
+  if ($errors.Count -gt 0) {
+    $d["errors"] = @($errors | ForEach-Object { Hide-S17 $_ })
+    Say17 "RUCNE UPRATANIE: -Step s17-cleanup (alebo SQL na stagingu: web_provider='$($st.prev_web_provider)', ceny podla $S17StateFile)." "Red"
+  }
+  return $d
+}
+
+function Invoke-S17 {
+  $S17Ctx.t0 = Get-UtcIso
+  $S17Ctx.evidenceFile = Get-S17EvidenceFile
+  $S17Evidence["test"] = "S17 - P4 billing na Stripe sandboxe (pripnuta verzia, doklady + snapshot, archiv PDF, refundacia dobropisom, zmeskana udalost, export, poplatok/cista suma)"
+  $S17Evidence["started_at"] = $S17Ctx.t0
+  $S17Evidence["project"] = $Project
+  $S17Evidence["staging_ref"] = $StagingRef
+  $S17Evidence["stripe_price"] = Get-ShortId $PriceId
+  $S17Evidence["qa_company"] = "QA-STRIPE D ($($CompanyD.Substring(0, 8))...)"
+  $S17Evidence["overall"] = "RUNNING"
+  Say17 "Dokazy (bez tajomstiev): $($S17Ctx.evidenceFile)"
+  if ((Invoke-Git @("check-ignore", "-q", "release-backups/s17/s17-evidence.json")).code -ne 0) { Say17 "POZOR: release-backups/ nie je v git exclude - subor dokazov necommitovat." "Yellow" }
+
+  # Stav pre upratanie (aj po padnuti: -Step s17-cleanup). Neupratany predchadzajuci beh = stop.
+  $clocks = @()
+  if (Test-Path $S17StateFile) {
+    $old = Get-Content $S17StateFile -Raw | ConvertFrom-Json
+    if ($old.enabled -and -not $old.restored) { Fail "Predchadzajuci beh S17 neupratal staging - spusti najprv -Step s17-cleanup." }
+    $clocks = @(@($old.clocks) | Where-Object { $_ })
+  }
+  $st = [ordered]@{ started_at = $S17Ctx.t0; enabled = $false; restored = $false; prev_web_provider = $null; prev_prices = @(); clocks = $clocks; clock = $null; customer = $null; subscription = $null; invoice = $null }
+  $S17Ctx.state = $st
+  Save-S17State $st
+  $failed = $false
+
+  try {
+    Invoke-S17Step "1" "Preflight (test mode, staging, HEAD = origin/main) + zapnutie billingu na stagingu" {
+      param($d)
+      $kind = "?"
+      if ($env:STRIPE_API_KEY -match "^rkcs_test_") { $kind = "rkcs_test" } elseif ($env:STRIPE_API_KEY -match "^rk_test_") { $kind = "rk_test" } elseif ($env:STRIPE_API_KEY -match "^sk_test_") { $kind = "sk_test" }
+      if ($kind -eq "?") { Fail "Stripe kluc nie je testovaci (sk_test_/rk_test_/rkcs_test_)." }
+      $d["stripe_key_kind"] = $kind
+      if ($StagingUrl -notmatch $StagingRef -or $StagingUrl -match $ProdRef) { Fail "Supabase URL nie je staging $StagingRef." }
+      Get-ServiceRole | Out-Null
+      $d["supabase"] = "staging $StagingRef (produkcia $ProdRef odmietnuta)"
+      $S17Ctx.pinned = Get-S17PinnedVersion
+      $d["pinned_api_version"] = $S17Ctx.pinned
+      try { $acct = Invoke-StripeApi "GET" "/account"; $d["stripe_account"] = Get-ShortId ([string]$acct.id) } catch { $d["stripe_account"] = "neoverene (kluc bez Account: read)" }
+      $hi = Get-S17HeadInfo
+      $S17Evidence["git"] = $hi
+      $d["head"] = $hi.head
+      $d["origin_main"] = $hi.origin_main
+      $d["app_matches_expected_main"] = $hi.app_matches
+      Say17 "    HEAD $($hi.head) | origin/main $(if ($hi.origin_main) { $hi.origin_main } else { '-' }) | ocakavany $S17ExpectedMain"
+      Say17 "    aplikacny kod = ocakavany: $($hi.app_matches) (zmenene app subory $($hi.app_files_changed), necommitnute $($hi.app_files_uncommitted), harness/docs $($hi.harness_or_docs_files_changed))"
+      $headProblems = @()
+      if (-not $hi.expected_main_present) { $headProblems += "commit $S17ExpectedMain lokalne chyba (git fetch origin)" }
+      if (-not $hi.app_matches) { $headProblems += "aplikacny kod HEAD sa lisi od $S17ExpectedMain ($(($hi.app_changed_sample + $hi.app_uncommitted_sample) -join ', '))" }
+      if ($hi.origin_main -ne $S17ExpectedMain) { $headProblems += "origin/main = $(if ($hi.origin_main) { $hi.origin_main } else { 'nezname' }) (ocakavany $S17ExpectedMain)" }
+      if (-not (Test-Path $HeadFile)) { $headProblems += "okno 1 nebezi s touto verziou skriptu (chyba $HeadFile)" }
+      else {
+        $w1 = Get-Content $HeadFile -Raw | ConvertFrom-Json
+        $d["window1_head"] = [string]$w1.head
+        if ([string]$w1.head -ne $hi.head -or [string]$w1.repo -ne $RepoRoot) { $headProblems += "okno 1 bezi z ineho checkoutu/commitu ($([string]$w1.head), $([string]$w1.repo))" }
+      }
+      if ($headProblems.Count -gt 0) {
+        if (-not $Force) { Fail ("S17 odmieta bezat: " + ($headProblems -join "; ") + ". Postup: docs par. 8.14 (worktree na origin/main), alebo -Force.") }
+        Say17 ("    POZOR -Force: " + ($headProblems -join "; ")) "Yellow"
+        $d["head_check"] = "FORCED: " + ($headProblems -join "; ")
+      } else { $d["head_check"] = "OK" }
+      if (-not (Test-Path $CronFile)) { Fail "Okno 1 nebezi (chyba lokalny CRON_SECRET) - spusti okno 1: -Step start." }
+      if (Test-Path $NoListenFile) { Fail "Okno 1 bezi s -NoListen. S17 potrebuje stripe listen (krok 6 cez webhook, krok 7 ho sam zastavi) - restartuj okno 1 bez -NoListen." }
+      if (-not (Test-S17ListenAlive)) { Fail "stripe listen v okne 1 nebezi - restartuj okno 1 (-Step start)." }
+      $d["stripe_listen"] = "bezi"
+      $en = Enable-S17Billing $S17Ctx.state
+      $d["staging_billing"] = $en
+      Say17 "    staging: web_provider $($en.prev_web_provider) -> stripe, aktivna cena $($en.now_active_price) (povodny stav ulozeny pre obnovu)"
+    }
+
+    Invoke-S17Step "2" "Pripnuta verzia Stripe API + dotahovanie (lokalny cron billing-stripe-events)" {
+      param($d)
+      $r = Invoke-S17Catchup
+      $retryCode = $null
+      if ($r.retry) { $retryCode = $r.retry.code }
+      $d["cron"] = [ordered]@{ success = $r.success; configured = $r.configured; result = $r.result; processed = $r.processed; outcomes = $r.outcomes; code = $r.code; retry_code = $retryCode }
+      Say17 "    dotahovanie: result=$($r.result) processed=$($r.processed) outcomes=$(($r.outcomes | ConvertTo-Json -Compress)) code=$($r.code) retry=$retryCode"
+      if (-not $r.configured) { Fail "Dotahovanie nie je nakonfigurovane (okno 1 ESBLU_BILLING_MODE / DB web_provider)." }
+      if (-not $r.success -or ($r.result -ne "ok" -and $r.result -ne "partial")) { Fail "Dotahovanie skoncilo result=$($r.result) code=$($r.code)." }
+      if ("$($r.code) $retryCode" -match "VERSION|NOT_CONFIGURED") { Fail "Chyba verzie Stripe API / konfiguracie: $($r.code) $retryCode." }
+      if ($r.code) { Fail "Dotahovanie vratilo kod $($r.code)." }
+      $ev = Invoke-StripeApi "GET" "/events" ([ordered]@{ limit = 1 })
+      $first = @($ev.data | ForEach-Object { $_ })[0]
+      $evVer = ""
+      if ($first) { $evVer = [string]$first.api_version }
+      $d["latest_event_api_version"] = $evVer
+      $d["account_events_match_pinned"] = ($evVer -eq $S17Ctx.pinned)
+      try {
+        $we = Invoke-StripeApi "GET" "/webhook_endpoints" ([ordered]@{ limit = 20 })
+        $eps = @($we.data | ForEach-Object { $_ })
+        $d["webhook_endpoints"] = $eps.Count
+        $d["webhook_endpoint_versions"] = @($eps | ForEach-Object { if ($_.api_version) { [string]$_.api_version } else { "predvolena_uctu" } } | Select-Object -Unique)
+      } catch { $d["webhook_endpoints"] = "neoverene (kluc bez Webhook Endpoints: read)" }
+      $al = @(Get-Rows "billing_ops_alerts?environment=eq.test&code=eq.WEBHOOK_API_VERSION_MISMATCH&select=occurrences,state,last_seen_at&order=last_seen_at.desc&limit=1")
+      $S17Ctx.versionAlertBefore = $(if ($al.Count) { "$($al[0].last_seen_at)|$($al[0].occurrences)" } else { "" })
+      $d["listen_semantics"] = "stripe listen (bez --latest) preposiela udalosti vo verzii predvolenej pre ucet sandboxu; Esblu stav predplatneho vzdy nacita znova z API s pripnutou verziou, doklad uklada z tela udalosti (+ /v1/invoice_payments s pripnutou verziou); nezhoda = ops alert WEBHOOK_API_VERSION_MISMATCH (warning), spracovanie pokracuje"
+      Say17 "    pripnuta verzia Esblu: $($S17Ctx.pinned); verzia udalosti uctu: $(if ($evVer) { $evVer } else { '-' }); webhook endpointy: $($d['webhook_endpoints'])"
+      if ($evVer -and $evVer -ne $S17Ctx.pinned) { Say17 "    INFO: verzia udalosti uctu != pripnuta -> webhook z stripe listen vyvola ops alert WEBHOOK_API_VERSION_MISMATCH (ocakavane, overi sa v kroku 3)." "Yellow" }
+    }
+
+    Invoke-S17Step "3" "Nakup bez zadavania karty (Test Clock, pm_card_visa, zamer Esblu) -> invoice.paid spracovane" {
+      param($d)
+      $st = $S17Ctx.state
+      Invoke-Staging "PATCH" "billing_checkout_sessions?company_id=eq.$CompanyD&status=in.(created,open)" @{ status = "expired" } | Out-Null
+      $row = Invoke-Staging "POST" "billing_checkout_sessions" @{ company_id = $CompanyD; created_by = $OwnerD; provider = "stripe"; environment = "test";
+        plan_code = "esblu_complete"; billing_interval = "month"; provider_price_id = $PriceId; expires_at = (Get-Date).ToUniversalTime().AddHours(1).ToString("o") }
+      $checkoutId = [string](@($row)[0].id)
+      if ($checkoutId -notmatch "^[0-9a-f-]{36}$") { Fail "Zamer checkoutu pre QA-STRIPE D nevznikol." }
+      $tag = "s17-" + [Guid]::NewGuid().ToString("N").Substring(0, 12)
+      $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+      $clock = Invoke-StripeApi "POST" "/test_helpers/test_clocks" ([ordered]@{ frozen_time = $now; name = "Esblu S17" }) "$tag-clock"
+      $st.clock = [string]$clock.id
+      $st.clocks = @(@($st.clocks) + [string]$clock.id | Where-Object { $_ })
+      Save-S17State $st
+      $cus = Invoke-StripeApi "POST" "/customers" ([ordered]@{ test_clock = $clock.id; name = "QA-STRIPE D S17"; "metadata[esblu_qa]" = "s17" }) "$tag-cus"
+      $st.customer = [string]$cus.id
+      Save-S17State $st
+      $pm = Invoke-StripeApi "POST" "/payment_methods/pm_card_visa/attach" ([ordered]@{ customer = $cus.id }) "$tag-pm"
+      Invoke-StripeApi "POST" "/customers/$($cus.id)" ([ordered]@{ "invoice_settings[default_payment_method]" = $pm.id }) "$tag-cus-pm" | Out-Null
+      $sub = Invoke-StripeApi "POST" "/subscriptions" ([ordered]@{ customer = $cus.id; "items[0][price]" = $PriceId; "metadata[esblu_checkout_id]" = $checkoutId; default_payment_method = $pm.id }) "$tag-sub"
+      $st.subscription = [string]$sub.id
+      Save-S17State $st
+      $S17Ctx.sub = [string]$sub.id
+      $S17Ctx.customer = [string]$cus.id
+      $s = $null; $inv = $null
+      for ($i = 0; $i -lt 40; $i++) {
+        $s = Invoke-StripeApi "GET" "/subscriptions/$($sub.id)" ([ordered]@{ "expand[]" = "latest_invoice" })
+        $inv = $s.latest_invoice
+        if ($inv -and $inv.id -and $inv.status -eq "paid" -and $s.status -eq "active") { break }
+        Start-Sleep -Seconds 3
+      }
+      if (-not $inv -or $inv.status -ne "paid" -or $s.status -ne "active") { Fail "Stripe: prva faktura nie je zaplatena / predplatne nie je active (stav=$($s.status))." }
+      $S17Ctx.inv = [string]$inv.id
+      $st.invoice = [string]$inv.id
+      Save-S17State $st
+      $line = @($inv.lines.data | ForEach-Object { $_ }) | Where-Object { $_.period } | Select-Object -First 1
+      $S17Ctx.period = @{ start = [long]$line.period.start; end = [long]$line.period.end }
+      $parentSub = ""
+      if ($inv.parent -and $inv.parent.subscription_details) { $parentSub = [string]$inv.parent.subscription_details.subscription }
+      $d["pinned_invoice_shape"] = $(if ($parentSub -eq $sub.id) { "OK (invoice.parent.subscription_details)" } else { "CHYBA" })
+      if ($parentSub -ne $sub.id) { Fail "Faktura nacitana s pripnutou verziou nema invoice.parent.subscription_details.subscription = predplatne." }
+      Say17 "    Stripe: $(Get-ShortId $sub.id) active, faktura $(Get-ShortId $inv.id) zaplatena $(Format-Eur ([long]$inv.amount_paid) ([string]$inv.currency)), obdobie $(Utc $S17Ctx.period.start) -> $(Utc $S17Ctx.period.end)"
+      $acc = Wait-Esblu $sub.id { param($a) $a.status -eq "active" } "aktivacia predplatneho"
+      if ([string]$acc.company_id -ne $CompanyD) { Fail "Esblu: predplatne patri firme $($acc.company_id), ocakavana QA-STRIPE D." }
+      $e = Find-StripeEvent "invoice.paid" $inv.id
+      $S17Ctx.events["invoice.paid"] = [string]$e.id
+      $row = Wait-BillingEvent $e.id 90
+      if (-not $row) { Fail "Esblu DB: invoice.paid $(Get-ShortId $e.id) sa do 90 s nespracovala (okno 1 / stripe listen)." }
+      if ($row.status -ne "processed") { Fail "Esblu DB: invoice.paid status=$($row.status) chyba=$($row.error_code)." }
+      $al = @(Get-Rows "billing_ops_alerts?environment=eq.test&code=eq.WEBHOOK_API_VERSION_MISMATCH&select=occurrences,state,last_seen_at&order=last_seen_at.desc&limit=1")
+      $after = $(if ($al.Count) { "$($al[0].last_seen_at)|$($al[0].occurrences)" } else { "" })
+      $d["test_clock"] = Get-ShortId $clock.id
+      $d["customer"] = Get-ShortId $cus.id
+      $d["subscription"] = Get-ShortId $sub.id
+      $d["invoice"] = Get-ShortId $inv.id
+      $d["amount_paid_minor"] = [long]$inv.amount_paid
+      $d["stripe_subscription_status"] = [string]$s.status
+      $d["esblu_account_status"] = [string]$acc.status
+      $d["invoice_paid_event"] = Get-ShortId $e.id
+      $d["invoice_paid_event_api_version"] = [string]$e.api_version
+      $d["invoice_paid_event_status"] = [string]$row.status
+      $d["webhook_version_alert_raised_during_test"] = ($after -ne "" -and $after -ne $S17Ctx.versionAlertBefore)
+      Say17 "    Esblu: ucet active (QA-STRIPE D), invoice.paid $(Get-ShortId $e.id) processed; verzia udalosti $($e.api_version); ops alert verzie pocas testu: $($d['webhook_version_alert_raised_during_test'])"
+    }
+
+    Invoke-S17Step "4" "Uctovna kopia faktury (billing_invoice_documents + nemenny snapshot odberatela)" {
+      param($d)
+      $doc = Wait-Doc $S17Ctx.inv { param($r) $r.status -eq "paid" -and $r.company_id } 90
+      if (-not $doc) {
+        $last = @(Get-DocRows $S17Ctx.inv)
+        if ($last.Count -eq 0) { Fail "Doklad $(Get-ShortId $S17Ctx.inv) v billing_invoice_documents chyba." }
+        Fail "Doklad $(Get-ShortId $S17Ctx.inv): status=$($last[0].status) company_id=$($last[0].company_id) (ocakavane paid + QA-STRIPE D)."
+      }
+      $pay = Invoke-StripeApi "GET" "/invoice_payments" ([ordered]@{ invoice = $S17Ctx.inv; limit = 3 })
+      $p0 = @($pay.data | ForEach-Object { $_ }) | Where-Object { $_.status -eq "paid" } | Select-Object -First 1
+      $piStripe = ""
+      if ($p0 -and $p0.payment) { $piStripe = [string]$p0.payment.payment_intent; if ($p0.payment.payment_intent.id) { $piStripe = [string]$p0.payment.payment_intent.id } }
+      $S17Ctx.pi = $piStripe
+      $bad = @()
+      if ($doc.kind -ne "invoice") { $bad += "kind=$($doc.kind)" }
+      if ($doc.status -ne "paid") { $bad += "status=$($doc.status)" }
+      if ([string]$doc.company_id -ne $CompanyD) { $bad += "company_id iny ako QA-STRIPE D" }
+      if ([string]$doc.provider_subscription_id -ne $S17Ctx.sub) { $bad += "provider_subscription_id" }
+      if ([string]$doc.provider_customer_id -ne $S17Ctx.customer) { $bad += "provider_customer_id" }
+      if ([string]$doc.currency -ne "EUR") { $bad += "currency=$($doc.currency)" }
+      if ([long]$doc.total_minor -ne 1590 -or [long]$doc.amount_paid_minor -ne 1590) { $bad += "suma $($doc.total_minor)/$($doc.amount_paid_minor) (ocakavane 1590)" }
+      if (-not $piStripe -or [string]$doc.payment_intent_id -ne $piStripe) { $bad += "payment_intent_id nesedi s /v1/invoice_payments" }
+      $ps = ConvertTo-UtcDate $doc.service_period_start; $pe = ConvertTo-UtcDate $doc.service_period_end
+      if ($ps -ne [DateTimeOffset]::FromUnixTimeSeconds($S17Ctx.period.start).UtcDateTime -or $pe -ne [DateTimeOffset]::FromUnixTimeSeconds($S17Ctx.period.end).UtcDateTime) { $bad += "obdobie sluzby nesedi so Stripe" }
+      if (-not $doc.issued_at) { $bad += "issued_at chyba" }
+      if (-not $doc.pdf_url) { $bad += "pdf_url chyba" }
+      if ([string]$doc.customer_company_id -ne $CompanyD) { $bad += "snapshot customer_company_id" }
+      if (-not ([string]$doc.customer_legal_name).Trim()) { $bad += "snapshot customer_legal_name prazdne" }
+      if (-not $doc.customer_snapshot_at) { $bad += "snapshot customer_snapshot_at chyba" }
+      if ([string]$doc.customer_snapshot_source -ne "company") { $bad += "snapshot_source=$($doc.customer_snapshot_source) (ocakavane company)" }
+      $optional = [ordered]@{ ico = [bool]$doc.customer_ico; dic = [bool]$doc.customer_dic; ic_dph = [bool]$doc.customer_ic_dph; registration_id = [bool]$doc.customer_registration_id; address = [bool]$doc.customer_address; billing_country = [bool]$doc.customer_billing_country }
+      $d["document"] = Get-ShortId $S17Ctx.inv
+      $d["kind"] = [string]$doc.kind
+      $d["status"] = [string]$doc.status
+      $d["company_is_qa_d"] = ([string]$doc.company_id -eq $CompanyD)
+      $d["subscription_matches"] = ([string]$doc.provider_subscription_id -eq $S17Ctx.sub)
+      $d["payment_intent"] = Get-ShortId $piStripe
+      $d["total_minor"] = [long]$doc.total_minor
+      $d["service_period"] = "$(Utc $S17Ctx.period.start) -> $(Utc $S17Ctx.period.end)"
+      $d["snapshot_source"] = [string]$doc.customer_snapshot_source
+      $d["snapshot_required_fields"] = "customer_company_id, customer_legal_name, customer_snapshot_at: $(if ($bad | Where-Object { $_ -like 'snapshot*' }) { 'CHYBA' } else { 'vyplnene' })"
+      $d["snapshot_optional_present"] = $optional
+      $d["first_event"] = Get-ShortId ([string]$doc.first_event_id)
+      Say17 "    doklad $(Get-ShortId $S17Ctx.inv): invoice/paid, firma QA-STRIPE D, predplatne OK, 1590 EUR centov, PI $(Get-ShortId $piStripe), snapshot=$($doc.customer_snapshot_source) (volitelne: $(($optional.GetEnumerator() | Where-Object { $_.Value } | ForEach-Object { $_.Key }) -join ','))"
+      if ($bad.Count -gt 0) { Fail ("Uctovna kopia nesedi: " + ($bad -join "; ")) }
+    }
+
+    Invoke-S17Step "5" "Archiv PDF (lokalny cron billing-documents) + SHA-256 objektu v staging storage" {
+      param($d)
+      $runs = @()
+      $doc = $null
+      for ($i = 0; $i -lt 4; $i++) {
+        $r = Invoke-LocalCron "billing-documents"
+        $runs += [ordered]@{ configured = $r.configured; claimed = $r.claimed; archived = $r.archived; failed = $r.failed; code = $r.errorCode }
+        Say17 "    billing-documents #$($i + 1): claimed=$($r.claimed) archived=$($r.archived) failed=$($r.failed) code=$($r.errorCode)"
+        if (-not $r.configured) { Fail "Cron billing-documents nie je nakonfigurovany (okno 1)." }
+        $doc = @(Get-DocRows $S17Ctx.inv)[0]
+        if ($doc.pdf_sha256 -or $doc.pdf_archive_error) { break }
+        Start-Sleep -Seconds 5
+      }
+      $d["cron_runs"] = $runs
+      if (-not $doc.pdf_sha256) { Fail "PDF faktury nebolo archivovane (pokusy=$($doc.pdf_archive_attempts) chyba=$($doc.pdf_archive_error))." }
+      $re = "^test/\d{4}/\d{2}/invoice/" + [regex]::Escape($S17Ctx.inv) + "\.pdf$"
+      if ([string]$doc.pdf_storage_path -notmatch $re) { Fail "Neocakavana cesta archivu: $($doc.pdf_storage_path)." }
+      $dl = Get-S17StorageSha ([string]$doc.pdf_storage_path)
+      $d["pdf_storage_path"] = [string]$doc.pdf_storage_path
+      $d["pdf_sha256_db"] = [string]$doc.pdf_sha256
+      $d["pdf_sha256_storage"] = $dl.sha256
+      $d["pdf_bytes"] = $dl.bytes
+      $d["pdf_magic_ok"] = $dl.is_pdf
+      Say17 "    $($doc.pdf_storage_path): $($dl.bytes) B, SHA-256 DB $(([string]$doc.pdf_sha256).Substring(0, 16))... / storage $($dl.sha256.Substring(0, 16))..."
+      if (-not $dl.is_pdf) { Fail "Objekt v storage nie je PDF." }
+      if ($dl.sha256 -ne [string]$doc.pdf_sha256) { Fail "SHA-256 objektu v storage != pdf_sha256 v DB." }
+    }
+
+    Invoke-S17Step "6" "Ciastocna refundacia dobropisom (credit note + refund) -> doklad, pozorovanie refundacie, predplatne active" {
+      param($d)
+      $cn = Invoke-StripeApi "POST" "/credit_notes" ([ordered]@{ invoice = $S17Ctx.inv; amount = 500; refund_amount = 500; reason = "order_change"; memo = "Esblu S17 QA ciastocna refundacia" }) "s17-cn1-$($S17Ctx.sub)"
+      $S17Ctx.cn1 = [string]$cn.id
+      if ($cn.status -ne "issued" -or [long]$cn.total -ne 500) { Fail "Stripe dobropis $(Get-ShortId $cn.id): status=$($cn.status) total=$($cn.total)." }
+      $pi = $null
+      for ($i = 0; $i -lt 20; $i++) {
+        $pi = Invoke-StripeApi "GET" "/payment_intents/$($S17Ctx.pi)" ([ordered]@{ "expand[]" = "latest_charge" })
+        if ([long]$pi.latest_charge.amount_refunded -eq 500) { break }
+        Start-Sleep -Seconds 3
+      }
+      if ([long]$pi.latest_charge.amount_refunded -ne 500) { Fail "Stripe: platba nema refundovanych 5,00 EUR (amount_refunded=$($pi.latest_charge.amount_refunded))." }
+      $S17Ctx.charge = [string]$pi.latest_charge.id
+      Say17 "    Stripe: dobropis $(Get-ShortId $cn.id) 5,00 EUR s refundaciou; charge $(Get-ShortId $S17Ctx.charge) refundovane $(Format-Eur ([long]$pi.latest_charge.amount_refunded)) z $(Format-Eur ([long]$pi.latest_charge.amount))"
+      $eCn = Find-StripeEvent "credit_note.created" $cn.id
+      $eRf = Find-StripeEvent "charge.refunded" $S17Ctx.charge
+      $S17Ctx.events["credit_note.created#1"] = [string]$eCn.id
+      $S17Ctx.events["charge.refunded"] = [string]$eRf.id
+      $via = "webhook (stripe listen)"
+      $rCn = Wait-BillingEvent $eCn.id 90
+      $rRf = Wait-BillingEvent $eRf.id 30
+      if (-not $rCn -or -not $rRf) {
+        $via = "dotahovanie (webhook sa do 90 s nedorucil - skontroluj zoznam udalosti stripe listen v okne 1)"
+        Invoke-S17Catchup | Out-Null
+        $rCn = Wait-BillingEvent $eCn.id 30
+        $rRf = Wait-BillingEvent $eRf.id 30
+      }
+      if (-not $rCn) { Fail "Esblu DB: credit_note.created $(Get-ShortId $eCn.id) sa nespracovala." }
+      if (-not $rRf) { Fail "Esblu DB: charge.refunded $(Get-ShortId $eRf.id) sa nespracovala." }
+      if ($rCn.status -notin @("processed", "ignored")) { Fail "credit_note.created status=$($rCn.status) chyba=$($rCn.error_code)." }
+      if ($rRf.status -notin @("processed", "ignored")) { Fail "charge.refunded status=$($rRf.status) chyba=$($rRf.error_code)." }
+      $doc = Wait-Doc $S17Ctx.cn1 { param($r) $r.related_invoice_id -and $r.company_id } 60
+      if (-not $doc) { Fail "Doklad dobropisu $(Get-ShortId $S17Ctx.cn1) chyba alebo nema vazbu na fakturu / firmu." }
+      $bad = @()
+      if ($doc.kind -ne "credit_note") { $bad += "kind=$($doc.kind)" }
+      if ([string]$doc.related_invoice_id -ne $S17Ctx.inv) { $bad += "related_invoice_id nesedi" }
+      if ([string]$doc.company_id -ne $CompanyD) { $bad += "company_id iny ako QA-STRIPE D" }
+      if ([string]$doc.status -ne "issued") { $bad += "status=$($doc.status)" }
+      if ([long]$doc.total_minor -ne 500) { $bad += "total=$($doc.total_minor)" }
+      if ([string]$doc.customer_company_id -ne $CompanyD -or -not $doc.customer_snapshot_at) { $bad += "snapshot odberatela chyba" }
+      $obs = $null
+      for ($i = 0; $i -lt 10; $i++) {
+        $obs = @(Get-Rows "billing_refund_observations?environment=eq.test&payment_intent_id=eq.$($S17Ctx.pi)&select=amount_refunded_minor,currency,first_observed_at,last_observed_at")[0]
+        if ($obs -and [long]$obs.amount_refunded_minor -eq 500) { break }
+        Start-Sleep -Seconds 3
+      }
+      if (-not $obs -or [long]$obs.amount_refunded_minor -ne 500) { $bad += "pozorovanie refundacie (billing_refund_observations) chyba / suma $($obs.amount_refunded_minor)" }
+      $s = Invoke-StripeApi "GET" "/subscriptions/$($S17Ctx.sub)"
+      $acc = Get-EsbluAccount $S17Ctx.sub
+      if ($s.status -ne "active") { $bad += "Stripe predplatne $($s.status)" }
+      if (-not $acc -or $acc.status -ne "active") { $bad += "Esblu ucet $($acc.status)" }
+      $ents = Get-ActiveSubEnts $CompanyD
+      if ($ents -lt 1) { $bad += "firma bez ucinnych narokov po ciastocnej refundacii" }
+      $d["credit_note"] = Get-ShortId $S17Ctx.cn1
+      $d["credit_note_total_minor"] = [long]$doc.total_minor
+      $d["related_invoice_matches"] = ([string]$doc.related_invoice_id -eq $S17Ctx.inv)
+      $d["company_is_qa_d"] = ([string]$doc.company_id -eq $CompanyD)
+      $d["snapshot_source"] = [string]$doc.customer_snapshot_source
+      $d["credit_note_event"] = "$(Get-ShortId $eCn.id) $($rCn.status)"
+      $d["charge_refunded_event"] = "$(Get-ShortId $eRf.id) $($rRf.status)"
+      $d["delivered_via"] = $via
+      $d["refund_observation_minor"] = $(if ($obs) { [long]$obs.amount_refunded_minor } else { $null })
+      $d["stripe_subscription_status"] = [string]$s.status
+      $d["esblu_account_status"] = $(if ($acc) { [string]$acc.status } else { "none" })
+      $d["active_entitlements"] = $ents
+      Say17 "    Esblu: dobropis -> doklad credit_note (vazba na fakturu, firma D, snapshot $($doc.customer_snapshot_source)); pozorovanie refundacie $($d['refund_observation_minor']); Stripe $($s.status), Esblu $($d['esblu_account_status']), narokov $ents; cez $via"
+      if ($bad.Count -gt 0) { Fail ("Ciastocna refundacia: " + ($bad -join "; ")) }
+    }
+
+    Invoke-S17Step "7" "Zmeskana udalost (stripe listen zastaveny) -> dotahovanie spracuje presne raz, opakovanie bez zmeny" {
+      param($d)
+      $k = Stop-S17Listen
+      $d["listen_processes_stopped"] = $k.killed
+      if ($k.remaining -gt 0) { Fail "stripe listen sa nepodarilo zastavit ($($k.remaining) procesov bezi)." }
+      Say17 "    stripe listen ZASTAVENY (okno 1: Esblu bezi dalej, webhooky sa uz nedorucuju)" "Yellow"
+      $cn2 = Invoke-StripeApi "POST" "/credit_notes" ([ordered]@{ invoice = $S17Ctx.inv; amount = 100; out_of_band_amount = 100; reason = "order_change"; memo = "Esblu S17 QA zmeskana udalost" }) "s17-cn2-$($S17Ctx.sub)"
+      $S17Ctx.cn2 = [string]$cn2.id
+      $e2 = Find-StripeEvent "credit_note.created" $cn2.id
+      $S17Ctx.events["credit_note.created#2"] = [string]$e2.id
+      Say17 "    Stripe: dobropis $(Get-ShortId $cn2.id) 1,00 EUR (mimo Stripe, bez refundacie), udalost $(Get-ShortId $e2.id)"
+      Start-Sleep -Seconds 20
+      $pre = @(Get-BillingEventRows $e2.id)
+      $preDoc = @(Get-DocRows $cn2.id)
+      $d["arrived_without_listen"] = ($pre.Count + $preDoc.Count)
+      if ($pre.Count -ne 0 -or $preDoc.Count -ne 0) { Fail "Udalost/doklad dorazili aj bez stripe listen (listen stale bezi?)." }
+      Say17 "    po 20 s: udalost v Esblu 0, doklad 0 (nedorucene - OK)"
+      $r1 = Invoke-S17Catchup
+      $row = $null
+      for ($i = 0; $i -lt 10; $i++) {
+        $rows = @(Get-BillingEventRows $e2.id)
+        if ($rows.Count -ge 1 -and $rows[0].status -ne "received") { $row = $rows[0]; break }
+        Start-Sleep -Seconds 3
+        $r1 = Invoke-S17Catchup
+      }
+      if (-not $row) { Fail "Dotahovanie udalost $(Get-ShortId $e2.id) nespracovalo." }
+      if ($row.status -notin @("processed", "ignored")) { Fail "Dotiahnuta udalost status=$($row.status) chyba=$($row.error_code)." }
+      $doc2 = Wait-Doc $S17Ctx.cn2 { param($r) $r.related_invoice_id -and $r.company_id } 30
+      if (-not $doc2) { Fail "Doklad dobropisu $(Get-ShortId $S17Ctx.cn2) po dotahovani chyba." }
+      if ([string]$doc2.related_invoice_id -ne $S17Ctx.inv -or [string]$doc2.company_id -ne $CompanyD -or [long]$doc2.total_minor -ne 100) { Fail "Doklad dobropisu #2 nesedi (vazba/firma/suma)." }
+      $n1 = @(Get-BillingEventRows $e2.id).Count
+      Say17 "    dotahovanie #1: result=$($r1.result) processed=$($r1.processed) outcomes=$(($r1.outcomes | ConvertTo-Json -Compress)); udalost $($row.status), riadkov $n1; doklad cn #2 OK"
+      $r2 = Invoke-S17Catchup
+      $rows2 = @(Get-BillingEventRows $e2.id)
+      $doc2b = @(Get-DocRows $S17Ctx.cn2)
+      $applied2 = 0
+      if ($r2.outcomes -and $r2.outcomes.applied) { $applied2 = [int]$r2.outcomes.applied }
+      Say17 "    dotahovanie #2: result=$($r2.result) processed=$($r2.processed) outcomes=$(($r2.outcomes | ConvertTo-Json -Compress)); riadkov udalosti $($rows2.Count), dokladov $($doc2b.Count)"
+      $d["missed_event"] = Get-ShortId $e2.id
+      $d["catchup_1"] = [ordered]@{ result = $r1.result; processed = $r1.processed; outcomes = $r1.outcomes }
+      $d["event_status"] = [string]$row.status
+      $d["event_rows_after_1"] = $n1
+      $d["catchup_2"] = [ordered]@{ result = $r2.result; processed = $r2.processed; outcomes = $r2.outcomes }
+      $d["event_rows_after_2"] = $rows2.Count
+      $d["doc_rows_after_2"] = $doc2b.Count
+      $d["credit_note_2"] = Get-ShortId $S17Ctx.cn2
+      $d["listen_state_after"] = "ZASTAVENY - pre dalsie webhooky restartuj okno 1"
+      if ($n1 -ne 1 -or $rows2.Count -ne 1) { Fail "Udalost nie je zapisana presne raz ($n1 / $($rows2.Count))." }
+      if ($doc2b.Count -ne 1) { Fail "Doklad dobropisu #2 nie je presne 1x." }
+      if ("$($rows2[0].processed_at)" -ne "$($row.processed_at)" -or "$($doc2b[0].updated_at)" -ne "$($doc2.updated_at)") { Fail "Opakovane dotahovanie zmenilo spracovanu udalost alebo doklad." }
+      if ($applied2 -gt 0) { $d["note"] = "druhy beh aplikoval $applied2 inych (novych) udalosti - nie S17 udalost" }
+      Say17 "    stripe listen ostava ZASTAVENY. Esblu v okne 1 bezi; webhooky obnovis restartom okna 1 (Ctrl+C a -Step start)." "Yellow"
+    }
+
+    Invoke-S17Step "8" "Mesacny uctovny export bez prihlasenia (kod aplikacie, pripnuta verzia) -> CSV lokalne + suhrn" {
+      param($d)
+      $m = $Month
+      if (-not $m) { $m = [DateTime]::UtcNow.ToString("yyyy-MM") }
+      if ($m -notmatch '^\d{4}-(0[1-9]|1[0-2])$') { Fail "Neplatny -Month $m (YYYY-MM)." }
+      $outDir = Join-Path $env:USERPROFILE "esblu-backups\s17"
+      if ($outDir -match "(?i)onedrive") { Fail "Priecinok CSV $outDir je v OneDrive - odmietnute." }
+      New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+      Get-ServiceRole | Out-Null
+      $env:S17_SUPABASE_URL = $StagingUrl
+      $lines = @()
+      $code = $null
+      Push-Location $RepoRoot
+      try {
+        $ErrorActionPreference = "Continue"
+        $lines = @(& node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/s17-accounting-export.ts --month $m --out-dir $outDir --invoice $S17Ctx.inv --payment-intent $S17Ctx.pi 2>&1 | ForEach-Object { "$_" })
+        $code = $LASTEXITCODE
+      } finally {
+        $ErrorActionPreference = "Stop"
+        Pop-Location
+        Remove-Item Env:S17_SUPABASE_URL -ErrorAction SilentlyContinue
+      }
+      $resLine = $lines | Where-Object { $_ -like "S17_RESULT *" } | Select-Object -Last 1
+      if (-not $resLine) { Fail "Helper exportu nevratil vysledok (exit $code): $(($lines | Select-Object -Last 5) -join ' | ')" }
+      $res = $resLine.Substring(11) | ConvertFrom-Json
+      if (-not $res.ok) { Fail "Export zlyhal: $($res.code) (exit $code)." }
+      $S17Ctx.export = $res
+      $d["month"] = $res.month
+      $d["api_version"] = $res.api_version
+      $d["ledger_import"] = $res.import
+      $d["rows"] = $res.rows
+      $d["rows_by_type"] = $res.rows_by_type
+      $d["totals_minor"] = $res.totals_minor
+      $d["payouts"] = $res.payouts
+      $d["csv_location"] = "%USERPROFILE%\esblu-backups\s17\" + [string]$res.csv_file
+      $d["csv_sha256"] = $res.csv_sha256
+      $d["csv_bytes"] = $res.csv_bytes
+      $d["invoice_row_found"] = [bool]$res.invoice.found
+      $d["credit_note_rows_for_invoice"] = @($res.credit_notes).Count
+      $d["content"] = "iba synteticke QA data stagingu (firma QA-STRIPE D)"
+      Say17 "    export $($res.month): $($res.rows) riadkov $(($res.rows_by_type | ConvertTo-Json -Compress)); BT spolu gross=$($res.totals_minor.gross) fee=$($res.totals_minor.fee) net=$($res.totals_minor.net) refundacie=$($res.totals_minor.refunds) (centy); vyplaty: $($res.payouts.present)"
+      Say17 "    CSV: %USERPROFILE%\esblu-backups\s17\$($res.csv_file) (SHA-256 $(([string]$res.csv_sha256).Substring(0, 16))...)"
+      if ($res.api_version -ne $S17Ctx.pinned) { Fail "Export nepouzil pripnutu verziu ($($res.api_version))." }
+      if ($res.import.truncated) { Fail "Import balance transactions bol orezany (truncated)." }
+      if (-not $res.invoice.found) { Fail "Faktura S17 v exporte mesiaca $($res.month) chyba." }
+      if (@($res.credit_notes).Count -lt 2) { Fail "V exporte chybaju dobropisy S17 (najdene $(@($res.credit_notes).Count), ocakavane 2)." }
+    }
+
+    Invoke-S17Step "9" "Poplatok / cista suma: export vs. Stripe balance transaction platby" {
+      param($d)
+      $pi = Invoke-StripeApi "GET" "/payment_intents/$($S17Ctx.pi)" ([ordered]@{ "expand[]" = "latest_charge.balance_transaction" })
+      $bt = $pi.latest_charge.balance_transaction
+      if (-not $bt -or -not $bt.id) { Fail "Stripe: platba nema balance transaction." }
+      $g = [long]$bt.amount; $f = [long]$bt.fee; $n = [long]$bt.net
+      $x = $S17Ctx.export.invoice
+      $rf = Invoke-StripeApi "GET" "/refunds" ([ordered]@{ charge = $S17Ctx.charge; limit = 10; "expand[]" = "data.balance_transaction" })
+      $refundSum = 0
+      foreach ($r in @($rf.data | ForEach-Object { $_ })) { if ($r.balance_transaction -and $r.balance_transaction.id) { $refundSum += [long]$r.balance_transaction.amount } }
+      $cn1 = @($S17Ctx.export.credit_notes) | Where-Object { $_.id -eq $S17Ctx.cn1 } | Select-Object -First 1
+      $d["stripe_balance_transaction"] = Get-ShortId ([string]$bt.id)
+      $d["stripe_minor"] = [ordered]@{ gross = $g; fee = $f; net = $n; currency = ([string]$bt.currency).ToUpper(); status = [string]$bt.status }
+      $d["export_minor"] = [ordered]@{ gross = $x.gross_minor; fee = $x.fee_minor; net = $x.net_minor }
+      $d["export_bt_linked"] = (@($x.bt_ids) -contains [string]$bt.id)
+      $d["stripe_refund_bt_minor"] = $refundSum
+      $d["export_credit_note_gross_minor"] = $(if ($cn1) { $cn1.gross_minor } else { $null })
+      Say17 "    Stripe BT $(Get-ShortId ([string]$bt.id)): gross=$g fee=$f net=$n ($($bt.status)); export: gross=$($x.gross_minor) fee=$($x.fee_minor) net=$($x.net_minor); refund BT=$refundSum, export dobropis=$($d['export_credit_note_gross_minor'])"
+      $bad = @()
+      if ($f -le 0) { $bad += "Stripe poplatok nie je > 0" }
+      if ($n -ne ($g - $f)) { $bad += "net != gross - fee v Stripe" }
+      if ($null -eq $x.gross_minor -or [long]$x.gross_minor -ne $g -or [long]$x.fee_minor -ne $f -or [long]$x.net_minor -ne $n) { $bad += "export gross/fee/net != Stripe" }
+      if (-not $d["export_bt_linked"]) { $bad += "export neobsahuje BT platby" }
+      if (-not $cn1 -or $null -eq $cn1.gross_minor -or [long]$cn1.gross_minor -ne $refundSum) { $bad += "export dobropisu (refund BT) != Stripe refund BT" }
+      if ($bad.Count -gt 0) { Fail ($bad -join "; ") }
+      $S17Ctx.payoutPresent = ((@($x.payout_ids).Count -gt 0) -or [bool]$S17Ctx.export.payouts.present)
+    }
+    $pd = [ordered]@{ export_payout_ids_for_invoice = @($S17Ctx.export.invoice.payout_ids).Count; export_payouts_distinct = $S17Ctx.export.payouts.distinct }
+    if ($S17Ctx.payoutPresent) {
+      $pd["note"] = "vyplata naviazana (ID iba v CSV)"
+      Add-S17Result "9b" "Vyplata (payout) naviazana na platbu" "INFO" $pd
+    } else {
+      $pd["note"] = "sandbox zvycajne nevytvara vyplaty (alebo az po dnoch) - vazba BT -> payout overena iba DB testami (test:billing-ops-db), nie skutocnym Stripe"
+      Add-S17Result "9b" "Vyplata (payout) - v sandboxe nie je" "LIMITATION" $pd
+    }
+
+    Invoke-S17Step "10" "Izolacia a duplicity (1 doklad / Stripe doklad, 1 udalost / Stripe udalost, iba firma QA-STRIPE D)" {
+      param($d)
+      $cus = $S17Ctx.state.customer
+      $docs = @(Get-Rows "billing_invoice_documents?provider=eq.stripe&environment=eq.test&provider_customer_id=eq.$cus&select=provider_document_id,kind,company_id,customer_company_id")
+      $dupDocs = @($docs | Group-Object provider_document_id | Where-Object { $_.Count -gt 1 })
+      $foreign = @($docs | Where-Object { [string]$_.company_id -ne $CompanyD -or [string]$_.customer_company_id -ne $CompanyD })
+      $bad = @()
+      foreach ($id in @($S17Ctx.inv, $S17Ctx.cn1, $S17Ctx.cn2)) {
+        $c = @($docs | Where-Object { $_.provider_document_id -eq $id }).Count
+        if ($c -ne 1) { $bad += "doklad $(Get-ShortId $id): $c riadkov" }
+      }
+      $dDocs = @(Get-Rows "billing_invoice_documents?provider=eq.stripe&environment=eq.test&company_id=eq.$CompanyD&created_at=gte.$($S17Ctx.t0)&select=provider_document_id,provider_customer_id")
+      $otherCus = @($dDocs | Where-Object { [string]$_.provider_customer_id -ne $cus })
+      $evRes = [ordered]@{}
+      foreach ($kv in $S17Ctx.events.GetEnumerator()) {
+        $rows = @(Get-BillingEventRows $kv.Value)
+        $evRes[$kv.Key] = $rows.Count
+        if ($rows.Count -ne 1) { $bad += "udalost $($kv.Key): $($rows.Count) riadkov" }
+        foreach ($r in $rows) { if ($r.company_id -and [string]$r.company_id -ne $CompanyD) { $bad += "udalost $($kv.Key) patri inej firme" } }
+      }
+      $recent = @(Get-Rows "billing_events?provider=eq.stripe&environment=eq.test&received_at=gte.$($S17Ctx.t0)&select=provider_event_id,company_id")
+      $dupEv = @($recent | Group-Object provider_event_id | Where-Object { $_.Count -gt 1 })
+      $foreignEv = @($recent | Where-Object { $_.company_id -and [string]$_.company_id -ne $CompanyD })
+      if ($dupDocs.Count) { $bad += "duplicitne doklady: $($dupDocs.Count)" }
+      if ($foreign.Count) { $bad += "doklady zakaznika S17 s inou firmou: $($foreign.Count)" }
+      if ($otherCus.Count) { $bad += "nove doklady firmy D od ineho zakaznika: $($otherCus.Count)" }
+      if ($dupEv.Count) { $bad += "duplicitne udalosti od zaciatku S17: $($dupEv.Count)" }
+      $d["documents_for_s17_customer"] = $docs.Count
+      $d["duplicate_documents"] = $dupDocs.Count
+      $d["documents_other_company"] = $foreign.Count
+      $d["new_company_d_documents_other_customer"] = $otherCus.Count
+      $d["s17_event_rows"] = $evRes
+      $d["events_since_start"] = $recent.Count
+      $d["duplicate_events_since_start"] = $dupEv.Count
+      $d["events_since_start_other_company"] = $foreignEv.Count
+      Say17 "    doklady zakaznika S17: $($docs.Count) (duplicity $($dupDocs.Count), ina firma $($foreign.Count)); udalosti S17 $(($evRes | ConvertTo-Json -Compress)); od zaciatku $($recent.Count) udalosti, duplicity $($dupEv.Count), inej firmy $($foreignEv.Count)"
+      if ($foreignEv.Count) { $d["note"] = "udalosti inych firiem od zaciatku S17 (napr. QA E) - mimo S17, iba informacia" }
+      if ($bad.Count -gt 0) { Fail ($bad -join "; ") }
+    }
+  } catch {
+    $failed = $true
+    Say17 "S17 prerusene: $($_.Exception.Message)" "Red"
+  } finally {
+    $rd = $null
+    try {
+      Say17 ""
+      Say17 "=== S17-11 Obnova stagingu (billing OFF, ceny neaktivne, QA predplatne ukoncene; dokazy ostavaju) ==="
+      $rd = Restore-S17Staging $S17Ctx.state
+      $status = "PASS"
+      if ($rd.Contains("errors")) { $status = "FAIL"; $failed = $true }
+      Add-S17Result "11" "Obnova stagingu" $status $rd
+    } catch {
+      $failed = $true
+      $ed = [ordered]@{ error = (Hide-S17 $_.Exception.Message) }
+      Add-S17Result "11" "Obnova stagingu" "FAIL" $ed
+    }
+    $fails = @($S17Steps | Where-Object { $_.status -eq "FAIL" }).Count
+    $lims = @($S17Steps | Where-Object { $_.status -eq "LIMITATION" }).Count
+    $S17Evidence["overall"] = $(if ($failed -or $fails -gt 0) { "FAIL" } else { "PASS" })
+    $S17Evidence["limitations"] = $lims
+    $S17Evidence["finished_at"] = Get-UtcIso
+    Save-S17Evidence
+    Say17 ""
+    Say17 "=================================================================="
+    foreach ($s in $S17Steps) { Say17 ("  S17-{0,-3} {1,-11} {2}" -f $s.step, $s.status, $s.name) }
+    Say17 ("S17 celkovo: {0} (LIMITATION: {1})" -f $S17Evidence["overall"], $lims) $(if ($S17Evidence["overall"] -eq "PASS") { "Green" } else { "Red" })
+    Say17 "Dokazy: $($S17Ctx.evidenceFile)"
+    Say17 "stripe listen: $(if (Test-S17ListenAlive) { 'bezi' } else { 'ZASTAVENY (restart okna 1 pre webhooky)' }); Test Clock ostava pre audit -> -Step s17-cleanup ho zmaze."
+    Say17 "=================================================================="
+  }
+  if ($failed -or $S17Evidence["overall"] -ne "PASS") { exit 1 }
+}
+
+function Invoke-S17Cleanup {
+  if (-not (Test-Path $S17StateFile)) { Say17 "Ziadny stav S17 ($S17StateFile) - nie je co upratat."; return }
+  $st = Get-Content $S17StateFile -Raw | ConvertFrom-Json
+  $S17Ctx.pinned = Get-S17PinnedVersion
+  $S17Ctx.state = $st
+  Say17 "S17 cleanup: predplatne $(Get-ShortId ([string]$st.subscription)), staging konfiguracia (enabled=$($st.enabled) restored=$($st.restored)), Test Clocks $(@(@($st.clocks) | Where-Object { $_ }).Count)"
+  $d = Restore-S17Staging $st
+  $deleted = @()
+  foreach ($c in @(@($st.clocks) | Where-Object { $_ })) {
+    try {
+      Invoke-StripeApi "DELETE" "/test_helpers/test_clocks/$c" | Out-Null
+      $deleted += (Get-ShortId $c)
+    } catch {
+      if ($_.Exception.Message -match "HTTP 404") { $deleted += ((Get-ShortId $c) + " (uz neexistoval)") } else { throw }
+    }
+  }
+  $d["test_clocks_deleted"] = $deleted
+  Say17 "    Test Clocks zmazane: $($deleted -join ', ')"
+  $ev = Get-S17EvidenceFile
+  if (Test-Path $ev) {
+    $j = Get-Content $ev -Raw | ConvertFrom-Json
+    $j | Add-Member -NotePropertyName cleanup -NotePropertyValue ([ordered]@{ at = (Get-UtcIso); result = $d }) -Force
+    Set-Content -Path $ev -Value (Hide-S17 ($j | ConvertTo-Json -Depth 12)) -Encoding UTF8
+  }
+  if ($d.Contains("errors")) { Fail ("S17 cleanup neuplny: " + ($d["errors"] -join "; ")) }
+  Remove-Item $S17StateFile -Force
+  Say17 "OK: S17 upratane (staging billing vrateny, predplatne ukoncene, Test Clocks zmazane; dokazy v DB ostavaju)." "Green"
 }
 
 # ----------------------------------------------------------------------------- scenare (okno 2)
@@ -874,6 +1761,8 @@ if ($Step -ne "start") {
       if ((Get-EsbluAccount $subId).status -ne "canceled") { Fail "Stav sa zmenil po opakovanom dotahovani." }
       Say "OK: S13 na skutocnom Stripe - predcasny koniec bez 48 h, zmeny dorucene iba dotahovanim."
     }
+    "s17" { Invoke-S17 }
+    "s17-cleanup" { Invoke-S17Cleanup }
     "status" {
       $subId = if ($Subscription) { $Subscription } elseif (Test-Path $ClockFile) { (Get-ClockState).subscription } else { "" }
       if (-not $subId) { $subId = (Get-StripeJson @("subscriptions", "list", "--limit", "1", "-d", "status=all")).data[0].id }
@@ -892,6 +1781,13 @@ if ($Step -ne "start") {
 $Repo = Split-Path -Parent $PSScriptRoot
 Set-Location $Repo
 Say "Repozitar: $Repo"
+# S17: z akeho kodu bezi Esblu v tomto okne (okno 2 -Step s17 to porovna s origin/main; iba lokalny git, bez siete).
+try {
+  $hi = Get-S17HeadInfo
+  Say ("HEAD: {0} | origin/main: {1} | aplikacny kod = {2}: {3}" -f $hi.head, $(if ($hi.origin_main) { $hi.origin_main } else { "-" }), $S17ExpectedMain.Substring(0, 7), $(if ($hi.app_matches) { "ANO" } else { "NIE" }))
+  if (-not $hi.app_matches) { Say "    POZOR: -Step s17 vyzaduje checkout s aplikacnym kodom origin/main $($S17ExpectedMain.Substring(0, 7)) (docs par. 8.14)." }
+  [ordered]@{ head = $hi.head; repo = $Repo; app_matches = $hi.app_matches; started_at = [DateTime]::UtcNow.ToString("o") } | ConvertTo-Json | Set-Content -Path $HeadFile -Encoding ASCII
+} catch { Say "HEAD: nezistene ($($_.Exception.Message))"; Remove-Item $HeadFile -Force -ErrorAction SilentlyContinue }
 foreach ($f in @(".env", ".env.local", ".env.development", ".env.development.local")) {
   if ((Test-Path $f) -and (Select-String -Path $f -Pattern $ProdRef -Quiet)) { Fail "$f odkazuje na PRODUKCNY Supabase ($ProdRef). Premenuj ho pred testom." }
 }
@@ -938,12 +1834,14 @@ if (-not (Test-Path "node_modules\.bin\next.cmd")) { npm ci --no-audit --no-fund
 $listen = $null
 if ($NoListen) {
   Set-Content -Path $NoListenFile -Value "1" -Encoding ASCII
+  Remove-Item $ListenPidFile -Force -ErrorAction SilentlyContinue
   Say "5/5 BEZ stripe listen (-NoListen): webhooky sa nedorucia, synchronizacia iba cez /api/cron/billing-stripe-events"
 } else {
   Remove-Item $NoListenFile -Force -ErrorAction SilentlyContinue
   Say "5/5 stripe listen -> http://localhost:$Port/api/billing/webhooks/stripe"
   $listen = Start-Process -FilePath "npx.cmd" -ArgumentList @("--yes", "@stripe/cli@1.55.12", "--project-name", $Project, "listen", "--events", $Events, "--forward-to", "http://localhost:$Port/api/billing/webhooks/stripe") `
     -RedirectStandardOutput (Join-Path $StateDir "listen.out.log") -RedirectStandardError (Join-Path $StateDir "listen.log") -NoNewWindow -PassThru
+  Set-Content -Path $ListenPidFile -Value $listen.Id -Encoding ASCII   # S17 (okno 2) zastavi listen pre test zmeskanej udalosti
 }
 
 Say ""
@@ -957,7 +1855,7 @@ try {
   npx next dev -p $Port
 } finally {
   if ($listen -and -not $listen.HasExited) { Stop-Process -Id $listen.Id -Force -ErrorAction SilentlyContinue }
-  Remove-Item (Join-Path $StateDir "listen*.log"), $CronFile, $NoListenFile -Force -ErrorAction SilentlyContinue
+  Remove-Item (Join-Path $StateDir "listen*.log"), $CronFile, $NoListenFile, $ListenPidFile, $HeadFile -Force -ErrorAction SilentlyContinue
   Remove-Item Env:CRON_SECRET, Env:STRIPE_SECRET_KEY, Env:STRIPE_API_KEY, Env:STRIPE_WEBHOOK_SECRET, Env:SUPABASE_SERVICE_ROLE_KEY, Env:ESBLU_QA_SERVICE_ROLE -ErrorAction SilentlyContinue
   Say "Zastavene."
 }

@@ -579,6 +579,119 @@ Kurzor doťahovania ponechaný (technický stav, bez osobných údajov). Preview
 `20261117213219`, žiadna z `20261118*` / `20261119*`, `billing_event_cursors` neexistuje, `web_provider='none'`
 (read-only metadáta, záznam v `docs/ops/service-intervention-log.md`).
 
+### 8.14 S17 runbook — P4 billing na skutočnom Stripe sandboxe (pripravené 20. 11. 2026, zatiaľ NESPUSTENÉ)
+
+**Cieľ:** overiť funkcie P4 z `origin/main` `1e2ab73` (produkčný kód) so skutočným Stripe sandboxom a staging DB
+— pripnutá verzia Stripe API, retry/doťahovanie, účtovná kópia faktúr a dobropisov s nemenným snapshotom odberateľa,
+archív PDF, pozorovanie refundácie, balance transactions + mesačný export, poplatok/čistá suma. Operátor spustí **presne
+2 príkazy** (okno 1 `-Step start`, okno 2 `-Step s17`); všetko ostatné je automatické a každý pod-krok vypíše
+`[PASS]` / `[FAIL]` / `[LIMITATION]` až po overení **v Stripe aj v staging DB**.
+
+**Predpoklady (PC operátora):**
+
+| Čo | Ako |
+|---|---|
+| Stripe CLI profil `esblu-qa2` prihlásený do QA sandboxu (účet `acct_1UdCxs…`) | `npx --yes @stripe/cli@1.55.12 login --project-name esblu-qa2`; cena sandboxu `price_1UdE7t…` je v `%TEMP%\esblu-stripe-qa\sandbox-esblu-qa2.json` (z `-Step new-sandbox`, § 8.3a L5) |
+| Testovací Secret key sandboxu | `$env:STRIPE_API_KEY` alebo skrytá výzva (Dashboard sandboxu → Developers → API keys); skript odmietne `*_live_*` |
+| Staging service_role (`esblu-test`, `cjbdijbbcujvmrzezusd`) | skrytá výzva v **oboch** oknách (alebo `$env:ESBLU_QA_SERVICE_ROLE`); JWT iného projektu = stop; produkcia `fkpgvgvsmbpieduoatrt` sa nikdy nepoužije |
+| Node 22.6+ (strip-types), git, Windows PowerShell 5.1 alebo 7 | `node -v`, `git --version` |
+| Staging má migrácie P4 `20261123100000`–`20261123120000` + bucket `billing-documents` | stav k 20. 11. 2026: áno |
+| Žiadny `.env*` s produkčným ref v checkoute | okno 1 to kontroluje |
+
+**Worktree na `origin/main` + harness (jeden príkaz; hlavný checkout sa nemení):**
+
+```powershell
+git -C C:\Users\roiaj\assetpilot fetch origin; git -C C:\Users\roiaj\assetpilot worktree prune; git -C C:\Users\roiaj\assetpilot worktree add --detach C:\Users\roiaj\esblu-s17 ops/s17-sandbox
+```
+
+Vetva `ops/s17-sandbox` (lokálna, nepushnutá) = `origin/main` `1e2ab73` + iba harness (`scripts/stripe-local-sandbox.ps1`,
+`scripts/s17-accounting-export.ts`) a tento dokument. Kontrola: `git -C C:\Users\roiaj\esblu-s17 diff --stat 1e2ab73 HEAD`
+→ iba tieto 3 súbory. `-Step start` vypíše `HEAD: … | origin/main: … | aplikacny kod = 1e2ab73: ANO`; `-Step s17`
+**odmietne beh**, ak sa aplikačný kód HEAD (vrátane necommitnutých zmien) líši od `1e2ab73`, ak lokálny `origin/main`
+≠ `1e2ab73` alebo ak okno 1 beží z iného checkoutu/commitu (vedomé prepísanie iba `-Force`, zapíše sa do dôkazu).
+Pri prvom `-Step start` sa v worktree spustí `npm ci` (node_modules potrebuje aj helper exportu).
+
+**Dva príkazy:**
+
+```powershell
+# Okno 1 (Esblu next dev + stripe listen, staging DB) - nechať bežať:
+cd C:\Users\roiaj\esblu-s17; powershell -ExecutionPolicy Bypass -File .\scripts\stripe-local-sandbox.ps1 -Step start
+
+# Okno 2 (keď okno 1 vypíše "Ready"):
+cd C:\Users\roiaj\esblu-s17; powershell -ExecutionPolicy Bypass -File .\scripts\stripe-local-sandbox.ps1 -Step s17
+```
+
+Voliteľne `-Month 2026-11` (default aktuálny mesiac UTC). Po audite: `… -Step s17-cleanup` (zmaže Test Clock S17;
+idempotentne zopakuje aj obnovu stagingu — použiť aj po páde behu alebo Ctrl+C).
+
+**Čo robí `-Step s17` (QA firma QA-STRIPE D, nový zákazník + predplatné na Test Clock, iba test mode):**
+
+| # | Krok | PASS, keď |
+|---|---|---|
+| 1 | Preflight + zapnutie billingu na stagingu iba pre test | kľúč `sk/rk/rkcs_test_`, staging ref, HEAD = `1e2ab73` (aplikačný kód), okno 1 beží s `stripe listen` z toho istého commitu; pôvodný stav (`web_provider`, `active` každej Stripe ceny) uložený do `%TEMP%\esblu-stripe-qa\s17-esblu-qa2.json` **pred** zmenou; potom `web_provider='stripe'` + aktívna iba cena sandboxu |
+| 2 | Pripnutá verzia + lokálny cron `/api/cron/billing-stripe-events` (lokálny `CRON_SECRET`) | `success`, `configured`, `result` ok, žiadny kód (`*VERSION*`, `NOT_CONFIGURED`); zaznamená verziu udalostí účtu (`/v1/events`) a verzie webhook endpointov vs. pripnutá `2025-03-31.basil` (čítaná z `lib/billing/stripe-api-version.ts`) |
+| 3 | Nákup bez zadávania karty | zámer Esblu firmy D → Test Clock → zákazník → `pm_card_visa` → predplatné (metadata `esblu_checkout_id`); Stripe: faktúra `paid`, predplatné `active`; faktúra načítaná s pripnutou verziou má `invoice.parent.subscription_details`; Esblu: účet `active` firmy D, skutočné `invoice.paid` v `billing_events` = `processed` |
+| 4 | Účtovná kópia faktúry | `billing_invoice_documents`: `kind=invoice`, `status=paid`, `company_id`=D, `provider_subscription_id`, `provider_customer_id`, EUR 1590, `payment_intent_id` = Stripe `/v1/invoice_payments`, obdobie služby = riadok faktúry v Stripe, `issued_at`, `pdf_url`; snapshot `customer_company_id`=D, `customer_legal_name`, `customer_snapshot_at`, `customer_snapshot_source='company'` (IČO/DIČ/adresa sa iba vykážu — syntetická firma ich mať nemusí) |
+| 5 | Archív PDF | lokálny cron `/api/cron/billing-documents` → `pdf_sha256` + `pdf_storage_path` = `test/YYYY/MM/invoice/<in_…>.pdf`; objekt stiahnutý zo staging storage (service role) začína `%PDF-` a jeho SHA-256 = DB |
+| 6 | Čiastočná refundácia dobropisom | Stripe `credit_notes` (5,00 EUR, `refund_amount`) → charge `amount_refunded=500`; Esblu: `credit_note.created` + `charge.refunded` spracované (webhook), doklad `credit_note` s `related_invoice_id` = faktúra, firma D, snapshot; `billing_refund_observations` = 500; Stripe aj Esblu ostávajú `active`, nároky ostávajú |
+| 7 | Zmeškaná udalosť + idempotencia | skript **sám zastaví `stripe listen` okna 1** (strom procesov), vytvorí 2. dobropis 1,00 EUR (`out_of_band_amount`, bez pohybu peňazí); po 20 s v Esblu 0 riadkov aj 0 dokladov; doťahovanie → udalosť presne 1×, doklad 1×; opakované doťahovanie → bez zmeny (`processed_at`, `updated_at`). **`stripe listen` ostáva zastavený** (Esblu beží ďalej; webhooky = reštart okna 1) |
+| 8 | Mesačný export bez prehliadača | `node … scripts/s17-accounting-export.ts` (kód aplikácie: `importStripeBalanceTransactions` s `StripeTestProvider` = pripnutá verzia, RPC `esblu_billing_accounting_export`, `buildAccountingCsv`); CSV **iba** do `%USERPROFILE%\esblu-backups\s17\` (OneDrive aj repozitár odmietne; iba syntetické QA dáta stagingu); faktúra + 2 dobropisy S17 v exporte, import nie je orezaný |
+| 9 | Poplatok / čistá suma | Stripe balance transaction platby: `fee > 0`, `net = gross − fee`; export faktúry gross/fee/net = Stripe a obsahuje ID BT; export dobropisu = súčet refund BT v Stripe |
+| 9b | Výplata (payout) | v sandboxe zvyčajne žiadna → **LIMITATION** (nikdy PASS); ak existuje, iba INFO |
+| 10 | Izolácia a duplicity | presne 1 doklad na Stripe doklad (faktúra, 2 dobropisy), presne 1 riadok na každú udalosť S17, všetky doklady zákazníka S17 = firma D (aj snapshot), žiadne nové doklady firmy D od iného zákazníka, žiadne duplicitné udalosti od začiatku testu |
+| 11 | Obnova stagingu (vždy, aj po FAIL) | Stripe predplatné `canceled` (okamžite) → Esblu účet `canceled` cez doťahovanie (listen je zastavený), 0 účinných nárokov firmy D; `web_provider` a `active` každej ceny = pôvodné hodnoty (overené čítaním); dôkazy (`billing_events`, doklady, archív PDF, ledger, export log) ostávajú; Test Clock ostáva pre audit (`s17-cleanup`) |
+
+**Očakávaný výstup okna 2 (koniec):**
+
+```
+  S17-1   PASS        Preflight (test mode, staging, HEAD = origin/main) + zapnutie billingu na stagingu
+  …
+  S17-9b  LIMITATION  Vyplata (payout) - v sandboxe nie je
+  S17-10  PASS        Izolacia a duplicity (...)
+  S17-11  PASS        Obnova stagingu
+S17 celkovo: PASS (LIMITATION: 1)
+```
+
+**Dôkazy:** `C:\Users\roiaj\assetpilot\release-backups\s17\s17-evidence.json` (hlavný checkout aj pri behu z worktree;
+priečinok je v `.git/info/exclude`) — stav a detaily každého kroku, skrátené Stripe ID (prefix), počty, sumy v centoch,
+SHA-256 PDF a CSV, HEAD/strom/origin/main; žiadne kľúče, `whsec_`, JWT, e-maily, mená ani URL dokladov. Plné CSV iba v
+`%USERPROFILE%\esblu-backups\s17\`. Výpis okna 2 je maskovaný rovnako.
+
+**Verzia API a `stripe listen` (čo výsledok znamená):** `stripe listen` bez `--latest` preposiela udalosti vo verzii
+**predvolenej pre účet sandboxu** (nie v pripnutej). Esblu pri každej udalosti znova načíta stav predplatného z API
+s hlavičkou `Stripe-Version: 2025-03-31.basil`; účtovnú kópiu dokladu berie z tela udalosti (verzia účtu) a PaymentIntent
+dopĺňa cez `/v1/invoice_payments` s pripnutou verziou. Ak sa verzia účtu líši, webhook vyvolá ops alert
+`WEBHOOK_API_VERSION_MISMATCH` (warning) a spracovanie pokračuje — S17 to zapíše (krok 2/3), nie je to FAIL. Pre live
+endpoint platí § P4: verzia endpointu v Dashboarde = pripnutá verzia.
+
+**LIMITATION (nie PASS):** (1) výplaty — sandbox spravidla nevytvorí payout, väzba BT → payout je overená iba DB testami;
+(2) daňové polia — bez Stripe Tax v sandboxe sú DPH polia dokladu 0 / prázdne (S17 ich iba prenáša); (3) obnovy, zlyhania platby a plná refundácia sa v S17
+neopakujú (PASS v L7, L12–L15, § 8.13); (4) skutočný výpadok siete / dead-letter po 8 pokusoch sa nereprodukuje
+(DB testy `test:billing-ops-db`). **INFO:** nezhoda verzie udalostí účtu s pripnutou verziou (pozri vyššie).
+
+**Čo test mení:** staging — dočasne `web_provider='stripe'` + aktívna cena sandboxu (vrátené v kroku 11), 1 zámer
+checkoutu firmy D, riadky `billing_events` / dokladov / refundácie / ledgera / export logu (zachované ako dôkaz), 1 PDF
+v `billing-documents`; Stripe sandbox (test mode) — 1 Test Clock, 1 zákazník, 1 predplatné (ukončené), 1 faktúra,
+2 dobropisy, 1 refundácia 5,00 EUR. Produkcia, Vercel ani Preview sa nemenia.
+
+**Validácia harnessu (agent, offline, 20. 11. 2026):** helper `scripts/s17-accounting-export.ts` — `tsc --noEmit` 0 chýb
+(projekt aj helper samostatne, `scripts/` je mimo tsconfig), `eslint` 0, poistky overené spustením bez siete
+(produkčný ref, live kľúč, OneDrive / repozitár ako cieľ CSV, neplatný mesiac → odmietnuté). PowerShell: oficiálny
+parser (`pwsh` z GitHub Releases) bol v prostredí agenta **nedostupný** (proxy blokuje stiahnutie, HTTP 403), syntax
+overená gramatikou tree-sitter-powershell 0.26.6 (0 chýb; pôvodný skript tiež 0; umelo pokazené kópie chyby nájde).
+**Pred prvým behom** (PC operátora, priamo v okne PowerShell, 1 s, nič nespúšťa):
+
+```powershell
+$e=$null; [void][System.Management.Automation.Language.Parser]::ParseFile("C:\Users\roiaj\esblu-s17\scripts\stripe-local-sandbox.ps1",[ref]$null,[ref]$e); "parse errors: $($e.Count)"
+```
+
+očakávané `parse errors: 0` (PowerShell aj tak celý súbor parsuje pred spustením — syntaktická chyba by nič nezmenila).
+
+**Zmena okna 1 (kompatibilná):** `stripe listen --events` odoberá navyše dokladové udalosti P4 (`invoice.finalized`,
+`invoice.voided`, `invoice.marked_uncollectible`, `credit_note.created|updated|voided`, `customer.subscription.paused|resumed`
+= rovnaká množina ako doťahovanie), ukladá PID `listen` a HEAD do `%TEMP%\esblu-stripe-qa\` (mažú sa pri Ctrl+C).
+Existujúce kroky sa nezmenili.
+
 ### 8.7 Upratanie stagingu (19. 11. 2026, dôkazy zachované)
 
 | Položka | Stav |
