@@ -607,6 +607,35 @@ await check("verify:mobile-bundle: webpack bundle → jasné odmietnutie (exit 3
   const clean = run(mk("globalThis.TURBOPACK||[];"));
   assert.match(clean.stdout, /OK    bez lokálnych ciest build stroja/);
 });
+await check("verify:mobile-bundle: IS_MOBILE_BUILD a FloatingChatWidget aj so skrátenými exportmi Turbopacku (Next >= 16.4)", async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { spawnSync } = await import("node:child_process");
+  const mk = (chunk: string) => {
+    const d = mkdtempSync(path.join(tmpdir(), "esblu-bundle-"));
+    mkdirSync(path.join(d, "_next", "static", "chunks"), { recursive: true });
+    writeFileSync(path.join(d, "_next", "static", "chunks", "a.js"), chunk);
+    writeFileSync(path.join(d, "index.html"), "<html></html>");
+    mkdirSync(path.join(d, "vozidla"), { recursive: true });
+    writeFileSync(path.join(d, "vozidla", "detail.html"), '<meta name="viewport" content="width=device-width, initial-scale=1">');
+    return d;
+  };
+  const run = (d: string) => spawnSync(process.execPath, [path.join(ROOT, "scripts/verify-mobile-bundle.mjs"), d], { encoding: "utf8" }).stdout;
+  const bt = (flag: string) => `,92008,t=>{"use strict";t.i(47167),t.s(["Z",0,"production","p",0,"2026-11-20T17:20:14Z","u",0,${flag}])},`;
+  const w = (render: string) => `,91635,e=>{"use strict";var s=e.i(92008);let f="esblu.chat.bubble.position.v1";e.s(["default",0,function(){return ${render}}])},73877,e=>{"use strict";`;
+  const ok = run(mk("globalThis.TURBOPACK||[];" + bt("!0") + w("s.u?null:(0,t.jsx)(p,{})")));
+  assert.match(ok, /OK    IS_MOBILE_BUILD je v bundli true/);
+  assert.match(ok, /OK    FloatingChatWidget je v appke vypnutý/);
+  const off = run(mk("globalThis.TURBOPACK||[];" + bt("!1") + w("s.u?null:(0,t.jsx)(p,{})")));
+  assert.match(off, /FAIL  IS_MOBILE_BUILD je v bundli true/);
+  const ungated = run(mk("globalThis.TURBOPACK||[];" + bt("!0") + w("(0,t.jsx)(p,{})")));
+  assert.match(ungated, /FAIL  FloatingChatWidget je v appke vypnutý/);
+  const wrong = run(mk("globalThis.TURBOPACK||[];" + bt("!0") + w("s.p?null:(0,t.jsx)(p,{})")));
+  assert.match(wrong, /FAIL  FloatingChatWidget je v appke vypnutý/);
+  const legacy = run(mk('globalThis.TURBOPACK||[];,92008,e=>{"use strict";e.i(47167),e.s(["ESBLU_APP_ENV",0,"production","ESBLU_BUILD_ID",0,"2026-11-17T21:51:37Z","IS_MOBILE_BUILD",0,!0])},' + `,3,e=>{"use strict";let f="esblu.chat.bubble.position.v1";e.s(["default",0,function(){return a.IS_MOBILE_BUILD?null:(0,t.jsx)(b,{})}])},4,e=>{"use strict";`));
+  assert.match(legacy, /OK    IS_MOBILE_BUILD je v bundli true/);
+  assert.match(legacy, /OK    FloatingChatWidget je v appke vypnutý/);
+});
 await check("ESBLU_LEGAL_CONTENT_ROOT nie je v mobile/next.config env; legal/ sa nájde bez neho", async () => {
   const cfg = read("mobile/next.config.ts");
   assert.doesNotMatch(cfg, /ESBLU_LEGAL_CONTENT_ROOT:/);

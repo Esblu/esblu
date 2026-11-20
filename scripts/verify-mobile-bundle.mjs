@@ -66,13 +66,53 @@ check("bez lokálnych ciest build stroja v JS/HTML", leaking.length === 0 && htm
 check("bez ESBLU_LEGAL_CONTENT_ROOT v bundli", chunksWith("ESBLU_LEGAL_CONTENT_ROOT").length === 0);
 
 // 1. Natívny prepínač zapečený ako true (a nikde ako false).
-const flagTrue = chunksWith('"IS_MOBILE_BUILD",0,!0');
-const flagFalse = chunksWith('"IS_MOBILE_BUILD",0,!1');
-check("IS_MOBILE_BUILD je v bundli true", flagTrue.length > 0 && flagFalse.length === 0, `true v ${flagTrue.length}, false v ${flagFalse.length}`);
+//    Next 16.3 zachovával názvy exportov ("IS_MOBILE_BUILD",0,!0). Next >= 16.4 (Turbopack) ich
+//    skracuje ("u",0,!0) — vc5 build 2026-11-20. Modul lib/build-target sa preto hľadá podľa
+//    obsahu, nie podľa názvu: jediný modul, ktorý exportuje práve 3 hodnoty — prostredie
+//    ("production"|"staging"), build ID (ISO čas) a boolean (IS_MOBILE_BUILD). Starý tvar ostáva platný.
+const BT_RE = /(\d+),(\w+)=>\{"use strict";(?:\2\.i\(\d+\),)?\2\.s\(\[((?:"[^"]*",0,(?:"[^"]*"|!0|!1),?){3})\]\)\}/g;
+const buildTarget = [];
+for (const [f, src] of chunk.entries()) {
+  for (const m of src.matchAll(BT_RE)) {
+    const items = [...m[3].matchAll(/"([^"]*)",0,("[^"]*"|!0|!1)/g)].map((x) => ({ name: x[1], value: x[2] }));
+    const env = items.filter((i) => i.value === '"production"' || i.value === '"staging"');
+    const id = items.filter((i) => /^"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z"$/.test(i.value));
+    const flag = items.filter((i) => i.value === "!0" || i.value === "!1");
+    if (items.length === 3 && env.length === 1 && id.length === 1 && flag.length === 1) {
+      buildTarget.push({ file: f, moduleId: m[1], flagName: flag[0].name, flag: flag[0].value });
+    }
+  }
+}
+const legacyTrue = chunksWith('"IS_MOBILE_BUILD",0,!0');
+const legacyFalse = chunksWith('"IS_MOBILE_BUILD",0,!1');
+const btIds = new Set(buildTarget.map((b) => b.moduleId));
+const flagTrue = buildTarget.filter((b) => b.flag === "!0");
+const flagFalse = buildTarget.filter((b) => b.flag === "!1");
+check(
+  "IS_MOBILE_BUILD je v bundli true (modul build-target podľa obsahu)",
+  btIds.size === 1 && flagTrue.length > 0 && flagFalse.length === 0 && legacyFalse.length === 0,
+  `modul ${[...btIds].join(",") || "nenájdený"}, export "${buildTarget[0]?.flagName ?? "?"}", true v ${flagTrue.length}, false v ${flagFalse.length + legacyFalse.length}${legacyTrue.length ? ", starý tvar názvu" : ""}`
+);
 
-// 2. Plávajúci chat je v natívnom builde vypnutý.
+// 2. Plávajúci chat je v natívnom builde vypnutý: modul s FloatingChatWidget importuje build-target
+//    a jeho render je `<premenná>.<boolean export>?null:` (Next 16.3: `IS_MOBILE_BUILD?null:`).
 const widget = chunksWith("esblu.chat.bubble.position.v1");
-const widgetGated = widget.some((f) => /IS_MOBILE_BUILD\?null:/.test(chunk.get(f)));
+const MOD_START = /\d+,\w+=>\{"use strict";/g;
+const moduleOf = (src, idx) => {
+  let start = 0;
+  for (const m of src.matchAll(MOD_START)) { if (m.index <= idx) start = m.index; else return src.slice(start, m.index); }
+  return src.slice(start);
+};
+const flagName = buildTarget[0]?.flagName;
+const btId = [...btIds][0];
+const widgetGated = widget.some((f) => {
+  const src = chunk.get(f);
+  const mod = moduleOf(src, src.indexOf("esblu.chat.bubble.position.v1"));
+  if (/IS_MOBILE_BUILD\?null:/.test(mod)) return true;
+  if (!flagName || !btId || btIds.size !== 1) return false;
+  const vars = [...mod.matchAll(new RegExp(`(\\w+)=\\w+\\.i\\(${btId}\\)`, "g"))].map((m) => m[1]);
+  return vars.some((v) => new RegExp(`(?<![\\w.])${v}\\.${flagName}\\?null:`).test(mod));
+});
 check("FloatingChatWidget je v appke vypnutý (IS_MOBILE_BUILD ? null)", widget.length > 0 && widgetGated, widget.join(", "));
 
 // 3. Spodná navigácia je v chunkoch, ktoré načítavajú stránky modulov.

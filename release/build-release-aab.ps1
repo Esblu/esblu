@@ -72,11 +72,16 @@ if ($PrepareWeb) {
     if ($LASTEXITCODE -ne 0) { Fail "mobile web build failed" }
     Push-Location $MobileDir
     try { & npx cap sync android; if ($LASTEXITCODE -ne 0) { Fail "npx cap sync android failed" } } finally { Pop-Location }
-    & node scripts\android-prebuild-check.mjs --target production
-    if ($LASTEXITCODE -ne 0) { Fail "android-prebuild-check --target production failed" }
   } finally { Pop-Location }
 }
 if (-not (Test-Path (Join-Path $Assets "index.html"))) { Fail "No synced web assets in $Assets - run with -PrepareWeb (or npm run build -w mobile + npx cap sync android)" }
+# Production target check ALWAYS (also without -PrepareWeb, i.e. when reusing already synced assets):
+# package id, signing config, no secrets in assets, Supabase/API = production only.
+Push-Location $Root
+try {
+  & node scripts\android-prebuild-check.mjs --target production
+  if ($LASTEXITCODE -ne 0) { Fail "android-prebuild-check --target production failed" }
+} finally { Pop-Location }
 Push-Location $Root
 try { & node scripts\verify-mobile-bundle.mjs $Assets; if ($LASTEXITCODE -ne 0) { Fail "verify-mobile-bundle failed" } } finally { Pop-Location }
 # Closed-beta UI texts (SK/EN/DE) must not be in the bundle. ASCII-only patterns (PS 5.1 reads this file as ANSI).
@@ -110,7 +115,10 @@ try {
   Push-Location $AndroidDir
   try {
     # Gradle launcher AND daemon on the selected JDK 21 (not a JBR/JDK 25 daemon).
-    & .\gradlew.bat bundleRelease "-Dorg.gradle.java.home=$env:JAVA_HOME" "-PesbluVersionCode=$VersionCode" "-PesbluVersionName=$VersionName"
+    # Each argument is its own array element; JAVA_HOME without trailing \ (see jdk21.ps1 Get-EsbluGradleArgs).
+    $gradleArgs = Get-EsbluGradleArgs -JavaHome $env:JAVA_HOME -VersionCode $VersionCode -VersionName $VersionName
+    Write-Host ("gradlew.bat " + (($gradleArgs | ForEach-Object { "[$_]" }) -join ' '))
+    & .\gradlew.bat @gradleArgs
     if ($LASTEXITCODE -ne 0) { Fail "gradlew bundleRelease failed" }
   } finally { Pop-Location }
 
