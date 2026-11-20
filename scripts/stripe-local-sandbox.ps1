@@ -57,7 +57,7 @@
   - Databaza: Supabase staging `cjbdijbbcujvmrzezusd` (esblu-test). Produkcia sa nepouziva.
 #>
 param(
-  [ValidateSet("start", "status", "mark-exposed", "new-sandbox", "map-price", "clock-setup", "renew", "fail-renew", "fix-payment", "refund-partial", "refund-full",
+  [ValidateSet("start", "status", "mark-exposed", "new-sandbox", "map-price", "s17-auto", "clock-setup", "renew", "fail-renew", "fix-payment", "refund-partial", "refund-full",
                "refund-old", "refund-current", "reconcile", "advance-check", "verify-terminal", "qa-login", "qa-check",
                "s12-account", "s12-events", "s12-catchup", "s12-cancel-at", "s12-refund-missing", "s13-existing",
                "s17", "s17-cleanup")]
@@ -122,7 +122,7 @@ if (Test-Path $SandboxFile) {
 # Windows PowerShell 5.1 (.NET Framework): Stripe API vyzaduje TLS 1.2+.
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 # S17 bezpecnost: profil sa musi zadat VYSLOVNE (-Project), default 'esblu-qa2' sa uz nesmie pouzit omylom.
-$CompromisedProjects = @("esblu-qa2")   # whsec_ zverejnene v konverzacii 2026-11-20 (odtlacok v exposed.sha256)
+$CompromisedProjects = @("esblu-qa2", "esblu-qa3")   # qa2: whsec_ zverejnene; qa3: CLI kluc zverejneny a sandbox sa neda prevziat (2026-11-20)   # whsec_ zverejnene v konverzacii 2026-11-20 (odtlacok v exposed.sha256)
 # CLI test kluc profilu (test_mode_api_key, rkcs_test_) zverejneny v konverzacii 2026-11-20: profil sa smie pouzit
 # IBA s NOVYM klucom sandboxu zo skrytej vyzvy (sk_test_/rk_test_), nikdy s klucom z profilu ani zdedenym STRIPE_API_KEY.
 $CompromisedKeyProjects = @("esblu-qa3")
@@ -244,6 +244,35 @@ function Read-HiddenText([string]$prompt) {
   if ($null -eq $t) { return "" }
   return $t.Trim()
 }
+function Register-CompromisedProfileKeys {
+  # Odtlacky (SHA-256) CLI klucov kompromitovanych profilov -> compromised-keys.sha256 (lokalne, bez vypisu).
+  foreach ($pr in $CompromisedProjects) {
+    $cfgX = Invoke-StripeRaw (@($StripeCliBase) + @("--project-name", $pr)) @("config", "--list")
+    $mX = [regex]::Match($cfgX, "test_mode_api_key\s*=\s*['`"]?((?:sk|rk|rkcs)_test_[A-Za-z0-9]+)")
+    if ($mX.Success) {
+      $hX = Get-Sha256 $mX.Groups[1].Value
+      if (@(Get-CompromisedKeyHashes) -notcontains $hX) { Add-Content -Path $CompromisedKeyFile -Value $hX -Encoding ASCII }
+    }
+  }
+}
+function Test-StripeKeyAccess([string]$key, [string]$version) {
+  # READ-ONLY sonda pred akymkolvek zapisom: kluc + pripnuta verzia API musia mat pristup ku vsetkemu, co S17 pouzije.
+  $h = @{ Authorization = "Bearer $key" }
+  if ($version) { $h["Stripe-Version"] = $version }
+  $need = @("test_helpers/test_clocks", "prices", "customers", "subscriptions", "invoices", "credit_notes", "refunds", "charges", "payment_intents", "events", "balance_transactions")
+  $missing = @()
+  foreach ($r in $need) {
+    try { Invoke-RestMethod -Uri "https://api.stripe.com/v1/$($r)?limit=1" -Headers $h -Method Get | Out-Null }
+    catch {
+      $code = $null; try { $code = [int]$_.Exception.Response.StatusCode } catch { }
+      $missing += "$r (HTTP $code)"
+    }
+  }
+  $payouts = "ok"
+  try { Invoke-RestMethod -Uri "https://api.stripe.com/v1/payouts?limit=1" -Headers $h -Method Get | Out-Null } catch { $payouts = "bez pristupu (LIMITATION)" }
+  if ($missing.Count -gt 0) { Fail "Kluc/verzia $version nema pristup: $($missing -join ', ') - zastavene pred zapisom." }
+  Say "    Stripe API sonda OK (read-only, Stripe-Version $version): $($need.Count) zdrojov; payouts: $payouts"
+}
 function Get-CompromisedKeyHashes {
   if (-not (Test-Path $CompromisedKeyFile)) { return @() }
   return @(Get-Content $CompromisedKeyFile | ForEach-Object { "$_".Trim().ToLower() } | Where-Object { $_ -match "^[0-9a-f]{64}$" })
@@ -301,6 +330,7 @@ function Get-StripeTestKey {
     if ($key -notmatch "^$testRe$") { Fail "Zadany kluc nie je testovaci Stripe kluc (sk_test_/rk_test_/rkcs_test_)." }
     $src = "skryta vyzva"
   }
+  if (@(Get-CompromisedKeyHashes) -contains (Get-Sha256 $key)) { Fail "Kluc je evidovany ako KOMPROMITOVANY - nepouzije sa." }
   $env:STRIPE_API_KEY = $key   # iba tento proces; Stripe CLI ho uprednostni pred profilom
   Say ("    kluc: {0} ({1}***)" -f $src, $key.Substring(0, $key.IndexOf("_test_") + 6))
   return $key
@@ -1467,6 +1497,56 @@ if ($Step -eq "mark-exposed") {
   exit 0
 }
 
+if ($Step -eq "s17-auto") {
+  # JEDEN prikaz: (a) novy sandbox, ak profil nema cenu, (b) okno 1 v novom okne, (c) S17, (d) upratanie, (e) stop okna 1.
+  # Tajomstva sa zadaju raz (skryta vyzva) a podprocesy ich zdedia iba cez premenne tohto procesu.
+  $self = $PSCommandPath
+  $ps = (Get-Process -Id $PID).Path
+  Say "S17-auto: profil '$Project', CLI $($StripeCliBase -join ' ')"
+  Register-CompromisedProfileKeys
+  $null = Get-ServiceRole
+  $null = Assert-StagingAccess
+  if (-not $PriceId) {
+    if ($Email -notmatch "^[^@\s]+@[^@\s]+\.[^@\s]+$") { Fail "Profil '$Project' nema sandbox - zadaj -Email <adresa> (vytvori sa novy izolovany sandbox)." }
+    & $ps -NoProfile -ExecutionPolicy Bypass -File $self -Step new-sandbox -Project $Project -Email $Email
+    if ($LASTEXITCODE -ne 0) { Fail "new-sandbox zlyhal (vystup vyssie) - S17 sa nespustil, staging je v povodnom stave." }
+    $script:PriceId = (Get-Content $SandboxFile -Raw | ConvertFrom-Json).price
+  }
+  $k = Get-StripeTestKey
+  Assert-StripeAccount $k
+  Test-StripeKeyAccess $k (Get-S17PinnedVersion)
+  if (-not (Test-Path (Join-Path $RepoRoot "node_modules\next\package.json"))) {
+    Say "node_modules chyba -> npm ci (jednorazovo, niekolko minut)..."
+    Push-Location $RepoRoot; try { & npm.cmd ci --no-audit --no-fund; if ($LASTEXITCODE -ne 0) { Fail "npm ci zlyhal." } } finally { Pop-Location }
+  }
+  Say "Okno 1 (Esblu + stripe listen) sa spusta v novom okne..."
+  $w1 = Start-Process -FilePath $ps -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$self`"", "-Step", "start", "-Project", $Project, "-Port", "$Port") -PassThru
+  $ready = $false
+  for ($i = 0; $i -lt 120; $i++) {
+    if ($w1.HasExited) { break }
+    try { $r = Invoke-WebRequest -Uri "http://localhost:$Port/login" -UseBasicParsing -TimeoutSec 5; if ($r.StatusCode -eq 200) { $ready = $true; break } } catch { }
+    Start-Sleep -Seconds 5
+  }
+  $s17Exit = 1; $cleanExit = 1
+  try {
+    if (-not $ready) { Fail "Okno 1 nenabehlo do 10 min (pozri okno 1) - S17 sa nespustil." }
+    Start-Sleep -Seconds 10   # stripe listen sa pripaja
+    & $ps -NoProfile -ExecutionPolicy Bypass -File $self -Step s17 -Project $Project -Port $Port
+    $s17Exit = $LASTEXITCODE
+  } finally {
+    if ($ready) {
+      & $ps -NoProfile -ExecutionPolicy Bypass -File $self -Step s17-cleanup -Project $Project -Port $Port
+      $cleanExit = $LASTEXITCODE
+    }
+    if (-not $w1.HasExited) { $ErrorActionPreference = "Continue"; & taskkill.exe /PID $w1.Id /T /F 2>&1 | Out-Null }
+    # taskkill nespusti finally okna 1 -> logy stripe listen (whsec_) a lokalny CRON_SECRET zmazat tu
+    Remove-Item (Join-Path $StateDir "listen*.log"), $CronFile, $NoListenFile, $ListenPidFile, $HeadFile -Force -ErrorAction SilentlyContinue
+  }
+  Say "S17-auto: S17 exit $s17Exit, upratanie exit $cleanExit. Dokazy: release-backups\s17\s17-evidence.json (bez tajomstiev)."
+  if ($s17Exit -ne 0 -or $cleanExit -ne 0) { exit 1 }
+  exit 0
+}
+
 if ($Step -eq "new-sandbox") {
   if ($Email -notmatch "^[^@\s]+@[^@\s]+\.[^@\s]+$") { Fail "Zadaj -Email <adresa> (predvyplni registraciu pri neskorsom claim)." }
   # 0) Zdedeny STRIPE_API_KEY by mal prednost pred profilom -> pre novy sandbox sa ignoruje (iba tento proces).
@@ -1483,7 +1563,8 @@ if ($Step -eq "new-sandbox") {
   $exposed = Get-ListenSecret $StripeCliBase -Quiet
   if ($exposed) { Add-ExposedHash (Get-Sha256 $exposed) }
   # 2) Ucty existujucich profilov (novy sandbox sa od nich musi lisit).
-  $oldAccounts = @(@((Get-ProfileAccountId $StripeCliBase), (Get-ProfileAccountId (@($StripeCliBase) + @("--project-name", "esblu-qa2")))) | Where-Object { $_ })
+  $oldAccounts = @(@((Get-ProfileAccountId $StripeCliBase)) + @($CompromisedProjects | ForEach-Object { Get-ProfileAccountId (@($StripeCliBase) + @("--project-name", $_)) }) | Where-Object { $_ })
+  Register-CompromisedProfileKeys
   # 3) Staging READ-ONLY (URL, service_role, billing test) - pred prvym zapisom.
   $null = Assert-StagingAccess
   # 4) Novy profil musi byt prazdny, inak by `sandboxes create` iba otvoril Dashboard povodneho uctu.
@@ -1502,19 +1583,20 @@ if ($Step -eq "new-sandbox") {
   if (-not $km.Success) { Fail "Profil '$Project' nema citatelny testovaci kluc - identitu noveho sandboxu neviem overit (zastavene pred cenou)." }
   $newKey = $km.Groups[1].Value
   $env:STRIPE_API_KEY = $newKey   # iba tento proces; dalsie volania CLI idu do noveho uctu
-  try {
-    $a = Invoke-RestMethod -Uri "https://api.stripe.com/v1/account" -Headers @{ Authorization = "Bearer $newKey" } -Method Get
+  if (@(Get-CompromisedKeyHashes) -contains (Get-Sha256 $newKey)) { Fail "Kluc noveho profilu je evidovany ako kompromitovany - zastavene." }
+  $a = $null; $code = $null
+  try { $a = Invoke-RestMethod -Uri "https://api.stripe.com/v1/account" -Headers @{ Authorization = "Bearer $newKey" } -Method Get }
+  catch { try { $code = [int]$_.Exception.Response.StatusCode } catch { } }
+  if ($a) {
     if ($a.id -ne $acct) { Fail "Kluc profilu patri uctu $($a.id), profil hlasi $acct - zastavene." }
     $idNote = "/v1/account = $acct"
-  } catch {
-    $code = $null; try { $code = [int]$_.Exception.Response.StatusCode } catch { }
-    if ($code -eq 403) { $idNote = "kluc profilu bez prava na /v1/account (403) - identita podla account_id profilu $acct" }
-    else { Fail "Overenie uctu noveho sandboxu zlyhalo (HTTP $code)." }
-  }
+  } elseif ($code -eq 403) { $idNote = "kluc profilu bez prava na /v1/account (403) - identita podla account_id profilu $acct" }
+  else { Fail "Overenie uctu noveho sandboxu zlyhalo (HTTP $code)." }
   $w = Get-ListenSecret $StripeCli
   if (-not $w) { Fail "stripe listen --print-secret v novom profile nevratil whsec_." }
   if (@(Get-ExposedHashes) -contains (Get-Sha256 $w)) { Fail "Novy sandbox ma kompromitovane tajomstvo - zastavene." }
   Say "2/5 identita OK: novy ucet $acct (lisi sa od $($oldAccounts.Count) existujucich), $idNote; whsec_*** nove (SHA-256 $((Get-Sha256 $w).Substring(0,8))...)"
+  Test-StripeKeyAccess $newKey (Get-S17PinnedVersion)
   # 3/5 Cena Esblu Komplet 15,90 EUR / mesiac v novom sandboxe + kontrola, ze ju vidi kluc noveho uctu.
   $price = Get-StripeJson @("prices", "create", "-d", "currency=eur", "-d", "unit_amount=1590", "-d", "recurring[interval]=month", "-d", "product_data[name]=Esblu Komplet (test)")
   if ($price.livemode) { Fail "Cena je live." }
