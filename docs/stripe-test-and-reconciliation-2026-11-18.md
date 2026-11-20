@@ -736,3 +736,9 @@ mení prístup, čo sa deje s dátami po ukončení, ako zákazník vypína obno
 - Oprava: poradie `ESBLU_STRIPE_CLI` → natívny `stripe` v PATH → npx; bezpečné delenie argumentov; `listen --print-secret --project-name <profil>` (rovnako ako overený ručný príkaz); pri zlyhaní maskovaná diagnostika (exit kód + 6 riadkov). `stripe listen` v okne 1 používa ten istý CLI.
 - Kompromitované tajomstvá: `exposed.sha256` je zoznam odtlačkov (1/riadok); nový krok `-Step mark-exposed -Project <profil>` (bez platieb, bez výpisu tajomstva) pridá odtlačok aktuálneho whsec_ profilu. `start` aj `new-sandbox` odmietnu každé evidované tajomstvo.
 - Whsec_ profilu `esblu-qa2` bol zverejnený v konverzácii → po `mark-exposed` je profil pre testy nepoužiteľný; ďalší test vyžaduje nový sandbox (`-Step new-sandbox -Project esblu-qa3 -Email <adresa>`), ktorý vytvorí nový účet, novú cenu a mapovanie na stagingu.
+
+#### 8.14b Bezpečný `-Step new-sandbox` (2026-11-20)
+Pred **prvým zápisom** (`stripe sandboxes create`): zdedená `STRIPE_API_KEY` sa zmaže z procesu; tajomstvo `esblu-qa2` musí byť v `exposed.sha256` (inak STOP); staging sa overí read-only (URL `cjbdijbbcujvmrzezusd`, `billing_runtime_config.environment=test`, čítanie `internal_operator_grants` = kľúč je service_role); nový profil musí byť prázdny.
+Pred **cenou**: `account_id` nového profilu sa líši od default a `esblu-qa2`; kľúč sa berie iba z profilu (žiadna výzva ani premenná) a `/v1/account` musí vrátiť ten istý účet (403 = identita podľa profilu); nové whsec_ nie je kompromitované. Po cene `Assert-StripeAccount` (kľúč vidí cenu, Test Clocks).
+Staging mapovanie je obnoviteľné: restore súbor → nový riadok neaktívny → staré neaktívne → nový aktívny → kontrola presne 1 aktívna; pri chybe návrat na predchádzajúci stav. Opakovanie iba mapovania: `-Step map-price -Project <profil>`.
+`-Project` sa musí zadávať vždy výslovne; `esblu-qa2` je povolený iba pre `mark-exposed` a `status`.

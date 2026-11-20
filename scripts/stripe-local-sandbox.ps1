@@ -55,7 +55,7 @@
   - Databaza: Supabase staging `cjbdijbbcujvmrzezusd` (esblu-test). Produkcia sa nepouziva.
 #>
 param(
-  [ValidateSet("start", "status", "mark-exposed", "new-sandbox", "clock-setup", "renew", "fail-renew", "fix-payment", "refund-partial", "refund-full",
+  [ValidateSet("start", "status", "mark-exposed", "new-sandbox", "map-price", "clock-setup", "renew", "fail-renew", "fix-payment", "refund-partial", "refund-full",
                "refund-old", "refund-current", "reconcile", "advance-check", "verify-terminal", "qa-login", "qa-check",
                "s12-account", "s12-events", "s12-catchup", "s12-cancel-at", "s12-refund-missing", "s13-existing",
                "s17", "s17-cleanup")]
@@ -112,6 +112,14 @@ $OwnerE = "5a5a0000-0000-4000-8000-000000000041"
 $OwnerEEmail = "qa-stripe-e-owner@example.invalid"
 $PriceId = $null
 if (Test-Path $SandboxFile) { $PriceId = (Get-Content $SandboxFile -Raw | ConvertFrom-Json).price }
+# S17 bezpecnost: profil sa musi zadat VYSLOVNE (-Project), default 'esblu-qa2' sa uz nesmie pouzit omylom.
+$CompromisedProjects = @("esblu-qa2")   # whsec_ zverejnene v konverzacii 2026-11-20 (odtlacok v exposed.sha256)
+if (-not $PSBoundParameters.ContainsKey("Project")) {
+  Write-Host "CHYBA: zadaj profil vyslovne, napr. -Project esblu-qa3 (default sa nepouziva)." -ForegroundColor Red; exit 1
+}
+if (($CompromisedProjects -contains $Project) -and @("mark-exposed", "status") -notcontains $Step) {
+  Write-Host "CHYBA: profil '$Project' ma kompromitovane webhook tajomstvo - pouzi novy sandbox (-Project esblu-qa3)." -ForegroundColor Red; exit 1
+}
 $Events = @(
   "checkout.session.completed", "checkout.session.async_payment_succeeded", "checkout.session.async_payment_failed",
   "checkout.session.expired", "customer.subscription.created", "customer.subscription.updated",
@@ -159,6 +167,54 @@ function Get-StripeJson([string[]]$StripeArgs) {
   $a = $text.IndexOf("{"); $b = $text.LastIndexOf("}")
   if ($a -lt 0 -or $b -le $a) { Fail "Stripe CLI nevratil JSON pre: $($StripeArgs[0..1] -join ' ')" }
   return ($text.Substring($a, $b - $a + 1) | ConvertFrom-Json)
+}
+
+function Get-ProfileAccountId([string[]]$cli) {
+  # account_id profilu Stripe CLI (nie je tajny). Prazdny retazec = profil bez uctu.
+  $m = [regex]::Match((Invoke-StripeRaw $cli @("config", "--list")), "account_id\s*=\s*['`"]?(acct_[A-Za-z0-9]+)")
+  if ($m.Success) { return $m.Groups[1].Value }
+  return ""
+}
+function Assert-StagingAccess {
+  # READ-ONLY overenie stagingu PRED akymkolvek zapisom: URL = esblu-test, kluc = service_role (vidi tabulku
+  # bez prava pre anon/authenticated), billing konfiguracia = test. Vrati aktualne riadky mapovania ceny.
+  if ($StagingUrl -ne "https://$StagingRef.supabase.co" -or $StagingUrl -match $ProdRef) { Fail "Supabase URL nie je staging $StagingRef." }
+  $cfg = @(Get-Rows "billing_runtime_config?select=environment,web_provider")
+  if ($cfg.Count -ne 1 -or $cfg[0].environment -ne "test") { Fail "Staging billing_runtime_config nie je environment=test (najdene: $($cfg.Count) riadkov)." }
+  $null = @(Get-Rows "internal_operator_grants?select=id&limit=1")   # iba service_role; anon/authenticated -> chyba
+  $rows = @(Get-Rows "billing_provider_prices?select=id,provider_price_id,active&provider=eq.stripe&environment=eq.test&plan_code=eq.esblu_complete&billing_interval=eq.month")
+  Say "    staging $StagingRef OK: service_role (read-only test), billing environment=test web_provider=$($cfg[0].web_provider), mapovanie cien: $($rows.Count) riadkov, aktivnych $(@($rows | Where-Object { $_.active }).Count)"
+  return $rows
+}
+function Set-StagingPriceMapping([string]$newPrice) {
+  # Obnovitelna zmena mapovania (unikatny index: 1 aktivna cena na plan/interval):
+  # 1) predchadzajuci stav -> lokalny restore subor, 2) novy riadok NEAKTIVNY, 3) stare aktivne -> neaktivne,
+  # 4) novy -> aktivny, 5) kontrola presne 1 aktivny = novy. Pri chybe po kroku 2 sa vrati predchadzajuci stav.
+  $base = "billing_provider_prices?provider=eq.stripe&environment=eq.test&plan_code=eq.esblu_complete&billing_interval=eq.month"
+  $before = @(Get-Rows "$base&select=id,provider_price_id,active")
+  $prevActive = @($before | Where-Object { $_.active } | ForEach-Object { $_.id })
+  $restoreFile = Join-Path $StateDir "price-mapping-restore-$Project.json"
+  @{ at = (Get-Date).ToUniversalTime().ToString("o"); previously_active_ids = $prevActive; new_price = $newPrice } | ConvertTo-Json | Set-Content -Path $restoreFile -Encoding ASCII
+  $existing = @($before | Where-Object { $_.provider_price_id -eq $newPrice })
+  if ($existing.Count -gt 0) { $newId = $existing[0].id }
+  else {
+    $row = Invoke-Staging "POST" "billing_provider_prices" @{ provider = "stripe"; environment = "test"; plan_code = "esblu_complete"; billing_interval = "month"; provider_price_id = $newPrice; active = $false }
+    $newId = @($row)[0].id
+  }
+  try {
+    foreach ($id in $prevActive) { if ($id -ne $newId) { Invoke-Staging "PATCH" "billing_provider_prices?id=eq.$id" @{ active = $false } | Out-Null } }
+    Invoke-Staging "PATCH" "billing_provider_prices?id=eq.$newId" @{ active = $true } | Out-Null
+    $after = @(Get-Rows "$base&active=eq.true&select=id,provider_price_id")
+    if ($after.Count -ne 1 -or $after[0].provider_price_id -ne $newPrice) { throw "po zmene nie je presne 1 aktivna cena = $newPrice" }
+  } catch {
+    $msg = $_.Exception.Message
+    try {
+      Invoke-Staging "PATCH" "billing_provider_prices?id=eq.$newId" @{ active = $false } | Out-Null
+      foreach ($id in $prevActive) { Invoke-Staging "PATCH" "billing_provider_prices?id=eq.$id" @{ active = $true } | Out-Null }
+      Fail "Mapovanie ceny zlyhalo ($msg) - predchadzajuci stav obnoveny ($($prevActive.Count) aktivnych). Restore: $restoreFile"
+    } catch { Fail "Mapovanie ceny zlyhalo ($msg) A obnova zlyhala ($($_.Exception.Message)). Rucne obnov podla $restoreFile." }
+  }
+  Say "    staging: esblu_complete/month -> $newPrice (presne 1 aktivna; restore $restoreFile)"
 }
 
 function Get-Rows([string]$path) {
@@ -1328,31 +1384,74 @@ if ($Step -eq "mark-exposed") {
 
 if ($Step -eq "new-sandbox") {
   if ($Email -notmatch "^[^@\s]+@[^@\s]+\.[^@\s]+$") { Fail "Zadaj -Email <adresa> (predvyplni registraciu pri neskorsom claim)." }
-  # 1) Odtlacok VYSTAVENEHO tajomstva = secret povodneho (default) profilu CLI.
-  $exposed = Get-ListenSecret $StripeCliBase
-  if ($exposed) { Add-ExposedHash (Get-Sha256 $exposed); Say "    odtlacok vystaveneho tajomstva ulozeny (SHA-256 $((Get-Sha256 $exposed).Substring(0,8))...)" }
-  elseif (@(Get-ExposedHashes).Count -eq 0) { Fail "Neviem urcit vystavene tajomstvo (default profil bez kluca)." }
-  # 2) Novy profil musi byt prazdny, inak by `sandboxes create` iba otvoril Dashboard povodneho uctu.
+  # 0) Zdedeny STRIPE_API_KEY by mal prednost pred profilom -> pre novy sandbox sa ignoruje (iba tento proces).
+  if ($env:STRIPE_API_KEY) { Remove-Item Env:STRIPE_API_KEY; Say "    zdedena premenna STRIPE_API_KEY ignorovana (novy sandbox pouzije iba kluc z profilu '$Project')" }
+  Say "0/5 Kontroly pred zapisom (Stripe CLI: $($StripeCliBase -join ' '))"
+  # 1) Kompromitovane tajomstva: esblu-qa2 musi byt evidovane; default profil sa prida (lokalny subor).
+  $known = @(Get-ExposedHashes)
+  $qa2 = Get-ListenSecret (@($StripeCliBase) + @("--project-name", "esblu-qa2")) -Quiet
+  if ($qa2) {
+    if ($known -notcontains (Get-Sha256 $qa2)) { Fail "Tajomstvo profilu esblu-qa2 NIE JE evidovane ako kompromitovane - spusti najprv -Step mark-exposed -Project esblu-qa2." }
+    Say "    esblu-qa2: whsec_*** evidovane ako kompromitovane (SHA-256 $((Get-Sha256 $qa2).Substring(0,8))...)"
+  } elseif ($known.Count -lt 2) { Fail "Neviem overit tajomstvo esblu-qa2 a evidovane su len $($known.Count) odtlacky - spusti -Step mark-exposed -Project esblu-qa2." }
+  else { Say "    esblu-qa2: tajomstvo sa nedalo nacitat, evidovane odtlacky: $($known.Count) (z mark-exposed)" }
+  $exposed = Get-ListenSecret $StripeCliBase -Quiet
+  if ($exposed) { Add-ExposedHash (Get-Sha256 $exposed) }
+  # 2) Ucty existujucich profilov (novy sandbox sa od nich musi lisit).
+  $oldAccounts = @(@((Get-ProfileAccountId $StripeCliBase), (Get-ProfileAccountId (@($StripeCliBase) + @("--project-name", "esblu-qa2")))) | Where-Object { $_ })
+  # 3) Staging READ-ONLY (URL, service_role, billing test) - pred prvym zapisom.
+  $null = Assert-StagingAccess
+  # 4) Novy profil musi byt prazdny, inak by `sandboxes create` iba otvoril Dashboard povodneho uctu.
   $cfg = Invoke-StripeRaw $StripeCli @("config", "--list")
-  if ($cfg -match "(?:sk|rk|rkcs)_test_") { Fail "Profil '$Project' uz ma kluc. Pouzi iny -Project (napr. esblu-qa3)." }
-  Say "1/4 Novy anonymny sandbox v profile '$Project'..."
+  if ($cfg -match "(?:sk|rk|rkcs)_(?:test|live)_" -or $cfg -match "account_id\s*=\s*['`"]?acct_") { Fail "Profil '$Project' uz ma ucet/kluc. Pouzi iny -Project." }
+
+  Say "1/5 Novy anonymny sandbox v profile '$Project' (prvy zapis)..."
   Invoke-Stripe @("sandboxes", "create", "--email", $Email, "--non-interactive") | Out-Null
-  Get-StripeTestKey | Out-Null
-  # 3) Novy ucet => nove tajomstvo; musi sa lisit od vystaveneho.
+  # 2/5 Identita noveho sandboxu: ucet z profilu, kluc IBA z profilu (ziadna vyzva, ziadna premenna), /v1/account.
+  $acct = Get-ProfileAccountId $StripeCli
+  if (-not $acct) { Fail "Profil '$Project' po vytvoreni nema account_id - sandbox nevznikol." }
+  if ($oldAccounts -contains $acct) { Fail "Novy profil ukazuje na EXISTUJUCI ucet $acct - zastavene pred vytvorenim ceny." }
+  $cfg = Invoke-StripeRaw $StripeCli @("config", "--list")
+  if ($cfg -match "test_mode_api_key\s*=\s*['`"]?(?:sk|rk|rkcs)_live_") { Fail "V profile je LIVE kluc." }
+  $km = [regex]::Match($cfg, "test_mode_api_key\s*=\s*['`"]?((?:sk|rk|rkcs)_test_[A-Za-z0-9]+)")
+  if (-not $km.Success) { Fail "Profil '$Project' nema citatelny testovaci kluc - identitu noveho sandboxu neviem overit (zastavene pred cenou)." }
+  $newKey = $km.Groups[1].Value
+  $env:STRIPE_API_KEY = $newKey   # iba tento proces; dalsie volania CLI idu do noveho uctu
+  try {
+    $a = Invoke-RestMethod -Uri "https://api.stripe.com/v1/account" -Headers @{ Authorization = "Bearer $newKey" } -Method Get
+    if ($a.id -ne $acct) { Fail "Kluc profilu patri uctu $($a.id), profil hlasi $acct - zastavene." }
+    $idNote = "/v1/account = $acct"
+  } catch {
+    $code = $null; try { $code = [int]$_.Exception.Response.StatusCode } catch { }
+    if ($code -eq 403) { $idNote = "kluc profilu bez prava na /v1/account (403) - identita podla account_id profilu $acct" }
+    else { Fail "Overenie uctu noveho sandboxu zlyhalo (HTTP $code)." }
+  }
   $w = Get-ListenSecret $StripeCli
   if (-not $w) { Fail "stripe listen --print-secret v novom profile nevratil whsec_." }
-  if (@(Get-ExposedHashes) -contains (Get-Sha256 $w)) { Fail "Novy sandbox ma vystavene (kompromitovane) tajomstvo - sandbox nevznikol alebo profil je zly." }
-  Say "2/4 nove tajomstvo whsec_*** sa lisi od vystaveneho (SHA-256 $((Get-Sha256 $w).Substring(0,8))...)"
-  # 4) Cena Esblu Komplet 15,90 EUR / mesiac v novom sandboxe.
+  if (@(Get-ExposedHashes) -contains (Get-Sha256 $w)) { Fail "Novy sandbox ma kompromitovane tajomstvo - zastavene." }
+  Say "2/5 identita OK: novy ucet $acct (lisi sa od $($oldAccounts.Count) existujucich), $idNote; whsec_*** nove (SHA-256 $((Get-Sha256 $w).Substring(0,8))...)"
+  # 3/5 Cena Esblu Komplet 15,90 EUR / mesiac v novom sandboxe + kontrola, ze ju vidi kluc noveho uctu.
   $price = Get-StripeJson @("prices", "create", "-d", "currency=eur", "-d", "unit_amount=1590", "-d", "recurring[interval]=month", "-d", "product_data[name]=Esblu Komplet (test)")
   if ($price.livemode) { Fail "Cena je live." }
-  @{ price = $price.id; created = (Get-Date).ToUniversalTime().ToString("o") } | ConvertTo-Json | Set-Content -Path $SandboxFile -Encoding ASCII
-  Say "3/4 cena $($price.id) = 15,90 EUR / mesiac"
-  # 5) Mapovanie ceny na stagingu (iba test): stara cena neaktivna, nova aktivna.
-  Invoke-Staging "PATCH" "billing_provider_prices?provider=eq.stripe&environment=eq.test&plan_code=eq.esblu_complete&billing_interval=eq.month&active=eq.true" @{ active = $false } | Out-Null
-  Invoke-Staging "POST" "billing_provider_prices" @{ provider = "stripe"; environment = "test"; plan_code = "esblu_complete"; billing_interval = "month"; provider_price_id = $price.id; active = $true } | Out-Null
-  Say "4/4 staging: esblu_complete/month -> $($price.id)"
-  Say "OK: novy sandbox pripraveny (profil '$Project'). Spusti okno 1 znova."
+  $script:PriceId = $price.id
+  # Ulozit hned (nie je tajne) - ak by dalsia kontrola zlyhala, staging sa nemeni a pokracuje sa cez -Step map-price.
+  @{ price = $price.id; account = $acct; created = (Get-Date).ToUniversalTime().ToString("o") } | ConvertTo-Json | Set-Content -Path $SandboxFile -Encoding ASCII
+  Assert-StripeAccount $newKey
+  Say "3/5 cena $($price.id) = 15,90 EUR / mesiac (ucet $acct)"
+  # 4/5 Staging mapovanie - obnovitelne (pri chybe sa vrati predchadzajuci stav).
+  Say "4/5 staging mapovanie ceny..."
+  Set-StagingPriceMapping $price.id
+  Say "5/5 OK: novy sandbox pripraveny (profil '$Project'). Dalej vzdy s -Project $Project."
+  exit 0
+}
+
+if ($Step -eq "map-price") {
+  # Opakovanie iba kroku 4/5 (napr. po chybe stagingu), cena z profilu; bez zapisu do Stripe.
+  if (-not $PriceId) { Fail "Profil '$Project' nema cenu (sandbox-$Project.json)." }
+  $null = Assert-StagingAccess
+  $k = Get-StripeTestKey
+  Assert-StripeAccount $k
+  Set-StagingPriceMapping $PriceId
   exit 0
 }
 
