@@ -235,5 +235,21 @@ for (const [re, name] of ps7) {
   check("S17: ziadne nove Stripe ucty ani sandboxy v novych krokoch (iba zakaznik S17 na jeho Test Clock)", (() => { const seg = code.slice(idx(12), idx(10)); return !/sandboxes create|\/v1\/accounts|"\/customers" /.test(seg); })());
 }
 
+// --- 15) Pin produkcneho kodu (2026-11-20): po nasadeni PR #2 origin/main = 6506e11; kontrola NESMIE prijat lubovolny commit
+{
+  const m = code.match(/^\$S17ExpectedMain = "([^"]*)"\s*$/m);
+  check("pin S17ExpectedMain = plne 40-znakove SHA (ziadny rev-parse/origin/main/vetva)", !!m && /^[0-9a-f]{40}$/.test(m[1]), m ? m[1] : "chyba");
+  check("pin = 6506e11 (merge PR #2, bezpecnostne aktualizacie)", !!m && m[1] === "6506e11af70725f89f7cda3253fa4e4e60b883c5");
+  check("pin sa neprebera dynamicky z origin/main", !/\$S17ExpectedMain\s*=\s*(?=[^\s"])/.test(code) && (code.match(/\$S17ExpectedMain\s*=/g) || []).length === 1);
+  check("krok 1: origin/main == pin, aplikacny kod == pin, commit lokalne, okno 1 z rovnakeho HEAD, zavislosti", /if \(\$hi\.origin_main -ne \$S17ExpectedMain\) \{ \$headProblems \+= "origin\/main/.test(code) && /if \(-not \$hi\.app_matches\) \{ \$headProblems/.test(code) && /if \(-not \$hi\.expected_main_present\)/.test(code) && /\[string\]\$w1\.head -ne \$hi\.head/.test(code) && /if \(-not \$hi\.deps_match\) \{ \$headProblems/.test(code));
+  check("app_matches zahrna necommitnute zmeny aplikacnych suborov", /app_matches = \(\$expectedOk -and \$appChanged\.Count -eq 0 -and \$appDirty\.Count -eq 0\)/.test(code) && /"status", "--porcelain"/.test(code));
+  check("harness subory su uzavrety zoznam (scripts/* mimo zoznamu = aplikacny kod)", /\$S17HarnessFiles = @\("scripts\/stripe-local-sandbox\.ps1", "scripts\/s17-accounting-export\.ts", "scripts\/stripe-local-sandbox-static-tests\.mjs"\)/.test(code) && /\(\$S17HarnessFiles -contains \$p\) -or \$p\.StartsWith\("docs\/"\)/.test(code));
+  check("preflight odhali origin/main != pin aj zastarane node_modules (predtym az krok 1)", /if \(\$hi\.origin_main -ne \$S17ExpectedMain\) \{ \$problems \+=/.test(code) && /if \(-not \$hi\.deps_match\) \{ \$problems \+=/.test(code));
+  check("preflight: origin/main != pin je blokujuci (exit 1)", /-notmatch "S17-1 ho vytvori\|s17-auto spusti npm ci"/.test(code) && !/-notmatch "[^"]*origin/.test(code));
+  check("s17-auto a okno 1: npm ci aj pri zastaranych node_modules (nie iba chybajucich)", /if \(-not \(Get-S17DepsInfo\)\.deps_match\) \{/.test(code) && /-or -not \(Get-S17DepsInfo\)\.deps_match\) \{ npm ci/.test(code));
+  check("zavislosti porovnane s package-lock.json (next, react, react-dom)", /\$S17DepPackages = @\("next", "react", "react-dom"\)/.test(code) && /package-lock\.json/.test(code));
+  check("vetva a Force: Assert-HarnessCheckout zostava, -Force iba explicitne", /function Assert-HarnessCheckout/.test(code) && /if \(-not \$Force\) \{ Fail \("S17 odmieta bezat: "/.test(code));
+}
+
 console.log(`\n${passed} PASS, ${failed} FAIL`);
 process.exit(failed ? 1 : 0);

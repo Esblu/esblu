@@ -112,7 +112,12 @@ $NoListenFile = Join-Path $StateDir "nolisten-$Project.flag"     # okno 1 bezi b
 $ListenPidFile = Join-Path $StateDir "listen-$Project.pid"       # PID stripe listen z okna 1 (S17 ho zastavi)
 $HeadFile = Join-Path $StateDir "head-$Project.json"             # commit, z ktoreho bezi okno 1 (S17 porovna)
 $S17StateFile = Join-Path $StateDir "s17-$Project.json"          # povodny stav stagingu + objekty S17 (upratanie)
-$S17ExpectedMain = "1e2ab730ab5caab86ab5a72d1042fbca28748f7b"    # origin/main = produkcny kod, ktory S17 overuje
+# origin/main = produkcny kod, ktory S17 overuje. Explicitny pin (plne SHA), NIKDY "aktualny origin/main" automaticky:
+# po kazdom schvalenom nasadeni sa pin meni iba commitom v ops/s17-sandbox spolu s mergom origin/main (docs par. 8.14).
+# 6506e11 = merge PR #2 (bezpecnostne aktualizacie Next.js 16.4.6 / Capacitor), nasadene 20. 11. 2026.
+$S17ExpectedMain = "6506e11af70725f89f7cda3253fa4e4e60b883c5"
+# Zavislosti, ktore S17 skutocne spusta (next dev v okne 1): nainstalovana verzia musi sediet s package-lock.json pinu.
+$S17DepPackages = @("next", "react", "react-dom")
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $CompanyD = "5a5a0000-0000-4000-8000-0000000000d0"              # QA-STRIPE D (test clock)
 $OwnerD = "5a5a0000-0000-4000-8000-000000000031"
@@ -695,6 +700,21 @@ function Invoke-Git([string[]]$GitArgs) {
 function Test-S17HarnessPath([string]$p) {
   return (($S17HarnessFiles -contains $p) -or $p.StartsWith("docs/"))
 }
+function Get-S17DepsInfo {
+  # Nainstalovane node_modules vs. package-lock.json v HEAD (bez siete). Stare node_modules = test stareho kodu.
+  $lockPath = Join-Path $RepoRoot "package-lock.json"
+  $lock = $(if (Test-Path $lockPath) { [IO.File]::ReadAllText($lockPath) } else { "" })
+  $mism = @()
+  foreach ($n in $S17DepPackages) {
+    $m = [regex]::Match($lock, '"node_modules/' + [regex]::Escape($n) + '"\s*:\s*\{\s*"version"\s*:\s*"([^"]+)"')
+    $want = $(if ($m.Success) { $m.Groups[1].Value } else { "" })
+    $pj = Join-Path $RepoRoot ("node_modules\" + $n + "\package.json")
+    $have = ""
+    if (Test-Path $pj) { $hm = [regex]::Match([IO.File]::ReadAllText($pj), '"version"\s*:\s*"([^"]+)"'); if ($hm.Success) { $have = $hm.Groups[1].Value } }
+    if (-not $want -or $have -ne $want) { $mism += "$n $(if ($have) { $have } else { 'chyba' }) != lock $(if ($want) { $want } else { '?' })" }
+  }
+  return [ordered]@{ deps_match = ($mism.Count -eq 0); deps_mismatch = $mism }
+}
 function Get-S17HeadInfo {
   # Aplikacny kod HEAD (+ necommitnute zmeny) vs. ocakavany origin/main. Bez siete (ziadny git fetch).
   $hr = Invoke-Git @("rev-parse", "HEAD")
@@ -712,6 +732,7 @@ function Get-S17HeadInfo {
   $dirty = @(((Invoke-Git @("status", "--porcelain")).out -split "`n") | Where-Object { $_.Length -gt 3 } | ForEach-Object { $_.Substring(3).Trim('"') })
   $appChanged = @($changed | Where-Object { -not (Test-S17HarnessPath $_) })
   $appDirty = @($dirty | Where-Object { -not (Test-S17HarnessPath $_) })
+  $deps = Get-S17DepsInfo
   return [ordered]@{
     head = $head
     head_tree = $tree
@@ -725,6 +746,8 @@ function Get-S17HeadInfo {
     app_changed_sample = @($appChanged | Select-Object -First 10)
     app_uncommitted_sample = @($appDirty | Select-Object -First 10)
     app_matches = ($expectedOk -and $appChanged.Count -eq 0 -and $appDirty.Count -eq 0)
+    deps_match = $deps.deps_match
+    deps_mismatch = @($deps.deps_mismatch)
   }
 }
 function Get-S17PinnedVersion {
@@ -1127,6 +1150,7 @@ function Invoke-S17 {
       if (-not $hi.expected_main_present) { $headProblems += "commit $S17ExpectedMain lokalne chyba (git fetch origin)" }
       if (-not $hi.app_matches) { $headProblems += "aplikacny kod HEAD sa lisi od $S17ExpectedMain ($(($hi.app_changed_sample + $hi.app_uncommitted_sample) -join ', '))" }
       if ($hi.origin_main -ne $S17ExpectedMain) { $headProblems += "origin/main = $(if ($hi.origin_main) { $hi.origin_main } else { 'nezname' }) (ocakavany $S17ExpectedMain)" }
+      if (-not $hi.deps_match) { $headProblems += "node_modules nezodpovedaju package-lock.json ($($hi.deps_mismatch -join ', ')) - npm ci" }
       if (-not (Test-Path $HeadFile)) { $headProblems += "okno 1 nebezi s touto verziou skriptu (chyba $HeadFile)" }
       else {
         $w1 = Get-Content $HeadFile -Raw | ConvertFrom-Json
@@ -1848,9 +1872,12 @@ if ($Step -eq "s17-auto" -or $Step -eq "s17-preflight") {
       cursor_action_in_s17 = $(if (-not $cur) { "zalozi cron" } elseif ([string]$cur.account_ref -eq $SandboxAccount) { "ziadny reset" } else { "reset + obnova" })
       qa_d_open_checkout_intents = $open.Count
       node_modules = (Test-Path (Join-Path $RepoRoot "node_modules\next\package.json"))
+      origin_main = $hi.origin_main; expected_main = $S17ExpectedMain; deps_match = $hi.deps_match; deps_mismatch = @($hi.deps_mismatch)
     }
     $problems = @()
     if (-not $hi.app_matches) { $problems += "aplikacny kod != $($S17ExpectedMain.Substring(0, 7))" }
+    if ($hi.origin_main -ne $S17ExpectedMain) { $problems += "origin/main = $(if ($hi.origin_main) { $hi.origin_main.Substring(0, 7) } else { 'nezname' }) != pin $($S17ExpectedMain.Substring(0, 7)) (git fetch origin / aktualizovat ops/s17-sandbox)" }
+    if (-not $hi.deps_match) { $problems += "node_modules != package-lock ($($hi.deps_mismatch -join ', ')) - s17-auto spusti npm ci" }
     if ($pre.staging_web_provider -ne "none") { $problems += "staging web_provider=$($pre.staging_web_provider) (ocakavane none)" }
     if (-not $pre.staging_price_row_exists) { $problems += "staging nema riadok ceny $(Get-ShortId $PriceId) (S17-1 ho vytvori)" }
     $pre["result"] = $(if ($problems.Count) { "POZOR: " + ($problems -join "; ") } else { "OK - S17 moze bezat" })
@@ -1859,11 +1886,11 @@ if ($Step -eq "s17-auto" -or $Step -eq "s17-preflight") {
     Say ""
     Say "S17 PREFLIGHT (iba citanie): $($pre.result)"
     Say "    dokaz: $pf"
-    if ($problems | Where-Object { $_ -notmatch "S17-1 ho vytvori" }) { exit 1 }
+    if ($problems | Where-Object { $_ -notmatch "S17-1 ho vytvori|s17-auto spusti npm ci" }) { exit 1 }
     exit 0
   }
-  if (-not (Test-Path (Join-Path $RepoRoot "node_modules\next\package.json"))) {
-    Say "node_modules chyba -> npm ci (jednorazovo, niekolko minut)..."
+  if (-not (Get-S17DepsInfo).deps_match) {
+    Say "node_modules chyba alebo nezodpoveda package-lock.json -> npm ci (niekolko minut)..."
     Push-Location $RepoRoot; try { & npm.cmd ci --no-audit --no-fund; if ($LASTEXITCODE -ne 0) { Fail "npm ci zlyhal." } } finally { Pop-Location }
   }
   $fwd = @()
@@ -2559,7 +2586,7 @@ Set-Content -Path $CronFile -Value $env:CRON_SECRET -Encoding ASCII
 Remove-Item Env:VERCEL_ENV -ErrorAction SilentlyContinue
 
 Say "4/5 Zavislosti..."
-if (-not (Test-Path "node_modules\.bin\next.cmd")) { npm ci --no-audit --no-fund; if ($LASTEXITCODE -ne 0) { Fail "npm ci zlyhal" } }
+if (-not (Test-Path "node_modules\.bin\next.cmd") -or -not (Get-S17DepsInfo).deps_match) { npm ci --no-audit --no-fund; if ($LASTEXITCODE -ne 0) { Fail "npm ci zlyhal" } }
 
 $listen = $null
 if ($NoListen) {
