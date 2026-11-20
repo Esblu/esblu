@@ -730,3 +730,9 @@ Existujúce kroky sa nezmenili.
 
 Pozri `docs/clia-delta-2026-11-24-draft.md` § 3: kto je predajca, kedy vzniká nárok na refund, či čiastočná refundácia
 mení prístup, čo sa deje s dátami po ukončení, ako zákazník vypína obnovovanie a lehoty oznámení o zmene ceny.
+
+#### 8.14a Oprava získania webhook secretu (2026-11-20)
+- Príčina: skript vždy volal `npx --yes @stripe/cli@1.55.12` (aj keď bol nainštalovaný natívny Stripe CLI cez WinGet) a `Get-ListenSecret` zahodil výstup aj exit kód → každé zlyhanie npx/profilu sa prejavilo iba ako „nevrátil whsec_“. Navyše pri 1-prvkovom príkaze (natívny `stripe.exe`) by `$cli[1..0]` odovzdal samotný program ako argument.
+- Oprava: poradie `ESBLU_STRIPE_CLI` → natívny `stripe` v PATH → npx; bezpečné delenie argumentov; `listen --print-secret --project-name <profil>` (rovnako ako overený ručný príkaz); pri zlyhaní maskovaná diagnostika (exit kód + 6 riadkov). `stripe listen` v okne 1 používa ten istý CLI.
+- Kompromitované tajomstvá: `exposed.sha256` je zoznam odtlačkov (1/riadok); nový krok `-Step mark-exposed -Project <profil>` (bez platieb, bez výpisu tajomstva) pridá odtlačok aktuálneho whsec_ profilu. `start` aj `new-sandbox` odmietnu každé evidované tajomstvo.
+- Whsec_ profilu `esblu-qa2` bol zverejnený v konverzácii → po `mark-exposed` je profil pre testy nepoužiteľný; ďalší test vyžaduje nový sandbox (`-Step new-sandbox -Project esblu-qa3 -Email <adresa>`), ktorý vytvorí nový účet, novú cenu a mapovanie na stagingu.

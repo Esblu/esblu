@@ -5,6 +5,8 @@
     powershell -ExecutionPolicy Bypass -File .\scripts\stripe-local-sandbox.ps1
   Okno 2 (scenare):
     powershell -ExecutionPolicy Bypass -File .\scripts\stripe-local-sandbox.ps1 -Step <krok> [-CheckoutId <uuid>] [-Subscription <sub_...>]
+      mark-exposed - bez platieb: overi Stripe CLI (natívny stripe v PATH ma prednost pred npx) a ulozi SHA-256
+                     aktualneho whsec_ profilu -Project medzi kompromitovane (start s nim sa uz nespusti)
       new-sandbox  - NOVY anonymny sandbox v samostatnom profile CLI (-Project, default esblu-qa2) -Email <adresa>:
                      test kluce, nova cena 15,90 EUR/mes., mapovanie ceny na stagingu, odtlacok vystaveneho tajomstva
       clock-setup  - predplatne na Stripe TEST CLOCK pre firmu QA-STRIPE D (zamer sa vytvori automaticky)
@@ -53,7 +55,7 @@
   - Databaza: Supabase staging `cjbdijbbcujvmrzezusd` (esblu-test). Produkcia sa nepouziva.
 #>
 param(
-  [ValidateSet("start", "status", "new-sandbox", "clock-setup", "renew", "fail-renew", "fix-payment", "refund-partial", "refund-full",
+  [ValidateSet("start", "status", "mark-exposed", "new-sandbox", "clock-setup", "renew", "fail-renew", "fix-payment", "refund-partial", "refund-full",
                "refund-old", "refund-current", "reconcile", "advance-check", "verify-terminal", "qa-login", "qa-check",
                "s12-account", "s12-events", "s12-catchup", "s12-cancel-at", "s12-refund-missing", "s13-existing",
                "s17", "s17-cleanup")]
@@ -71,9 +73,22 @@ param(
 )
 $ErrorActionPreference = "Stop"
 
-$StripeCliBase = @("npx", "--yes", "@stripe/cli@1.55.12")
+function Resolve-StripeCliBase {
+  # Poradie: $env:ESBLU_STRIPE_CLI (plna cesta k stripe.exe) -> nativny `stripe` v PATH (WinGet/Scoop)
+  # -> zaloha npx @stripe/cli@1.55.12. Nativny CLI cita ten isty profil (~/.config/stripe) aj
+  # systemovy trezor po `stripe login` (S17: povodne sa vzdy pouzival iba npx, aj ked bol nainstalovany CLI).
+  $p = $env:ESBLU_STRIPE_CLI
+  if (-not $p) {
+    $c = Get-Command stripe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($c) { $p = $c.Source }
+  }
+  if ($p) { return @($p) }
+  return @("npx", "--yes", "@stripe/cli@1.55.12")
+}
+$StripeCliBase = @(Resolve-StripeCliBase)
 # Samostatny profil Stripe CLI pre QA sandbox (default profil = povodny sandbox s vystavenym tajomstvom).
-$StripeCli = $StripeCliBase + @("--project-name", $Project)
+$StripeProfileArgs = @("--project-name", $Project)
+$StripeCli = @($StripeCliBase) + $StripeProfileArgs
 $StagingRef = "cjbdijbbcujvmrzezusd"
 $ProdRef = "fkpgvgvsmbpieduoatrt"
 $StagingUrl = "https://$StagingRef.supabase.co"
@@ -125,8 +140,13 @@ function Format-Eur([long]$minor, [string]$cur = "EUR") {
 }
 function Utc([long]$ts) { return [DateTimeOffset]::FromUnixTimeSeconds($ts).UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss 'UTC'") }
 
+function Get-CliRest([string[]]$cli) {
+  # Pozor: pre 1-prvkove pole by $cli[1..0] vratilo prvky [1] a [0] (opacny rozsah) -> natívny stripe.exe by dostal sam seba ako argument.
+  if ($cli.Length -gt 1) { return @($cli[1..($cli.Length - 1)]) }
+  return @()
+}
 function Invoke-Stripe([string[]]$StripeArgs) {
-  $cmd = $StripeCli[0]; $rest = $StripeCli[1..($StripeCli.Length - 1)] + $StripeArgs
+  $cmd = $StripeCli[0]; $rest = @(Get-CliRest $StripeCli) + $StripeArgs
   # Windows PowerShell 5.1: stderr nativneho prikazu pri 2>&1 nesmie ukoncit skript.
   $ErrorActionPreference = "Continue"
   $out = (& $cmd @rest 2>&1 | ForEach-Object { "$_" }) | Out-String
@@ -247,13 +267,39 @@ function Invoke-Staging([string]$method, [string]$path, $body = $null) {
 }
 
 function Invoke-StripeRaw([string[]]$cli, [string[]]$StripeArgs) {
-  # Bez kontroly chyb (napr. prazdny profil); vystup sa nikdy nevypisuje priamo.
-  $cmd = $cli[0]; $rest = $cli[1..($cli.Length - 1)] + $StripeArgs
+  # Bez kontroly chyb (napr. prazdny profil); vystup sa nikdy nevypisuje priamo. Exit kod -> $script:LastStripeExit.
+  $cmd = $cli[0]; $rest = @(Get-CliRest $cli) + $StripeArgs
   $ErrorActionPreference = "Continue"
-  return ((& $cmd @rest 2>&1 | ForEach-Object { "$_" }) | Out-String)
+  $script:LastStripeExit = $null
+  try {
+    $out = ((& $cmd @rest 2>&1 | ForEach-Object { "$_" }) | Out-String)
+    $script:LastStripeExit = $LASTEXITCODE
+  } catch {
+    $out = "spustenie '$cmd' zlyhalo: $($_.Exception.Message)"; $script:LastStripeExit = -1
+  }
+  return $out
 }
-function Get-ListenSecret([string[]]$cli) {
-  return [regex]::Match((Invoke-StripeRaw $cli @("listen", "--print-secret")), "whsec_[A-Za-z0-9]+").Value
+function Get-ListenSecret([string[]]$cli, [switch]$Quiet) {
+  # Rovnake poradie argumentov ako overeny rucny prikaz: stripe listen --print-secret --project-name <profil>.
+  $i = [Array]::IndexOf([string[]]$cli, "--project-name")
+  if ($i -ge 1) { $base = @($cli[0..($i - 1)]); $prof = @($cli[$i..($cli.Length - 1)]) } else { $base = @($cli); $prof = @() }
+  $out = Invoke-StripeRaw $base (@("listen", "--print-secret") + $prof)
+  $m = [regex]::Match($out, "whsec_[A-Za-z0-9]+")
+  if ($m.Success) { return $m.Value }
+  if (-not $Quiet) {
+    # Diagnostika bez tajomstiev: exit kod a prvych 6 riadkov (cez Hide-Secrets).
+    Say "    stripe listen --print-secret nevratil whsec_: CLI '$($base[0])', exit $($script:LastStripeExit)"
+    foreach ($l in @(($out -split "`r?`n") | Where-Object { $_.Trim() } | Select-Object -First 6)) { Say "      | $l" }
+  }
+  return ""
+}
+function Get-ExposedHashes {
+  # exposed.sha256 = jeden SHA-256 na riadok (vsetky vystavene / kompromitovane whsec_ tajomstva; nie tajomstvo).
+  if (-not (Test-Path $ExposedFile)) { return @() }
+  return @(Get-Content $ExposedFile | ForEach-Object { "$_".Trim().ToLower() } | Where-Object { $_ -match "^[0-9a-f]{64}$" })
+}
+function Add-ExposedHash([string]$h) {
+  if (@(Get-ExposedHashes) -notcontains $h.ToLower()) { Add-Content -Path $ExposedFile -Value $h.ToLower() -Encoding ASCII }
 }
 
 function Get-EsbluAccount([string]$subId) {
@@ -1264,12 +1310,28 @@ function Invoke-S17Cleanup {
 }
 
 # ----------------------------------------------------------------------------- scenare (okno 2)
+if ($Step -eq "mark-exposed") {
+  # Bez platieb a bez vypisu tajomstva: overi Stripe CLI a ulozi SHA-256 aktualneho whsec_ profilu '$Project'
+  # medzi kompromitovane -> -Step start s tymto profilom sa uz nespusti (treba novy sandbox: -Step new-sandbox).
+  Say "Stripe CLI: $($StripeCliBase -join ' ')"
+  $ver = Invoke-StripeRaw $StripeCliBase @("version")
+  Say "    verzia: $((($ver -split "`r?`n") | Where-Object { $_.Trim() } | Select-Object -First 1))"
+  Get-StripeTestKey | Out-Null
+  $w = Get-ListenSecret $StripeCli
+  if (-not $w) { Fail "Profil '$Project': whsec_ sa nepodarilo ziskat (diagnostika vyssie)." }
+  $h = Get-Sha256 $w
+  Add-ExposedHash $h
+  Say "OK: whsec_*** profilu '$Project' (SHA-256 $($h.Substring(0,8))...) je oznaceny ako kompromitovany; evidovane odtlacky: $(@(Get-ExposedHashes).Count)."
+  Say "    Dalej: novy sandbox v samostatnom profile, napr. -Step new-sandbox -Project esblu-qa3 -Email <adresa> (az po schvaleni)."
+  exit 0
+}
+
 if ($Step -eq "new-sandbox") {
   if ($Email -notmatch "^[^@\s]+@[^@\s]+\.[^@\s]+$") { Fail "Zadaj -Email <adresa> (predvyplni registraciu pri neskorsom claim)." }
   # 1) Odtlacok VYSTAVENEHO tajomstva = secret povodneho (default) profilu CLI.
   $exposed = Get-ListenSecret $StripeCliBase
-  if ($exposed) { Set-Content -Path $ExposedFile -Value (Get-Sha256 $exposed) -Encoding ASCII; Say "    odtlacok vystaveneho tajomstva ulozeny (SHA-256 $((Get-Sha256 $exposed).Substring(0,8))...)" }
-  elseif (-not (Test-Path $ExposedFile)) { Fail "Neviem urcit vystavene tajomstvo (default profil bez kluca)." }
+  if ($exposed) { Add-ExposedHash (Get-Sha256 $exposed); Say "    odtlacok vystaveneho tajomstva ulozeny (SHA-256 $((Get-Sha256 $exposed).Substring(0,8))...)" }
+  elseif (@(Get-ExposedHashes).Count -eq 0) { Fail "Neviem urcit vystavene tajomstvo (default profil bez kluca)." }
   # 2) Novy profil musi byt prazdny, inak by `sandboxes create` iba otvoril Dashboard povodneho uctu.
   $cfg = Invoke-StripeRaw $StripeCli @("config", "--list")
   if ($cfg -match "(?:sk|rk|rkcs)_test_") { Fail "Profil '$Project' uz ma kluc. Pouzi iny -Project (napr. esblu-qa3)." }
@@ -1279,7 +1341,7 @@ if ($Step -eq "new-sandbox") {
   # 3) Novy ucet => nove tajomstvo; musi sa lisit od vystaveneho.
   $w = Get-ListenSecret $StripeCli
   if (-not $w) { Fail "stripe listen --print-secret v novom profile nevratil whsec_." }
-  if ((Get-Sha256 $w) -eq (Get-Content $ExposedFile -Raw).Trim()) { Fail "Novy sandbox ma rovnake tajomstvo ako vystavene - sandbox nevznikol." }
+  if (@(Get-ExposedHashes) -contains (Get-Sha256 $w)) { Fail "Novy sandbox ma vystavene (kompromitovane) tajomstvo - sandbox nevznikol alebo profil je zly." }
   Say "2/4 nove tajomstvo whsec_*** sa lisi od vystaveneho (SHA-256 $((Get-Sha256 $w).Substring(0,8))...)"
   # 4) Cena Esblu Komplet 15,90 EUR / mesiac v novom sandboxe.
   $price = Get-StripeJson @("prices", "create", "-d", "currency=eur", "-d", "unit_amount=1590", "-d", "recurring[interval]=month", "-d", "product_data[name]=Esblu Komplet (test)")
@@ -1803,10 +1865,10 @@ Say "2/5 Podpisove tajomstvo stripe listen (viazane na sandbox profilu '$Project
 $WhSec = Get-ListenSecret $StripeCli
 if (-not $WhSec) { Fail "stripe listen --print-secret nevratil whsec_." }
 $newHash = Get-Sha256 $WhSec
-if ((Test-Path $ExposedFile) -and ($newHash -eq (Get-Content $ExposedFile -Raw).Trim())) {
+if (@(Get-ExposedHashes) -contains $newHash) {
   Fail "Profil '$Project' pouziva VYSTAVENE tajomstvo. Vytvor novy sandbox: -Step new-sandbox -Email <adresa>."
 }
-if (-not (Test-Path $ExposedFile)) { Fail "Chyba odtlacok vystaveneho tajomstva - spusti najprv -Step new-sandbox -Email <adresa>." }
+if (@(Get-ExposedHashes).Count -eq 0) { Fail "Chyba odtlacok vystaveneho tajomstva - spusti najprv -Step new-sandbox -Email <adresa>." }
 Say "    tajomstvo whsec_*** (SHA-256 $($newHash.Substring(0,8))...) - lisi sa od vystaveneho"
 
 Say "3/5 Staging Supabase service role kluc (esblu-test)."
@@ -1839,7 +1901,9 @@ if ($NoListen) {
 } else {
   Remove-Item $NoListenFile -Force -ErrorAction SilentlyContinue
   Say "5/5 stripe listen -> http://localhost:$Port/api/billing/webhooks/stripe"
-  $listen = Start-Process -FilePath "npx.cmd" -ArgumentList @("--yes", "@stripe/cli@1.55.12", "--project-name", $Project, "listen", "--events", $Events, "--forward-to", "http://localhost:$Port/api/billing/webhooks/stripe") `
+  $lArgs = @("listen", "--events", $Events, "--forward-to", "http://localhost:$Port/api/billing/webhooks/stripe") + $StripeProfileArgs
+  if ($StripeCliBase[0] -eq "npx") { $lExe = "npx.cmd"; $lArgs = @(Get-CliRest $StripeCliBase) + $lArgs } else { $lExe = $StripeCliBase[0] }
+  $listen = Start-Process -FilePath $lExe -ArgumentList $lArgs `
     -RedirectStandardOutput (Join-Path $StateDir "listen.out.log") -RedirectStandardError (Join-Path $StateDir "listen.log") -NoNewWindow -PassThru
   Set-Content -Path $ListenPidFile -Value $listen.Id -Encoding ASCII   # S17 (okno 2) zastavi listen pre test zmeskanej udalosti
 }
