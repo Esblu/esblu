@@ -61,9 +61,9 @@ check("build/create skripty: žiadny natvrdo JBR override, používajú Use-Jdk2
 });
 check("build skript: verzia/podpis/package nezmenené", () => {
   // 2026-11-17: versionCode/Name sú parametre (predtým natvrdo vc2); default = najbližší voľný kód po vc3.
-  assert.match(build, /\[int\]\$VersionCode = 4\b/, "default vc4 (vc1–vc3 už použité)");
-  assert.match(build, /\[string\]\$VersionName = "1\.0\.1"/);
-  assert.match(build, /if \(\$VersionCode -lt 4\)/, "použité kódy vc1–vc3 sú odmietnuté");
+  assert.match(build, /\[int\]\$VersionCode = 5\b/, "default vc5 (vc1–vc4 už použité)");
+  assert.match(build, /\[string\]\$VersionName = "1\.0\.2"/);
+  assert.match(build, /if \(\$VersionCode -lt 5\)/, "použité kódy vc1–vc4 sú odmietnuté");
   assert.match(build, /if \(Test-Path \$OutAab\) \{ Fail /, "existujúci AAB sa neprepíše");
   assert.match(build, /esblu-upload-key-2026\.jks/);
   assert.match(build, /\$Alias = "esblu"/);

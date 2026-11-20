@@ -10,21 +10,22 @@
 # - Output: esblu-<versionName>-vc<versionCode>.aab + .signing.txt (public fingerprints only).
 # - versionCode must grow with EVERY Play upload: vc1 = first build (main @ 901c46c),
 #   vc2 = Internal Testing build from mobile-platform (dashboard + voice), vc3 = 1.0.0
-#   (bc31e63), vc4 = 1.0.1 public-release candidate (0a44a60, open registration).
+#   (bc31e63), vc4 = 1.0.1 public-release candidate (0a44a60, open registration),
+#   vc5 = 1.0.2 security update (Next.js 16.4.6, Capacitor 8.6.2 - proxy origin fix).
 #   An existing AAB with the same versionCode is never overwritten.
 # - Parameters (2026-11-17; previously hard-coded vc2):
-#     -VersionCode 4 -VersionName 1.0.1   (defaults = next free code after vc3)
+#     -VersionCode 5 -VersionName 1.0.2   (defaults = next free code after vc4)
 #     -PrepareWeb   also builds fresh mobile web assets (npm ci, mobile build,
 #                   npx cap sync android) before Gradle. Without it the script only
 #                   verifies the existing synced assets (it never packages stale ones silently).
 param(
-  [int]$VersionCode = 4,
-  [string]$VersionName = "1.0.1",
+  [int]$VersionCode = 5,
+  [string]$VersionName = "1.0.2",
   [switch]$PrepareWeb
 )
 
 $ErrorActionPreference = "Continue"  # native tools write to stderr; every step is checked explicitly
-if ($VersionCode -lt 4) { Write-Host "FAIL: versionCode $VersionCode is already used (vc1-vc3). Use 4 or higher." -ForegroundColor Red; exit 1 }
+if ($VersionCode -lt 5) { Write-Host "FAIL: versionCode $VersionCode is already used (vc1-vc4). Use 5 or higher." -ForegroundColor Red; exit 1 }
 # NEW upload key (2026). The legacy esblu-upload-key.jks (unknown password) is NOT used.
 $Keystore = if ($env:ESBLU_UPLOAD_KEYSTORE) { $env:ESBLU_UPLOAD_KEYSTORE } else { Join-Path $env:USERPROFILE "Documents\Esblu-keys\esblu-upload-key-2026.jks" }
 $ShaFile = Join-Path $PSScriptRoot "upload-key.sha256"
