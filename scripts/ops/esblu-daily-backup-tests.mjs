@@ -15,7 +15,7 @@ async function check(label, fn) {
   catch (e) { failed++; console.log(`  FAIL ${label}\n       ${e.message}`); }
 }
 
-const KEY = "sb_secret_TESTONLY_not_a_real_key_000000";
+const KEY = "test_only_mock_key";
 const md5 = (b) => crypto.createHash("md5").update(b).digest("hex");
 function mockData() {
   const vehicles = Array.from({ length: 2345 }, (_, i) => ({ id: i + 1, plate: `BA${i}`, company_id: "c1" }));
@@ -104,12 +104,11 @@ await check("záloha: všetky tabuľky (stránkovanie > 1000), Auth, všetky buc
   assert.equal(bundle.tables.vehicles.rows.length, 2345);
   assert.deepEqual(bundle.objects.map((o) => `${o.bucket}/${o.name}`).sort(), Object.keys(data.files).sort());
 });
-await check("minimalizácia: push tokeny, web push, relácie nie sú v zálohe; kurzy iba ako počet", async () => {
+await check("minimalizácia: push tokeny, web push, relácie nie sú v zálohe; kurzy ECB celé (prepočty faktúr)", async () => {
   const { bundle } = B.openBackup(first.file, fs.readFileSync(keys.priv, "utf8"), PASS);
   for (const t of ["push_devices", "push_subscriptions", "session_active_company"]) assert.equal(bundle.tables[t], undefined, t);
-  assert.equal(bundle.tables.fx_reference_rates.count_only, true);
   assert.equal(bundle.tables.fx_reference_rates.count, 30);
-  assert.equal(bundle.tables.fx_reference_rates.rows, undefined);
+  assert.equal(bundle.tables.fx_reference_rates.rows.length, 30);
   assert.ok(!fs.readFileSync(first.file).includes("fcm-secret"));
 });
 await check("súhrn last-success.json bez osobných údajov (žiadne e-maily, mená, ŠPZ)", () => {
@@ -158,9 +157,22 @@ await check("ochrany: iba produkčný ref alebo 127.0.0.1, pripnutý odtlačok k
   await assert.rejects(B.runBackup(envFor("https://cjbdijbbcujvmrzezusd.supabase.co"), quiet), /127\.0\.0\.1/);
   await assert.rejects(B.runBackup(envFor(m.base, { ESBLU_BACKUP_PUBKEY_SHA256: "0".repeat(64) }), quiet), /odtlačok/);
   await assert.rejects(B.runBackup(envFor(m.base, { ESBLU_BACKUP_SUPABASE_KEY: "anon" }), quiet), /serverový kľúč/);
+  await assert.rejects(B.runBackup({ ...envFor(m.base), ESBLU_TEST_BASE_URL: "" }, quiet), /serverový kľúč/); // test_only_ kľúč nikdy proti produkcii
   assert.throws(() => B.assertSafeOutDir("C:\\Users\\roiaj\\OneDrive\\esblu"), /OneDrive/);
   assert.throws(() => B.assertSafeOutDir(path.join(os.homedir(), "OneDrive - Esblu", "x")), /OneDrive/);
   assert.throws(() => B.assertSafeOutDir(path.resolve(path.dirname(new URL(import.meta.url).pathname), "..", "..", "tmp")), /repozitári/);
+});
+await check("neúplná záloha: zmiznutá tabuľka alebo bucket oproti predchádzajúcemu behu = FAIL, súbor sa nezachová", async () => {
+  const d = mockData(); delete d.tables.companies; d.buckets = d.buckets.filter((b) => b !== "company-logos");
+  for (const k of Object.keys(d.files)) if (k.startsWith("company-logos/")) delete d.files[k];
+  const m4 = await startMock(d);
+  const before = fs.readdirSync(path.join(tmp, "out")).filter((f) => f.endsWith(".esblubk2")).length;
+  await assert.rejects(B.runBackup(envFor(m4.base), quiet), /neúplná.*chýba tabuľka companies.*chýba bucket company-logos/);
+  m4.srv.close();
+  assert.equal(fs.readdirSync(path.join(tmp, "out")).filter((f) => f.endsWith(".esblubk2")).length, before);
+  const w = B.compareManifests({ tables: { vehicles: 2000 }, buckets: { "vehicle-photos": 40 } }, { tables: { vehicles: 100 }, buckets: { "vehicle-photos": 3 } });
+  assert.equal(w.errors.length, 0);
+  assert.equal(w.warnings.length, 2);
 });
 await check("retencia: 14 denných + najnovšia z každého zo 4 predchádzajúcich týždňov", () => {
   const names = Array.from({ length: 60 }, (_, i) => {

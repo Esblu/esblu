@@ -36,7 +36,7 @@ export const EXPECTED_REF = "fkpgvgvsmbpieduoatrt";
 export const MAGIC = Buffer.from("ESBLUBK2");
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, "..", "..");
-const FILE_RE = /^esblu-prod-(\d{4}-\d{2}-\d{2})T(\d{2}-\d{2}-\d{2})Z\.esblubk2$/;
+const FILE_RE = /^esblu-prod-(\d{4}-\d{2}-\d{2})T(\d{2}-\d{2}-\d{2})(?:-\d{3})?Z\.esblubk2$/;
 
 // Minimalizácia (GDPR čl. 5 ods. 1 písm. c): tabuľky, ktoré nie sú potrebné na obnovu služby.
 // Pri obnove sa znovu vytvoria (zariadenia sa znovu zaregistrujú, relácie/potvrdenia sú dočasné).
@@ -48,8 +48,9 @@ export const EXCLUDED_TABLES = {
   assistant_conversation_contexts: "dočasný kontext konverzácie asistenta",
   einvoice_enroll_attempts: "dočasné pokusy o aktiváciu (30 dní), bez dôkaznej hodnoty",
 };
-// Verejné referenčné dáta: iba počet riadkov (obnova z ECB/zdroja), nie obsah.
-export const COUNT_ONLY_TABLES = { fx_reference_rates: "kurzy ECB - verejné, znovu načítateľné" };
+// Tabuľky iba s počtom riadkov (bez obsahu). Zámerne prázdne: kurzy ECB (fx_reference_rates) sa zálohujú celé -
+// historické kurzy sú súčasťou prepočtu vystavených faktúr a cron ich spätne nedoťahuje.
+export const COUNT_ONLY_TABLES = {};
 
 const sha256 = (b) => crypto.createHash("sha256").update(b).digest("hex");
 const md5 = (b) => crypto.createHash("md5").update(b).digest("hex");
@@ -236,6 +237,25 @@ export function selectForDeletion(fileNames, keepDaily = 14, keepWeekly = 4) {
   return items.filter((x) => !keep.has(x.f)).map((x) => x.f);
 }
 
+export function compareManifests(prev, now) {
+  const errors = [], warnings = [];
+  if (!prev) return { errors, warnings };
+  for (const t of Object.keys(prev.tables || {})) if (!(t in now.tables) && !(t in EXCLUDED_TABLES)) errors.push(`chýba tabuľka ${t}`);
+  for (const b of Object.keys(prev.buckets || {})) if (!(b in now.buckets)) errors.push(`chýba bucket ${b}`);
+  const sum = (o) => Object.values(o || {}).reduce((a, n) => a + n, 0);
+  if (sum(prev.tables) > 0 && sum(now.tables) === 0) errors.push("všetky tabuľky prázdne");
+  if (sum(prev.buckets) > 0 && sum(now.buckets) === 0) errors.push("Storage prázdny");
+  for (const [t, n] of Object.entries(prev.tables || {})) {
+    const m = now.tables[t];
+    if (m !== undefined && n >= 100 && m < n * 0.5) warnings.push(`tabuľka ${t}: ${n} -> ${m} riadkov`);
+  }
+  for (const [b, n] of Object.entries(prev.buckets || {})) {
+    const m = now.buckets[b];
+    if (m !== undefined && n >= 10 && m < n * 0.5) warnings.push(`bucket ${b}: ${n} -> ${m} súborov`);
+  }
+  return { errors, warnings };
+}
+
 export function assertSafeOutDir(outDir) {
   const abs = path.resolve(outDir);
   const low = abs.toLowerCase();
@@ -256,7 +276,8 @@ export async function runBackup(env = process.env, log = console.log) {
   if (testBase && !/^http:\/\/127\.0\.0\.1:\d+$/.test(testBase)) die("ESBLU_TEST_BASE_URL smie byť iba http://127.0.0.1:<port>");
   const base = testBase || `https://${EXPECTED_REF}.supabase.co`;
   const key = (env.ESBLU_BACKUP_SUPABASE_KEY || "").trim();
-  if (!/^(sb_secret_|eyJ)/.test(key)) die("chýba serverový kľúč ESBLU_BACKUP_SUPABASE_KEY (sb_secret_… alebo service_role)");
+  // test_only_ kľúč iba pre lokálny mock (127.0.0.1) - testy tak neobsahujú nič, čo vyzerá ako skutočný kľúč.
+  if (!/^(sb_secret_|eyJ)/.test(key) && !(testBase && /^test_only_[a-z0-9_]+$/.test(key))) die("chýba serverový kľúč ESBLU_BACKUP_SUPABASE_KEY (sb_secret_… alebo service_role)");
   if (!env.ESBLU_BACKUP_PUBLIC_KEY || !fs.existsSync(env.ESBLU_BACKUP_PUBLIC_KEY)) die("chýba verejný kľúč ESBLU_BACKUP_PUBLIC_KEY");
   const pub = fs.readFileSync(env.ESBLU_BACKUP_PUBLIC_KEY, "utf8");
   const fp = publicKeyFingerprint(pub);
@@ -290,11 +311,12 @@ export async function runBackup(env = process.env, log = console.log) {
   log("4/5 Šifrovanie verejným kľúčom…");
   fs.mkdirSync(outDir, { recursive: true });
   restrictDir(outDir);
-  const stamp = bundle.meta.created_at.replace(/\.\d+Z$/, "Z").replace(/:/g, "-");
+  const stamp = bundle.meta.created_at.replace(/:/g, "-").replace(".", "-"); // s milisekundami - dva behy nikdy nekolidujú
   const name = `esblu-prod-${stamp}.esblubk2`;
   const file = path.join(outDir, name);
   const { file: enc, dataKey } = encryptBundle(zlib.gzipSync(Buffer.from(JSON.stringify(bundle))), pub);
-  fs.writeFileSync(`${file}.tmp`, enc, { mode: 0o600 });
+  if (fs.existsSync(file)) die(`súbor ${name} už existuje - neprepisujem`);
+  fs.writeFileSync(`${file}.tmp`, enc, { mode: 0o600, flag: "wx" });
   fs.renameSync(`${file}.tmp`, file);
 
   log("5/5 Kontrola integrity zo súboru na disku…");
@@ -305,6 +327,19 @@ export async function runBackup(env = process.env, log = console.log) {
   if (p2.length) { fs.rmSync(file, { force: true }); die(`kontrola po zápise: ${p2.join("; ")}`); }
 
   const summary = { status: "OK", duration_s: Math.round((Date.now() - started) / 1000), ...summaryOf(back, name, sha256(disk)) };
+  // Neúplná záloha: porovnanie s predchádzajúcim úspešným behom (iba názvy a počty, bez osobných údajov).
+  const manifestNow = {
+    tables: Object.fromEntries(Object.entries(back.tables).map(([t, e]) => [t, e.count])),
+    buckets: Object.fromEntries(back.meta.buckets.map((b) => [b, back.objects.filter((o) => o.bucket === b).length])),
+  };
+  const manifestFile = path.join(outDir, "last-manifest.json");
+  const issues = compareManifests(fs.existsSync(manifestFile) ? JSON.parse(fs.readFileSync(manifestFile, "utf8")) : null, manifestNow);
+  summary.warnings = issues.warnings;
+  if (issues.errors.length) {
+    fs.rmSync(file, { force: true });
+    die(`záloha je neúplná oproti predchádzajúcej: ${issues.errors.join("; ")} (ak je to zámer, presuň last-manifest.json a spusti znova)`);
+  }
+  fs.writeFileSync(manifestFile, JSON.stringify(manifestNow, null, 1));
   const deleted = selectForDeletion(fs.readdirSync(outDir), Number(env.ESBLU_BACKUP_KEEP_DAILY || 14), Number(env.ESBLU_BACKUP_KEEP_WEEKLY || 4));
   for (const f of deleted) fs.rmSync(path.join(outDir, f), { force: true });
   summary.retention_deleted = deleted.length;
@@ -334,6 +369,55 @@ export function extractBundle(bundle, outDir) {
     fs.mkdirSync(path.dirname(p), { recursive: true });
     fs.writeFileSync(p, Buffer.from(o.data_b64, "base64"));
   }
+}
+
+// Obnova databázových záznamov: SQL pre psql / Supabase SQL Editor do NOVEJ databázy so schémou z repo migrácií.
+// Jedna transakcia; session_replication_role=replica vypne FK kontroly a triggery počas importu (poradie tabuliek
+// je potom ľubovoľné a triggery nevytvárajú duplicitné vedľajšie záznamy); generované stĺpce sa vynechajú,
+// identity hodnoty sa zachovajú (OVERRIDING SYSTEM VALUE), sekvencie sa posunú za maximum; na konci kontrola počtov.
+// Auth používatelia sa obnovujú cez Admin API s pôvodným id (heslá záloha neobsahuje), súbory cez Storage API.
+export function buildRestoreSql(bundle) {
+  const tag = `esblu_${crypto.randomBytes(6).toString("hex")}`;
+  const lines = [
+    "-- Esblu obnova databázových záznamov zo zálohy " + bundle.meta.created_at + " (CITLIVÉ ÚDAJE - po obnove zmazať)",
+    "begin;",
+    "set local session_replication_role = replica;",
+    "create function pg_temp.esblu_restore(p_table regclass, p_rows json) returns bigint language plpgsql as $f$",
+    "declare cols text; n bigint;",
+    "begin",
+    "  select string_agg(quote_ident(attname), ',' order by attnum) into cols from pg_attribute",
+    "   where attrelid = p_table and attnum > 0 and not attisdropped and attgenerated = '';",
+    "  execute format('insert into %s (%s) overriding system value select %s from json_populate_recordset(null::%s, $1)', p_table, cols, cols, p_table) using p_rows;",
+    "  get diagnostics n = row_count; return n;",
+    "end $f$;",
+    "create temp table esblu_restore_check (t text primary key, expected bigint, restored bigint);",
+  ];
+  // Cieľ je NOVÁ databáza zo schémy migrácií: referenčné dáta, ktoré vložili migrácie (plány, limity, právne
+  // dokumenty…), sa nahradia stavom zo zálohy - inak by kolidovali primárne kľúče.
+  const restored = Object.entries(bundle.tables).filter(([t, e]) => !e.count_only && /^[a-z0-9_]+$/.test(t)).map(([t]) => `public.${t}`);
+  if (restored.length) lines.push(`truncate table ${restored.join(", ")} cascade;`);
+  for (const [t, e] of Object.entries(bundle.tables)) {
+    if (e.count_only || !/^[a-z0-9_]+$/.test(t)) continue;
+    const json = JSON.stringify(e.rows);
+    if (json.includes(`$${tag}$`)) die("nečakaný obsah v zálohe (kolízia oddeľovača)");
+    lines.push(`insert into esblu_restore_check values ('${t}', ${e.count}, pg_temp.esblu_restore('public.${t}', $${tag}$${json}$${tag}$::json));`);
+  }
+  lines.push(
+    "do $f$ declare r record; m bigint; begin",
+    "  for r in select s.oid::regclass seq, c.oid::regclass tbl, a.attname col from pg_class s join pg_depend d on d.objid = s.oid and d.deptype in ('a','i')",
+    "    join pg_class c on c.oid = d.refobjid join pg_attribute a on a.attrelid = c.oid and a.attnum = d.refobjsubid",
+    "    join pg_namespace n on n.oid = c.relnamespace where s.relkind = 'S' and n.nspname = 'public' loop",
+    "    execute format('select max(%I) from %s', r.col, r.tbl) into m;",
+    "    if m is not null then perform setval(r.seq, m); end if;",
+    "  end loop;",
+    "  if exists (select 1 from esblu_restore_check where expected <> restored) then",
+    "    raise exception 'OBNOVA ZLYHALA: počty nesedia: %', (select string_agg(t || ' ' || restored || '/' || expected, ', ') from esblu_restore_check where expected <> restored);",
+    "  end if;",
+    "end $f$;",
+    "commit;",
+    "select count(*) as tables_restored, sum(restored) as rows_restored from esblu_restore_check;",
+  );
+  return lines.join("\n") + "\n";
 }
 
 export function initKeys(dir, passphrase) {
@@ -373,7 +457,12 @@ async function main() {
     const pass = await askHidden("Heslo súkromného kľúča: ");
     const { bundle, sha } = openBackup(a, fs.readFileSync(b, "utf8"), pass);
     console.log(`OVERENÉ: ${Object.keys(bundle.tables).length} tabuliek, ${bundle.auth_users.length} Auth, ${bundle.objects.length} súborov, SHA-256 ${sha}, vytvorené ${bundle.meta.created_at}`);
-    if (mode === "--extract") { extractBundle(bundle, assertSafeOutDir(c)); console.log(`Rozbalené do ${c} - citlivé údaje, po obnove zmazať.`); }
+    if (mode === "--extract") {
+      const dir = assertSafeOutDir(c);
+      extractBundle(bundle, dir);
+      fs.writeFileSync(path.join(dir, "restore-public-data.sql"), buildRestoreSql(bundle), { mode: 0o600 });
+      console.log(`Rozbalené do ${c} (tables/, storage/, auth_users.json, restore-public-data.sql) - citlivé údaje, po obnove zmazať.`);
+    }
     return;
   }
   console.log("Použitie: --init-keys <priečinok> | --run | --verify <súbor> <private.pem> | --extract <súbor> <private.pem> <cieľ>");

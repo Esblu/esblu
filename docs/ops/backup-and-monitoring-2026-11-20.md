@@ -52,10 +52,10 @@ dokladov a AI dokumentov.
 | Produkcia | iba čítanie (GET + výpis bucketu); test overuje 0 zápisov |
 | Integrita | počty riadkov voči serveru, SHA-256 tabuliek, veľkosť + MD5/eTag každého súboru; po zápise sa súbor znovu načíta, rozšifruje a celý overí; inak sa zmaže a beh zlyhá |
 | Šifrovanie | AES-256-GCM s náhodným kľúčom na každú zálohu, kľúč zabalený **verejným** RSA-4096 kľúčom; hlavička chránená tagom. Denný beh nepozná heslo ani súkromný kľúč. Súkromný kľúč (šifrovaný heslom) je offline. |
-| Kľúč k Supabase | samostatný, samostatne zrušiteľný secret kľúč „backup“, uložený iba cez Windows DPAPI (tento používateľ + PC), nikdy v súbore v čistej podobe |
+| Kľúč k Supabase | **nahradené** — secret kľúč nie je iba na čítanie; pozri `backup-preflight-verification-2026-11-20.md` (rola `esblu_backup` + endpoint iba na čítanie súborov) |
 | Cieľ | `C:\Users\roiaj\esblu-backups\daily` — mimo repa a mimo OneDrive (skript odmietne OneDrive/Dropbox/Google Drive), práva iba pre používateľa |
 | Retencia | 14 denných + 1 týždenná zo 4 predchádzajúcich týždňov (najstaršia ≤ ~6 týždňov) |
-| Minimalizácia | vynechané: FCM tokeny (`push_devices`), web push odbery, relácie, dočasné potvrdenia/kontexty asistenta, pokusy o aktiváciu eFaktúry; kurzy ECB iba počet |
+| Minimalizácia | vynechané: FCM tokeny (`push_devices`), web push odbery, relácie, dočasné potvrdenia/kontexty asistenta, pokusy o aktiváciu eFaktúry (kurzy ECB sa zálohujú celé) |
 | Súhrn | `last-success.json` / `backup-runs.jsonl` — iba počty, veľkosti, odtlačky (test overuje, že neobsahuje e-maily ani mená) |
 | Automatizácia | Plánovač úloh denne 02:30, spustí sa aj dodatočne po zapnutí PC; log bez tajomstiev; pri chybe `last-failure.json` |
 | Testy | `node scripts/ops/esblu-daily-backup-tests.mjs` — 12/12 (mock Supabase na 127.0.0.1: stránkovanie, podpriečinky, minimalizácia, nesprávne heslo/kľúč, poškodenie 1 bajtu, path traversal, retencia, ochrany produkcie/OneDrive); mutácie (vypnutá kontrola MD5, odtlačku) testy zachytia |
