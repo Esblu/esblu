@@ -255,24 +255,34 @@ function Register-CompromisedProfileKeys {
     }
   }
 }
+function Get-StripeProbeStatus([hashtable]$h, [string]$path) {
+  # HTTP stav GET (iba citanie). 200 = OK, 403 = chyba OPRAVNENIE kluca, 401 = neplatny kluc, 400/404 = chyba kontroly/verzie.
+  try { Invoke-RestMethod -Uri "https://api.stripe.com/v1/$path" -Headers $h -Method Get | Out-Null; return 200 }
+  catch { $c = 0; try { $c = [int]$_.Exception.Response.StatusCode } catch { }; return $c }
+}
 function Test-StripeKeyAccess([string]$key, [string]$version) {
-  # READ-ONLY sonda pred akymkolvek zapisom: kluc + pripnuta verzia API musia mat pristup ku vsetkemu, co S17 pouzije.
+  # READ-ONLY sonda pred akymkolvek zapisom. Povinne zdroje S17 -> pri chybe STOP. Uctovne zdroje
+  # (balance_transactions, payouts): 403 = kluc sandboxu nema pravo (CLI kluc rkcs_ claimable sandboxu) ->
+  # LIMITATION pre poplatok/cistu sumu (S17-9), S17 pokracuje; ine kody = chyba kontroly -> STOP.
   $h = @{ Authorization = "Bearer $key" }
   if ($version) { $h["Stripe-Version"] = $version }
-  $need = @("test_helpers/test_clocks", "prices", "customers", "subscriptions", "invoices", "credit_notes", "refunds", "charges", "payment_intents", "events", "balance_transactions")
+  $need = @("test_helpers/test_clocks", "prices", "customers", "subscriptions", "invoices", "credit_notes", "refunds", "charges", "payment_intents", "events")
   $missing = @()
-  foreach ($r in $need) {
-    try { Invoke-RestMethod -Uri "https://api.stripe.com/v1/$($r)?limit=1" -Headers $h -Method Get | Out-Null }
-    catch {
-      $code = $null; try { $code = [int]$_.Exception.Response.StatusCode } catch { }
-      $missing += "$r (HTTP $code)"
-    }
-  }
-  $payouts = "ok"
-  try { Invoke-RestMethod -Uri "https://api.stripe.com/v1/payouts?limit=1" -Headers $h -Method Get | Out-Null } catch { $payouts = "bez pristupu (LIMITATION)" }
+  foreach ($r in $need) { $c = Get-StripeProbeStatus $h "$($r)?limit=1"; if ($c -ne 200) { $missing += "$r (HTTP $c)" } }
   if ($missing.Count -gt 0) { Fail "Kluc/verzia $version nema pristup: $($missing -join ', ') - zastavene pred zapisom." }
-  Say "    Stripe API sonda OK (read-only, Stripe-Version $version): $($need.Count) zdrojov; payouts: $payouts"
+  $acc = [ordered]@{}
+  foreach ($r in @("balance_transactions", "payouts")) {
+    $c = Get-StripeProbeStatus $h "$($r)?limit=1"
+    if ($c -eq 200) { $acc[$r] = "ok" }
+    elseif ($c -eq 403) { $acc[$r] = "permission_denied" }
+    else { Fail "Kontrola $r vratila HTTP $c (nie je to chyba opravnenia) - zastavene, over verziu $version / endpoint." }
+  }
+  $env:S17_LEDGER_ACCESS = $acc["balance_transactions"]   # zdedia podprocesy (S17-8/9)
+  Say "    Stripe API sonda OK (read-only, Stripe-Version $version): $($need.Count) povinnych zdrojov; balance_transactions: $($acc['balance_transactions']); payouts: $($acc['payouts'])"
+  if ($acc["balance_transactions"] -ne "ok") { Say "    POZOR: kluc sandboxu nema pravo citat balance transactions -> S17-9 (poplatok/cista suma) bude LIMITATION, nie PASS." }
+  return $acc
 }
+
 function Get-CompromisedKeyHashes {
   if (-not (Test-Path $CompromisedKeyFile)) { return @() }
   return @(Get-Content $CompromisedKeyFile | ForEach-Object { "$_".Trim().ToLower() } | Where-Object { $_ -match "^[0-9a-f]{64}$" })
@@ -1323,6 +1333,8 @@ function Invoke-S17 {
       $d["month"] = $res.month
       $d["api_version"] = $res.api_version
       $d["ledger_import"] = $res.import
+      $d["ledger"] = $res.ledger
+      if ($res.ledger -eq "PERMISSION_DENIED") { Say17 "    INFO: import balance transactions = 403 (opravnenie kluca sandboxu) - export dokladov pokracuje, poplatok/net v S17-9 = LIMITATION" "Yellow" }
       $d["rows"] = $res.rows
       $d["rows_by_type"] = $res.rows_by_type
       $d["totals_minor"] = $res.totals_minor
@@ -1343,6 +1355,14 @@ function Invoke-S17 {
 
     Invoke-S17Step "9" "Poplatok / cista suma: export vs. Stripe balance transaction platby" {
       param($d)
+      if ($S17Ctx.export.ledger -eq "PERMISSION_DENIED" -or $env:S17_LEDGER_ACCESS -eq "permission_denied") {
+        $d["_status"] = "LIMITATION"
+        $d["reason"] = "kluc sandboxu (CLI kluc claimable sandboxu) nema pravo Balance transactions: read (Stripe 403) - poplatok, cista suma a vyplaty sa v sandboxe overit nedaju"
+        $d["consequence"] = "hruba suma dokladov (faktura, dobropis) je overena v S17-4/6/8; poplatok/net/payout overuju iba DB testy (test:billing-ops-db); pred LIVE: overit s restricted reporting klucom (Balance transactions read + Payouts read) pri prvej internej platbe"
+        Say17 "    LIMITATION: $($d['reason'])" "Yellow"
+        $S17Ctx.payoutPresent = $false
+        return
+      }
       $pi = Invoke-StripeApi "GET" "/payment_intents/$($S17Ctx.pi)" ([ordered]@{ "expand[]" = "latest_charge.balance_transaction" })
       $bt = $pi.latest_charge.balance_transaction
       if (-not $bt -or -not $bt.id) { Fail "Stripe: platba nema balance transaction." }
@@ -1514,7 +1534,7 @@ if ($Step -eq "s17-auto") {
   }
   $k = Get-StripeTestKey
   Assert-StripeAccount $k
-  Test-StripeKeyAccess $k (Get-S17PinnedVersion)
+  $null = Test-StripeKeyAccess $k (Get-S17PinnedVersion)
   if (-not (Test-Path (Join-Path $RepoRoot "node_modules\next\package.json"))) {
     Say "node_modules chyba -> npm ci (jednorazovo, niekolko minut)..."
     Push-Location $RepoRoot; try { & npm.cmd ci --no-audit --no-fund; if ($LASTEXITCODE -ne 0) { Fail "npm ci zlyhal." } } finally { Pop-Location }
@@ -1569,10 +1589,17 @@ if ($Step -eq "new-sandbox") {
   $null = Assert-StagingAccess
   # 4) Novy profil musi byt prazdny, inak by `sandboxes create` iba otvoril Dashboard povodneho uctu.
   $cfg = Invoke-StripeRaw $StripeCli @("config", "--list")
-  if ($cfg -match "(?:sk|rk|rkcs)_(?:test|live)_" -or $cfg -match "account_id\s*=\s*['`"]?acct_") { Fail "Profil '$Project' uz ma ucet/kluc. Pouzi iny -Project." }
-
-  Say "1/5 Novy anonymny sandbox v profile '$Project' (prvy zapis)..."
-  Invoke-Stripe @("sandboxes", "create", "--email", $Email, "--non-interactive") | Out-Null
+  $resume = $false
+  if ($cfg -match "(?:sk|rk|rkcs)_live_") { Fail "Profil '$Project' obsahuje LIVE kluc." }
+  if ($cfg -match "(?:sk|rk|rkcs)_test_" -or $cfg -match "account_id\s*=\s*['`"]?acct_") {
+    # Pokracovanie: profil uz ma sandbox z predchadzajuceho behu, ale este nema cenu (sandbox-$Project.json).
+    if (Test-Path $SandboxFile) { Fail "Profil '$Project' uz ma sandbox aj cenu - pouzi -Step s17-auto / map-price." }
+    $resume = $true
+    Say "1/5 Profil '$Project' uz ma sandbox z predchadzajuceho behu - POKRACOVANIE bez noveho sandboxu."
+  } else {
+    Say "1/5 Novy anonymny sandbox v profile '$Project' (prvy zapis)..."
+    Invoke-Stripe @("sandboxes", "create", "--email", $Email, "--non-interactive") | Out-Null
+  }
   # 2/5 Identita noveho sandboxu: ucet z profilu, kluc IBA z profilu (ziadna vyzva, ziadna premenna), /v1/account.
   $acct = Get-ProfileAccountId $StripeCli
   if (-not $acct) { Fail "Profil '$Project' po vytvoreni nema account_id - sandbox nevznikol." }
@@ -1596,9 +1623,15 @@ if ($Step -eq "new-sandbox") {
   if (-not $w) { Fail "stripe listen --print-secret v novom profile nevratil whsec_." }
   if (@(Get-ExposedHashes) -contains (Get-Sha256 $w)) { Fail "Novy sandbox ma kompromitovane tajomstvo - zastavene." }
   Say "2/5 identita OK: novy ucet $acct (lisi sa od $($oldAccounts.Count) existujucich), $idNote; whsec_*** nove (SHA-256 $((Get-Sha256 $w).Substring(0,8))...)"
-  Test-StripeKeyAccess $newKey (Get-S17PinnedVersion)
+  $null = Test-StripeKeyAccess $newKey (Get-S17PinnedVersion)
   # 3/5 Cena Esblu Komplet 15,90 EUR / mesiac v novom sandboxe + kontrola, ze ju vidi kluc noveho uctu.
-  $price = Get-StripeJson @("prices", "create", "-d", "currency=eur", "-d", "unit_amount=1590", "-d", "recurring[interval]=month", "-d", "product_data[name]=Esblu Komplet (test)")
+  # Bez duplicity: existujuca aktivna cena 15,90 EUR / mesiac s lookup_key S17 sa pouzije znova.
+  $lk = "esblu_complete_month_s17"
+  $found = Get-StripeJson @("prices", "list", "-d", "lookup_keys[]=$lk", "-d", "active=true", "--limit", "10")
+  $cands = @(@($found.data) | Where-Object { $_ -and $_.unit_amount -eq 1590 -and $_.currency -eq "eur" -and $_.recurring.interval -eq "month" -and -not $_.livemode })
+  if ($cands.Count -gt 1) { Fail "V sandboxe je viac cien s lookup_key $lk - zastavene (vyries rucne)." }
+  if ($cands.Count -eq 1) { $price = $cands[0]; Say "    existujuca cena $($price.id) sa pouzije znova (bez duplicity)" }
+  else { $price = Get-StripeJson @("prices", "create", "-d", "currency=eur", "-d", "unit_amount=1590", "-d", "recurring[interval]=month", "-d", "lookup_key=$lk", "-d", "product_data[name]=Esblu Komplet (test)") }
   if ($price.livemode) { Fail "Cena je live." }
   $script:PriceId = $price.id
   # Ulozit hned (nie je tajne) - ak by dalsia kontrola zlyhala, staging sa nemeni a pokracuje sa cez -Step map-price.

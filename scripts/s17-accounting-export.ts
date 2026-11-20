@@ -99,12 +99,15 @@ async function main(): Promise<void> {
   if (provider.apiVersion !== STRIPE_API_VERSION) fail("STRIPE_API_VERSION_NOT_PINNED");
   const admin = createClient(supabaseUrl, serviceRole, { auth: { autoRefreshToken: false, persistSession: false } });
 
-  let imported: ImportResult;
+  let imported: ImportResult = { transactions: 0, payouts: 0, payoutLinks: 0, truncated: false };
+  let ledger: "OK" | "PERMISSION_DENIED" = "OK";
   try {
     imported = await importStripeBalanceTransactions(admin, provider, "test", range);
   } catch (error) {
-    const code = error instanceof Error && /^[A-Z_]{3,60}$/.test(error.message) ? error.message : "LEDGER_IMPORT_FAILED";
-    fail(code);
+    const msg = error instanceof Error ? error.message : "";
+    // 403 = kľúč sandboxu nemá právo Balance transactions: read → LIMITATION (nie obchádzanie, nie PASS).
+    if (/^PROVIDER_ERROR: stripe GET balance_transactions 403$/.test(msg)) ledger = "PERMISSION_DENIED";
+    else fail(/^[A-Z_]{3,60}$/.test(msg) ? msg : "LEDGER_IMPORT_FAILED");
   }
 
   // --- export (rovnaké RPC ako admin route; actor = null → operátorský beh S17) --
@@ -137,6 +140,7 @@ async function main(): Promise<void> {
 
   emit({
     ok: true,
+    ledger,
     month,
     api_version: provider.apiVersion,
     import: imported,
