@@ -120,8 +120,10 @@ $S17ExpectedMain = "6506e11af70725f89f7cda3253fa4e4e60b883c5"
 # fix/billing-document-company-link-db. Pin kandidata je plne SHA; kandidat musi byt potomkom $S17ExpectedMain
 # (= origin/main) a jeho rozdiel voci nemu smie obsahovat IBA subory $S17CandidateFiles (uzavrety zoznam).
 # Tieto dve kontroly a kontrola schemy stagingu (migracia 20261124100000) sa NEDAJU obist cez -Force.
-$S17ExpectedApp = "8d736dbe9f66a42a44f5f87b036712c80bd4c97d"
-$S17CandidateFiles = @("lib/billing/ops-alerts.ts", "lib/billing/pipeline.ts", "scripts/billing-ops-pglite-tests.ts", "supabase/grants/public-data-api-grants.json", "supabase/migrations/20261124100000_billing_document_company_link.sql", "supabase/rollback/20261124100000_billing_document_company_link_rollback.sql")
+# 2026-11-23: kandidat = fix/billing-pdf-archive-s3 d785483 (S17-5: archiv PDF cez presny S3 hostitel Stripe + SSRF
+# kontrola skutocnej IP), priamy potomok 8d736db (S17-4) -> 8 suborov oproti main 6506e11.
+$S17ExpectedApp = "d78548355e7c27b548d2fa6c2725db615dc1a830"
+$S17CandidateFiles = @("lib/billing/document-archive.ts", "lib/billing/ops-alerts.ts", "lib/billing/pipeline.ts", "scripts/billing-ops-pglite-tests.ts", "scripts/subscriptions-lifecycle-tests.ts", "supabase/grants/public-data-api-grants.json", "supabase/migrations/20261124100000_billing_document_company_link.sql", "supabase/rollback/20261124100000_billing_document_company_link_rollback.sql")
 # Zavislosti, ktore S17 skutocne spusta (next dev v okne 1): nainstalovana verzia musi sediet s package-lock.json pinu.
 $S17DepPackages = @("next", "react", "react-dom")
 $RepoRoot = Split-Path -Parent $PSScriptRoot

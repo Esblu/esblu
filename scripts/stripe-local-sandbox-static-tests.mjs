@@ -254,9 +254,9 @@ for (const [re, name] of ps7) {
 // --- 16) Kandidat opravy S17-4 (2026-11-22): S17 testuje opravnu vetvu BEZ merge do main; neobiditelne kontroly
 {
   const m = code.match(/^\$S17ExpectedApp = "([^"]*)"\s*$/m);
-  check("kandidat S17ExpectedApp = plne SHA 8d736db (fix/billing-document-company-link-db)", !!m && m[1] === "8d736dbe9f66a42a44f5f87b036712c80bd4c97d");
+  check("kandidat S17ExpectedApp = plne SHA d785483 (fix/billing-pdf-archive-s3, potomok 8d736db)", !!m && m[1] === "d78548355e7c27b548d2fa6c2725db615dc1a830");
   check("kandidat sa neprebera dynamicky (jedno priradenie, literal)", (code.match(/\$S17ExpectedApp\s*=/g) || []).length === 1);
-  check("uzavrety zoznam suborov kandidata = presne 6 suborov opravy", /\$S17CandidateFiles = @\("lib\/billing\/ops-alerts\.ts", "lib\/billing\/pipeline\.ts", "scripts\/billing-ops-pglite-tests\.ts", "supabase\/grants\/public-data-api-grants\.json", "supabase\/migrations\/20261124100000_billing_document_company_link\.sql", "supabase\/rollback\/20261124100000_billing_document_company_link_rollback\.sql"\)/.test(code));
+  check("uzavrety zoznam suborov kandidata = presne 8 suborov opravy S17-4 + S17-5", /\$S17CandidateFiles = @\("lib\/billing\/document-archive\.ts", "lib\/billing\/ops-alerts\.ts", "lib\/billing\/pipeline\.ts", "scripts\/billing-ops-pglite-tests\.ts", "scripts\/subscriptions-lifecycle-tests\.ts", "supabase\/grants\/public-data-api-grants\.json", "supabase\/migrations\/20261124100000_billing_document_company_link\.sql", "supabase\/rollback\/20261124100000_billing_document_company_link_rollback\.sql"\)/.test(code));
   check("aplikacny kod HEAD porovnany s kandidatom (nie s main)", /"diff", "--name-only", \$S17ExpectedApp, "HEAD"/.test(code));
   check("kandidat musi byt potomkom pinu main", /"merge-base", "--is-ancestor", \$S17ExpectedMain, \$S17ExpectedApp/.test(code));
   check("origin/main musi stale byt pin 6506e11 (ziadny merge do main)", /if \(\$hi\.origin_main -ne \$S17ExpectedMain\) \{ \$headProblems/.test(code));
@@ -280,6 +280,17 @@ for (const [re, name] of ps7) {
   check("sonda: neplatne prostredie bez zapisu, POST na rpc", /-Method POST/.test(f) && /"p_environment":"s17-probe"/.test(f));
   check("HTTP 0 diagnostika: typ vynimky + WebException.Status, cez Hide-Secrets", /\(bez HTTP odpovede\) exc=\$\(\$ex\.GetType\(\)\.Name\)/.test(code) && /return \(Hide-Secrets \$txt\)/.test(code));
   check("kontrola schemy ostava pred -Force v kroku 1 a blokujuca v preflighte", /if \(-not \$schema\.ok\) \{ Fail "Staging: /.test(code) && /if \(-not \$schema\.ok\) \{ \$problems \+=/.test(code));
+}
+
+// --- 18) Kandidat S17-5 (2026-11-23): allowlist = presne zmenene subory main..kandidat (git), nic navyse
+{
+  const m = code.match(/^\$S17CandidateFiles = @\(([^)]*)\)\s*$/m);
+  const list = m ? [...m[1].matchAll(/"([^"]+)"/g)].map((x) => x[1]).sort() : [];
+  const { execFileSync } = await import("node:child_process");
+  let actual = [];
+  try { actual = execFileSync("git", ["diff", "--name-only", "6506e11af70725f89f7cda3253fa4e4e60b883c5", "d78548355e7c27b548d2fa6c2725db615dc1a830"], { encoding: "utf8" }).split("\n").filter(Boolean).sort(); } catch { actual = ["git-nedostupny"]; }
+  check("allowlist kandidata = git diff 6506e11..d785483 (8 suborov, bez navyse)", JSON.stringify(list) === JSON.stringify(actual) && list.length === 8, JSON.stringify(actual));
+  check("pin main ostava 6506e11 (bez merge do main)", /^\$S17ExpectedMain = "6506e11af70725f89f7cda3253fa4e4e60b883c5"\s*$/m.test(code));
 }
 
 console.log(`\n${passed} PASS, ${failed} FAIL`);
