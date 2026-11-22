@@ -1577,6 +1577,10 @@ await check("P1-4 R3: RECIPIENT_MISMATCH sa nikdy nekarantenuje, nepotvrdí ani 
   assert.ok(!provider.calls.some((c) => c.startsWith("ack:")));
   const seen = await as(U.owner, () => db.query<{ n: number }>("select count(*)::int n from public.einvoice_inbound where provider_received_id = 'rcv-p14-mismatch'"));
   assert.equal(seen.rows[0].n, 0, "firma riadok nevidí ani cez Data API");
+  const seenEv = await as(U.owner, () => db.query<{ n: number }>("select count(*)::int n from public.einvoice_events where inbound_id = $1", [fresh.id]));
+  assert.equal(seenEv.rows[0].n, 0, "ani históriu stavov skrytého dokladu");
+  const allEv = await sql<{ n: number }>("select count(*)::int n from public.einvoice_events where inbound_id = $1", [fresh.id]);
+  assert.ok(allEv.rows[0].n > 0, "história pre prevádzku ostáva");
   const q = await svc<{ j: { result: string } }>("select public.esblu_einvoice_inbound_quarantine($1, 'INVALID_XML') j", [fresh.id]);
   assert.equal(q[0].j.result, "not_eligible");
   const [h] = await svc<{ j: { inbound: Record<string, number> } }>("select public.esblu_einvoice_health(60, 60) j", []);
@@ -1592,6 +1596,30 @@ await check("P1-4 T10/T11: karanténa inej firmy je neviditeľná; funkcie karan
   assert.match(err, /permission denied/i);
   const err2 = await errorOf(() => as(U.owner, () => db.query("select public.esblu_einvoice_inbound_quarantine_acked($1)", [row.id])));
   assert.match(err2, /permission denied/i);
+});
+
+await check("P1-4 migrácia: operátorský reprocess karantenovaného dokladu nie je blokovaný CHECKom", async () => {
+  const row = await inboundByPid("rcv-p14-q1");
+  assert.ok(row.quarantined_at);
+  const [r] = await svc<{ j: Record<string, unknown> }>("select public.esblu_einvoice_operator_begin($1, 'inbound', $2, 'inbound_reprocess', 'DATA_FIXED', 120, 0) j", [U.owner, row.id]);
+  assert.ok(r.j, "operator_begin prešiel");
+  const after = await inboundByPid("rcv-p14-q1");
+  assert.equal(after.processing_status, "stored", "failed → stored");
+  assert.ok(after.quarantined_at, "stĺpce karantény ostávajú ako história");
+});
+
+await check("P1-4 migrácia: rollback vráti politiky a health (health beží), opätovná aplikácia je idempotentná", async () => {
+  await locked(() => db.exec(read("supabase/rollback/20261125100000_einvoice_inbound_quarantine_rollback.sql")));
+  const cols = (await sql<{ c: string }>("select column_name c from information_schema.columns where table_schema = 'public' and table_name = 'einvoice_inbound' and column_name like '%quarantin%'")).rows;
+  assert.equal(cols.length, 0);
+  const [h] = await svc<{ j: { inbound: Record<string, number> } }>("select public.esblu_einvoice_health(60, 60) j", []);
+  assert.equal(h.j.inbound.quarantined, undefined);
+  const fns = (await sql<{ n: number }>("select count(*)::int n from pg_proc where proname like 'esblu_einvoice_inbound_quarantine%'")).rows[0].n;
+  assert.equal(fns, 0);
+  await locked(() => db.exec(read("supabase/migrations/20261125100000_einvoice_inbound_quarantine.sql")));
+  await locked(() => db.exec(read("supabase/migrations/20261125100000_einvoice_inbound_quarantine.sql")));
+  const [h2] = await svc<{ j: { inbound: Record<string, number> } }>("select public.esblu_einvoice_health(60, 60) j", []);
+  assert.equal(typeof h2.j.inbound.quarantined, "number");
 });
 
 console.log(`\neinvoice-inbound: ${passed} passed, ${failed} failed`);

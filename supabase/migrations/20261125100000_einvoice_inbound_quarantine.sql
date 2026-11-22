@@ -4,7 +4,8 @@
 -- schválení vlastníka). Iba aditívne; nemení stavový automat, nemennosť originálu ani mapovanie organizácií.
 --
 -- 1) einvoice_inbound: quarantined_at, quarantine_reason, provider_acknowledged_at (+ index).
--- 2) RLS: firma NEVIDÍ riadok s last_error_code = 'RECIPIENT_MISMATCH' (doklad nie je jej) — ani cez Data API.
+-- 2) RLS: firma NEVIDÍ riadok s last_error_code = 'RECIPIENT_MISMATCH' (doklad nie je jej) — ani cez Data API,
+--    ani jeho udalosti v einvoice_events.
 -- 3) esblu_einvoice_inbound_quarantine(id, reason): IBA service_role; iba `failed` s uloženým XML (cesta + SHA-256),
 --    nikdy RECIPIENT_MISMATCH; idempotentné ('already'); zapíše udalosť do einvoice_events (audit).
 -- 4) esblu_einvoice_inbound_quarantine_acked(id): IBA service_role; zaznamená ACK karantény u poskytovateľa
@@ -21,10 +22,12 @@ alter table public.einvoice_inbound
   add column if not exists provider_acknowledged_at timestamptz;
 
 alter table public.einvoice_inbound drop constraint if exists einvoice_inbound_quarantine_check;
+-- Stav sa v CHECK nevyžaduje: operátorský reprocess (failed → stored, 20261002140000) musí ostať možný;
+-- karanténa je platná iba v stave `failed` (health aj UI to filtrujú), stĺpce ostávajú ako história.
 alter table public.einvoice_inbound add constraint einvoice_inbound_quarantine_check check (
   (quarantined_at is null and quarantine_reason is null and provider_acknowledged_at is null)
   or (quarantined_at is not null and quarantine_reason is not null
-      and processing_status = 'failed' and xml_storage_path is not null and xml_sha256 is not null
+      and xml_storage_path is not null and xml_sha256 is not null
       and quarantine_reason <> 'RECIPIENT_MISMATCH')
 ) not valid;
 alter table public.einvoice_inbound validate constraint einvoice_inbound_quarantine_check;
@@ -39,6 +42,16 @@ create policy einvoice_inbound_select_finance on public.einvoice_inbound
   using (company_id = public.esblu_my_active_company_id()
          and public.esblu_my_finance_view()
          and coalesce(last_error_code, '') <> 'RECIPIENT_MISMATCH');
+
+-- R3: ani história stavov (einvoice_events) skrytého dokladu sa firme nevracia — udalosť dokladu je viditeľná
+-- iba ak je viditeľný samotný doklad (RLS einvoice_inbound sa uplatní aj v poddotaze).
+drop policy if exists einvoice_events_select_finance on public.einvoice_events;
+create policy einvoice_events_select_finance on public.einvoice_events
+  for select to authenticated
+  using (company_id = public.esblu_my_active_company_id()
+         and public.esblu_my_finance_view()
+         and (inbound_id is null
+              or exists (select 1 from public.einvoice_inbound i where i.id = einvoice_events.inbound_id)));
 
 create or replace function public.esblu_einvoice_inbound_quarantine(p_inbound_id uuid, p_reason text)
 returns jsonb

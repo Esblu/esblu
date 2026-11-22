@@ -69,6 +69,10 @@ drop policy if exists einvoice_inbound_select_finance on public.einvoice_inbound
 create policy einvoice_inbound_select_finance on public.einvoice_inbound
   for select to authenticated
   using (company_id = public.esblu_my_active_company_id() and public.esblu_my_finance_view());
+drop policy if exists einvoice_events_select_finance on public.einvoice_events;
+create policy einvoice_events_select_finance on public.einvoice_events
+  for select to authenticated
+  using (company_id = public.esblu_my_active_company_id() and public.esblu_my_finance_view());
 drop index if exists public.einvoice_inbound_quarantine_idx;
 alter table public.einvoice_inbound drop constraint if exists einvoice_inbound_quarantine_check;
 alter table public.einvoice_inbound
