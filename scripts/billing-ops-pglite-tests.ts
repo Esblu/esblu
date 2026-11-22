@@ -9,6 +9,7 @@
 //   npm run test:billing-ops-db
 // =============================================================================
 /* eslint-disable @typescript-eslint/no-unused-vars -- spoločný harness (fixtures pre všetky roly) */
+import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
@@ -564,6 +565,63 @@ await check("archív PDF: stiahne iba z *.stripe.com, uloží bez prepisu, SHA-2
   const html = (async () => new Response("<html>", { status: 200 })) as unknown as typeof fetch;
   assert.equal(await fetchStripePdf("https://pay.stripe.com/invoice/x/pdf", html), "NOT_A_PDF");
   await fails(() => su("update public.billing_invoice_documents set pdf_url = 'https://evil.example/x.pdf' where provider_document_id = 'cn_opsdoc1'"), /url_check/);
+});
+
+await check("archív PDF (S17-5): pay.stripe.com → presný S3 Stripe; zlyhanie → bezpečné opakovanie; nezhodný SHA-256 → ARCHIVE_CONFLICT; doklad nemenný", async () => {
+  const pdf = new TextEncoder().encode("%PDF-1.7\n% esblu s17-5\n");
+  const sha = createHash("sha256").update(pdf).digest("hex");
+  const S3 = "https://stripe-upload-api.s3.us-west-1.amazonaws.com/inv.pdf?X-Amz-Signature=x";
+  for (const id of ["in_s175ok", "in_s175conf"]) {
+    await su(`insert into public.billing_invoice_documents (environment, kind, provider_document_id, status, total_minor, pdf_url, issued_at, pdf_next_attempt_at)
+      values ('test', 'invoice', $1, 'paid', 1590, $2, now(), now())`, [id, `https://pay.stripe.com/invoice/acct_x/${id}/pdf?s=ap`]);
+  }
+  const before = (await doc("in_s175ok")) as Json;
+  const store = new Map<string, Uint8Array>();
+  const storage: ArchiveStorage = {
+    async upload(p, b) { if (store.has(p)) return "exists"; store.set(p, b); return "ok"; },
+    async download(p) { return store.get(p) ?? null; },
+  };
+  // 1) Stripe presmeruje na cudzí bucket → URL_NOT_ALLOWED, nič sa neuloží, backoff
+  const wrong = (async (url: string) => new URL(url).hostname === "pay.stripe.com"
+    ? new Response(null, { status: 302, headers: { location: "https://evil.s3.us-west-1.amazonaws.com/x.pdf" } })
+    : new Response(pdf, { status: 200 })) as unknown as typeof fetch;
+  let r = await runDocumentArchive(serviceDb, "test", storage, { fetchImpl: wrong });
+  assert.deepEqual([r.claimed, r.archived, r.failed], [2, 0, 2], JSON.stringify(r));
+  let d = (await doc("in_s175ok")) as Json;
+  assert.deepEqual([d.pdf_archive_error, d.pdf_archive_attempts, d.pdf_sha256, d.pdf_archived_at], ["URL_NOT_ALLOWED", 1, null, null]);
+  assert.equal(store.size, 0);
+  assert.equal((await runDocumentArchive(serviceDb, "test", storage, { fetchImpl: wrong })).claimed, 0, "backoff: hneď sa neopakuje");
+  // 2) po uplynutí backoffu: správne presmerovanie na S3 Stripe → archivované, SHA-256 = bajty zo Stripe
+  await su("update public.billing_invoice_documents set pdf_next_attempt_at = now() where provider_document_id in ('in_s175ok', 'in_s175conf')");
+  const path = (await su<Json>("select 'test/' || to_char(issued_at at time zone 'UTC', 'YYYY/MM') || '/invoice/in_s175conf.pdf' p from public.billing_invoice_documents where provider_document_id = 'in_s175conf'"))[0].p as string;
+  store.set(path, new TextEncoder().encode("%PDF-1.7\n% INY OBSAH\n"));   // predchádzajúci beh nahral iný obsah
+  const hops: string[] = [];
+  const good = (async (url: string, init?: RequestInit) => {
+    hops.push(new URL(url).hostname);
+    assert.equal(init?.headers, undefined, "žiadne hlavičky/kľúče na S3");
+    return new URL(url).hostname === "pay.stripe.com" ? new Response(null, { status: 302, headers: { location: S3 } }) : new Response(pdf, { status: 200, headers: { "content-type": "application/pdf" } });
+  }) as unknown as typeof fetch;
+  r = await runDocumentArchive(serviceDb, "test", storage, { fetchImpl: good });
+  assert.deepEqual([r.claimed, r.archived, r.failed], [2, 1, 1], JSON.stringify(r));
+  assert.ok(hops.includes("stripe-upload-api.s3.us-west-1.amazonaws.com"));
+  d = (await doc("in_s175ok")) as Json;
+  assert.equal(d.pdf_sha256, sha);
+  assert.equal(d.pdf_archive_error, null);
+  assert.equal(d.pdf_archive_attempts, 2);
+  assert.ok(Buffer.from(store.get(d.pdf_storage_path as string)!).equals(Buffer.from(pdf)), "uložené = stiahnuté");
+  // účtovné údaje dokladu sa archiváciou nezmenili
+  for (const k of ["status", "total_minor", "company_id", "customer_company_id", "pdf_url", "issued_at", "document_number"]) assert.deepEqual(d[k], before[k], k);
+  // 3) nezhodný existujúci objekt → ARCHIVE_CONFLICT, nič sa neprepíše, doklad ostane nearchivovaný
+  const c = (await doc("in_s175conf")) as Json;
+  assert.deepEqual([c.pdf_archive_error, c.pdf_sha256, c.pdf_archived_at], ["ARCHIVE_CONFLICT", null, null]);
+  assert.match(new TextDecoder().decode(store.get(path)!), /INY OBSAH/);
+  // 4) idempotencia: archivovaný doklad sa už neberie; hash/cesta nemenné
+  await su("update public.billing_invoice_documents set pdf_next_attempt_at = now() where provider_document_id = 'in_s175ok'");
+  r = await runDocumentArchive(serviceDb, "test", storage, { fetchImpl: good });
+  assert.ok(!(await doc("in_s175ok") as Json).pdf_archive_error);
+  assert.equal(((await doc("in_s175ok")) as Json).pdf_sha256, sha);
+  await fails(() => su("update public.billing_invoice_documents set pdf_sha256 = repeat('1', 64) where provider_document_id = 'in_s175ok'"), /ARCHIVE_IMMUTABLE/);
+  await fails(() => su("update public.billing_invoice_documents set pdf_url = $1 where provider_document_id = 'in_s175conf'", [S3]), /url_check/);
 });
 
 // ============================================================================= 6) účtovný export
