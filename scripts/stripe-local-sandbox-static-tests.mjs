@@ -271,5 +271,16 @@ for (const [re, name] of ps7) {
   check("nove sandboxy zakazane, qa2 iba -NoListen", /zakladanie dalsich Stripe sandboxov je vypnute/.test(code) && /\$WhsecOnlyCompromised = @\("esblu-qa2"\)/.test(code));
 }
 
+// --- 17) S17-1 "HTTP 0" (2026-11-22): sonda migracie na novom spojeni, opakovanie iba bez HTTP odpovede, podmienka nezmenena
+{
+  const f = code.slice(code.indexOf("function Test-S17StagingSchema"), code.indexOf("function Get-S17EvidenceFile"));
+  check("sonda: vlastne spojenie (-DisableKeepAlive) a timeout", /-DisableKeepAlive -TimeoutSec 30/.test(f));
+  check("sonda: najviac 3 pokusy, opakuje IBA chybu bez HTTP odpovede", /for \(\$attempt = 1; \$attempt -le 3; \$attempt\+\+\)/.test(f) && /if \(\$t -notmatch "\\\(bez HTTP odpovede\\\)"\) \{ break \}/.test(f));
+  check("sonda: uspech stale IBA pri ESBLU_BILLING_OPS_ALERT_INVALID (inak ok = false)", (f.match(/ok = \$true/g) || []).length === 1 && /if \(\$t -match "ESBLU_BILLING_OPS_ALERT_INVALID"\) \{ return \[ordered\]@\{ ok = \$true/.test(f) && /ok = \$false; detail = "migracia 20261124100000 na stagingu chyba/.test(f));
+  check("sonda: neplatne prostredie bez zapisu, POST na rpc", /-Method POST/.test(f) && /"p_environment":"s17-probe"/.test(f));
+  check("HTTP 0 diagnostika: typ vynimky + WebException.Status, cez Hide-Secrets", /\(bez HTTP odpovede\) exc=\$\(\$ex\.GetType\(\)\.Name\)/.test(code) && /return \(Hide-Secrets \$txt\)/.test(code));
+  check("kontrola schemy ostava pred -Force v kroku 1 a blokujuca v preflighte", /if \(-not \$schema\.ok\) \{ Fail "Staging: /.test(code) && /if \(-not \$schema\.ok\) \{ \$problems \+=/.test(code));
+}
+
 console.log(`\n${passed} PASS, ${failed} FAIL`);
 process.exit(failed ? 1 : 0);

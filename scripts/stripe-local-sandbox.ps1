@@ -457,6 +457,14 @@ function Get-HttpErrorText($err) {
   $status = $null
   try { $status = [int]$err.Exception.Response.StatusCode } catch { }
   $txt = "HTTP $status"
+  # HTTP 0 = ziadna HTTP odpoved (Response chyba: spojenie/TLS/timeout/zatvorene keep-alive spojenie alebo chyba
+  # klienta pred odoslanim) -> doplnit typ vynimky a WebException.Status, aby sa to dalo odlisit od odpovede servera.
+  if (-not $status) {
+    $ex = $err.Exception
+    $ws = $null; try { $ws = [string]$ex.Status } catch { }
+    $inner = $(if ($ex.InnerException) { " inner=$($ex.InnerException.GetType().Name): $($ex.InnerException.Message)" } else { "" })
+    $txt += " (bez HTTP odpovede) exc=$($ex.GetType().Name)$(if ($ws) { " status=$ws" }): $($ex.Message)$inner"
+  }
   if ($raw) {
     try {
       $j = $raw | ConvertFrom-Json
@@ -780,16 +788,25 @@ function Get-S17PinnedVersion {
 function Test-S17StagingSchema {
   # Migracia 20261124100000 na stagingu: volanie s neplatnym prostredim NIC nezapise (funkcia hned odmietne).
   # ESBLU_BILLING_OPS_ALERT_INVALID = funkcia existuje; PGRST202 / iny kod = migracia chyba -> STOP (bez -Force).
+  # 2026-11-22 (S17-1 "HTTP 0"): sonda je POST a v S17-1 je PRVE volanie stagingu po ~70 s necinnosti. .NET (PS 5.1)
+  # pouzil zatvorene keep-alive spojenie a POST (neidempotentny) sam neopakuje -> vynimka bez HTTP odpovede; poziadavka
+  # nedorazila na staging (edge logy). Preto: vlastne nove spojenie (-DisableKeepAlive) a najviac 3 pokusy IBA pri chybe
+  # bez HTTP odpovede. Podmienka uspechu sa nemeni: iba odpoved servera ESBLU_BILLING_OPS_ALERT_INVALID.
   $k = Get-ServiceRole
   $h = @{ apikey = $k; Authorization = "Bearer $k" }
-  try {
-    $null = Invoke-RestMethod -Uri "$StagingUrl/rest/v1/rpc/esblu_billing_ops_collect_documents" -Headers $h -Method POST -ContentType "application/json" -Body '{"p_environment":"s17-probe"}'
-    return [ordered]@{ ok = $false; detail = "neocakavany uspech volania s neplatnym prostredim" }
-  } catch {
-    $t = Get-HttpErrorText $_
-    if ($t -match "ESBLU_BILLING_OPS_ALERT_INVALID") { return [ordered]@{ ok = $true; detail = "migracia 20261124100000 pritomna (esblu_billing_ops_collect_documents)" } }
-    return [ordered]@{ ok = $false; detail = "migracia 20261124100000 na stagingu chyba alebo je ina ($t)" }
+  $t = ""
+  for ($attempt = 1; $attempt -le 3; $attempt++) {
+    try {
+      $null = Invoke-RestMethod -Uri "$StagingUrl/rest/v1/rpc/esblu_billing_ops_collect_documents" -Headers $h -Method POST -ContentType "application/json" -Body '{"p_environment":"s17-probe"}' -DisableKeepAlive -TimeoutSec 30
+      return [ordered]@{ ok = $false; detail = "neocakavany uspech volania s neplatnym prostredim" }
+    } catch {
+      $t = Get-HttpErrorText $_
+      if ($t -match "ESBLU_BILLING_OPS_ALERT_INVALID") { return [ordered]@{ ok = $true; attempts = $attempt; detail = "migracia 20261124100000 pritomna (esblu_billing_ops_collect_documents, pokus $attempt)" } }
+      if ($t -notmatch "\(bez HTTP odpovede\)") { break }   # server odpovedal inak -> bez opakovania
+      if ($attempt -lt 3) { Start-Sleep -Seconds (2 * $attempt) }
+    }
   }
+  return [ordered]@{ ok = $false; detail = "migracia 20261124100000 na stagingu chyba alebo je ina ($t)" }
 }
 function Get-S17EvidenceFile {
   # Hlavny checkout (C:\Users\...\assetpilot) aj pri behu z worktree: priecinok release-backups je git-excluded.
