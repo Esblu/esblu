@@ -386,8 +386,18 @@ export async function syncInboundList(
     const seen = new Set<string>();
     for (let page = 1; page <= maxPages; page++) {
       let list: InboundSummary[];
+      let hasMore: boolean | null = null;
+      let rawCount: number;
       try {
-        list = await deps.provider.listUnacknowledgedInbound(ctx, { limit: pageSize, page });
+        if (deps.provider.listUnacknowledgedInboundPage) {
+          const p = await deps.provider.listUnacknowledgedInboundPage(ctx, { limit: pageSize, page });
+          list = p.items;
+          hasMore = p.hasMore;
+          rawCount = p.rawCount;
+        } else {
+          list = await deps.provider.listUnacknowledgedInbound(ctx, { limit: pageSize, page });
+          rawCount = list.length;
+        }
       } catch (error) {
         report.errors.push({ code: `${INBOUND_ERROR.PROVIDER_FETCH_FAILED}:${errorCode(error)}` });
         break;
@@ -410,7 +420,8 @@ export async function syncInboundList(
           is_test: item.isTest,
         });
       }
-      if (list.length < pageSize) break;
+      // Koniec: meta.has_more = false (autoritatívne), inak menej riadkov ako limit (pred filtrom).
+      if (hasMore === false || (hasMore === null && rawCount < pageSize)) break;
       if (page === maxPages && paginated) report.stopped!.push({ code: "PAGINATION_LIMIT" });
     }
   }

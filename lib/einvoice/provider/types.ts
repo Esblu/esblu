@@ -113,8 +113,11 @@ export type InboundSummary = {
   isTest: boolean;
 };
 
-/** P1-4: ako poskytovateľ stránkuje zoznam prijatých dokladov. "none" = iba prvá stránka (bezpečný default). */
-export type InboundPaginationMode = "none" | "offset" | "page";
+/** P1-4: stránkovanie zoznamu prijatých dokladov. "offset" overené v sandboxe (R1); "none" = iba prvá stránka. */
+export type InboundPaginationMode = "none" | "offset";
+
+/** P1-4: jedna stránka zoznamu; `hasMore` z `meta.has_more` (null = poskytovateľ ho neuviedol), `rawCount` = riadky pred filtrom. */
+export type InboundPage = { items: InboundSummary[]; hasMore: boolean | null; rawCount: number };
 
 export type InboundDocument = {
   providerReceivedId: string;
@@ -146,12 +149,14 @@ export interface EinvoiceProvider {
   /** GET /v1/agent/peppol/submissions/{document_id}; null = poskytovateľ podanie (zatiaľ) nevie vrátiť. */
   getSubmissionByDocumentId?(ctx: ProviderContext, documentId: string): Promise<SubmissionByDocument | null>;
   /**
-   * Nepotvrdené prijaté doklady. `page` (1 = prvá) sa použije IBA ak `inboundPagination` ≠ "none";
-   * pri "none" vráti poskytovateľ pre page > 1 prázdny zoznam (žiadne neoverené parametre).
+   * Nepotvrdené prijaté doklady. `page` (1 = prvá) sa prevedie na `offset` IBA ak `inboundPagination` = "offset";
+   * pri "none" vráti poskytovateľ pre page > 1 prázdny zoznam.
    */
   listUnacknowledgedInbound(ctx: ProviderContext, options?: { limit?: number; page?: number }): Promise<InboundSummary[]>;
   /** P1-4: režim stránkovania GET /received (overený v sandboxe, R1). Chýba = "none" (iba prvá stránka). */
   readonly inboundPagination?: InboundPaginationMode;
+  /** P1-4: stránka vrátane `meta.has_more`. Voliteľné — bez nej sa koniec určí podľa počtu riadkov. */
+  listUnacknowledgedInboundPage?(ctx: ProviderContext, options?: { limit?: number; page?: number }): Promise<InboundPage>;
   getInboundDocument(ctx: ProviderContext, providerReceivedId: string): Promise<InboundDocument>;
   acknowledgeInbound(ctx: ProviderContext, providerReceivedId: string): Promise<void>;
 }

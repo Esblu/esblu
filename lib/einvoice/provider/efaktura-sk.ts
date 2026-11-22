@@ -27,6 +27,7 @@ import {
   type SendUblInput,
   type SubmissionLookup,
   type SubmissionByDocument,
+  type InboundPage,
   type InboundPaginationMode,
 } from "./types.ts";
 import { MAX_INBOUND_XML_BYTES } from "../ubl/parse.ts";
@@ -90,10 +91,7 @@ export type EfakturaConfig = {
   timeoutMs?: number;
   /** Iba pre testy (fake fetch bez siete). */
   fetchImpl?: EfakturaFetch;
-  /**
-   * P1-4: stránkovanie GET /v1/agent/peppol/received. Dokumentácia poskytovateľa je rozporná
-   * (limit/offset vs. page/per_page) → default "none" (iba prvá stránka), kým R1 v sandboxe neoverí režim.
-   */
+  /** P1-4: stránkovanie GET /v1/agent/peppol/received — default "offset" (overené R1); "none" = iba prvá stránka. */
   receivedPagination?: InboundPaginationMode;
 };
 
@@ -299,9 +297,12 @@ type RequestOptions = {
   maxBytes?: number;
 };
 
-/** P1-4: iba známe hodnoty; čokoľvek iné (aj preklep v env) = "none" (fail-safe: iba prvá stránka). */
+/**
+ * P1-4: `offset` je overený v sandboxe (R1, 2026-11-23) → predvolený. "none" = kill-switch (iba prvá stránka)
+ * cez ESBLU_EFAKTURA_RECEIVED_PAGINATION=none. Iné hodnoty (aj page/per_page — poskytovateľ ich ignoruje) = "offset".
+ */
 export function parseInboundPaginationMode(raw: unknown): InboundPaginationMode {
-  return raw === "offset" || raw === "page" ? raw : "none";
+  return raw === "none" ? "none" : "offset";
 }
 
 export class EfakturaSkProvider implements EinvoiceProvider, EinvoiceOnboardingProvider, EinvoiceDeregistrationProvider {
@@ -700,18 +701,20 @@ export class EfakturaSkProvider implements EinvoiceProvider, EinvoiceOnboardingP
   }
 
   async listUnacknowledgedInbound(ctx: ProviderContext, options?: { limit?: number; page?: number }): Promise<InboundSummary[]> {
+    return (await this.listUnacknowledgedInboundPage(ctx, options)).items;
+  }
+
+  /**
+   * P1-4 (R1 overené v sandboxe 2026-11-23): `limit` + `offset` fungujú, `page`/`per_page` poskytovateľ ignoruje,
+   * zoradenie od najnovších, odpoveď `{ data: [...], meta: { limit, offset, has_more } }`.
+   * Režim "none" (kill-switch) → iba prvá stránka, ďalšie = prázdne bez volania.
+   */
+  async listUnacknowledgedInboundPage(ctx: ProviderContext, options?: { limit?: number; page?: number }): Promise<InboundPage> {
     const limit = Math.max(1, Math.min(RECEIVED_PAGE_MAX, Math.floor(options?.limit ?? 50)));
     const page = Math.max(1, Math.floor(options?.page ?? 1));
-    // P1-4: docs (receiving) = limit/offset; OpenAPI = page/per_page (rozpor, P8). Parameter sa pošle IBA
-    // v režime overenom v sandboxe (R1); "none" → iba prvá stránka, ďalšie stránky = prázdny zoznam.
+    if (page > 1 && this.#receivedPagination === "none") return { items: [], hasMore: false, rawCount: 0 };
     const query: Record<string, string> = { acknowledged: "false", limit: String(limit) };
-    if (page > 1) {
-      if (this.#receivedPagination === "none") return [];
-      if (this.#receivedPagination === "offset") query.offset = String((page - 1) * limit);
-      else { delete query.limit; query.page = String(page); query.per_page = String(limit); }
-    } else if (this.#receivedPagination === "page") {
-      delete query.limit; query.page = "1"; query.per_page = String(limit);
-    }
+    if (this.#receivedPagination === "offset") query.offset = String((page - 1) * limit);
     const res = await this.#request({
       method: "GET",
       path: "/v1/agent/peppol/received",
@@ -721,15 +724,18 @@ export class EfakturaSkProvider implements EinvoiceProvider, EinvoiceOnboardingP
     const root = obj(parseJson(res.bytes));
     const list = Array.isArray(root?.data) ? (root!.data as unknown[]) : null;
     if (!list) throw new EinvoiceProviderError("EINVOICE_PROVIDER_BAD_RESPONSE", "Neočakávaný zoznam prijatých dokladov");
+    const meta = obj(root?.meta);
+    // has_more iba ak je to boolean; inak null (volajúci sa rozhodne podľa počtu riadkov oproti limitu).
+    const hasMore = typeof meta?.has_more === "boolean" ? (meta.has_more as boolean) : null;
 
-    const out: InboundSummary[] = [];
+    const items: InboundSummary[] = [];
     for (const raw of list) {
       const row = obj(raw);
       const id = str(row?.id);
       if (!row || !id || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(id)) continue;
       // Obrana: filter acknowledged=false mohol byť ignorovaný.
       if (row.acknowledged_at) continue;
-      out.push({
+      items.push({
         providerReceivedId: id,
         senderParticipantId: str(row.sender_participant_id),
         senderIco: str(row.sender_ico),
@@ -739,7 +745,7 @@ export class EfakturaSkProvider implements EinvoiceProvider, EinvoiceOnboardingP
         isTest: row.is_test === true,
       });
     }
-    return out;
+    return { items, hasMore, rawCount: list.length };
   }
 
   async getInboundDocument(ctx: ProviderContext, providerReceivedId: string): Promise<InboundDocument> {

@@ -305,33 +305,42 @@ await check("listUnacknowledgedInbound: acknowledged=false, limit 1–100, obran
   }]);
 });
 
-await check("P1-4 stránkovanie GET /received: default none = iba prvá stránka bez neoverených parametrov; offset / page iba výslovne", async () => {
-  const route = () => fake([(r) => is("GET", "/v1/agent/peppol/received")(r) ? { json: { data: [] } } : undefined]);
-  // default (bez overenia R1): page 1 bez offset/page, page 2 = žiadne volanie
-  let f = route();
+await check("P1-4 stránkovanie GET /received (R1 overené): default offset, limit+offset, meta.has_more; none = kill-switch; page/per_page sa neposiela", async () => {
+  // presný tvar odpovede sandboxu (R1, 2026-11-23): { data: [...], meta: { limit, offset, has_more } }, najnovšie prvé
+  const rows = (n: number, from: number) => Array.from({ length: n }, (_, i) => ({ id: `rcv-${from + i}`, document_type: "invoice", received_at: `2026-11-2${3 - Math.min(i, 3)}T08:00:00Z`, acknowledged_at: null, is_test: true }));
+  const route = (meta: Record<string, unknown> | null, data: unknown[]) =>
+    fake([(r) => is("GET", "/v1/agent/peppol/received")(r) ? { json: meta ? { data, meta } : { data } } : undefined]);
+  let f = route({ limit: 3, offset: 3, has_more: true }, rows(3, 3));
   let p = provider(f.impl);
-  assert.equal(p.inboundPagination, "none");
+  assert.equal(p.inboundPagination, "offset");
+  const pg = await p.listUnacknowledgedInboundPage!(ctx, { limit: 3, page: 2 });
+  assert.equal(f.calls[0].url.searchParams.get("acknowledged"), "false");
+  assert.equal(f.calls[0].url.searchParams.get("limit"), "3");
+  assert.equal(f.calls[0].url.searchParams.get("offset"), "3");
+  assert.equal(f.calls[0].url.searchParams.get("page"), null);
+  assert.equal(f.calls[0].url.searchParams.get("per_page"), null);
+  assert.deepEqual([pg.items.map((x) => x.providerReceivedId), pg.hasMore, pg.rawCount], [["rcv-3", "rcv-4", "rcv-5"], true, 3]);
+  // has_more=false; prvá stránka má offset=0
+  f = route({ limit: 100, offset: 0, has_more: false }, rows(1, 0));
+  p = provider(f.impl);
+  const last = await p.listUnacknowledgedInboundPage!(ctx, { limit: 100, page: 1 });
+  assert.equal(f.calls[0].url.searchParams.get("offset"), "0");
+  assert.equal(last.hasMore, false);
+  // meta chýba alebo has_more nie je boolean → null (rozhodne počet riadkov)
+  f = route(null, rows(2, 0));
+  assert.equal((await provider(f.impl).listUnacknowledgedInboundPage!(ctx, { limit: 100 })).hasMore, null);
+  f = route({ has_more: "yes" }, rows(2, 0));
+  assert.equal((await provider(f.impl).listUnacknowledgedInboundPage!(ctx, { limit: 100 })).hasMore, null);
+  // kill-switch none: page 1 bez offset, page 2 bez volania
+  f = route({ limit: 100, offset: 0, has_more: true }, rows(2, 0));
+  p = new EfakturaSkProvider({ apiKey: FAKE_KEY, environment: "sandbox", fetchImpl: f.impl, receivedPagination: "none" });
   await p.listUnacknowledgedInbound(ctx, { limit: 100, page: 1 });
   assert.deepEqual(await p.listUnacknowledgedInbound(ctx, { limit: 100, page: 2 }), []);
   assert.equal(f.calls.length, 1);
   assert.equal(f.calls[0].url.searchParams.get("offset"), null);
-  assert.equal(f.calls[0].url.searchParams.get("page"), null);
-  // offset
-  f = route();
-  p = new EfakturaSkProvider({ apiKey: FAKE_KEY, environment: "sandbox", fetchImpl: f.impl, receivedPagination: "offset" });
-  await p.listUnacknowledgedInbound(ctx, { limit: 100, page: 3 });
-  assert.equal(f.calls[0].url.searchParams.get("offset"), "200");
-  assert.equal(f.calls[0].url.searchParams.get("limit"), "100");
-  // page/per_page
-  f = route();
-  p = new EfakturaSkProvider({ apiKey: FAKE_KEY, environment: "sandbox", fetchImpl: f.impl, receivedPagination: "page" });
-  await p.listUnacknowledgedInbound(ctx, { limit: 50, page: 2 });
-  assert.equal(f.calls[0].url.searchParams.get("page"), "2");
-  assert.equal(f.calls[0].url.searchParams.get("per_page"), "50");
-  assert.equal(f.calls[0].url.searchParams.get("limit"), null);
-  // neznáma hodnota (preklep v env) → none
-  assert.equal(parseInboundPaginationMode("OFFSET"), "none");
-  assert.equal(parseInboundPaginationMode(undefined), "none");
+  assert.equal(parseInboundPaginationMode("none"), "none");
+  assert.equal(parseInboundPaginationMode(undefined), "offset");
+  assert.equal(parseInboundPaginationMode("page"), "offset", "page/per_page poskytovateľ ignoruje");
 });
 
 await check("getInboundDocument: surové XML bajty, Accept XML, limit veľkosti", async () => {

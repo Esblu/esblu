@@ -310,7 +310,9 @@ class FakeProvider implements EinvoiceProvider {
   listError: EinvoiceProviderError | null = null;
   status = new Map<string, OutboundState>();
   /** P1-4: režim stránkovania, ignorovanie parametra stránky, poradie (najnovšie prvé). */
-  inboundPagination: "none" | "offset" | "page" = "none";
+  inboundPagination: "none" | "offset" = "none";
+  /** P1-4: simulácia meta.has_more (null = poskytovateľ meta neposiela). */
+  hasMoreMode: "meta" | "absent" | "lying-false" = "absent";
   ignorePage = false;
   newestFirst = false;
   private orgs = new Set(["org-a", "org-b"]);
@@ -344,6 +346,14 @@ class FakeProvider implements EinvoiceProvider {
     const limit = options?.limit ?? 50;
     const page = this.ignorePage ? 1 : Math.max(1, options?.page ?? 1);
     return all.slice((page - 1) * limit, page * limit);
+  }
+  async listUnacknowledgedInboundPage(c: ProviderContext, options?: { limit?: number; page?: number }) {
+    const items = await this.listUnacknowledgedInbound(c, options);
+    const total = [...this.docs.values()].filter((d) => d.org === c.providerOrgId && !d.acknowledged).length;
+    const limit = options?.limit ?? 50;
+    const page = this.ignorePage ? 1 : Math.max(1, options?.page ?? 1);
+    const hasMore = this.hasMoreMode === "absent" ? null : this.hasMoreMode === "lying-false" ? false : page * limit < total;
+    return { items, hasMore, rawCount: items.length };
   }
   async getInboundDocument(c: ProviderContext, id: string) {
     this.calls.push(`fetch:${id}`);
@@ -1483,6 +1493,21 @@ await check("P1-4 A2: webhook s ID dokladu v tele → overená nápoveda (fetch 
   assert.equal(r.status, 200);
   const row = await inboundByPid("rcv-p14-wh");
   assert.equal(row.company_id, CA);
+});
+
+await check("P1-4 meta.has_more: koniec podľa has_more (bez zbytočnej ďalšej stránky); has_more=false zastaví aj pri plnej stránke", async () => {
+  provider.inboundPagination = "offset";
+  provider.hasMoreMode = "meta";
+  let before = provider.calls.filter((c) => c === "list").length;
+  const total = (await syncInboundList(deps(), [{ providerOrgId: "org-a" }], "poll", { pageSize: 10 })).listed;
+  const lists1 = provider.calls.filter((c) => c === "list").length - before;
+  assert.equal(lists1, Math.max(1, Math.ceil(total / 10)), `presne toľko stránok, koľko treba (${total} dokladov)`);
+  provider.hasMoreMode = "lying-false";
+  before = provider.calls.filter((c) => c === "list").length;
+  await syncInboundList(deps(), [{ providerOrgId: "org-a" }], "poll", { pageSize: 10 });
+  assert.equal(provider.calls.filter((c) => c === "list").length - before, 1, "has_more=false je autoritatívne");
+  provider.hasMoreMode = "absent";
+  provider.inboundPagination = "none";
 });
 
 await check("P1-4 T3: poskytovateľ ignoruje parameter stránky → PAGINATION_IGNORED, žiadny nekonečný cyklus", async () => {
