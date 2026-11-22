@@ -1396,7 +1396,8 @@ const sk = {
         "Zrušenie účtu sa nepodarilo úplne overiť. Kontaktuj podporu.",
       einvoiceDeregistrationPending: "Prebieha ukončenie registrácie firmy u poskytovateľa e-faktúr (eFaktura.sk). Odosielanie e-faktúr je už zastavené. Skúste ukončenie firmy znova o niekoľko minút. Nič sa nezmazalo.",
       einvoiceDeregistrationFailed: "Registráciu firmy u poskytovateľa e-faktúr sa nepodarilo automaticky ukončiť. Kontaktujte nás na info@esblu.com. Nič sa nezmazalo.",
-      terminationExportNotVerified: "Ukončenie firmy v režime „exportované“ vyžaduje kompletný export údajov vytvorený v Esblu za posledných 24 hodín. Najprv spustite export, alebo zvoľte výslovné ukončenie bez exportu. Nič sa nezmazalo.",
+      terminationExportNotVerified: "Ukončenie firmy vyžaduje kompletný export údajov vytvorený v Esblu za posledných 24 hodín. Najprv spustite export. Nič sa nezmazalo.",
+      terminationExportRequired: "Firma má finalizované účtovné doklady alebo e-faktúry. Ukončiť ju možno iba po kompletnom exporte údajov z Esblu (za posledných 24 hodín). Najprv spustite export. Nič sa nezmazalo.",
       companyHasAccountingRecords:
         "Firma má vystavené alebo prijaté účtovné doklady (faktúry, e-faktúry). Pred zrušením si ich exportuj (Odovzdanie účtovníkovi) a kontaktuj podporu — doklady sa nemažú automaticky.",
       companyDeletionFailedRetry:

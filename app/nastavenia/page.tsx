@@ -1499,10 +1499,7 @@ export default function NastaveniaPage() {
                       <input type="radio" name="termination-export" className="mt-0.5" checked={terminationExportMode === "exported"} onChange={() => setTerminationExportMode("exported")} disabled={deleteSubmitting} />
                       <span>{t("settings.termination.exported")}</span>
                     </label>
-                    <label className="flex items-start gap-2 text-[13px] leading-5">
-                      <input type="radio" name="termination-export" className="mt-0.5" checked={terminationExportMode === "waived"} onChange={() => setTerminationExportMode("waived")} disabled={deleteSubmitting} />
-                      <span>{t("settings.termination.waived")}</span>
-                    </label>
+                    {/* O3: firma s dokladmi sa ukončuje iba po overenom exporte — možnosť „bez exportu“ sa neponúka (server ju odmietne). */}
                   </fieldset>
                   <label className="flex items-start gap-2 text-[13px] leading-5">
                     <input type="checkbox" className="mt-0.5" checked={terminationAcknowledged} onChange={(e) => setTerminationAcknowledged(e.target.checked)} disabled={deleteSubmitting} />

@@ -1382,7 +1382,8 @@ const en = {
         "The account deletion could not be fully verified. Please contact support.",
       einvoiceDeregistrationPending: "The company's registration with the e-invoicing provider (eFaktura.sk) is being closed. Sending e-invoices has already stopped. Try terminating the company again in a few minutes. Nothing was deleted.",
       einvoiceDeregistrationFailed: "The company's registration with the e-invoicing provider could not be closed automatically. Contact info@esblu.com. Nothing was deleted.",
-      terminationExportNotVerified: "Terminating the company as \"exported\" requires a complete data export created in Esblu within the last 24 hours. Run the export first, or explicitly choose termination without export. Nothing was deleted.",
+      terminationExportNotVerified: "Terminating the company requires a complete data export created in Esblu within the last 24 hours. Please run the export first. Nothing was deleted.",
+      terminationExportRequired: "The company has finalized accounting documents or e-invoices. It can only be terminated after a complete data export from Esblu (within the last 24 hours). Please run the export first. Nothing was deleted.",
       companyHasAccountingRecords:
         "The company has issued or received accounting documents (invoices, e-invoices). Export them first (Accountant handoff) and contact support — documents are not deleted automatically.",
       companyDeletionFailedRetry:

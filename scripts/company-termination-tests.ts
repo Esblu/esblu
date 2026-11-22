@@ -199,5 +199,25 @@ check("i18n: termination + companyExport kľúče v SK/EN/DE", () => {
   }
 });
 
+check("O3: firma s dokladmi sa nedá ukončiť bez exportu — waived odmietnutý PRED akýmkoľvek zásahom; UI možnosť neponúka; texty SK/EN/DE", () => {
+  const r = read("app/api/account/delete/route.ts");
+  const guard = r.indexOf('if (blocker && terminationMode === "waived")');
+  assert.ok(guard > 0, "guard existuje");
+  assert.match(r.slice(guard, guard + 400), /ESBLU_TERMINATION_EXPORT_REQUIRED/);
+  assert.match(r.slice(guard, guard + 400), /status: 409/);
+  for (const sideEffect of ["ensureCompanyDeregistered(", "const ownerResult = await orchestrateAccountDeletion(", "supabaseTerminationDeps(admin, terminationMode)"]) {
+    const at = r.indexOf(sideEffect);
+    assert.ok(at > guard, `${sideEffect} až po guarde`);
+  }
+  assert.ok(r.indexOf("const terminationMode") < guard && r.indexOf("const terminationAllowed") < guard);
+  const ui = read("app/nastavenia/page.tsx");
+  assert.doesNotMatch(ui, /setTerminationExportMode\("waived"\)/, "UI neponúka ukončenie bez exportu");
+  for (const d of [sk, en, de]) {
+    const e = (d as unknown as { settings: { errors: Record<string, string> } }).settings.errors;
+    assert.ok(e.terminationExportRequired && e.terminationExportRequired.length > 40);
+    assert.doesNotMatch(e.terminationExportNotVerified, /bez exportu|without export|ohne Export/);
+  }
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

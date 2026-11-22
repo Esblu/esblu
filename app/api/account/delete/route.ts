@@ -408,6 +408,20 @@ export async function POST(req: Request) {
           { status: 409 }
         );
       }
+      // O3 (2026-11-23, rozhodnutie vlastníka D5): firma s finalizovanými účtovnými dokladmi alebo e-faktúrami sa
+      // nesmie ukončiť bez overeného exportu — režim „waived" (vzdanie sa exportu) by doklady nevratne vymazal.
+      // Iba režim „exported" (DB brána 20261113110000 overí dokončený serverový export za posledných 24 h).
+      if (blocker && terminationMode === "waived") {
+        return Response.json(
+          {
+            error: translate(locale, "settings.errors.terminationExportRequired"),
+            blocked: blocker,
+            code: "ESBLU_TERMINATION_EXPORT_REQUIRED",
+            termination_available: true,
+          },
+          { status: 409 }
+        );
+      }
 
       // RC 2026-10-12: rovnaká podmienka ako ESBLU_OWNER_MISMATCH v
       // esblu_owner_delete_company — overená PRED mazaním súborov, aby DB

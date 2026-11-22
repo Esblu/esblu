@@ -1383,7 +1383,8 @@ const de = {
         "Die Kontolöschung konnte nicht vollständig überprüft werden. Bitte kontaktieren Sie den Support.",
       einvoiceDeregistrationPending: "Die Registrierung des Unternehmens beim E-Rechnungs-Anbieter (eFaktura.sk) wird beendet. Der Versand von E-Rechnungen ist bereits gestoppt. Versuchen Sie die Beendigung in einigen Minuten erneut. Es wurde nichts gelöscht.",
       einvoiceDeregistrationFailed: "Die Registrierung beim E-Rechnungs-Anbieter konnte nicht automatisch beendet werden. Kontaktieren Sie info@esblu.com. Es wurde nichts gelöscht.",
-      terminationExportNotVerified: "Die Beendigung des Unternehmens als „exportiert“ erfordert einen vollständigen Datenexport aus Esblu aus den letzten 24 Stunden. Starten Sie zuerst den Export oder wählen Sie ausdrücklich die Beendigung ohne Export. Es wurde nichts gelöscht.",
+      terminationExportNotVerified: "Die Beendigung des Unternehmens erfordert einen vollständigen Datenexport aus Esblu innerhalb der letzten 24 Stunden. Bitte führen Sie zuerst den Export durch. Es wurde nichts gelöscht.",
+      terminationExportRequired: "Das Unternehmen hat abgeschlossene Buchhaltungsbelege oder E-Rechnungen. Es kann nur nach einem vollständigen Datenexport aus Esblu (innerhalb der letzten 24 Stunden) beendet werden. Bitte führen Sie zuerst den Export durch. Es wurde nichts gelöscht.",
       companyHasAccountingRecords:
         "Das Unternehmen hat ausgestellte oder empfangene Buchhaltungsbelege (Rechnungen, E-Rechnungen). Exportieren Sie diese zuerst (Übergabe an die Buchhaltung) und kontaktieren Sie den Support — Belege werden nicht automatisch gelöscht.",
       companyDeletionFailedRetry:
