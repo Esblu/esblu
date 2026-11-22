@@ -37,7 +37,20 @@ import { STRIPE_API_VERSION, resolveStripeApiVersion } from "@/lib/billing/strip
 import { STRIPE_CATCHUP_EVENT_TYPES, stripeCreditNoteDocument, stripeInvoiceDocument } from "@/lib/billing/providers/stripe";
 import { buildAccountingCsv, csvText, formatMinor, monthRange } from "@/lib/billing/accounting-export";
 import { formatAlertEmail, resendMailerFromEnv, safeDetails } from "@/lib/billing/ops-alerts";
-import { archivePath, isAllowedStripeUrl } from "@/lib/billing/document-archive";
+import {
+  archivePath,
+  buildPdfRequestOptions,
+  fetchStripePdf,
+  guardedLookup,
+  isAllowedPdfRedirect,
+  isAllowedStripeUrl,
+  isBlockedAddress,
+  PDF_REQUEST_HEADERS,
+  safePdfFetch,
+  STRIPE_PDF_STORAGE_HOSTS,
+} from "@/lib/billing/document-archive";
+import { createServer as createNetServer } from "node:net";
+import { request as httpsRequest } from "node:https";
 import { CANONICAL_STATUSES as PROVIDER_STATUSES, type NormalizedSubscriptionState } from "@/lib/billing/types";
 import type { BillingDb } from "@/lib/billing/pipeline";
 
@@ -976,6 +989,116 @@ await check("billing-ops: e-mail alertu iba s kódmi a číslami; Resend iba pri
   for (const u of ["http://pay.stripe.com/x", "https://stripe.com.evil.io/x", "https://evil.io/stripe.com/", "https://u:p@pay.stripe.com/x", "https://pay.stripe.com:8443/x"]) assert.equal(isAllowedStripeUrl(u), false, u);
   assert.equal(archivePath("live", "invoice", "in_1A", "2026-11-23T10:00:00Z"), "live/2026/11/invoice/in_1A.pdf");
   assert.equal(archivePath("live", "invoice", "../x", "2026-11-23T10:00:00Z"), null);
+});
+
+// ----------------------------------------------------------------------------- S17-5 (2026-11-22): archív PDF cez S3 Stripe
+const S3 = "https://stripe-upload-api.s3.us-west-1.amazonaws.com/invoices/x.pdf?X-Amz-Signature=abc";
+const PAY = "https://pay.stripe.com/invoice/acct_x/test_tok/pdf?s=ap";
+const PDF_BYTES = new TextEncoder().encode("%PDF-1.7\n% esblu s17-5\n");
+await check("billing-ops: S17-5 presmerovanie PDF — presný S3 hostiteľ Stripe IBA z *.stripe.com; nič iné z AWS", () => {
+  assert.deepEqual([...STRIPE_PDF_STORAGE_HOSTS], ["stripe-upload-api.s3.us-west-1.amazonaws.com"]);
+  assert.equal(isAllowedPdfRedirect(S3, PAY), true);
+  assert.equal(isAllowedPdfRedirect("https://files.stripe.com/x.pdf", PAY), true);
+  assert.equal(isAllowedStripeUrl(S3), false, "S3 nie je povolený ako prvá URL dokladu");
+  for (const [next, from, why] of [
+    [S3, S3, "z S3 ďalej nikam"],
+    [S3, "https://evil.example/x", "presmerovanie z cudzieho hostiteľa"],
+    [S3, "https://stripe-upload-api.s3.us-west-1.amazonaws.com/a", "S3 → S3"],
+    ["https://stripe-upload-api.s3.us-east-1.amazonaws.com/x.pdf", PAY, "iný región"],
+    ["https://evil.s3.us-west-1.amazonaws.com/x.pdf", PAY, "iný bucket"],
+    ["https://s3.us-west-1.amazonaws.com/stripe-upload-api/x.pdf", PAY, "path-style S3"],
+    ["https://stripe-upload-api.s3.us-west-1.amazonaws.com.evil.io/x.pdf", PAY, "podvrhnutý sufix"],
+    ["https://xstripe-upload-api.s3.us-west-1.amazonaws.com/x.pdf", PAY, "podvrhnutý prefix"],
+    ["https://evil.amazonaws.com/x.pdf", PAY, "*.amazonaws.com"],
+    ["http://stripe-upload-api.s3.us-west-1.amazonaws.com/x.pdf", PAY, "http"],
+    ["https://stripe-upload-api.s3.us-west-1.amazonaws.com:8443/x.pdf", PAY, "port"],
+    ["https://u:p@stripe-upload-api.s3.us-west-1.amazonaws.com/x.pdf", PAY, "prihlasovacie údaje"],
+    ["https://169.254.169.254/latest/meta-data", PAY, "metadata IP"],
+    ["https://[::1]/x.pdf", PAY, "IPv6 literál"],
+    ["https://127.0.0.1/x.pdf", PAY, "IPv4 literál"],
+    ["not a url", PAY, "neplatná URL"],
+  ] as const) assert.equal(isAllowedPdfRedirect(next, from), false, why);
+});
+await check("billing-ops: S17-5 SSRF — blokované neverejné IP (v4/v6, mapované, tunelované), verejné povolené", () => {
+  for (const a of ["10.1.2.3", "127.0.0.1", "0.0.0.0", "169.254.169.254", "172.16.0.1", "172.31.255.255", "192.168.1.1", "100.64.0.1", "198.18.0.1", "224.0.0.1", "255.255.255.255",
+    "::1", "::", "fe80::1", "fc00::1", "fd12:3456::1", "::ffff:127.0.0.1", "::ffff:10.0.0.1", "64:ff9b::a00:1", "2002:a00:1::1", "2001:db8::1", "ff02::1", "nie-ip"]) {
+    assert.equal(isBlockedAddress(a), true, a);
+  }
+  for (const a of ["52.219.193.10", "3.5.160.1", "54.187.174.169", "8.8.8.8", "172.32.0.1", "2600:1f14::1", "2a00:1450:4001::1"]) assert.equal(isBlockedAddress(a), false, a);
+});
+await check("billing-ops: S17-5 lookup pri pripojení — zmiešané/privátne adresy odmietnuté, DNS rebinding sa kontroluje pri KAŽDOM pripojení", async () => {
+  const answers: string[][] = [["52.219.193.10"], ["52.219.193.10", "10.0.0.5"], ["127.0.0.1"]];
+  let call = 0;
+  const fake = ((_h: string, _o: unknown, cb: (e: null, a: { address: string; family: number }[]) => void) => {
+    const list = answers[Math.min(call++, answers.length - 1)];
+    cb(null, list.map((address) => ({ address, family: address.includes(":") ? 6 : 4 })));
+  }) as unknown as Parameters<typeof guardedLookup>[0];
+  const lk = guardedLookup(fake);
+  const run = (opts: unknown) => new Promise<{ err: string | null; addr: unknown }>((res) => lk("stripe-upload-api.s3.us-west-1.amazonaws.com", opts, (err, addr) => res({ err: err ? String(err.code) : null, addr })));
+  assert.deepEqual(await run({}), { err: null, addr: "52.219.193.10" });
+  assert.equal((await run({ all: true })).err, "ADDRESS_NOT_ALLOWED", "jedna privátna adresa = odmietnuť celý hostiteľ");
+  assert.equal((await run(4)).err, "ADDRESS_NOT_ALLOWED", "rebinding na 127.0.0.1 pri ďalšom pripojení");
+});
+await check("billing-ops: S17-5 požiadavka na PDF — bez cookies/autentifikácie, bez poolu, TLS overené; IP z lookupu sa skutočne použije", async () => {
+  assert.deepEqual(Object.keys(PDF_REQUEST_HEADERS).sort(), ["accept", "user-agent"]);
+  const o = buildPdfRequestOptions(new URL(S3));
+  const h = o.headers as Record<string, string>;
+  for (const bad of ["authorization", "cookie", "apikey", "stripe-account", "x-api-key", "proxy-authorization"]) assert.equal(Object.keys(h).some((k) => k.toLowerCase() === bad), false, bad);
+  assert.deepEqual([o.agent, o.rejectUnauthorized, o.port, o.method, o.servername, typeof o.lookup], [false, true, 443, "GET", "stripe-upload-api.s3.us-west-1.amazonaws.com", "function"]);
+  assert.equal(o.path, "/invoices/x.pdf?X-Amz-Signature=abc");
+  // skutočný socket: hostiteľ "sa preloží" na 127.0.0.1 → spojenie sa NEOTVORÍ (server nedostane žiadne pripojenie)
+  let connections = 0;
+  const srv = createNetServer(() => { connections++; });
+  await new Promise<void>((r) => srv.listen(0, "127.0.0.1", () => r()));
+  const port = (srv.address() as { port: number }).port;
+  const toLoopback = ((_h: string, _o: unknown, cb: (e: null, a: { address: string; family: number }[]) => void) => cb(null, [{ address: "127.0.0.1", family: 4 }])) as unknown as Parameters<typeof guardedLookup>[0];
+  const err = await new Promise<string>((res) => {
+    const req = httpsRequest({ ...buildPdfRequestOptions(new URL(S3), guardedLookup(toLoopback)), port }, () => res("connected"));
+    req.on("error", (e: NodeJS.ErrnoException) => res(String(e.code ?? e.message)));
+    req.end();
+  });
+  await new Promise<void>((r) => srv.close(() => r()));
+  assert.equal(err, "ADDRESS_NOT_ALLOWED");
+  assert.equal(connections, 0);
+  // klient odmietne bez siete: IP literál, cudzí hostiteľ, http
+  for (const u of ["https://127.0.0.1/x.pdf", "https://[::1]/x.pdf", "https://evil.example/x.pdf", "http://pay.stripe.com/x", "https://evil.s3.us-west-1.amazonaws.com/x"]) {
+    await assert.rejects(() => safePdfFetch(u), (e: { code?: string }) => e.code === "URL_NOT_ALLOWED", u);
+  }
+});
+await check("billing-ops: S17-5 fetchStripePdf — pay.stripe.com → S3 → PDF; chybné PDF, veľkosť, presmerovania a SSRF kódy", async () => {
+  const seen: { url: string; init: RequestInit | undefined }[] = [];
+  const chain = (map: Record<string, () => Response>) => (async (url: string, init?: RequestInit) => {
+    seen.push({ url, init });
+    const f = map[new URL(url).hostname];
+    if (!f) throw new Error("neočakávaný hostiteľ " + url);
+    return f();
+  }) as unknown as typeof fetch;
+  const ok = chain({ "pay.stripe.com": () => new Response(null, { status: 302, headers: { location: S3 } }), "stripe-upload-api.s3.us-west-1.amazonaws.com": () => new Response(PDF_BYTES, { status: 200, headers: { "content-type": "application/pdf" } }) });
+  const got = await fetchStripePdf(PAY, ok);
+  assert.ok(got instanceof Uint8Array && Buffer.from(got).equals(Buffer.from(PDF_BYTES)), "PDF = bajty zo Stripe");
+  assert.deepEqual(seen.map((s) => new URL(s.url).hostname), ["pay.stripe.com", "stripe-upload-api.s3.us-west-1.amazonaws.com"]);
+  for (const s of seen) { assert.equal(s.init?.headers, undefined, "žiadne vlastné hlavičky"); assert.equal(s.init?.credentials, "omit"); assert.equal(s.init?.redirect, "manual"); }
+  const s3loop = chain({ "pay.stripe.com": () => new Response(null, { status: 302, headers: { location: S3 } }), "stripe-upload-api.s3.us-west-1.amazonaws.com": () => new Response(null, { status: 302, headers: { location: S3 } }) });
+  assert.equal(await fetchStripePdf(PAY, s3loop), "URL_NOT_ALLOWED", "S3 → S3 presmerovanie");
+  const s3evil = chain({ "pay.stripe.com": () => new Response(null, { status: 302, headers: { location: S3 } }), "stripe-upload-api.s3.us-west-1.amazonaws.com": () => new Response(null, { status: 302, headers: { location: "https://files.stripe.com/x" } }) });
+  assert.equal(await fetchStripePdf(PAY, s3evil), "URL_NOT_ALLOWED", "z S3 ani späť na stripe.com");
+  const otherBucket = chain({ "pay.stripe.com": () => new Response(null, { status: 302, headers: { location: "https://evil.s3.us-west-1.amazonaws.com/x.pdf" } }) });
+  assert.equal(await fetchStripePdf(PAY, otherBucket), "URL_NOT_ALLOWED");
+  assert.equal(await fetchStripePdf(S3, ok), "URL_NOT_ALLOWED", "S3 ako prvá URL");
+  const html = chain({ "pay.stripe.com": () => new Response(null, { status: 302, headers: { location: S3 } }), "stripe-upload-api.s3.us-west-1.amazonaws.com": () => new Response("<Error>AccessDenied</Error>", { status: 200 }) });
+  assert.equal(await fetchStripePdf(PAY, html), "NOT_A_PDF");
+  const denied = chain({ "pay.stripe.com": () => new Response(null, { status: 302, headers: { location: S3 } }), "stripe-upload-api.s3.us-west-1.amazonaws.com": () => new Response("x", { status: 403 }) });
+  assert.equal(await fetchStripePdf(PAY, denied), "HTTP_4XX");
+  const big = chain({ "pay.stripe.com": () => new Response(null, { status: 302, headers: { location: S3 } }), "stripe-upload-api.s3.us-west-1.amazonaws.com": () => new Response(PDF_BYTES, { status: 200, headers: { "content-length": String(16 * 1024 * 1024) } }) });
+  assert.equal(await fetchStripePdf(PAY, big), "PDF_TOO_LARGE");
+  const loop = chain({ "pay.stripe.com": () => new Response(null, { status: 302, headers: { location: "https://files.stripe.com/a" } }), "files.stripe.com": () => new Response(null, { status: 302, headers: { location: "https://pay.stripe.com/b" } }) });
+  assert.equal(await fetchStripePdf(PAY, loop), "TOO_MANY_REDIRECTS");
+  for (const code of ["ADDRESS_NOT_ALLOWED", "PDF_TOO_LARGE", "URL_NOT_ALLOWED"]) {
+    const thrower = (async () => { throw Object.assign(new Error(code), { code }); }) as unknown as typeof fetch;
+    assert.equal(await fetchStripePdf(PAY, thrower), code);
+  }
+  const tls = (async () => { throw Object.assign(new Error("cert"), { code: "UNABLE_TO_VERIFY_LEAF_SIGNATURE" }); }) as unknown as typeof fetch;
+  assert.equal(await fetchStripePdf(PAY, tls), "FETCH_FAILED", "TLS/sieť = FETCH_FAILED (backoff), nie úspech");
 });
 
 console.log(`\nsubscriptions-lifecycle: ${passed} passed, ${failed} failed`);
