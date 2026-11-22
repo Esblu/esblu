@@ -70,6 +70,14 @@ export type AccessResult =
  * expirovaný JWT → unauthenticated, odmietnutie → forbidden, inak temporary. Clock skew
  * čerstvého JWT (PGRST303 „issued at future“) sa ohraničene zopakuje.
  */
+/**
+ * R3 (P1-4): doklad adresovaný inému účastníkovi (RECIPIENT_MISMATCH) sa firme nikdy nevracia — filter v kóde
+ * funguje aj bez migrácie 20261125100000 (tá to vynúti aj v RLS pre Data API).
+ */
+export function visibleToCompany(row: { last_error_code?: string | null }): boolean {
+  return row.last_error_code !== "RECIPIENT_MISMATCH";
+}
+
 export async function loadAccessResult(db: SupabaseClient, env: Record<string, string | undefined>, sleep?: (ms: number) => Promise<void>): Promise<AccessResult> {
   const configured = providerConfigured(env);
   const res = await loadAccessFlags((fn, args) => db.rpc(fn, args), {
@@ -306,7 +314,7 @@ export async function loadInboundList(db: SupabaseClient, env: Record<string, st
     .limit(200)
     .returns<InboundRowLite[]>();
   if (error) return { ok: false, status: 500, code: "QUERY_FAILED" };
-  const items = await enrich(db, data ?? []);
+  const items = await enrich(db, (data ?? []).filter(visibleToCompany));
   if (!items) return { ok: false, status: 500, code: "QUERY_FAILED" };
   return { ok: true, data: { access: acc.access, items } };
 }
@@ -322,6 +330,6 @@ export async function loadInboundDetail(
   if (!acc.financeView) return { ok: false, status: 403, code: "FORBIDDEN" };
   const { data, error } = await db.from("einvoice_inbound").select(INBOUND_COLS).eq("id", inboundId).maybeSingle<InboundRowLite>();
   if (error) return { ok: false, status: 500, code: "QUERY_FAILED" };
-  if (!data) return { ok: false, status: 404, code: "NOT_FOUND" };
+  if (!data || !visibleToCompany(data)) return { ok: false, status: 404, code: "NOT_FOUND" };
   return inboundDetail(db, data, requesterId, acc.access);
 }

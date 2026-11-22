@@ -113,6 +113,9 @@ export type InboundSummary = {
   isTest: boolean;
 };
 
+/** P1-4: ako poskytovateľ stránkuje zoznam prijatých dokladov. "none" = iba prvá stránka (bezpečný default). */
+export type InboundPaginationMode = "none" | "offset" | "page";
+
 export type InboundDocument = {
   providerReceivedId: string;
   xml: Uint8Array;
@@ -142,7 +145,13 @@ export interface EinvoiceProvider {
   findSubmissionByIdempotencyKey(ctx: ProviderContext, idempotencyKey: string): Promise<SubmissionLookup>;
   /** GET /v1/agent/peppol/submissions/{document_id}; null = poskytovateľ podanie (zatiaľ) nevie vrátiť. */
   getSubmissionByDocumentId?(ctx: ProviderContext, documentId: string): Promise<SubmissionByDocument | null>;
-  listUnacknowledgedInbound(ctx: ProviderContext, options?: { limit?: number }): Promise<InboundSummary[]>;
+  /**
+   * Nepotvrdené prijaté doklady. `page` (1 = prvá) sa použije IBA ak `inboundPagination` ≠ "none";
+   * pri "none" vráti poskytovateľ pre page > 1 prázdny zoznam (žiadne neoverené parametre).
+   */
+  listUnacknowledgedInbound(ctx: ProviderContext, options?: { limit?: number; page?: number }): Promise<InboundSummary[]>;
+  /** P1-4: režim stránkovania GET /received (overený v sandboxe, R1). Chýba = "none" (iba prvá stránka). */
+  readonly inboundPagination?: InboundPaginationMode;
   getInboundDocument(ctx: ProviderContext, providerReceivedId: string): Promise<InboundDocument>;
   acknowledgeInbound(ctx: ProviderContext, providerReceivedId: string): Promise<void>;
 }

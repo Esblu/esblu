@@ -29,10 +29,12 @@ export async function downloadStoredDocument(
   const shaCol = kind === "outbound" ? "ubl_sha256" : "xml_sha256";
   const { data, error } = await deps.userDb
     .from(table)
-    .select(`id, ${pathCol}, ${shaCol}`)
+    .select(kind === "inbound" ? `id, ${pathCol}, ${shaCol}, last_error_code` : `id, ${pathCol}, ${shaCol}`)
     .eq("id", id)
     .maybeSingle<Record<string, string | null>>();
   if (error) return { ok: false, status: 500, code: "QUERY_FAILED" };
+  // R3 (P1-4): XML dokladu adresovaného inému účastníkovi sa firme nikdy nevydá (rovnaká odpoveď ako neexistujúci).
+  if (kind === "inbound" && data?.last_error_code === "RECIPIENT_MISMATCH") return { ok: false, status: 404, code: "NOT_FOUND" };
   const path = data?.[pathCol] ?? null;
   const sha = data?.[shaCol] ?? null;
   if (!data || !path || !sha) return { ok: false, status: 404, code: "NOT_FOUND" };

@@ -84,6 +84,13 @@ export interface InboundStore {
    * posiela nové X-Webhook-Id s rovnakým telom a po zlyhanom spracovaní ho treba spracovať.
    */
   webhookBodySeen?(input: { provider: string; environment: EinvoiceEnvironment; bodySha256: string; deliveryId: string }): Promise<boolean>;
+  /**
+   * P1-4 karanténa (migrácia 2026112410000x): trvalo zlyhaný doklad s uloženým originálom XML.
+   * Stav `failed` sa nemení. Voliteľné: bez migrácie/metódy sa karanténa preskočí.
+   */
+  quarantine?(inboundId: string, reason: string): Promise<"quarantined" | "already" | "not_eligible">;
+  /** P1-4: zaznamená úspešné ACK karantenovaného dokladu u poskytovateľa (iba keď je ACK povolené). */
+  quarantineAcked?(inboundId: string): Promise<void>;
   register(input: { provider: string; environment: EinvoiceEnvironment; providerOrgId: string; providerReceivedId: string; source: "webhook" | "poll"; meta: RegisterMeta }): Promise<{ inboundId: string; created: boolean; processingStatus: string; companyId: string }>;
   claim(limit: number, leaseSeconds: number): Promise<InboundRow[]>;
   transition(id: string, expectedState: string, toState: string | null, source: InboundSource, providerCode: string | null, fields: InboundTransitionFields): Promise<InboundRow>;

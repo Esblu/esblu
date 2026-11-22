@@ -15,8 +15,8 @@ import { createHash, createHmac } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { handleEinvoiceWebhook, classifyWebhookEvent, WEBHOOK_MAX_BODY_BYTES } from "../lib/einvoice/inbound/webhook.ts";
-import { processInboundRow, runInboundPoll, runInboundProcessBatch } from "../lib/einvoice/inbound/processor.ts";
+import { handleEinvoiceWebhook, classifyWebhookEvent, WEBHOOK_MAX_BODY_BYTES, inboundHintId } from "../lib/einvoice/inbound/webhook.ts";
+import { processInboundRow, runInboundPoll, runInboundProcessBatch, syncInboundList } from "../lib/einvoice/inbound/processor.ts";
 import { InboundStoreError, inboundXmlPath, type InboundRow, type InboundStore } from "../lib/einvoice/inbound/store.ts";
 import { mapInboundDraft, verifyInboundRecipient } from "../lib/einvoice/inbound/mapping.ts";
 import { wrapSbdh } from "./einvoice-partner-fake-sandbox.ts";
@@ -130,6 +130,8 @@ for (const migration of [
   // 20261122100000: bez účinného mandátu sa nič neodošle (seed nižšie)
   EINVOICE_MANDATE_MIGRATION,
   "20261113100000_einvoice_webhook_body_sha256_idx.sql",
+  // P1-4: karanténa + R3 (skrytie RECIPIENT_MISMATCH) — pripravená migrácia (neaplikovaná na staging/produkciu)
+  "20261125100000_einvoice_inbound_quarantine.sql",
 ]) {
   try {
     await db.exec(read(`supabase/migrations/${migration}`));
@@ -216,6 +218,13 @@ const inboundStore: InboundStore = {
     );
     return rows[0].n > 0;
   },
+  async quarantine(id, reason) {
+    const [r] = await svc<{ j: { result: "quarantined" | "already" | "not_eligible" } }>("select public.esblu_einvoice_inbound_quarantine($1, $2) j", [id, reason]);
+    return r.j.result;
+  },
+  async quarantineAcked(id) {
+    await svc("select public.esblu_einvoice_inbound_quarantine_acked($1)", [id]);
+  },
   async register(i) {
     const [r] = await svc<Row>("select * from public.esblu_einvoice_inbound_register($1, $2, $3, $4, $5, $6::jsonb)", [i.provider, i.environment, i.providerOrgId, i.providerReceivedId, i.source, JSON.stringify(i.meta)]);
     return { inboundId: r.inbound_id as string, created: r.created as boolean, processingStatus: r.processing_status as string, companyId: r.company_id as string };
@@ -300,6 +309,10 @@ class FakeProvider implements EinvoiceProvider {
   ackErrors: EinvoiceProviderError[] = [];
   listError: EinvoiceProviderError | null = null;
   status = new Map<string, OutboundState>();
+  /** P1-4: režim stránkovania, ignorovanie parametra stránky, poradie (najnovšie prvé). */
+  inboundPagination: "none" | "offset" | "page" = "none";
+  ignorePage = false;
+  newestFirst = false;
   private orgs = new Set(["org-a", "org-b"]);
   private ctx(c: ProviderContext) {
     if (c.environment !== "sandbox" || !this.orgs.has(c.providerOrgId)) throw new EinvoiceProviderError("EINVOICE_ORGANIZATION_NOT_FOUND");
@@ -321,11 +334,16 @@ class FakeProvider implements EinvoiceProvider {
   }
   async getDeliveryEvidence() { return null; }
   async findSubmissionByIdempotencyKey() { return { kind: "unknown" as const }; }
-  async listUnacknowledgedInbound(c: ProviderContext) {
+  async listUnacknowledgedInbound(c: ProviderContext, options?: { limit?: number; page?: number }) {
     this.calls.push("list");
     this.ctx(c);
     if (this.listError) throw this.listError;
-    return [...this.docs.values()].filter((d) => d.org === c.providerOrgId && !d.acknowledged).map((d) => d.summary);
+    let all = [...this.docs.values()].filter((d) => d.org === c.providerOrgId && !d.acknowledged).map((d) => d.summary);
+    if (this.newestFirst) all = all.reverse();
+    if (this.inboundPagination === "none") return all; // pôvodné správanie testov (bez limitu)
+    const limit = options?.limit ?? 50;
+    const page = this.ignorePage ? 1 : Math.max(1, options?.page ?? 1);
+    return all.slice((page - 1) * limit, page * limit);
   }
   async getInboundDocument(c: ProviderContext, id: string) {
     this.calls.push(`fetch:${id}`);
@@ -543,7 +561,8 @@ await check("platný webhook: firma IBA z provider_org_id (company_id v tele sa 
   const row = await inboundByPid("rcv-001");
   assert.equal(row.company_id, CA);
   assert.equal(row.processing_status, "acknowledged");
-  assert.ok(!provider.calls.includes("fetch:rcv-FAKE"), "ID z tela webhooku sa nepoužije");
+  // P1-4: ID z tela je iba nápoveda — overí sa stiahnutím v kontexte org-a (z mapovania); cudzie ID → 404 → nič.
+  assert.equal(await inboundByPid("rcv-FAKE"), undefined, "neoverené ID z tela webhooku sa nezaregistruje");
   assert.ok(provider.calls.includes("list"));
   const wh = (await sql<Row>("select processing_status, company_id, body_sha256, error from public.einvoice_webhook_events where delivery_id = 'dlv-1'")).rows[0];
   assert.equal(wh.processing_status, "processed");
@@ -1388,6 +1407,191 @@ await check("dedupe (rovnaké XML) a izolácia firiem ostávajú: žiadny druhý
   assert.equal(seenByB.rows[0].n, 0);
   const seenByA = await as(U.owner, () => db.query<{ n: number }>("select count(*)::int n from public.invoice_tax_breakdowns where invoice_id = $1", [orig.invoice_id]));
   assert.equal(seenByA.rows[0].n, 1);
+});
+
+// =============================================================================
+// P1-4 (2026-11-23): stránkovanie, nápovedy z udalosti, karanténa, R3
+// =============================================================================
+// Bez príjemcu (BT-49) → RECIPIENT_MISMATCH/RECIPIENT_MISSING: trvalo chybný, nikdy sa nekarantenuje ani nepotvrdí.
+const BAD_XML = () => new TextEncoder().encode('<?xml version="1.0"?><Invoice xmlns="urn:oasis:names:specification:ubl:schema:xsd:Invoice-2"></Invoice>');
+/** Správny príjemca, ale prázdne číslo dokladu (BT-1) → trvalá chyba až PO uložení originálu (INVALID_XML). */
+function noNumberXml(number: string): Uint8Array {
+  const text = new TextDecoder().decode(inboundXml(number)).replace(`>${number}<`, "><");
+  return new TextEncoder().encode(text);
+}
+async function drain() {
+  for (let i = 0; i < 40; i++) {
+    const r = await runInboundProcessBatch(deps(), { batchSize: 20 });
+    if (r.claimed === 0) return;
+  }
+}
+async function seedFailed(prefix: string, n: number) {
+  for (let i = 0; i < n; i++) provider.add("org-a", `${prefix}-${String(i).padStart(3, "0")}`, BAD_XML());
+}
+
+await check("P1-4 T1/T2: 65 trvalo chybných dokladov neblokuje prijatie ďalšej platnej faktúry (oba smery zoradenia)", async () => {
+  for (const newestFirst of [false, true]) {
+    provider.inboundPagination = "offset";
+    provider.ignorePage = false;
+    provider.newestFirst = newestFirst;
+    const tag = newestFirst ? "nf" : "of";
+    seedFailed(`rcv-p14-${tag}`, 65);
+    await syncInboundList(deps(), [{ providerOrgId: "org-a" }], "poll");
+    await drain();
+    const failedN = (await sql<{ n: number }>(`select count(*)::int n from public.einvoice_inbound where provider_received_id like 'rcv-p14-${tag}-%' and processing_status = 'failed'`)).rows[0].n;
+    assert.equal(failedN, 65, "všetky chybné sú failed a ostávajú u poskytovateľa nepotvrdené");
+    // nová platná faktúra: pri najstarších prvých je až za 65 chybnými (mimo prvej stránky po 50)
+    provider.add("org-a", `rcv-p14-${tag}-valid`, inboundXml(`FA-P14-${tag.toUpperCase()}`));
+    const rep = await syncInboundList(deps(), [{ providerOrgId: "org-a" }], "poll", { pageSize: 50 });
+    assert.ok((rep.pages ?? 0) >= 2 || newestFirst, `stránkovanie prešlo ďalej (${rep.pages})`);
+    await drain();
+    const ok = await inboundByPid(`rcv-p14-${tag}-valid`);
+    assert.ok(ok, "platná faktúra zaregistrovaná");
+    assert.equal(ok.processing_status, "acknowledged");
+    assert.ok(ok.invoice_id, "koncept vytvorený");
+  }
+  provider.inboundPagination = "none";
+  provider.newestFirst = false;
+});
+
+await check("P1-4 kontrola: bez stránkovania (režim none) by platná faktúra za 50+ chybnými ostala neprijatá", async () => {
+  provider.inboundPagination = "offset"; // poskytovateľ stránkuje, ale Esblu režim „none" (provider bez inboundPagination)
+  const p2 = Object.assign(Object.create(Object.getPrototypeOf(provider)), provider, { inboundPagination: undefined });
+  seedFailed("rcv-p14-none", 55);
+  await syncInboundList({ ...deps(), provider: p2 }, [{ providerOrgId: "org-a" }], "poll");
+  await drain();
+  provider.add("org-a", "rcv-p14-none-valid", inboundXml("FA-P14-NONE"));
+  const rep = await syncInboundList({ ...deps(), provider: p2 }, [{ providerOrgId: "org-a" }], "poll");
+  assert.equal(rep.pages, 1);
+  assert.equal(await inboundByPid("rcv-p14-none-valid"), undefined, "dôkaz pôvodného problému: jedna stránka (50) nestačí");
+  // ten istý doklad cez overenú nápovedu z udalosti (A2) sa prijme aj bez stránkovania
+  const rep2 = await syncInboundList({ ...deps(), provider: p2 }, [{ providerOrgId: "org-a" }], "webhook", { hints: { "org-a": ["rcv-p14-none-valid"] } });
+  assert.equal(rep2.hintsRegistered, 1);
+  await drain();
+  assert.equal((await inboundByPid("rcv-p14-none-valid")).processing_status, "acknowledged");
+  provider.inboundPagination = "none";
+});
+
+await check("P1-4 A2: webhook s ID dokladu v tele → overená nápoveda (fetch v kontexte org z mapovania), aj bez stránkovania", async () => {
+  assert.equal(inboundHintId({ receivedId: "rcv-x" }), "rcv-x");
+  assert.equal(inboundHintId({ received_id: "rcv-y" }), "rcv-y");
+  assert.equal(inboundHintId({ received_id: "../x" }), null);
+  assert.equal(inboundHintId({ id: "rcv-z" }), null, "všeobecné id sa nepoužíva");
+  assert.equal(inboundHintId(null), null);
+  provider.add("org-a", "rcv-p14-wh", inboundXml("FA-P14-WH"));
+  const r = await webhook({ event: "peppol.document.received", organization_id: "org-a", data: { receivedId: "rcv-p14-wh" } }, "dlv-p14-wh");
+  assert.equal(r.status, 200);
+  const row = await inboundByPid("rcv-p14-wh");
+  assert.equal(row.company_id, CA);
+});
+
+await check("P1-4 T3: poskytovateľ ignoruje parameter stránky → PAGINATION_IGNORED, žiadny nekonečný cyklus", async () => {
+  provider.inboundPagination = "offset";
+  provider.ignorePage = true;
+  const before = provider.calls.filter((c) => c === "list").length;
+  const rep = await syncInboundList(deps(), [{ providerOrgId: "org-a" }], "poll", { pageSize: 10 });
+  const lists = provider.calls.filter((c) => c === "list").length - before;
+  assert.equal(lists, 2, "druhá stránka = rovnaké ID → stop");
+  assert.deepEqual(rep.stopped, [{ code: "PAGINATION_IGNORED" }]);
+  provider.ignorePage = false;
+  provider.inboundPagination = "none";
+});
+
+await check("P1-4 T4: strop stránok na beh (PAGINATION_LIMIT)", async () => {
+  provider.inboundPagination = "offset";
+  const rep = await syncInboundList(deps(), [{ providerOrgId: "org-a" }], "poll", { pageSize: 5, maxPages: 3 });
+  assert.equal(rep.pages, 3);
+  assert.deepEqual(rep.stopped, [{ code: "PAGINATION_LIMIT" }]);
+  provider.inboundPagination = "none";
+});
+
+await check("P1-4 T5: nápoveda s ID dokladu inej organizácie → overenie v kontexte org-a zlyhá, nič sa nezapíše", async () => {
+  provider.add("org-b", "rcv-p14-foreign", inboundXml("FA-P14-FOREIGN", { endpoint: "2030000000", customerIco: "22222222" }));
+  const rep = await syncInboundList(deps(), [{ providerOrgId: "org-a" }], "webhook", { hints: { "org-a": ["rcv-p14-foreign", "../evil", ""] } });
+  assert.equal(rep.hintsRegistered, 0);
+  assert.equal(await inboundByPid("rcv-p14-foreign"), undefined);
+});
+
+await check("P1-4 T6: ten istý doklad z nápovedy aj zo zoznamu → jeden riadok, jeden koncept, jeden ACK", async () => {
+  provider.calls = [];
+  provider.add("org-a", "rcv-p14-dup", inboundXml("FA-P14-DUP"));
+  await syncInboundList(deps(), [{ providerOrgId: "org-a" }], "webhook", { hints: { "org-a": ["rcv-p14-dup"] } });
+  await syncInboundList(deps(), [{ providerOrgId: "org-a" }], "poll", { hints: { "org-a": ["rcv-p14-dup"] } });
+  await drain();
+  assert.equal((await sql<{ n: number }>("select count(*)::int n from public.einvoice_inbound where provider_received_id = 'rcv-p14-dup'")).rows[0].n, 1);
+  assert.equal(provider.calls.filter((c) => c === "ack:rcv-p14-dup").length, 1);
+});
+
+await check("P1-4 T7/R2: trvalo chybný doklad s uloženým XML → karanténa (stav failed, firma ho vidí), ACK predvolene VYPNUTÉ", async () => {
+  provider.calls = [];
+  provider.add("org-a", "rcv-p14-q1", noNumberXml("FA-P14-Q1")); // správny príjemca, chýba číslo dokladu → INVALID_XML po uložení
+  await syncInboundList(deps(), [{ providerOrgId: "org-a" }], "poll", { hints: { "org-a": ["rcv-p14-q1"] } });
+  await drain();
+  const row = await inboundByPid("rcv-p14-q1");
+  assert.equal(row.processing_status, "failed");
+  assert.ok(row.xml_sha256 && row.xml_storage_path, "originál uložený");
+  assert.ok(row.quarantined_at, "karanténa");
+  assert.equal(row.provider_acknowledged_at, null);
+  assert.ok(!provider.calls.includes("ack:rcv-p14-q1"), "bez povolenia sa poskytovateľovi nič nepotvrdí");
+  const seen = await as(U.owner, () => db.query<{ n: number }>("select count(*)::int n from public.einvoice_inbound where provider_received_id = 'rcv-p14-q1'"));
+  assert.equal(seen.rows[0].n, 1, "firma (finance.view) doklad vidí");
+  const ev = await eventsOf(String(row.id));
+  assert.ok(ev.some((e) => e.includes("failed->quarantined")), "auditná stopa karantény");
+});
+
+await check("P1-4 T7b/T9: s výslovným povolením ACK → potvrdené, provider_acknowledged_at; zlyhaný ACK sa zopakuje bez straty", async () => {
+  provider.add("org-a", "rcv-p14-q2", noNumberXml("FA-P14-Q2"));
+  provider.ackErrors = [new EinvoiceProviderError("EINVOICE_PROVIDER_UNAVAILABLE")];
+  await syncInboundList({ ...deps(), quarantineAck: true }, [{ providerOrgId: "org-a" }], "poll", { hints: { "org-a": ["rcv-p14-q2"] } });
+  for (let i = 0; i < 10; i++) if ((await runInboundProcessBatch({ ...deps(), quarantineAck: true }, { batchSize: 20 })).claimed === 0) break;
+  let row = await inboundByPid("rcv-p14-q2");
+  assert.ok(row.quarantined_at);
+  assert.equal(row.provider_acknowledged_at, null, "prvý ACK zlyhal → bez záznamu");
+  // opakovanie: priame volanie rovnakej cesty (idempotentná karanténa 'already' → ACK znovu)
+  const [q] = await svc<{ j: { result: string } }>("select public.esblu_einvoice_inbound_quarantine($1, 'INVALID_XML') j", [row.id]);
+  assert.equal(q.j.result, "already");
+  await provider.acknowledgeInbound({ environment: "sandbox", providerOrgId: "org-a" }, "rcv-p14-q2");
+  await inboundStore.quarantineAcked!(String(row.id));
+  row = await inboundByPid("rcv-p14-q2");
+  assert.ok(row.provider_acknowledged_at);
+});
+
+await check("P1-4 T8: trvalá chyba BEZ uloženého originálu → žiadna karanténa, žiadny ACK", async () => {
+  provider.calls = [];
+  provider.add("org-a", "rcv-p14-noxml", new Uint8Array(0)); // prázdne → XML_SIZE_INVALID pred uložením
+  await syncInboundList({ ...deps(), quarantineAck: true }, [{ providerOrgId: "org-a" }], "poll", { hints: { "org-a": ["rcv-p14-noxml"] } });
+  for (let i = 0; i < 10; i++) if ((await runInboundProcessBatch({ ...deps(), quarantineAck: true }, { batchSize: 20 })).claimed === 0) break;
+  const row = await inboundByPid("rcv-p14-noxml");
+  assert.equal(row.processing_status, "failed");
+  assert.equal(row.quarantined_at, null);
+  assert.ok(!provider.calls.includes("ack:rcv-p14-noxml"));
+});
+
+await check("P1-4 R3: RECIPIENT_MISMATCH sa nikdy nekarantenuje, nepotvrdí ani nesprístupní firme (RLS); health ho hlási", async () => {
+  provider.calls = [];
+  const xml = inboundXml("FA-P14-MISMATCH", { endpoint: "2099999999", customerIco: "99999999" });
+  const row = await processSingle("rcv-p14-mismatch", xml, "org-a");
+  assert.equal(row.last_error_code, "RECIPIENT_MISMATCH");
+  const fresh = await inboundByPid("rcv-p14-mismatch");
+  assert.equal(fresh.quarantined_at, null);
+  assert.ok(!provider.calls.some((c) => c.startsWith("ack:")));
+  const seen = await as(U.owner, () => db.query<{ n: number }>("select count(*)::int n from public.einvoice_inbound where provider_received_id = 'rcv-p14-mismatch'"));
+  assert.equal(seen.rows[0].n, 0, "firma riadok nevidí ani cez Data API");
+  const q = await svc<{ j: { result: string } }>("select public.esblu_einvoice_inbound_quarantine($1, 'INVALID_XML') j", [fresh.id]);
+  assert.equal(q[0].j.result, "not_eligible");
+  const [h] = await svc<{ j: { inbound: Record<string, number> } }>("select public.esblu_einvoice_health(60, 60) j", []);
+  assert.ok(Number(h.j.inbound.recipient_mismatch) >= 1);
+  assert.ok(Number(h.j.inbound.quarantined) >= 1);
+});
+
+await check("P1-4 T10/T11: karanténa inej firmy je neviditeľná; funkcie karantény nevolá authenticated", async () => {
+  const seenByB = await as(U.b, () => db.query<{ n: number }>("select count(*)::int n from public.einvoice_inbound where quarantined_at is not null"));
+  assert.equal(seenByB.rows[0].n, 0);
+  const row = await inboundByPid("rcv-p14-q1");
+  const err = await errorOf(() => as(U.owner, () => db.query("select public.esblu_einvoice_inbound_quarantine($1, 'INVALID_XML')", [row.id])));
+  assert.match(err, /permission denied/i);
+  const err2 = await errorOf(() => as(U.owner, () => db.query("select public.esblu_einvoice_inbound_quarantine_acked($1)", [row.id])));
+  assert.match(err2, /permission denied/i);
 });
 
 console.log(`\neinvoice-inbound: ${passed} passed, ${failed} failed`);

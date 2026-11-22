@@ -14,8 +14,7 @@ import {
   resolveEfakturaBaseUrl,
   scrubProviderText,
   mapEfakturaSendState,
-  type EfakturaFetch,
-} from "../lib/einvoice/provider/efaktura-sk.ts";
+  type EfakturaFetch, parseInboundPaginationMode } from "../lib/einvoice/provider/efaktura-sk.ts";
 import { getEinvoiceProvider } from "../lib/einvoice/provider/index.ts";
 import { EinvoiceProviderError } from "../lib/einvoice/provider/types.ts";
 import { EVIDENCE_TOP_LEVEL_KEYS, sanitizeDeliveryEvidence } from "../lib/einvoice/evidence.ts";
@@ -304,6 +303,35 @@ await check("listUnacknowledgedInbound: acknowledged=false, limit 1–100, obran
     providerReceivedId: RCV, senderParticipantId: "9915:9999999901", senderIco: "99999901", documentNumber: "T-1",
     documentType: "invoice", receivedAt: "2026-09-30T08:15:00.000Z", isTest: true,
   }]);
+});
+
+await check("P1-4 stránkovanie GET /received: default none = iba prvá stránka bez neoverených parametrov; offset / page iba výslovne", async () => {
+  const route = () => fake([(r) => is("GET", "/v1/agent/peppol/received")(r) ? { json: { data: [] } } : undefined]);
+  // default (bez overenia R1): page 1 bez offset/page, page 2 = žiadne volanie
+  let f = route();
+  let p = provider(f.impl);
+  assert.equal(p.inboundPagination, "none");
+  await p.listUnacknowledgedInbound(ctx, { limit: 100, page: 1 });
+  assert.deepEqual(await p.listUnacknowledgedInbound(ctx, { limit: 100, page: 2 }), []);
+  assert.equal(f.calls.length, 1);
+  assert.equal(f.calls[0].url.searchParams.get("offset"), null);
+  assert.equal(f.calls[0].url.searchParams.get("page"), null);
+  // offset
+  f = route();
+  p = new EfakturaSkProvider({ apiKey: FAKE_KEY, environment: "sandbox", fetchImpl: f.impl, receivedPagination: "offset" });
+  await p.listUnacknowledgedInbound(ctx, { limit: 100, page: 3 });
+  assert.equal(f.calls[0].url.searchParams.get("offset"), "200");
+  assert.equal(f.calls[0].url.searchParams.get("limit"), "100");
+  // page/per_page
+  f = route();
+  p = new EfakturaSkProvider({ apiKey: FAKE_KEY, environment: "sandbox", fetchImpl: f.impl, receivedPagination: "page" });
+  await p.listUnacknowledgedInbound(ctx, { limit: 50, page: 2 });
+  assert.equal(f.calls[0].url.searchParams.get("page"), "2");
+  assert.equal(f.calls[0].url.searchParams.get("per_page"), "50");
+  assert.equal(f.calls[0].url.searchParams.get("limit"), null);
+  // neznáma hodnota (preklep v env) → none
+  assert.equal(parseInboundPaginationMode("OFFSET"), "none");
+  assert.equal(parseInboundPaginationMode(undefined), "none");
 });
 
 await check("getInboundDocument: surové XML bajty, Accept XML, limit veľkosti", async () => {

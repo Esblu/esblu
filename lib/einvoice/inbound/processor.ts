@@ -1,12 +1,12 @@
 import "server-only";
 
 import { createHash } from "node:crypto";
-import { EinvoiceProviderError, type EinvoiceEnvironment, type EinvoiceProvider, type ProviderContext } from "../provider/types.ts";
+import { EinvoiceProviderError, type EinvoiceEnvironment, type EinvoiceProvider, type InboundSummary, type ProviderContext } from "../provider/types.ts";
 import { MAX_INBOUND_XML_BYTES, parseInboundUbl } from "../ubl/parse.ts";
 import { backoffMs, errorCode } from "../outbound/policy.ts";
 import { dbErrorCode } from "../outbound/store.ts";
 import { mapInboundDraft, verifyInboundRecipient } from "./mapping.ts";
-import { inboundXmlPath, InboundStoreError, type InboundRow, type InboundStore } from "./store.ts";
+import { inboundXmlPath, InboundStoreError, type InboundRow, type InboundStore, type RegisterMeta } from "./store.ts";
 
 // =============================================================================
 // E-Faktúra inbound — spracovanie prijatých dokladov. SERVER-ONLY.
@@ -56,7 +56,16 @@ export type InboundDeps = {
   provider: EinvoiceProvider;
   environment: EinvoiceEnvironment;
   now?: () => Date;
+  /**
+   * P1-4 (R2): potvrdenie (ACK) karantenovaného dokladu poskytovateľovi. DEFAULT VYPNUTÉ — zapína sa až po
+   * overení, že originál je bezpečne uložený a doklad sprístupnený oprávnenému príjemcovi
+   * (env ESBLU_EINVOICE_INBOUND_QUARANTINE_ACK=enabled, rozhodnutie vlastníka).
+   */
+  quarantineAck?: boolean;
 };
+
+/** P1-4: kódy, pri ktorých sa doklad s uloženým originálom presunie do karantény. RECIPIENT_MISMATCH NIKDY (R3). */
+const QUARANTINE_EXCLUDED = new Set<string>(["RECIPIENT_MISMATCH"]);
 
 export type InboundItemResult = { inboundId: string; from: string; to: string; code: string | null };
 export type InboundReport = { claimed: number; results: InboundItemResult[] };
@@ -99,7 +108,33 @@ async function failPermanently(deps: InboundDeps, row: InboundRow, code: string,
     next_retry_at: null,
     locked_until: null,
   });
+  await quarantineFailed(deps, updated, code);
   return { row: updated, done: true, code };
+}
+
+/**
+ * P1-4 karanténa: trvalo zlyhaný doklad, ktorého originál XML je uložený (cesta + SHA-256), sa označí na ručné
+ * spracovanie (vidí ho firma). RECIPIENT_MISMATCH sa nikdy nekarantenuje ani nesprístupní (R3).
+ * ACK poskytovateľovi iba ak je výslovne povolené (R2); inak doklad ostáva u poskytovateľa nepotvrdený.
+ * Best-effort: zlyhanie karantény/ACK nemení výsledok kroku (doklad je `failed`, alert INBOUND_FAILED).
+ */
+async function quarantineFailed(deps: InboundDeps, row: InboundRow, code: string): Promise<void> {
+  if (QUARANTINE_EXCLUDED.has(code) || !row.xml_storage_path || !row.xml_sha256 || !deps.store.quarantine) return;
+  let result: "quarantined" | "already" | "not_eligible";
+  try {
+    result = await deps.store.quarantine(row.id, code);
+  } catch {
+    return;
+  }
+  if (result === "not_eligible" || deps.quarantineAck !== true || !deps.store.quarantineAcked) return;
+  try {
+    const ctx = await contextFor(deps, row);
+    if (!ctx) return;
+    await deps.provider.acknowledgeInbound(ctx, row.provider_received_id);
+    await deps.store.quarantineAcked(row.id);
+  } catch {
+    // ACK zlyhal → ďalší beh (karanténa bez provider_acknowledged_at) to zopakuje; nič sa nestratí.
+  }
 }
 
 async function stepFetch(deps: InboundDeps, row: InboundRow): Promise<StepOutcome> {
@@ -283,7 +318,27 @@ export async function runInboundProcessBatch(deps: InboundDeps, options: { batch
   return { claimed: rows.length, results };
 }
 
-export type SyncReport = { organizations: number; listed: number; registered: number; errors: { code: string }[] };
+export type SyncReport = {
+  organizations: number;
+  listed: number;
+  registered: number;
+  errors: { code: string }[];
+  /** P1-4: počet načítaných stránok, už známe doklady, overené nápovedy z udalostí, dôvody zastavenia stránkovania. */
+  pages?: number;
+  alreadyKnown?: number;
+  hintsRegistered?: number;
+  stopped?: { code: "PAGINATION_LIMIT" | "PAGINATION_IGNORED" }[];
+};
+
+export type SyncOptions = {
+  /** ID prijatých dokladov z udalosti (webhook/feed) podľa organizácie — overia sa u poskytovateľa v kontexte org. */
+  hints?: Record<string, string[]>;
+  maxPages?: number;
+  pageSize?: number;
+};
+
+/** P1-4: strop stránok na organizáciu a beh (100 × 10 = 1 000 dokladov) — ochrana pred zahltením. */
+export const INBOUND_SYNC_MAX_PAGES = 10;
 
 /**
  * Zoznam nepotvrdených dokladov u poskytovateľa → registrácia (idempotentná
@@ -292,43 +347,78 @@ export type SyncReport = { organizations: number; listed: number; registered: nu
 export async function syncInboundList(
   deps: InboundDeps,
   organizations: { providerOrgId: string }[],
-  source: "webhook" | "poll"
+  source: "webhook" | "poll",
+  options: SyncOptions = {}
 ): Promise<SyncReport> {
-  const report: SyncReport = { organizations: organizations.length, listed: 0, registered: 0, errors: [] };
-  for (const org of organizations) {
-    let list;
+  const report: SyncReport = { organizations: organizations.length, listed: 0, registered: 0, errors: [], pages: 0, alreadyKnown: 0, hintsRegistered: 0, stopped: [] };
+  const paginated = (deps.provider.inboundPagination ?? "none") !== "none";
+  const pageSize = paginated ? Math.max(1, Math.min(100, Math.floor(options.pageSize ?? 100))) : 50;
+  const maxPages = paginated ? Math.max(1, Math.min(INBOUND_SYNC_MAX_PAGES, Math.floor(options.maxPages ?? INBOUND_SYNC_MAX_PAGES))) : 1;
+
+  const registerOne = async (providerOrgId: string, providerReceivedId: string, meta: RegisterMeta): Promise<boolean | null> => {
     try {
-      list = await deps.provider.listUnacknowledgedInbound({ environment: deps.environment, providerOrgId: org.providerOrgId }, { limit: 50 });
+      const r = await deps.store.register({ provider: deps.provider.name, environment: deps.environment, providerOrgId, providerReceivedId, source, meta });
+      if (r.created) report.registered++;
+      else report.alreadyKnown = (report.alreadyKnown ?? 0) + 1;
+      return r.created;
     } catch (error) {
-      report.errors.push({ code: `${INBOUND_ERROR.PROVIDER_FETCH_FAILED}:${errorCode(error)}` });
-      continue;
+      report.errors.push({ code: error instanceof InboundStoreError ? error.code : errorCode(error) });
+      return null;
     }
-    report.listed += list.length;
-    for (const item of list) {
-      if (!SAFE_ID.test(item.providerReceivedId)) continue;
+  };
+
+  for (const org of organizations) {
+    const ctx: ProviderContext = { environment: deps.environment, providerOrgId: org.providerOrgId };
+
+    // 1) Nápovedy z udalosti: ID sa NEPOUŽIJE bez overenia — doklad musí byť stiahnuteľný v kontexte TEJTO
+    //    organizácie (z mapovania v DB, nie z tela udalosti). Cudzie/podvrhnuté ID → poskytovateľ 404 → nič.
+    const hints = [...new Set((options.hints?.[org.providerOrgId] ?? []).filter((id) => SAFE_ID.test(id)))].slice(0, 20);
+    for (const id of hints) {
       try {
-        const r = await deps.store.register({
-          provider: deps.provider.name,
-          environment: deps.environment,
-          providerOrgId: org.providerOrgId,
-          providerReceivedId: item.providerReceivedId,
-          source,
-          meta: {
-            sender_participant_id: item.senderParticipantId,
-            sender_ico: item.senderIco,
-            document_number: item.documentNumber,
-            document_type: item.documentType,
-            is_test: item.isTest,
-          },
-        });
-        if (r.created) report.registered++;
-      } catch (error) {
-        report.errors.push({ code: error instanceof InboundStoreError ? error.code : errorCode(error) });
+        await deps.provider.getInboundDocument(ctx, id);
+      } catch {
+        continue;
       }
+      if ((await registerOne(org.providerOrgId, id, EMPTY_META)) === true) report.hintsRegistered = (report.hintsRegistered ?? 0) + 1;
+    }
+
+    // 2) Zoznam nepotvrdených dokladov po stránkach (iba v overenom režime; inak jedna stránka ako doteraz).
+    const seen = new Set<string>();
+    for (let page = 1; page <= maxPages; page++) {
+      let list: InboundSummary[];
+      try {
+        list = await deps.provider.listUnacknowledgedInbound(ctx, { limit: pageSize, page });
+      } catch (error) {
+        report.errors.push({ code: `${INBOUND_ERROR.PROVIDER_FETCH_FAILED}:${errorCode(error)}` });
+        break;
+      }
+      report.pages = (report.pages ?? 0) + 1;
+      report.listed += list.length;
+      const fresh = list.filter((item) => SAFE_ID.test(item.providerReceivedId) && !seen.has(item.providerReceivedId));
+      if (page > 1 && list.length > 0 && fresh.length === 0) {
+        // Poskytovateľ parameter stránkovania ignoruje (vracia tú istú stránku) → stop, žiadny nekonečný cyklus.
+        report.stopped!.push({ code: "PAGINATION_IGNORED" });
+        break;
+      }
+      for (const item of fresh) {
+        seen.add(item.providerReceivedId);
+        await registerOne(org.providerOrgId, item.providerReceivedId, {
+          sender_participant_id: item.senderParticipantId,
+          sender_ico: item.senderIco,
+          document_number: item.documentNumber,
+          document_type: item.documentType,
+          is_test: item.isTest,
+        });
+      }
+      if (list.length < pageSize) break;
+      if (page === maxPages && paginated) report.stopped!.push({ code: "PAGINATION_LIMIT" });
     }
   }
   return report;
 }
+
+// Nápoveda nesie iba ID — metadáta doplní spracovanie z overeného XML (nič sa nepreberá z tela udalosti).
+const EMPTY_META: RegisterMeta = {};
 
 /** Poll fallback: všetky pripravené organizácie → zoznam → spracovanie. Webhook nie je jediný mechanizmus. */
 export async function runInboundPoll(deps: InboundDeps, options: { batchSize?: number; leaseSeconds?: number } = {}) {

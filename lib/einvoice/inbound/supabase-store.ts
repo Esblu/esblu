@@ -73,6 +73,16 @@ export function createSupabaseInboundStore(admin: SupabaseClient = getSupabaseAd
       });
       return { status: r.status, invoiceId: r.invoice_id, matchedOn: r.matched_on };
     },
+    async quarantine(inboundId, reason) {
+      const r = await rpc<{ result: "quarantined" | "already" | "not_eligible" }>("esblu_einvoice_inbound_quarantine", {
+        p_inbound_id: inboundId,
+        p_reason: reason,
+      });
+      return r.result;
+    },
+    async quarantineAcked(inboundId) {
+      await rpc<unknown>("esblu_einvoice_inbound_quarantine_acked", { p_inbound_id: inboundId });
+    },
     async findStoredXmlPath(companyId, sha256, exceptInboundId) {
       const { data, error } = await admin
         .from("einvoice_inbound")

@@ -27,6 +27,7 @@ import {
   type SendUblInput,
   type SubmissionLookup,
   type SubmissionByDocument,
+  type InboundPaginationMode,
 } from "./types.ts";
 import { MAX_INBOUND_XML_BYTES } from "../ubl/parse.ts";
 import { sanitizeDeliveryEvidence } from "../evidence.ts";
@@ -89,6 +90,11 @@ export type EfakturaConfig = {
   timeoutMs?: number;
   /** Iba pre testy (fake fetch bez siete). */
   fetchImpl?: EfakturaFetch;
+  /**
+   * P1-4: stránkovanie GET /v1/agent/peppol/received. Dokumentácia poskytovateľa je rozporná
+   * (limit/offset vs. page/per_page) → default "none" (iba prvá stránka), kým R1 v sandboxe neoverí režim.
+   */
+  receivedPagination?: InboundPaginationMode;
 };
 
 /** Kľúč musí zodpovedať prostrediu (zdokumentované prefixy partnerských kľúčov). */
@@ -293,6 +299,11 @@ type RequestOptions = {
   maxBytes?: number;
 };
 
+/** P1-4: iba známe hodnoty; čokoľvek iné (aj preklep v env) = "none" (fail-safe: iba prvá stránka). */
+export function parseInboundPaginationMode(raw: unknown): InboundPaginationMode {
+  return raw === "offset" || raw === "page" ? raw : "none";
+}
+
 export class EfakturaSkProvider implements EinvoiceProvider, EinvoiceOnboardingProvider, EinvoiceDeregistrationProvider {
   readonly name = "efaktura_sk";
 
@@ -301,6 +312,7 @@ export class EfakturaSkProvider implements EinvoiceProvider, EinvoiceOnboardingP
   readonly #baseUrl: string;
   readonly #timeoutMs: number;
   readonly #fetch: EfakturaFetch;
+  readonly #receivedPagination: InboundPaginationMode;
 
   constructor(config: EfakturaConfig) {
     if (!config.apiKey) throw new EinvoiceProviderError("EINVOICE_PROVIDER_NOT_CONFIGURED");
@@ -310,6 +322,7 @@ export class EfakturaSkProvider implements EinvoiceProvider, EinvoiceOnboardingP
     this.#baseUrl = resolveEfakturaBaseUrl(config.baseUrl);
     this.#timeoutMs = config.timeoutMs && config.timeoutMs > 0 ? Math.min(config.timeoutMs, 120_000) : DEFAULT_TIMEOUT_MS;
     this.#fetch = config.fetchImpl ?? ((input, init) => fetch(input, init));
+    this.#receivedPagination = parseInboundPaginationMode(config.receivedPagination);
   }
 
   /** Nikdy neprezradí kľúč pri logovaní / serializácii objektu. */
@@ -682,15 +695,28 @@ export class EfakturaSkProvider implements EinvoiceProvider, EinvoiceOnboardingP
   // Príjem
   // ---------------------------------------------------------------------------
 
-  async listUnacknowledgedInbound(ctx: ProviderContext, options?: { limit?: number }): Promise<InboundSummary[]> {
+  get inboundPagination(): InboundPaginationMode {
+    return this.#receivedPagination;
+  }
+
+  async listUnacknowledgedInbound(ctx: ProviderContext, options?: { limit?: number; page?: number }): Promise<InboundSummary[]> {
     const limit = Math.max(1, Math.min(RECEIVED_PAGE_MAX, Math.floor(options?.limit ?? 50)));
-    // Stránkovanie: docs (receiving) = limit/offset; OpenAPI uvádza page/per_page.
-    // Posielame `limit` — overiť v sandboxe (TODO v reporte).
+    const page = Math.max(1, Math.floor(options?.page ?? 1));
+    // P1-4: docs (receiving) = limit/offset; OpenAPI = page/per_page (rozpor, P8). Parameter sa pošle IBA
+    // v režime overenom v sandboxe (R1); "none" → iba prvá stránka, ďalšie stránky = prázdny zoznam.
+    const query: Record<string, string> = { acknowledged: "false", limit: String(limit) };
+    if (page > 1) {
+      if (this.#receivedPagination === "none") return [];
+      if (this.#receivedPagination === "offset") query.offset = String((page - 1) * limit);
+      else { delete query.limit; query.page = String(page); query.per_page = String(limit); }
+    } else if (this.#receivedPagination === "page") {
+      delete query.limit; query.page = "1"; query.per_page = String(limit);
+    }
     const res = await this.#request({
       method: "GET",
       path: "/v1/agent/peppol/received",
       ctx,
-      query: { acknowledged: "false", limit: String(limit) },
+      query,
     });
     const root = obj(parseJson(res.bytes));
     const list = Array.isArray(root?.data) ? (root!.data as unknown[]) : null;

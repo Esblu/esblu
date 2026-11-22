@@ -1013,6 +1013,8 @@
     "esblu_einvoice_event_resolve(uuid,text,text)",
     "esblu_einvoice_half_units(text)",
     "esblu_einvoice_health(integer,integer)",
+    "esblu_einvoice_inbound_quarantine(uuid,text)",
+    "esblu_einvoice_inbound_quarantine_acked(uuid)",
     "esblu_einvoice_inbound_create_draft(uuid,jsonb)",
     "esblu_einvoice_inbound_register(text,text,text,text,text,jsonb)",
     "esblu_einvoice_inbound_transition(uuid,text,text,text,text,jsonb)",

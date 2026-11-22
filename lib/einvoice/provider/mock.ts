@@ -161,14 +161,17 @@ export class MockEinvoiceProvider implements EinvoiceProvider {
     return entry;
   }
 
-  async listUnacknowledgedInbound(ctx: ProviderContext, options?: { limit?: number }): Promise<InboundSummary[]> {
+  readonly inboundPagination = "offset" as const;
+
+  async listUnacknowledgedInbound(ctx: ProviderContext, options?: { limit?: number; page?: number }): Promise<InboundSummary[]> {
     this.calls.push("listUnacknowledgedInbound");
     this.requireOrg(ctx);
     const limit = Math.min(Math.max(options?.limit ?? 50, 1), 100);
+    const page = Math.max(1, options?.page ?? 1);
     return [...this.inbound.values()]
       .filter((e) => e.orgId === ctx.providerOrgId && !e.acknowledged)
       .map((e) => e.summary)
-      .slice(0, limit);
+      .slice((page - 1) * limit, page * limit);
   }
 
   async getInboundDocument(ctx: ProviderContext, providerReceivedId: string): Promise<InboundDocument> {

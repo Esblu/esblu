@@ -40,6 +40,7 @@ import { inboundCategory, outboundCategory } from "../lib/einvoice/ops/categorie
 import { evaluateAlerts, sanitizeHealth } from "../lib/einvoice/ops/alerts.ts";
 import { maintenanceHttpStatus, runEinvoiceMaintenance } from "../lib/einvoice/ops/maintenance.ts";
 import { downloadStoredDocument } from "../lib/einvoice/ops/download.ts";
+import { visibleToCompany } from "../lib/einvoice/ui/summary-server.ts";
 import { OpsStoreError, type OperatorAction, type OperatorBeginResult, type OperatorReasonCode, type OpsStore } from "../lib/einvoice/ops/store.ts";
 import { EINVOICE_MANDATE_MIGRATION, SEED_EFFECTIVE_MANDATES_SQL } from "./einvoice-mandate-test-seed.ts";
 
@@ -1111,6 +1112,27 @@ await check("routes: operátor bez tokenu → 401; download bez tokenu → 401; 
     assert.match(read(f), /^import "server-only";/, f);
     assert.doesNotMatch(read(f), /console\.(log|info|warn|error|debug)/, f);
   }
+});
+
+await check("P1-4 R3: XML dokladu RECIPIENT_MISMATCH sa nevydá (404 ako neexistujúci); nové alerty karantény a nesúladu príjemcu", async () => {
+  const rows: Record<string, Record<string, string | null>> = {
+    mm: { id: "mm", xml_storage_path: "c/x.xml", xml_sha256: "00".repeat(32), last_error_code: "RECIPIENT_MISMATCH" },
+  };
+  let objectRead = false;
+  const fakeDb = {
+    from: () => ({ select: () => ({ eq: (_c: string, id: string) => ({ maybeSingle: async () => ({ data: rows[id] ?? null, error: null }) }) }) }),
+  } as unknown as Parameters<typeof downloadStoredDocument>[0]["userDb"];
+  const r = await downloadStoredDocument({ userDb: fakeDb, getObject: async () => { objectRead = true; return new Uint8Array(1); } }, "inbound", "mm");
+  assert.deepEqual(r, { ok: false, status: 404, code: "NOT_FOUND" });
+  assert.equal(objectRead, false, "storage sa ani nečíta");
+  const codes = evaluateAlerts(sanitizeHealth({ inbound: { recipient_mismatch: 1, quarantined: 3, quarantined_unacked: 2 } })).map((a) => `${a.code}:${a.severity}`);
+  assert.ok(codes.includes("INBOUND_RECIPIENT_MISMATCH:critical"));
+  assert.ok(codes.includes("INBOUND_QUARANTINED:warning"));
+  assert.equal(visibleToCompany({ last_error_code: "RECIPIENT_MISMATCH" }), false);
+  assert.equal(visibleToCompany({ last_error_code: "INVALID_XML" }), true);
+  assert.equal(visibleToCompany({ last_error_code: null }), true);
+  // bez migrácie (chýbajúce kľúče) = 0, žiadny falošný alert
+  assert.ok(!evaluateAlerts(sanitizeHealth({ inbound: {} })).some((a) => a.code === "INBOUND_RECIPIENT_MISMATCH" || a.code === "INBOUND_QUARANTINED"));
 });
 
 console.log(`\neinvoice-ops: ${passed} passed, ${failed} failed`);

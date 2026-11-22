@@ -1,6 +1,6 @@
 import "server-only";
 
-import { EfakturaSkProvider } from "./efaktura-sk.ts";
+import { EfakturaSkProvider, parseInboundPaginationMode } from "./efaktura-sk.ts";
 import { assertServerOnly, type EinvoiceEnvironment, type EinvoiceProvider } from "./types.ts";
 
 // =============================================================================
@@ -43,7 +43,9 @@ export function getEinvoiceProvider(env: Record<string, string | undefined> = pr
     if (!apiKey) return null;
     // Voliteľné; default https://api.efaktura.sk. Host je overený voči allowlistu.
     const baseUrl = env.ESBLU_EFAKTURA_BASE_URL?.trim() || undefined;
-    return { provider: new EfakturaSkProvider({ apiKey, environment, baseUrl }), environment };
+    // P1-4: stránkovanie prijatých dokladov — iba po overení v sandboxe (R1); default "none".
+    const receivedPagination = parseInboundPaginationMode(env.ESBLU_EFAKTURA_RECEIVED_PAGINATION?.trim());
+    return { provider: new EfakturaSkProvider({ apiKey, environment, baseUrl, receivedPagination }), environment };
   }
   return null;
 }

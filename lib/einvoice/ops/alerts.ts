@@ -37,6 +37,10 @@ export type EinvoiceHealth = {
     ack_pending: number;
     acknowledged: number;
     failed: number;
+    /** P1-4 (migrácia 20261125100000; bez nej 0). */
+    quarantined: number;
+    quarantined_unacked: number;
+    recipient_mismatch: number;
     ack_pending_too_long: number;
     stuck: number;
     oldest_stuck_age_seconds: number;
@@ -62,6 +66,8 @@ export type AlertCandidate = {
     | "INBOUND_STUCK"
     | "INBOUND_ACK_PENDING_TOO_LONG"
     | "INBOUND_FAILED"
+    | "INBOUND_RECIPIENT_MISMATCH"
+    | "INBOUND_QUARANTINED"
     | "WEBHOOK_SIGNATURE_FAILURES"
     | "WEBHOOK_REPLAYS"
     | "WEBHOOK_PROCESSING_FAILURES";
@@ -103,7 +109,7 @@ export function sanitizeHealth(raw: unknown, outcomes: unknown = null): Einvoice
       ...pick(r.outbound, ["queued", "sending", "sent", "deferred", "delivered", "rejected", "failed", "retryable", "reconciliation_required", "retry_exhausted_unknown", "unknown_send_outcome", "stuck", "oldest_stuck_age_seconds"] as const),
       ...pick((outcomes ?? {}) as Record<string, unknown>, ["sent_24h", "delivered_24h", "rejected_24h", "failed_24h"] as const),
     },
-    inbound: pick(r.inbound, ["received", "stored", "parsed", "draft_created", "duplicate", "ack_pending", "acknowledged", "failed", "ack_pending_too_long", "stuck", "oldest_stuck_age_seconds"] as const),
+    inbound: pick(r.inbound, ["received", "stored", "parsed", "draft_created", "duplicate", "ack_pending", "acknowledged", "failed", "quarantined", "quarantined_unacked", "recipient_mismatch", "ack_pending_too_long", "stuck", "oldest_stuck_age_seconds"] as const),
     webhook: pick(r.webhook, ["failures_24h", "rejected_24h", "unprocessed_older_15m", "signature_failures_1h", "replays_1h"] as const),
   };
 }
@@ -126,6 +132,9 @@ export function evaluateAlerts(health: EinvoiceHealth, thresholds: AlertThreshol
   add("INBOUND_ACK_PENDING_TOO_LONG", "critical", health.inbound.ack_pending_too_long, 1);
   add("INBOUND_STUCK", "warning", health.inbound.stuck, 1);
   add("INBOUND_FAILED", "warning", health.inbound.failed, 1);
+  // R3: doklad adresovaný inému účastníkovi v schránke organizácie = prevádzkový incident (postup v runbooku).
+  add("INBOUND_RECIPIENT_MISMATCH", "critical", health.inbound.recipient_mismatch, 1);
+  add("INBOUND_QUARANTINED", "warning", health.inbound.quarantined_unacked, 1);
   add("WEBHOOK_SIGNATURE_FAILURES", "critical", health.webhook.signature_failures_1h, thresholds.signatureFailuresPerHour);
   add("WEBHOOK_REPLAYS", "warning", health.webhook.replays_1h, thresholds.replaysPerHour);
   add("WEBHOOK_PROCESSING_FAILURES", "warning", health.webhook.failures_24h + health.webhook.unprocessed_older_15m, thresholds.webhookFailures24h);

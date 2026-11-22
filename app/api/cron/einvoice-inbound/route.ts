@@ -39,7 +39,13 @@ export async function GET(req: Request) {
   if (!runtimeConfig) return Response.json({ success: true, configured: false });
 
   const result = await runInboundPoll(
-    { store: createSupabaseInboundStore(), provider: runtimeConfig.provider, environment: runtimeConfig.environment },
+    {
+      store: createSupabaseInboundStore(),
+      provider: runtimeConfig.provider,
+      environment: runtimeConfig.environment,
+      // P1-4 (R2): ACK karantenovaných dokladov iba po výslovnom zapnutí vlastníkom.
+      quarantineAck: process.env.ESBLU_EINVOICE_INBOUND_QUARANTINE_ACK?.trim() === "enabled",
+    },
     { batchSize: 5, leaseSeconds: 120 }
   );
   return Response.json(
@@ -47,7 +53,17 @@ export async function GET(req: Request) {
       success: true,
       configured: true,
       environment: runtimeConfig.environment,
-      sync: { organizations: result.sync.organizations, listed: result.sync.listed, registered: result.sync.registered, errors: result.sync.errors.map((e) => e.code) },
+      sync: {
+        organizations: result.sync.organizations,
+        listed: result.sync.listed,
+        registered: result.sync.registered,
+        pages: result.sync.pages ?? 0,
+        already_known: result.sync.alreadyKnown ?? 0,
+        hints_registered: result.sync.hintsRegistered ?? 0,
+        stopped: (result.sync.stopped ?? []).map((s) => s.code),
+        pagination: runtimeConfig.provider.inboundPagination ?? "none",
+        errors: result.sync.errors.map((e) => e.code),
+      },
       processed: { claimed: result.processed.claimed, results: result.processed.results.map((r) => ({ id: r.inboundId, from: r.from, to: r.to, code: r.code })) },
     },
     { headers: { "Cache-Control": "no-store" } }

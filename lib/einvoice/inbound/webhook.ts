@@ -25,6 +25,20 @@ import type { OpsAlertSink } from "../ops/alert-sink.ts";
 // Nič z tela webhooku sa neloguje.
 // =============================================================================
 
+
+/**
+ * P1-4: kandidát ID prijatého dokladu z tela udalosti peppol.document.received. Názov poľa v udalosti poskytovateľ
+ * nezdokumentoval (NEOVERENÉ) → skúšajú sa známe tvary; nezhoda = žiadna nápoveda (správanie ako doteraz).
+ */
+export function inboundHintId(data: Record<string, unknown> | null | undefined): string | null {
+  if (!data) return null;
+  for (const key of ["receivedId", "received_id", "documentId", "document_id"]) {
+    const v = data[key];
+    if (typeof v === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(v)) return v;
+  }
+  return null;
+}
+
 export const WEBHOOK_MAX_BODY_BYTES = 256 * 1024;
 
 export type WebhookDeps = {
@@ -242,10 +256,14 @@ export async function processProviderEvent(
       return { status: 200, body: { code: res.applied ? "PARTICIPANT_UPDATED" : "IGNORED" } };
     }
     if (kind === "inbound") {
+      // P1-4: ID prijatého dokladu z udalosti je iba NÁPOVEDA — syncInboundList ho overí stiahnutím u poskytovateľa
+      // v kontexte organizácie z mapovania (orgId z DB). Firma sa nikdy neurčuje z tela udalosti.
+      const hint = inboundHintId(data);
       const sync = await syncInboundList(
         { store: deps.inbound, provider: deps.provider, environment: deps.environment },
         [{ providerOrgId: orgId }],
-        "webhook"
+        "webhook",
+        hint ? { hints: { [orgId]: [hint] } } : {}
       );
       await runInboundProcessBatch({ store: deps.inbound, provider: deps.provider, environment: deps.environment }, { batchSize: 5 });
       const failed = sync.errors.length > 0;
