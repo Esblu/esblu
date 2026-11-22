@@ -242,13 +242,33 @@ for (const [re, name] of ps7) {
   check("pin = 6506e11 (merge PR #2, bezpecnostne aktualizacie)", !!m && m[1] === "6506e11af70725f89f7cda3253fa4e4e60b883c5");
   check("pin sa neprebera dynamicky z origin/main", !/\$S17ExpectedMain\s*=\s*(?=[^\s"])/.test(code) && (code.match(/\$S17ExpectedMain\s*=/g) || []).length === 1);
   check("krok 1: origin/main == pin, aplikacny kod == pin, commit lokalne, okno 1 z rovnakeho HEAD, zavislosti", /if \(\$hi\.origin_main -ne \$S17ExpectedMain\) \{ \$headProblems \+= "origin\/main/.test(code) && /if \(-not \$hi\.app_matches\) \{ \$headProblems/.test(code) && /if \(-not \$hi\.expected_main_present\)/.test(code) && /\[string\]\$w1\.head -ne \$hi\.head/.test(code) && /if \(-not \$hi\.deps_match\) \{ \$headProblems/.test(code));
-  check("app_matches zahrna necommitnute zmeny aplikacnych suborov", /app_matches = \(\$expectedOk -and \$appChanged\.Count -eq 0 -and \$appDirty\.Count -eq 0\)/.test(code) && /"status", "--porcelain"/.test(code));
+  check("app_matches zahrna necommitnute zmeny aplikacnych suborov", /app_matches = \(\$expectedOk -and \$appOk -and \$appChanged\.Count -eq 0 -and \$appDirty\.Count -eq 0\)/.test(code) && /"status", "--porcelain"/.test(code));
   check("harness subory su uzavrety zoznam (scripts/* mimo zoznamu = aplikacny kod)", /\$S17HarnessFiles = @\("scripts\/stripe-local-sandbox\.ps1", "scripts\/s17-accounting-export\.ts", "scripts\/stripe-local-sandbox-static-tests\.mjs"\)/.test(code) && /\(\$S17HarnessFiles -contains \$p\) -or \$p\.StartsWith\("docs\/"\)/.test(code));
   check("preflight odhali origin/main != pin aj zastarane node_modules (predtym az krok 1)", /if \(\$hi\.origin_main -ne \$S17ExpectedMain\) \{ \$problems \+=/.test(code) && /if \(-not \$hi\.deps_match\) \{ \$problems \+=/.test(code));
   check("preflight: origin/main != pin je blokujuci (exit 1)", /-notmatch "S17-1 ho vytvori\|s17-auto spusti npm ci"/.test(code) && !/-notmatch "[^"]*origin/.test(code));
   check("s17-auto a okno 1: npm ci aj pri zastaranych node_modules (nie iba chybajucich)", /if \(-not \(Get-S17DepsInfo\)\.deps_match\) \{/.test(code) && /-or -not \(Get-S17DepsInfo\)\.deps_match\) \{ npm ci/.test(code));
   check("zavislosti porovnane s package-lock.json (next, react, react-dom)", /\$S17DepPackages = @\("next", "react", "react-dom"\)/.test(code) && /package-lock\.json/.test(code));
   check("vetva a Force: Assert-HarnessCheckout zostava, -Force iba explicitne", /function Assert-HarnessCheckout/.test(code) && /if \(-not \$Force\) \{ Fail \("S17 odmieta bezat: "/.test(code));
+}
+
+// --- 16) Kandidat opravy S17-4 (2026-11-22): S17 testuje opravnu vetvu BEZ merge do main; neobiditelne kontroly
+{
+  const m = code.match(/^\$S17ExpectedApp = "([^"]*)"\s*$/m);
+  check("kandidat S17ExpectedApp = plne SHA 8d736db (fix/billing-document-company-link-db)", !!m && m[1] === "8d736dbe9f66a42a44f5f87b036712c80bd4c97d");
+  check("kandidat sa neprebera dynamicky (jedno priradenie, literal)", (code.match(/\$S17ExpectedApp\s*=/g) || []).length === 1);
+  check("uzavrety zoznam suborov kandidata = presne 6 suborov opravy", /\$S17CandidateFiles = @\("lib\/billing\/ops-alerts\.ts", "lib\/billing\/pipeline\.ts", "scripts\/billing-ops-pglite-tests\.ts", "supabase\/grants\/public-data-api-grants\.json", "supabase\/migrations\/20261124100000_billing_document_company_link\.sql", "supabase\/rollback\/20261124100000_billing_document_company_link_rollback\.sql"\)/.test(code));
+  check("aplikacny kod HEAD porovnany s kandidatom (nie s main)", /"diff", "--name-only", \$S17ExpectedApp, "HEAD"/.test(code));
+  check("kandidat musi byt potomkom pinu main", /"merge-base", "--is-ancestor", \$S17ExpectedMain, \$S17ExpectedApp/.test(code));
+  check("origin/main musi stale byt pin 6506e11 (ziadny merge do main)", /if \(\$hi\.origin_main -ne \$S17ExpectedMain\) \{ \$headProblems/.test(code));
+  const s1 = code.indexOf('Invoke-S17Step "1"');
+  const seg = code.slice(s1, code.indexOf('Invoke-S17Step "2"'));
+  const forceAt = seg.indexOf("if (-not $Force)");
+  check("krok 1: kandidat a schema stagingu sa kontroluju PRED vetvou -Force (neobiditelne)", seg.indexOf("candidate_descends_from_main") > -1 && seg.indexOf("Test-S17StagingSchema") > -1 && seg.indexOf("Test-S17StagingSchema") < forceAt && seg.indexOf("candidate_ok") < forceAt);
+  check("schema probe: neplatne prostredie (bez zapisu), ocakava ESBLU_BILLING_OPS_ALERT_INVALID", /rpc\/esblu_billing_ops_collect_documents/.test(code) && /"p_environment":"s17-probe"/.test(code) && /-match "ESBLU_BILLING_OPS_ALERT_INVALID"/.test(code));
+  check("preflight: kandidat a schema su blokujuce problemy", /if \(-not \$hi\.candidate_ok\) \{ \$problems \+=/.test(code) && /if \(-not \$schema\.ok\) \{ \$problems \+=/.test(code));
+  check("S17-10: nemennost snapshotu prvej faktury po S17-4", /first_invoice_snapshot_unchanged/.test(code) && /\$S17Ctx\.snap = \[ordered\]@/.test(code));
+  check("staging/produkcia ref nezmenene", /\$StagingRef = "cjbdijbbcujvmrzezusd"/.test(code) && /\$ProdRef = "fkpgvgvsmbpieduoatrt"/.test(code));
+  check("nove sandboxy zakazane, qa2 iba -NoListen", /zakladanie dalsich Stripe sandboxov je vypnute/.test(code) && /\$WhsecOnlyCompromised = @\("esblu-qa2"\)/.test(code));
 }
 
 console.log(`\n${passed} PASS, ${failed} FAIL`);

@@ -116,6 +116,12 @@ $S17StateFile = Join-Path $StateDir "s17-$Project.json"          # povodny stav 
 # po kazdom schvalenom nasadeni sa pin meni iba commitom v ops/s17-sandbox spolu s mergom origin/main (docs par. 8.14).
 # 6506e11 = merge PR #2 (bezpecnostne aktualizacie Next.js 16.4.6 / Capacitor), nasadene 20. 11. 2026.
 $S17ExpectedMain = "6506e11af70725f89f7cda3253fa4e4e60b883c5"
+# 2026-11-22 (schvalene: staging S17 opravy S17-4 BEZ merge do main): testovany aplikacny kod = opravna vetva
+# fix/billing-document-company-link-db. Pin kandidata je plne SHA; kandidat musi byt potomkom $S17ExpectedMain
+# (= origin/main) a jeho rozdiel voci nemu smie obsahovat IBA subory $S17CandidateFiles (uzavrety zoznam).
+# Tieto dve kontroly a kontrola schemy stagingu (migracia 20261124100000) sa NEDAJU obist cez -Force.
+$S17ExpectedApp = "8d736dbe9f66a42a44f5f87b036712c80bd4c97d"
+$S17CandidateFiles = @("lib/billing/ops-alerts.ts", "lib/billing/pipeline.ts", "scripts/billing-ops-pglite-tests.ts", "supabase/grants/public-data-api-grants.json", "supabase/migrations/20261124100000_billing_document_company_link.sql", "supabase/rollback/20261124100000_billing_document_company_link_rollback.sql")
 # Zavislosti, ktore S17 skutocne spusta (next dev v okne 1): nainstalovana verzia musi sediet s package-lock.json pinu.
 $S17DepPackages = @("next", "react", "react-dom")
 $RepoRoot = Split-Path -Parent $PSScriptRoot
@@ -723,11 +729,19 @@ function Get-S17HeadInfo {
   $tree = (Invoke-Git @("rev-parse", "HEAD^{tree}")).out
   $origin = Invoke-Git @("rev-parse", "--verify", "--quiet", "origin/main")
   $expectedOk = ((Invoke-Git @("cat-file", "-e", "$S17ExpectedMain^{commit}")).code -eq 0)
+  $appOk = ((Invoke-Git @("cat-file", "-e", "$S17ExpectedApp^{commit}")).code -eq 0)
   $changed = @()
   $expTree = ""
-  if ($expectedOk) {
-    $changed = @(((Invoke-Git @("diff", "--name-only", $S17ExpectedMain, "HEAD")).out -split "`n") | Where-Object { $_ })
-    $expTree = (Invoke-Git @("rev-parse", "$S17ExpectedMain^{tree}")).out
+  $candDescends = $false
+  $candFiles = @()
+  $candForeign = @()
+  if ($expectedOk -and $appOk) {
+    # aplikacny kod HEAD sa porovnava s kandidatom opravy, nie so samotnym main
+    $changed = @(((Invoke-Git @("diff", "--name-only", $S17ExpectedApp, "HEAD")).out -split "`n") | Where-Object { $_ })
+    $expTree = (Invoke-Git @("rev-parse", "$S17ExpectedApp^{tree}")).out
+    $candDescends = ((Invoke-Git @("merge-base", "--is-ancestor", $S17ExpectedMain, $S17ExpectedApp)).code -eq 0)
+    $candFiles = @(((Invoke-Git @("diff", "--name-only", $S17ExpectedMain, $S17ExpectedApp)).out -split "`n") | Where-Object { $_ })
+    $candForeign = @($candFiles | Where-Object { $S17CandidateFiles -notcontains $_ })
   }
   $dirty = @(((Invoke-Git @("status", "--porcelain")).out -split "`n") | Where-Object { $_.Length -gt 3 } | ForEach-Object { $_.Substring(3).Trim('"') })
   $appChanged = @($changed | Where-Object { -not (Test-S17HarnessPath $_) })
@@ -740,12 +754,18 @@ function Get-S17HeadInfo {
     expected_main = $S17ExpectedMain
     expected_main_tree = $expTree
     expected_main_present = $expectedOk
+    expected_app = $S17ExpectedApp
+    expected_app_present = $appOk
+    candidate_descends_from_main = $candDescends
+    candidate_files = @($candFiles)
+    candidate_foreign_files = @($candForeign)
+    candidate_ok = ($appOk -and $candDescends -and $candFiles.Count -gt 0 -and $candForeign.Count -eq 0)
     harness_or_docs_files_changed = ($changed.Count - $appChanged.Count)
     app_files_changed = $appChanged.Count
     app_files_uncommitted = $appDirty.Count
     app_changed_sample = @($appChanged | Select-Object -First 10)
     app_uncommitted_sample = @($appDirty | Select-Object -First 10)
-    app_matches = ($expectedOk -and $appChanged.Count -eq 0 -and $appDirty.Count -eq 0)
+    app_matches = ($expectedOk -and $appOk -and $appChanged.Count -eq 0 -and $appDirty.Count -eq 0)
     deps_match = $deps.deps_match
     deps_mismatch = @($deps.deps_mismatch)
   }
@@ -756,6 +776,20 @@ function Get-S17PinnedVersion {
   $m = [regex]::Match((Get-Content $f -Raw), 'export const STRIPE_API_VERSION = "([^"]+)"')
   if (-not $m.Success) { Fail "Pripnuta verzia Stripe API sa v $f nenasla." }
   return $m.Groups[1].Value
+}
+function Test-S17StagingSchema {
+  # Migracia 20261124100000 na stagingu: volanie s neplatnym prostredim NIC nezapise (funkcia hned odmietne).
+  # ESBLU_BILLING_OPS_ALERT_INVALID = funkcia existuje; PGRST202 / iny kod = migracia chyba -> STOP (bez -Force).
+  $k = Get-ServiceRole
+  $h = @{ apikey = $k; Authorization = "Bearer $k" }
+  try {
+    $null = Invoke-RestMethod -Uri "$StagingUrl/rest/v1/rpc/esblu_billing_ops_collect_documents" -Headers $h -Method POST -ContentType "application/json" -Body '{"p_environment":"s17-probe"}'
+    return [ordered]@{ ok = $false; detail = "neocakavany uspech volania s neplatnym prostredim" }
+  } catch {
+    $t = Get-HttpErrorText $_
+    if ($t -match "ESBLU_BILLING_OPS_ALERT_INVALID") { return [ordered]@{ ok = $true; detail = "migracia 20261124100000 pritomna (esblu_billing_ops_collect_documents)" } }
+    return [ordered]@{ ok = $false; detail = "migracia 20261124100000 na stagingu chyba alebo je ina ($t)" }
+  }
 }
 function Get-S17EvidenceFile {
   # Hlavny checkout (C:\Users\...\assetpilot) aj pri behu z worktree: priecinok release-backups je git-excluded.
@@ -1127,7 +1161,7 @@ function Invoke-S17 {
   $failed = $false
 
   try {
-    Invoke-S17Step "1" "Preflight (test mode, staging, HEAD = origin/main) + zapnutie billingu na stagingu" {
+    Invoke-S17Step "1" "Preflight (test mode, staging + migracia, HEAD = kandidat opravy nad origin/main) + zapnutie billingu na stagingu" {
       param($d)
       $kind = "?"
       if ($env:STRIPE_API_KEY -match "^rkcs_test_") { $kind = "rkcs_test" } elseif ($env:STRIPE_API_KEY -match "^rk_test_") { $kind = "rk_test" } elseif ($env:STRIPE_API_KEY -match "^sk_test_") { $kind = "sk_test" }
@@ -1144,11 +1178,11 @@ function Invoke-S17 {
       $d["head"] = $hi.head
       $d["origin_main"] = $hi.origin_main
       $d["app_matches_expected_main"] = $hi.app_matches
-      Say17 "    HEAD $($hi.head) | origin/main $(if ($hi.origin_main) { $hi.origin_main } else { '-' }) | ocakavany $S17ExpectedMain"
+      Say17 "    HEAD $($hi.head) | origin/main $(if ($hi.origin_main) { $hi.origin_main } else { '-' }) | ocakavany main $S17ExpectedMain | kandidat $S17ExpectedApp"
       Say17 "    aplikacny kod = ocakavany: $($hi.app_matches) (zmenene app subory $($hi.app_files_changed), necommitnute $($hi.app_files_uncommitted), harness/docs $($hi.harness_or_docs_files_changed))"
       $headProblems = @()
       if (-not $hi.expected_main_present) { $headProblems += "commit $S17ExpectedMain lokalne chyba (git fetch origin)" }
-      if (-not $hi.app_matches) { $headProblems += "aplikacny kod HEAD sa lisi od $S17ExpectedMain ($(($hi.app_changed_sample + $hi.app_uncommitted_sample) -join ', '))" }
+      if (-not $hi.app_matches) { $headProblems += "aplikacny kod HEAD sa lisi od kandidata $S17ExpectedApp ($(($hi.app_changed_sample + $hi.app_uncommitted_sample) -join ', '))" }
       if ($hi.origin_main -ne $S17ExpectedMain) { $headProblems += "origin/main = $(if ($hi.origin_main) { $hi.origin_main } else { 'nezname' }) (ocakavany $S17ExpectedMain)" }
       if (-not $hi.deps_match) { $headProblems += "node_modules nezodpovedaju package-lock.json ($($hi.deps_mismatch -join ', ')) - npm ci" }
       if (-not (Test-Path $HeadFile)) { $headProblems += "okno 1 nebezi s touto verziou skriptu (chyba $HeadFile)" }
@@ -1157,6 +1191,16 @@ function Invoke-S17 {
         $d["window1_head"] = [string]$w1.head
         if ([string]$w1.head -ne $hi.head -or [string]$w1.repo -ne $RepoRoot) { $headProblems += "okno 1 bezi z ineho checkoutu/commitu ($([string]$w1.head), $([string]$w1.repo))" }
       }
+      # Neobiditelne (-Force nepomoze): kandidat opravy a schema stagingu.
+      $d["expected_app"] = $S17ExpectedApp
+      $d["candidate_files"] = @($hi.candidate_files)
+      if (-not $hi.expected_app_present) { Fail "Commit kandidata $S17ExpectedApp lokalne chyba (git fetch origin)." }
+      if (-not $hi.candidate_descends_from_main) { Fail "Kandidat $($S17ExpectedApp.Substring(0, 7)) nie je potomkom origin/main $($S17ExpectedMain.Substring(0, 7)) - STOP." }
+      if (-not $hi.candidate_ok) { Fail "Kandidat $($S17ExpectedApp.Substring(0, 7)) meni subory mimo schvaleneho rozsahu: $($hi.candidate_foreign_files -join ', ') - STOP." }
+      $schema = Test-S17StagingSchema
+      $d["staging_schema"] = $schema.detail
+      if (-not $schema.ok) { Fail "Staging: $($schema.detail) - STOP." }
+      Say17 "    kandidat opravy $($S17ExpectedApp.Substring(0, 7)) (potomok main, $($hi.candidate_files.Count) schvalenych suborov); $($schema.detail)"
       if ($headProblems.Count -gt 0) {
         if (-not $Force) { Fail ("S17 odmieta bezat: " + ($headProblems -join "; ") + ". Postup: docs par. 8.14 (worktree na origin/main), alebo -Force.") }
         Say17 ("    POZOR -Force: " + ($headProblems -join "; ")) "Yellow"
@@ -1316,6 +1360,7 @@ function Invoke-S17 {
       $d["snapshot_required_fields"] = "customer_company_id, customer_legal_name, customer_snapshot_at: $(if ($bad | Where-Object { $_ -like 'snapshot*' }) { 'CHYBA' } else { 'vyplnene' })"
       $d["snapshot_optional_present"] = $optional
       $d["first_event"] = Get-ShortId ([string]$doc.first_event_id)
+      $S17Ctx.snap = [ordered]@{ company = [string]$doc.customer_company_id; name = [string]$doc.customer_legal_name; ico = [string]$doc.customer_ico; at = [string]$doc.customer_snapshot_at; source = [string]$doc.customer_snapshot_source }
       Say17 "    doklad $(Get-ShortId $S17Ctx.inv): invoice/paid, firma QA-STRIPE D, predplatne OK, 1590 EUR centov, PI $(Get-ShortId $piStripe), snapshot=$($doc.customer_snapshot_source) (volitelne: $(($optional.GetEnumerator() | Where-Object { $_.Value } | ForEach-Object { $_.Key }) -join ','))"
       if ($bad.Count -gt 0) { Fail ("Uctovna kopia nesedi: " + ($bad -join "; ")) }
     }
@@ -1717,6 +1762,12 @@ function Invoke-S17 {
       $recent = @(Get-Rows "billing_events?provider=eq.stripe&environment=eq.test&received_at=gte.$($S17Ctx.t0)&select=provider_event_id,company_id")
       $dupEv = @($recent | Group-Object provider_event_id | Where-Object { $_.Count -gt 1 })
       $foreignEv = @($recent | Where-Object { $_.company_id -and [string]$_.company_id -ne $CompanyD })
+      if ($S17Ctx.snap) {
+        $now = @(Get-DocRows $S17Ctx.inv)
+        $same = ($now.Count -eq 1 -and [string]$now[0].customer_company_id -eq $S17Ctx.snap.company -and [string]$now[0].customer_legal_name -eq $S17Ctx.snap.name -and [string]$now[0].customer_ico -eq $S17Ctx.snap.ico -and [string]$now[0].customer_snapshot_at -eq $S17Ctx.snap.at -and [string]$now[0].customer_snapshot_source -eq $S17Ctx.snap.source -and [string]$now[0].company_id -eq $CompanyD)
+        $d["first_invoice_snapshot_unchanged"] = $same
+        if (-not $same) { $bad += "snapshot odberatela prvej faktury sa po S17-4 zmenil" }
+      }
       if ($dupDocs.Count) { $bad += "duplicitne doklady: $($dupDocs.Count)" }
       if ($foreign.Count) { $bad += "doklady zakaznika S17 s inou firmou: $($foreign.Count)" }
       if ($otherCus.Count) { $bad += "nove doklady firmy D od ineho zakaznika: $($otherCus.Count)" }
@@ -1872,10 +1923,14 @@ if ($Step -eq "s17-auto" -or $Step -eq "s17-preflight") {
       cursor_action_in_s17 = $(if (-not $cur) { "zalozi cron" } elseif ([string]$cur.account_ref -eq $SandboxAccount) { "ziadny reset" } else { "reset + obnova" })
       qa_d_open_checkout_intents = $open.Count
       node_modules = (Test-Path (Join-Path $RepoRoot "node_modules\next\package.json"))
-      origin_main = $hi.origin_main; expected_main = $S17ExpectedMain; deps_match = $hi.deps_match; deps_mismatch = @($hi.deps_mismatch)
+      origin_main = $hi.origin_main; expected_main = $S17ExpectedMain; expected_app = $S17ExpectedApp; candidate_ok = $hi.candidate_ok; deps_match = $hi.deps_match; deps_mismatch = @($hi.deps_mismatch)
     }
     $problems = @()
-    if (-not $hi.app_matches) { $problems += "aplikacny kod != $($S17ExpectedMain.Substring(0, 7))" }
+    if (-not $hi.app_matches) { $problems += "aplikacny kod != kandidat $($S17ExpectedApp.Substring(0, 7))" }
+    if (-not $hi.candidate_ok) { $problems += "kandidat $($S17ExpectedApp.Substring(0, 7)) chyba / nie je potomkom main / subory mimo rozsahu ($($hi.candidate_foreign_files -join ', '))" }
+    $schema = Test-S17StagingSchema
+    $pre["staging_schema"] = $schema.detail
+    if (-not $schema.ok) { $problems += "staging: $($schema.detail)" }
     if ($hi.origin_main -ne $S17ExpectedMain) { $problems += "origin/main = $(if ($hi.origin_main) { $hi.origin_main.Substring(0, 7) } else { 'nezname' }) != pin $($S17ExpectedMain.Substring(0, 7)) (git fetch origin / aktualizovat ops/s17-sandbox)" }
     if (-not $hi.deps_match) { $problems += "node_modules != package-lock ($($hi.deps_mismatch -join ', ')) - s17-auto spusti npm ci" }
     if ($pre.staging_web_provider -ne "none") { $problems += "staging web_provider=$($pre.staging_web_provider) (ocakavane none)" }
@@ -2531,7 +2586,7 @@ Say "Repozitar: $Repo"
 # S17: z akeho kodu bezi Esblu v tomto okne (okno 2 -Step s17 to porovna s origin/main; iba lokalny git, bez siete).
 try {
   $hi = Get-S17HeadInfo
-  Say ("HEAD: {0} | origin/main: {1} | aplikacny kod = {2}: {3}" -f $hi.head, $(if ($hi.origin_main) { $hi.origin_main } else { "-" }), $S17ExpectedMain.Substring(0, 7), $(if ($hi.app_matches) { "ANO" } else { "NIE" }))
+  Say ("HEAD: {0} | origin/main: {1} | aplikacny kod = kandidat {2}: {3}" -f $hi.head, $(if ($hi.origin_main) { $hi.origin_main } else { "-" }), $S17ExpectedApp.Substring(0, 7), $(if ($hi.app_matches) { "ANO" } else { "NIE" }))
   if (-not $hi.app_matches) { Say "    POZOR: -Step s17 vyzaduje checkout s aplikacnym kodom origin/main $($S17ExpectedMain.Substring(0, 7)) (docs par. 8.14)." }
   [ordered]@{ head = $hi.head; repo = $Repo; app_matches = $hi.app_matches; started_at = [DateTime]::UtcNow.ToString("o") } | ConvertTo-Json | Set-Content -Path $HeadFile -Encoding ASCII
 } catch { Say "HEAD: nezistene ($($_.Exception.Message))"; Remove-Item $HeadFile -Force -ErrorAction SilentlyContinue }
