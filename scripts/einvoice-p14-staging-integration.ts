@@ -55,8 +55,15 @@ import type { UblInvoiceSnapshot, UblParty } from "../lib/einvoice/ubl/model.ts"
 // Argumenty a poistky
 // -----------------------------------------------------------------------------
 const ARGS = new Set(process.argv.slice(2).map((a) => a.replace(/^--/, "")));
+class FatalStop extends Error {}
+let RUNNING = false; // po štarte scenárov sa STOP nesmie ukončiť bez vrátenia rolloutu
+// Výnimku z fetch môže adaptér poskytovateľa zabaliť do sieťovej chyby → STOP sa zaznamená aj globálne
+// a beh sa ukončí po aktuálnom kroku (zablokovaná požiadavka sa NIKDY neodošle).
+let FATAL: string | null = null;
 function stop(message: string): never {
   console.error(`STOP: ${message}`);
+  FATAL ??= message;
+  if (RUNNING) throw new FatalStop(message);
   process.exit(2);
 }
 const SELFTEST = ARGS.has("offline-selftest");
@@ -105,6 +112,9 @@ if (!SELFTEST) {
   } else if (!SUPA_KEY.startsWith("sb_secret_")) {
     stop("neznámy formát service-role kľúča");
   }
+  // Žiadny fallback: implicitný klient (getSupabaseAdmin) by čítal tieto premenné — v procese nesmú existovať.
+  for (const k of ["NEXT_PUBLIC_SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY", "NEXT_PUBLIC_SUPABASE_ANON_KEY", "SUPABASE_URL"]) delete process.env[k];
+  if (!ARGS.has("switch-rollout")) stop("chýba --switch-rollout (dočasné povolenie rolloutu E2E Partner B so spätným prepnutím)");
   console.log(`kľúče: sandbox partner (odtlačok ${KEY_FP} sedí), staging ${STAGING_REF} (service role) — hodnoty sa nevypisujú`);
 }
 
@@ -215,6 +225,11 @@ type Db = {
   rolloutAllowed(company: string): Promise<boolean>;
   /** nedokončené prijaté doklady iných firiem (claim je globálny — musia byť 0) */
   othersPending(): Promise<number>;
+  /** odtlačok VŠETKÝCH riadkov einvoice_rollout okrem B (izolácia prepnutia) */
+  rolloutOthersFingerprint(): Promise<string>;
+  /** podmienené prepnutie rolloutu B (iba sandbox, iba z očakávaného stavu); vracia počet zmenených riadkov */
+  setRolloutB(from: "paused" | "internal", to: "paused" | "internal"): Promise<number>;
+  rolloutStageB(): Promise<string | null>;
 };
 
 async function stagingDb(): Promise<Db> {
@@ -263,6 +278,22 @@ async function stagingDb(): Promise<Db> {
       if (r.error) stop("DB others pending");
       return r.count ?? 0;
     },
+    async rolloutOthersFingerprint() {
+      const r = must(await admin.from("einvoice_rollout").select("company_id, environment, stage, changed_by, updated_at").order("company_id").order("environment"), "rollout fp") as { company_id: string; environment: string }[];
+      return sha(JSON.stringify(r.filter((x) => !(x.company_id === CO_B && x.environment === "sandbox")))).slice(0, 16);
+    },
+    async setRolloutB(from, to) {
+      const r = await admin.from("einvoice_rollout")
+        .update({ stage: to, changed_by: "p14-staging-integration", note: to === "internal" ? `P1-4 test ${RUN} — dočasne, automatické vrátenie na paused` : `P1-4 test ${RUN} — vrátené na paused` })
+        .eq("company_id", CO_B).eq("environment", "sandbox").eq("stage", from)
+        .select("company_id");
+      if (r.error) throw new FatalStop(`rollout ${from}→${to}: ${r.error.message}`);
+      return (r.data ?? []).length;
+    },
+    async rolloutStageB() {
+      const r = must(await admin.from("einvoice_rollout").select("stage").eq("company_id", CO_B).eq("environment", "sandbox").maybeSingle(), "rollout B") as { stage: string } | null;
+      return r?.stage ?? null;
+    },
     async othersFingerprint() {
       const a = must(await admin.from("einvoice_inbound").select("id, company_id, processing_status, updated_at, invoice_id, xml_sha256").neq("company_id", CO_B).order("id"), "others inbound");
       const b = must(await admin.from("invoices").select("id, company_id, updated_at").neq("company_id", CO_B).order("id"), "others invoices");
@@ -283,7 +314,7 @@ async function selftestDb(): Promise<Db> {
       values ('${CO_A}', 'E2E Partner A s.r.o.', '33002711', '2054825695', 'SK2054825695', 'Testovacia 1', 'Bratislava', '81101', 'SK', '2054825695', '9915'),
              ('${CO_B}', 'E2E Partner B s.r.o.', '37665880', '2020147507', 'SK2020147507', 'Testovacia 2', 'Košice', '04001', 'SK', '2020147507', '9915');
     insert into public.company_entitlements (company_id, entitlement_key, source, note) values ('${CO_B}', 'einvoice', 'manual', 'p14-selftest');
-    insert into public.einvoice_rollout (company_id, environment, stage, changed_by) values ('${CO_B}', 'sandbox', 'internal', 'p14-selftest');
+    insert into public.einvoice_rollout (company_id, environment, stage, changed_by) values ('${CO_B}', 'sandbox', 'paused', 'p14-selftest'), ('${CO_A}', 'sandbox', 'paused', 'p14-selftest');
     insert into public.einvoice_organizations (company_id, provider, environment, provider_org_id, participant_id, org_status, peppol_eligible, reception_status)
       values ('${CO_A}', '${PROVIDER}', 'sandbox', '${ORG_A}', '${PID_A}', 'aktivne', true, 'active'),
              ('${CO_B}', '${PROVIDER}', 'sandbox', '${ORG_B}', '${PID_B}', 'aktivne', true, 'active');
@@ -315,6 +346,9 @@ async function selftestDb(): Promise<Db> {
     health: async () => (await svc<{ j: unknown }>("select public.esblu_einvoice_health(60, 60) j"))[0].j,
     // harness neobsahuje migráciu einvoice_ops_alerts (20261122120000) → v selftestu 0
     opsAlerts: async () => (await q<{ n: number }>("select count(*)::int n from pg_class where relname = 'einvoice_ops_alerts'"))[0].n === 0 ? 0 : (await q<{ n: number }>("select count(*)::int n from public.einvoice_ops_alerts"))[0].n,
+    rolloutOthersFingerprint: async () => sha(JSON.stringify(await q("select company_id, environment, stage, changed_by, updated_at from public.einvoice_rollout where not (company_id = $1 and environment = 'sandbox') order by company_id, environment", [CO_B]))).slice(0, 16),
+    setRolloutB: async (from, to) => (await q<{ company_id: string }>("update public.einvoice_rollout set stage = $1, changed_by = 'p14-staging-integration', updated_at = now() where company_id = $2 and environment = 'sandbox' and stage = $3 returning company_id", [to, CO_B, from])).length,
+    rolloutStageB: async () => (await q<{ stage: string }>("select stage from public.einvoice_rollout where company_id = $1 and environment = 'sandbox'", [CO_B]))[0]?.stage ?? null,
     rolloutAllowed: async (c) => (await svc<{ ok: boolean }>("select public.esblu_einvoice_rollout_allowed($1, 'sandbox') ok", [c]))[0]?.ok === true,
     othersPending: async () => (await q<{ n: number }>("select count(*)::int n from public.einvoice_inbound where company_id <> $1 and processing_status not in ('acknowledged', 'failed')", [CO_B]))[0].n,
     othersFingerprint: async () => sha(JSON.stringify(await q("select id, company_id, processing_status, updated_at, invoice_id, xml_sha256 from public.einvoice_inbound where company_id <> $1 order by id", [CO_B]))).slice(0, 16),
@@ -332,12 +366,17 @@ async function step(id: string, label: string, fn: () => Promise<Record<string, 
     console.log(`SKIP  ${id} ${label}`);
     return;
   }
+  if (FATAL) throw new FatalStop(FATAL);
   const from = calls.length;
   try {
+    // selftest: simulácia zásahu poistky uprostred behu (overenie vrátenia rolloutu)
+    if (SELFTEST && ARGS.has(`selftest-fault-${id}`)) await provider.getInboundDocument({ environment: "sandbox", providerOrgId: ORG_A }, "x");
     const evidence = await fn();
+    if (FATAL) throw new FatalStop(FATAL);
     results.push({ id, label, verdict: "PASS", requests: countCalls(from), evidence });
     console.log(`PASS  ${id} ${label}  req=${JSON.stringify(countCalls(from))}`);
   } catch (error) {
+    if (error instanceof FatalStop || FATAL) throw error instanceof FatalStop ? error : new FatalStop(FATAL!); // STOP ukončí celý beh (rollout sa vráti vo finally)
     const message = (error instanceof Error ? error.message.split("\n")[0] : String(error)).slice(0, 300);
     results.push({ id, label, verdict: "FAIL", requests: countCalls(from), evidence: { error: message } });
     console.log(`FAIL  ${id} ${label}\n      ${message}`);
@@ -405,167 +444,225 @@ let FP_OTHERS = "";
 let ALERTS_BEFORE = 0;
 const savedLimits = { ...INBOUND_RATE_LIMITS };
 
-await step("F0", "invariantné kontroly: staging, mapovanie A/B, test kľúč, žiadne produkčné smerovanie; inventár B", async () => {
-  assert.equal(await db.billingEnv(), "test", "billing_runtime_config = test (staging)");
-  const o = await db.orgs();
-  const a = o.find((x) => x.provider_org_id === ORG_A);
-  const b = o.find((x) => x.provider_org_id === ORG_B);
-  assert.ok(a && b, "mapovanie A aj B existuje");
-  assert.deepEqual([a.company_id, a.provider, a.environment, a.participant_id, a.reception_status, a.peppol_eligible], [CO_A, PROVIDER, "sandbox", PID_A, "active", true]);
-  assert.deepEqual([b.company_id, b.provider, b.environment, b.participant_id, b.reception_status, b.peppol_eligible], [CO_B, PROVIDER, "sandbox", PID_B, "active", true]);
-  assert.ok(PID_A.startsWith("9915:") && PID_B.startsWith("9915:"), "testovacia schéma 9915 (nie 0245)");
-  assert.equal(provider.inboundPagination, "offset");
-  // spracovanie claimuje iba firmy s povoleným rolloutom; na stagingu je B 'paused' → zmena iba so súhlasom vlastníka
-  if (!(await db.rolloutAllowed(CO_B))) throw new Error("rollout firmy B nie je povolený (stage paused) — spracovanie by nič nevzalo; zmena rolloutu vyžaduje súhlas");
-  assert.equal(await db.othersPending(), 0, "žiadne nedokončené doklady iných firiem (claim je globálny)");
-  PRE = await listAllB();
-  if (PRE.length > 3) throw new Error(`u B je ${PRE.length} nepotvrdených (> 3) — rozhodnutie vlastníka`);
-  const preRows = await db.inbound(PRE);
-  FP_OTHERS = await db.othersFingerprint();
-  ALERTS_BEFORE = await db.opsAlerts();
-  return { pre_unacked: PRE.length, pre_known_in_db: preRows.map((r) => r.processing_status), others_fp: FP_OTHERS, ops_alerts: ALERTS_BEFORE };
-});
-
-await step("F1", `odoslanie ${N_SEND} syntetických faktúr A → B (sandbox), doručenie`, async () => {
-  const states: string[] = [];
-  for (let n = 1; n <= N_SEND; n++) {
-    const ubl = syntheticUbl(n);
-    const r = await provider.sendUbl(ctxA, { ubl, ublSha256: sha(ubl), idempotencyKey: `qa-p14-${RUN}-${n}-${"x".repeat(8)}`, receiverParticipantId: PID_B });
-    states.push(r.state);
-    await sleep(1_500);
+// -----------------------------------------------------------------------------
+// Dočasný rollout E2E Partner B: paused → internal → paused (vrátenie aj pri chybe, STOP, Ctrl+C)
+// Mení IBA riadok (company_id = B, environment = sandbox, stage = očakávaný); ostatné riadky sa overia odtlačkom.
+// -----------------------------------------------------------------------------
+let rolloutSwitched = false;
+const ROLLOUT_OTHERS_BEFORE = await db.rolloutOthersFingerprint();
+const rolloutReport: Record<string, unknown> = { others_fp_before: ROLLOUT_OTHERS_BEFORE };
+async function revertRollout(reason: string) {
+  if (!rolloutSwitched) return;
+  for (let i = 0; i < 3 && rolloutSwitched; i++) {
+    try {
+      const n = await db.setRolloutB("internal", "paused");
+      const stage = await db.rolloutStageB();
+      rolloutSwitched = stage !== "paused";
+      rolloutReport.reverted = { reason, rows: n, stage_after: stage };
+    } catch (error) {
+      rolloutReport.revert_error = error instanceof Error ? error.message.slice(0, 200) : "chyba";
+      await new Promise((r) => setTimeout(r, 2_000));
+    }
   }
-  for (let i = 0; i < 36; i++) {
-    const now = await listAllB();
-    OURS = now.filter((id) => !PRE.includes(id));
-    if (OURS.length >= N_SEND) break;
-    await sleep(5_000);
-  }
-  assert.equal(OURS.length, N_SEND, `doručených ${OURS.length}/${N_SEND}`);
-  return { send_states: states, delivered: OURS.length, ids: OURS.map(short) };
-});
+  if (rolloutSwitched) console.error("POZOR: rollout B sa nepodarilo vrátiť na paused — vráťte ho ručne (SQL v reporte)");
+}
+for (const sig of ["SIGINT", "SIGTERM"] as const) {
+  process.on(sig, () => {
+    void revertRollout(sig).finally(() => process.exit(130));
+  });
+}
 
-await step("F2", "súbeh: počas skenu (strana 3) iný proces potvrdí 2 doklady → kotva chýba → reštart, nič sa nepreskočí", async () => {
-  hook = async () => {
-    // spracovanie (XML → koncept → ACK) najviac 2 už zaregistrovaných dokladov = súbežný webhook/poll
-    const r = await runInboundProcessBudget(deps, { maxItems: 2, batchSize: 2 });
-    hookResult = r.results.map((x) => `${x.from}>${x.to}:${x.code ?? ""}`);
-  };
-  listCallsInHookPhase = 0;
-  const r = await syncInboundList(deps, [{ providerOrgId: ORG_B }], "poll", { pageSize: 3 });
-  hook = null;
-  const unacked = await listAllB();
-  const rows = await db.inbound(unacked);
-  const missing = unacked.filter((id) => !rows.some((x) => x.provider_received_id === id));
-  assert.deepEqual(missing.map(short), [], "každý nepotvrdený doklad je zaregistrovaný");
-  assert.ok((r.passes ?? 0) >= 2, `prechody ${r.passes} (očakávaný reštart; súbežné spracovanie: ${hookResult.join(" ")})`);
-  assert.equal(r.orgsComplete, 1, "sken úplný");
-  const st = await db.scanState(ORG_B);
-  assert.ok(st?.last_complete_at, "stav skenu: úplný");
-  return { passes: r.passes, pages: r.pages, registered: r.registered, already_known: r.alreadyKnown, stopped: r.stopped, acked_during_scan: OURS.length + PRE.length - unacked.length };
-});
+async function scenarios() {
+  await step("F0", "invariantné kontroly: staging, mapovanie A/B, test kľúč, žiadne produkčné smerovanie; inventár B", async () => {
+    assert.equal(await db.billingEnv(), "test", "billing_runtime_config = test (staging)");
+    const o = await db.orgs();
+    const a = o.find((x) => x.provider_org_id === ORG_A);
+    const b = o.find((x) => x.provider_org_id === ORG_B);
+    assert.ok(a && b, "mapovanie A aj B existuje");
+    assert.deepEqual([a.company_id, a.provider, a.environment, a.participant_id, a.reception_status, a.peppol_eligible], [CO_A, PROVIDER, "sandbox", PID_A, "active", true]);
+    assert.deepEqual([b.company_id, b.provider, b.environment, b.participant_id, b.reception_status, b.peppol_eligible], [CO_B, PROVIDER, "sandbox", PID_B, "active", true]);
+    assert.ok(PID_A.startsWith("9915:") && PID_B.startsWith("9915:"), "testovacia schéma 9915 (nie 0245)");
+    assert.equal(provider.inboundPagination, "offset");
+    // rollout B prepína obal behu (paused → internal → paused); tu sa iba overí, že ho prepol
+    assert.equal(await db.rolloutStageB(), "internal", "rollout B je počas testu dočasne internal");
+    assert.equal(await db.othersPending(), 0, "žiadne nedokončené doklady iných firiem (claim je globálny)");
+    PRE = await listAllB();
+    if (PRE.length > 3) throw new Error(`u B je ${PRE.length} nepotvrdených (> 3) — rozhodnutie vlastníka`);
+    const preRows = await db.inbound(PRE);
+    FP_OTHERS = await db.othersFingerprint();
+    ALERTS_BEFORE = await db.opsAlerts();
+    return { pre_unacked: PRE.length, pre_known_in_db: preRows.map((r) => r.processing_status), others_fp: FP_OTHERS, ops_alerts: ALERTS_BEFORE };
+  });
 
-await step("F3", "stránkovanie: strana 3, offset s prekryvom 1, koniec podľa has_more", async () => {
-  const n = (await listAllB()).length;
-  const from = calls.length;
-  const r = await syncInboundList(deps, [{ providerOrgId: ORG_B }], "poll", { pageSize: 3 });
-  const lists = countCalls(from).list - 1; // bez kontrolného listAllB nižšie
-  const expectedPages = n <= 3 ? 1 : Math.ceil((n - 3) / 2) + 1;
-  assert.equal(r.pages, expectedPages, `strán ${r.pages}, očakávané ${expectedPages} pre ${n} dokladov`);
-  assert.equal(r.orgsComplete, 1);
-  assert.equal(r.registered, 0, "nič nové (všetko známe z F2)");
-  void lists;
-  return { unacked: n, pages: r.pages, passes: r.passes, already_known: r.alreadyKnown };
-});
+  await step("F1", `odoslanie ${N_SEND} syntetických faktúr A → B (sandbox), doručenie`, async () => {
+    const states: string[] = [];
+    for (let n = 1; n <= N_SEND; n++) {
+      const ubl = syntheticUbl(n);
+      const r = await provider.sendUbl(ctxA, { ubl, ublSha256: sha(ubl), idempotencyKey: `qa-p14-${RUN}-${n}-${"x".repeat(8)}`, receiverParticipantId: PID_B });
+      states.push(r.state);
+      await sleep(1_500);
+    }
+    for (let i = 0; i < 36; i++) {
+      const now = await listAllB();
+      OURS = now.filter((id) => !PRE.includes(id));
+      if (OURS.length >= N_SEND) break;
+      await sleep(5_000);
+    }
+    assert.equal(OURS.length, N_SEND, `doručených ${OURS.length}/${N_SEND}`);
+    return { send_states: states, delivered: OURS.length, ids: OURS.map(short) };
+  });
 
-await step("F6", "limiter: sken s limitom 2/min → RATE_LIMITED, okno ≤ 2, zamietnutia zaznamenané (bez claimu dokladov)", async () => {
-  // nové okno: čakanie na začiatok ďalšej minúty, aby limit 3 platil pre tento beh
-  if (!SELFTEST) await sleep(61_000 - (Date.now() % 60_000));
-  INBOUND_RATE_LIMITS.poll = 2;
-  INBOUND_RATE_LIMITS.event = 2;
-  try {
-    // iba sken cez limiter triedy poll (žiadny claim → po zastavení nezostanú doklady v lease)
-    const r = await syncInboundList(withInboundRateLimit(deps, "poll"), [{ providerOrgId: ORG_B }], "poll", { pageSize: 2 }); // ≥ 3 strany pri 5 dokladoch
-    const w = await db.rateWindows();
-    const last = w[w.length - 1];
-    const stopped = (r.stopped ?? []).map((x) => x.code);
-    assert.ok(stopped.includes("RATE_LIMITED"), `zastavenie limiterom (${stopped.join(",")})`);
-    assert.ok(w.every((x) => Number(x.used) <= 60), "žiadne okno nad limit udalostí");
-    assert.ok(Number(last.used) <= 2, `okno ${last.used} ≤ 2`);
-    assert.ok(Number(last.denied) >= 1, "zamietnutia");
-    return { stopped, window: { used: Number(last.used), denied: Number(last.denied) } };
-  } finally {
-    Object.assign(INBOUND_RATE_LIMITS, savedLimits);
-  }
-});
+  await step("F2", "súbeh: počas skenu (strana 3) iný proces potvrdí 2 doklady → kotva chýba → reštart, nič sa nepreskočí", async () => {
+    assert.equal(await db.othersPending(), 0, "pred spracovaním: žiadne nedokončené doklady iných firiem");
+    hook = async () => {
+      // spracovanie (XML → koncept → ACK) najviac 2 už zaregistrovaných dokladov = súbežný webhook/poll
+      const r = await runInboundProcessBudget(deps, { maxItems: 2, batchSize: 2 });
+      hookResult = r.results.map((x) => `${x.from}>${x.to}:${x.code ?? ""}`);
+    };
+    listCallsInHookPhase = 0;
+    const r = await syncInboundList(deps, [{ providerOrgId: ORG_B }], "poll", { pageSize: 3 });
+    hook = null;
+    const unacked = await listAllB();
+    const rows = await db.inbound(unacked);
+    const missing = unacked.filter((id) => !rows.some((x) => x.provider_received_id === id));
+    assert.deepEqual(missing.map(short), [], "každý nepotvrdený doklad je zaregistrovaný");
+    assert.ok((r.passes ?? 0) >= 2, `prechody ${r.passes} (očakávaný reštart; súbežné spracovanie: ${hookResult.join(" ")})`);
+    assert.equal(r.orgsComplete, 1, "sken úplný");
+    const st = await db.scanState(ORG_B);
+    assert.ok(st?.last_complete_at, "stav skenu: úplný");
+    return { passes: r.passes, pages: r.pages, registered: r.registered, already_known: r.alreadyKnown, stopped: r.stopped, acked_during_scan: OURS.length + PRE.length - unacked.length };
+  });
 
-await step("F4", "spracovanie: XML uložené (SHA-256), koncept vo firme B, ACK presne raz, nemennosť XML", async () => {
-  if (!SELFTEST) await sleep(61_000 - (Date.now() % 60_000)); // nové okno limitera
-  const from = calls.length;
-  for (let i = 0; i < 6; i++) {
+  await step("F3", "stránkovanie: strana 3, offset s prekryvom 1, koniec podľa has_more", async () => {
+    const n = (await listAllB()).length;
+    const from = calls.length;
+    const r = await syncInboundList(deps, [{ providerOrgId: ORG_B }], "poll", { pageSize: 3 });
+    const lists = countCalls(from).list - 1; // bez kontrolného listAllB nižšie
+    const expectedPages = n <= 3 ? 1 : Math.ceil((n - 3) / 2) + 1;
+    assert.equal(r.pages, expectedPages, `strán ${r.pages}, očakávané ${expectedPages} pre ${n} dokladov`);
+    assert.equal(r.orgsComplete, 1);
+    assert.equal(r.registered, 0, "nič nové (všetko známe z F2)");
+    void lists;
+    return { unacked: n, pages: r.pages, passes: r.passes, already_known: r.alreadyKnown };
+  });
+
+  await step("F6", "limiter: sken s limitom 2/min → RATE_LIMITED, okno ≤ 2, zamietnutia zaznamenané (bez claimu dokladov)", async () => {
+    // nové okno: čakanie na začiatok ďalšej minúty, aby limit 3 platil pre tento beh
+    if (!SELFTEST) await sleep(61_000 - (Date.now() % 60_000));
+    INBOUND_RATE_LIMITS.poll = 2;
+    INBOUND_RATE_LIMITS.event = 2;
+    try {
+      // iba sken cez limiter triedy poll (žiadny claim → po zastavení nezostanú doklady v lease)
+      const r = await syncInboundList(withInboundRateLimit(deps, "poll"), [{ providerOrgId: ORG_B }], "poll", { pageSize: 2 }); // ≥ 3 strany pri 5 dokladoch
+      const w = await db.rateWindows();
+      const last = w[w.length - 1];
+      const stopped = (r.stopped ?? []).map((x) => x.code);
+      assert.ok(stopped.includes("RATE_LIMITED"), `zastavenie limiterom (${stopped.join(",")})`);
+      assert.ok(w.every((x) => Number(x.used) <= 60), "žiadne okno nad limit udalostí");
+      assert.ok(Number(last.used) <= 2, `okno ${last.used} ≤ 2`);
+      assert.ok(Number(last.denied) >= 1, "zamietnutia");
+      return { stopped, window: { used: Number(last.used), denied: Number(last.denied) } };
+    } finally {
+      Object.assign(INBOUND_RATE_LIMITS, savedLimits);
+    }
+  });
+
+  await step("F4", "spracovanie: XML uložené (SHA-256), koncept vo firme B, ACK presne raz, nemennosť XML", async () => {
+    if (!SELFTEST) await sleep(61_000 - (Date.now() % 60_000)); // nové okno limitera
+    assert.equal(await db.othersPending(), 0, "pred spracovaním: žiadne nedokončené doklady iných firiem");
+    const from = calls.length;
+    for (let i = 0; i < 6; i++) {
+      const rows = await db.inbound(OURS);
+      if (rows.length === N_SEND && rows.every((x) => x.processing_status === "acknowledged")) break;
+      await runInboundPoll(deps, { maxItems: 30, requestBudget: 20 });
+    }
     const rows = await db.inbound(OURS);
-    if (rows.length === N_SEND && rows.every((x) => x.processing_status === "acknowledged")) break;
-    await runInboundPoll(deps, { maxItems: 30, requestBudget: 20 });
-  }
-  const rows = await db.inbound(OURS);
-  assert.equal(rows.length, N_SEND);
-  assert.deepEqual([...new Set(rows.map((r) => r.processing_status))], ["acknowledged"], "všetky acknowledged");
-  assert.ok(rows.every((r) => r.company_id === CO_B), "firma B");
-  const invoiceIds = rows.map((r) => r.invoice_id).filter((x): x is string => !!x);
-  assert.equal(new Set(invoiceIds).size, N_SEND, "7 rôznych konceptov");
-  const comp = await db.invoiceCompanies(invoiceIds);
-  assert.ok(invoiceIds.every((id) => comp[id] === CO_B), "koncepty vo firme B");
-  // nemennosť: uložené XML (storage) aj op. stiahnuté XML = xml_sha256
-  for (const r of rows) {
-    const stored = await db.store.getXml(r.xml_storage_path!);
-    assert.ok(stored && sha(stored) === r.xml_sha256, "storage = SHA-256");
-  }
-  const ackCalls = calls.slice(from).filter((c) => c.kind === "ack").length;
-  const totalAcks = calls.filter((c) => c.kind === "ack").length;
-  assert.ok(totalAcks <= N_SEND + PRE.length, `ACK spolu ${totalAcks} ≤ ${N_SEND + PRE.length} (každý doklad najviac raz)`);
-  const stillUnacked = (await listAllB()).filter((id) => OURS.includes(id));
-  assert.deepEqual(stillUnacked, [], "u poskytovateľa nepotvrdené 0 z našich");
-  return { acknowledged: rows.length, drafts: invoiceIds.length, ack_calls_this_step: ackCalls, ack_calls_total: totalAcks };
-});
+    assert.equal(rows.length, N_SEND);
+    assert.deepEqual([...new Set(rows.map((r) => r.processing_status))], ["acknowledged"], "všetky acknowledged");
+    assert.ok(rows.every((r) => r.company_id === CO_B), "firma B");
+    const invoiceIds = rows.map((r) => r.invoice_id).filter((x): x is string => !!x);
+    assert.equal(new Set(invoiceIds).size, N_SEND, "7 rôznych konceptov");
+    const comp = await db.invoiceCompanies(invoiceIds);
+    assert.ok(invoiceIds.every((id) => comp[id] === CO_B), "koncepty vo firme B");
+    // nemennosť: uložené XML (storage) aj op. stiahnuté XML = xml_sha256
+    for (const r of rows) {
+      const stored = await db.store.getXml(r.xml_storage_path!);
+      assert.ok(stored && sha(stored) === r.xml_sha256, "storage = SHA-256");
+    }
+    const ackCalls = calls.slice(from).filter((c) => c.kind === "ack").length;
+    const totalAcks = calls.filter((c) => c.kind === "ack").length;
+    assert.ok(totalAcks <= N_SEND + PRE.length, `ACK spolu ${totalAcks} ≤ ${N_SEND + PRE.length} (každý doklad najviac raz)`);
+    const stillUnacked = (await listAllB()).filter((id) => OURS.includes(id));
+    assert.deepEqual(stillUnacked, [], "u poskytovateľa nepotvrdené 0 z našich");
+    return { acknowledged: rows.length, drafts: invoiceIds.length, ack_calls_this_step: ackCalls, ack_calls_total: totalAcks };
+  });
 
-await step("F5", "opakované behy: 2× poll + udalosť s nápovedou → 0 nových, 0 ACK, 0 duplicít", async () => {
-  const from = calls.length;
-  const r1 = await runInboundPoll(deps, { maxItems: 30, requestBudget: 20 });
-  const r2 = await runInboundPoll(deps, { maxItems: 30, requestBudget: 20 });
-  const ev = await runInboundEvent(deps, ORG_B, OURS[0]);
-  const c = countCalls(from);
-  assert.equal(r1.sync.registered + r2.sync.registered + ev.sync.registered, 0);
-  assert.equal(c.ack, 0, "žiadny ďalší ACK");
-  const rows = await db.inbound(OURS);
-  assert.equal(rows.length, N_SEND, "žiadna duplicita");
-  assert.equal(new Set(rows.map((r) => r.invoice_id)).size, N_SEND);
-  return { registered: 0, requests: c };
-});
+  await step("F5", "opakované behy: 2× poll + udalosť s nápovedou → 0 nových, 0 ACK, 0 duplicít", async () => {
+    const from = calls.length;
+    const r1 = await runInboundPoll(deps, { maxItems: 30, requestBudget: 20 });
+    const r2 = await runInboundPoll(deps, { maxItems: 30, requestBudget: 20 });
+    const ev = await runInboundEvent(deps, ORG_B, OURS[0]);
+    const c = countCalls(from);
+    assert.equal(r1.sync.registered + r2.sync.registered + ev.sync.registered, 0);
+    assert.equal(c.ack, 0, "žiadny ďalší ACK");
+    const rows = await db.inbound(OURS);
+    assert.equal(rows.length, N_SEND, "žiadna duplicita");
+    assert.equal(new Set(rows.map((r) => r.invoice_id)).size, N_SEND);
+    return { registered: 0, requests: c };
+  });
 
-await step("F8", "ochrana cudzích firiem: cudzia/podvrhnutá nápoveda sa nezaregistruje; ostatné firmy nezmenené", async () => {
-  const fake = "rcv-foreign-p14-0000";
-  const ev = await runInboundEvent(deps, ORG_B, fake);
-  assert.equal(ev.sync.hintsRegistered ?? 0, 0);
-  assert.equal((await db.inbound([fake])).length, 0);
-  const fp = await db.othersFingerprint();
-  assert.equal(fp, FP_OTHERS, "riadky ostatných firiem nezmenené");
-  return { others_fp_before: FP_OTHERS, others_fp_after: fp };
-});
+  await step("F8", "ochrana cudzích firiem: cudzia/podvrhnutá nápoveda sa nezaregistruje; ostatné firmy nezmenené", async () => {
+    const fake = "rcv-foreign-p14-0000";
+    const ev = await runInboundEvent(deps, ORG_B, fake);
+    assert.equal(ev.sync.hintsRegistered ?? 0, 0);
+    assert.equal((await db.inbound([fake])).length, 0);
+    const fp = await db.othersFingerprint();
+    assert.equal(fp, FP_OTHERS, "riadky ostatných firiem nezmenené");
+    return { others_fp_before: FP_OTHERS, others_fp_after: fp };
+  });
 
-await step("F7", "monitoring: health (scan, limiter), vyhodnotenie alertov; uloženie ≠ doručenie", async () => {
-  const h = sanitizeHealth(await db.health());
-  const alerts = evaluateAlerts(h, DEFAULT_ALERT_THRESHOLDS).map((a) => `${a.code}:${a.severity}`);
-  const st = await db.scanState(ORG_B);
-  assert.equal(h.inbound.scan_overdue, 0);
-  assert.ok(h.inbound.rate_limited_1h >= 1, "zamietnutia z F6 viditeľné");
-  assert.ok(st?.last_complete_at && st.incomplete_streak === 0 || (st?.incomplete_streak ?? 0) >= 0);
-  const opsAfter = await db.opsAlerts();
-  return {
-    health_inbound: { acknowledged: h.inbound.acknowledged, failed: h.inbound.failed, scan_overdue: h.inbound.scan_overdue, scan_incomplete: h.inbound.scan_incomplete, rate_limited_1h: h.inbound.rate_limited_1h, stuck: h.inbound.stuck },
-    alerts_evaluated: alerts,
-    ops_alerts_stored_before_after: [ALERTS_BEFORE, opsAfter],
-    delivery: "žiadna (bez drainu/e-mailu) — iba vyhodnotenie; perzistenciu robí cron einvoice-maintenance (iba produkcia)",
-  };
-});
+  await step("F7", "monitoring: health (scan, limiter), vyhodnotenie alertov; uloženie ≠ doručenie", async () => {
+    const h = sanitizeHealth(await db.health());
+    const alerts = evaluateAlerts(h, DEFAULT_ALERT_THRESHOLDS).map((a) => `${a.code}:${a.severity}`);
+    const st = await db.scanState(ORG_B);
+    assert.equal(h.inbound.scan_overdue, 0);
+    assert.ok(h.inbound.rate_limited_1h >= 1, "zamietnutia z F6 viditeľné");
+    assert.ok(st?.last_complete_at && st.incomplete_streak === 0 || (st?.incomplete_streak ?? 0) >= 0);
+    const opsAfter = await db.opsAlerts();
+    return {
+      health_inbound: { acknowledged: h.inbound.acknowledged, failed: h.inbound.failed, scan_overdue: h.inbound.scan_overdue, scan_incomplete: h.inbound.scan_incomplete, rate_limited_1h: h.inbound.rate_limited_1h, stuck: h.inbound.stuck },
+      alerts_evaluated: alerts,
+      ops_alerts_stored_before_after: [ALERTS_BEFORE, opsAfter],
+      delivery: "žiadna (bez drainu/e-mailu) — iba vyhodnotenie; perzistenciu robí cron einvoice-maintenance (iba produkcia)",
+    };
+  });
+
+}
+
+RUNNING = true;
+try {
+  if ((await db.rolloutStageB()) !== "paused") throw new FatalStop("rollout B nie je v očakávanom stave paused");
+  if ((await db.othersPending()) !== 0) throw new FatalStop("iné firmy majú nedokončené prijaté doklady (globálny claim)");
+  const switched = await db.setRolloutB("paused", "internal");
+  if (switched !== 1) throw new FatalStop(`prepnutie rolloutu zmenilo ${switched} riadkov (očakávaný 1)`);
+  rolloutSwitched = true;
+  await scenarios();
+} catch (error) {
+  const message = error instanceof Error ? error.message.slice(0, 300) : String(error);
+  results.push({ id: "ABORT", label: "beh zastavený", verdict: "FAIL", requests: {}, evidence: { error: message } });
+  console.log(`ABORT ${message}`);
+} finally {
+  await revertRollout("koniec behu");
+  rolloutReport.others_fp_after = await db.rolloutOthersFingerprint();
+  rolloutReport.others_unchanged = rolloutReport.others_fp_after === ROLLOUT_OTHERS_BEFORE;
+  rolloutReport.stage_b_final = await db.rolloutStageB();
+  RUNNING = false;
+}
+if (rolloutReport.others_unchanged !== true || rolloutReport.stage_b_final !== "paused") {
+  results.push({ id: "ROLLOUT", label: "rollout B vrátený, ostatné firmy nezmenené", verdict: "FAIL", requests: {}, evidence: rolloutReport });
+} else {
+  results.push({ id: "ROLLOUT", label: "rollout B vrátený, ostatné firmy nezmenené", verdict: "PASS", requests: {}, evidence: rolloutReport });
+}
 
 // -----------------------------------------------------------------------------
 // Súhrn (bez tajomstiev, XML a čitateľných ID)
