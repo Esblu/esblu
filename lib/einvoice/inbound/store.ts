@@ -98,6 +98,8 @@ export interface InboundStore {
   inboundScanOrder?(provider: string, environment: EinvoiceEnvironment): Promise<string[]>;
   /** P1-4 (20261125100000): zdieľaný limit požiadaviek na poskytovateľa (okno 1 min); false = limit vyčerpaný. */
   acquireProviderBudget?(provider: string, environment: EinvoiceEnvironment, cost: number, limit: number): Promise<boolean>;
+  /** 20261126100000: spoločný limit partnerského kľúča po triedach; true = povolené (ok / unconfigured). */
+  acquireProviderClass?(provider: string, environment: EinvoiceEnvironment, cls: "inbound_poll" | "inbound_event", cost: number): Promise<boolean>;
   /** P1-4: zaznamená úspešné ACK karantenovaného dokladu u poskytovateľa (iba keď je ACK povolené). */
   quarantineAcked?(inboundId: string): Promise<void>;
   register(input: { provider: string; environment: EinvoiceEnvironment; providerOrgId: string; providerReceivedId: string; source: "webhook" | "poll"; meta: RegisterMeta }): Promise<{ inboundId: string; created: boolean; processingStatus: string; companyId: string }>;

@@ -433,6 +433,30 @@
       "service_role": "SELECT,INSERT,UPDATE,DELETE",
       "note": "finance-gated SELECT; immutable XML metadata"
     },
+    "einvoice_provider_rate_limits": {
+      "domain": "einvoice",
+      "access": "D",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT",
+      "note": "kvoty spolocneho limitu partnerskeho kluca - iba service"
+    },
+    "einvoice_provider_rate_state": {
+      "domain": "einvoice",
+      "access": "D",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT",
+      "note": "cakanie po 429 poskytovatela - iba service, zapis cez RPC"
+    },
+    "einvoice_provider_rate_usage": {
+      "domain": "einvoice",
+      "access": "D",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT",
+      "note": "pouzitie spolocneho limitu po triedach - iba service, zapis cez RPC"
+    },
     "einvoice_provider_rate_window": {
       "domain": "einvoice",
       "access": "D",
@@ -1039,6 +1063,8 @@
     "esblu_einvoice_org_apply_enroll(text,text,text,text,text,text,text)",
     "esblu_einvoice_org_record_inbound_scan(text,text,text,boolean,text)",
     "esblu_einvoice_rate_acquire(text,text,integer,integer)",
+    "esblu_einvoice_rate_acquire_class(text,text,text,integer)",
+    "esblu_einvoice_rate_cooldown(text,text,integer)",
     "esblu_einvoice_org_participant_event(text,text,text,text,text,text,timestamp with time zone)",
     "esblu_einvoice_org_upsert_provisioned(uuid,text,text,text,text,text,text,text,boolean,jsonb)",
     "esblu_einvoice_outbound_record_transport(uuid,text,text,text)",

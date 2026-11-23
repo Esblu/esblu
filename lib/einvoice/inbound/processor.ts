@@ -537,19 +537,33 @@ const RATE_LIMITED_METHODS = new Set(["listUnacknowledgedInbound", "listUnacknow
 
 export function withInboundRateLimit(deps: InboundDeps, cls: "poll" | "event"): InboundDeps {
   const store = deps.store;
-  if (!store.acquireProviderBudget) return deps;
+  if (!store.acquireProviderBudget && !store.acquireProviderClass) return deps;
+  // 20261126100000: spoločný limit partnerského kľúča (trieda príjmu); bez novej migrácie starší limiter príjmu;
+  // pri chybe oboch fail-open.
+  const acquire = async (name: string): Promise<boolean> => {
+    if (store.acquireProviderClass) {
+      try {
+        return await store.acquireProviderClass(name, deps.environment, cls === "poll" ? "inbound_poll" : "inbound_event", 1);
+      } catch {
+        // pokračuje starším limiterom
+      }
+    }
+    if (store.acquireProviderBudget) {
+      try {
+        return await store.acquireProviderBudget(name, deps.environment, 1, INBOUND_RATE_LIMITS[cls]);
+      } catch {
+        return true;
+      }
+    }
+    return true;
+  };
   const provider = new Proxy(deps.provider, {
     get(target, key) {
       const value = Reflect.get(target, key, target);
       if (typeof value !== "function") return value;
       if (!RATE_LIMITED_METHODS.has(String(key))) return value.bind(target);
       return async (...args: unknown[]) => {
-        let ok = true;
-        try {
-          ok = await store.acquireProviderBudget!(target.name, deps.environment, 1, INBOUND_RATE_LIMITS[cls]);
-        } catch {
-          ok = true; // fail-open: výpadok DB funkcie limitera nesmie zastaviť príjem (stropy behov platia)
-        }
+        const ok = await acquire(target.name);
         if (!ok) throw new EinvoiceProviderError("EINVOICE_PROVIDER_RATE_LIMITED", "Lokálny limit požiadaviek na poskytovateľa", true);
         return await value.apply(target, args);
       };

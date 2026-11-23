@@ -1,6 +1,8 @@
 import "server-only";
 
 import { EfakturaSkProvider, parseInboundPaginationMode } from "./efaktura-sk.ts";
+import { withProviderRateLimit, type ProviderRateLimiter } from "./rate-limit.ts";
+import { createSupabaseProviderRateLimiter } from "./rate-limit-supabase-store.ts";
 import { assertServerOnly, type EinvoiceEnvironment, type EinvoiceProvider } from "./types.ts";
 
 // =============================================================================
@@ -28,7 +30,14 @@ import { assertServerOnly, type EinvoiceEnvironment, type EinvoiceProvider } fro
 
 export type EinvoiceRuntimeConfig = { provider: EinvoiceProvider; environment: EinvoiceEnvironment } | null;
 
-export function getEinvoiceProvider(env: Record<string, string | undefined> = process.env): EinvoiceRuntimeConfig {
+/**
+ * `rateLimiter`: spoločný limit partnerského kľúča (20261126100000) — predvolene DB limiter (service role, lazy);
+ * `null` = bez limitera (iba testy / nástroje, ktoré limit riešia inak).
+ */
+export function getEinvoiceProvider(
+  env: Record<string, string | undefined> = process.env,
+  options: { rateLimiter?: ProviderRateLimiter | null } = {}
+): EinvoiceRuntimeConfig {
   assertServerOnly();
   const providerName = env.ESBLU_EINVOICE_PROVIDER?.trim();
   const environment = env.ESBLU_EINVOICE_ENVIRONMENT?.trim();
@@ -45,7 +54,9 @@ export function getEinvoiceProvider(env: Record<string, string | undefined> = pr
     const baseUrl = env.ESBLU_EFAKTURA_BASE_URL?.trim() || undefined;
     // P1-4: stránkovanie prijatých dokladov — `offset` overené v sandboxe (R1); ESBLU_EFAKTURA_RECEIVED_PAGINATION=none = kill-switch.
     const receivedPagination = parseInboundPaginationMode(env.ESBLU_EFAKTURA_RECEIVED_PAGINATION?.trim());
-    return { provider: new EfakturaSkProvider({ apiKey, environment, baseUrl, receivedPagination }), environment };
+    const provider = new EfakturaSkProvider({ apiKey, environment, baseUrl, receivedPagination });
+    const limiter = options.rateLimiter === undefined ? createSupabaseProviderRateLimiter() : options.rateLimiter;
+    return { provider: limiter ? withProviderRateLimit(provider, environment, limiter) : provider, environment };
   }
   return null;
 }

@@ -175,7 +175,7 @@ export async function requestOutboundForInvoice(deps: OutboundRequestDeps, input
     if (lookup.lookupUnavailable) return { status: 503, body: { code: "RECIPIENT_LOOKUP_UNAVAILABLE", readiness } };
     if (!lookup.found) return { status: 422, body: { code: "RECIPIENT_NOT_FOUND", readiness } };
   } catch (error) {
-    return { status: 502, body: { code: errorCode(error), readiness } };
+    return { status: providerErrorStatus(error), body: { code: errorCode(error), readiness } };
   }
 
   // 6) Preflight poskytovateľa (bez zápisu, bez kreditu) — musí prejsť.
@@ -186,7 +186,7 @@ export async function requestOutboundForInvoice(deps: OutboundRequestDeps, input
       return { status: 422, body: { code: "PREFLIGHT_FAILED", issues: preflightIssues(preflight.issues), readiness } };
     }
   } catch (error) {
-    return { status: 502, body: { code: errorCode(error), readiness } };
+    return { status: providerErrorStatus(error), body: { code: errorCode(error), readiness } };
   }
 
   // 7) Presné bajty do privátneho storage (adresované obsahom; existujúci objekt sa overí, nikdy neprepíše).
@@ -222,4 +222,9 @@ export async function requestOutboundForInvoice(deps: OutboundRequestDeps, input
     const code = error instanceof OutboundStoreError ? error.code : dbErrorCode(error instanceof Error ? error.message : null);
     return { status: statusForDbCode(code), body: { code, readiness } };
   }
+}
+
+/** Kontroly pred odoslaním: limit požiadaviek (lokálny aj 429 poskytovateľa) = 429 „skúste o chvíľu“, inak 502. */
+export function providerErrorStatus(error: unknown): 429 | 502 {
+  return errorCode(error) === "EINVOICE_PROVIDER_RATE_LIMITED" ? 429 : 502;
 }

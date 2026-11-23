@@ -119,6 +119,7 @@
     "test:einvoice-efaktura": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/einvoice-efaktura-adapter-tests.ts",
     "test:einvoice-outbound": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/einvoice-outbound-tests.ts",
     "test:einvoice-inbound": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/einvoice-inbound-tests.ts",
+    "test:einvoice-rate-limit": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/einvoice-rate-limit-tests.ts",
     "test:einvoice-ops": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/einvoice-ops-tests.ts",
     "test:einvoice-ui": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs --import ./scripts/tsx-loader.mjs scripts/einvoice-ui-tests.ts",
     "test:l3-launcher": "node scripts/l3/run-local-staging-tests.mjs",

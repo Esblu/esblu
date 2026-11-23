@@ -93,6 +93,10 @@ export function createSupabaseInboundStore(admin: SupabaseClient = getSupabaseAd
       const r = await rpc<string[] | null>("esblu_einvoice_inbound_scan_order", { p_provider: provider, p_environment: environment });
       return Array.isArray(r) ? r.filter((x): x is string => typeof x === "string") : [];
     },
+    async acquireProviderClass(provider, environment, cls, cost) {
+      const r = await rpc<string | null>("esblu_einvoice_rate_acquire_class", { p_provider: provider, p_environment: environment, p_class: cls, p_cost: cost });
+      return r !== "class_limit" && r !== "total_limit" && r !== "cooldown";
+    },
     async acquireProviderBudget(provider, environment, cost, limit) {
       // Chyba (aj chýbajúca funkcia pred migráciou) → výnimka; volajúci (withInboundRateLimit) je fail-open.
       const r = await rpc<boolean | null>("esblu_einvoice_rate_acquire", { p_provider: provider, p_environment: environment, p_cost: cost, p_limit: limit });

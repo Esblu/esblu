@@ -50,6 +50,14 @@ export type EinvoiceHealth = {
     /** P1-4: zamietnuté požiadavky príjmu zdieľaným limiterom za poslednú hodinu. */
     rate_limited_1h: number;
   };
+  /** 20261126100000: spoločný limit partnerského kľúča (bez migrácie 0). */
+  provider: {
+    rate_denied_1h: number;
+    rate_denied_outbound_1h: number;
+    rate_denied_interactive_1h: number;
+    cooldown_active: number;
+    provider_429_24h: number;
+  };
   webhook: {
     failures_24h: number;
     rejected_24h: number;
@@ -77,6 +85,9 @@ export type AlertCandidate = {
     | "INBOUND_SCAN_INCOMPLETE"
     | "INBOUND_BACKLOG_AGING"
     | "INBOUND_RATE_LIMITED"
+    | "PROVIDER_RATE_COOLDOWN"
+    | "PROVIDER_429_REPEATED"
+    | "OUTBOUND_RATE_LIMITED"
     | "WEBHOOK_SIGNATURE_FAILURES"
     | "WEBHOOK_REPLAYS"
     | "WEBHOOK_PROCESSING_FAILURES";
@@ -125,6 +136,7 @@ export function sanitizeHealth(raw: unknown, outcomes: unknown = null): Einvoice
       ...pick((outcomes ?? {}) as Record<string, unknown>, ["sent_24h", "delivered_24h", "rejected_24h", "failed_24h"] as const),
     },
     inbound: pick(r.inbound, ["received", "stored", "parsed", "draft_created", "duplicate", "ack_pending", "acknowledged", "failed", "quarantined", "quarantined_unacked", "recipient_mismatch", "ack_pending_too_long", "stuck", "oldest_stuck_age_seconds", "scan_overdue", "scan_incomplete", "rate_limited_1h"] as const),
+    provider: pick(r.provider, ["rate_denied_1h", "rate_denied_outbound_1h", "rate_denied_interactive_1h", "cooldown_active", "provider_429_24h"] as const),
     webhook: pick(r.webhook, ["failures_24h", "rejected_24h", "unprocessed_older_15m", "signature_failures_1h", "replays_1h"] as const),
   };
 }
@@ -156,6 +168,11 @@ export function evaluateAlerts(health: EinvoiceHealth, thresholds: AlertThreshol
   // P1-4: nespracované doklady sa dlhodobo neznižujú (najstarší čaká ≥ 2 h)
   add("INBOUND_BACKLOG_AGING", "critical", health.inbound.oldest_stuck_age_seconds, thresholds.inboundBacklogAgeSeconds);
   add("INBOUND_RATE_LIMITED", "warning", health.inbound.rate_limited_1h, thresholds.inboundRateLimited1h);
+  // 20261126100000: poskytovateľ vrátil 429 → všetky triedy čakajú; opakované 429 = kvóty sú nad skutočným limitom
+  add("PROVIDER_RATE_COOLDOWN", "warning", health.provider.cooldown_active, 1);
+  add("PROVIDER_429_REPEATED", "critical", health.provider.provider_429_24h, 5);
+  // odosielanie zamietnuté vlastným limitom (rezerva nestačí) — oneskorenie odoslania faktúr
+  add("OUTBOUND_RATE_LIMITED", "warning", health.provider.rate_denied_outbound_1h, 5);
   add("WEBHOOK_SIGNATURE_FAILURES", "critical", health.webhook.signature_failures_1h, thresholds.signatureFailuresPerHour);
   add("WEBHOOK_REPLAYS", "warning", health.webhook.replays_1h, thresholds.replaysPerHour);
   add("WEBHOOK_PROCESSING_FAILURES", "warning", health.webhook.failures_24h + health.webhook.unprocessed_older_15m, thresholds.webhookFailures24h);
