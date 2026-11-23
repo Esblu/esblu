@@ -47,6 +47,8 @@ export type EinvoiceHealth = {
     /** P1-4 stav skenu zoznamu (migrácia 20261125100000; bez nej 0). */
     scan_overdue: number;
     scan_incomplete: number;
+    /** P1-4: zamietnuté požiadavky príjmu zdieľaným limiterom za poslednú hodinu. */
+    rate_limited_1h: number;
   };
   webhook: {
     failures_24h: number;
@@ -74,6 +76,7 @@ export type AlertCandidate = {
     | "INBOUND_SCAN_OVERDUE"
     | "INBOUND_SCAN_INCOMPLETE"
     | "INBOUND_BACKLOG_AGING"
+    | "INBOUND_RATE_LIMITED"
     | "WEBHOOK_SIGNATURE_FAILURES"
     | "WEBHOOK_REPLAYS"
     | "WEBHOOK_PROCESSING_FAILURES";
@@ -91,6 +94,8 @@ export type AlertThresholds = {
   webhookFailures24h: number;
   /** P1-4: najstarší nespracovaný prijatý doklad (s) — backlog sa dlhodobo neznižuje. */
   inboundBacklogAgeSeconds: number;
+  /** P1-4: zamietnutia limiterom za hodinu, od ktorých je to varovanie (krátke špičky sú normálne). */
+  inboundRateLimited1h: number;
 };
 
 export const DEFAULT_ALERT_THRESHOLDS: AlertThresholds = {
@@ -100,6 +105,7 @@ export const DEFAULT_ALERT_THRESHOLDS: AlertThresholds = {
   replaysPerHour: 5,
   webhookFailures24h: 5,
   inboundBacklogAgeSeconds: 7200,
+  inboundRateLimited1h: 20,
 };
 
 function num(value: unknown): number {
@@ -118,7 +124,7 @@ export function sanitizeHealth(raw: unknown, outcomes: unknown = null): Einvoice
       ...pick(r.outbound, ["queued", "sending", "sent", "deferred", "delivered", "rejected", "failed", "retryable", "reconciliation_required", "retry_exhausted_unknown", "unknown_send_outcome", "stuck", "oldest_stuck_age_seconds"] as const),
       ...pick((outcomes ?? {}) as Record<string, unknown>, ["sent_24h", "delivered_24h", "rejected_24h", "failed_24h"] as const),
     },
-    inbound: pick(r.inbound, ["received", "stored", "parsed", "draft_created", "duplicate", "ack_pending", "acknowledged", "failed", "quarantined", "quarantined_unacked", "recipient_mismatch", "ack_pending_too_long", "stuck", "oldest_stuck_age_seconds", "scan_overdue", "scan_incomplete"] as const),
+    inbound: pick(r.inbound, ["received", "stored", "parsed", "draft_created", "duplicate", "ack_pending", "acknowledged", "failed", "quarantined", "quarantined_unacked", "recipient_mismatch", "ack_pending_too_long", "stuck", "oldest_stuck_age_seconds", "scan_overdue", "scan_incomplete", "rate_limited_1h"] as const),
     webhook: pick(r.webhook, ["failures_24h", "rejected_24h", "unprocessed_older_15m", "signature_failures_1h", "replays_1h"] as const),
   };
 }
@@ -149,6 +155,7 @@ export function evaluateAlerts(health: EinvoiceHealth, thresholds: AlertThreshol
   add("INBOUND_SCAN_INCOMPLETE", "warning", health.inbound.scan_incomplete, 1);
   // P1-4: nespracované doklady sa dlhodobo neznižujú (najstarší čaká ≥ 2 h)
   add("INBOUND_BACKLOG_AGING", "critical", health.inbound.oldest_stuck_age_seconds, thresholds.inboundBacklogAgeSeconds);
+  add("INBOUND_RATE_LIMITED", "warning", health.inbound.rate_limited_1h, thresholds.inboundRateLimited1h);
   add("WEBHOOK_SIGNATURE_FAILURES", "critical", health.webhook.signature_failures_1h, thresholds.signatureFailuresPerHour);
   add("WEBHOOK_REPLAYS", "warning", health.webhook.replays_1h, thresholds.replaysPerHour);
   add("WEBHOOK_PROCESSING_FAILURES", "warning", health.webhook.failures_24h + health.webhook.unprocessed_older_15m, thresholds.webhookFailures24h);

@@ -16,8 +16,10 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { handleEinvoiceWebhook, classifyWebhookEvent, WEBHOOK_MAX_BODY_BYTES, inboundHintId } from "../lib/einvoice/inbound/webhook.ts";
-import { processInboundRow, runInboundPoll, runInboundProcessBatch, runInboundProcessBudget, syncInboundList } from "../lib/einvoice/inbound/processor.ts";
-import { evaluateAlerts, sanitizeHealth } from "../lib/einvoice/ops/alerts.ts";
+import { INBOUND_RATE_LIMITS, processInboundRow, runInboundPoll, runInboundProcessBatch, runInboundProcessBudget, syncInboundList } from "../lib/einvoice/inbound/processor.ts";
+// Limiter (DB RPC) je v testovacom store zapnutý iba v testoch RL1–RL4.
+const limiter = { on: false };
+import { DEFAULT_ALERT_THRESHOLDS, evaluateAlerts, sanitizeHealth } from "../lib/einvoice/ops/alerts.ts";
 import { InboundStoreError, inboundXmlPath, type InboundRow, type InboundStore } from "../lib/einvoice/inbound/store.ts";
 import { mapInboundDraft, verifyInboundRecipient } from "../lib/einvoice/inbound/mapping.ts";
 import { wrapSbdh } from "./einvoice-partner-fake-sandbox.ts";
@@ -227,6 +229,11 @@ const inboundStore: InboundStore = {
   },
   async recordInboundScan(input) {
     await svc("select public.esblu_einvoice_org_record_inbound_scan($1, $2, $3, $4, $5)", [input.provider, input.environment, input.providerOrgId, input.complete, input.code]);
+  },
+  async acquireProviderBudget(provider, environment, cost, limit) {
+    if (!limiter.on) return true; // záťažové testy idú tisíckami požiadaviek za minútu; limiter testujú RL1–RL4
+    const [r] = await svc<{ ok: boolean }>("select public.esblu_einvoice_rate_acquire($1, $2, $3, $4) ok", [provider, environment, cost, limit]);
+    return r?.ok !== false;
   },
   async inboundScanOrder(provider, environment) {
     const [r] = await svc<{ a: string[] }>("select public.esblu_einvoice_inbound_scan_order($1, $2) a", [provider, environment]);
@@ -2115,6 +2122,17 @@ await check("P1-4 M1: monitoring — scan_overdue (aktívny príjem bez úplnéh
   const orgAState = await scanState("org-a");
   h = sanitizeHealth(await health());
   assert.equal(h.inbound.scan_overdue, 0, `po úplnom skene žiadna organizácia po termíne (org-a: ${orgAState?.c ? "úplný" : "bez skenu"})`);
+  // nasadenie: kým poll s novým kódom nezapísal žiadny sken, organizácie bez záznamu sa nepočítajú (žiadny falošný alert)
+  await svc("delete from public.einvoice_inbound_scan_state", []);
+  assert.equal(sanitizeHealth(await health()).inbound.scan_overdue, 0);
+  // akonáhle poll beží (záznam pre org-b), organizácia bez záznamu (org-a, stará) sa už počíta
+  await sql(`update public.einvoice_organizations set created_at = now() - interval '1 day' where provider_org_id = 'org-a'`);
+  await inboundStore.recordInboundScan!({ provider: "mock", environment: "sandbox", providerOrgId: "org-b", complete: true, code: null });
+  assert.equal(sanitizeHealth(await health()).inbound.scan_overdue, 1);
+  await inboundStore.recordInboundScan!({ provider: "mock", environment: "sandbox", providerOrgId: "org-a", complete: true, code: null });
+  assert.equal(sanitizeHealth(await health()).inbound.scan_overdue, 0);
+  // sken neexistujúcej organizácie sa nezapíše (FK na mapovanie)
+  await assert.rejects(() => inboundStore.recordInboundScan!({ provider: "mock", environment: "sandbox", providerOrgId: "org-ghost", complete: true, code: null }));
   // backlog aging (čistá funkcia nad health)
   const aged = sanitizeHealth({ inbound: { oldest_stuck_age_seconds: 7300 } });
   assert.ok(evaluateAlerts(aged).some((a) => a.code === "INBOUND_BACKLOG_AGING" && a.severity === "critical"));
@@ -2126,6 +2144,123 @@ await check("P1-4 M2: RPC stavu skenu odmietne neplatný kód; tabuľka bez prí
   const g = (await sql<{ a: boolean; e: boolean }>("select has_table_privilege('authenticated', 'public.einvoice_inbound_scan_state', 'select') a, has_function_privilege('authenticated', 'public.esblu_einvoice_org_record_inbound_scan(text,text,text,boolean,text)', 'execute') e")).rows[0];
   assert.equal(g.a, false);
   assert.equal(g.e, false);
+});
+
+
+// =============================================================================
+// P1-4 limit požiadaviek (zdieľaný DB limiter) a lacná udalostná cesta
+// =============================================================================
+const rateSum = async () =>
+  (await svc<{ u: number; d: number }>("select coalesce(sum(used), 0)::int u, coalesce(sum(denied), 0)::int d from public.einvoice_provider_rate_window", []))[0];
+
+limiter.on = true;
+await check("P1-4 RL1: esblu_einvoice_rate_acquire — atomický strop v okne 1 min, zamietnutia sa počítajú, neplatné vstupy odmietnuté, bez prístupu pre authenticated", async () => {
+  const acq = (cost: number, limit: number) => inboundStore.acquireProviderBudget!("rl_test", "sandbox", cost, limit);
+  const res: boolean[] = [];
+  for (let i = 0; i < 7; i++) res.push(await acq(1, 5));
+  // okno sa mohlo zmeniť na hranici minúty → v jednom okne nikdy viac ako 5
+  const rows = await svc<{ used: number; denied: number }>("select used, denied from public.einvoice_provider_rate_window where provider = 'rl_test'", []);
+  assert.ok(rows.every((r) => Number(r.used) <= 5));
+  assert.equal(rows.reduce((a, r) => a + Number(r.used), 0), res.filter(Boolean).length);
+  assert.equal(rows.reduce((a, r) => a + Number(r.denied), 0), res.filter((x) => !x).length);
+  assert.ok(res.filter((x) => !x).length >= 1);
+  assert.equal(await acq(6, 5), false, "cena nad limit");
+  await assert.rejects(() => acq(0, 5));
+  await assert.rejects(() => inboundStore.acquireProviderBudget!("BAD NAME", "sandbox", 1, 5));
+  const g = (await sql<{ e: boolean; t: boolean }>("select has_function_privilege('authenticated', 'public.esblu_einvoice_rate_acquire(text,text,integer,integer)', 'execute') e, has_table_privilege('authenticated', 'public.einvoice_provider_rate_window', 'select') t")).rows[0];
+  assert.deepEqual([g.e, g.t], [false, false]);
+  await svc("delete from public.einvoice_provider_rate_window where provider = 'rl_test'", []).catch(() => []);
+});
+
+await check("P1-4 RL2: udalosť (webhook / feed) je lacná — 150 nepotvrdených v organizácii → 1 stránka zoznamu, ≤ 8 požiadaviek, stav skenu sa nezapisuje", async () => {
+  pagingMode();
+  try {
+    await drainAll();
+    const prefix = "rcv-rl2-";
+    for (let i = 0; i < 150; i++) provider.add("org-b", `${prefix}${String(i).padStart(3, "0")}`, xmlB(`FA-RL2-${i}`));
+    const before = provider.calls.length;
+    const st0 = await scanState("org-b");
+    const r = await webhook({ event: "peppol.document.received", organization_id: "org-b", data: { received_id: `${prefix}149` } }, "dlv-rl2-1");
+    assert.ok(r.status < 500, `status ${r.status}`);
+    const calls = provider.calls.slice(before);
+    assert.equal(calls.filter((c) => c === "list").length, 1, "iba 1 stránka zoznamu");
+    assert.ok(providerRequests(before) <= 8, `požiadaviek ${providerRequests(before)} ≤ 8`);
+    const st1 = await scanState("org-b");
+    assert.deepEqual([st1?.c, st1?.k, Number(st1?.n)], [st0?.c, st0?.k, Number(st0?.n)], "udalosť nemení stav skenu");
+    // zvyšok prevezme poll (cron každých 10 min — tu bez limitera, aby test nečakal na ďalšie okno)
+    limiter.on = false;
+    for (let i = 0; i < 10; i++) {
+      await runInboundPoll(deps(), { maxItems: 30, requestBudget: 20 });
+      if ((await countLike(prefix, "processing_status = 'acknowledged'")) === 150) break;
+    }
+    assert.equal(await countLike(prefix, "processing_status = 'acknowledged'"), 150);
+    assert.equal(await dupRows(prefix), 0);
+  } finally {
+    limiter.on = true;
+    pagingReset();
+  }
+});
+
+await check("P1-4 RL3: súbežné udalosti + poll so zdieľaným limiterom → v žiadnej minúte nad limit, každá povolená požiadavka započítaná, zamietnutia viditeľné v health/alerte; po uvoľnení sa všetko dokončí bez duplicít", async () => {
+  pagingMode();
+  const saved = { ...INBOUND_RATE_LIMITS };
+  try {
+    await drainAll();
+    const prefix = "rcv-rl3-";
+    for (let i = 0; i < 80; i++) provider.add("org-b", `${prefix}${String(i).padStart(3, "0")}`, xmlB(`FA-RL3-${i}`));
+    INBOUND_RATE_LIMITS.poll = 10;
+    INBOUND_RATE_LIMITS.event = 15;
+    await svc("delete from public.einvoice_provider_rate_window where provider = 'mock'", []);
+    const s0 = await rateSum();
+    const before = provider.calls.length;
+    const statuses = await Promise.all([
+      ...Array.from({ length: 10 }, (_, k) => webhook({ event: "peppol.document.received", organization_id: "org-b", data: { received_id: `${prefix}${String(79 - k).padStart(3, "0")}` } }, `dlv-rl3-${k}`).then((x) => x.status)),
+      runInboundPoll(deps(), { maxItems: 30, requestBudget: 20 }).then(() => 200),
+      runInboundPoll(deps(), { maxItems: 30, requestBudget: 20 }).then(() => 200),
+    ]);
+    const s1 = await rateSum();
+    const windows = await svc<{ used: number }>("select used from public.einvoice_provider_rate_window where provider = 'mock'", []);
+    assert.ok(windows.every((w) => Number(w.used) <= INBOUND_RATE_LIMITS.event), "v žiadnom okne nad limit udalostí (15)");
+    // počas fázy s nízkym limitom: povolené = skutočné požiadavky na poskytovateľa
+    assert.equal(providerRequests(before), s1.u - s0.u, "každá požiadavka prešla limiterom");
+    assert.ok(s1.u - s0.u <= 2 * INBOUND_RATE_LIMITS.event, `povolených ${s1.u - s0.u} ≤ 2 okná × 15 (hranica minúty)`);
+    assert.ok(s1.d - s0.d > 0, "zamietnutia sa počítajú");
+    assert.ok(statuses.some((x) => x >= 500) || (await countLike(prefix, "processing_status = 'acknowledged'")) < 80, "backpressure: časť udalostí čaká na opakovanie");
+    const h = sanitizeHealth(await health());
+    assert.ok(h.inbound.rate_limited_1h >= 1);
+    assert.ok(evaluateAlerts(h, { ...DEFAULT_ALERT_THRESHOLDS, inboundRateLimited1h: 1 }).some((a) => a.code === "INBOUND_RATE_LIMITED"));
+    // uvoľnenie: všetko sa dokončí, žiadny dvojitý ACK ani koncept
+    INBOUND_RATE_LIMITS.poll = 1000;
+    INBOUND_RATE_LIMITS.event = 1000;
+    await svc("delete from public.einvoice_provider_rate_window where provider = 'mock'", []);
+    await sql(`update public.einvoice_inbound set next_retry_at = now(), locked_until = null where provider_received_id like '${prefix}%'`);
+    for (let i = 0; i < 10; i++) {
+      await runInboundPoll(deps(), { maxItems: 30, requestBudget: 20 });
+      await sql(`update public.einvoice_inbound set next_retry_at = now(), locked_until = null where provider_received_id like '${prefix}%' and processing_status <> 'acknowledged'`);
+      if ((await countLike(prefix, "processing_status = 'acknowledged'")) === 80) break;
+    }
+    assert.equal(await countLike(prefix, "processing_status = 'acknowledged'"), 80);
+    assert.equal(await draftsFor(prefix), 80);
+    assert.equal(await dupRows(prefix), 0);
+    assert.equal(provider.calls.filter((c) => c.startsWith(`ack:${prefix}`)).length, 80, "každý ACK presne raz");
+  } finally {
+    Object.assign(INBOUND_RATE_LIMITS, saved);
+    pagingReset();
+  }
+});
+
+await check("P1-4 RL4: limiter je fail-open — chyba DB funkcie limitera nezastaví príjem (platia stropy behu)", async () => {
+  pagingMode();
+  try {
+    await drainAll();
+    const prefix = "rcv-rl4-";
+    for (let i = 0; i < 5; i++) provider.add("org-b", `${prefix}${i}`, xmlB(`FA-RL4-${i}`));
+    const broken = { ...inboundStore, async acquireProviderBudget() { throw new InboundStoreError("DB_ERROR"); } } as InboundStore;
+    await runInboundPoll({ ...deps(), store: broken }, { maxItems: 30, requestBudget: 20 });
+    assert.equal(await countLike(prefix, "processing_status = 'acknowledged'"), 5);
+  } finally {
+    pagingReset();
+  }
 });
 
 console.log(`\neinvoice-inbound: ${passed} passed, ${failed} failed`);

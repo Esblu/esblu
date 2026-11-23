@@ -6,7 +6,7 @@ import type { EinvoiceEnvironment, EinvoiceProvider } from "../provider/types.ts
 import { reconcileOutboundRow } from "../outbound/worker.ts";
 import type { OutboundStore } from "../outbound/store.ts";
 import { errorCode } from "../outbound/policy.ts";
-import { runInboundProcessBatch, syncInboundList } from "./processor.ts";
+import { runInboundEvent } from "./processor.ts";
 import type { InboundStore } from "./store.ts";
 import type { OpsAlertSink } from "../ops/alert-sink.ts";
 
@@ -258,14 +258,9 @@ export async function processProviderEvent(
     if (kind === "inbound") {
       // P1-4: ID prijatého dokladu z udalosti je iba NÁPOVEDA — syncInboundList ho overí stiahnutím u poskytovateľa
       // v kontexte organizácie z mapovania (orgId z DB). Firma sa nikdy neurčuje z tela udalosti.
+      // P1-4: udalosť robí iba lacný ohraničený krok (≤ 8 požiadaviek, zdieľaný limiter); úplný sken robí poll.
       const hint = inboundHintId(data);
-      const sync = await syncInboundList(
-        { store: deps.inbound, provider: deps.provider, environment: deps.environment },
-        [{ providerOrgId: orgId }],
-        "webhook",
-        hint ? { hints: { [orgId]: [hint] } } : {}
-      );
-      await runInboundProcessBatch({ store: deps.inbound, provider: deps.provider, environment: deps.environment }, { batchSize: 5 });
+      const { sync } = await runInboundEvent({ store: deps.inbound, provider: deps.provider, environment: deps.environment }, orgId, hint);
       const failed = sync.errors.length > 0;
       await deps.inbound.webhookComplete(record.webhookEventId, failed ? "failed" : "processed", failed ? "PROVIDER_FETCH_FAILED" : null);
       return { status: 200, body: { code: failed ? "ACCEPTED_RETRY_LATER" : "PROCESSED" } };

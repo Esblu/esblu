@@ -15,6 +15,8 @@
 --    posledný ÚPLNÝ sken, kód zastavenia). Iba service_role (SELECT); zápis iba cez SECURITY DEFINER RPC.
 --    esblu_einvoice_org_record_inbound_scan / esblu_einvoice_inbound_scan_order (poradie: najdlhšie bez úplného skenu prvé).
 --    Health: inbound.scan_overdue (aktívny príjem bez úplného skenu > 2 h), inbound.scan_incomplete (posledný sken neúplný).
+-- 7) einvoice_provider_rate_window + esblu_einvoice_rate_acquire: zdieľaný limit požiadaviek príjmu na poskytovateľa
+--    (okno 1 min, atomický upsert s podmienkou; zamietnutia sa počítajú). Iba service_role. Health: inbound.rate_limited_1h.
 -- Rollback: supabase/rollback/20261125100000_einvoice_inbound_quarantine_rollback.sql
 -- =============================================================================
 begin;
@@ -126,7 +128,10 @@ create table if not exists public.einvoice_inbound_scan_state (
   last_complete_at timestamptz,
   last_code text check (last_code is null or last_code ~ '^[A-Z_]{1,40}$'),
   incomplete_streak integer not null default 0 check (incomplete_streak >= 0),
-  primary key (provider, environment, provider_org_id)
+  primary key (provider, environment, provider_org_id),
+  -- iba existujúce mapovanie organizácie; zmazanie organizácie zmaže aj jej stav skenu (žiadne siroty v health)
+  constraint einvoice_inbound_scan_state_org_fkey foreign key (provider, environment, provider_org_id)
+    references public.einvoice_organizations (provider, environment, provider_org_id) on delete cascade
 );
 alter table public.einvoice_inbound_scan_state enable row level security;
 revoke all on table public.einvoice_inbound_scan_state from public, anon, authenticated;
@@ -179,6 +184,57 @@ revoke all on function public.esblu_einvoice_org_record_inbound_scan(text, text,
 revoke all on function public.esblu_einvoice_inbound_scan_order(text, text) from public, anon, authenticated;
 grant execute on function public.esblu_einvoice_org_record_inbound_scan(text, text, text, boolean, text) to service_role;
 grant execute on function public.esblu_einvoice_inbound_scan_order(text, text) to service_role;
+
+-- 7) Zdieľaný limit požiadaviek príjmu (P1-4) ------------------------------------------------------------
+create table if not exists public.einvoice_provider_rate_window (
+  provider text not null check (provider ~ '^[a-z0-9_]{2,40}$'),
+  environment text not null check (environment in ('sandbox', 'live')),
+  window_start timestamptz not null,
+  used integer not null default 0 check (used >= 0),
+  denied integer not null default 0 check (denied >= 0),
+  primary key (provider, environment, window_start)
+);
+alter table public.einvoice_provider_rate_window enable row level security;
+revoke all on table public.einvoice_provider_rate_window from public, anon, authenticated;
+grant select on table public.einvoice_provider_rate_window to service_role;
+
+-- true = požiadavka smie ísť k poskytovateľovi (used + cost <= limit v aktuálnej minúte); false = zamietnuté
+-- (počíta sa do `denied`). Atomické aj pri súbežných volaniach (INSERT … ON CONFLICT DO UPDATE … WHERE).
+create or replace function public.esblu_einvoice_rate_acquire(p_provider text, p_environment text, p_cost integer, p_limit integer)
+returns boolean
+language plpgsql
+security definer
+set search_path to ''
+as $function$
+declare
+  v_window timestamptz := date_trunc('minute', now());
+  v_ok boolean;
+begin
+  if p_provider is null or p_provider !~ '^[a-z0-9_]{2,40}$' or p_environment not in ('sandbox', 'live')
+     or p_cost is null or p_cost < 1 or p_cost > 100 or p_limit is null or p_limit < 1 or p_limit > 1000 then
+    raise exception 'EINVOICE_RATE_INVALID' using errcode = '22023';
+  end if;
+  insert into public.einvoice_provider_rate_window as w (provider, environment, window_start, used)
+  select p_provider, p_environment, v_window, p_cost
+  where p_cost <= p_limit
+  on conflict (provider, environment, window_start) do update
+    set used = w.used + excluded.used
+    where w.used + excluded.used <= p_limit
+  returning true into v_ok;
+  if v_ok is null then
+    insert into public.einvoice_provider_rate_window as w (provider, environment, window_start, used, denied)
+    values (p_provider, p_environment, v_window, 0, 1)
+    on conflict (provider, environment, window_start) do update set denied = least(w.denied + 1, 1000000);
+    v_ok := false;
+  end if;
+  -- údržba: staré okná (malá tabuľka, rozsah cez PK)
+  delete from public.einvoice_provider_rate_window
+   where provider = p_provider and environment = p_environment and window_start < v_window - interval '2 days';
+  return v_ok;
+end;
+$function$;
+revoke all on function public.esblu_einvoice_rate_acquire(text, text, integer, integer) from public, anon, authenticated;
+grant execute on function public.esblu_einvoice_rate_acquire(text, text, integer, integer) to service_role;
 
 create or replace function public.esblu_einvoice_health(p_stuck_minutes integer, p_ack_pending_minutes integer)
 returns jsonb
@@ -239,8 +295,14 @@ as $function$
                         where g.peppol_eligible and g.provider_org_id is not null
                           and (g.reception_status is null or g.reception_status = 'active')
                           and g.created_at < now() - interval '2 hours'
-                          and (ss.last_complete_at is null or ss.last_complete_at < now() - interval '2 hours')),
-      'scan_incomplete', (select count(*) from public.einvoice_inbound_scan_state ss where ss.incomplete_streak > 0)
+                          -- bez záznamu sa počíta až keď poll s novým kódom už beží (nasadenie kódu po migrácii
+                          -- tak nevyvolá falošný kritický alert)
+                          and (case when ss.provider_org_id is null
+                                    then exists (select 1 from public.einvoice_inbound_scan_state x
+                                                  where x.provider = g.provider and x.environment = g.environment)
+                                    else coalesce(ss.last_complete_at, '-infinity'::timestamptz) < now() - interval '2 hours' end)),
+      'scan_incomplete', (select count(*) from public.einvoice_inbound_scan_state ss where ss.incomplete_streak > 0),
+      'rate_limited_1h', (select coalesce(sum(rw.denied), 0) from public.einvoice_provider_rate_window rw where rw.window_start > now() - interval '1 hour')
     ),
     'webhook', jsonb_build_object(
       'failures_24h', (select count(*) from public.einvoice_webhook_events w where w.processing_status = 'failed' and w.received_at > now() - interval '24 hours'),

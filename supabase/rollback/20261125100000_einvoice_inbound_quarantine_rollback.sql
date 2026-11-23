@@ -83,4 +83,6 @@ alter table public.einvoice_inbound
 drop function if exists public.esblu_einvoice_org_record_inbound_scan(text, text, text, boolean, text);
 drop function if exists public.esblu_einvoice_inbound_scan_order(text, text);
 drop table if exists public.einvoice_inbound_scan_state;
+drop function if exists public.esblu_einvoice_rate_acquire(text, text, integer, integer);
+drop table if exists public.einvoice_provider_rate_window;
 commit;

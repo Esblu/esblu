@@ -93,6 +93,11 @@ export function createSupabaseInboundStore(admin: SupabaseClient = getSupabaseAd
       const r = await rpc<string[] | null>("esblu_einvoice_inbound_scan_order", { p_provider: provider, p_environment: environment });
       return Array.isArray(r) ? r.filter((x): x is string => typeof x === "string") : [];
     },
+    async acquireProviderBudget(provider, environment, cost, limit) {
+      // Chyba (aj chýbajúca funkcia pred migráciou) → výnimka; volajúci (withInboundRateLimit) je fail-open.
+      const r = await rpc<boolean | null>("esblu_einvoice_rate_acquire", { p_provider: provider, p_environment: environment, p_cost: cost, p_limit: limit });
+      return r !== false;
+    },
     async quarantineAcked(inboundId) {
       await rpc<unknown>("esblu_einvoice_inbound_quarantine_acked", { p_inbound_id: inboundId });
     },

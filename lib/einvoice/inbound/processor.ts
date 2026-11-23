@@ -319,6 +319,7 @@ export async function runInboundProcessBatch(deps: InboundDeps, options: { batch
 }
 
 export type SyncStopCode =
+  | "RATE_LIMITED"
   | "PAGINATION_LIMIT"
   | "PAGINATION_IGNORED"
   | "SCAN_SHIFTED"
@@ -353,6 +354,8 @@ export type SyncOptions = {
   requestBudget?: number;
   /** Strop prechodov od začiatku na organizáciu (reštart po zistenom posune). */
   maxPasses?: number;
+  /** Zapísať stav skenu (poll áno; udalosť robí iba lacný sken 1 stránky → nezapisuje neúplný stav). */
+  recordScan?: boolean;
 };
 
 /** P1-4: strop stránok na prechod a organizáciu (100 × 10 = 1 000 dokladov). */
@@ -455,7 +458,13 @@ export async function syncInboundList(
           p = await fetchPage(ctx, offset, page);
         } catch (error) {
           report.errors.push({ code: `${INBOUND_ERROR.PROVIDER_FETCH_FAILED}:${errorCode(error)}` });
-          orgCode = "LIST_FAILED";
+          if (errorCode(error) === "EINVOICE_PROVIDER_RATE_LIMITED") {
+            // 429 / lokálny limit: ďalšie požiadavky v tomto behu by zlyhali tiež → zvyšok organizácií sa vynechá
+            orgCode = "RATE_LIMITED";
+            budget = 0;
+          } else {
+            orgCode = "LIST_FAILED";
+          }
           break passes;
         }
         const ids = p.items.map((i) => i.providerReceivedId);
@@ -502,7 +511,7 @@ export async function syncInboundList(
       report.orgsIncomplete = (report.orgsIncomplete ?? 0) + 1;
       stop(orgCode === "SCAN_SHIFTED" ? "SCAN_SHIFTED" : orgCode!);
     }
-    if (deps.store.recordInboundScan) {
+    if (deps.store.recordInboundScan && (options.recordScan ?? true)) {
       try {
         await deps.store.recordInboundScan({ provider: deps.provider.name, environment: deps.environment, providerOrgId: org.providerOrgId, complete, code: complete ? null : orgCode });
       } catch {
@@ -512,6 +521,58 @@ export async function syncInboundList(
   }
   if ((report.orgsSkipped ?? 0) > 0) stop("REQUEST_BUDGET");
   return report;
+}
+
+// =============================================================================
+// P1-4: zdieľaný limit požiadaviek na poskytovateľa pre príjem (všetky inštancie, okno 1 min v DB).
+// Partnerský kľúč eFaktura.sk: ≥ 100 req/min spolu pre odosielanie, feed, príjem aj údržbu. Príjem smie spolu
+// najviac INBOUND_RATE_LIMITS.event za minútu, poll iba INBOUND_RATE_LIMITS.poll (zvyšok ostáva udalostiam);
+// ≥ 40 req/min ostáva odosielaniu, feedu a údržbe (tie limiter nepoužívajú, ich strop je daný dávkami cronov).
+// Zamietnutie = lokálne EINVOICE_PROVIDER_RATE_LIMITED (retryable) → beh sa zastaví ako pri 429, nič sa nestratí.
+// Bez migrácie 20261125100000 / pri chybe DB: fail-open (platia stropy jednotlivých behov).
+// =============================================================================
+/** Mení sa iba v testoch. */
+export const INBOUND_RATE_LIMITS: { poll: number; event: number } = { poll: 40, event: 60 };
+const RATE_LIMITED_METHODS = new Set(["listUnacknowledgedInbound", "listUnacknowledgedInboundPage", "getInboundDocument", "acknowledgeInbound"]);
+
+export function withInboundRateLimit(deps: InboundDeps, cls: "poll" | "event"): InboundDeps {
+  const store = deps.store;
+  if (!store.acquireProviderBudget) return deps;
+  const provider = new Proxy(deps.provider, {
+    get(target, key, receiver) {
+      const value = Reflect.get(target, key, receiver);
+      if (typeof value !== "function") return value;
+      if (!RATE_LIMITED_METHODS.has(String(key))) return value.bind(target);
+      return async (...args: unknown[]) => {
+        let ok = true;
+        try {
+          ok = await store.acquireProviderBudget!(target.name, deps.environment, 1, INBOUND_RATE_LIMITS[cls]);
+        } catch {
+          ok = true; // fail-open: výpadok DB funkcie limitera nesmie zastaviť príjem (stropy behov platia)
+        }
+        if (!ok) throw new EinvoiceProviderError("EINVOICE_PROVIDER_RATE_LIMITED", "Lokálny limit požiadaviek na poskytovateľa", true);
+        return await value.apply(target, args);
+      };
+    },
+  });
+  return { ...deps, provider };
+}
+
+/**
+ * P1-4: príjem z udalosti (webhook aj feed). Lacný a ohraničený: overenie nápovedy (≤ 1), 1 stránka zoznamu,
+ * spracovanie max. 3 dokladov (≤ 6 požiadaviek) → ≤ 8 požiadaviek na udalosť, všetko cez limiter `event`.
+ * Úplný sken robí iba poll (cron); udalosť stav skenu nezapisuje.
+ */
+export async function runInboundEvent(deps: InboundDeps, providerOrgId: string, hint: string | null) {
+  const limited = withInboundRateLimit(deps, "event");
+  const sync = await syncInboundList(limited, [{ providerOrgId }], "webhook", {
+    ...(hint ? { hints: { [providerOrgId]: [hint] } } : {}),
+    requestBudget: 1,
+    maxPages: 1,
+    recordScan: false,
+  });
+  const processed = await runInboundProcessBudget(limited, { maxItems: 3, batchSize: 3, deadlineMs: Date.now() + 20_000 });
+  return { sync, processed };
 }
 
 // Nápoveda nesie iba ID — metadáta doplní spracovanie z overeného XML (nič sa nepreberá z tela udalosti).
@@ -588,9 +649,10 @@ export async function runInboundProcessBudget(
 
 /** Poll fallback: pripravené organizácie (najdlhšie bez úplného skenu prvé) → sken zoznamu → spracovanie s rozpočtom. */
 export async function runInboundPoll(
-  deps: InboundDeps,
+  rawDeps: InboundDeps,
   options: { batchSize?: number; leaseSeconds?: number; maxItems?: number; deadlineMs?: number; requestBudget?: number; pageSize?: number } = {}
 ) {
+  const deps = withInboundRateLimit(rawDeps, "poll");
   let orgs = (await deps.store.listOrganizations(deps.provider.name, deps.environment)).filter((o) => o.providerOrgId);
   if (deps.store.inboundScanOrder) {
     try {
