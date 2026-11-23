@@ -885,7 +885,7 @@
       "anon": "",
       "authenticated": "",
       "service_role": "SELECT",
-      "note": "VOP 20.6 auditny zaznam ukoncenia firmy (bez FK); zapis iba esblu_company_termination_commit/_record_failure"
+      "note": "VOP 20.6 auditny zaznam ukoncenia firmy (bez FK); zapis iba esblu_company_termination_execute (20261127100000, potvrdenie opravnenej osoby; commit odmieta)/_record_failure"
     },
     "company_terms_notices": {
       "domain": "legal",
@@ -1033,10 +1033,14 @@
     "esblu_company_storage_bytes(uuid)",
     "esblu_company_storage_status(uuid)",
     "esblu_company_export_begin(uuid,uuid,text,integer,integer,text)",
+    "esblu_company_export_begin(uuid,uuid,text,integer,integer,text,text,text)",
     "esblu_company_export_fail(uuid,uuid,text)",
+    "esblu_company_export_fingerprint(uuid)",
     "esblu_company_export_part(uuid,uuid,uuid,integer,integer,text,integer)",
     "esblu_company_termination_commit(uuid,uuid,boolean,text)",
+    "esblu_company_termination_execute(uuid,uuid,boolean,text,jsonb)",
     "esblu_company_termination_in_progress()",
+    "esblu_company_termination_preflight(uuid,uuid,text,jsonb)",
     "esblu_company_termination_record_failure(uuid,uuid,text,text)",
     "esblu_create_company_invite(text,text)",
     "esblu_create_my_company(text)",

@@ -1029,6 +1029,7 @@ const en = {
       exported: "I have downloaded and received the export.",
       waived: "I do not need an export — I request deletion without export.",
       acknowledge: "I understand that deletion is irreversible and also covers accounting documents and e-invoices. Esblu is not a statutory archive; the company is responsible for retaining documents as required by law.",
+      authority: "I declare that I am authorised to act for this company (statutory representative or a person holding a power of attorney) and I decide on the return and deletion of its data, including copies.",
       forfeit: "I understand that the remaining paid subscription period is forfeited without a refund.",
       confirmPhrase: "To confirm, type {{phrase}}",
       submit: "Terminate the company and delete data",
@@ -1382,7 +1383,11 @@ const en = {
         "The account deletion could not be fully verified. Please contact support.",
       einvoiceDeregistrationPending: "The company's registration with the e-invoicing provider (eFaktura.sk) is being closed. Sending e-invoices has already stopped. Try terminating the company again in a few minutes. Nothing was deleted.",
       einvoiceDeregistrationFailed: "The company's registration with the e-invoicing provider could not be closed automatically. Contact info@esblu.com. Nothing was deleted.",
-      terminationExportNotVerified: "Terminating the company as \"exported\" requires a complete data export created in Esblu within the last 24 hours. Run the export first, or explicitly choose termination without export. Nothing was deleted.",
+      terminationExportNotVerified: "Terminating the company as \"exported\" requires a complete data export created in Esblu within the last 24 hours. Run the export first. Nothing was deleted.",
+      terminationExportStale: "The company's data changed after the last export. Download a new export so it reflects the current state. Nothing was deleted.",
+      terminationExportRequired: "The company has finalised documents or e-invoices — a complete data export is required before deletion. Nothing was deleted.",
+      terminationAckRequired: "Confirm that you are authorised to act for the company and try again. Nothing was deleted.",
+      terminationReauthRequired: "For security reasons, sign out and sign in again (your last sign-in is older than 30 minutes), then repeat the termination. Nothing was deleted.",
       companyHasAccountingRecords:
         "The company has issued or received accounting documents (invoices, e-invoices). Export them first (Accountant handoff) and contact support — documents are not deleted automatically.",
       companyDeletionFailedRetry:

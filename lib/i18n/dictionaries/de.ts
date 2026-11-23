@@ -1030,6 +1030,7 @@ const de = {
       exported: "Ich habe den Export heruntergeladen und erhalten.",
       waived: "Ich benötige keinen Export — ich beantrage die Löschung ohne Export.",
       acknowledge: "Ich verstehe, dass die Löschung unwiderruflich ist und auch Buchungsbelege und E-Rechnungen umfasst. Esblu ist kein gesetzliches Archiv; für die gesetzliche Aufbewahrung der Belege ist die Firma verantwortlich.",
+      authority: "Ich erkläre, dass ich berechtigt bin, für dieses Unternehmen zu handeln (gesetzlicher Vertreter oder bevollmächtigte Person), und über die Rückgabe und Löschung seiner Daten einschließlich Kopien entscheide.",
       forfeit: "Ich verstehe, dass der verbleibende bezahlte Abonnementzeitraum ohne Erstattung verfällt.",
       confirmPhrase: "Zur Bestätigung geben Sie {{phrase}} ein",
       submit: "Firma beenden und Daten löschen",
@@ -1383,7 +1384,11 @@ const de = {
         "Die Kontolöschung konnte nicht vollständig überprüft werden. Bitte kontaktieren Sie den Support.",
       einvoiceDeregistrationPending: "Die Registrierung des Unternehmens beim E-Rechnungs-Anbieter (eFaktura.sk) wird beendet. Der Versand von E-Rechnungen ist bereits gestoppt. Versuchen Sie die Beendigung in einigen Minuten erneut. Es wurde nichts gelöscht.",
       einvoiceDeregistrationFailed: "Die Registrierung beim E-Rechnungs-Anbieter konnte nicht automatisch beendet werden. Kontaktieren Sie info@esblu.com. Es wurde nichts gelöscht.",
-      terminationExportNotVerified: "Die Beendigung des Unternehmens als „exportiert“ erfordert einen vollständigen Datenexport aus Esblu aus den letzten 24 Stunden. Starten Sie zuerst den Export oder wählen Sie ausdrücklich die Beendigung ohne Export. Es wurde nichts gelöscht.",
+      terminationExportNotVerified: "Die Beendigung des Unternehmens als „exportiert“ erfordert einen vollständigen Datenexport aus Esblu aus den letzten 24 Stunden. Starten Sie zuerst den Export. Es wurde nichts gelöscht.",
+      terminationExportStale: "Die Unternehmensdaten haben sich nach dem letzten Export geändert. Laden Sie einen neuen Export herunter, damit er den aktuellen Stand enthält. Es wurde nichts gelöscht.",
+      terminationExportRequired: "Das Unternehmen hat abgeschlossene Belege oder E-Rechnungen — vor der Löschung ist ein vollständiger Datenexport erforderlich. Es wurde nichts gelöscht.",
+      terminationAckRequired: "Bestätigen Sie, dass Sie berechtigt sind, für das Unternehmen zu handeln, und versuchen Sie es erneut. Es wurde nichts gelöscht.",
+      terminationReauthRequired: "Melden Sie sich aus Sicherheitsgründen ab und erneut an (die letzte Anmeldung liegt mehr als 30 Minuten zurück) und wiederholen Sie dann die Beendigung. Es wurde nichts gelöscht.",
       companyHasAccountingRecords:
         "Das Unternehmen hat ausgestellte oder empfangene Buchhaltungsbelege (Rechnungen, E-Rechnungen). Exportieren Sie diese zuerst (Übergabe an die Buchhaltung) und kontaktieren Sie den Support — Belege werden nicht automatisch gelöscht.",
       companyDeletionFailedRetry:

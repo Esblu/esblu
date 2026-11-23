@@ -492,10 +492,15 @@ await check("deregistrácia: RLS — owner A vidí iba svoje joby, employee a ow
   assert.ok((await run(who("ownerB"), `select company_id from public.einvoice_deregistrations`)).data.every((r) => r.company_id === C.b));
 });
 
-await check("4. dôkazy prežijú ukončenie firmy: termination A (waived) po deregistrácii prejde; mandáty a joby ostávajú (bez FK)", async () => {
+await check("4. dôkazy prežijú ukončenie firmy: termination A (overený export + potvrdenie oprávnenej osoby) po deregistrácii prejde; mandáty a joby ostávajú (bez FK)", async () => {
   const before = await su<{ m: number; d: number }>(`select (select count(*) from public.einvoice_mandates where company_id = $1)::int m, (select count(*) from public.einvoice_deregistrations where company_id = $1)::int d`, [C.a]);
   // pokusy A (outbound) sú súčasť termination výmazu (rozhodnutie D-G1 / archív rieši samostatná úloha)
-  const o = await svcCommit(`select public.esblu_company_termination_commit($1, $2, false, 'waived') r`, [U.owner, C.a]);
+  // 20261127100000: výmaz iba s aktuálnym overeným exportom, potvrdením oprávnenej osoby a čerstvým prihlásením.
+  await db.exec(`update auth.users set last_sign_in_at = now() where id = '${U.owner}'`);
+  const run0 = await svcCommit(`select public.esblu_company_export_begin($1, $2, 'test.v1', 0, 0, $3) id`, [U.owner, C.a, "a".repeat(64)]);
+  assert.equal(run0.layer, "ok", run0.message);
+  const ack = JSON.stringify({ authority_confirmed: true, text_version: "termination-authority-2026-11-23.sk", text_sha256: "1".repeat(64), confirmed_at: new Date().toISOString() });
+  const o = await svcCommit(`select public.esblu_company_termination_execute($1, $2, false, 'exported', $3::jsonb) r`, [U.owner, C.a, ack]);
   assert.equal(o.layer, "ok", o.message);
   const [gone] = await su<{ n: number }>(`select count(*)::int n from public.companies where id = $1`, [C.a]);
   assert.equal(gone.n, 0);

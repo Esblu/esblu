@@ -9,7 +9,8 @@ import { checkSubscriptionForDeletion } from "@/lib/account-deletion-subscriptio
 import type { SubscriptionDeletionCheck } from "@/lib/billing/deletion-guard";
 import type { Locale } from "@/lib/i18n/locales";
 import { orchestrateAccountDeletion, type OrchestrationResult } from "@/lib/account-deletion-orchestrator";
-import { supabaseDeletionDeps, supabaseTerminationDeps, type TerminationExportMode } from "@/lib/account-deletion-deps";
+import { supabaseDeletionDeps, supabaseTerminationDeps, terminationPreflight, type TerminationExportMode } from "@/lib/account-deletion-deps";
+import { buildTerminationAck, TERMINATION_GATE_ERROR_KEYS } from "@/lib/company-termination-ack";
 import { resolveActiveMembershipForUser } from "@/lib/active-membership-server";
 import { requestSessionId } from "@/lib/request-session";
 import { ensureCompanyDeregistered } from "@/lib/einvoice/deregistration";
@@ -100,8 +101,9 @@ function orchestrationResponse(locale: Locale, role: string, result: Orchestrati
         ESBLU_MULTI_COMPANY_NOT_MIGRATED: "settings.errors.deletionFailedRetry",
         // eInvoice ↔ zrušenie firmy (20261013100000): súbeh medzi preflightom a transakciou.
         ESBLU_ACCOUNTING_RECORDS_BLOCK_DELETION: "settings.errors.companyHasAccountingRecords",
-        // Ukončenie „exported“ bez serverom zaevidovaného kompletného exportu (20261113110000) — nič sa nezmazalo.
-        ESBLU_TERMINATION_EXPORT_NOT_VERIFIED: "settings.errors.terminationExportNotVerified",
+        // Brána ukončenia (20261113110000, 20261127100000): export, aktuálnosť exportu, potvrdenie oprávnenej
+        // osoby, čerstvé prihlásenie — nič sa nezmazalo.
+        ...TERMINATION_GATE_ERROR_KEYS,
       };
       const key = rule[result.code];
       return Response.json(
@@ -304,7 +306,7 @@ export async function POST(req: Request) {
       acknowledgeForfeit?: boolean;
       scope?: string;
       // VOP 1.2 čl. 20.6 / DPA: ukončenie firmy s účtovnými dokladmi.
-      termination?: { exportMode?: unknown; confirmed?: unknown };
+      termination?: { exportMode?: unknown; confirmed?: unknown; authorityConfirmed?: unknown };
     } = {};
     try {
       body = await req.json();
@@ -435,6 +437,35 @@ export async function POST(req: Request) {
         );
       }
 
+      // GDPR 2.0 (20261127100000): nevratný výmaz dokladov iba po potvrdení oprávnenej osoby a s aktuálnym
+      // overeným exportom. Overí sa PRED akýmkoľvek nevratným krokom (deregistrácia u poskytovateľa, DB, Storage)
+      // tou istou DB bránou, ktorá stráži samotný výmaz (preflight bez zmeny údajov). Fail closed.
+      const terminationAck =
+        blocker && terminationMode
+          ? buildTerminationAck({
+              authorityConfirmed: body.termination?.authorityConfirmed,
+              locale,
+              companyId: membership.company_id,
+              headers: req.headers,
+            })
+          : null;
+      if (blocker && terminationMode) {
+        const gateCode = terminationAck
+          ? await terminationPreflight(admin, { userId: user.id, companyId: membership.company_id, exportMode: terminationMode, ack: terminationAck })
+          : "ESBLU_TERMINATION_ACK_REQUIRED";
+        if (gateCode) {
+          const key = TERMINATION_GATE_ERROR_KEYS[gateCode];
+          return Response.json(
+            {
+              error: translate(locale, key ?? "settings.errors.companyDeletionFailedRetry"),
+              code: key ? gateCode : undefined,
+              reauth_required: gateCode === "ESBLU_TERMINATION_REAUTH_REQUIRED" || undefined,
+            },
+            { status: key ? 409 : 500 }
+          );
+        }
+      }
+
       // Predplatné: overené PRED mazaním súborov aj DB. Obnovujúce sa /
       // nedokončené externé predplatné = 409, nič sa nemaže (fail closed).
       const subscriptionCheck = await checkSubscriptionForDeletion(admin, {
@@ -522,7 +553,9 @@ export async function POST(req: Request) {
       // (lib/account-deletion-orchestrator.ts). Odmietnutie DB = žiadny súbor
       // sa nezmaže.
       const ownerResult = await orchestrateAccountDeletion(
-        blocker && terminationMode ? supabaseTerminationDeps(admin, terminationMode) : supabaseDeletionDeps(admin),
+        blocker && terminationMode && terminationAck
+          ? supabaseTerminationDeps(admin, terminationMode, terminationAck)
+          : supabaseDeletionDeps(admin),
         { kind: "owner", userId: user.id, companyId: membership.company_id, deleteAccount }
       );
       return orchestrationResponse(locale, "owner", ownerResult);

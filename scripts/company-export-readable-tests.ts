@@ -156,7 +156,9 @@ await check("route: čitateľná vrstva iba z `exported` (filter firmy), manifes
   assert.match(route, /if \(active\.role !== "owner"\) return fail\(403, "OWNER_ONLY"\)/);
   assert.ok(route.indexOf("buildHumanReadable(") < route.indexOf("generateAsync"), "čitateľné súbory sú v data ZIP pred výpočtom SHA");
   assert.ok(route.indexOf("generateAsync") < route.indexOf("esblu_company_export_begin"), "evidencia exportu až po vygenerovaní");
-  assert.match(route, /COMPANY_EXPORT_SCHEMA_VERSION = "2026-11-13\.einvoice-lifecycle"/, "schéma technického exportu sa nemení");
+  // P1-5 (2026-11-23): nová verzia schémy — R3 filter, denník účtovného stavu, mandáty, PDF prijatých e-faktúr,
+  // excluded_counts a data_fingerprint v manifeste. Čitateľná vrstva sa nemení.
+  assert.match(route, /COMPANY_EXPORT_SCHEMA_VERSION = "2026-11-23\.gdpr2-isolation"/, "schéma technického exportu (P1-5)");
   assert.ok(COMPANY_EXPORT_EXCLUDED.some((x) => x.includes("einvoice_webhook_events")));
   assert.match(read("next.config.ts"), /"\/api\/company\/export": \["\.\/assets\/fonts\/\*\*"\]/);
   // žiadne trvalé uloženie čitateľnej vrstvy

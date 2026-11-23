@@ -11,6 +11,7 @@ import {
   COMPANY_EXPORT_EXCLUDED,
   COMPANY_EXPORT_FILE_SOURCES,
   COMPANY_EXPORT_TABLES,
+  exportCountMismatches,
   exportFilePartCount,
   normalizeExportFiles,
   rowsToCsv,
@@ -18,6 +19,8 @@ import {
   zipSafePath,
 } from "@/lib/company-export";
 import { legalConfig } from "@/lib/legal-config";
+import { filterCompanyVisibleEinvoice, visibleToCompany } from "@/lib/einvoice/visibility";
+import { buildTerminationAck, terminationAuthorityStatement } from "@/lib/company-termination-ack";
 import sk from "@/lib/i18n/dictionaries/sk";
 import en from "@/lib/i18n/dictionaries/en";
 import de from "@/lib/i18n/dictionaries/de";
@@ -115,13 +118,16 @@ check("export evidence: dôkaz vzniká iba na serveri po vygenerovaní; dávky v
   assert.match(client, /export_id: exportId/);
   assert.match(client, /completed: status === "completed"/);
   assert.match(read("app/components/CompanyExportButton.tsx"), /if \(result\.completed\) onDone\?\.\(\)/);
-  assert.match(read("app/api/account/delete/route.ts"), /ESBLU_TERMINATION_EXPORT_NOT_VERIFIED: "settings\.errors\.terminationExportNotVerified"/);
+  assert.match(read("app/api/account/delete/route.ts"), /\.\.\.TERMINATION_GATE_ERROR_KEYS/);
+  assert.match(read("lib/company-termination-ack.ts"), /ESBLU_TERMINATION_EXPORT_NOT_VERIFIED: "settings\.errors\.terminationExportNotVerified"/);
   const mig = read("supabase/migrations/20261113110000_company_export_evidence.sql");
   assert.match(mig, /revoke all on table public\.company_export_runs from public, anon, authenticated/);
   assert.match(mig, /before insert on public\.company_terminations/);
   for (const [name, d] of [["sk", sk], ["en", en], ["de", de]] as const) {
     const dict = d as unknown as { settings: { errors: Record<string, string>; companyExport: { errors: Record<string, string> } } };
-    assert.ok(dict.settings.errors.terminationExportNotVerified, `${name} terminationExportNotVerified`);
+    for (const k of ["terminationExportNotVerified", "terminationExportStale", "terminationExportRequired", "terminationAckRequired", "terminationReauthRequired"]) {
+      assert.ok(dict.settings.errors[k], `${name} ${k}`);
+    }
     assert.ok(dict.settings.companyExport.errors.EXPORT_RUN_INVALID, `${name} EXPORT_RUN_INVALID`);
   }
 });
@@ -147,21 +153,31 @@ check("export route: iba owner aktívnej firmy, firma zo servera, SHA-256, logy 
   assert.match(read("app/nastavenia/page.tsx"), /companyId && myRole === "owner" && \(/);
 });
 
-check("termination: iba pri účtovnom bloku, s exportom/vzdaním sa a potvrdením; provider registrácia blokuje", () => {
+check("termination: iba pri účtovnom bloku, s exportom, potvrdením oprávnenej osoby a preflightom PRED deregistráciou", () => {
   const r = read("app/api/account/delete/route.ts");
   assert.match(r, /blocker === "FINALIZED_ACCOUNTING_DOCUMENTS" \|\| blocker === "EINVOICE_RECORDS"/);
   assert.match(r, /body\.termination\?\.confirmed === true/);
-  assert.match(r, /supabaseTerminationDeps\(admin, terminationMode\)/);
+  assert.match(r, /supabaseTerminationDeps\(admin, terminationMode, terminationAck\)/);
+  assert.match(r, /authorityConfirmed: body\.termination\?\.authorityConfirmed/);
+  // preflight (rovnaká DB brána) musí byť pred deregistráciou u poskytovateľa a pred orchestráciou výmazu
+  const pre = r.indexOf("await terminationPreflight(");
+  assert.ok(pre > 0 && pre < r.indexOf("await ensureCompanyDeregistered(") && pre < r.indexOf("const ownerResult = await orchestrateAccountDeletion("), "preflight pred nevratnými krokmi");
   assert.match(r, /if \(body\.confirmPhrase !== "ZRUŠIŤ FIRMU"\)/);
   const d = read("lib/account-deletion-deps.ts");
-  assert.match(d, /esblu_company_termination_commit/);
+  assert.match(d, /esblu_company_termination_execute/);
+  assert.match(d, /p_ack: ack/);
+  assert.match(d, /esblu_company_termination_preflight/);
+  assert.doesNotMatch(d, /rpc\("esblu_company_termination_commit"/);
   assert.match(d, /esblu_company_termination_record_failure/);
   const m = read("supabase/migrations/20261112110000_company_termination_workflow.sql");
   assert.match(m, /ESBLU_EINVOICE_PROVIDER_ENROLLED/);
   assert.match(m, /grant execute on function public\.esblu_company_termination_commit\(uuid, uuid, boolean, text\) to service_role/);
   assert.doesNotMatch(m, /esblu_company_termination_commit\(uuid, uuid, boolean, text\) to authenticated/);
   const ui = read("app/nastavenia/page.tsx");
-  assert.match(ui, /!terminationExportMode \|\|\s*!terminationAcknowledged/);
+  assert.match(ui, /!terminationExportMode \|\|\s*!terminationAcknowledged \|\|\s*!terminationAuthority/);
+  assert.doesNotMatch(ui, /setTerminationExportMode\("waived"\)/, "pri dokladoch sa výmaz bez exportu neponúka");
+  const ack = read("lib/company-termination-ack.ts");
+  assert.match(ack, /if \(input\.authorityConfirmed !== true\) return null/);
 });
 
 check("guardy: všetkých 7 upravených funkcií povoľuje iba DELETE počas termination; rollback ich vracia", () => {
@@ -188,6 +204,71 @@ check("kontakt: telefón z jedného configu, dostupnosť a rozsah bez prísľubu
   }
   for (const f of ["legal/terms/1.2.md", "legal/terms/1.2.en.md", "legal/terms/1.2.de.md"])
     assert.ok(!read(f).includes("0903"), `${f}: číslo nie je natvrdo vo VOP`);
+});
+
+check("potvrdenie oprávnenej osoby: iba výslovné true; SHA-256 zobrazeného textu podľa jazyka; IP/UA iba hash", () => {
+  const h = new Headers({ "x-forwarded-for": "203.0.113.7, 10.0.0.1", "user-agent": "QA" });
+  for (const v of [undefined, false, "true", 1, {}]) {
+    assert.equal(buildTerminationAck({ authorityConfirmed: v, locale: "sk", companyId: "c", headers: h }), null, String(v));
+  }
+  const now = new Date("2026-11-23T10:00:00Z");
+  const a = buildTerminationAck({ authorityConfirmed: true, locale: "en", companyId: "c1", headers: h, now })!;
+  assert.equal(a.authority_confirmed, true);
+  assert.equal(a.confirmed_at, "2026-11-23T10:00:00.000Z");
+  assert.match(a.text_version, /^[A-Za-z0-9_.:-]{1,60}$/);
+  assert.match(a.text_sha256, /^[0-9a-f]{64}$/);
+  assert.equal(a.text_sha256, terminationAuthorityStatement("en").sha256);
+  assert.notEqual(terminationAuthorityStatement("sk").sha256, terminationAuthorityStatement("en").sha256);
+  assert.match(a.ip_sha256 ?? "", /^[0-9a-f]{64}$/);
+  assert.notEqual(buildTerminationAck({ authorityConfirmed: true, locale: "en", companyId: "c2", headers: h, now })!.ip_sha256, a.ip_sha256, "soľ viazaná na firmu");
+  assert.ok(!JSON.stringify(a).includes("203.0.113.7") && !JSON.stringify(a).includes("QA\""));
+});
+
+check("P1-5 R3: export/balík/UI nevracajú doklad RECIPIENT_MISMATCH ani jeho udalosti a súbory (service role obchádza RLS)", () => {
+  const inbound = [
+    { id: "ok", last_error_code: null, xml_storage_path: "c/ok.xml", pdf_storage_path: "c/ok.pdf" },
+    { id: "mm", last_error_code: "RECIPIENT_MISMATCH", xml_storage_path: "c/mm.xml" },
+    { id: "bad", last_error_code: "INVALID_XML", xml_storage_path: "c/bad.xml" },
+  ];
+  const events = [{ id: "e1", inbound_id: "ok" }, { id: "e2", inbound_id: "mm" }, { id: "e3", outbound_id: "o1", inbound_id: null }, { id: "e4", inbound_id: "bad" }];
+  const v = filterCompanyVisibleEinvoice({ inbound, events });
+  assert.deepEqual(v.inbound.map((r) => r.id), ["ok", "bad"]);
+  assert.deepEqual(v.events.map((r) => r.id), ["e1", "e3", "e4"]);
+  assert.deepEqual(v.hidden, { einvoice_inbound: 1, einvoice_events: 1 });
+  assert.equal(visibleToCompany({ last_error_code: "RECIPIENT_MISMATCH" }), false);
+  const life = buildEinvoiceLifecycle({ inbound: v.inbound, outbound: [], events: v.events, invoices: [] });
+  assert.ok(!life.some((x) => x.einvoice_id === "mm"));
+  // súbory: všetky zdroje einvoice_inbound sú companyVisibleOnly; PDF prijatej e-faktúry je v exporte
+  const inboundSources = COMPANY_EXPORT_FILE_SOURCES.filter((x) => x.table === "einvoice_inbound");
+  assert.deepEqual(inboundSources.map((x) => x.pathColumn).sort(), ["pdf_storage_path", "xml_storage_path"]);
+  assert.ok(inboundSources.every((x) => x.companyVisibleOnly === true));
+  const route = read("app/api/company/export/route.ts");
+  assert.match(route, /if \(src\.companyVisibleOnly && !visibleToCompany\(/);
+  assert.ok(route.indexOf("filterCompanyVisibleEinvoice(") < route.indexOf("zip.file(`data/${spec.table}.json`"), "filter pred zápisom do ZIP");
+  assert.match(route, /excluded_counts: visible\.hidden/);
+  assert.ok(COMPANY_EXPORT_EXCLUDED.some((x) => x.includes("RECIPIENT_MISMATCH")));
+  assert.match(read("app/api/accounting-handoff/package/route.ts"), /visibleToCompany\(r\)/);
+  assert.match(read("lib/einvoice/ui/summary-server.ts"), /from "\.\.\/visibility\.ts"/);
+  assert.match(read("lib/einvoice/ui/summary-server.ts"), /\.filter\(visibleToCompany\)\.sort/);
+  assert.match(read("lib/einvoice/ops/download.ts"), /RECIPIENT_MISMATCH/);
+});
+
+check("P1-5 export úplnosť: denník účtovného stavu, mandáty, odtlačok DB = exportované počty, zmena počas exportu = chyba", () => {
+  const tables = COMPANY_EXPORT_TABLES.map((t) => t.table);
+  for (const t of ["invoice_accounting_state_log", "einvoice_mandates", "einvoice_events", "invoice_accounting_state"]) assert.ok(tables.includes(t), t);
+  // každá tabuľka odtlačku (DB) je v exporte — inak by kontrola úplnosti nemohla prejsť
+  const mig = read("supabase/migrations/20261127100000_company_termination_customer_delete.sql");
+  const fpTables = [...mig.matchAll(/\(\d+, '([a-z_]+)', '(?:company|invoice|inbound|events)'\)/g)].map((m) => m[1]);
+  assert.equal(fpTables.length, 16);
+  for (const t of fpTables) assert.ok(tables.includes(t), `odtlačok ${t} chýba v exporte`);
+  assert.deepEqual(exportCountMismatches({ invoices: 2, einvoice_inbound: 1, x: "n/a" }, { invoices: 2, einvoice_inbound: 1 }), []);
+  assert.deepEqual(exportCountMismatches({ invoices: 2, einvoice_mandates: 1, documents: 0 }, { invoices: 1 }), ["documents", "einvoice_mandates", "invoices"], "chýbajúca tabuľka v exporte = neúplný");
+  const route = read("app/api/company/export/route.ts");
+  assert.ok(route.indexOf("await loadExportFingerprint(") < route.indexOf('await fetchTable(admin, "invoices"'), "odtlačok pred čítaním");
+  assert.match(route, /exportCountMismatches\(fingerprint\.counts, exportedCounts\)/);
+  assert.match(route, /p_expected_fingerprint: fingerprint\.fingerprint/);
+  assert.match(route, /p_manifest_sha256: sha256\(manifestJson\)/);
+  assert.match(route, /ESBLU_EXPORT_DATA_CHANGED/);
 });
 
 check("i18n: termination + companyExport kľúče v SK/EN/DE", () => {

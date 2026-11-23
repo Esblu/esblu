@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { visibleToCompany } from "@/lib/einvoice/visibility";
 import JSZip from "jszip";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { verifyRequestUser } from "@/lib/server-auth";
@@ -344,8 +345,8 @@ export async function POST(req: Request) {
       .returns<{ invoice_id: string; paid_amount: number; paid_at: string; payment_method: string | null; note: string | null; created_at: string; entry_type: string }[]>(),
     db.from("invoice_advance_deductions").select("invoice_id, advance_invoice_id, vat_category_code, vat_rate, taxable_amount, vat_amount").in("invoice_id", ids)
       .returns<{ invoice_id: string; advance_invoice_id: string; vat_category_code: string; vat_rate: number; taxable_amount: number; vat_amount: number }[]>(),
-    db.from("einvoice_inbound").select("invoice_id, xml_storage_path, xml_sha256, provider, provider_received_id, received_at, acknowledged_at, sender_participant_id").in("invoice_id", ids)
-      .returns<{ invoice_id: string; xml_storage_path: string | null; xml_sha256: string | null; provider: string; provider_received_id: string; received_at: string; acknowledged_at: string | null; sender_participant_id: string | null }[]>(),
+    db.from("einvoice_inbound").select("invoice_id, xml_storage_path, xml_sha256, provider, provider_received_id, received_at, acknowledged_at, sender_participant_id, last_error_code").in("invoice_id", ids)
+      .returns<{ invoice_id: string; xml_storage_path: string | null; xml_sha256: string | null; provider: string; provider_received_id: string; received_at: string; acknowledged_at: string | null; sender_participant_id: string | null; last_error_code: string | null }[]>(),
     db.from("einvoice_outbound").select("invoice_id, attempt, state, ubl_storage_path, ubl_sha256, provider, sent_at, delivered_at, evidence, receiver_participant_id").in("invoice_id", ids)
       .returns<{ invoice_id: string; attempt: number; state: string; ubl_storage_path: string | null; ubl_sha256: string | null; provider: string; sent_at: string | null; delivered_at: string | null; evidence: Record<string, unknown> | null; receiver_participant_id: string | null }[]>(),
     // 20261008100008: prijaté zálohy (386) odpočítané na prijatej konečnej faktúre (BT-113).
@@ -359,7 +360,8 @@ export async function POST(req: Request) {
   const paymentsByInvoice = groupBy(paymentsRes.data ?? [], (x) => x.invoice_id);
   const deductionsByInvoice = groupBy(deductionsRes.data ?? [], (x) => x.invoice_id);
   const receivedAdvByInvoice = groupBy(receivedAdvRes.data ?? [], (x) => x.invoice_id);
-  const inboundByInvoice = new Map((inboundRes.data ?? []).filter((r) => r.xml_storage_path && r.xml_sha256).map((r) => [r.invoice_id, r]));
+  // R3: doklad adresovaný inému účastníkovi sa do balíka nikdy nedostane (aj bez RLS 20261125100000).
+  const inboundByInvoice = new Map((inboundRes.data ?? []).filter((r) => r.xml_storage_path && r.xml_sha256 && visibleToCompany(r)).map((r) => [r.invoice_id, r]));
   const outboundByInvoice = new Map<string, NonNullable<typeof outboundRes.data>[number]>();
   for (const o of outboundRes.data ?? []) {
     const prev = outboundByInvoice.get(o.invoice_id);

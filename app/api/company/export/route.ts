@@ -13,6 +13,7 @@ import {
   COMPANY_EXPORT_FILES_PER_PART,
   COMPANY_EXPORT_TABLES,
   buildEinvoiceLifecycle,
+  exportCountMismatches,
   exportFilePartCount,
   normalizeExportFiles,
   rowsToCsv,
@@ -20,6 +21,7 @@ import {
   zipSafePath,
   type StorageFileRef,
 } from "@/lib/company-export";
+import { filterCompanyVisibleEinvoice, visibleToCompany } from "@/lib/einvoice/visibility";
 import {
   buildReadableCsvFiles,
   companyOverview,
@@ -46,7 +48,7 @@ export const maxDuration = 300;
 
 const PAGE = 1000;
 /** Verzia schémy exportu (manifest + server-side dôkaz company_export_runs). */
-const COMPANY_EXPORT_SCHEMA_VERSION = "2026-11-13.einvoice-lifecycle";
+const COMPANY_EXPORT_SCHEMA_VERSION = "2026-11-23.gdpr2-isolation";
 /** Čitateľná vrstva: max. počet PDF vizualizácií faktúr a časový rozpočet (zvyšok iba v Zoznam_faktur.csv). */
 const READABLE_INVOICE_PDF_CAP = 200;
 const READABLE_PDF_BUDGET_MS = 90_000;
@@ -89,6 +91,8 @@ async function collectFiles(admin: SupabaseClient, companyId: string): Promise<S
   for (const src of COMPANY_EXPORT_FILE_SOURCES) {
     const rows = await fetchAll(admin, src.table, "company_id", [companyId]);
     for (const row of rows) {
+      // R3: súbory dokladov adresovaných inému účastníkovi nie sú údajmi firmy (service role obchádza RLS).
+      if (src.companyVisibleOnly && !visibleToCompany(row as { last_error_code?: string | null })) continue;
       const bucket = src.bucket ?? (src.bucketColumn ? String(row[src.bucketColumn] ?? "") : "");
       const path = String(row[src.pathColumn] ?? "");
       if (bucket && path) files.push({ bucket, path });
@@ -98,6 +102,20 @@ async function collectFiles(admin: SupabaseClient, companyId: string): Promise<S
 }
 
 const sha256 = (bytes: Uint8Array | string) => createHash("sha256").update(bytes).digest("hex");
+
+/** DB odtlačok údajov firmy (20261127100000). null = RPC neexistuje (staršia DB) → pôvodný režim. */
+async function loadExportFingerprint(admin: SupabaseClient, companyId: string): Promise<{ fingerprint: string; counts: Record<string, unknown> } | null> {
+  const { data, error } = await admin.rpc("esblu_company_export_fingerprint", { p_company_id: companyId });
+  if (error) {
+    if (error.code === "PGRST202" || error.code === "42883") return null;
+    throw new Error(`EXPORT_READ_FAILED:fingerprint:${error.code ?? "unknown"}`);
+  }
+  const fp = data as { fingerprint?: unknown; counts?: unknown } | null;
+  if (!fp || typeof fp.fingerprint !== "string" || !/^[0-9a-f]{64}$/.test(fp.fingerprint) || !fp.counts || typeof fp.counts !== "object") {
+    throw new Error("EXPORT_READ_FAILED:fingerprint:invalid");
+  }
+  return { fingerprint: fp.fingerprint, counts: fp.counts as Record<string, unknown> };
+}
 
 function zipResponse(bytes: Uint8Array, filename: string, headers: Record<string, string>): Response {
   return new Response(Buffer.from(bytes), {
@@ -153,12 +171,31 @@ export async function POST(req: Request) {
       const zip = new JSZip();
       const counts: Record<string, number> = {};
       const hashes: Record<string, string> = {};
+      // Odtlačok údajov PRED čítaním (DB, rovnaké filtre ako export). Ak sa údaje počas tvorby exportu zmenia,
+      // evidencia behu zlyhá (ESBLU_EXPORT_DATA_CHANGED) — export zodpovedá jednému stavu. Bez migrácie
+      // 20261127100000 (RPC neexistuje) pokračuje v pôvodnom režime bez odtlačku.
+      const fingerprint = await loadExportFingerprint(admin, companyId);
       const invoices = await fetchTable(admin, "invoices", "company", companyId, []);
       const invoiceIds = invoices.map((r) => String(r.id));
       const exported: Record<string, Row[]> = {};
       for (const spec of COMPANY_EXPORT_TABLES) {
-        const rows = spec.table === "invoices" ? invoices : await fetchTable(admin, spec.table, spec.scope, companyId, invoiceIds);
-        exported[spec.table] = rows;
+        exported[spec.table] = spec.table === "invoices" ? invoices : await fetchTable(admin, spec.table, spec.scope, companyId, invoiceIds);
+      }
+      // R3: doklady adresované inému účastníkovi (a ich udalosti) sa neexportujú; počet sa uvedie v manifeste.
+      const visible = filterCompanyVisibleEinvoice({ inbound: exported.einvoice_inbound ?? [], events: exported.einvoice_events ?? [] });
+      exported.einvoice_inbound = visible.inbound;
+      exported.einvoice_events = visible.events;
+      // Úplnosť: exportované počty = počty, ktoré DB započítala do odtlačku.
+      if (fingerprint) {
+        const exportedCounts = Object.fromEntries(Object.entries(exported).map(([k, v]) => [k, v.length]));
+        const mismatched = exportCountMismatches(fingerprint.counts, exportedCounts);
+        if (mismatched.length > 0) {
+          console.error("company/export: neúplný export (počty sa nezhodujú s DB):", mismatched.join(","));
+          return fail(409, "EXPORT_RUN_INVALID");
+        }
+      }
+      for (const spec of COMPANY_EXPORT_TABLES) {
+        const rows = exported[spec.table];
         counts[spec.table] = rows.length;
         const json = JSON.stringify(rows, null, 2);
         const csv = rowsToCsv(rows);
@@ -207,6 +244,8 @@ export async function POST(req: Request) {
         files_parts: exportFilePartCount(files.length),
         files_per_part: COMPANY_EXPORT_FILES_PER_PART,
         excluded: COMPANY_EXPORT_EXCLUDED,
+        excluded_counts: visible.hidden,
+        data_fingerprint: fingerprint?.fingerprint ?? null,
         technical_export: {
           description: "Úplný strojovo spracovateľný export: data/<tabuľka>.json + .csv, data/einvoice_lifecycle.*, originálne súbory v dávkach files/…",
           datasets: COMPANY_EXPORT_TABLES.map((t) => t.table).concat("einvoice_lifecycle"),
@@ -223,19 +262,27 @@ export async function POST(req: Request) {
         },
         note: "Export nie je zákonný archív. Za uchovávanie účtovných dokladov zodpovedá Zákazník (VOP čl. 19.4, 21.3). Účtovné balíky s PDF faktúr: Faktúry → Balík pre účtovníka.",
       };
-      zip.file("manifest.json", JSON.stringify(manifest, null, 2));
+      const manifestJson = JSON.stringify(manifest, null, 2);
+      zip.file("manifest.json", manifestJson);
       const bytes = await zip.generateAsync({ type: "uint8array", compression: "DEFLATE", compressionOptions: { level: 6 } });
       // Server-side dôkaz (company_export_runs): vzniká IBA tu, po vygenerovaní ZIP; klient ho nevie vytvoriť.
       const fileParts = files.length > 0 ? exportFilePartCount(files.length) : 0;
-      const { data: runId, error: runError } = await admin.rpc("esblu_company_export_begin", {
+      const beginArgs = {
         p_user_id: user.id,
         p_company_id: companyId,
         p_schema_version: COMPANY_EXPORT_SCHEMA_VERSION,
         p_files_total: files.length,
         p_file_parts: fileParts,
         p_data_sha256: sha256(bytes),
-      });
+      };
+      const { data: runId, error: runError } = fingerprint
+        ? await admin.rpc("esblu_company_export_begin", { ...beginArgs, p_manifest_sha256: sha256(manifestJson), p_expected_fingerprint: fingerprint.fingerprint })
+        : await admin.rpc("esblu_company_export_begin", beginArgs);
       if (runError || typeof runId !== "string") {
+        if (runError?.message?.includes("ESBLU_EXPORT_DATA_CHANGED")) {
+          console.error("company/export: údaje sa zmenili počas exportu — klient zopakuje");
+          return fail(409, "EXPORT_RUN_INVALID");
+        }
         console.error("company/export: evidencia exportu zlyhala:", runError?.code ?? "unknown");
         return fail(500, "EXPORT_FAILED");
       }

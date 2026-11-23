@@ -11,6 +11,7 @@
 //      Storage AŽ po úspešnom RPC. Bez retry jobu (jobId = null).
 // =============================================================================
 
+import type { TerminationAck } from "@/lib/company-termination-ack";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   collectMemberOwnStorageTargets,
@@ -130,24 +131,44 @@ export function supabaseDeletionDeps(admin: SupabaseClient): DeletionDeps {
 }
 
 // -----------------------------------------------------------------------------
-// VOP 1.2 čl. 20.6 / DPA: ukončenie firmy s účtovnými dokladmi
-// (esblu_company_termination_commit, 20261112110000). Rovnaká orchestrácia
-// „DB najprv, Storage až po commite" ako bežné zrušenie; iba commit je
-// auditovaný termination workflow. Zlyhanie sa zapíše do auditu (iba kód).
+// VOP 1.2 čl. 20.6 / DPA 2.0: ukončenie firmy s účtovnými dokladmi
+// (esblu_company_termination_execute, 20261127100000 — výmaz bez zákazníckeho
+// archívu, s potvrdením oprávnenej osoby). Rovnaká orchestrácia „DB najprv,
+// Storage až po commite" ako bežné zrušenie. Zlyhanie sa zapíše do auditu (iba kód).
 // -----------------------------------------------------------------------------
 export type TerminationExportMode = "exported" | "waived";
 
-export function supabaseTerminationDeps(admin: SupabaseClient, exportMode: TerminationExportMode): DeletionDeps {
+/**
+ * Predbežná kontrola brány ukončenia BEZ zmeny údajov (esblu_company_termination_preflight) — volá sa pred
+ * nevratnými krokmi mimo DB (deregistrácia u poskytovateľa e-Faktúry). null = výmaz by prešiel.
+ * Chyba RPC (napr. chýbajúca migrácia) = fail closed.
+ */
+export async function terminationPreflight(
+  admin: SupabaseClient,
+  input: { userId: string; companyId: string; exportMode: TerminationExportMode; ack: TerminationAck }
+): Promise<string | null> {
+  const { data, error } = await admin.rpc("esblu_company_termination_preflight", {
+    p_user_id: input.userId,
+    p_company_id: input.companyId,
+    p_export_mode: input.exportMode,
+    p_ack: input.ack,
+  });
+  if (error) return "ESBLU_TERMINATION_PREFLIGHT_FAILED";
+  return typeof data === "string" && data.length > 0 ? data : null;
+}
+
+export function supabaseTerminationDeps(admin: SupabaseClient, exportMode: TerminationExportMode, ack: TerminationAck): DeletionDeps {
   const base = supabaseDeletionDeps(admin);
   return {
     ...base,
     async commit(request: DeletionRequest): Promise<CommitResult> {
       const { userId, companyId, deleteAccount } = request;
-      const { data, error } = await admin.rpc("esblu_company_termination_commit", {
+      const { data, error } = await admin.rpc("esblu_company_termination_execute", {
         p_user_id: userId,
         p_company_id: companyId,
         p_delete_account: deleteAccount,
         p_export_mode: exportMode,
+        p_ack: ack,
       });
       if (!error) {
         const row = (data ?? {}) as { job_id?: string; storage_targets?: unknown; summary?: unknown; delete_account?: boolean };
@@ -160,7 +181,7 @@ export function supabaseTerminationDeps(admin: SupabaseClient, exportMode: Termi
         };
       }
       const code = dbCode(error);
-      console.error("company/termination: esblu_company_termination_commit zlyhalo:", code);
+      console.error("company/termination: esblu_company_termination_execute zlyhalo:", code);
       await admin
         .rpc("esblu_company_termination_record_failure", {
           p_user_id: userId,

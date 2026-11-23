@@ -713,16 +713,18 @@ await check("snapshot: neskorší upsert NEPREPÍŠE (iba doplní null); priama 
 });
 
 let pdfPathX = "";
-await check("ukončenie firmy (esblu_company_termination_commit, archív): doklad ostáva, company_id = null, snapshot celý; Storage ciele bez billing-documents", async () => {
+await check("ukončenie firmy (esblu_company_termination_execute, výmaz bez archívu 20261127100000): účtovná kópia Esblu ostáva, company_id = null, snapshot celý; Storage ciele bez billing-documents", async () => {
   // archivované PDF účtovnej kópie (cesta v bucket billing-documents)
   const row = (await su<{ id: string }>("select id from public.billing_invoice_documents where provider_document_id = 'in_snap_x1'"))[0];
   pdfPathX = `test/${new Date().toISOString().slice(0, 4)}/${new Date().toISOString().slice(5, 7)}/invoice/in_snap_x1.pdf`;
   await su("select public.esblu_billing_document_archive_result($1, true, $2, $3, null)", [row.id, "f".repeat(64), pdfPathX]);
   const before = await snapOf("in_snap_x1");
-  const o = await commitAs(service, "select public.esblu_company_termination_commit($1, $2, false, 'waived') r", [SU.x, SC.x]);
+  await su("update auth.users set last_sign_in_at = now() where id = $1", [SU.x]);
+  const ack = JSON.stringify({ authority_confirmed: true, text_version: "termination-authority-2026-11-23.sk", text_sha256: "1".repeat(64), confirmed_at: new Date().toISOString() });
+  const o = await commitAs(service, "select public.esblu_company_termination_execute($1, $2, false, 'waived', $3::jsonb) r", [SU.x, SC.x, ack]);
   assert.equal(o.layer, "ok", o.message);
   const r = o.data[0].r as Json;
-  assert.equal(r.termination_mode, "archive");
+  assert.equal(r.termination_mode, "customer_delete");
   assert.equal(await n("select count(*)::int n from public.companies where id = $1", [SC.x]), 0, "firma zrušená");
   assert.equal(await n("select count(*)::int n from public.billing_provider_links where company_id = $1", [SC.x]), 0, "väzby na Stripe zanikli");
   const after = await snapOf("in_snap_x1");

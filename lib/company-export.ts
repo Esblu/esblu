@@ -51,11 +51,15 @@ export const COMPANY_EXPORT_TABLES: ExportTableSpec[] = [
   { table: "invoices", scope: "company" },
   { table: "invoice_number_sequences", scope: "company" },
   { table: "invoice_accounting_state", scope: "company" },
+  // Denník zmien účtovného stavu (kto/kedy označil doklad ako zaúčtovaný) — GDPR 2.0 vrátenie údajov.
+  { table: "invoice_accounting_state_log", scope: "company" },
   { table: "received_advance_links", scope: "company" },
   { table: "einvoice_inbound", scope: "company" },
   { table: "einvoice_outbound", scope: "company" },
   // Kanonická história stavov e-faktúry (append-only, firma z mapovania) — preukázanie životného cyklu/doručenia.
   { table: "einvoice_events", scope: "company" },
+  // Elektronické poverenia (mandáty) eFaktúry: kto, kedy, rozsah, verzia a SHA-256 textu (dôkaz oprávnenia).
+  { table: "einvoice_mandates", scope: "company" },
   { table: "invoice_items", scope: "invoice" },
   { table: "invoice_parties", scope: "invoice" },
   { table: "invoice_tax_breakdowns", scope: "invoice" },
@@ -77,12 +81,13 @@ export const COMPANY_EXPORT_EXCLUDED = [
   "einvoice_webhook_events, einvoice_webhook_rejections, einvoice_enroll_attempts, einvoice_organizations, einvoice_rollout, einvoice_event_cursors, einvoice_ops_audit (interné technické a bezpečnostné záznamy prenosu; kanonická história dokladu je v einvoice_events a einvoice_lifecycle)",
   "document_download_events, document_export_*, accounting_handoff_* (evidencia sťahovaní)",
   "session_active_company, user_active_company, media_deletion_queue (technické)",
+  "einvoice_inbound s kódom RECIPIENT_MISMATCH a ich udalosti/súbory (doklad adresovaný inému účastníkovi — nie je údajom firmy; počet je v manifeste excluded_counts)",
 ];
 
 export type StorageFileRef = { bucket: string; path: string };
 
 /** Zdroje súborov firmy v Storage (rovnaké ako zber pri výmaze firmy + XML e-faktúr). */
-export const COMPANY_EXPORT_FILE_SOURCES: Array<{ table: string; bucketColumn?: string; bucket?: string; pathColumn: string }> = [
+export const COMPANY_EXPORT_FILE_SOURCES: Array<{ table: string; bucketColumn?: string; bucket?: string; pathColumn: string; companyVisibleOnly?: boolean }> = [
   { table: "documents", bucketColumn: "storage_bucket", pathColumn: "storage_path" },
   { table: "document_attachments", bucketColumn: "storage_bucket", pathColumn: "storage_path" },
   { table: "chat_attachments", bucketColumn: "storage_bucket", pathColumn: "storage_path" },
@@ -91,9 +96,26 @@ export const COMPANY_EXPORT_FILE_SOURCES: Array<{ table: string; bucketColumn?: 
   { table: "inventory_photos", bucket: "inventory-photos", pathColumn: "file_path" },
   { table: "vehicle_photos", bucket: "vehicle-photos", pathColumn: "storage_path" },
   { table: "company_billing_profile", bucket: "company-logos", pathColumn: "logo_path" },
-  { table: "einvoice_inbound", bucket: "einvoice-documents", pathColumn: "xml_storage_path" },
+  // R3: súbory dokladov adresovaných inému účastníkovi sa neexportujú (companyVisibleOnly).
+  { table: "einvoice_inbound", bucket: "einvoice-documents", pathColumn: "xml_storage_path", companyVisibleOnly: true },
+  // PDF vizualizácia priložená k prijatej e-faktúre (ak ju odosielateľ poslal).
+  { table: "einvoice_inbound", bucket: "einvoice-documents", pathColumn: "pdf_storage_path", companyVisibleOnly: true },
   { table: "einvoice_outbound", bucket: "einvoice-documents", pathColumn: "ubl_storage_path" },
 ];
+
+/**
+ * Kontrola úplnosti exportu: počty riadkov, ktoré server exportoval, sa musia zhodovať s počtami, ktoré DB
+ * započítala do odtlačku (esblu_company_export_fingerprint, rovnaké filtre vrátane R3). Vráti nezhodné tabuľky.
+ * Tabuľka, ktorú DB nepozná (chýbajúca migrácia), sa nekontroluje.
+ */
+export function exportCountMismatches(dbCounts: Record<string, unknown>, exportedCounts: Record<string, number>): string[] {
+  const out: string[] = [];
+  for (const [table, n] of Object.entries(dbCounts)) {
+    if (typeof n !== "number") continue;
+    if (exportedCounts[table] !== n) out.push(table);
+  }
+  return out.sort();
+}
 
 /** Max. súborov v jednej dávke (ZIP) — limit pamäte a času serverless funkcie. */
 export const COMPANY_EXPORT_FILES_PER_PART = 100;

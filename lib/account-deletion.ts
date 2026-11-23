@@ -117,7 +117,7 @@ export async function deleteMyAccount(
     acknowledgeForfeit?: boolean;
     scope?: "company" | "global";
     /** VOP 1.2 čl. 20.6: ukončenie firmy s účtovnými dokladmi (owner). */
-    termination?: { exportMode: "exported" | "waived" };
+    termination?: { exportMode: "exported" | "waived"; authorityConfirmed: boolean };
   } = {}
 ): Promise<{ accountDeleted: boolean }> {
   const accessToken = await getAccessToken(locale);
@@ -134,7 +134,7 @@ export async function deleteMyAccount(
       // Zrušená obnova + bežiace obdobie: server vyžaduje výslovné potvrdenie.
       ...(options.acknowledgeForfeit ? { acknowledgeForfeit: true } : {}),
       ...(options.scope === "global" ? { scope: "global" } : {}),
-      ...(options.termination ? { termination: { exportMode: options.termination.exportMode, confirmed: true } } : {}),
+      ...(options.termination ? { termination: { exportMode: options.termination.exportMode, confirmed: true, authorityConfirmed: options.termination.authorityConfirmed === true } } : {}),
     }),
   });
 

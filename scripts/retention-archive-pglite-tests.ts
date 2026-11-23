@@ -53,7 +53,10 @@ async function check(label: string, fn: () => Promise<void>) {
 }
 
 await db.exec(read("scripts/sql/pglite/supabase-platform-stub.sql"));
-const files = replayOrder(readdirSync(path.join(ROOT, MIGRATIONS)).filter((f) => f.endsWith(".sql")));
+// LEGACY: 20261127100000 (GDPR 2.0 / CLIA 23. 11. 2026) nahrádza zákaznícky retenčný archív výmazom bez archívu.
+// Tento test overuje iba historický stav 20261121100000 (staging) — replay končí pred 20261127100000.
+const LEGACY_REPLAY_UNTIL = "20261127100000";
+const files = replayOrder(readdirSync(path.join(ROOT, MIGRATIONS)).filter((f) => f.endsWith(".sql") && f < LEGACY_REPLAY_UNTIL));
 assert.ok(files.includes(path.basename(MIGRATION)));
 // Storage politiky / buckety: snapshot tesne pred a po retenčnej migrácii (nesmie ich meniť).
 const storagePolicySnapshot = async () =>

@@ -245,6 +245,8 @@ export default function NastaveniaPage() {
   // VOP 1.2 čl. 20.6 / DPA: ukončenie firmy s účtovnými dokladmi.
   const [terminationExportMode, setTerminationExportMode] = useState<"" | "exported" | "waived">("");
   const [terminationAcknowledged, setTerminationAcknowledged] = useState(false);
+  // GDPR 2.0: výslovné vyhlásenie o oprávnení konať za firmu (text + SHA-256 eviduje server).
+  const [terminationAuthority, setTerminationAuthority] = useState(false);
   // Multi-company: názov aktívnej firmy (texty „Opustiť firmu …").
   const [activeCompanyName, setActiveCompanyName] = useState("");
   const [deleteSubmitting, setDeleteSubmitting] = useState(false);
@@ -880,7 +882,7 @@ export default function NastaveniaPage() {
         deletePreflight.role === "owner" &&
         (deletePreflight.ownerDeletionBlocked === "FINALIZED_ACCOUNTING_DOCUMENTS" ||
           deletePreflight.ownerDeletionBlocked === "EINVOICE_RECORDS");
-      if (terminationFlow && (!terminationExportMode || !terminationAcknowledged)) {
+      if (terminationFlow && (!terminationExportMode || !terminationAcknowledged || !terminationAuthority)) {
         setDeleteSubmitting(false);
         return;
       }
@@ -889,7 +891,7 @@ export default function NastaveniaPage() {
         deletePreflight.role === "owner" ? deleteConfirmText : undefined,
         {
           acknowledgeForfeit: deletePreflight.role === "owner" && forfeitAcknowledged,
-          ...(terminationFlow && terminationExportMode ? { termination: { exportMode: terminationExportMode } } : {}),
+          ...(terminationFlow && terminationExportMode ? { termination: { exportMode: terminationExportMode, authorityConfirmed: terminationAuthority } } : {}),
         }
       );
 
@@ -1499,14 +1501,14 @@ export default function NastaveniaPage() {
                       <input type="radio" name="termination-export" className="mt-0.5" checked={terminationExportMode === "exported"} onChange={() => setTerminationExportMode("exported")} disabled={deleteSubmitting} />
                       <span>{t("settings.termination.exported")}</span>
                     </label>
-                    <label className="flex items-start gap-2 text-[13px] leading-5">
-                      <input type="radio" name="termination-export" className="mt-0.5" checked={terminationExportMode === "waived"} onChange={() => setTerminationExportMode("waived")} disabled={deleteSubmitting} />
-                      <span>{t("settings.termination.waived")}</span>
-                    </label>
                   </fieldset>
                   <label className="flex items-start gap-2 text-[13px] leading-5">
                     <input type="checkbox" className="mt-0.5" checked={terminationAcknowledged} onChange={(e) => setTerminationAcknowledged(e.target.checked)} disabled={deleteSubmitting} />
                     <span>{t("settings.termination.acknowledge")}</span>
+                  </label>
+                  <label className="flex items-start gap-2 text-[13px] leading-5">
+                    <input type="checkbox" className="mt-0.5" checked={terminationAuthority} onChange={(e) => setTerminationAuthority(e.target.checked)} disabled={deleteSubmitting} data-testid="termination-authority" />
+                    <span>{t("settings.termination.authority")}</span>
                   </label>
                   {deletePreflight.subscription?.forfeits_remaining_period && (
                     <label className="flex items-start gap-2 text-[13px] leading-5">
@@ -1532,6 +1534,7 @@ export default function NastaveniaPage() {
                         deleteSubmitting ||
                         !terminationExportMode ||
                         !terminationAcknowledged ||
+                        !terminationAuthority ||
                         deleteConfirmText !== ACCOUNT_DELETION_CONFIRM_PHRASE ||
                         (deletePreflight.subscription?.forfeits_remaining_period === true && !forfeitAcknowledged)
                       }

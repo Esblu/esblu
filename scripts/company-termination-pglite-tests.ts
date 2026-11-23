@@ -6,8 +6,10 @@
 //   - owner-only, potvrdenie exportu, registrácia u providera = stop
 //   - zlyhanie uprostred → rollback celku (žiadny partial delete)
 //   - úspech → firma A celá preč, firma B nedotknutá, cleanup job so Storage
-//     cieľmi (od 20261121100000 BEZ XML e-faktúr — doklady idú do retenčného
-//     archívu, pozri retention-archive-pglite-tests.ts), auditný záznam bez obsahu
+//     cieľmi VRÁTANE XML/UBL e-faktúr (20261127100000: výmaz vrátane kópií, žiadny
+//     zákaznícky retenčný archív), auditný záznam bez obsahu
+//   - od 20261127100000 iba esblu_company_termination_execute s potvrdením oprávnenej
+//     osoby (p_ack); pôvodný 4-arg commit odmietne (podrobnosti: p15-termination-isolation-tests.ts)
 //   - opakované / dvojité spustenie → already_completed
 //   - rollback migrácie + re-apply
 //
@@ -92,9 +94,9 @@ const who = (k: keyof typeof U & keyof typeof S): Who => ({ role: "authenticated
 const owner = who("owner"), admin = who("admin"), employee = who("employee"), ownerB = who("ownerB");
 
 await db.exec(`
-  insert into auth.users (id, email, email_confirmed_at) values
-    ('${U.owner}', 'owner@example.invalid', now()), ('${U.admin}', 'admin@example.invalid', now()),
-    ('${U.employee}', 'emp@example.invalid', now()), ('${U.ownerB}', 'ownerb@example.invalid', now());
+  insert into auth.users (id, email, email_confirmed_at, last_sign_in_at) values
+    ('${U.owner}', 'owner@example.invalid', now(), now()), ('${U.admin}', 'admin@example.invalid', now(), now()),
+    ('${U.employee}', 'emp@example.invalid', now(), now()), ('${U.ownerB}', 'ownerb@example.invalid', now(), now());
   insert into auth.sessions (id, user_id) values ('${S.owner}', '${U.owner}'), ('${S.admin}', '${U.admin}'), ('${S.employee}', '${U.employee}'), ('${S.ownerB}', '${U.ownerB}');
   set session_replication_role = replica;
   insert into public.companies (id, owner_id, name) values ('${C.a}', '${U.owner}', 'Firma A s.r.o.'), ('${C.b}', '${U.ownerB}', 'Firma B s.r.o.');
@@ -121,7 +123,10 @@ async function svcExec(sql: string): Promise<string> {
     await db.exec("rollback");
   }
 }
-const commitSql = "select public.esblu_company_termination_commit($1, $2, false, $3) r";
+// 20261127100000: výmaz iba s potvrdením oprávnenej osoby (verzia + SHA-256 textu, čas, čerstvé prihlásenie).
+const commitSql = "select public.esblu_company_termination_execute($1, $2, false, $3, $4::jsonb) r";
+const legacyCommitSql = "select public.esblu_company_termination_commit($1, $2, false, $3) r";
+const ack = () => JSON.stringify({ authority_confirmed: true, text_version: "sk-2026-11-23", text_sha256: "1".repeat(64), confirmed_at: new Date().toISOString() });
 const count = async (sql: string) => Number((await su<{ n: number }>(sql))[0].n);
 const companyRows = async (c: string) => ({
   invoices: await count(`select count(*)::int n from public.invoices where company_id = '${c}'`),
@@ -210,15 +215,15 @@ await check("bežné zrušenie firmy je naďalej blokované (ESBLU_ACCOUNTING_RE
 
 await check("owner-only + klient nemá EXECUTE; bez potvrdenia exportu stop", async () => {
   for (const u of [U.admin, U.employee, U.ownerB]) {
-    const o = await run(svc, commitSql, [u, C.a, "exported"]);
+    const o = await run(svc, commitSql, [u, C.a, "exported", ack()]);
     assert.match(o.message, /ESBLU_NOT_ACTIVE_OWNER/, u);
   }
   for (const w of [owner, admin, employee, { role: "anon" } as Who]) {
-    const o = await run(w, commitSql, [U.owner, C.a, "exported"]);
+    const o = await run(w, commitSql, [U.owner, C.a, "exported", ack()]);
     assert.equal(o.layer, "privilege", w.role);
   }
   for (const mode of [null, "", "maybe"]) {
-    const o = await run(svc, commitSql, [U.owner, C.a, mode]);
+    const o = await run(svc, commitSql, [U.owner, C.a, mode, ack()]);
     assert.match(o.message, /ESBLU_TERMINATION_EXPORT_NOT_CONFIRMED/);
   }
   assert.deepEqual(await companyRows(C.a), before.a);
@@ -230,7 +235,7 @@ await check("registrácia u eFaktúra providera → stop pred výmazom", async (
   await su(`set session_replication_role = origin`);
   const enrolled = await count(`select count(*)::int n from public.einvoice_organizations where company_id = '${C.a}' and provider_org_id is not null`);
   if (enrolled > 0) {
-    const o = await run(svc, commitSql, [U.owner, C.a, "exported"]);
+    const o = await run(svc, commitSql, [U.owner, C.a, "exported", ack()]);
     assert.match(o.message, /ESBLU_EINVOICE_PROVIDER_ENROLLED/);
     await su(`delete from public.einvoice_organizations where company_id = '${C.a}'`);
   }
@@ -250,7 +255,7 @@ async function beginRun(user: string, company: string, files: number, parts: num
   return String(o.data[0].id);
 }
 const expectBlocked = async (label: string) => {
-  const o = await run(svc, commitSql, [U.owner, C.a, "exported"]);
+  const o = await run(svc, commitSql, [U.owner, C.a, "exported", ack()]);
   assert.match(o.message, /ESBLU_TERMINATION_EXPORT_NOT_VERIFIED/, label);
   assert.deepEqual(await companyRows(C.a), before.a, `${label}: nič sa nezmazalo`);
   assert.equal(await count(`select count(*)::int n from public.company_terminations where status in ('executing','completed')`), 0, label);
@@ -310,10 +315,18 @@ await check("BLOCK: dokončený export starší ako 24 h sa nepočíta", async (
   await expectBlocked("starý export");
 });
 
-await check("waived: výslovné vzdanie sa exportu nevyžaduje dôkaz (samostatný režim; potvrdenie rieši route)", async () => {
-  const o = await run(svc, commitSql, [U.owner, C.a, "waived"]); // rollback — iba overenie, že brána neblokuje
-  assert.equal(o.layer, "ok", o.message);
-  assert.deepEqual(await companyRows(C.a), before.a, "rollback");
+await check("waived: firma s finalizovanými dokladmi / e-faktúrami sa bez exportu nevymaže (O3 v DB)", async () => {
+  const o = await run(svc, commitSql, [U.owner, C.a, "waived", ack()]);
+  assert.match(o.message, /ESBLU_TERMINATION_EXPORT_REQUIRED/);
+  assert.deepEqual(await companyRows(C.a), before.a);
+});
+
+await check("pôvodný 4-arg commit (bez potvrdenia oprávnenej osoby) odmietne — fail closed", async () => {
+  for (const mode of ["exported", "waived"]) {
+    const o = await run(svc, legacyCommitSql, [U.owner, C.a, mode]);
+    assert.match(o.message, /ESBLU_TERMINATION_ACK_REQUIRED/, mode);
+  }
+  assert.deepEqual(await companyRows(C.a), before.a);
 });
 
 await check("zlyhanie uprostred procesu → rollback celku, žiadny partial delete ani auditný executing záznam", async () => {
@@ -323,7 +336,7 @@ await check("zlyhanie uprostred procesu → rollback celku, žiadny partial dele
     create trigger test_fail_company_delete before delete on public.companies for each row execute function public.test_fail_company_delete();
   `);
   await beginRun(U.owner, C.a, 0, 0); // overený export (inak by brána zastavila skôr)
-  const o = await run(svc, commitSql, [U.owner, C.a, "exported"]);
+  const o = await run(svc, commitSql, [U.owner, C.a, "exported", ack()]);
   assert.match(o.message, /TEST_INJECTED_FAILURE/);
   await db.exec(`drop trigger test_fail_company_delete on public.companies; drop function public.test_fail_company_delete();`);
   assert.deepEqual(await companyRows(C.a), before.a, "nič sa nezmazalo");
@@ -352,20 +365,20 @@ await check("PASS: owner dokončí export (data + všetky dávky) → completed 
 
 let terminationId = "";
 await check("retry po zlyhaní → úspech: firma A celá preč, Storage ciele v cleanup jobe, auditný záznam bez obsahu", async () => {
-  const o = await run(svc, commitSql, [U.owner, C.a, "exported"], true);
+  const o = await run(svc, commitSql, [U.owner, C.a, "exported", ack()], true);
   assert.equal(o.layer, "ok", o.message);
   const r = o.data[0].r as Record<string, unknown>;
   terminationId = String(r.termination_id);
   assert.ok(r.job_id);
   const targets = (r.storage_targets as Array<{ bucket: string; path: string }>).map((t) => `${t.bucket}:${t.path}`).sort();
-  // 20261121100000: XML e-faktúr sa NEMAŽE (retenčný archív esblu_retention); maže sa iba neúčtovný dokument.
-  assert.deepEqual(targets, [`ai-inbox-documents:${C.a}/doc-a.pdf`]);
-  assert.ok(r.archive_id, "doklady sú v retenčnom archíve");
-  assert.equal(r.termination_mode, "archive");
+  // 20261127100000: žiadny zákaznícky archív — XML/UBL e-faktúr sa mažú spolu s dokumentmi (výmaz vrátane kópií).
+  assert.deepEqual(targets, [`ai-inbox-documents:${C.a}/doc-a.pdf`, `einvoice-documents:${C.a}/in-a.xml`, `einvoice-documents:${C.a}/out-a.xml`]);
+  assert.equal(r.archive_id, undefined, "žiadny retenčný archív");
+  assert.equal(r.termination_mode, "customer_delete");
   assert.deepEqual(await companyRows(C.a), { invoices: 0, items: 0, einvoice: 0, documents: 0, vehicles: 0, company: 0 });
   const job = await su<{ storage_status: string; storage_target_count: number }>(`select storage_status, storage_target_count from public.account_deletion_cleanup_jobs where id = '${r.job_id}'`);
   assert.equal(job[0].storage_status, "pending");
-  assert.equal(job[0].storage_target_count, 1);
+  assert.equal(job[0].storage_target_count, 3);
   const t = await su<{ status: string; export_mode: string; deleted_counts: Record<string, number>; storage_target_count: number }>(
     `select status, export_mode, deleted_counts, storage_target_count from public.company_terminations where id = '${terminationId}'`);
   assert.equal(t[0].status, "completed");
@@ -375,7 +388,7 @@ await check("retry po zlyhaní → úspech: firma A celá preč, Storage ciele v
   assert.equal(await count(`select count(*)::int n from public.company_export_runs where id = '${exportRunId}'`), 1, "dôkaz exportu prežije výmaz firmy");
   assert.equal(t[0].deleted_counts.invoices, 2);
   assert.equal(t[0].deleted_counts.einvoice_events, 1);
-  assert.equal(t[0].storage_target_count, 1);
+  assert.equal(t[0].storage_target_count, 3);
   const cols = (await su<{ c: string }>(`select column_name c from information_schema.columns where table_schema = 'public' and table_name = 'company_terminations'`)).map((x) => x.c);
   for (const bad of ["email", "name", "legal_name", "path", "storage_targets"]) assert.ok(!cols.includes(bad), bad);
   assert.equal(await count(`select count(*)::int n from public.company_terminations where status = 'executing'`), 0);
@@ -388,15 +401,23 @@ await check("izolácia: firma B nedotknutá a jej finalizované doklady ostávaj
 });
 
 await check("dvojité / opakované spustenie → already_completed, nič ďalšie sa nezmaže", async () => {
-  const o = await run(svc, commitSql, [U.owner, C.a, "exported"], true);
+  const o = await run(svc, commitSql, [U.owner, C.a, "exported", ack()], true);
   assert.equal(o.layer, "ok", o.message);
   const r = o.data[0].r as Record<string, unknown>;
   assert.equal(r.already_completed, true);
   assert.equal(r.termination_id, terminationId);
   assert.deepEqual(await companyRows(C.b), before.b);
   assert.equal(await count(`select count(*)::int n from public.company_terminations where status = 'completed'`), 1);
-  const other = await run(svc, commitSql, [U.ownerB, C.a, "exported"]);
+  const other = await run(svc, commitSql, [U.ownerB, C.a, "exported", ack()]);
   assert.match(other.message, /ESBLU_NOT_ACTIVE_OWNER/, "cudzí používateľ nedostane výsledok");
+});
+
+await check("dôkaz výmazu súborov: storage_purged_at až po dokončení cleanup jobu", async () => {
+  const t0 = await su<{ storage_purged_at: string | null; cleanup_job_id: string }>(`select storage_purged_at, cleanup_job_id from public.company_terminations where id = '${terminationId}'`);
+  assert.equal(t0[0].storage_purged_at, null, "súbory ešte nie sú zmazané");
+  await su(`update public.account_deletion_cleanup_jobs set storage_status = 'done' where id = '${t0[0].cleanup_job_id}'`);
+  const t1 = await su<{ storage_purged_at: string | null }>(`select storage_purged_at from public.company_terminations where id = '${terminationId}'`);
+  assert.ok(t1[0].storage_purged_at, "čas výmazu súborov zaznamenaný");
 });
 
 await check("auditný záznam: klient nečíta ani nezapisuje", async () => {
@@ -426,6 +447,18 @@ await check("rollback 20261113110000 (dôkazy ostávajú) + re-apply idempotentn
   await db.exec(read(f));
   await db.exec(read(f));
   assert.equal((await su("select 1 from pg_trigger where tgname = 'esblu_company_termination_export_gate'")).length, 1);
+});
+
+await check("rollback 20261127100000 (audit ostáva) + re-apply idempotentné → opäť fail closed", async () => {
+  await db.exec(read("supabase/rollback/20261127100000_company_termination_customer_delete_rollback.sql"));
+  assert.equal((await su("select 1 from pg_proc where proname = 'esblu_company_termination_execute'")).length, 0);
+  assert.equal(await count(`select count(*)::int n from public.company_terminations where id = '${terminationId}' and termination_mode = 'customer_delete'`), 1, "audit ostáva");
+  const f = "supabase/migrations/20261127100000_company_termination_customer_delete.sql";
+  await db.exec(read(f));
+  await db.exec(read(f));
+  const o = await run(svc, legacyCommitSql, [U.ownerB, C.b, "exported"]);
+  assert.match(o.message, /ESBLU_TERMINATION_ACK_REQUIRED/);
+  assert.deepEqual(await companyRows(C.b), before.b);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

@@ -3,6 +3,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { hasEntitlement, parseCompanyEntitlements } from "@/lib/entitlements";
 import { loadAccessFlags } from "./access.ts";
+import { visibleToCompany } from "../visibility.ts";
 import { getEinvoiceProvider } from "../provider/index.ts";
 import { loadEinvoiceReadiness } from "../readiness-server.ts";
 import { inboundCategory, outboundCategory } from "../ops/categories.ts";
@@ -74,9 +75,7 @@ export type AccessResult =
  * R3 (P1-4): doklad adresovaný inému účastníkovi (RECIPIENT_MISMATCH) sa firme nikdy nevracia — filter v kóde
  * funguje aj bez migrácie 20261125100000 (tá to vynúti aj v RLS pre Data API).
  */
-export function visibleToCompany(row: { last_error_code?: string | null }): boolean {
-  return row.last_error_code !== "RECIPIENT_MISMATCH";
-}
+export { visibleToCompany };
 
 export async function loadAccessResult(db: SupabaseClient, env: Record<string, string | undefined>, sleep?: (ms: number) => Promise<void>): Promise<AccessResult> {
   const configured = providerConfigured(env);
@@ -298,7 +297,7 @@ export async function loadInvoiceEinvoiceSummary(
   }
   const { data: rows, error: inErr } = await db.from("einvoice_inbound").select(INBOUND_COLS).eq("invoice_id", invoiceId).returns<InboundRowLite[]>();
   if (inErr) return { ok: false, status: 500, code: "QUERY_FAILED" };
-  const row = [...(rows ?? [])].sort((a, b) => a.received_at.localeCompare(b.received_at))[0];
+  const row = [...(rows ?? [])].filter(visibleToCompany).sort((a, b) => a.received_at.localeCompare(b.received_at))[0];
   if (!row) return { ok: true, data: { kind: "none", access: acc.access } };
   return inboundDetail(db, row, requesterId, acc.access);
 }

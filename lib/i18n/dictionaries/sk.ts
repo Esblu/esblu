@@ -1043,6 +1043,7 @@ const sk = {
       exported: "Export som stiahol/stiahla a prevzal/a.",
       waived: "Export nepotrebujem — žiadam výmaz bez exportu.",
       acknowledge: "Rozumiem, že výmaz je nevratný a zahŕňa aj účtovné doklady a e-faktúry. Esblu nie je zákonný archív; za uchovávanie dokladov podľa zákona zodpovedá firma.",
+      authority: "Vyhlasujem, že som oprávnený/á konať za túto firmu (štatutár alebo osoba s plnomocenstvom) a rozhodujem o vrátení a výmaze jej údajov vrátane kópií.",
       forfeit: "Rozumiem, že zostávajúce zaplatené obdobie predplatného prepadá bez nároku na vrátenie.",
       confirmPhrase: "Na potvrdenie napíšte {{phrase}}",
       submit: "Ukončiť firmu a vymazať údaje",
@@ -1396,7 +1397,11 @@ const sk = {
         "Zrušenie účtu sa nepodarilo úplne overiť. Kontaktuj podporu.",
       einvoiceDeregistrationPending: "Prebieha ukončenie registrácie firmy u poskytovateľa e-faktúr (eFaktura.sk). Odosielanie e-faktúr je už zastavené. Skúste ukončenie firmy znova o niekoľko minút. Nič sa nezmazalo.",
       einvoiceDeregistrationFailed: "Registráciu firmy u poskytovateľa e-faktúr sa nepodarilo automaticky ukončiť. Kontaktujte nás na info@esblu.com. Nič sa nezmazalo.",
-      terminationExportNotVerified: "Ukončenie firmy v režime „exportované“ vyžaduje kompletný export údajov vytvorený v Esblu za posledných 24 hodín. Najprv spustite export, alebo zvoľte výslovné ukončenie bez exportu. Nič sa nezmazalo.",
+      terminationExportNotVerified: "Ukončenie firmy v režime „exportované“ vyžaduje kompletný export údajov vytvorený v Esblu za posledných 24 hodín. Najprv spustite export. Nič sa nezmazalo.",
+      terminationExportStale: "Údaje firmy sa po poslednom exporte zmenili. Stiahnite nový export, aby obsahoval aktuálny stav. Nič sa nezmazalo.",
+      terminationExportRequired: "Firma má finalizované doklady alebo e-faktúry — pred výmazom je potrebný kompletný export údajov. Nič sa nezmazalo.",
+      terminationAckRequired: "Potvrďte, že ste oprávnený/á konať za firmu, a skúste to znova. Nič sa nezmazalo.",
+      terminationReauthRequired: "Z bezpečnostných dôvodov sa odhláste a znova prihláste (posledné prihlásenie je staršie ako 30 minút), potom ukončenie zopakujte. Nič sa nezmazalo.",
       companyHasAccountingRecords:
         "Firma má vystavené alebo prijaté účtovné doklady (faktúry, e-faktúry). Pred zrušením si ich exportuj (Odovzdanie účtovníkovi) a kontaktuj podporu — doklady sa nemažú automaticky.",
       companyDeletionFailedRetry:
