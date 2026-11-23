@@ -80,6 +80,19 @@ export function createSupabaseInboundStore(admin: SupabaseClient = getSupabaseAd
       });
       return r.result;
     },
+    async recordInboundScan(i) {
+      await rpc<unknown>("esblu_einvoice_org_record_inbound_scan", {
+        p_provider: i.provider,
+        p_environment: i.environment,
+        p_provider_org_id: i.providerOrgId,
+        p_complete: i.complete,
+        p_code: i.code,
+      });
+    },
+    async inboundScanOrder(provider, environment) {
+      const r = await rpc<string[] | null>("esblu_einvoice_inbound_scan_order", { p_provider: provider, p_environment: environment });
+      return Array.isArray(r) ? r.filter((x): x is string => typeof x === "string") : [];
+    },
     async quarantineAcked(inboundId) {
       await rpc<unknown>("esblu_einvoice_inbound_quarantine_acked", { p_inbound_id: inboundId });
     },

@@ -343,6 +343,21 @@ await check("P1-4 stránkovanie GET /received (R1 overené): default offset, lim
   assert.equal(parseInboundPaginationMode("page"), "offset", "page/per_page poskytovateľ ignoruje");
 });
 
+await check("P1-4 explicitný offset (prekryv kotvy): offset má prednosť pred page; záporný/neplatný → 0; kill-switch none + offset > 0 → bez volania", async () => {
+  const route = () => fake([(r) => is("GET", "/v1/agent/peppol/received")(r) ? { json: { data: [], meta: { limit: 100, offset: 99, has_more: false } } } : undefined]);
+  let f = route();
+  await provider(f.impl).listUnacknowledgedInboundPage!(ctx, { limit: 100, page: 5, offset: 99 });
+  assert.equal(f.calls[0].url.searchParams.get("offset"), "99");
+  assert.equal(f.calls[0].url.searchParams.get("limit"), "100");
+  f = route();
+  await provider(f.impl).listUnacknowledgedInboundPage!(ctx, { limit: 100, offset: -5 });
+  assert.equal(f.calls[0].url.searchParams.get("offset"), "0");
+  f = route();
+  const p = new EfakturaSkProvider({ apiKey: FAKE_KEY, environment: "sandbox", fetchImpl: f.impl, receivedPagination: "none" });
+  const empty = await p.listUnacknowledgedInboundPage!(ctx, { limit: 100, offset: 99 });
+  assert.deepEqual([empty.items, f.calls.length], [[], 0]);
+});
+
 await check("getInboundDocument: surové XML bajty, Accept XML, limit veľkosti", async () => {
   const xml = new TextEncoder().encode("<?xml version=\"1.0\"?><Invoice/>");
   let big = false;

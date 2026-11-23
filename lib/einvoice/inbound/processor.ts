@@ -318,16 +318,30 @@ export async function runInboundProcessBatch(deps: InboundDeps, options: { batch
   return { claimed: rows.length, results };
 }
 
+export type SyncStopCode =
+  | "PAGINATION_LIMIT"
+  | "PAGINATION_IGNORED"
+  | "SCAN_SHIFTED"
+  | "SCAN_INCOMPLETE"
+  | "REQUEST_BUDGET"
+  | "ANCHOR_UNAVAILABLE"
+  | "LIST_FAILED";
+
 export type SyncReport = {
   organizations: number;
   listed: number;
   registered: number;
   errors: { code: string }[];
-  /** P1-4: počet načítaných stránok, už známe doklady, overené nápovedy z udalostí, dôvody zastavenia stránkovania. */
+  /** P1-4: požiadavky na zoznam, už známe doklady, overené nápovedy z udalostí, dôvody zastavenia stránkovania. */
   pages?: number;
   alreadyKnown?: number;
   hintsRegistered?: number;
-  stopped?: { code: "PAGINATION_LIMIT" | "PAGINATION_IGNORED" }[];
+  stopped?: { code: SyncStopCode }[];
+  /** P1-4: počet prechodov od začiatku (reštart po posune zoznamu), úplné / neúplné / preskočené organizácie. */
+  passes?: number;
+  orgsComplete?: number;
+  orgsIncomplete?: number;
+  orgsSkipped?: number;
 };
 
 export type SyncOptions = {
@@ -335,14 +349,37 @@ export type SyncOptions = {
   hints?: Record<string, string[]>;
   maxPages?: number;
   pageSize?: number;
+  /** Strop požiadaviek na zoznam za beh (všetky organizácie spolu). */
+  requestBudget?: number;
+  /** Strop prechodov od začiatku na organizáciu (reštart po zistenom posune). */
+  maxPasses?: number;
 };
 
-/** P1-4: strop stránok na organizáciu a beh (100 × 10 = 1 000 dokladov) — ochrana pred zahltením. */
+/** P1-4: strop stránok na prechod a organizáciu (100 × 10 = 1 000 dokladov). */
 export const INBOUND_SYNC_MAX_PAGES = 10;
+/**
+ * P1-4: strop požiadaviek na zoznam za jeden beh pre všetky organizácie. Partnerský kľúč má podľa dokumentácie
+ * poskytovateľa ≥ 100 req/min a zdieľa ho aj odosielanie a feed → zoznam si berie najviac 30 za beh.
+ */
+export const INBOUND_SYNC_REQUEST_BUDGET = 30;
+/** P1-4: najviac 3 prechody od začiatku na organizáciu (reštart po posune zoznamu). */
+export const INBOUND_SYNC_MAX_PASSES = 3;
 
 /**
- * Zoznam nepotvrdených dokladov u poskytovateľa → registrácia (idempotentná
- * podľa ID poskytovateľa). Firma = mapovanie organizácie v DB.
+ * Zoznam nepotvrdených dokladov u poskytovateľa → registrácia (idempotentná podľa ID poskytovateľa).
+ * Firma = mapovanie organizácie v DB.
+ *
+ * P1-4 — skenovanie meniaceho sa zoznamu (limit + offset, najnovšie prvé, R1):
+ *   - každá ďalšia stránka sa prekrýva s predchádzajúcou o 1 doklad (KOTVA = posledný doklad predchádzajúcej
+ *     stránky; offset_k = offset_{k-1} + limit − 1);
+ *   - kotva nájdená na indexe j ≥ 0 → medzi stránkami NIČ nechýba (nové doklady pribúdajú iba navrchu, ich
+ *     opakovanie je neškodné — registrácia je idempotentná);
+ *   - kotva chýba → pred ňou ubudli doklady (súbežný ACK iným procesom) a mohli by sa preskočiť → celý prechod
+ *     sa ZAČNE ZNOVA od offsetu 0 (SCAN_SHIFTED), najviac INBOUND_SYNC_MAX_PASSES-krát;
+ *   - prechod je ÚPLNÝ, iba ak dobehne na koniec zoznamu (meta.has_more = false, inak menej riadkov ako limit)
+ *     bez chýbajúcej kotvy. Úplný prechod garantuje, že každý doklad nepotvrdený počas celého prechodu bol videný.
+ *   - strop stránok / požiadaviek / prechodov → organizácia je NEÚPLNÁ (kód + záznam stavu skenu pre monitoring);
+ *     ďalší beh začne znova od začiatku. Nič sa nepreskočí potichu.
  */
 export async function syncInboundList(
   deps: InboundDeps,
@@ -350,10 +387,16 @@ export async function syncInboundList(
   source: "webhook" | "poll",
   options: SyncOptions = {}
 ): Promise<SyncReport> {
-  const report: SyncReport = { organizations: organizations.length, listed: 0, registered: 0, errors: [], pages: 0, alreadyKnown: 0, hintsRegistered: 0, stopped: [] };
+  const report: SyncReport = {
+    organizations: organizations.length, listed: 0, registered: 0, errors: [], pages: 0, alreadyKnown: 0, hintsRegistered: 0,
+    stopped: [], passes: 0, orgsComplete: 0, orgsIncomplete: 0, orgsSkipped: 0,
+  };
   const paginated = (deps.provider.inboundPagination ?? "none") !== "none";
-  const pageSize = paginated ? Math.max(1, Math.min(100, Math.floor(options.pageSize ?? 100))) : 50;
+  const pageSize = paginated ? Math.max(2, Math.min(100, Math.floor(options.pageSize ?? 100))) : 50;
   const maxPages = paginated ? Math.max(1, Math.min(INBOUND_SYNC_MAX_PAGES, Math.floor(options.maxPages ?? INBOUND_SYNC_MAX_PAGES))) : 1;
+  const maxPasses = paginated ? Math.max(1, Math.min(5, Math.floor(options.maxPasses ?? INBOUND_SYNC_MAX_PASSES))) : 1;
+  let budget = Math.max(1, Math.floor(options.requestBudget ?? INBOUND_SYNC_REQUEST_BUDGET));
+  const stop = (code: SyncStopCode) => report.stopped!.push({ code });
 
   const registerOne = async (providerOrgId: string, providerReceivedId: string, meta: RegisterMeta): Promise<boolean | null> => {
     try {
@@ -365,6 +408,16 @@ export async function syncInboundList(
       report.errors.push({ code: error instanceof InboundStoreError ? error.code : errorCode(error) });
       return null;
     }
+  };
+
+  const fetchPage = async (ctx: ProviderContext, offset: number, page: number) => {
+    budget--;
+    report.pages = (report.pages ?? 0) + 1;
+    if (deps.provider.listUnacknowledgedInboundPage) {
+      return await deps.provider.listUnacknowledgedInboundPage(ctx, { limit: pageSize, page, offset });
+    }
+    const items = await deps.provider.listUnacknowledgedInbound(ctx, { limit: pageSize, page, offset });
+    return { items, hasMore: null, rawCount: items.length };
   };
 
   for (const org of organizations) {
@@ -382,59 +435,180 @@ export async function syncInboundList(
       if ((await registerOne(org.providerOrgId, id, EMPTY_META)) === true) report.hintsRegistered = (report.hintsRegistered ?? 0) + 1;
     }
 
-    // 2) Zoznam nepotvrdených dokladov po stránkach (iba v overenom režime; inak jedna stránka ako doteraz).
+    // 2) Sken zoznamu nepotvrdených dokladov (kotva + reštart, ohraničené požiadavky).
+    if (budget <= 0) {
+      report.orgsSkipped = (report.orgsSkipped ?? 0) + 1;
+      continue;
+    }
     const seen = new Set<string>();
-    for (let page = 1; page <= maxPages; page++) {
-      let list: InboundSummary[];
-      let hasMore: boolean | null = null;
-      let rawCount: number;
-      try {
-        if (deps.provider.listUnacknowledgedInboundPage) {
-          const p = await deps.provider.listUnacknowledgedInboundPage(ctx, { limit: pageSize, page });
-          list = p.items;
-          hasMore = p.hasMore;
-          rawCount = p.rawCount;
-        } else {
-          list = await deps.provider.listUnacknowledgedInbound(ctx, { limit: pageSize, page });
-          rawCount = list.length;
+    let complete = false;
+    let orgCode: SyncStopCode | null = null;
+    passes: for (let pass = 1; pass <= maxPasses; pass++) {
+      report.passes = (report.passes ?? 0) + 1;
+      let offset = 0;
+      let anchor: string | null = null;
+      let prevIds: string[] | null = null;
+      for (let page = 1; page <= maxPages; page++) {
+        if (budget <= 0) { orgCode = "REQUEST_BUDGET"; break passes; }
+        let p: { items: InboundSummary[]; hasMore: boolean | null; rawCount: number };
+        try {
+          p = await fetchPage(ctx, offset, page);
+        } catch (error) {
+          report.errors.push({ code: `${INBOUND_ERROR.PROVIDER_FETCH_FAILED}:${errorCode(error)}` });
+          orgCode = "LIST_FAILED";
+          break passes;
         }
-      } catch (error) {
-        report.errors.push({ code: `${INBOUND_ERROR.PROVIDER_FETCH_FAILED}:${errorCode(error)}` });
-        break;
+        const ids = p.items.map((i) => i.providerReceivedId);
+        report.listed += p.items.length;
+        if (page > 1) {
+          if (prevIds && ids.length > 0 && ids.length === prevIds.length && ids.every((id, i) => id === prevIds![i])) {
+            orgCode = "PAGINATION_IGNORED"; // poskytovateľ offset ignoruje → žiadny nekonečný cyklus
+            break passes;
+          }
+          if (anchor === null) { orgCode = "ANCHOR_UNAVAILABLE"; break passes; }
+          if (!ids.includes(anchor)) {
+            // pred kotvou ubudli doklady → riziko preskočenia → nový prechod od začiatku
+            orgCode = "SCAN_SHIFTED";
+            continue passes;
+          }
+        }
+        for (const item of p.items) {
+          if (!SAFE_ID.test(item.providerReceivedId) || seen.has(item.providerReceivedId)) continue;
+          seen.add(item.providerReceivedId);
+          await registerOne(org.providerOrgId, item.providerReceivedId, {
+            sender_participant_id: item.senderParticipantId,
+            sender_ico: item.senderIco,
+            document_number: item.documentNumber,
+            document_type: item.documentType,
+            is_test: item.isTest,
+          });
+        }
+        // Koniec zoznamu: meta.has_more = false (autoritatívne), inak menej riadkov ako limit (pred filtrom).
+        if (p.hasMore === false || (p.hasMore === null && p.rawCount < pageSize)) {
+          complete = true;
+          orgCode = null;
+          break passes;
+        }
+        if (!paginated) { orgCode = "SCAN_INCOMPLETE"; break passes; } // kill-switch: iba prvá stránka
+        if (page === maxPages) { orgCode = "PAGINATION_LIMIT"; break passes; }
+        anchor = ids.length > 0 ? ids[ids.length - 1] : null;
+        prevIds = ids;
+        offset = offset + pageSize - 1; // 1 doklad prekryv = kotva
       }
-      report.pages = (report.pages ?? 0) + 1;
-      report.listed += list.length;
-      const fresh = list.filter((item) => SAFE_ID.test(item.providerReceivedId) && !seen.has(item.providerReceivedId));
-      if (page > 1 && list.length > 0 && fresh.length === 0) {
-        // Poskytovateľ parameter stránkovania ignoruje (vracia tú istú stránku) → stop, žiadny nekonečný cyklus.
-        report.stopped!.push({ code: "PAGINATION_IGNORED" });
-        break;
+    }
+    if (!complete && orgCode === null) orgCode = "SCAN_INCOMPLETE";
+    if (complete) report.orgsComplete = (report.orgsComplete ?? 0) + 1;
+    else {
+      report.orgsIncomplete = (report.orgsIncomplete ?? 0) + 1;
+      stop(orgCode === "SCAN_SHIFTED" ? "SCAN_SHIFTED" : orgCode!);
+    }
+    if (deps.store.recordInboundScan) {
+      try {
+        await deps.store.recordInboundScan({ provider: deps.provider.name, environment: deps.environment, providerOrgId: org.providerOrgId, complete, code: complete ? null : orgCode });
+      } catch {
+        // bez migrácie 20261125100000 / zlyhanie zápisu: výsledok ostáva v reporte cronu
       }
-      for (const item of fresh) {
-        seen.add(item.providerReceivedId);
-        await registerOne(org.providerOrgId, item.providerReceivedId, {
-          sender_participant_id: item.senderParticipantId,
-          sender_ico: item.senderIco,
-          document_number: item.documentNumber,
-          document_type: item.documentType,
-          is_test: item.isTest,
-        });
-      }
-      // Koniec: meta.has_more = false (autoritatívne), inak menej riadkov ako limit (pred filtrom).
-      if (hasMore === false || (hasMore === null && rawCount < pageSize)) break;
-      if (page === maxPages && paginated) report.stopped!.push({ code: "PAGINATION_LIMIT" });
     }
   }
+  if ((report.orgsSkipped ?? 0) > 0) stop("REQUEST_BUDGET");
   return report;
 }
 
 // Nápoveda nesie iba ID — metadáta doplní spracovanie z overeného XML (nič sa nepreberá z tela udalosti).
 const EMPTY_META: RegisterMeta = {};
 
-/** Poll fallback: všetky pripravené organizácie → zoznam → spracovanie. Webhook nie je jediný mechanizmus. */
-export async function runInboundPoll(deps: InboundDeps, options: { batchSize?: number; leaseSeconds?: number } = {}) {
-  const orgs = (await deps.store.listOrganizations(deps.provider.name, deps.environment)).filter((o) => o.providerOrgId);
-  const sync = await syncInboundList(deps, orgs.map((o) => ({ providerOrgId: o.providerOrgId! })), "poll");
-  const processed = await runInboundProcessBatch(deps, options);
+/**
+ * P1-4 priepustnosť: spracovanie s rozpočtom namiesto jednej dávky 5 dokladov.
+ *   - najviac `maxItems` dokladov za beh (každý = stiahnutie XML + ACK = 2 požiadavky na poskytovateľa),
+ *   - termín `deadlineMs` (rezerva pod maxDuration cronu 60 s),
+ *   - claim po malých dávkach (FOR UPDATE SKIP LOCKED + lease) → súbežné webhooky / behy sa neprekrývajú,
+ *   - výpadok poskytovateľa: 429 hneď zastaví beh; `maxConsecutiveProviderFailures` po sebe idúcich chýb
+ *     poskytovateľa (sieť / 5xx / timeout) zastaví beh (doklady čakajú na retry s backoffom, nič sa nestratí).
+ */
+export const INBOUND_POLL_MAX_ITEMS = 30;
+export const INBOUND_POLL_RUN_MS = 40_000;
+
+export type InboundBudgetReport = InboundReport & { stoppedCode: "MAX_ITEMS" | "DEADLINE" | "PROVIDER_RATE_LIMITED" | "PROVIDER_DEGRADED" | null };
+
+export async function runInboundProcessBudget(
+  deps: InboundDeps,
+  options: { maxItems?: number; deadlineMs?: number; batchSize?: number; leaseSeconds?: number; maxConsecutiveProviderFailures?: number } = {}
+): Promise<InboundBudgetReport> {
+  const maxItems = Math.max(1, Math.floor(options.maxItems ?? INBOUND_POLL_MAX_ITEMS));
+  const deadline = options.deadlineMs ?? Date.now() + INBOUND_POLL_RUN_MS;
+  const batchSize = Math.max(1, Math.min(25, Math.floor(options.batchSize ?? 10)));
+  const maxFails = Math.max(1, Math.floor(options.maxConsecutiveProviderFailures ?? 3));
+  // Sledovanie chýb poskytovateľa (výsledok kroku nesie iba interný kód, napr. PROVIDER_FETCH_FAILED / ACK_FAILED).
+  let lastProviderError: unknown = null;
+  const provider = new Proxy(deps.provider, {
+    get(target, key, receiver) {
+      const value = Reflect.get(target, key, receiver);
+      if (typeof value !== "function") return value;
+      if (key !== "getInboundDocument" && key !== "acknowledgeInbound") return value.bind(target);
+      return async (...args: unknown[]) => {
+        try {
+          return await value.apply(target, args);
+        } catch (error) {
+          lastProviderError = error;
+          throw error;
+        }
+      };
+    },
+  });
+  const tracked: InboundDeps = { ...deps, provider };
+  const results: InboundItemResult[] = [];
+  let claimed = 0;
+  let consecutive = 0;
+  let stoppedCode: InboundBudgetReport["stoppedCode"] = null;
+  outer: while (true) {
+    if (claimed >= maxItems) { stoppedCode = "MAX_ITEMS"; break; }
+    if (Date.now() >= deadline) { stoppedCode = "DEADLINE"; break; }
+    const rows = await deps.store.claim(Math.min(batchSize, maxItems - claimed), options.leaseSeconds ?? 120);
+    if (rows.length === 0) break;
+    claimed += rows.length;
+    for (const row of rows) {
+      // Neodštartované riadky po termíne / výpadku: lease vyprší a ďalší beh ich vezme (žiadna strata).
+      if (Date.now() >= deadline) { stoppedCode = "DEADLINE"; break outer; }
+      lastProviderError = null;
+      let r: InboundItemResult;
+      try {
+        r = await processInboundRow(tracked, row);
+      } catch (error) {
+        r = { inboundId: row.id, from: row.processing_status, to: row.processing_status, code: error instanceof InboundStoreError ? error.code : errorCode(error) };
+      }
+      results.push(r);
+      const err = lastProviderError;
+      if (err !== null && errorCode(err) === "EINVOICE_PROVIDER_RATE_LIMITED") { stoppedCode = "PROVIDER_RATE_LIMITED"; break outer; }
+      consecutive = err !== null && isRetryableProviderError(err) ? consecutive + 1 : 0;
+      if (consecutive >= maxFails) { stoppedCode = "PROVIDER_DEGRADED"; break outer; }
+    }
+  }
+  return { claimed, results, stoppedCode };
+}
+
+/** Poll fallback: pripravené organizácie (najdlhšie bez úplného skenu prvé) → sken zoznamu → spracovanie s rozpočtom. */
+export async function runInboundPoll(
+  deps: InboundDeps,
+  options: { batchSize?: number; leaseSeconds?: number; maxItems?: number; deadlineMs?: number; requestBudget?: number; pageSize?: number } = {}
+) {
+  let orgs = (await deps.store.listOrganizations(deps.provider.name, deps.environment)).filter((o) => o.providerOrgId);
+  if (deps.store.inboundScanOrder) {
+    try {
+      const order = await deps.store.inboundScanOrder(deps.provider.name, deps.environment);
+      const rank = new Map(order.map((id, i) => [id, i]));
+      orgs = [...orgs].sort((a, b) => (rank.get(a.providerOrgId!) ?? -1) - (rank.get(b.providerOrgId!) ?? -1));
+    } catch {
+      // bez migrácie: pôvodné poradie
+    }
+  }
+  const sync = await syncInboundList(deps, orgs.map((o) => ({ providerOrgId: o.providerOrgId! })), "poll", {
+    requestBudget: options.requestBudget,
+    pageSize: options.pageSize,
+  });
+  const processed = await runInboundProcessBudget(deps, {
+    maxItems: options.maxItems ?? options.batchSize ?? INBOUND_POLL_MAX_ITEMS,
+    deadlineMs: options.deadlineMs,
+    leaseSeconds: options.leaseSeconds,
+  });
   return { sync, processed };
 }

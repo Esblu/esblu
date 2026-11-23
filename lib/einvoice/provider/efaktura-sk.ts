@@ -700,7 +700,7 @@ export class EfakturaSkProvider implements EinvoiceProvider, EinvoiceOnboardingP
     return this.#receivedPagination;
   }
 
-  async listUnacknowledgedInbound(ctx: ProviderContext, options?: { limit?: number; page?: number }): Promise<InboundSummary[]> {
+  async listUnacknowledgedInbound(ctx: ProviderContext, options?: { limit?: number; page?: number; offset?: number }): Promise<InboundSummary[]> {
     return (await this.listUnacknowledgedInboundPage(ctx, options)).items;
   }
 
@@ -709,12 +709,14 @@ export class EfakturaSkProvider implements EinvoiceProvider, EinvoiceOnboardingP
    * zoradenie od najnovších, odpoveď `{ data: [...], meta: { limit, offset, has_more } }`.
    * Režim "none" (kill-switch) → iba prvá stránka, ďalšie = prázdne bez volania.
    */
-  async listUnacknowledgedInboundPage(ctx: ProviderContext, options?: { limit?: number; page?: number }): Promise<InboundPage> {
+  async listUnacknowledgedInboundPage(ctx: ProviderContext, options?: { limit?: number; page?: number; offset?: number }): Promise<InboundPage> {
     const limit = Math.max(1, Math.min(RECEIVED_PAGE_MAX, Math.floor(options?.limit ?? 50)));
     const page = Math.max(1, Math.floor(options?.page ?? 1));
-    if (page > 1 && this.#receivedPagination === "none") return { items: [], hasMore: false, rawCount: 0 };
+    // Explicitný offset (sken s kotvou, P1-4) má prednosť pred `page`.
+    const offset = options?.offset !== undefined ? Math.max(0, Math.floor(options.offset)) : (page - 1) * limit;
+    if (offset > 0 && this.#receivedPagination === "none") return { items: [], hasMore: false, rawCount: 0 };
     const query: Record<string, string> = { acknowledged: "false", limit: String(limit) };
-    if (this.#receivedPagination === "offset") query.offset = String((page - 1) * limit);
+    if (this.#receivedPagination === "offset") query.offset = String(offset);
     const res = await this.#request({
       method: "GET",
       path: "/v1/agent/peppol/received",

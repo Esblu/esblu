@@ -433,6 +433,14 @@
       "service_role": "SELECT,INSERT,UPDATE,DELETE",
       "note": "finance-gated SELECT; immutable XML metadata"
     },
+    "einvoice_inbound_scan_state": {
+      "domain": "einvoice",
+      "access": "D",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT",
+      "note": "stav skenu prijatych dokladov - iba service, zapis cez RPC"
+    },
     "einvoice_ops_audit": {
       "domain": "einvoice",
       "access": "D",
@@ -1015,11 +1023,13 @@
     "esblu_einvoice_health(integer,integer)",
     "esblu_einvoice_inbound_quarantine(uuid,text)",
     "esblu_einvoice_inbound_quarantine_acked(uuid)",
+    "esblu_einvoice_inbound_scan_order(text,text)",
     "esblu_einvoice_inbound_create_draft(uuid,jsonb)",
     "esblu_einvoice_inbound_register(text,text,text,text,text,jsonb)",
     "esblu_einvoice_inbound_transition(uuid,text,text,text,text,jsonb)",
     "esblu_einvoice_operator_begin(uuid,text,uuid,text,text,integer,integer)",
     "esblu_einvoice_org_apply_enroll(text,text,text,text,text,text,text)",
+    "esblu_einvoice_org_record_inbound_scan(text,text,text,boolean,text)",
     "esblu_einvoice_org_participant_event(text,text,text,text,text,text,timestamp with time zone)",
     "esblu_einvoice_org_upsert_provisioned(uuid,text,text,text,text,text,text,text,boolean,jsonb)",
     "esblu_einvoice_outbound_record_transport(uuid,text,text,text)",

@@ -152,11 +152,11 @@ export interface EinvoiceProvider {
    * Nepotvrdené prijaté doklady. `page` (1 = prvá) sa prevedie na `offset` IBA ak `inboundPagination` = "offset";
    * pri "none" vráti poskytovateľ pre page > 1 prázdny zoznam.
    */
-  listUnacknowledgedInbound(ctx: ProviderContext, options?: { limit?: number; page?: number }): Promise<InboundSummary[]>;
+  listUnacknowledgedInbound(ctx: ProviderContext, options?: { limit?: number; page?: number; offset?: number }): Promise<InboundSummary[]>;
   /** P1-4: režim stránkovania GET /received (overený v sandboxe, R1). Chýba = "none" (iba prvá stránka). */
   readonly inboundPagination?: InboundPaginationMode;
   /** P1-4: stránka vrátane `meta.has_more`. Voliteľné — bez nej sa koniec určí podľa počtu riadkov. */
-  listUnacknowledgedInboundPage?(ctx: ProviderContext, options?: { limit?: number; page?: number }): Promise<InboundPage>;
+  listUnacknowledgedInboundPage?(ctx: ProviderContext, options?: { limit?: number; page?: number; offset?: number }): Promise<InboundPage>;
   getInboundDocument(ctx: ProviderContext, providerReceivedId: string): Promise<InboundDocument>;
   acknowledgeInbound(ctx: ProviderContext, providerReceivedId: string): Promise<void>;
 }

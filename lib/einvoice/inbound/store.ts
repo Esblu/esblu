@@ -89,6 +89,13 @@ export interface InboundStore {
    * Stav `failed` sa nemení. Voliteľné: bez migrácie/metódy sa karanténa preskočí.
    */
   quarantine?(inboundId: string, reason: string): Promise<"quarantined" | "already" | "not_eligible">;
+  /**
+   * P1-4: výsledok skenu zoznamu organizácie (migrácia 20261125100000). complete = úplný prechod do konca zoznamu;
+   * inak kód (PAGINATION_LIMIT, SCAN_SHIFTED, …). Voliteľné — bez migrácie sa nezapisuje (výsledok je v reporte cronu).
+   */
+  recordInboundScan?(input: { provider: string; environment: EinvoiceEnvironment; providerOrgId: string; complete: boolean; code: string | null }): Promise<void>;
+  /** P1-4: poradie organizácií pre poll (najdlhšie bez úplného skenu prvé). Voliteľné — bez migrácie pôvodné poradie. */
+  inboundScanOrder?(provider: string, environment: EinvoiceEnvironment): Promise<string[]>;
   /** P1-4: zaznamená úspešné ACK karantenovaného dokladu u poskytovateľa (iba keď je ACK povolené). */
   quarantineAcked?(inboundId: string): Promise<void>;
   register(input: { provider: string; environment: EinvoiceEnvironment; providerOrgId: string; providerReceivedId: string; source: "webhook" | "poll"; meta: RegisterMeta }): Promise<{ inboundId: string; created: boolean; processingStatus: string; companyId: string }>;

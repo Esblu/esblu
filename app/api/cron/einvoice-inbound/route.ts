@@ -46,7 +46,9 @@ export async function GET(req: Request) {
       // P1-4 (R2): ACK karantenovaných dokladov iba po výslovnom zapnutí vlastníkom.
       quarantineAck: process.env.ESBLU_EINVOICE_INBOUND_QUARANTINE_ACK?.trim() === "enabled",
     },
-    { batchSize: 5, leaseSeconds: 120 }
+    // P1-4: rozpočet namiesto 5 dokladov — max. 30 dokladov / 40 s a max. 20 požiadaviek na zoznam za beh
+    // (partnerský kľúč ≥ 100 req/min zdieľa aj odosielanie a feed); 429 / výpadok poskytovateľa beh zastaví.
+    { maxItems: 30, leaseSeconds: 120, deadlineMs: Date.now() + 40_000, requestBudget: 20 }
   );
   return Response.json(
     {
@@ -61,10 +63,18 @@ export async function GET(req: Request) {
         already_known: result.sync.alreadyKnown ?? 0,
         hints_registered: result.sync.hintsRegistered ?? 0,
         stopped: (result.sync.stopped ?? []).map((s) => s.code),
+        passes: result.sync.passes ?? 0,
+        orgs_complete: result.sync.orgsComplete ?? 0,
+        orgs_incomplete: result.sync.orgsIncomplete ?? 0,
+        orgs_skipped: result.sync.orgsSkipped ?? 0,
         pagination: runtimeConfig.provider.inboundPagination ?? "none",
         errors: result.sync.errors.map((e) => e.code),
       },
-      processed: { claimed: result.processed.claimed, results: result.processed.results.map((r) => ({ id: r.inboundId, from: r.from, to: r.to, code: r.code })) },
+      processed: {
+        claimed: result.processed.claimed,
+        stopped: result.processed.stoppedCode,
+        results: result.processed.results.map((r) => ({ id: r.inboundId, from: r.from, to: r.to, code: r.code })),
+      },
     },
     { headers: { "Cache-Control": "no-store" } }
   );

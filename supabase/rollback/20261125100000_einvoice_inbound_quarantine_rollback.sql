@@ -79,4 +79,8 @@ alter table public.einvoice_inbound
   drop column if exists provider_acknowledged_at,
   drop column if exists quarantine_reason,
   drop column if exists quarantined_at;
+-- P1-4 stav skenu (prevádzkové údaje; doklady sa nemenia)
+drop function if exists public.esblu_einvoice_org_record_inbound_scan(text, text, text, boolean, text);
+drop function if exists public.esblu_einvoice_inbound_scan_order(text, text);
+drop table if exists public.einvoice_inbound_scan_state;
 commit;

@@ -16,7 +16,8 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { handleEinvoiceWebhook, classifyWebhookEvent, WEBHOOK_MAX_BODY_BYTES, inboundHintId } from "../lib/einvoice/inbound/webhook.ts";
-import { processInboundRow, runInboundPoll, runInboundProcessBatch, syncInboundList } from "../lib/einvoice/inbound/processor.ts";
+import { processInboundRow, runInboundPoll, runInboundProcessBatch, runInboundProcessBudget, syncInboundList } from "../lib/einvoice/inbound/processor.ts";
+import { evaluateAlerts, sanitizeHealth } from "../lib/einvoice/ops/alerts.ts";
 import { InboundStoreError, inboundXmlPath, type InboundRow, type InboundStore } from "../lib/einvoice/inbound/store.ts";
 import { mapInboundDraft, verifyInboundRecipient } from "../lib/einvoice/inbound/mapping.ts";
 import { wrapSbdh } from "./einvoice-partner-fake-sandbox.ts";
@@ -115,6 +116,8 @@ for (const migration of [
   "20261002140000_einvoice_operations.sql",
   "20261002150000_einvoice_rollout_gate.sql",
   "20261003100000_einvoice_inbound_draft_totals.sql",
+  // P1-4: health.scan_overdue filtruje aktívny príjem (reception_status z partner onboardingu)
+  "20261005100000_einvoice_partner_onboarding.sql",
   "20261008100000_invoicing_sk_compliance.sql",
   "20261008100001_invoicing_sk_trigger_fn_revoke.sql",
   "20261008100002_finance_helpers_bind_active_company.sql",
@@ -221,6 +224,13 @@ const inboundStore: InboundStore = {
   async quarantine(id, reason) {
     const [r] = await svc<{ j: { result: "quarantined" | "already" | "not_eligible" } }>("select public.esblu_einvoice_inbound_quarantine($1, $2) j", [id, reason]);
     return r.j.result;
+  },
+  async recordInboundScan(input) {
+    await svc("select public.esblu_einvoice_org_record_inbound_scan($1, $2, $3, $4, $5)", [input.provider, input.environment, input.providerOrgId, input.complete, input.code]);
+  },
+  async inboundScanOrder(provider, environment) {
+    const [r] = await svc<{ a: string[] }>("select public.esblu_einvoice_inbound_scan_order($1, $2) a", [provider, environment]);
+    return r?.a ?? [];
   },
   async quarantineAcked(id) {
     await svc("select public.esblu_einvoice_inbound_quarantine_acked($1)", [id]);
@@ -340,30 +350,37 @@ class FakeProvider implements EinvoiceProvider {
   beforeList: ((page: number) => void) | null = null;
   /** P1-4 audit: ACK prebehne u poskytovateľa, ale odpoveď sa stratí (timeout). */
   ackLostResponse = 0;
-  async listUnacknowledgedInbound(c: ProviderContext, options?: { limit?: number; page?: number }) {
+  /** P1-4: chyby zoznamu / stiahnutia / ACK vo fronte (výpadky, 429). */
+  listErrors: EinvoiceProviderError[] = [];
+  fetchErrors: EinvoiceProviderError[] = [];
+  async listUnacknowledgedInbound(c: ProviderContext, options?: { limit?: number; page?: number; offset?: number }) {
     this.calls.push("list");
     this.ctx(c);
     this.beforeList?.(Math.max(1, options?.page ?? 1));
     if (this.listError) throw this.listError;
+    const le = this.listErrors.shift();
+    if (le) throw le;
     let all = [...this.docs.values()].filter((d) => d.org === c.providerOrgId && !d.acknowledged).map((d) => d.summary);
     if (this.newestFirst) all = all.reverse();
     if (this.inboundPagination === "none") return all; // pôvodné správanie testov (bez limitu)
     const limit = options?.limit ?? 50;
-    const page = this.ignorePage ? 1 : Math.max(1, options?.page ?? 1);
-    return all.slice((page - 1) * limit, page * limit);
+    const offset = this.ignorePage ? 0 : Math.max(0, options?.offset ?? (Math.max(1, options?.page ?? 1) - 1) * limit);
+    return all.slice(offset, offset + limit);
   }
-  async listUnacknowledgedInboundPage(c: ProviderContext, options?: { limit?: number; page?: number }) {
+  async listUnacknowledgedInboundPage(c: ProviderContext, options?: { limit?: number; page?: number; offset?: number }) {
     const items = await this.listUnacknowledgedInbound(c, options);
     const total = [...this.docs.values()].filter((d) => d.org === c.providerOrgId && !d.acknowledged).length;
     const limit = options?.limit ?? 50;
-    const page = this.ignorePage ? 1 : Math.max(1, options?.page ?? 1);
-    const hasMore = this.hasMoreMode === "absent" ? null : this.hasMoreMode === "lying-false" ? false : page * limit < total;
+    const offset = this.ignorePage ? 0 : Math.max(0, options?.offset ?? (Math.max(1, options?.page ?? 1) - 1) * limit);
+    const hasMore = this.hasMoreMode === "absent" ? null : this.hasMoreMode === "lying-false" ? false : offset + limit < total;
     return { items, hasMore, rawCount: items.length };
   }
   async getInboundDocument(c: ProviderContext, id: string) {
     this.calls.push(`fetch:${id}`);
     this.ctx(c);
     if (this.fetchError) throw this.fetchError;
+    const fe = this.fetchErrors.shift();
+    if (fe) throw fe;
     const d = this.docs.get(id);
     if (!d || d.org !== c.providerOrgId) throw new EinvoiceProviderError("EINVOICE_PROVIDER_NOT_FOUND");
     return { providerReceivedId: id, xml: new Uint8Array(d.xml), pdf: null };
@@ -1650,10 +1667,14 @@ await check("P1-4 migrácia: rollback vráti politiky a health (health beží), 
   assert.equal(h.j.inbound.quarantined, undefined);
   const fns = (await sql<{ n: number }>("select count(*)::int n from pg_proc where proname like 'esblu_einvoice_inbound_quarantine%'")).rows[0].n;
   assert.equal(fns, 0);
+  assert.equal(h.j.inbound.scan_overdue, undefined);
+  const scan = (await sql<{ n: number }>("select (select count(*) from pg_class where relname = 'einvoice_inbound_scan_state')::int + (select count(*) from pg_proc where proname in ('esblu_einvoice_org_record_inbound_scan', 'esblu_einvoice_inbound_scan_order'))::int n")).rows[0].n;
+  assert.equal(scan, 0, "rollback odstráni stav skenu");
   await locked(() => db.exec(read("supabase/migrations/20261125100000_einvoice_inbound_quarantine.sql")));
   await locked(() => db.exec(read("supabase/migrations/20261125100000_einvoice_inbound_quarantine.sql")));
   const [h2] = await svc<{ j: { inbound: Record<string, number> } }>("select public.esblu_einvoice_health(60, 60) j", []);
   assert.equal(typeof h2.j.inbound.quarantined, "number");
+  assert.equal(typeof h2.j.inbound.scan_overdue, "number");
 });
 
 // =============================================================================
@@ -1735,31 +1756,40 @@ await check("P1-4 AUDIT S2: nové doklady prídu medzi stránkami (najnovšie pr
   pagingReset();
 });
 
-await check("P1-4 AUDIT S3: súbežný ACK iným procesom medzi stránkami POSUNIE offset → časť dokladov sa v tom behu PRESKOČÍ; ďalší beh ich prevezme (nie trvalo)", async () => {
+await check("P1-4 AUDIT S3 (opravené): súbežný ACK iným procesom medzi stránkami → kotva chýba → nový prechod od začiatku → v TOM ISTOM behu sa nič nepreskočí", async () => {
   pagingMode();
-  for (let i = 0; i < 150; i++) provider.add("org-b", `rcv-s3-${String(i).padStart(3, "0")}`, xmlB(`FA-S3-${i}`));
-  let acked = 0;
-  provider.beforeList = (page) => {
-    if (page === 2 && acked === 0) {
-      // iný proces (webhook / feed) práve potvrdil 30 najnovších dokladov z 1. stránky
-      for (const d of [...provider.docs.values()].filter((x) => x.org === "org-b" && !x.acknowledged && x.summary.providerReceivedId.startsWith("rcv-s3-")).reverse().slice(0, 30)) {
-        d.acknowledged = true;
-        acked++;
+  try {
+    for (let i = 0; i < 150; i++) provider.add("org-b", `rcv-s3-${String(i).padStart(3, "0")}`, xmlB(`FA-S3-${i}`));
+    let acked = 0;
+    provider.beforeList = (page) => {
+      if (page === 2 && acked === 0) {
+        // iný proces (webhook / feed) práve potvrdil 30 najnovších dokladov z 1. stránky
+        for (const d of [...provider.docs.values()].filter((x) => x.org === "org-b" && !x.acknowledged && x.summary.providerReceivedId.startsWith("rcv-s3-")).reverse().slice(0, 30)) {
+          d.acknowledged = true;
+          acked++;
+        }
       }
-    }
-  };
-  await syncB({ pageSize: 50 });
-  const run1 = await countLike("rcv-s3-");
-  assert.ok(run1 < 150, `v 1. behu chýba ${150 - run1} dokladov (dôkaz posunu offsetu)`);
-  provider.beforeList = null;
-  await syncB({ pageSize: 50 });
-  // potvrdené iným procesom (30) Esblu nezaregistruje — u poskytovateľa už nie sú nepotvrdené (v reálnom svete ich spracoval ten proces)
-  const unackedAtProvider = [...provider.docs.values()].filter((x) => x.org === "org-b" && !x.acknowledged && x.summary.providerReceivedId.startsWith("rcv-s3-")).map((x) => x.summary.providerReceivedId);
-  const registered = new Set((await sql<{ p: string }>("select provider_received_id p from public.einvoice_inbound where provider_received_id like 'rcv-s3-%'")).rows.map((r) => r.p));
-  assert.deepEqual(unackedAtProvider.filter((id) => !registered.has(id)), [], "po 2. behu je zaregistrovaný každý doklad, ktorý je u poskytovateľa stále nepotvrdený");
-  await drainAll();
-  assert.equal(await dupRows("rcv-s3-"), 0);
-  pagingReset();
+    };
+    const r1 = await syncB({ pageSize: 50 });
+    const unackedAtProvider = [...provider.docs.values()].filter((x) => x.org === "org-b" && !x.acknowledged && x.summary.providerReceivedId.startsWith("rcv-s3-")).map((x) => x.summary.providerReceivedId);
+    const registered = new Set((await sql<{ p: string }>("select provider_received_id p from public.einvoice_inbound where provider_received_id like 'rcv-s3-%'")).rows.map((r) => r.p));
+    assert.deepEqual(unackedAtProvider.filter((id) => !registered.has(id)), [], "už v 1. behu je zaregistrovaný každý doklad, ktorý je u poskytovateľa nepotvrdený");
+    assert.equal(r1.passes, 2, "1 reštart po posune");
+    assert.equal(r1.orgsComplete, 1);
+    assert.deepEqual(r1.stopped, []);
+    const [st] = (await svc<{ c: string | null; k: string | null; n: number }>("select last_complete_at::text c, last_code k, incomplete_streak n from public.einvoice_inbound_scan_state where provider_org_id = 'org-b'", []));
+    assert.ok(st.c, "úplný sken zaznamenaný");
+    assert.equal(st.k, null);
+    assert.equal(Number(st.n), 0);
+    provider.beforeList = null;
+    const r2 = await syncB({ pageSize: 50 });
+    assert.equal(r2.registered, 0, "2. beh nič nové");
+    await drainAll();
+    assert.equal(await dupRows("rcv-s3-"), 0);
+  } finally {
+    provider.beforeList = null;
+    pagingReset();
+  }
 });
 
 await check("P1-4 AUDIT S4: zlyhaný ACK (503), timeout so stratenou odpoveďou a opakovaný beh → jeden koncept, ACK sa dokončí, žiadna duplicita", async () => {
@@ -1795,7 +1825,8 @@ await check("P1-4 AUDIT S5: has_more + strop strán pri meniacom sa zozname; trv
   assert.deepEqual(r1.stopped, [{ code: "PAGINATION_LIMIT" }]);
   assert.equal(r1.pages, 3);
   await drainAll();
-  assert.equal(await countLike("rcv-s5x-", "processing_status = 'failed'"), 60, "60 chybných spracovaných (failed, nepotvrdené)");
+  // prekryv 1 doklad (kotva): 20 + 19 + 19 = 58 jedinečných
+  assert.equal(await countLike("rcv-s5x-", "processing_status = 'failed'"), 58, "58 chybných spracovaných (failed, nepotvrdené)");
   assert.equal(await countLike("rcv-s5v-"), 0, "staršie platné za stropom ešte nevidno");
   const r2 = await syncB({ pageSize: 20, maxPages: 3 });
   assert.equal(await countLike("rcv-s5v-"), 0, "bez ACK karantény chybné na vrchu trvalo zaberajú strop → staršie by čakali");
@@ -1812,6 +1843,289 @@ await check("P1-4 AUDIT S5: has_more + strop strán pri meniacom sa zozname; trv
   await drainAll();
   assert.equal(await dupRows("rcv-s5"), 0);
   pagingReset();
+});
+
+
+// =============================================================================
+// P1-4 spoľahlivosť: kotva + reštart, rozpočty, výpadky, záťaž, monitoring (offline)
+// =============================================================================
+const unackedAt = (org: string, prefix: string) =>
+  [...provider.docs.values()].filter((x) => x.org === org && !x.acknowledged && x.summary.providerReceivedId.startsWith(prefix)).map((x) => x.summary.providerReceivedId);
+const registeredSet = async (prefix: string) =>
+  new Set((await sql<{ p: string }>(`select provider_received_id p from public.einvoice_inbound where provider_received_id like '${prefix}%'`)).rows.map((r) => r.p));
+const scanState = async (org: string) =>
+  (await svc<{ c: string | null; k: string | null; n: number }>("select last_complete_at::text c, last_code k, incomplete_streak n from public.einvoice_inbound_scan_state where provider_org_id = $1", [org]))[0];
+const health = async () => (await svc<{ j: Record<string, unknown> }>("select public.esblu_einvoice_health(60, 60) j", []))[0].j;
+const providerRequests = (from: number) => provider.calls.slice(from).filter((c) => c === "list" || c.startsWith("fetch:") || c.startsWith("ack:")).length;
+await check("P1-4 R1: trvalé zmeny zoznamu (ACK pred kotvou na KAŽDEJ stránke) → max. 3 prechody, SCAN_SHIFTED, stav skenu neúplný + health/alert; pokojný beh → úplný", async () => {
+  pagingMode();
+  try {
+    await inboundStore.recordInboundScan!({ provider: "mock", environment: "sandbox", providerOrgId: "org-b", complete: true, code: null });
+    for (let i = 0; i < 90; i++) provider.add("org-b", `rcv-r1-${String(i).padStart(3, "0")}`, xmlB(`FA-R1-${i}`));
+    provider.beforeList = (page) => {
+      if (page >= 2) {
+        // pred každou ďalšou stránkou iný proces potvrdí 2 najnovšie → kotva sa vždy posunie
+        for (const d of [...provider.docs.values()].filter((x) => x.org === "org-b" && !x.acknowledged && x.summary.providerReceivedId.startsWith("rcv-r1-")).reverse().slice(0, 2)) d.acknowledged = true;
+      }
+    };
+    const calls0 = provider.calls.length;
+    const r = await syncB({ pageSize: 20 });
+    assert.equal(r.passes, 3, "strop prechodov");
+    assert.deepEqual(r.stopped, [{ code: "SCAN_SHIFTED" }]);
+    assert.equal(r.orgsIncomplete, 1);
+    assert.ok(provider.calls.slice(calls0).filter((c) => c === "list").length <= 6, "ohraničené požiadavky (3 prechody × 2 stránky)");
+    let st = await scanState("org-b");
+    assert.equal(st.k, "SCAN_SHIFTED");
+    assert.equal(Number(st.n), 1);
+    const h = sanitizeHealth(await health());
+    assert.ok(h.inbound.scan_incomplete >= 1);
+    assert.ok(evaluateAlerts(h).some((a) => a.code === "INBOUND_SCAN_INCOMPLETE" && a.severity === "warning"));
+    // opakovaný neúplný beh zvyšuje počítadlo
+    await syncB({ pageSize: 20 });
+    st = await scanState("org-b");
+    assert.equal(Number(st.n), 2);
+    // pokoj → úplný sken, počítadlo 0, nič nepotvrdené nechýba
+    provider.beforeList = null;
+    const ok = await syncB({ pageSize: 20 });
+    assert.equal(ok.orgsComplete, 1);
+    st = await scanState("org-b");
+    assert.equal(st.k, null);
+    assert.equal(Number(st.n), 0);
+    const reg = await registeredSet("rcv-r1-");
+    assert.deepEqual(unackedAt("org-b", "rcv-r1-").filter((id) => !reg.has(id)), []);
+    assert.equal(sanitizeHealth(await health()).inbound.scan_incomplete, 0);
+    await drainAll();
+    assert.equal(await dupRows("rcv-r1-"), 0);
+  } finally {
+    pagingReset();
+  }
+});
+
+await check("P1-4 R2: rozpočet požiadaviek na zoznam → REQUEST_BUDGET, vynechaná organizácia ide v ďalšom behu PRVÁ (rotácia podľa stavu skenu)", async () => {
+  pagingMode();
+  try {
+    for (let i = 0; i < 30; i++) provider.add("org-a", `rcv-r2a-${String(i).padStart(3, "0")}`, inboundXml(`FA-R2A-${i}`));
+    for (let i = 0; i < 30; i++) provider.add("org-b", `rcv-r2b-${String(i).padStart(3, "0")}`, xmlB(`FA-R2B-${i}`));
+    // org-b má čerstvý úplný sken, org-a najstarší → poradie org-a, org-b
+    await inboundStore.recordInboundScan!({ provider: "mock", environment: "sandbox", providerOrgId: "org-a", complete: true, code: null });
+    await svc("update public.einvoice_inbound_scan_state set last_complete_at = now() - interval '1 day' where provider_org_id = 'org-a'", []);
+    let order = await inboundStore.inboundScanOrder!("mock", "sandbox");
+    assert.deepEqual(order.slice(0, 2), ["org-a", "org-b"]);
+    const calls0 = provider.calls.length;
+    const r = await runInboundPoll(deps(), { pageSize: 10, requestBudget: 3, maxItems: 1 });
+    assert.equal(provider.calls.slice(calls0).filter((c) => c === "list").length, 3, "presne rozpočet");
+    assert.ok(r.sync.stopped?.some((x) => x.code === "REQUEST_BUDGET"));
+    assert.equal(r.sync.orgsSkipped, 1, "org-b vynechaná");
+    assert.equal(await countLike("rcv-r2b-"), 0);
+    // org-a neúplná (rozpočet) — last_complete_at ostáva starý (1 deň) → v ďalšom behu znova prvá
+    order = await inboundStore.inboundScanOrder!("mock", "sandbox");
+    assert.equal(order[0], "org-a", "org-a stále bez úplného skenu (1 deň) → prvá");
+    // ďalší beh s dostatočným rozpočtom: obe úplné
+    const r2 = await runInboundPoll(deps(), { pageSize: 100, requestBudget: 20, maxItems: 1 });
+    assert.equal(r2.sync.orgsComplete, 2);
+    order = await inboundStore.inboundScanOrder!("mock", "sandbox");
+    assert.equal(order.length >= 2, true);
+    const reg = await registeredSet("rcv-r2");
+    assert.deepEqual([...unackedAt("org-a", "rcv-r2a-"), ...unackedAt("org-b", "rcv-r2b-")].filter((id) => !reg.has(id)), []);
+    // izolácia: doklady org-a patria firme A, org-b firme B
+    const wrong = (await sql<{ n: number }>(`select count(*)::int n from public.einvoice_inbound where (provider_received_id like 'rcv-r2a-%' and company_id <> '${CA}') or (provider_received_id like 'rcv-r2b-%' and company_id <> '${CB}')`)).rows[0].n;
+    assert.equal(wrong, 0, "izolácia firiem");
+    await drainAll();
+    assert.equal(await countLike("rcv-r2", "processing_status = 'acknowledged'"), 60);
+  } finally {
+    pagingReset();
+  }
+});
+
+for (const n of [100, 250]) {
+  await check(`P1-4 L${n}: ${n} nepotvrdených, poll s predvoleným rozpočtom (30 dokladov, 20 požiadaviek na zoznam) → všetko spracované, ohraničené požiadavky, opakované behy idempotentné`, async () => {
+    pagingMode();
+    try {
+      const prefix = `rcv-l${n}-`;
+      await drainAll(); // zvyšky z predchádzajúcich testov mimo merania
+      for (let i = 0; i < n; i++) provider.add("org-b", `${prefix}${String(i).padStart(4, "0")}`, xmlB(`FA-L${n}-${i}`));
+      let runs = 0;
+      let maxReq = 0;
+      let maxClaimed = 0;
+      for (; runs < 100; runs++) {
+        const before = provider.calls.length;
+        const r = await runInboundPoll(deps(), { maxItems: 30, requestBudget: 20 });
+        maxReq = Math.max(maxReq, providerRequests(before));
+        maxClaimed = Math.max(maxClaimed, r.processed.claimed);
+        if ((await countLike(prefix, "processing_status = 'acknowledged'")) === n) { runs++; break; }
+      }
+      assert.equal(await countLike(prefix, "processing_status = 'acknowledged'"), n);
+      assert.ok(maxClaimed <= 30, `max. 30 dokladov za beh (${maxClaimed})`);
+      assert.ok(maxReq <= 20 + 2 * 30, `max. požiadaviek na poskytovateľa za beh ${maxReq} ≤ 80`);
+      assert.equal(runs, Math.ceil(n / 30), `behov: ${runs} (10 min cron → ${n} dokladov za ~${runs * 10} min)`);
+      assert.equal(await draftsFor(prefix), n);
+      assert.equal(await dupRows(prefix), 0);
+      const acks = provider.calls.filter((c) => c.startsWith(`ack:${prefix}`));
+      assert.equal(new Set(acks).size, n);
+      assert.equal(acks.length, n, "každý ACK presne raz");
+      // opakované behy po dokončení: nič nové, žiadny ďalší ACK ani koncept
+      for (let i = 0; i < 2; i++) await runInboundPoll(deps(), { maxItems: 30, requestBudget: 20 });
+      assert.equal(provider.calls.filter((c) => c.startsWith(`ack:${prefix}`)).length, n);
+      assert.equal(await draftsFor(prefix), n);
+    } finally {
+      pagingReset();
+    }
+  });
+}
+
+await check("P1-4 L1100: > 1 000 nepotvrdených → prvý sken narazí na strop (991 = 100 + 9 × 99) a hlási PAGINATION_LIMIT; po spracovaní ďalšie behy prevezmú zvyšok; XML nemenné, žiadna duplicita", async () => {
+  pagingMode();
+  try {
+    const prefix = "rcv-lk-";
+    const n = 1100;
+    for (let i = 0; i < n; i++) provider.add("org-b", `${prefix}${String(i).padStart(4, "0")}`, xmlB(`FA-LK-${i}`));
+    const r1 = await syncB({ pageSize: 100 });
+    assert.deepEqual(r1.stopped, [{ code: "PAGINATION_LIMIT" }]);
+    assert.equal(r1.pages, 10);
+    assert.equal(await countLike(prefix), 991, "100 + 9 × 99 (prekryv kotvy)");
+    assert.equal((await scanState("org-b")).k, "PAGINATION_LIMIT");
+    let runs = 0;
+    for (; runs < 100; runs++) {
+      await runInboundPoll(deps(), { maxItems: 250, requestBudget: 20 });
+      if ((await countLike(prefix, "processing_status = 'acknowledged'")) === n) { runs++; break; }
+    }
+    assert.equal(await countLike(prefix, "processing_status = 'acknowledged'"), n, "všetkých 1 100 potvrdených");
+    assert.equal(await draftsFor(prefix), n);
+    assert.equal(await dupRows(prefix), 0);
+    assert.equal((await scanState("org-b")).k, null, "po vyprázdnení úplný sken");
+    // nemennosť: SHA-256 uloženého XML = SHA-256 originálu u poskytovateľa
+    const rows = (await sql<{ p: string; h: string }>(`select provider_received_id p, xml_sha256 h from public.einvoice_inbound where provider_received_id like '${prefix}%' order by random() limit 25`)).rows;
+    for (const r of rows) assert.equal(r.h, createHash("sha256").update(provider.docs.get(r.p)!.xml).digest("hex"));
+    const ackCount = provider.calls.filter((c) => c.startsWith(`ack:${prefix}`)).length;
+    assert.equal(ackCount, n, "každý ACK presne raz");
+  } finally {
+    pagingReset();
+  }
+});
+
+await check("P1-4 C1: súbežné webhooky + poll + spracovanie (claim SKIP LOCKED) → každý doklad jeden koncept a jeden ACK", async () => {
+  pagingMode();
+  try {
+    const prefix = "rcv-c1-";
+    for (let i = 0; i < 60; i++) provider.add("org-b", `${prefix}${String(i).padStart(3, "0")}`, xmlB(`FA-C1-${i}`));
+    const before = provider.calls.length;
+    await Promise.all([
+      webhook({ event: "peppol.document.received", organization_id: "org-b", data: { received_id: `${prefix}000` } }, "dlv-c1-1"),
+      webhook({ event: "peppol.document.received", organization_id: "org-b", data: { received_id: `${prefix}001` } }, "dlv-c1-2"),
+      webhook({ event: "peppol.document.received", organization_id: "org-b", data: { received_id: `${prefix}002` } }, "dlv-c1-3"),
+      runInboundPoll(deps(), { maxItems: 30, requestBudget: 20 }),
+      runInboundPoll(deps(), { maxItems: 30, requestBudget: 20 }),
+      runInboundProcessBudget(deps(), { maxItems: 30, batchSize: 5 }),
+    ]);
+    await drainAll();
+    assert.equal(await countLike(prefix, "processing_status = 'acknowledged'"), 60);
+    assert.equal(await draftsFor(prefix), 60);
+    assert.equal(await dupRows(prefix), 0);
+    const acks = provider.calls.slice(before).filter((c) => c.startsWith(`ack:${prefix}`));
+    assert.equal(acks.length, 60, "žiadny dvojitý ACK");
+  } finally {
+    pagingReset();
+  }
+});
+
+await check("P1-4 O1: výpadok poskytovateľa — 429 zastaví beh hneď, 3 × 503 po sebe = PROVIDER_DEGRADED; doklady čakajú (bez straty), po obnove sa dokončia", async () => {
+  pagingMode();
+  try {
+    const prefix = "rcv-o1-";
+    for (let i = 0; i < 20; i++) provider.add("org-b", `${prefix}${String(i).padStart(3, "0")}`, xmlB(`FA-O1-${i}`));
+    await syncB({ pageSize: 50 });
+    provider.fetchErrors = [new EinvoiceProviderError("EINVOICE_PROVIDER_RATE_LIMITED", "429", true)];
+    const c0 = provider.calls.length;
+    const r1 = await runInboundProcessBudget(deps(), { maxItems: 30 });
+    assert.equal(r1.stoppedCode, "PROVIDER_RATE_LIMITED");
+    assert.equal(r1.results.length, 1, "po 429 sa ďalší doklad nespracúva");
+    assert.equal(provider.calls.slice(c0).filter((c) => c.startsWith("fetch:")).length, 1);
+    const u = () => new EinvoiceProviderError("EINVOICE_PROVIDER_UNAVAILABLE", "503", true);
+    provider.fetchErrors = [u(), u(), u(), u(), u()];
+    const r2 = await runInboundProcessBudget(deps(), { maxItems: 30 });
+    assert.equal(r2.stoppedCode, "PROVIDER_DEGRADED");
+    assert.equal(r2.results.length, 3);
+    assert.equal(await countLike(prefix, "processing_status = 'failed'"), 0, "výpadok nie je trvalá chyba");
+    assert.ok((await countLike(prefix, "processing_status = 'received' and last_error_code = 'PROVIDER_FETCH_FAILED' and next_retry_at is not null")) >= 4, "čakajú na retry s backoffom");
+    // výpadok zoznamu: LIST_FAILED, stav skenu neúplný, spracovanie pokračuje
+    provider.listErrors = [u()];
+    const rl = await syncB({ pageSize: 50 });
+    assert.deepEqual(rl.stopped, [{ code: "LIST_FAILED" }]);
+    assert.equal((await scanState("org-b")).k, "LIST_FAILED");
+    // obnova (claimnuté, ale nespracované riadky po zastavení drží lease 120 s → ďalší cron o 10 min ich vezme; tu simulované vypršanie)
+    provider.fetchErrors = [];
+    await sql(`update public.einvoice_inbound set next_retry_at = now(), locked_until = null where provider_received_id like '${prefix}%'`);
+    for (let i = 0; i < 5; i++) await runInboundPoll(deps(), { maxItems: 30, requestBudget: 20 });
+    assert.equal(await countLike(prefix, "processing_status = 'acknowledged'"), 20);
+    assert.equal(await draftsFor(prefix), 20);
+    assert.equal(await dupRows(prefix), 0);
+    assert.equal((await scanState("org-b")).k, null);
+  } finally {
+    provider.fetchErrors = [];
+    provider.listErrors = [];
+    pagingReset();
+  }
+});
+
+await check("P1-4 O2: ACK zlyhá (503 / 429) → bez dvojitého konceptu; ACK až po uložení XML a koncepte; 429 pri ACK zastaví beh", async () => {
+  pagingMode();
+  try {
+    const prefix = "rcv-o2-";
+    for (let i = 0; i < 5; i++) provider.add("org-b", `${prefix}${i}`, xmlB(`FA-O2-${i}`));
+    await syncB({ pageSize: 50 });
+    provider.ackErrors = [new EinvoiceProviderError("EINVOICE_PROVIDER_RATE_LIMITED", "429", true)];
+    const r = await runInboundProcessBudget(deps(), { maxItems: 30 });
+    assert.equal(r.stoppedCode, "PROVIDER_RATE_LIMITED");
+    assert.equal(r.results.length, 1);
+    const pending = (await sql<{ s: string; x: string | null; i: string | null }>(`select processing_status s, xml_sha256 x, invoice_id i from public.einvoice_inbound where provider_received_id like '${prefix}%' and processing_status = 'ack_pending'`)).rows;
+    assert.equal(pending.length, 1);
+    assert.ok(pending[0].x && pending[0].i, "ACK sa skúšal až s uloženým XML a konceptom");
+    await sql(`update public.einvoice_inbound set next_retry_at = now(), locked_until = null where provider_received_id like '${prefix}%'`);
+    await drainAll();
+    assert.equal(await countLike(prefix, "processing_status = 'acknowledged'"), 5);
+    assert.equal(await draftsFor(prefix), 5);
+  } finally {
+    pagingReset();
+  }
+});
+
+await check("P1-4 O3: termín behu (deadline) → beh skončí DEADLINE, neodštartované doklady sa nestratia (lease) a dokončí ich ďalší beh", async () => {
+  pagingMode();
+  try {
+    const prefix = "rcv-o3-";
+    for (let i = 0; i < 6; i++) provider.add("org-b", `${prefix}${i}`, xmlB(`FA-O3-${i}`));
+    await syncB({ pageSize: 50 });
+    const r = await runInboundProcessBudget(deps(), { maxItems: 30, deadlineMs: Date.now() - 1 });
+    assert.equal(r.stoppedCode, "DEADLINE");
+    assert.equal(r.results.length, 0);
+    await drainAll();
+    assert.equal(await countLike(prefix, "processing_status = 'acknowledged'"), 6);
+  } finally {
+    pagingReset();
+  }
+});
+
+await check("P1-4 M1: monitoring — scan_overdue (aktívny príjem bez úplného skenu > 2 h) a backlog_aging (najstarší nespracovaný ≥ 2 h) → kritické alerty", async () => {
+  await sql(`update public.einvoice_organizations set created_at = now() - interval '1 day' where provider_org_id = 'org-b'`);
+  await svc("update public.einvoice_inbound_scan_state set last_complete_at = now() - interval '3 hours' where provider_org_id = 'org-b'", []);
+  let h = sanitizeHealth(await health());
+  assert.ok(h.inbound.scan_overdue >= 1);
+  assert.ok(evaluateAlerts(h).some((a) => a.code === "INBOUND_SCAN_OVERDUE" && a.severity === "critical"));
+  await inboundStore.recordInboundScan!({ provider: "mock", environment: "sandbox", providerOrgId: "org-b", complete: true, code: null });
+  const orgAState = await scanState("org-a");
+  h = sanitizeHealth(await health());
+  assert.equal(h.inbound.scan_overdue, 0, `po úplnom skene žiadna organizácia po termíne (org-a: ${orgAState?.c ? "úplný" : "bez skenu"})`);
+  // backlog aging (čistá funkcia nad health)
+  const aged = sanitizeHealth({ inbound: { oldest_stuck_age_seconds: 7300 } });
+  assert.ok(evaluateAlerts(aged).some((a) => a.code === "INBOUND_BACKLOG_AGING" && a.severity === "critical"));
+  assert.ok(!evaluateAlerts(sanitizeHealth({ inbound: { oldest_stuck_age_seconds: 600 } })).some((a) => a.code === "INBOUND_BACKLOG_AGING"));
+});
+
+await check("P1-4 M2: RPC stavu skenu odmietne neplatný kód; tabuľka bez prístupu pre authenticated", async () => {
+  await assert.rejects(() => inboundStore.recordInboundScan!({ provider: "mock", environment: "sandbox", providerOrgId: "org-b", complete: false, code: "bad code; drop" as never }));
+  const g = (await sql<{ a: boolean; e: boolean }>("select has_table_privilege('authenticated', 'public.einvoice_inbound_scan_state', 'select') a, has_function_privilege('authenticated', 'public.esblu_einvoice_org_record_inbound_scan(text,text,text,boolean,text)', 'execute') e")).rows[0];
+  assert.equal(g.a, false);
+  assert.equal(g.e, false);
 });
 
 console.log(`\neinvoice-inbound: ${passed} passed, ${failed} failed`);

@@ -11,6 +11,10 @@
 -- 4) esblu_einvoice_inbound_quarantine_acked(id): IBA service_role; zaznamená ACK karantény u poskytovateľa
 --    (aplikácia ho volá iba pri ESBLU_EINVOICE_INBOUND_QUARANTINE_ACK=enabled — default vypnuté, R2).
 -- 5) esblu_einvoice_health: + quarantined, quarantined_unacked, recipient_mismatch (alerty v lib/einvoice/ops/alerts.ts).
+-- 6) einvoice_inbound_scan_state: stav skenu zoznamu prijatých dokladov per organizácia poskytovateľa (posledný beh,
+--    posledný ÚPLNÝ sken, kód zastavenia). Iba service_role (SELECT); zápis iba cez SECURITY DEFINER RPC.
+--    esblu_einvoice_org_record_inbound_scan / esblu_einvoice_inbound_scan_order (poradie: najdlhšie bez úplného skenu prvé).
+--    Health: inbound.scan_overdue (aktívny príjem bez úplného skenu > 2 h), inbound.scan_incomplete (posledný sken neúplný).
 -- Rollback: supabase/rollback/20261125100000_einvoice_inbound_quarantine_rollback.sql
 -- =============================================================================
 begin;
@@ -113,6 +117,69 @@ revoke all on function public.esblu_einvoice_inbound_quarantine_acked(uuid) from
 grant execute on function public.esblu_einvoice_inbound_quarantine(uuid, text) to service_role;
 grant execute on function public.esblu_einvoice_inbound_quarantine_acked(uuid) to service_role;
 
+-- 6) Stav skenu prijatých dokladov (P1-4 spoľahlivosť) ------------------------------------------------------
+create table if not exists public.einvoice_inbound_scan_state (
+  provider text not null check (provider ~ '^[a-z0-9_]{2,40}$'),
+  environment text not null check (environment in ('sandbox', 'live')),
+  provider_org_id text not null check (char_length(provider_org_id) between 1 and 200),
+  last_scan_at timestamptz not null default now(),
+  last_complete_at timestamptz,
+  last_code text check (last_code is null or last_code ~ '^[A-Z_]{1,40}$'),
+  incomplete_streak integer not null default 0 check (incomplete_streak >= 0),
+  primary key (provider, environment, provider_org_id)
+);
+alter table public.einvoice_inbound_scan_state enable row level security;
+revoke all on table public.einvoice_inbound_scan_state from public, anon, authenticated;
+grant select on table public.einvoice_inbound_scan_state to service_role;
+
+create or replace function public.esblu_einvoice_org_record_inbound_scan(
+  p_provider text, p_environment text, p_provider_org_id text, p_complete boolean, p_code text)
+returns void
+language plpgsql
+security definer
+set search_path to ''
+as $function$
+begin
+  if p_provider is null or p_environment is null or p_provider_org_id is null or p_complete is null then
+    raise exception 'EINVOICE_SCAN_INVALID' using errcode = '22023';
+  end if;
+  if p_code is not null and p_code !~ '^[A-Z_]{1,40}$' then
+    raise exception 'EINVOICE_SCAN_INVALID' using errcode = '22023';
+  end if;
+  insert into public.einvoice_inbound_scan_state as s
+    (provider, environment, provider_org_id, last_scan_at, last_complete_at, last_code, incomplete_streak)
+  values (p_provider, p_environment, p_provider_org_id, now(),
+          case when p_complete then now() end, case when p_complete then null else p_code end,
+          case when p_complete then 0 else 1 end)
+  on conflict (provider, environment, provider_org_id) do update set
+    last_scan_at = now(),
+    last_complete_at = case when p_complete then now() else s.last_complete_at end,
+    last_code = case when p_complete then null else p_code end,
+    incomplete_streak = case when p_complete then 0 else least(s.incomplete_streak + 1, 1000000) end;
+end;
+$function$;
+
+-- Poradie organizácií pre poll: bez úplného skenu (alebo najstarší úplný sken) prvé → pri rozpočte požiadaviek sa
+-- žiadna organizácia trvalo nevynechá (rotácia).
+create or replace function public.esblu_einvoice_inbound_scan_order(p_provider text, p_environment text)
+returns text[]
+language sql
+stable
+security definer
+set search_path to ''
+as $function$
+  select coalesce(array_agg(o.provider_org_id order by s.last_complete_at asc nulls first, s.last_scan_at asc nulls first, o.provider_org_id), '{}')
+  from public.einvoice_organizations o
+  left join public.einvoice_inbound_scan_state s
+    on s.provider = o.provider and s.environment = o.environment and s.provider_org_id = o.provider_org_id
+  where o.provider = p_provider and o.environment = p_environment and o.provider_org_id is not null;
+$function$;
+
+revoke all on function public.esblu_einvoice_org_record_inbound_scan(text, text, text, boolean, text) from public, anon, authenticated;
+revoke all on function public.esblu_einvoice_inbound_scan_order(text, text) from public, anon, authenticated;
+grant execute on function public.esblu_einvoice_org_record_inbound_scan(text, text, text, boolean, text) to service_role;
+grant execute on function public.esblu_einvoice_inbound_scan_order(text, text) to service_role;
+
 create or replace function public.esblu_einvoice_health(p_stuck_minutes integer, p_ack_pending_minutes integer)
 returns jsonb
 language sql
@@ -164,7 +231,16 @@ as $function$
       'recipient_mismatch', (select count(*) from i where status = 'failed' and last_error_code = 'RECIPIENT_MISMATCH'),
       'ack_pending_too_long', (select count(*) from i, stuck_minutes s where status in ('ack_pending', 'draft_created', 'duplicate') and updated_at < now() - make_interval(mins => s.a)),
       'stuck', (select count(*) from i, stuck_minutes s where status in ('received', 'stored', 'parsed', 'draft_created', 'duplicate', 'ack_pending') and updated_at < now() - make_interval(mins => s.m)),
-      'oldest_stuck_age_seconds', (select coalesce(floor(extract(epoch from now() - min(updated_at))), 0)::bigint from i where status in ('received', 'stored', 'parsed', 'draft_created', 'duplicate', 'ack_pending'))
+      'oldest_stuck_age_seconds', (select coalesce(floor(extract(epoch from now() - min(updated_at))), 0)::bigint from i where status in ('received', 'stored', 'parsed', 'draft_created', 'duplicate', 'ack_pending')),
+      -- P1-4: organizácie s aktívnym príjmom bez úplného skenu zoznamu > 2 h (nové doklady by mohli čakať neviditeľne)
+      'scan_overdue', (select count(*) from public.einvoice_organizations g
+                        left join public.einvoice_inbound_scan_state ss
+                          on ss.provider = g.provider and ss.environment = g.environment and ss.provider_org_id = g.provider_org_id
+                        where g.peppol_eligible and g.provider_org_id is not null
+                          and (g.reception_status is null or g.reception_status = 'active')
+                          and g.created_at < now() - interval '2 hours'
+                          and (ss.last_complete_at is null or ss.last_complete_at < now() - interval '2 hours')),
+      'scan_incomplete', (select count(*) from public.einvoice_inbound_scan_state ss where ss.incomplete_streak > 0)
     ),
     'webhook', jsonb_build_object(
       'failures_24h', (select count(*) from public.einvoice_webhook_events w where w.processing_status = 'failed' and w.received_at > now() - interval '24 hours'),
