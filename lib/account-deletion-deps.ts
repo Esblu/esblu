@@ -16,8 +16,10 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   collectMemberOwnStorageTargets,
   collectOwnerStorageTargets,
+  deletionAllowed,
   parseStorageTargets,
   removeStorageTargets,
+  verifyStorageTargetsAbsent,
 } from "@/lib/account-deletion-storage";
 import type { AuthDeleteResult, CommitResult, DeletionDeps, DeletionRequest, JobPatch } from "@/lib/account-deletion-orchestrator";
 
@@ -107,7 +109,22 @@ export function supabaseDeletionDeps(admin: SupabaseClient): DeletionDeps {
       return { ok: true, jobId: null, storageTargets: targets, summary: legacy.data ?? null, deleteAccount: true };
     },
 
-    removeStorage: (targets) => removeStorageTargets(admin, targets),
+    async removeStorage(targets, scope) {
+      const removed = await removeStorageTargets(admin, targets, scope);
+      // Skutočná neprítomnosť povolených cieľov (vynechané chránené ciele overí DB — job by ostal pending).
+      await verifyStorageTargetsAbsent(admin, targets.filter((t) => deletionAllowed(t, scope)));
+      return removed;
+    },
+
+    async confirmStorage(jobId: string) {
+      const { data, error } = await admin.rpc("esblu_cleanup_job_confirm_storage", { p_job_id: jobId });
+      if (error) {
+        if (isMissingFunctionError(error)) return null;
+        throw new Error(`ESBLU_STORAGE_CONFIRM_FAILED:${error.code ?? "unknown"}`);
+      }
+      const row = (data ?? {}) as { done?: unknown; remaining?: unknown };
+      return { done: row.done === true, remaining: typeof row.remaining === "number" ? row.remaining : -1 };
+    },
 
     async deleteAuthUser(userId: string): Promise<AuthDeleteResult> {
       const { error } = await admin.auth.admin.deleteUser(userId);
@@ -175,9 +192,11 @@ export function supabaseTerminationDeps(admin: SupabaseClient, exportMode: Termi
         return {
           ok: true,
           jobId: row.job_id ?? null,
-          storageTargets: parseStorageTargets(row.storage_targets),
+          // Job ukončenia: e-faktúry tejto firmy (prefix) sú cieľom výmazu; DB to vynúti aj triggerom.
+          storageTargets: parseStorageTargets(row.storage_targets, { terminationCompanyId: companyId }),
           summary: row.summary ?? null,
           deleteAccount: row.delete_account === true,
+          terminationCompanyId: companyId,
         };
       }
       const code = dbCode(error);

@@ -792,13 +792,15 @@ await check("ochrana: DELETE / TRUNCATE účtovných záznamov Esblu zlyhá aj p
     await fails(() => su(`truncate public.${t}`), /ESBLU_BILLING_ACCOUNTING_RECORD_RETAINED/);
   }
   await fails(() => su("delete from public.billing_invoice_documents where customer_company_id = $1", [SC.x]), /RETAINED/);
+  // 20261128100000: cieľ v billing-documents už nie je potichu odstránený — zápis jobu zlyhá (fail closed, nie tiché preskočenie).
+  await fails(() => su(`insert into public.account_deletion_cleanup_jobs (kind, user_id, storage_targets, storage_target_count, storage_status, auth_status)
+    values ('owner', $1, $2::jsonb, 2, 'pending', 'done')`,
+    [SU.x, JSON.stringify([{ bucket: "billing-documents", path: pdfPathX }, { bucket: "vehicle-photos", path: "x/1.jpg" }])]), /ESBLU_CLEANUP_TARGET_PROTECTED/);
   const job = await su<Json>(`insert into public.account_deletion_cleanup_jobs (kind, user_id, storage_targets, storage_target_count, storage_status, auth_status)
-    values ('owner', $1, $2::jsonb, 2, 'pending', 'done') returning storage_targets, storage_target_count, storage_status, completed_at is not null done`,
-    [SU.x, JSON.stringify([{ bucket: "billing-documents", path: pdfPathX }, { bucket: "vehicle-photos", path: "x/1.jpg" }])]);
-  assert.deepEqual([job[0].storage_targets, job[0].storage_target_count, job[0].storage_status], [[{ bucket: "vehicle-photos", path: "x/1.jpg" }], 1, "pending"]);
-  const upd = await su<Json>(`update public.account_deletion_cleanup_jobs set storage_targets = $1::jsonb where user_id = $2 and kind = 'owner' and company_id is null
-    returning storage_targets, storage_target_count, storage_status, completed_at is not null done`, [JSON.stringify([{ bucket: "billing-documents", path: pdfPathX }]), SU.x]);
-  assert.deepEqual([upd[0].storage_targets, upd[0].storage_target_count, upd[0].storage_status, upd[0].done], [[], 0, "done", true]);
+    values ('owner', $1, $2::jsonb, 1, 'pending', 'done') returning storage_targets`, [SU.x, JSON.stringify([{ bucket: "vehicle-photos", path: "x/1.jpg" }])]);
+  assert.deepEqual(job[0].storage_targets, [{ bucket: "vehicle-photos", path: "x/1.jpg" }]);
+  await fails(() => su(`update public.account_deletion_cleanup_jobs set storage_targets = $1::jsonb where user_id = $2 and kind = 'owner' and company_id is null`,
+    [JSON.stringify([{ bucket: "billing-documents", path: pdfPathX }]), SU.x]), /ESBLU_CLEANUP_TARGET_PROTECTED/);
 });
 
 await check("izolácia nezmenená: snapshot ani identitu nevidí žiadny tenant/anon; nové funkcie nie sú volateľné z Data API", async () => {

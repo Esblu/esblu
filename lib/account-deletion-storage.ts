@@ -27,8 +27,25 @@ export type StorageTarget = { bucket: string; path: string };
  */
 export const DELETION_PROTECTED_BUCKETS: ReadonlySet<string> = new Set(["einvoice-documents", "billing-documents"]);
 
+/**
+ * P1-5 (20261128100000): e-faktúry firmy sa mažú IBA v jobe autorizovaného ukončenia (DB: termination_id) a IBA
+ * pod prefixom „<company_id>/“ tej firmy. billing-documents nikdy. Čokoľvek iné sa z mazania vynechá — ale nie
+ * potichu: hotovo zapíše iba esblu_cleanup_job_confirm_storage, ktorá overí neprítomnosť KAŽDÉHO cieľa jobu
+ * v storage.objects (vynechaný cieľ = job ostane pending → retry → alert po vyčerpaní pokusov).
+ */
+export type StorageDeleteScope = { terminationCompanyId?: string | null };
+
+export function deletionAllowed(target: StorageTarget, scope: StorageDeleteScope = {}): boolean {
+  if (target.bucket === "billing-documents") return false;
+  if (target.bucket === "einvoice-documents") {
+    const companyId = scope.terminationCompanyId;
+    return typeof companyId === "string" && /^[0-9a-f-]{36}$/i.test(companyId) && target.path.startsWith(`${companyId}/`);
+  }
+  return !DELETION_PROTECTED_BUCKETS.has(target.bucket);
+}
+
 /** Validácia jobu z DB (jsonb) — iba {bucket, path} stringy, bez prázdnych ciest. */
-export function parseStorageTargets(value: unknown): StorageTarget[] {
+export function parseStorageTargets(value: unknown, scope: StorageDeleteScope = {}): StorageTarget[] {
   if (!Array.isArray(value)) return [];
   const out: StorageTarget[] = [];
   for (const item of value) {
@@ -40,7 +57,7 @@ export function parseStorageTargets(value: unknown): StorageTarget[] {
       bucket &&
       path &&
       !path.includes("..") &&
-      !DELETION_PROTECTED_BUCKETS.has(bucket)
+      deletionAllowed({ bucket, path }, scope)
     ) {
       out.push({ bucket, path });
     }
@@ -207,12 +224,13 @@ export async function collectMemberOwnStorageTargets(
 
 export async function removeStorageTargets(
   admin: SupabaseClient,
-  targets: StorageTarget[]
+  targets: StorageTarget[],
+  scope: StorageDeleteScope = {}
 ): Promise<number> {
   const byBucket = new Map<string, string[]>();
 
   for (const target of targets) {
-    if (DELETION_PROTECTED_BUCKETS.has(target.bucket)) continue;
+    if (target.path.includes("..") || !deletionAllowed(target, scope)) continue;
     const list = byBucket.get(target.bucket) ?? [];
     list.push(target.path);
     byBucket.set(target.bucket, list);
@@ -236,4 +254,23 @@ export async function removeStorageTargets(
   }
 
   return removed;
+}
+
+/**
+ * Overenie skutočnej neprítomnosti každého cieľa v Storage (nie iba úspešnej odpovede remove()). Vyhodí, ak
+ * objekt stále existuje alebo sa stav nedá overiť — job ostane pending a zopakuje sa.
+ */
+export async function verifyStorageTargetsAbsent(admin: SupabaseClient, targets: StorageTarget[]): Promise<void> {
+  let present = 0;
+  for (const target of targets) {
+    let result: { data: boolean | null; error: unknown };
+    try {
+      result = (await admin.storage.from(target.bucket).exists(target.path)) as { data: boolean | null; error: unknown };
+    } catch {
+      throw new Error(`ESBLU_STORAGE_VERIFY_FAILED:${target.bucket}`);
+    }
+    if (result.data === true) present++;
+    else if (result.data !== false) throw new Error(`ESBLU_STORAGE_VERIFY_FAILED:${target.bucket}`);
+  }
+  if (present > 0) throw new Error(`ESBLU_STORAGE_NOT_PURGED:${present}`);
 }

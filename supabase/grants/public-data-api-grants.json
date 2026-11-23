@@ -879,6 +879,22 @@
       "service_role": "SELECT",
       "note": "VOP 20.6 / DPA server-side dokaz exportu firmy (bez FK, iba metadata+SHA-256); zapis iba esblu_company_export_begin/_part/_fail; podmienka ukoncenia v rezime exported"
     },
+    "company_export_run_files": {
+      "domain": "legal",
+      "access": "D",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT",
+      "note": "P1-5 subory exportneho behu (identita, umiestnenie, snimka Storage, SHA-256; bez obsahu); zapis iba esblu_company_export_begin/_part_files"
+    },
+    "einvoice_misdelivery_incidents": {
+      "domain": "einvoice",
+      "access": "D",
+      "anon": "",
+      "authenticated": "",
+      "service_role": "SELECT",
+      "note": "P1-5 R3 minimalny incidentovy zaznam pred vymazom dokladu adresovaneho inemu ucastnikovi (iba hashe, bez obsahu a ciest); zapis iba esblu_company_termination_execute"
+    },
     "company_terminations": {
       "domain": "legal",
       "access": "D",
@@ -1032,11 +1048,17 @@
     "esblu_company_price_tier(uuid)",
     "esblu_company_storage_bytes(uuid)",
     "esblu_company_storage_status(uuid)",
+    "esblu_cleanup_health(integer)",
+    "esblu_cleanup_job_confirm_storage(uuid)",
     "esblu_company_export_begin(uuid,uuid,text,integer,integer,text)",
     "esblu_company_export_begin(uuid,uuid,text,integer,integer,text,text,text)",
+    "esblu_company_export_begin(uuid,uuid,text,integer,integer,text,text,text,jsonb)",
     "esblu_company_export_fail(uuid,uuid,text)",
+    "esblu_company_export_file_list(uuid)",
     "esblu_company_export_fingerprint(uuid)",
     "esblu_company_export_part(uuid,uuid,uuid,integer,integer,text,integer)",
+    "esblu_company_export_part_files(uuid,uuid,uuid,integer,jsonb,jsonb,text)",
+    "esblu_company_export_storage_fingerprint(uuid)",
     "esblu_company_termination_commit(uuid,uuid,boolean,text)",
     "esblu_company_termination_execute(uuid,uuid,boolean,text,jsonb)",
     "esblu_company_termination_in_progress()",

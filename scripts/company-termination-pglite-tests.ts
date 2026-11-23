@@ -248,6 +248,23 @@ await check("registrácia u eFaktúra providera → stop pred výmazom", async (
 const SHA = (c: string) => c.repeat(64);
 const beginSql = "select public.esblu_company_export_begin($1, $2, 'test.v1', $3, $4, $5) id";
 const partSql = "select public.esblu_company_export_part($1, $2, $3, $4, $5, $6, $7) st";
+// 20261128100000: export použiteľný na ukončenie = beh so súbormi viazanými na beh (zoznam z DB, SHA-256 dávok).
+async function boundExport(user: string, company: string): Promise<string> {
+  const list = await su<{ bucket: string; path: string; expected_sha256: string | null }>(
+    "select bucket, path, expected_sha256 from public.esblu_company_export_file_list($1) order by bucket, path", [company]);
+  const fp = (await su<{ f: string }>("select public.esblu_company_export_fingerprint($1)->>'fingerprint' f", [company]))[0].f;
+  const parts = list.length === 0 ? 0 : Math.ceil(list.length / 100);
+  const b = await run(svc, "select public.esblu_company_export_begin($1, $2, 'test.v2', $3, $4, $5, $6, $7, $8::jsonb) id",
+    [user, company, list.length, parts, SHA("a"), SHA("b"), fp, JSON.stringify(list.map((f) => ({ bucket: f.bucket, path: f.path })))], true);
+  assert.equal(b.layer, "ok", b.message);
+  const id = String(b.data[0].id);
+  for (let i = 0; i < parts; i++) {
+    const files = list.slice(i * 100, (i + 1) * 100).map((f) => ({ bucket: f.bucket, path: f.path, sha256: f.expected_sha256 ?? SHA("d"), bytes: "10" }));
+    const o = await run(svc, "select public.esblu_company_export_part_files($1, $2, $3, $4, $5::jsonb, '[]'::jsonb, $6) st", [id, user, company, i, JSON.stringify(files), SHA("e")], true);
+    assert.equal(o.layer, "ok", o.message);
+  }
+  return id;
+}
 const exportRuns = async () => count(`select count(*)::int n from public.company_export_runs where company_id = '${C.a}'`);
 async function beginRun(user: string, company: string, files: number, parts: number): Promise<string> {
   const o = await run(svc, beginSql, [user, company, files, parts, SHA("a")], true);
@@ -335,7 +352,7 @@ await check("zlyhanie uprostred procesu → rollback celku, žiadny partial dele
     begin raise exception 'TEST_INJECTED_FAILURE'; end $f$;
     create trigger test_fail_company_delete before delete on public.companies for each row execute function public.test_fail_company_delete();
   `);
-  await beginRun(U.owner, C.a, 0, 0); // overený export (inak by brána zastavila skôr)
+  await boundExport(U.owner, C.a); // overený export (inak by brána zastavila skôr)
   const o = await run(svc, commitSql, [U.owner, C.a, "exported", ack()]);
   assert.match(o.message, /TEST_INJECTED_FAILURE/);
   await db.exec(`drop trigger test_fail_company_delete on public.companies; drop function public.test_fail_company_delete();`);
@@ -365,6 +382,9 @@ await check("PASS: owner dokončí export (data + všetky dávky) → completed 
 
 let terminationId = "";
 await check("retry po zlyhaní → úspech: firma A celá preč, Storage ciele v cleanup jobe, auditný záznam bez obsahu", async () => {
+  // Beh bez väzby súborov (pôvodné _part) na ukončenie nestačí.
+  assert.match((await run(svc, commitSql, [U.owner, C.a, "exported", ack()])).message, /ESBLU_TERMINATION_EXPORT_STALE/);
+  exportRunId = await boundExport(U.owner, C.a);
   const o = await run(svc, commitSql, [U.owner, C.a, "exported", ack()], true);
   assert.equal(o.layer, "ok", o.message);
   const r = o.data[0].r as Record<string, unknown>;
@@ -412,10 +432,12 @@ await check("dvojité / opakované spustenie → already_completed, nič ďalši
   assert.match(other.message, /ESBLU_NOT_ACTIVE_OWNER/, "cudzí používateľ nedostane výsledok");
 });
 
-await check("dôkaz výmazu súborov: storage_purged_at až po dokončení cleanup jobu", async () => {
+await check("dôkaz výmazu súborov: storage_purged_at až po overení Storage (esblu_cleanup_job_confirm_storage)", async () => {
   const t0 = await su<{ storage_purged_at: string | null; cleanup_job_id: string }>(`select storage_purged_at, cleanup_job_id from public.company_terminations where id = '${terminationId}'`);
   assert.equal(t0[0].storage_purged_at, null, "súbory ešte nie sú zmazané");
-  await su(`update public.account_deletion_cleanup_jobs set storage_status = 'done' where id = '${t0[0].cleanup_job_id}'`);
+  assert.match((await run(svc, `update public.account_deletion_cleanup_jobs set storage_status = 'done' where id = '${t0[0].cleanup_job_id}'`)).message, /ESBLU_CLEANUP_UNVERIFIED/, "ručné „hotovo“ zakázané");
+  const c = await run(svc, "select public.esblu_cleanup_job_confirm_storage($1) r", [t0[0].cleanup_job_id], true);
+  assert.equal((c.data[0].r as { done: boolean }).done, true, c.message);
   const t1 = await su<{ storage_purged_at: string | null }>(`select storage_purged_at from public.company_terminations where id = '${terminationId}'`);
   assert.ok(t1[0].storage_purged_at, "čas výmazu súborov zaznamenaný");
 });

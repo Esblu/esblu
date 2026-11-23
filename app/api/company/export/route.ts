@@ -275,12 +275,23 @@ export async function POST(req: Request) {
         p_file_parts: fileParts,
         p_data_sha256: sha256(bytes),
       };
-      const { data: runId, error: runError } = fingerprint
-        ? await admin.rpc("esblu_company_export_begin", { ...beginArgs, p_manifest_sha256: sha256(manifestJson), p_expected_fingerprint: fingerprint.fingerprint })
+      // 20261128100000: zoznam súborov sa viaže na beh (identita, umiestnenie, snímka Storage); DB ho porovná
+      // so svojím zoznamom. Bez tejto migrácie (RPC s p_files neexistuje) pôvodný beh bez väzby — nepostačí na
+      // ukončenie firmy (brána vyžaduje files_bound).
+      let { data: runId, error: runError } = fingerprint
+        ? await admin.rpc("esblu_company_export_begin", {
+            ...beginArgs,
+            p_manifest_sha256: sha256(manifestJson),
+            p_expected_fingerprint: fingerprint.fingerprint,
+            p_files: files.map((f) => ({ bucket: f.bucket, path: f.path })),
+          })
         : await admin.rpc("esblu_company_export_begin", beginArgs);
+      if (fingerprint && runError && (runError.code === "PGRST202" || runError.code === "42883")) {
+        ({ data: runId, error: runError } = await admin.rpc("esblu_company_export_begin", beginArgs));
+      }
       if (runError || typeof runId !== "string") {
-        if (runError?.message?.includes("ESBLU_EXPORT_DATA_CHANGED")) {
-          console.error("company/export: údaje sa zmenili počas exportu — klient zopakuje");
+        if (/ESBLU_EXPORT_(DATA_CHANGED|FILES_MISMATCH)/.test(runError?.message ?? "")) {
+          console.error("company/export: údaje alebo zoznam súborov sa zmenili počas exportu — klient zopakuje");
           return fail(409, "EXPORT_RUN_INVALID");
         }
         console.error("company/export: evidencia exportu zlyhala:", runError?.code ?? "unknown");
@@ -301,16 +312,22 @@ export async function POST(req: Request) {
     const zip = new JSZip();
     const included: Array<{ path: string; sha256: string; bytes: number }> = [];
     const missing: string[] = [];
+    // Identita súborov pre DB (bucket + cesta v Storage, SHA-256 a veľkosť stiahnutých bajtov).
+    const fileEvidence: Array<{ bucket: string; path: string; sha256: string; bytes: number }> = [];
+    const missingRefs: StorageFileRef[] = [];
     for (const f of batch) {
       const { data, error } = await admin.storage.from(f.bucket).download(f.path);
       const zipPath = zipSafePath(f.bucket, f.path);
       if (error || !data) {
         missing.push(zipPath);
+        missingRefs.push({ bucket: f.bucket, path: f.path });
         continue;
       }
       const bytes = new Uint8Array(await data.arrayBuffer());
+      const digest = sha256(bytes);
       zip.file(zipPath, bytes);
-      included.push({ path: zipPath, sha256: sha256(bytes), bytes: bytes.byteLength });
+      included.push({ path: zipPath, sha256: digest, bytes: bytes.byteLength });
+      fileEvidence.push({ bucket: f.bucket, path: f.path, sha256: digest, bytes: bytes.byteLength });
     }
     zip.file("manifest.json", JSON.stringify({
       kind: "esblu_company_export",
@@ -323,16 +340,30 @@ export async function POST(req: Request) {
       missing,
     }, null, 2));
     const bytes = await zip.generateAsync({ type: "uint8array", compression: "STORE" });
-    // Dávka zapísaná k behu exportu; posledná dávka bez chýbajúcich súborov = completed.
-    const { data: runStatus, error: partError } = await admin.rpc("esblu_company_export_part", {
+    // Dávka zapísaná k behu exportu; DB overí presnú zhodu súborov dávky s behom, nezmenenosť objektov v Storage
+    // a SHA-256 originálov e-faktúr (xml_sha256 / ubl_sha256). Posledná úplná dávka = completed.
+    let { data: runStatus, error: partError } = await admin.rpc("esblu_company_export_part_files", {
       p_export_id: exportId,
       p_user_id: user.id,
       p_company_id: companyId,
       p_index: index,
-      p_files_total: files.length,
+      p_files: fileEvidence,
+      p_missing: missingRefs,
       p_part_sha256: sha256(bytes),
-      p_missing: missing.length,
     });
+    if (partError && (partError.code === "PGRST202" || partError.code === "42883" || /ESBLU_EXPORT_INVALID/.test(partError.message ?? ""))) {
+      // Beh bez väzby súborov (staršia DB / staršie begin) → pôvodná evidencia dávky.
+      const legacy = await admin.rpc("esblu_company_export_part", {
+        p_export_id: exportId,
+        p_user_id: user.id,
+        p_company_id: companyId,
+        p_index: index,
+        p_files_total: files.length,
+        p_part_sha256: sha256(bytes),
+        p_missing: missing.length,
+      });
+      if (!legacy.error || !/ESBLU_EXPORT_FILES_BOUND/.test(legacy.error.message ?? "")) ({ data: runStatus, error: partError } = legacy);
+    }
     if (partError || typeof runStatus !== "string") {
       const code = partError?.message?.match(/ESBLU_EXPORT_[A-Z_]+/)?.[0] ?? "EXPORT_FAILED";
       console.error("company/export: evidencia dávky zlyhala:", code);

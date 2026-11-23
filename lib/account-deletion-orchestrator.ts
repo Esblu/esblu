@@ -15,7 +15,7 @@
 // provider API. Logy iba kódy (žiadne cesty súborov, e-maily ani tokeny).
 // =============================================================================
 
-import type { StorageTarget } from "@/lib/account-deletion-storage";
+import type { StorageDeleteScope, StorageTarget } from "@/lib/account-deletion-storage";
 
 /** owner = zrušiť firmu, member = opustiť firmu, global = zrušiť login (multi-company 2026-10-12). */
 export type DeletionKind = "owner" | "member" | "global";
@@ -30,7 +30,15 @@ export type DeletionRequest = {
 };
 
 export type CommitResult =
-  | { ok: true; jobId: string | null; storageTargets: StorageTarget[]; summary: unknown; deleteAccount: boolean }
+  | {
+      ok: true;
+      jobId: string | null;
+      storageTargets: StorageTarget[];
+      summary: unknown;
+      deleteAccount: boolean;
+      /** P1-5: job ukončenia firmy — oprávňuje výmaz e-faktúr pod prefixom tejto firmy a vyžaduje overenie v DB. */
+      terminationCompanyId?: string | null;
+    }
   | { ok: false; reason: "subscription_guard" | "db_error"; code: string };
 
 export type AuthDeleteResult = { ok: true } | { ok: false; code: string };
@@ -48,8 +56,13 @@ export type JobPatch = {
 
 export type DeletionDeps = {
   commit(request: DeletionRequest): Promise<CommitResult>;
-  /** Vyhodí pri zlyhaní; chýbajúca cesta nie je chyba. */
-  removeStorage(targets: StorageTarget[]): Promise<number>;
+  /** Vyhodí pri zlyhaní alebo ak cieľ po výmaze stále existuje; chýbajúca cesta nie je chyba. */
+  removeStorage(targets: StorageTarget[], scope?: StorageDeleteScope): Promise<number>;
+  /**
+   * P1-5 (20261128100000): DB overí neprítomnosť každého cieľa v storage.objects a až potom zapíše hotovo
+   * (a pri ukončení storage_purged_at). null = RPC v DB ešte nie je (pôvodné správanie, nie pre ukončenie).
+   */
+  confirmStorage?(jobId: string): Promise<{ done: boolean; remaining: number } | null>;
   /** Neexistujúci používateľ = ok (idempotentné). */
   deleteAuthUser(userId: string): Promise<AuthDeleteResult>;
   updateJob(jobId: string, patch: JobPatch): Promise<void>;
@@ -63,6 +76,8 @@ export type CleanupJob = {
   storagePending: boolean;
   authPending: boolean;
   attempts: number;
+  /** Job ukončenia firmy (DB termination_id) → ID firmy pre prefix e-faktúr. */
+  terminationCompanyId?: string | null;
 };
 
 export type CleanupOutcome = {
@@ -100,12 +115,38 @@ export async function runCleanupJob(deps: DeletionDeps, job: CleanupJob): Promis
   let authDone = !job.authPending;
   let errorCode: string | null = null;
 
+  const termination = typeof job.terminationCompanyId === "string" && job.terminationCompanyId.length > 0;
+  // Ukončenie firmy: hotovo rozhoduje IBA overenie v DB (aj pri prázdnom zozname — sweep prefixu firmy).
+  if (termination && job.storagePending) storageDone = false;
+  let storageConfirmedInDb = false;
+
   if (!storageDone) {
     try {
-      storageRemoved = await deps.removeStorage(job.storageTargets);
+      if (job.storageTargets.length > 0) {
+        storageRemoved = await deps.removeStorage(job.storageTargets, { terminationCompanyId: job.terminationCompanyId ?? null });
+      }
       storageDone = true;
     } catch (error) {
       errorCode = safeCode(error, "ESBLU_STORAGE_REMOVE_FAILED");
+    }
+    if (storageDone && job.id && (deps.confirmStorage || termination)) {
+      try {
+        const confirmed = deps.confirmStorage ? await deps.confirmStorage(job.id) : null;
+        if (confirmed === null) {
+          // DB overenie nie je k dispozícii: bežné zrušenie po starom, ukončenie firmy NIKDY (fail closed).
+          if (termination) {
+            storageDone = false;
+            errorCode = "ESBLU_STORAGE_CONFIRM_UNAVAILABLE";
+          }
+        } else {
+          storageConfirmedInDb = true;
+          storageDone = confirmed.done;
+          if (!confirmed.done) errorCode = "ESBLU_STORAGE_NOT_PURGED";
+        }
+      } catch (error) {
+        storageDone = false;
+        errorCode = safeCode(error, "ESBLU_STORAGE_CONFIRM_FAILED");
+      }
     }
   }
 
@@ -121,11 +162,18 @@ export async function runCleanupJob(deps: DeletionDeps, job: CleanupJob): Promis
     const attempts = job.attempts + 1;
     const done = storageDone && authDone;
     try {
+      // Stav Storage zapisuje DB overenie (storageConfirmedInDb) alebo — pri ukončení firmy — nikto iný;
+      // inak pôvodné správanie.
+      const storagePatch: JobPatch = storageConfirmedInDb || termination
+        ? {}
+        : {
+            storage_status: storageDone ? "done" : "pending",
+            // Minimalizácia: po vyčistení sa cesty v jobe nedržia.
+            ...(storageDone ? { storage_targets: [] } : {}),
+          };
       await deps.updateJob(job.id, {
-        storage_status: storageDone ? "done" : "pending",
+        ...storagePatch,
         auth_status: authDone ? "done" : "pending",
-        // Minimalizácia: po vyčistení sa cesty v jobe nedržia.
-        ...(storageDone ? { storage_targets: [] } : {}),
         attempts,
         last_error_code: done ? null : errorCode,
         next_attempt_at: done ? now.toISOString() : nextAttemptAt(now, attempts),
@@ -152,10 +200,11 @@ export async function orchestrateAccountDeletion(deps: DeletionDeps, request: De
     id: commit.jobId,
     userId: request.userId,
     storageTargets: commit.storageTargets,
-    storagePending: commit.storageTargets.length > 0,
+    storagePending: commit.storageTargets.length > 0 || Boolean(commit.terminationCompanyId),
     // Login sa ruší IBA keď to DB commit potvrdil (global / posledná firma).
     authPending: commit.deleteAccount,
     attempts: 0,
+    terminationCompanyId: commit.terminationCompanyId ?? null,
   });
 
   if (!outcome.authDone) {

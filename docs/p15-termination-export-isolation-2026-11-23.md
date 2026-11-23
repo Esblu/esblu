@@ -1,5 +1,9 @@
 # P1-5 / GDPR 2.0 — ukončenie firmy bez zákazníckeho archívu a izolácia RECIPIENT_MISMATCH (2026-11-23)
 
+> **Oprava (bezpečnostná kontrola 2a8aea3):** tvrdenia o „preukázateľnom výmaze vrátane kópií“ a o exporte „PDF
+> prijatých e-faktúr“ v tomto reporte neplatili (súbory e-faktúr sa nemazali; `pdf_storage_path` aplikácia
+> nevypĺňa). Opravy a aktuálny stav: `docs/p15-security-fixes-2026-11-23.md` (migrácia 20261128100000).
+
 Vetva `fix/p15-termination-export-isolation` (nad 4a08264). Iba lokálna implementácia a offline testy (PGlite,
 syntetické údaje). Žiadna stagingová ani produkčná migrácia, žiadny push, merge ani deploy.
 

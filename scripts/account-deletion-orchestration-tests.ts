@@ -15,7 +15,9 @@ import {
   type JobPatch,
 } from "@/lib/account-deletion-orchestrator";
 import { isMissingFunctionError, subscriptionGuardCode, supabaseDeletionDeps } from "@/lib/account-deletion-deps";
-import { parseStorageTargets, removeStorageTargets, type StorageTarget } from "@/lib/account-deletion-storage";
+import { deletionAllowed, parseStorageTargets, removeStorageTargets, verifyStorageTargetsAbsent, type StorageTarget } from "@/lib/account-deletion-storage";
+import { formatAccountDeletionAlert } from "@/lib/account-deletion-alert";
+import { readFileSync } from "node:fs";
 
 let passed = 0;
 let failed = 0;
@@ -248,6 +250,103 @@ await check("deps: bez multi-company migrácie sa „iba opustiť firmu“ / glo
     assert.equal((r as { code: string }).code, "ESBLU_MULTI_COMPANY_NOT_MIGRATED");
     assert.ok(!log.some((l) => l.startsWith("remove:") || l === "auth:delete"));
   }
+});
+
+// ----------------------------------------------------------------------------- P1-5: ukončenie firmy — overený výmaz
+const CO = "e7000000-0000-4000-8000-00000000000a";
+const OTHER = "e7000000-0000-4000-8000-00000000000b";
+await check("P1-5 rozsah výmazu: e-faktúry iba v jobe ukončenia a pod prefixom firmy; billing-documents nikdy", () => {
+  const t = (bucket: string, path: string) => ({ bucket, path });
+  assert.equal(deletionAllowed(t("einvoice-documents", `${CO}/inbound/x.xml`)), false, "bez ukončenia");
+  assert.equal(deletionAllowed(t("einvoice-documents", `${CO}/inbound/x.xml`), { terminationCompanyId: CO }), true);
+  assert.equal(deletionAllowed(t("einvoice-documents", `${OTHER}/inbound/x.xml`), { terminationCompanyId: CO }), false, "cudzí prefix");
+  assert.equal(deletionAllowed(t("einvoice-documents", `${CO}x/a.xml`), { terminationCompanyId: CO }), false, "prefix bez lomky");
+  assert.equal(deletionAllowed(t("billing-documents", `${CO}/a.pdf`), { terminationCompanyId: CO }), false);
+  assert.equal(deletionAllowed(t("einvoice-documents", `${CO}/a.xml`), { terminationCompanyId: "not-a-uuid" }), false);
+  assert.deepEqual(parseStorageTargets([t("einvoice-documents", `${CO}/a.xml`), t("einvoice-documents", `${OTHER}/b.xml`), t("einvoice-documents", `${CO}/../${OTHER}/c.xml`)], { terminationCompanyId: CO }),
+    [t("einvoice-documents", `${CO}/a.xml`)]);
+});
+await check("P1-5 verifyStorageTargetsAbsent: objekt stále existuje / neoveriteľný stav = chyba (nie úspech)", async () => {
+  const admin = (state: Record<string, boolean | "error">) => ({ storage: { from: (b: string) => ({ exists: async (p: string) => {
+    const v = state[`${b}/${p}`];
+    if (v === "error") throw new Error("503");
+    return { data: v ?? false, error: null };
+  } }) } }) as never;
+  const targets = [{ bucket: "einvoice-documents", path: `${CO}/a.xml` }, { bucket: "documents", path: "c/d.pdf" }];
+  await verifyStorageTargetsAbsent(admin({}), targets);
+  await assert.rejects(verifyStorageTargetsAbsent(admin({ [`einvoice-documents/${CO}/a.xml`]: true }), targets), /ESBLU_STORAGE_NOT_PURGED:1/);
+  await assert.rejects(verifyStorageTargetsAbsent(admin({ "documents/c/d.pdf": "error" }), targets), /ESBLU_STORAGE_VERIFY_FAILED/);
+});
+function terminationDeps(confirm: Array<{ done: boolean; remaining: number } | null | "throw">, opts: { storageFails?: boolean } = {}) {
+  const log: string[] = [];
+  const patches: JobPatch[] = [];
+  const deps: DeletionDeps = {
+    async commit() { return { ok: true, jobId: "job-1", storageTargets: [{ bucket: "einvoice-documents", path: `${CO}/a.xml` }], summary: null, deleteAccount: false, terminationCompanyId: CO }; },
+    async removeStorage(targets, scope) {
+      log.push(`storage:${targets.length}:${scope?.terminationCompanyId ?? "-"}`);
+      if (opts.storageFails) throw new Error("ESBLU_STORAGE_NOT_PURGED:1");
+      return targets.length;
+    },
+    async confirmStorage() {
+      const next = confirm.shift() ?? null;
+      log.push("confirm");
+      if (next === "throw") throw new Error("ESBLU_STORAGE_CONFIRM_FAILED:500");
+      return next;
+    },
+    async deleteAuthUser() { return { ok: true }; },
+    async updateJob(_id, patch) { log.push("job"); patches.push(patch); },
+    now: () => NOW,
+  };
+  return { deps, log, patches };
+}
+await check("P1-5 ukončenie: hotovo iba po DB overení; job sa nezapíše ako hotový z aplikácie", async () => {
+  const { deps, log, patches } = terminationDeps([{ done: true, remaining: 0 }]);
+  const r = await orchestrateAccountDeletion(deps, { kind: "owner", userId: "u1", companyId: CO, deleteAccount: false });
+  assert.equal(r.status, "deleted");
+  assert.equal((r as { cleanupPending: boolean }).cleanupPending, false);
+  assert.deepEqual(log, [`storage:1:${CO}`, "confirm", "job"]);
+  assert.equal(patches[0].storage_status, undefined, "stav Storage zapisuje iba DB overenie");
+  assert.equal(patches[0].storage_targets, undefined);
+});
+await check("P1-5 ukončenie: neúplný výmaz / zlyhanie overenia / chýbajúce RPC / zlyhaný výmaz = pending a retry", async () => {
+  for (const [confirm, code] of [
+    [{ done: false, remaining: 2 }, "ESBLU_STORAGE_NOT_PURGED"],
+    ["throw", "ESBLU_STORAGE_CONFIRM_FAILED:500"],
+    [null, "ESBLU_STORAGE_CONFIRM_UNAVAILABLE"],
+  ] as const) {
+    const { deps, patches } = terminationDeps([confirm as never]);
+    const r = await orchestrateAccountDeletion(deps, { kind: "owner", userId: "u1", companyId: CO, deleteAccount: false });
+    assert.equal((r as { cleanupPending: boolean }).cleanupPending, true, String(code));
+    assert.equal(patches[0].last_error_code, code);
+    assert.equal(patches[0].storage_status, undefined);
+    assert.ok(patches[0].next_attempt_at && new Date(patches[0].next_attempt_at).getTime() > NOW.getTime(), "backoff");
+  }
+  const failing = terminationDeps([{ done: true, remaining: 0 }], { storageFails: true });
+  const r = await orchestrateAccountDeletion(failing.deps, { kind: "owner", userId: "u1", companyId: CO, deleteAccount: false });
+  assert.equal((r as { cleanupPending: boolean }).cleanupPending, true);
+  assert.ok(!failing.log.includes("confirm"), "bez úspešného výmazu sa neoveruje");
+  assert.match(String(failing.patches[0].last_error_code), /ESBLU_STORAGE_NOT_PURGED/);
+});
+await check("P1-5 ukončenie bez confirmStorage v závislostiach = nikdy hotovo (fail closed)", async () => {
+  const { deps, patches } = terminationDeps([]);
+  delete (deps as { confirmStorage?: unknown }).confirmStorage;
+  const r = await runCleanupJob(deps, { id: "job-1", userId: "u1", storageTargets: [], storagePending: true, authPending: false, attempts: 3, terminationCompanyId: CO });
+  assert.equal(r.storageDone, false);
+  assert.equal(patches[0].last_error_code, "ESBLU_STORAGE_CONFIRM_UNAVAILABLE");
+  assert.equal(patches[0].attempts, 4);
+});
+await check("P1-5 cron: job ukončenia s prefixom firmy, monitoring vyčerpaných pokusov a neoverených výmazov (alert + 503)", () => {
+  const cron = readFileSync("app/api/cron/account-deletion-cleanup/route.ts", "utf8");
+  assert.match(cron, /termination_id/);
+  assert.match(cron, /parseStorageTargets\(row\.storage_targets, \{ terminationCompanyId \}\)/);
+  assert.match(cron, /esblu_cleanup_health/);
+  assert.match(cron, /status: 503/);
+  const line = formatAccountDeletionAlert({ code: "ACCOUNT_CLEANUP_RETRY_EXHAUSTED", exhausted: 2, unpurged: 1 });
+  assert.match(line, /^\[account-deletion-alert\] \{"code":"ACCOUNT_CLEANUP_RETRY_EXHAUSTED","severity":"critical","exhausted":2,"termination_unpurged":1\}$/);
+  const deps = readFileSync("lib/account-deletion-deps.ts", "utf8");
+  assert.match(deps, /verifyStorageTargetsAbsent\(admin/);
+  assert.match(deps, /esblu_cleanup_job_confirm_storage/);
+  assert.match(deps, /terminationCompanyId: companyId/);
 });
 
 console.log(`\naccount-deletion-orchestration: ${passed} passed, ${failed} failed`);

@@ -10,6 +10,7 @@ import {
   buildEinvoiceLifecycle,
   COMPANY_EXPORT_EXCLUDED,
   COMPANY_EXPORT_FILE_SOURCES,
+  COMPANY_EXPORT_FILES_PER_PART,
   COMPANY_EXPORT_TABLES,
   exportCountMismatches,
   exportFilePartCount,
@@ -269,6 +270,26 @@ check("P1-5 export úplnosť: denník účtovného stavu, mandáty, odtlačok DB
   assert.match(route, /p_expected_fingerprint: fingerprint\.fingerprint/);
   assert.match(route, /p_manifest_sha256: sha256\(manifestJson\)/);
   assert.match(route, /ESBLU_EXPORT_DATA_CHANGED/);
+});
+
+check("P1-5 (20261128100000): odtlačok = všetky tabuľky exportu; zoznam súborov v DB = zdroje exportu; súbory viazané na beh", () => {
+  const mig = read("supabase/migrations/20261128100000_termination_purge_export_integrity.sql");
+  const block = mig.slice(mig.indexOf("create or replace function public.esblu_company_export_fingerprint"), mig.indexOf("-- ----------------------------------------------------------------------------- 4."));
+  const sqlTables = [...block.matchAll(/\(\d+, '([a-z_]+)', '[a-z]+'\)/g)].map((m) => m[1]);
+  assert.deepEqual(sqlTables, COMPANY_EXPORT_TABLES.map((t) => t.table), "SQL odtlačok == COMPANY_EXPORT_TABLES (poradie aj obsah)");
+  const list = mig.slice(mig.indexOf("create or replace function public.esblu_company_export_file_list"), mig.indexOf("-- Odtlačok stavu Storage"));
+  for (const src of COMPANY_EXPORT_FILE_SOURCES) {
+    assert.ok(list.includes(`public.${src.table} `), `file_list: ${src.table}`);
+    assert.ok(list.includes(src.pathColumn), `file_list: ${src.table}.${src.pathColumn}`);
+    if (src.bucket) assert.ok(list.includes(`'${src.bucket}'`), `file_list: ${src.bucket}`);
+  }
+  assert.equal(COMPANY_EXPORT_FILES_PER_PART, 100, "DB delí dávky po 100");
+  const route = read("app/api/company/export/route.ts");
+  assert.match(route, /p_files: files\.map\(\(f\) => \(\{ bucket: f\.bucket, path: f\.path \}\)\)/);
+  assert.match(route, /esblu_company_export_part_files/);
+  assert.match(route, /fileEvidence\.push\(\{ bucket: f\.bucket, path: f\.path, sha256: digest, bytes: bytes\.byteLength \}\)/);
+  assert.match(mig, /error_code = 'FILES_CORRUPT'/);
+  assert.match(mig, /v_run\.storage_fingerprint <> public\.esblu_company_export_storage_fingerprint\(new\.company_id\)/);
 });
 
 check("i18n: termination + companyExport kľúče v SK/EN/DE", () => {

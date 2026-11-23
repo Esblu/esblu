@@ -497,8 +497,19 @@ await check("4. dôkazy prežijú ukončenie firmy: termination A (overený expo
   // pokusy A (outbound) sú súčasť termination výmazu (rozhodnutie D-G1 / archív rieši samostatná úloha)
   // 20261127100000: výmaz iba s aktuálnym overeným exportom, potvrdením oprávnenej osoby a čerstvým prihlásením.
   await db.exec(`update auth.users set last_sign_in_at = now() where id = '${U.owner}'`);
-  const run0 = await svcCommit(`select public.esblu_company_export_begin($1, $2, 'test.v1', 0, 0, $3) id`, [U.owner, C.a, "a".repeat(64)]);
+  // 20261128100000: export viazaný na súbory firmy (zoznam z DB, SHA-256 každej dávky).
+  const list = (await db.query<{ bucket: string; path: string; expected_sha256: string | null }>(
+    "select bucket, path, expected_sha256 from public.esblu_company_export_file_list($1) order by bucket, path", [C.a])).rows;
+  const fpA = (await db.query<{ f: string }>("select public.esblu_company_export_fingerprint($1)->>'fingerprint' f", [C.a])).rows[0].f;
+  const parts = list.length === 0 ? 0 : Math.ceil(list.length / 100);
+  const run0 = await svcCommit(`select public.esblu_company_export_begin($1, $2, 'test.v2', $3, $4, $5, null, $6, $7::jsonb) id`,
+    [U.owner, C.a, list.length, parts, "a".repeat(64), fpA, JSON.stringify(list.map((f) => ({ bucket: f.bucket, path: f.path })))]);
   assert.equal(run0.layer, "ok", run0.message);
+  for (let i = 0; i < parts; i++) {
+    const ev = list.slice(i * 100, (i + 1) * 100).map((f) => ({ bucket: f.bucket, path: f.path, sha256: f.expected_sha256 ?? "d".repeat(64), bytes: "1" }));
+    const pr = await svcCommit(`select public.esblu_company_export_part_files($1, $2, $3, $4, $5::jsonb, '[]'::jsonb, $6) st`, [run0.data[0].id, U.owner, C.a, i, JSON.stringify(ev), "e".repeat(64)]);
+    assert.equal(pr.layer, "ok", pr.message);
+  }
   const ack = JSON.stringify({ authority_confirmed: true, text_version: "termination-authority-2026-11-23.sk", text_sha256: "1".repeat(64), confirmed_at: new Date().toISOString() });
   const o = await svcCommit(`select public.esblu_company_termination_execute($1, $2, false, 'exported', $3::jsonb) r`, [U.owner, C.a, ack]);
   assert.equal(o.layer, "ok", o.message);
