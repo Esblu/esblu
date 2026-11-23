@@ -230,7 +230,33 @@ type Db = {
   /** podmienené prepnutie rolloutu B (iba sandbox, iba z očakávaného stavu); vracia počet zmenených riadkov */
   setRolloutB(from: "paused" | "internal", to: "paused" | "internal"): Promise<number>;
   rolloutStageB(): Promise<string | null>;
+  rolloutUpdatedAtB(): Promise<string | null>;
+  /** všetky mapovania organizácií a stavy skenu (malé tabuľky) — nezávislý prepočet scan_overdue */
+  orgsAndScans(): Promise<{ orgs: OrgRow[]; scans: ScanRow[] }>;
 };
+type OrgRow = { provider: string; environment: string; provider_org_id: string | null; peppol_eligible: boolean; reception_status: string | null; created_at: string };
+type ScanRow = { provider: string; environment: string; provider_org_id: string; last_complete_at: string | null };
+
+/**
+ * Nezávislý prepočet pravidla health `inbound.scan_overdue` (migrácia 20261125100000): aktívny príjem, mapovanie
+ * staršie ako 2 h; bez záznamu stavu skenu sa organizácia počíta až keď existuje záznam pre ten istý provider/prostredie
+ * (poll s novým kódom beží), inak keď posledný úplný sken chýba alebo je starší ako 2 h.
+ */
+function overdueOrgs(orgs: OrgRow[], scans: ScanRow[], nowMs = Date.now()): string[] {
+  const limit = nowMs - 2 * 3600_000;
+  const out: string[] = [];
+  for (const o of orgs) {
+    if (!o.peppol_eligible || !o.provider_org_id) continue;
+    if (o.reception_status !== null && o.reception_status !== "active") continue;
+    if (Date.parse(o.created_at) >= limit) continue;
+    const row = scans.find((x) => x.provider === o.provider && x.environment === o.environment && x.provider_org_id === o.provider_org_id);
+    const overdue = row
+      ? row.last_complete_at === null || Date.parse(row.last_complete_at) < limit
+      : scans.some((x) => x.provider === o.provider && x.environment === o.environment);
+    if (overdue) out.push(o.provider_org_id);
+  }
+  return out;
+}
 
 async function stagingDb(): Promise<Db> {
   const admin: SupabaseClient = createClient(SUPA_URL, SUPA_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
@@ -284,11 +310,21 @@ async function stagingDb(): Promise<Db> {
     },
     async setRolloutB(from, to) {
       const r = await admin.from("einvoice_rollout")
-        .update({ stage: to, changed_by: "p14-staging-integration", note: to === "internal" ? `P1-4 test ${RUN} — dočasne, automatické vrátenie na paused` : `P1-4 test ${RUN} — vrátené na paused` })
+        // updated_at explicitne: einvoice_rollout nemá touch trigger (audit zmeny); filter mení iba riadok B
+        .update({ stage: to, changed_by: "p14-staging-integration", updated_at: new Date().toISOString(), note: to === "internal" ? `P1-4 test ${RUN} — dočasne, automatické vrátenie na paused` : `P1-4 test ${RUN} — vrátené na paused` })
         .eq("company_id", CO_B).eq("environment", "sandbox").eq("stage", from)
         .select("company_id");
       if (r.error) throw new FatalStop(`rollout ${from}→${to}: ${r.error.message}`);
       return (r.data ?? []).length;
+    },
+    async orgsAndScans() {
+      const orgs = must(await admin.from("einvoice_organizations").select("provider, environment, provider_org_id, peppol_eligible, reception_status, created_at"), "orgs (overdue)") as OrgRow[];
+      const scans = must(await admin.from("einvoice_inbound_scan_state").select("provider, environment, provider_org_id, last_complete_at"), "scans (overdue)") as ScanRow[];
+      return { orgs, scans };
+    },
+    async rolloutUpdatedAtB() {
+      const r = must(await admin.from("einvoice_rollout").select("updated_at").eq("company_id", CO_B).eq("environment", "sandbox").maybeSingle(), "rollout B updated_at") as { updated_at: string } | null;
+      return r?.updated_at ?? null;
     },
     async rolloutStageB() {
       const r = must(await admin.from("einvoice_rollout").select("stage").eq("company_id", CO_B).eq("environment", "sandbox").maybeSingle(), "rollout B") as { stage: string } | null;
@@ -315,9 +351,11 @@ async function selftestDb(): Promise<Db> {
              ('${CO_B}', 'E2E Partner B s.r.o.', '37665880', '2020147507', 'SK2020147507', 'Testovacia 2', 'Košice', '04001', 'SK', '2020147507', '9915');
     insert into public.company_entitlements (company_id, entitlement_key, source, note) values ('${CO_B}', 'einvoice', 'manual', 'p14-selftest');
     insert into public.einvoice_rollout (company_id, environment, stage, changed_by) values ('${CO_B}', 'sandbox', 'paused', 'p14-selftest'), ('${CO_A}', 'sandbox', 'paused', 'p14-selftest');
-    insert into public.einvoice_organizations (company_id, provider, environment, provider_org_id, participant_id, org_status, peppol_eligible, reception_status)
-      values ('${CO_A}', '${PROVIDER}', 'sandbox', '${ORG_A}', '${PID_A}', 'aktivne', true, 'active'),
-             ('${CO_B}', '${PROVIDER}', 'sandbox', '${ORG_B}', '${PID_B}', 'aktivne', true, 'active');
+    -- regresia F7 (staging 2026-11-23): organizácie sú staršie ako 2 h ako na stagingu (vznik 5. 10.) — A s aktívnym
+    -- príjmom, ktorú test zámerne neskenuje, je po prvom skene B oprávnene „po termíne“ (scan_overdue = 1)
+    insert into public.einvoice_organizations (company_id, provider, environment, provider_org_id, participant_id, org_status, peppol_eligible, reception_status, created_at)
+      values ('${CO_A}', '${PROVIDER}', 'sandbox', '${ORG_A}', '${PID_A}', 'aktivne', true, 'active', now() - interval '49 days'),
+             ('${CO_B}', '${PROVIDER}', 'sandbox', '${ORG_B}', '${PID_B}', 'aktivne', true, 'active', now() - interval '49 days');
     create table if not exists public.billing_runtime_config (id boolean primary key default true, environment text);
     insert into public.billing_runtime_config (id, environment) values (true, 'test') on conflict do nothing;
   `);
@@ -348,6 +386,11 @@ async function selftestDb(): Promise<Db> {
     opsAlerts: async () => (await q<{ n: number }>("select count(*)::int n from pg_class where relname = 'einvoice_ops_alerts'"))[0].n === 0 ? 0 : (await q<{ n: number }>("select count(*)::int n from public.einvoice_ops_alerts"))[0].n,
     rolloutOthersFingerprint: async () => sha(JSON.stringify(await q("select company_id, environment, stage, changed_by, updated_at from public.einvoice_rollout where not (company_id = $1 and environment = 'sandbox') order by company_id, environment", [CO_B]))).slice(0, 16),
     setRolloutB: async (from, to) => (await q<{ company_id: string }>("update public.einvoice_rollout set stage = $1, changed_by = 'p14-staging-integration', updated_at = now() where company_id = $2 and environment = 'sandbox' and stage = $3 returning company_id", [to, CO_B, from])).length,
+    orgsAndScans: async () => ({
+      orgs: await q<OrgRow>("select provider, environment, provider_org_id, peppol_eligible, reception_status, created_at::text from public.einvoice_organizations"),
+      scans: await q<ScanRow>("select provider, environment, provider_org_id, last_complete_at::text from public.einvoice_inbound_scan_state"),
+    }),
+    rolloutUpdatedAtB: async () => (await q<{ u: string }>("select updated_at::text u from public.einvoice_rollout where company_id = $1 and environment = 'sandbox'", [CO_B]))[0]?.u ?? null,
     rolloutStageB: async () => (await q<{ stage: string }>("select stage from public.einvoice_rollout where company_id = $1 and environment = 'sandbox'", [CO_B]))[0]?.stage ?? null,
     rolloutAllowed: async (c) => (await svc<{ ok: boolean }>("select public.esblu_einvoice_rollout_allowed($1, 'sandbox') ok", [c]))[0]?.ok === true,
     othersPending: async () => (await q<{ n: number }>("select count(*)::int n from public.einvoice_inbound where company_id <> $1 and processing_status not in ('acknowledged', 'failed')", [CO_B]))[0].n,
@@ -449,6 +492,7 @@ const savedLimits = { ...INBOUND_RATE_LIMITS };
 // Mení IBA riadok (company_id = B, environment = sandbox, stage = očakávaný); ostatné riadky sa overia odtlačkom.
 // -----------------------------------------------------------------------------
 let rolloutSwitched = false;
+const RUN_STARTED_MS = Date.now();
 const ROLLOUT_OTHERS_BEFORE = await db.rolloutOthersFingerprint();
 const rolloutReport: Record<string, unknown> = { others_fp_before: ROLLOUT_OTHERS_BEFORE };
 async function revertRollout(reason: string) {
@@ -625,11 +669,19 @@ async function scenarios() {
     const h = sanitizeHealth(await db.health());
     const alerts = evaluateAlerts(h, DEFAULT_ALERT_THRESHOLDS).map((a) => `${a.code}:${a.severity}`);
     const st = await db.scanState(ORG_B);
-    assert.equal(h.inbound.scan_overdue, 0);
-    assert.ok(h.inbound.rate_limited_1h >= 1, "zamietnutia z F6 viditeľné");
-    assert.ok(st?.last_complete_at && st.incomplete_streak === 0 || (st?.incomplete_streak ?? 0) >= 0);
+    // B (skenovaná testom): úplný sken za posledné 2 h, žiadna séria neúplných, nie je po termíne
+    assert.ok(st?.last_complete_at, "B: chýba úplný sken");
+    assert.ok(Date.parse(st.last_complete_at!) > Date.now() - 2 * 3600_000, `B: posledný úplný sken ${st.last_complete_at} je starší ako 2 h`);
+    assert.equal(Number(st.incomplete_streak), 0, `B: incomplete_streak ${st.incomplete_streak}`);
+    const { orgs, scans } = await db.orgsAndScans();
+    const overdue = overdueOrgs(orgs, scans);
+    assert.ok(!overdue.includes(ORG_B), "B nesmie byť po termíne");
+    // celkový scan_overdue = oprávnene oneskorené organizácie mimo testu (test skenuje iba B), nie pevná nula
+    assert.equal(h.inbound.scan_overdue, overdue.length, `scan_overdue: health ${h.inbound.scan_overdue}, nezávislý prepočet ${overdue.length}`);
+    assert.ok(h.inbound.rate_limited_1h >= 1, `rate_limited_1h ${h.inbound.rate_limited_1h} (očakávané ≥ 1 z F6)`);
     const opsAfter = await db.opsAlerts();
     return {
+      overdue_outside_test: overdue.map(short),
       health_inbound: { acknowledged: h.inbound.acknowledged, failed: h.inbound.failed, scan_overdue: h.inbound.scan_overdue, scan_incomplete: h.inbound.scan_incomplete, rate_limited_1h: h.inbound.rate_limited_1h, stuck: h.inbound.stuck },
       alerts_evaluated: alerts,
       ops_alerts_stored_before_after: [ALERTS_BEFORE, opsAfter],
@@ -656,9 +708,12 @@ try {
   rolloutReport.others_fp_after = await db.rolloutOthersFingerprint();
   rolloutReport.others_unchanged = rolloutReport.others_fp_after === ROLLOUT_OTHERS_BEFORE;
   rolloutReport.stage_b_final = await db.rolloutStageB();
+  const bUpdated = await db.rolloutUpdatedAtB();
+  // audit: ak sa rollout prepínal, updated_at riadku B musí byť z tohto behu
+  rolloutReport.b_updated_at_in_run = !rolloutReport.reverted || (bUpdated !== null && Date.parse(bUpdated) >= RUN_STARTED_MS - 1_000);
   RUNNING = false;
 }
-if (rolloutReport.others_unchanged !== true || rolloutReport.stage_b_final !== "paused") {
+if (rolloutReport.others_unchanged !== true || rolloutReport.stage_b_final !== "paused" || rolloutReport.b_updated_at_in_run !== true) {
   results.push({ id: "ROLLOUT", label: "rollout B vrátený, ostatné firmy nezmenené", verdict: "FAIL", requests: {}, evidence: rolloutReport });
 } else {
   results.push({ id: "ROLLOUT", label: "rollout B vrátený, ostatné firmy nezmenené", verdict: "PASS", requests: {}, evidence: rolloutReport });
