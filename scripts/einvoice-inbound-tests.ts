@@ -336,9 +336,14 @@ class FakeProvider implements EinvoiceProvider {
   }
   async getDeliveryEvidence() { return null; }
   async findSubmissionByIdempotencyKey() { return { kind: "unknown" as const }; }
+  /** P1-4 audit: zmena zoznamu u poskytovateľa medzi stránkami (nové doklady, ACK iným procesom). */
+  beforeList: ((page: number) => void) | null = null;
+  /** P1-4 audit: ACK prebehne u poskytovateľa, ale odpoveď sa stratí (timeout). */
+  ackLostResponse = 0;
   async listUnacknowledgedInbound(c: ProviderContext, options?: { limit?: number; page?: number }) {
     this.calls.push("list");
     this.ctx(c);
+    this.beforeList?.(Math.max(1, options?.page ?? 1));
     if (this.listError) throw this.listError;
     let all = [...this.docs.values()].filter((d) => d.org === c.providerOrgId && !d.acknowledged).map((d) => d.summary);
     if (this.newestFirst) all = all.reverse();
@@ -371,6 +376,10 @@ class FakeProvider implements EinvoiceProvider {
     const d = this.docs.get(id);
     if (!d || d.org !== c.providerOrgId) throw new EinvoiceProviderError("EINVOICE_PROVIDER_NOT_FOUND");
     d.acknowledged = true; // idempotentné
+    if (this.ackLostResponse > 0) {
+      this.ackLostResponse--;
+      throw new EinvoiceProviderError("EINVOICE_PROVIDER_TIMEOUT", "lost response", true);
+    }
   }
 }
 const provider = new FakeProvider();
@@ -1645,6 +1654,164 @@ await check("P1-4 migrácia: rollback vráti politiky a health (health beží), 
   await locked(() => db.exec(read("supabase/migrations/20261125100000_einvoice_inbound_quarantine.sql")));
   const [h2] = await svc<{ j: { inbound: Record<string, number> } }>("select public.esblu_einvoice_health(60, 60) j", []);
   assert.equal(typeof h2.j.inbound.quarantined, "number");
+});
+
+// =============================================================================
+// P1-4 AUDIT (2026-11-23): meniaci sa zoznam nepotvrdených dokladov počas stránkovania
+// =============================================================================
+const xmlB = (n: string) => inboundXml(n, { endpoint: "2030000000", customerIco: "22222222" });
+const countLike = async (prefix: string, where = "true") =>
+  (await sql<{ n: number }>(`select count(*)::int n from public.einvoice_inbound where provider_received_id like '${prefix}%' and ${where}`)).rows[0].n;
+const dupRows = async (prefix: string) =>
+  (await sql<{ n: number }>(`select count(*)::int n from (select provider_received_id from public.einvoice_inbound where provider_received_id like '${prefix}%' group by 1 having count(*) > 1) x`)).rows[0].n;
+const draftsFor = async (prefix: string) =>
+  (await sql<{ n: number }>(`select count(distinct invoice_id)::int n from public.einvoice_inbound where provider_received_id like '${prefix}%' and invoice_id is not null`)).rows[0].n;
+async function drainAll(d = deps()) {
+  for (let i = 0; i < 200; i++) if ((await runInboundProcessBatch(d, { batchSize: 25 })).claimed === 0) return;
+}
+const syncB = (opts: Parameters<typeof syncInboundList>[3] = {}) => syncInboundList(deps(), [{ providerOrgId: "org-b" }], "poll", opts);
+function pagingMode() {
+  provider.inboundPagination = "offset";
+  provider.newestFirst = true; // R1: poskytovateľ vracia najnovšie prvé
+  provider.hasMoreMode = "meta";
+}
+function pagingReset() {
+  provider.inboundPagination = "none";
+  provider.newestFirst = false;
+  provider.hasMoreMode = "absent";
+  provider.beforeList = null;
+  provider.ackErrors = [];
+  provider.ackLostResponse = 0;
+}
+
+await check("P1-4 AUDIT S1: 250 nepotvrdených (200 platných + 50 trvalo chybných) — stránky sa načítajú PRED akýmkoľvek ACK; všetko spracované, bez duplicít", async () => {
+  pagingMode();
+  for (let i = 0; i < 250; i++) {
+    const id = `rcv-s1-${String(i).padStart(3, "0")}`;
+    provider.add("org-b", id, i % 5 === 4 ? BAD_XML() : xmlB(`FA-S1-${i}`));
+  }
+  provider.calls = [];
+  const rep = await syncB({ pageSize: 100 });
+  const listIdx = provider.calls.map((c, i) => (c === "list" ? i : -1)).filter((i) => i >= 0);
+  assert.equal(listIdx.length, 3, "3 stránky (100+100+50), has_more=false na tretej");
+  assert.ok(!provider.calls.some((c) => c.startsWith("ack:")), "počas stránkovania žiadny ACK");
+  assert.equal(await countLike("rcv-s1-"), 250, "všetkých 250 zaregistrovaných v jednom behu");
+  assert.equal(rep.stopped?.length ?? 0, 0);
+  await drainAll();
+  assert.equal(await countLike("rcv-s1-", "processing_status = 'acknowledged'"), 200);
+  assert.equal(await countLike("rcv-s1-", "processing_status = 'failed'"), 50);
+  assert.equal(await draftsFor("rcv-s1-"), 200, "presne 200 konceptov");
+  assert.equal(await dupRows("rcv-s1-"), 0);
+  const acks = provider.calls.filter((c) => c.startsWith("ack:rcv-s1-"));
+  assert.equal(acks.length, 200);
+  assert.equal(new Set(acks).size, 200, "každý ACK presne raz");
+  // opakovaný beh: nič nové, chybné ostávajú u poskytovateľa a sú iba „už známe“
+  const again = await syncB({ pageSize: 100 });
+  assert.equal(again.registered, 0);
+  assert.ok((again.alreadyKnown ?? 0) >= 50);
+  await drainAll();
+  assert.equal(await draftsFor("rcv-s1-"), 200);
+  pagingReset();
+});
+
+await check("P1-4 AUDIT S2: nové doklady prídu medzi stránkami (najnovšie prvé) → žiadny pôvodný sa nepreskočí, nové prevezme ďalší beh", async () => {
+  pagingMode();
+  for (let i = 0; i < 120; i++) provider.add("org-b", `rcv-s2-${String(i).padStart(3, "0")}`, xmlB(`FA-S2-${i}`));
+  let injected = false;
+  provider.beforeList = (page) => {
+    if (page === 2 && !injected) {
+      injected = true;
+      for (let i = 0; i < 40; i++) provider.add("org-b", `rcv-s2n-${String(i).padStart(3, "0")}`, xmlB(`FA-S2N-${i}`));
+    }
+  };
+  await syncB({ pageSize: 50 });
+  assert.equal(await countLike("rcv-s2-"), 120, "posun nadol pri vložení = opakovanie, nie preskočenie");
+  provider.beforeList = null;
+  await syncB({ pageSize: 50 });
+  assert.equal(await countLike("rcv-s2n-"), 40, "nové v ďalšom behu");
+  await drainAll();
+  assert.equal(await countLike("rcv-s2", "processing_status = 'acknowledged'"), 160);
+  assert.equal(await dupRows("rcv-s2"), 0);
+  pagingReset();
+});
+
+await check("P1-4 AUDIT S3: súbežný ACK iným procesom medzi stránkami POSUNIE offset → časť dokladov sa v tom behu PRESKOČÍ; ďalší beh ich prevezme (nie trvalo)", async () => {
+  pagingMode();
+  for (let i = 0; i < 150; i++) provider.add("org-b", `rcv-s3-${String(i).padStart(3, "0")}`, xmlB(`FA-S3-${i}`));
+  let acked = 0;
+  provider.beforeList = (page) => {
+    if (page === 2 && acked === 0) {
+      // iný proces (webhook / feed) práve potvrdil 30 najnovších dokladov z 1. stránky
+      for (const d of [...provider.docs.values()].filter((x) => x.org === "org-b" && !x.acknowledged && x.summary.providerReceivedId.startsWith("rcv-s3-")).reverse().slice(0, 30)) {
+        d.acknowledged = true;
+        acked++;
+      }
+    }
+  };
+  await syncB({ pageSize: 50 });
+  const run1 = await countLike("rcv-s3-");
+  assert.ok(run1 < 150, `v 1. behu chýba ${150 - run1} dokladov (dôkaz posunu offsetu)`);
+  provider.beforeList = null;
+  await syncB({ pageSize: 50 });
+  // potvrdené iným procesom (30) Esblu nezaregistruje — u poskytovateľa už nie sú nepotvrdené (v reálnom svete ich spracoval ten proces)
+  const unackedAtProvider = [...provider.docs.values()].filter((x) => x.org === "org-b" && !x.acknowledged && x.summary.providerReceivedId.startsWith("rcv-s3-")).map((x) => x.summary.providerReceivedId);
+  const registered = new Set((await sql<{ p: string }>("select provider_received_id p from public.einvoice_inbound where provider_received_id like 'rcv-s3-%'")).rows.map((r) => r.p));
+  assert.deepEqual(unackedAtProvider.filter((id) => !registered.has(id)), [], "po 2. behu je zaregistrovaný každý doklad, ktorý je u poskytovateľa stále nepotvrdený");
+  await drainAll();
+  assert.equal(await dupRows("rcv-s3-"), 0);
+  pagingReset();
+});
+
+await check("P1-4 AUDIT S4: zlyhaný ACK (503), timeout so stratenou odpoveďou a opakovaný beh → jeden koncept, ACK sa dokončí, žiadna duplicita", async () => {
+  pagingMode();
+  for (let i = 0; i < 4; i++) provider.add("org-b", `rcv-s4-${i}`, xmlB(`FA-S4-${i}`));
+  provider.ackErrors = [new EinvoiceProviderError("EINVOICE_PROVIDER_UNAVAILABLE", "u", true), new EinvoiceProviderError("EINVOICE_PROVIDER_TIMEOUT", "t", true)];
+  provider.ackLostResponse = 1; // tretí ACK prebehne, ale odpoveď sa stratí
+  await syncB({ pageSize: 50 });
+  await drainAll();
+  const pending = await countLike("rcv-s4-", "processing_status = 'ack_pending'");
+  assert.ok(pending >= 2, `čaká na ACK: ${pending}`);
+  // čas plynie (backoff) a ďalšie behy synchronizácie aj spracovania
+  for (let round = 0; round < 3; round++) {
+    await sql("update public.einvoice_inbound set next_retry_at = now() where provider_received_id like 'rcv-s4-%' and processing_status = 'ack_pending'");
+    await syncB({ pageSize: 50 });
+    await drainAll();
+  }
+  assert.equal(await countLike("rcv-s4-", "processing_status = 'acknowledged'"), 4);
+  assert.equal(await draftsFor("rcv-s4-"), 4);
+  assert.equal(await dupRows("rcv-s4-"), 0);
+  pagingReset();
+});
+
+await check("P1-4 AUDIT S5: has_more + strop strán pri meniacom sa zozname; trvalo chybné na vrchu nad stropom blokujú staršie (bez ACK karantény)", async () => {
+  pagingMode();
+  // 60 starších platných, potom 60 novších trvalo chybných (najnovšie prvé → chybné sú na vrchu)
+  for (let i = 0; i < 60; i++) provider.add("org-b", `rcv-s5v-${String(i).padStart(3, "0")}`, xmlB(`FA-S5-${i}`));
+  for (let i = 0; i < 60; i++) provider.add("org-b", `rcv-s5x-${String(i).padStart(3, "0")}`, BAD_XML());
+  const unackedB = () => [...provider.docs.values()].filter((x) => x.org === "org-b" && !x.acknowledged).length;
+  const before = unackedB();
+  // strop: 3 stránky × 20 = 60 → PAGINATION_LIMIT, has_more=true
+  const r1 = await syncB({ pageSize: 20, maxPages: 3 });
+  assert.deepEqual(r1.stopped, [{ code: "PAGINATION_LIMIT" }]);
+  assert.equal(r1.pages, 3);
+  await drainAll();
+  assert.equal(await countLike("rcv-s5x-", "processing_status = 'failed'"), 60, "60 chybných spracovaných (failed, nepotvrdené)");
+  assert.equal(await countLike("rcv-s5v-"), 0, "staršie platné za stropom ešte nevidno");
+  const r2 = await syncB({ pageSize: 20, maxPages: 3 });
+  assert.equal(await countLike("rcv-s5v-"), 0, "bez ACK karantény chybné na vrchu trvalo zaberajú strop → staršie by čakali");
+  assert.deepEqual(r2.stopped, [{ code: "PAGINATION_LIMIT" }], "alert PAGINATION_LIMIT to hlási");
+  // s vyšším stropom (realita: 10 × 100 = 1 000) sa prevezmú; has_more=false ukončí beh
+  const r3 = await syncB({ pageSize: 100, maxPages: 10 });
+  assert.equal(await countLike("rcv-s5v-"), 60);
+  assert.equal(r3.stopped?.length ?? 0, 0);
+  assert.ok((r3.pages ?? 0) <= Math.ceil(before / 100) + 1);
+  // nápoveda z udalosti funguje aj nad stropom
+  provider.add("org-b", "rcv-s5h-0", xmlB("FA-S5-H"));
+  await syncB({ pageSize: 20, maxPages: 1, hints: { "org-b": ["rcv-s5h-0"] } });
+  assert.equal(await countLike("rcv-s5h-"), 1);
+  await drainAll();
+  assert.equal(await dupRows("rcv-s5"), 0);
+  pagingReset();
 });
 
 console.log(`\neinvoice-inbound: ${passed} passed, ${failed} failed`);
