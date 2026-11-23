@@ -539,8 +539,8 @@ export function withInboundRateLimit(deps: InboundDeps, cls: "poll" | "event"): 
   const store = deps.store;
   if (!store.acquireProviderBudget) return deps;
   const provider = new Proxy(deps.provider, {
-    get(target, key, receiver) {
-      const value = Reflect.get(target, key, receiver);
+    get(target, key) {
+      const value = Reflect.get(target, key, target);
       if (typeof value !== "function") return value;
       if (!RATE_LIMITED_METHODS.has(String(key))) return value.bind(target);
       return async (...args: unknown[]) => {
@@ -602,8 +602,8 @@ export async function runInboundProcessBudget(
   // Sledovanie chýb poskytovateľa (výsledok kroku nesie iba interný kód, napr. PROVIDER_FETCH_FAILED / ACK_FAILED).
   let lastProviderError: unknown = null;
   const provider = new Proxy(deps.provider, {
-    get(target, key, receiver) {
-      const value = Reflect.get(target, key, receiver);
+    get(target, key) {
+      const value = Reflect.get(target, key, target);
       if (typeof value !== "function") return value;
       if (key !== "getInboundDocument" && key !== "acknowledgeInbound") return value.bind(target);
       return async (...args: unknown[]) => {

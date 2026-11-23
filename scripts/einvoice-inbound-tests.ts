@@ -16,7 +16,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { handleEinvoiceWebhook, classifyWebhookEvent, WEBHOOK_MAX_BODY_BYTES, inboundHintId } from "../lib/einvoice/inbound/webhook.ts";
-import { INBOUND_RATE_LIMITS, processInboundRow, runInboundPoll, runInboundProcessBatch, runInboundProcessBudget, syncInboundList } from "../lib/einvoice/inbound/processor.ts";
+import { INBOUND_RATE_LIMITS, withInboundRateLimit, processInboundRow, runInboundPoll, runInboundProcessBatch, runInboundProcessBudget, syncInboundList } from "../lib/einvoice/inbound/processor.ts";
 // Limiter (DB RPC) je v testovacom store zapnutý iba v testoch RL1–RL4.
 const limiter = { on: false };
 import { DEFAULT_ALERT_THRESHOLDS, evaluateAlerts, sanitizeHealth } from "../lib/einvoice/ops/alerts.ts";
@@ -2263,5 +2263,20 @@ await check("P1-4 RL4: limiter je fail-open — chyba DB funkcie limitera nezast
   }
 });
 
+
+await check("P1-4 RL5 (regresia zo stagingového harnessu): limiter a rozpočet nad skutočným EfakturaSkProvider (privátne polia) — getter inboundPagination a volania fungujú cez Proxy", async () => {
+  const { EfakturaSkProvider } = await import("../lib/einvoice/provider/efaktura-sk.ts");
+  const real = new EfakturaSkProvider({
+    apiKey: "efk_pk_test_" + "0".repeat(24), environment: "sandbox",
+    fetchImpl: async () => new Response(JSON.stringify({ data: [], meta: { limit: 100, offset: 0, has_more: false } }), { status: 200, headers: { "content-type": "application/json" } }),
+  });
+  const d = withInboundRateLimit({ store: inboundStore, provider: real, environment: "sandbox" }, "poll");
+  assert.equal(d.provider.inboundPagination, "offset");
+  const r = await syncInboundList(d, [{ providerOrgId: "org-a" }], "poll", { recordScan: false });
+  assert.equal(r.orgsComplete, 1);
+  assert.deepEqual(r.errors, []);
+  const b = await runInboundProcessBudget({ store: inboundStore, provider: real, environment: "sandbox" }, { maxItems: 1 });
+  assert.ok(b.stoppedCode === null || b.stoppedCode === "MAX_ITEMS");
+});
 console.log(`\neinvoice-inbound: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
