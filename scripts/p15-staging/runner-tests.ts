@@ -102,6 +102,35 @@ await check("F-4 zmenená knižnica / manifest = STOP; nezmenené = OK", () => {
   }
 });
 
+await check("F-4 graf závislostí: zmenený tranzitívny modul (tslib, iceberg-js, phoenix) alebo prítomný @opentelemetry/api = STOP", async () => {
+  const { verifyDependencyLock } = await import("./runner-core.ts");
+  verifyDependencyLock(ROOT);
+  const lock = JSON.parse(readFileSync(path.join(ROOT, "scripts/p15-staging/dependency-lock.json"), "utf8")) as { files: Record<string, string>; absent: string[] };
+  for (const target of ["node_modules/tslib/tslib.js", "node_modules/iceberg-js/dist/index.mjs", "node_modules/@supabase/phoenix/priv/static/phoenix.cjs.js", "node_modules/@supabase/storage-js/package.json"]) {
+    assert.ok(lock.files[target], `v locku: ${target}`);
+    const dir = mkdtempSync(path.join(tmpdir(), "p15-dep-"));
+    for (const rel of Object.keys(lock.files).concat("scripts/p15-staging/dependency-lock.json")) cpSync(path.join(ROOT, rel), path.join(dir, rel));
+    writeFileSync(path.join(dir, target), readFileSync(path.join(dir, target), "utf8") + "\n// tampered\n");
+    throwsStop(() => verifyDependencyLock(dir), /F-4/);
+  }
+  const dir = mkdtempSync(path.join(tmpdir(), "p15-dep-"));
+  for (const rel of Object.keys(lock.files).concat("scripts/p15-staging/dependency-lock.json")) cpSync(path.join(ROOT, rel), path.join(dir, rel));
+  cpSync(path.join(ROOT, "package.json"), path.join(dir, "node_modules/@opentelemetry/api/package.json"));
+  throwsStop(() => verifyDependencyLock(dir), /F-4: nečakaný balík/);
+});
+
+await check("preflight režim: všetky lokálne kontroly, žiadna sieť, žiadny kľúč; s kľúčom v prostredí = STOP", () => {
+  const base = { PATH: process.env.PATH ?? "", ESBLU_P15_PREFLIGHT: "1", ESBLU_STAGING_SUPABASE_URL: ALLOWED_ORIGIN };
+  const ok = spawnSync(process.execPath, ["--experimental-strip-types", "--no-warnings", "scripts/p15-staging/p15-staging-storage-export.ts"], { cwd: ROOT, env: base, encoding: "utf8" });
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.match(ok.stdout, /PREFLIGHT_OK/);
+  const withKey = spawnSync(process.execPath, ["--experimental-strip-types", "--no-warnings", "scripts/p15-staging/p15-staging-storage-export.ts"], { cwd: ROOT, env: { ...base, ESBLU_STAGING_SERVICE_ROLE_KEY: "sb_secret_offline_test_not_real_000000" }, encoding: "utf8" });
+  assert.equal(withKey.status, 2);
+  assert.doesNotMatch(withKey.stdout + withKey.stderr, /sb_secret_offline/);
+  const badUrl = spawnSync(process.execPath, ["--experimental-strip-types", "--no-warnings", "scripts/p15-staging/p15-staging-storage-export.ts"], { cwd: ROOT, env: { ...base, ESBLU_STAGING_SUPABASE_URL: "https://evil.example" }, encoding: "utf8" });
+  assert.equal(badUrl.status, 2);
+});
+
 await check("F-5 NODE_OPTIONS / NODE_PATH / proxy / TLS výnimky / NPM_CONFIG_* / iné execArgv = STOP", () => {
   assertCleanProcess({ PATH: "x", ESBLU_STAGING_SUPABASE_URL: ALLOWED_ORIGIN }, ["--experimental-strip-types", "--no-warnings"]);
   for (const env of [{ NODE_OPTIONS: "--require x.js" }, { node_options: "--import x" }, { NODE_PATH: "/x" }, { HTTPS_PROXY: "http://p" }, { https_proxy: "http://p" },

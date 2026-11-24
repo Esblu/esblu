@@ -47,3 +47,20 @@ nesúlad DB. `tsc --strict` bez chýb.
 ## Verdikt
 
 **PASS** — runner je možné spustiť podľa kontrolného zoznamu v reporte.
+
+## Dodatok — posledná kontrola pred skupinou C (2026-11-24)
+
+- **Skutočný graf modulov** (trasovanie Node 22: ESM resolve hook + CommonJS `require`): 46 súborov — 2 runner,
+  2 knižnice, 40 v `@supabase/*` (vrátane `phoenix/priv/static/phoenix.cjs.js` **mimo `dist`**), `tslib/tslib.js`,
+  `iceberg-js/dist/index.mjs` (**mimo `@supabase`** — predtým nepokryté). Runtime (rpc, storage, select) nenačíta nič ďalšie.
+- **`dependency-lock.json`**: 54 súborov (graf + `package.json` 9 balíkov a koreňa — rozlíšenie `exports`) a zoznam
+  zakázaných dynamicky načítateľných balíkov (`@opentelemetry/api` — supabase-js ho skúša `import()`-nuť, `ws`).
+  Overuje .ps1 pred spustením Node (pinovaný SHA-256 locku) a runner pri štarte.
+- **Obchádzanie URL**: v grafe nie je `http`/`https`/`net`/`tls`/`child_process`; všetka sieť ide cez `fetch` —
+  klient aj globálny `fetch` sú obalené `guardedFetch` (iný origin = výnimka, bez presmerovania); realtime/websocket
+  sa nepoužíva, auth bez refresh.
+- **Preflight** `-PreflightOnly`: syntax skriptu (PowerShell parser), 6 odtlačkov, lock, `@supabase`, Node, čisté
+  prostredie, potom Node s `ESBLU_P15_PREFLIGHT=1` bez kľúča (overí F-3/F-4/F-5/F-6 v skutočnom procese) → `PREFLIGHT_OK`
+  a koniec; kľúč sa nepýta. Ak by bol kľúč v prostredí, Node skončí STOP.
+- Offline testy 19/19 (pribudli: zmena tranzitívneho modulu / prítomný `@opentelemetry/api`, preflight režim).
+- .ps1 sa v Linuxovom sandboxe nedá spustiť — preflight na Windows spúšťa vlastník.

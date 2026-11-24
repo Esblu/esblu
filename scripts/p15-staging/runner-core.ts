@@ -17,7 +17,7 @@
 // Runner nikdy nemaže (backend nemá operáciu remove) a nevolá nič mimo Supabase stagingu.
 // =============================================================================
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import {
   COMPANY_EXPORT_FILE_SOURCES,
@@ -52,6 +52,7 @@ export const EXPECTED_LOCAL_SHA256: Readonly<Record<string, string>> = Object.fr
   "scripts/p15-staging/manifest.json": "fd81a8f55f12c46a488f58441c7ef411a3620f50499f13b86f3804fba0b77d51",
   "lib/company-export.ts": "96adf813c4e03ba2ec15132900fa53dab6b582b584d016715edfc0a73f034eac",
   "lib/einvoice/visibility.ts": "7013c5f61aa819e6d299fd4eeeef9c9a65fc59cebf634d381756c54f1f14a5d2",
+  "scripts/p15-staging/dependency-lock.json": "9280ba5bc86397ba5a5187a1c30a973fc819e151af414e95e0c9a9d51cb1981d",
 });
 const ALLOWED_BUCKETS = new Set(["einvoice-documents", "ai-inbox-documents"]);
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -129,6 +130,32 @@ export function verifyLocalIntegrity(root: string, expected: Readonly<Record<str
       throw new Stop(`F-4: chýba ${rel}`);
     }
     if (got !== want) throw new Stop(`F-4: SHA-256 nesedí pre ${rel}`);
+  }
+}
+
+/**
+ * Graf závislostí (dependency-lock.json): každý skutočne načítaný modul + package.json balíkov má očakávaný SHA-256
+ * a voliteľné balíky, ktoré by sa načítali dynamicky (napr. @opentelemetry/api), nesmú existovať.
+ * Primárna kontrola je v .ps1 PRED spustením Node; runner ju opakuje pri štarte (obrana do hĺbky).
+ */
+export function verifyDependencyLock(root: string): void {
+  let lock: { files: Record<string, string>; absent: string[] };
+  try {
+    lock = JSON.parse(readFileSync(path.join(root, "scripts/p15-staging/dependency-lock.json"), "utf8"));
+  } catch {
+    throw new Stop("F-4: chýba dependency-lock.json");
+  }
+  for (const [rel, want] of Object.entries(lock.files ?? {})) {
+    let got: string;
+    try {
+      got = sha256(readFileSync(path.join(root, rel)));
+    } catch {
+      throw new Stop(`F-4: chýba závislosť ${rel}`);
+    }
+    if (got !== want) throw new Stop(`F-4: závislosť sa zmenila: ${rel}`);
+  }
+  for (const rel of lock.absent ?? []) {
+    if (existsSync(path.join(root, rel))) throw new Stop(`F-4: nečakaný balík (dynamicky načítateľný): ${rel}`);
   }
 }
 

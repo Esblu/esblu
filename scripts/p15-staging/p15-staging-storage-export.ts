@@ -14,6 +14,7 @@ import {
   Runner,
   Stop,
   validateStagingUrl,
+  verifyDependencyLock,
   verifyLocalIntegrity,
   type Backend,
 } from "./runner-core.ts";
@@ -28,8 +29,22 @@ function fail(msg: string, code = 2): never {
 try {
   assertCleanProcess(process.env, process.execArgv);
   verifyLocalIntegrity(ROOT);
+  verifyDependencyLock(ROOT);
 } catch (error) {
   fail(error instanceof Error ? error.message : "kontrola prostredia zlyhala");
+}
+
+// Preflight (bez kľúča, bez siete): všetky lokálne kontroly prešli → koniec. Nikdy nečíta kľúč ani nevytvára klienta.
+if (process.env.ESBLU_P15_PREFLIGHT === "1") {
+  try {
+    validateStagingUrl(process.env.ESBLU_STAGING_SUPABASE_URL ?? "");
+    new Runner(null as unknown as Backend, loadManifest(ROOT));
+  } catch (error) {
+    fail(error instanceof Error ? error.message : "preflight");
+  }
+  if (process.env.ESBLU_STAGING_SERVICE_ROLE_KEY) fail("preflight nesmie mať kľúč v prostredí");
+  console.log("PREFLIGHT_OK: prostredie Node, odtlačky, URL a manifest overené; žiadna sieť, žiadny kľúč");
+  process.exit(0);
 }
 
 let url: string;
@@ -41,9 +56,13 @@ try {
 const key = process.env.ESBLU_STAGING_SERVICE_ROLE_KEY ?? "";
 if (!/^sb_secret_[A-Za-z0-9_-]{20,}$/.test(key)) fail("kľúč nemá formát sb_secret_");
 
+// Obrana do hĺbky: aj globálny fetch (ak by ho niektorá závislosť použila mimo klienta) je obmedzený na povolený origin.
+const nativeFetch = globalThis.fetch;
+globalThis.fetch = guardedFetch(nativeFetch);
+
 const admin = createClient(url, key, {
   auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
-  global: { fetch: guardedFetch(fetch) },
+  global: { fetch: globalThis.fetch },
 });
 
 const backend: Backend = {
