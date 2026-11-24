@@ -57,6 +57,29 @@ Návrh optimalizácie (neimplementované): (a) poradovo nezávislý odtlačok be
 odhad 2–3× rýchlejšie; (b) odtlačok raz pred čítaním a v `begin` iba porovnanie počtov + `max(updated_at)`;
 (c) vyšší `statement_timeout` iba pre volanie výmazu (vlastná rola/RPC) alebo výmaz ako job na pozadí.
 
+## 6. Záverečná kontrola po runneri (2026-11-24 21:20–21:30 UTC, read-only + testy s rollbackom)
+
+Runner (vlastník, Windows PS 5.1): 13/13 PASS, exit 0, kľúč `sb_secret_s9kI1…` odvolaný.
+
+| Kontrola | Výsledok |
+| --- | --- |
+| 16 pôvodných firiem vs záloha `esblu_backup_p15_20261124` (18 tabuliek, celé riadky podľa id) | 0 zmenených/chýbajúcich, 0 nových mimo P15; snímka `b3917b95…`, Storage mimo P15 67 obj. `2b33662b…`, účty 24 `8aaff21a…` — **zhoda** |
+| 322 objektov Storage vs manifest (eTag = MD5 obsahu + veľkosť, po firmách) | T1 7, T2 8, ISO 7, PERF 300; súhrny = manifest (`53c95bd8…`); 0 duplicít, 0 multipart; T2 poškodený cieľ = pôvodné bajty (obnovený); prepísané iba 2 (E1, E5) |
+| Exporty (7 behov = presne scenár runnera) | E1 T1 `FILES_CHANGED`, E2 T1 completed 5 súb., E3 ISO completed 5, E4 T2 `FILES_MISSING`, E5 T2 `FILES_CORRUPT`, E6 T2 completed 7, P1 PERF completed 300 (3 časti) |
+| SHA-256 exportovaných súborov vs manifest | T1 `4a7fc90a…`, T2 `93791d73…`, ISO `8ce997f8…`, PERF `e6f6f919…` = manifest; XML/UBL SHA = `xml_sha256` v DB; R3 a osirelé 0× v exporte; 0 cudzích ciest |
+| Aktuálnosť exportov | dátový aj Storage odtlačok = aktuálny stav DB/Storage pre všetky 4; počty (T1 inbound 2 bez R3) sedia; súbory dokončených behov = aktuálne objekty (id, eTag, veľkosť, čas) |
+| RLS (T1/T2/ISO vlastník, T1 admin, anon) s reálnymi objektmi | iba vlastné riadky a súbory; R3 skrytý; admin 0 e-faktúr; evidenčné tabuľky a anon 42501; anon Storage 0 |
+| RPC anon/authenticated (11 RPC + 5 tabuliek) | 32/32 `42501` |
+| begin/part negatívne | chýbajúci, cudzí (ISO), R3 (RECIPIENT_MISMATCH), osirelý súbor → `FILES_MISMATCH`; starý odtlačok → `DATA_CHANGED`; ISO/T2 vlastník, T1 admin → `NOT_ACTIVE_OWNER`; dávka cudzím vlastníkom → `EXPORT_NOT_FOUND`; zlé SHA XML → `FILES_CORRUPT` |
+| Preflight ukončenia T1/T2 (simulovaná reautentifikácia, rollback) | exported = OK pre T1 aj T2; waived → `EXPORT_REQUIRED`; bez oprávnenia → `ACK_REQUIRED`; cudzí vlastník/admin → `NOT_ACTIVE_OWNER`; zmena údajov T1 → `EXPORT_STALE`, T2 neovplyvnená; bez reautentifikácie → `REAUTH_REQUIRED` |
+| Mandáty / ukončenie | 3 mandáty (sandbox, neodvolané, syntetické e-maily); 0 ukončení, 0 deregistrácií, 0 cleanup jobov, 0 incidentov pre P15 |
+| Neočakávané záznamy | od runnera iba 7 behov + 336 súborov behov + 322 objektov; 0 otvorených behov; 0 duplicít; po testoch bez zvyškov (md5 behov, mandátov, objektov a P15 účtov nezmenené) |
+| Kľúč (logy API, iba prefix/hash) | 1 secret key, 2 545 požiadaviek 21:06:41–21:17:38, iba `rest` + `storage`, iba GET/POST (0 DELETE/PUT/PATCH), RPC iba export; posledné 200 o 21:16:03, potom 1× 401 `UNAUTHORIZED_INVALID_API_KEY_TYPE`, ďalšie použitie 0 |
+
+Poznámka: 28× HTTP 400 pri čítaní 3 tabuliek bez stĺpca `id` (`order=id`) — každé hneď nasledované úspešným čítaním bez triedenia; 326× 400 v Storage = sondy „objekt neexistuje“ pred nahraním.
+
+**Výsledok: PASS. Príprava skupiny D: GO** (samotné spustenie D iba po samostatnom schválení).
+
 ## 5. Čaká na runner (vlastník)
 
 `release-backups/p15/run-p15-groupC.ps1` → `scripts/p15-staging/p15-staging-storage-export.ts` (SHA-256 kontroluje .ps1):
