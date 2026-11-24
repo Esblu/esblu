@@ -79,3 +79,23 @@ nesúlad DB. `tsc --strict` bez chýb.
   rozlíšenie Node, verzie vs package-lock, porovnanie po súboroch s lockom, oba spôsoby súhrnu (potvrdí príčinu).
 - **Testy:** 21/21 (nové: zmenený nenačítaný súbor `.d.ts`, nadbytočný `evil.mjs`, chýbajúci súbor, zmenená verzia
   v `package.json`, CRLF↔LF v `tslib.js`).
+
+## Dodatok 3 — diagnostika zlyhala vo Windows PowerShell 5.1 (ConvertFrom-Json)
+
+- **Príčina:** `package-lock.json` (lockfileVersion 3) má koreňový balík pod kľúčom `""` v `packages`. PS 5.1
+  `ConvertFrom-Json` prevádza objekty na PSObject a vlastnosť s prázdnym názvom vytvoriť nevie →
+  „value of argument "name" is not valid“. Navyše názvy vlastností PSObject nerozlišujú veľkosť písmen.
+  `dependency-lock.json` prázdne ani veľkosťou písmen kolidujúce kľúče nemá (preto preflight prešiel až po strom @supabase).
+- **Oprava (oba .ps1, mimo Git):** `ConvertFrom-JsonSafe` — PS 5.1: `JavaScriptSerializer` (rovnaký parser, aký
+  ConvertFrom-Json používa interne, bez prevodu na PSObject; slovník s rozlišovaním veľkosti písmen), PS 7:
+  `ConvertFrom-Json -AsHashtable`. Spúšťač: samotest parsera (prázdny kľúč, A/a, vnorenie, pole) = STOP pri zlyhaní,
+  kontrola štruktúry a počtov locku (54 / 375 / 2), množiny ako ordinálny `Dictionary` (namiesto `@{}`), TLS 1.2 pre
+  overenie revokácie v PS 5.1. Žiadna kontrola SHA-256, verzií ani identity stagingu sa neodstránila; pinované odtlačky
+  sa nemenili (runner, lock, manifest, knižnice bez zmeny).
+- **Diagnostika v2:** sekcie D0 (samotest parsera), D1 (aj odkazy v @supabase), D2 (verzie cez parser PS), D2b (verzie
+  cez Node `JSON.parse`, skript cez stdin, bez siete), D3 (lock po súboroch + absent), D4, D5 (Node: `execArgv`,
+  `process.features.typescript` s parametrami runnera). Každá sekcia beží samostatne.
+- **Overenie v sandboxe (Linux, Node 22.23.5):** Node časti D2b/D1/D5 OK; lock 54/375/2, 0 rozdielov, absent nie sú
+  prítomné; preflight runnera v čistom prostredí `PREFLIGHT_OK` (so sandboxovými proxy premennými STOP F-5 — správne);
+  runner-tests 21/21; .ps1 ASCII, zátvorky vyvážené. **Neoverené:** beh v PowerShell 5.1 a Node 24.18.0 (sandbox
+  nemá PowerShell ani Windows) — overí diagnostika a `-PreflightOnly` na Windows.
