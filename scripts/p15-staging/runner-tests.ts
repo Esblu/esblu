@@ -105,18 +105,61 @@ await check("F-4 zmenená knižnica / manifest = STOP; nezmenené = OK", () => {
 await check("F-4 graf závislostí: zmenený tranzitívny modul (tslib, iceberg-js, phoenix) alebo prítomný @opentelemetry/api = STOP", async () => {
   const { verifyDependencyLock } = await import("./runner-core.ts");
   verifyDependencyLock(ROOT);
-  const lock = JSON.parse(readFileSync(path.join(ROOT, "scripts/p15-staging/dependency-lock.json"), "utf8")) as { files: Record<string, string>; absent: string[] };
+  const lock = JSON.parse(readFileSync(path.join(ROOT, "scripts/p15-staging/dependency-lock.json"), "utf8")) as { files: Record<string, string>; supabase_tree: Record<string, string>; absent: string[] };
   for (const target of ["node_modules/tslib/tslib.js", "node_modules/iceberg-js/dist/index.mjs", "node_modules/@supabase/phoenix/priv/static/phoenix.cjs.js", "node_modules/@supabase/storage-js/package.json"]) {
     assert.ok(lock.files[target], `v locku: ${target}`);
     const dir = mkdtempSync(path.join(tmpdir(), "p15-dep-"));
-    for (const rel of Object.keys(lock.files).concat("scripts/p15-staging/dependency-lock.json")) cpSync(path.join(ROOT, rel), path.join(dir, rel));
+    for (const rel of [...new Set([...Object.keys(lock.files), ...Object.keys(lock.supabase_tree), "scripts/p15-staging/dependency-lock.json"])]) cpSync(path.join(ROOT, rel), path.join(dir, rel));
     writeFileSync(path.join(dir, target), readFileSync(path.join(dir, target), "utf8") + "\n// tampered\n");
     throwsStop(() => verifyDependencyLock(dir), /F-4/);
   }
   const dir = mkdtempSync(path.join(tmpdir(), "p15-dep-"));
-  for (const rel of Object.keys(lock.files).concat("scripts/p15-staging/dependency-lock.json")) cpSync(path.join(ROOT, rel), path.join(dir, rel));
+  for (const rel of [...new Set([...Object.keys(lock.files), ...Object.keys(lock.supabase_tree), "scripts/p15-staging/dependency-lock.json"])]) cpSync(path.join(ROOT, rel), path.join(dir, rel));
   cpSync(path.join(ROOT, "package.json"), path.join(dir, "node_modules/@opentelemetry/api/package.json"));
   throwsStop(() => verifyDependencyLock(dir), /F-4: nečakaný balík/);
+});
+
+await check("F-4 strom @supabase: zmenený nenačítaný súbor, nadbytočný alebo chýbajúci súbor = STOP; poradie/OS nemá vplyv", async () => {
+  const { verifyDependencyLock, listSupabaseTree } = await import("./runner-core.ts");
+  const lock = JSON.parse(readFileSync(path.join(ROOT, "scripts/p15-staging/dependency-lock.json"), "utf8")) as { files: Record<string, string>; supabase_tree: Record<string, string> };
+  assert.deepEqual(listSupabaseTree(ROOT), Object.keys(lock.supabase_tree).sort(), "množina súborov = lock");
+  const copy = () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "p15-tree-"));
+    for (const rel of new Set([...Object.keys(lock.files), ...Object.keys(lock.supabase_tree), "scripts/p15-staging/dependency-lock.json"])) cpSync(path.join(ROOT, rel), path.join(dir, rel));
+    return dir;
+  };
+  const ok = copy();
+  verifyDependencyLock(ok);
+  // zmenený súbor, ktorý runner nenačíta (typová definícia) — predchádzajúca súhrnná kontrola by ho tiež zachytila
+  const d1 = copy();
+  const dts = Object.keys(lock.supabase_tree).find((r) => r.endsWith(".d.ts"))!;
+  writeFileSync(path.join(d1, dts), readFileSync(path.join(d1, dts), "utf8") + "\nexport {};\n");
+  throwsStop(() => verifyDependencyLock(d1), /F-4: súbor @supabase sa zmenil/);
+  // podstrčený nadbytočný súbor
+  const d2 = copy();
+  writeFileSync(path.join(d2, "node_modules/@supabase/storage-js/dist/evil.mjs"), "export default 1;\n");
+  throwsStop(() => verifyDependencyLock(d2), /F-4: strom @supabase nesedí \(navyše 1/);
+  // chýbajúci súbor (napr. iná platforma / neúplná inštalácia)
+  const d3 = copy();
+  const { rmSync } = await import("node:fs");
+  rmSync(path.join(d3, dts));
+  throwsStop(() => verifyDependencyLock(d3), /F-4: strom @supabase nesedí \(navyše 0, chýba 1/);
+  // zmenená verzia balíka (package.json)
+  const d4 = copy();
+  const pj = "node_modules/@supabase/supabase-js/package.json";
+  writeFileSync(path.join(d4, pj), readFileSync(path.join(d4, pj), "utf8").replace('"version": "2.110.0"', '"version": "2.110.1"'));
+  throwsStop(() => verifyDependencyLock(d4), /F-4/);
+});
+
+await check("CRLF/LF: lock porovnáva presné bajty (zmena koncov riadkov v knižnici = STOP, nie tichá zhoda)", async () => {
+  const { verifyDependencyLock } = await import("./runner-core.ts");
+  const lock = JSON.parse(readFileSync(path.join(ROOT, "scripts/p15-staging/dependency-lock.json"), "utf8")) as { files: Record<string, string>; supabase_tree: Record<string, string> };
+  const dir = mkdtempSync(path.join(tmpdir(), "p15-crlf-"));
+  for (const rel of new Set([...Object.keys(lock.files), ...Object.keys(lock.supabase_tree), "scripts/p15-staging/dependency-lock.json"])) cpSync(path.join(ROOT, rel), path.join(dir, rel));
+  const t = "node_modules/tslib/tslib.js";
+  const txt = readFileSync(path.join(dir, t), "utf8");
+  writeFileSync(path.join(dir, t), txt.includes("\r\n") ? txt.replaceAll("\r\n", "\n") : txt.replaceAll("\n", "\r\n"));
+  throwsStop(() => verifyDependencyLock(dir), /F-4: závislosť sa zmenila: node_modules\/tslib\/tslib.js/);
 });
 
 await check("preflight režim: všetky lokálne kontroly, žiadna sieť, žiadny kľúč; s kľúčom v prostredí = STOP", () => {

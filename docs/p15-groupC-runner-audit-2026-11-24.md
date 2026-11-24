@@ -64,3 +64,18 @@ nesúlad DB. `tsc --strict` bez chýb.
   a koniec; kľúč sa nepýta. Ak by bol kľúč v prostredí, Node skončí STOP.
 - Offline testy 19/19 (pribudli: zmena tranzitívneho modulu / prítomný `@opentelemetry/api`, preflight režim).
 - .ps1 sa v Linuxovom sandboxe nedá spustiť — preflight na Windows spúšťa vlastník.
+
+## Dodatok 2 — preflight na Windows FAIL („node_modules/@supabase sa lisi“) a oprava
+
+- **Príčina:** chyba môjho kontrolného odtlačku, nie knižníc. Referenčný súhrn (Python) triedil súbory podľa cesty,
+  .ps1 triedil reťazce „cesta:sha“. Pri pároch typu `X.d.ts` / `X.d.ts.map` je `.` (0x2E) < `:` (0x3A), takže
+  poradie sa líši na 360 z 375 pozícií → rovnaký obsah dáva v .ps1 iný súhrn (`20106b68…` namiesto pinovaného
+  `246fd693…`). Sandbox číta tie isté súbory z disku Windows; verzie v node_modules = package-lock (2.110.0,
+  phoenix 0.4.4, iceberg-js 0.8.1, tslib 2.8.1), balíky sú čisté JS (žiadne platformové súbory).
+- **Oprava:** súhrnný odtlačok odstránený. `dependency-lock.json` obsahuje `supabase_tree` = každý z 375 súborov
+  (`dist/**` + `package.json`) s vlastným SHA-256. .ps1 aj runner overia presnú množinu (navyše/chýba = STOP)
+  a obsah každého súboru — bez triedenia a spájania, rovnako na Windows aj Linuxe.
+- **Diagnostika (iba čítanie):** `release-backups/p15/diag-p15-deps.ps1` — cesty, typ `node_modules` (junction),
+  rozlíšenie Node, verzie vs package-lock, porovnanie po súboroch s lockom, oba spôsoby súhrnu (potvrdí príčinu).
+- **Testy:** 21/21 (nové: zmenený nenačítaný súbor `.d.ts`, nadbytočný `evil.mjs`, chýbajúci súbor, zmenená verzia
+  v `package.json`, CRLF↔LF v `tslib.js`).

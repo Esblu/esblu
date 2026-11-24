@@ -17,7 +17,7 @@
 // Runner nikdy nemaže (backend nemá operáciu remove) a nevolá nič mimo Supabase stagingu.
 // =============================================================================
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import {
   COMPANY_EXPORT_FILE_SOURCES,
@@ -52,7 +52,7 @@ export const EXPECTED_LOCAL_SHA256: Readonly<Record<string, string>> = Object.fr
   "scripts/p15-staging/manifest.json": "fd81a8f55f12c46a488f58441c7ef411a3620f50499f13b86f3804fba0b77d51",
   "lib/company-export.ts": "96adf813c4e03ba2ec15132900fa53dab6b582b584d016715edfc0a73f034eac",
   "lib/einvoice/visibility.ts": "7013c5f61aa819e6d299fd4eeeef9c9a65fc59cebf634d381756c54f1f14a5d2",
-  "scripts/p15-staging/dependency-lock.json": "9280ba5bc86397ba5a5187a1c30a973fc819e151af414e95e0c9a9d51cb1981d",
+  "scripts/p15-staging/dependency-lock.json": "51c7b7fccbad2c2f844ce2a873dafaa68bb9c2c9c31decf8b999a95b1df4d632",
 });
 const ALLOWED_BUCKETS = new Set(["einvoice-documents", "ai-inbox-documents"]);
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -139,7 +139,7 @@ export function verifyLocalIntegrity(root: string, expected: Readonly<Record<str
  * Primárna kontrola je v .ps1 PRED spustením Node; runner ju opakuje pri štarte (obrana do hĺbky).
  */
 export function verifyDependencyLock(root: string): void {
-  let lock: { files: Record<string, string>; absent: string[] };
+  let lock: { files: Record<string, string>; supabase_tree: Record<string, string>; absent: string[] };
   try {
     lock = JSON.parse(readFileSync(path.join(root, "scripts/p15-staging/dependency-lock.json"), "utf8"));
   } catch {
@@ -154,9 +154,40 @@ export function verifyDependencyLock(root: string): void {
     }
     if (got !== want) throw new Stop(`F-4: závislosť sa zmenila: ${rel}`);
   }
+  // Celý strom node_modules/@supabase: presná množina súborov (chýbajúci aj nadbytočný = STOP) a obsah každého súboru.
+  // Porovnanie po súboroch — žiadne poradie ani spájanie reťazcov (rovnaký výsledok na Windows aj Linuxe).
+  const tree = lock.supabase_tree ?? {};
+  if (Object.keys(tree).length === 0) throw new Stop("F-4: lock neobsahuje strom @supabase");
+  const onDisk = listSupabaseTree(root);
+  const expected = new Set(Object.keys(tree));
+  const extra = onDisk.filter((r) => !expected.has(r));
+  const missing = [...expected].filter((r) => !onDisk.includes(r));
+  if (extra.length || missing.length) throw new Stop(`F-4: strom @supabase nesedí (navyše ${extra.length}, chýba ${missing.length}: ${[...extra, ...missing].slice(0, 3).join(", ")})`);
+  for (const [rel, want] of Object.entries(tree)) {
+    if (sha256(readFileSync(path.join(root, rel))) !== want) throw new Stop(`F-4: súbor @supabase sa zmenil: ${rel}`);
+  }
   for (const rel of lock.absent ?? []) {
     if (existsSync(path.join(root, rel))) throw new Stop(`F-4: nečakaný balík (dynamicky načítateľný): ${rel}`);
   }
+}
+
+/** node_modules/@supabase/<balík>/package.json + všetky súbory v <balík>/dist (relatívne k root, oddeľovač "/"). */
+export function listSupabaseTree(root: string): string[] {
+  const base = path.join(root, "node_modules", "@supabase");
+  const out: string[] = [];
+  const walk = (dir: string) => {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) walk(full);
+      else out.push(path.relative(root, full).split(path.sep).join("/"));
+    }
+  };
+  for (const pkg of readdirSync(base, { withFileTypes: true })) {
+    if (!pkg.isDirectory()) continue;
+    if (existsSync(path.join(base, pkg.name, "package.json"))) out.push(`node_modules/@supabase/${pkg.name}/package.json`);
+    if (existsSync(path.join(base, pkg.name, "dist"))) walk(path.join(base, pkg.name, "dist"));
+  }
+  return out.sort();
 }
 
 // ----------------------------------------------------------------------------- F-6 (manifest)
