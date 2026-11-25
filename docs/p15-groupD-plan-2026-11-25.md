@@ -180,6 +180,17 @@ Stav: **iba príprava**. Na staging sa nič nezapisovalo (iba read-only SQL), ž
   je iba INSERT trigger. Seed opravený lokálne (nové syntetické účty dostanú ''). Po oprave ostáva neoverené
   správanie GoTrue pri chýbajúcej identite (zistí až ďalší schválený auth-test).
 
+### 1i. Normalizácia Auth vlastníka T1 — VYKONANÉ (2026-11-25 19:46 UTC, schválené) — PASS
+
+- Projekt `cjbdijbbcujvmrzezusd` (esblu-test). Pred: presne 1 riadok `f1500000-…-0101` / `qa-p15-t1@esblu-qa.invalid`,
+  4 stĺpce NULL; md5 zvyšku riadku `3804b1f1…`, ostatných 28 používateľov `4a048f10…`.
+- Zmena (jedna transakcia, skript `p15-groupD-t1-auth-normalize.sql`): 1 riadok, `confirmation_token`,
+  `recovery_token`, `email_change_token_new`, `email_change` NULL → ''. Commit.
+- Po: 4 hodnoty = ''; zvyšok riadku `3804b1f1…` (updated_at/last_sign_in_at 2026-11-24 19:54, e-mail bez zmeny);
+  ostatní používatelia `4a048f10…` (bez zmeny; NULL ostáva u 8 iných); identity 20, relácie 13, refresh 19, OTT 0,
+  audit 0, exporty 11, ukončenia 1, deregistrácie 0 (bez zmeny); 16 firiem, súbory mimo P15, účty, billing, ISO,
+  faktúry T1/T2/PERF = východisko; 322 objektov P15, posledná zmena Storage 2026-11-24.
+
 ## 2. Allowlist výmazu
 
 | Kľúč | Firma | UUID | Vlastník | E-mail |
