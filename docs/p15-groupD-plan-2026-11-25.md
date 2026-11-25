@@ -122,6 +122,21 @@ Stav: **iba príprava**. Na staging sa nič nezapisovalo (iba read-only SQL), ž
 - Test obnovy (upload) **nebol vykonaný** — overená je iba čitateľnosť a integrita archívu (dešifrovanie, GCM, HMAC,
   SHA-256 voči manifestu).
 
+### 1f. Snímka pred D-T1 (2026-11-25 19:20 UTC, read-only) — PASS
+
+- Windows: `check-p15-ps-syntax.ps1` SYNTAX_OK, `run-p15-groupD.ps1 -Target t1 -PreflightOnly` PREFLIGHT_OK
+  (SHA-256 `09d94052…3149`).
+- Chránené: 16 firiem `b3917b95…`, objekty mimo P15 67 `2b33662b…`, účty 24 `8aaff21a…`, billing 8 `2aca79be…` /
+  3 objekty `777e3654…`, ISO `eb82cbeb…`; P15 4 firmy / 322 objektov; ukončenia 1, joby 1, exporty 11, deregistrácie 0,
+  incidenty 0, migrácie 79.
+- T1: `f1510000-…0001` „QA-P15-T1“, vlastník `f1500000-…0101` (qa-p15-t1@esblu-qa.invalid, potvrdený, bez hesla,
+  bez relácií, bez MFA, 1 členstvo), admin `…0105`; 0 organizácií e-Faktúry, 0 billing, 0 predplatných, 0 ukončení;
+  7 objektov (ai-inbox 2, einvoice 5), 0 ciest mimo prefixu; 3 prijaté (R3 1, karanténa 1), 1 odoslaná (UBL),
+  4 faktúry (3 finalizované), 1 dokument, 1 vozidlo, 1 osirelý súbor; 1 aktívny mandát (sandbox, bez org).
+- Magic link: vlastník T1 nemá `auth.identities` (rovnako ďalších 8 používateľov, z toho 4 pôvodné testovacie);
+  v projekte niet dôkazu, že sa používateľ bez identity niekedy prihlásil → správanie GoTrue neoverené; zlyhanie =
+  STOP pred precheckom aj výmazom (runner) + DB brána `REAUTH_REQUIRED` (posledné prihlásenie 2026-11-24 19:54).
+
 ## 2. Allowlist výmazu
 
 | Kľúč | Firma | UUID | Vlastník | E-mail |
