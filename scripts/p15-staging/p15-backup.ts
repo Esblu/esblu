@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 import { createClient } from "@supabase/supabase-js";
 import { assertCleanProcess, Stop, validateStagingUrl, verifyDependencyLock, verifyLocalIntegrity } from "./runner-core.ts";
 import {
-  assertBackupTarget, backupGuardedFetch, buildBackup, readBackupDir, sha256, validateInventory, verifyBackup, writeBackupDir,
+  assertBackupTarget, assertPassphraseSafe, backupGuardedFetch, buildBackup, readBackupDir, sha256, validateInventory, verifyBackup, writeBackupDir,
   type Fetched, type InventoryItem,
 } from "./storage-backup.ts";
 
@@ -20,7 +20,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
 const BACKUP_ROOT = path.resolve(ROOT, "../../release-backups/p15");
 /** F-4: lokálne súbory, ktoré tento proces načíta (vstup pinuje .ps1). */
 const BACKUP_EXPECTED_SHA256: Readonly<Record<string, string>> = Object.freeze({
-  "scripts/p15-staging/storage-backup.ts": "9c5943057724af394ea21e7177290f74da89627683a88a7711c240099ba8f2df",
+  "scripts/p15-staging/storage-backup.ts": "a2ddf3f122078510af83e8096913d0e613c08f4cfa3c6313d3a34561027fc4d6",
   "scripts/p15-staging/runner-core.ts": "112729265069214a6714357d53d16a843c9ee39b32adb69aea3cb30d17dac54c",
   "scripts/p15-staging/dependency-lock.json": "51c7b7fccbad2c2f844ce2a873dafaa68bb9c2c9c31decf8b999a95b1df4d632",
   "lib/company-export.ts": "96adf813c4e03ba2ec15132900fa53dab6b582b584d016715edfc0a73f034eac",
@@ -52,11 +52,14 @@ try {
     console.log("PREFLIGHT_OK: prostredie Node, odtlačky runnera a závislostí, URL overené; žiadna sieť, žiadny kľúč, žiadne heslo");
     process.exit(0);
   }
+  // Heslo archívu ≠ formát kľúča/JWT a ≠ Supabase kľúč — PRED čítaním súborov, klientom a sieťou.
+  assertPassphraseSafe(pass, key);
   if (mode === "verify") {
     if (key) throw new Stop("verify nesmie mať kľúč v prostredí");
     const { header, readBlob, files } = readBackupDir(process.env.ESBLU_P15B_DIR ?? "");
     const { manifest } = verifyBackup(header, readBlob, pass);
     if (files.length !== manifest.length + 2) throw new Stop("záloha: v priečinku sú súbory navyše/chýbajú");
+    // (neúplný zápis by ostal iba ako "<dir>.partial" bez header.json — verify ho odmietne pri čítaní hlavičky)
     const byBucket = manifest.reduce<Record<string, number>>((a, e) => { a[e.bucket] = (a[e.bucket] ?? 0) + 1; return a; }, {});
     const etag = manifest.reduce<Record<string, number>>((a, e) => { a[e.etag_md5] = (a[e.etag_md5] ?? 0) + 1; return a; }, {});
     console.log(`VERIFY_OK: ${manifest.length} objektov ${JSON.stringify(byBucket)}; HMAC hlavičky, GCM tag, SHA-256 a veľkosť overené; eTag↔MD5 ${JSON.stringify(etag)}`);

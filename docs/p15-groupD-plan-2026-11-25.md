@@ -94,6 +94,19 @@ Stav: **iba príprava**. Na staging sa nič nezapisovalo (iba read-only SQL), ž
   `validateInventory`), **SHA-256 `dbdfd3c0a9d6c3b229de0b4be4c83465761bd07833ee7dbec1a6dddb49492931`**. Súbor vznikol
   priamo z výsledku SQL (bez ručného prepisu).
 
+### 1d. Prerušený 1. pokus D-B (zámena hesla a kľúča) a poistky (2026-11-25)
+
+- Pokus 18:52:34 UTC prerušený vo fáze vstupov: Node sa nespustil (žiadne logy runnera, žiadny `storage-backup-*`),
+  v histórii PowerShellu 0× `sb_secret_`. Logy API stagingu (read-only, iba prefix/hash): 25. 11. **0 požiadaviek
+  s akýmkoľvek `sb_secret_` kľúčom**, 0 požiadaviek na Storage; posledná požiadavka edge 18:50:53 (MCP/dashboard).
+  Inventár 19:03 UTC bez zmeny (`26f004c4…`, kanonický `83658206…`).
+- Poistky: .ps1 aj runner odmietnu heslo archívu vo formáte `sb_secret_` / `sb_publishable_` / `sbp_` / `sb_temp_` /
+  JWT; zhoda hesla a kľúča (aj orezaná, aj podreťazec; porovnanie SHA-256 bez skorého ukončenia) = STOP pred Node a
+  bez overenia 401 (žiadna sieť); výzvy „HESLO ARCHÍVU – NIE SUPABASE KĽÚČ“ / „SUPABASE SECRET API KĽÚČ – NIE HESLO
+  ARCHÍVU“ (súbor ostáva ASCII, diakritika cez kódy znakov); archív sa zapisuje cez `<dir>.partial` a premenuje až
+  celý. Testy: storage-backup-tests 12/12 (vrátane skutočného procesu runnera a SIGKILL), Windows
+  `test-p15-backup-guards.ps1` (neoverené tu — sandbox nemá PowerShell).
+
 ## 2. Allowlist výmazu
 
 | Kľúč | Firma | UUID | Vlastník | E-mail |

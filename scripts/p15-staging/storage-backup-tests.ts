@@ -5,13 +5,14 @@
 // =============================================================================
 import assert from "node:assert/strict";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createClient } from "@supabase/supabase-js";
 import { ALLOWED_ORIGIN, Stop } from "./runner-core.ts";
 import {
-  assertBackupTarget, backupGuardedFetch, buildBackup, readBackupDir, validateInventory, verifyBackup, writeBackupDir,
+  assertBackupTarget, assertPassphraseSafe, backupGuardedFetch, buildBackup, looksLikeApiKey, readBackupDir, sameSecret, validateInventory, verifyBackup, writeBackupDir,
   type Fetched, type InventoryItem,
 } from "./storage-backup.ts";
 
@@ -179,6 +180,87 @@ await test("9 syntetický archív na nezávislé overenie (Python): zapíše arc
   // referencia mimo archívu: SHA-256 pôvodných syntetických bajtov (Python ich porovná s dešifrovaným obsahom)
   writeFileSync(path.join(base, "reference.json"), JSON.stringify(items.map((it, i) => ({ bucket: it.bucket, name: it.name, sha256: sha(bytes[i]) }))));
   writeFileSync("/tmp/p15b-indep-path.txt", base);
+});
+
+// ----------------------------------------------------------------------------- po prerušení 1. pokusu (zámena hesla a kľúča)
+const FAKE_KEY = "sb_secret_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4"; // syntetická hodnota (nie skutočný kľúč)
+const FAKE_JWT = "eyJhbGciOiJIUzI1NiJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIn0.c2lnbmF0dXJlLXRlc3Q";
+await test("10 heslo archívu vo formáte kľúča/JWT, totožné s kľúčom, podreťazec, krátke → STOP", () => {
+  for (const bad of [FAKE_KEY, ` ${FAKE_KEY} `, "sb_publishable_AQ4QLRJBTcEPp__yMrh4bg_MUY3N-Ma", "sbp_0123456789abcdef0123456789", "SB_SECRET_xxxxxxxxxxxxxxxxxxxxxxxx", FAKE_JWT, `moje heslo ${FAKE_KEY}`]) {
+    assert.throws(() => assertPassphraseSafe(bad), Stop, bad.slice(0, 12));
+  }
+  const good = "zelena-lampa-orech-vlak-2026-kopec";
+  assertPassphraseSafe(good);
+  assertPassphraseSafe(good, FAKE_KEY);
+  assert.throws(() => assertPassphraseSafe(good, good), Stop, "totožné");
+  assert.throws(() => assertPassphraseSafe(good, ` ${good}\n`), Stop, "totožné po orezaní");
+  assert.throws(() => assertPassphraseSafe(good + "x", good), Stop, "podreťazec");
+  assert.throws(() => assertPassphraseSafe("kratke-heslo"), Stop);
+  assert.ok(looksLikeApiKey(FAKE_KEY) && looksLikeApiKey(FAKE_JWT) && !looksLikeApiKey(good));
+  assert.ok(sameSecret("a", "a") && !sameSecret("a", "b"));
+  // šifrovanie odmietne heslo vo formáte kľúča aj pri vytváraní zálohy
+  const { items, fetched } = fixture();
+  assert.throws(() => buildBackup(fetched, items, FAKE_KEY), Stop);
+});
+await test("11 prerušenie počas zápisu archívu → iba <dir>.partial bez header.json (šifrované bloby), <dir> nevznikne, nový pokus do toho istého cieľa = STOP", () => {
+  const { items, fetched, bytes } = fixture();
+  const { header, blobs } = buildBackup(fetched, items, PASS);
+  const base = mkdtempSync(path.join(tmpdir(), "p15b-int-"));
+  const dir = path.join(base, "storage-backup-x");
+  assert.throws(() => writeBackupDir(dir, header, blobs, { afterBlob: (n) => { if (n === 20) throw new Error("simulované prerušenie"); } }));
+  assert.ok(!existsSync(dir), "hotový priečinok nesmie vzniknúť");
+  const left = readdirSync(`${dir}.partial`);
+  assert.equal(left.length, 20);
+  assert.ok(!left.includes("header.json"));
+  for (const f of left) { const d = readFileSync(path.join(`${dir}.partial`, f)); for (const b of bytes) assert.equal(d.indexOf(b.subarray(0, 32)), -1); }
+  assert.throws(() => writeBackupDir(dir, header, blobs), Stop);
+  assert.throws(() => assertBackupTarget(dir, base), Stop);
+  assert.throws(() => readBackupDir(`${dir}.partial`));
+});
+await test("12 skutočný proces runnera: zámena hesla/kľúča a zlé heslo → STOP pred čítaním inventára a sieťou; hodnoty sa nevypíšu; SIGKILL počas verify nič nezmení", async () => {
+  const WT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "../..");
+  const run = (env: Record<string, string>) => spawnSync(process.execPath, ["--experimental-strip-types", "--no-warnings", "scripts/p15-staging/p15-backup.ts"], {
+    cwd: WT, encoding: "utf8", timeout: 120_000,
+    env: { PATH: process.env.PATH ?? "", HOME: tmpdir(), ESBLU_STAGING_SUPABASE_URL: ALLOWED_ORIGIN, ...env },
+  });
+  const outDir = path.join(mkdtempSync(path.join(tmpdir(), "p15b-proc-")), "storage-backup-proc");
+  const common = { ESBLU_P15B_INVENTORY: "/neexistuje/inventar.json", ESBLU_P15B_INVENTORY_SHA256: "0".repeat(64), ESBLU_P15B_OUT: outDir };
+  const good = "zelena-lampa-orech-vlak-2026-kopec";
+  for (const [label, env, expect] of [
+    ["heslo = kľúč (formát kľúča)", { ESBLU_P15B_MODE: "backup", ESBLU_P15_BACKUP_PASSPHRASE: FAKE_KEY, ESBLU_STAGING_SERVICE_ROLE_KEY: FAKE_KEY, ...common }, /formát API kľúča/],
+    ["heslo = JWT", { ESBLU_P15B_MODE: "compare", ESBLU_P15_BACKUP_PASSPHRASE: FAKE_JWT, ESBLU_STAGING_SERVICE_ROLE_KEY: FAKE_KEY, ESBLU_P15B_DIR: "/neexistuje" }, /formát API kľúča/],
+    ["heslo = kľúč (iný formát)", { ESBLU_P15B_MODE: "backup", ESBLU_P15_BACKUP_PASSPHRASE: good, ESBLU_STAGING_SERVICE_ROLE_KEY: good, ...common }, /totožné/],
+    ["kľúč v poli hesla pri verify", { ESBLU_P15B_MODE: "verify", ESBLU_P15_BACKUP_PASSPHRASE: FAKE_KEY, ESBLU_P15B_DIR: "/neexistuje" }, /formát API kľúča/],
+  ] as const) {
+    const r = run(env as Record<string, string>);
+    assert.equal(r.status, 2, `${label}: ${r.stderr}`);
+    assert.match(r.stderr, expect, label);
+    assert.ok(!/ENOENT|inventár/.test(r.stderr), `${label}: musí zastaviť pred čítaním súborov`);
+    assert.ok(!r.stdout.includes(FAKE_KEY) && !r.stderr.includes(FAKE_KEY) && !r.stderr.includes(good) && !r.stderr.includes(FAKE_JWT), `${label}: hodnota vo výstupe`);
+    assert.ok(!existsSync(outDir) && !existsSync(`${outDir}.partial`), `${label}: nič sa nezapísalo`);
+  }
+  // zlé heslo pri verify syntetického archívu
+  const { items, fetched } = fixture();
+  const { header, blobs } = buildBackup(fetched, items, PASS);
+  const arch = path.join(mkdtempSync(path.join(tmpdir(), "p15b-v-")), "storage-backup-v");
+  writeBackupDir(arch, header, blobs);
+  const snap = () => readdirSync(arch).map((f) => `${f}:${sha(readFileSync(path.join(arch, f)))}`).join(",");
+  const before = snap();
+  const wrong = run({ ESBLU_P15B_MODE: "verify", ESBLU_P15_BACKUP_PASSPHRASE: PASS + " zle", ESBLU_P15B_DIR: arch });
+  assert.equal(wrong.status, 2);
+  assert.match(wrong.stderr, /HMAC/);
+  const ok = run({ ESBLU_P15B_MODE: "verify", ESBLU_P15_BACKUP_PASSPHRASE: PASS, ESBLU_P15B_DIR: arch });
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.match(ok.stdout, /VERIFY_OK: 67/);
+  // prerušenie procesu (SIGKILL) počas verify: archív bez zmeny, žiadne nové súbory
+  const child = spawn(process.execPath, ["--experimental-strip-types", "--no-warnings", "scripts/p15-staging/p15-backup.ts"], {
+    cwd: WT, env: { PATH: process.env.PATH ?? "", HOME: tmpdir(), ESBLU_P15B_MODE: "verify", ESBLU_P15_BACKUP_PASSPHRASE: PASS, ESBLU_P15B_DIR: arch }, stdio: "ignore",
+  });
+  await new Promise((r) => setTimeout(r, 400));
+  child.kill("SIGKILL");
+  await new Promise((r) => child.on("exit", r));
+  assert.equal(snap(), before);
+  assert.deepEqual(readdirSync(path.dirname(arch)), ["storage-backup-v"]);
 });
 
 console.log(`\np15-storage-backup-tests: ${passed} passed, ${failed} failed`);

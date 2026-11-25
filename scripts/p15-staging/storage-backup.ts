@@ -14,7 +14,7 @@
 // Režimy (p15-backup.ts): preflight | backup | verify | compare. Obnova (upload) nie je implementovaná.
 // =============================================================================
 import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { ALLOWED_ORIGIN, Stop, guardedFetch } from "./runner-core.ts";
 
@@ -62,8 +62,34 @@ export function validateInventory(items: InventoryItem[]): void {
   }
 }
 
-function deriveKeys(passphrase: string, salt: Buffer): { enc: Buffer; mac: Buffer } {
+/**
+ * Heslo archívu nesmie vyzerať ako API kľúč / token (zámena polí pri zadávaní). Iba formálna poistka — nenahrádza
+ * bezpečné uchovanie hesla (správca hesiel + offline kópia).
+ */
+export function looksLikeApiKey(value: string): boolean {
+  const v = String(value ?? "").trim();
+  return /^(sb_secret_|sb_publishable_|sbp_|sb_temp_)/i.test(v)
+    || /sb_(secret|publishable)_[A-Za-z0-9_-]{8,}/i.test(v)
+    || /^eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}$/.test(v);
+}
+/** Porovnanie bez skorého ukončenia (SHA-256 oboch + timingSafeEqual); hodnoty sa nikde nevypisujú. */
+export function sameSecret(a: string, b: string): boolean {
+  const ha = createHash("sha256").update(String(a ?? ""), "utf8").digest();
+  const hb = createHash("sha256").update(String(b ?? ""), "utf8").digest();
+  return timingSafeEqual(ha, hb);
+}
+/** Heslo archívu: ≥ 20 znakov, nie formát kľúča/JWT, odlišné od Supabase kľúča (ani orezané, ani ako podreťazec). */
+export function assertPassphraseSafe(passphrase: string, apiKey = ""): void {
   if (typeof passphrase !== "string" || passphrase.length < 20) throw new Stop("heslo zálohy musí mať aspoň 20 znakov");
+  if (looksLikeApiKey(passphrase)) throw new Stop("heslo archívu má formát API kľúča alebo JWT — zámena polí? (nič sa nespustilo)");
+  if (apiKey) {
+    const p = passphrase.trim(), k = apiKey.trim();
+    if (sameSecret(passphrase, apiKey) || sameSecret(p, k) || p.includes(k) || k.includes(p)) throw new Stop("heslo archívu a Supabase kľúč sú totožné — beh zastavený (nič sa nespustilo)");
+  }
+}
+
+function deriveKeys(passphrase: string, salt: Buffer): { enc: Buffer; mac: Buffer } {
+  assertPassphraseSafe(passphrase);
   const k = scryptSync(passphrase.normalize("NFC"), salt, 64, KDF);
   return { enc: k.subarray(0, 32), mac: k.subarray(32) };
 }
@@ -181,7 +207,7 @@ export function assertBackupTarget(dir: string, root: string, forbiddenPrefixes:
   if (!abs.startsWith(r + path.sep)) throw new Stop("záloha: cieľ mimo povoleného koreňa");
   if (/onedrive/i.test(abs)) throw new Stop("záloha: OneDrive je zakázaný");
   for (const p of forbiddenPrefixes) if (p && abs.toLowerCase().startsWith(path.resolve(p).toLowerCase())) throw new Stop("záloha: cieľ v synchronizovanom priečinku");
-  if (existsSync(abs)) throw new Stop("záloha: cieľový priečinok už existuje (neprepisuje sa)");
+  if (existsSync(abs) || existsSync(`${abs}.partial`)) throw new Stop("záloha: cieľový priečinok už existuje (neprepisuje sa)");
   let cur = path.dirname(abs);
   while (cur.length >= r.length) {
     if (lstatSync(cur).isSymbolicLink()) throw new Stop("záloha: v ceste je odkaz (junction/symlink)");
@@ -190,13 +216,24 @@ export function assertBackupTarget(dir: string, root: string, forbiddenPrefixes:
   }
 }
 
-export function writeBackupDir(dir: string, header: Header, blobs: Map<string, Buffer>): string {
-  if (existsSync(dir)) throw new Stop("záloha: cieľový priečinok už existuje (neprepisuje sa)");
+/**
+ * Zápis cez dočasný priečinok "<dir>.partial" a premenovanie až po zapísaní všetkých blobov aj hlavičky.
+ * Prerušenie = ostane iba "<dir>.partial" so šifrovanými blobmi a bez header.json (neplatný, nikdy nie plaintext);
+ * hotový "<dir>" vznikne iba celý. Existujúci "<dir>" alebo "<dir>.partial" = STOP (nič sa neprepisuje ani nemaže).
+ */
+export function writeBackupDir(dir: string, header: Header, blobs: Map<string, Buffer>, hooks: { afterBlob?: (n: number) => void } = {}): string {
+  const partial = `${dir}.partial`;
+  if (existsSync(dir) || existsSync(partial)) throw new Stop("záloha: cieľový priečinok už existuje (neprepisuje sa)");
   if (/onedrive/i.test(path.resolve(dir))) throw new Stop("záloha: OneDrive je zakázaný");
-  mkdirSync(dir, { recursive: false });
-  for (const [name, buf] of blobs) writeFileSync(path.join(dir, name), buf, { flag: "wx" });
+  mkdirSync(partial, { recursive: false });
+  let n = 0;
+  for (const [name, buf] of blobs) {
+    writeFileSync(path.join(partial, name), buf, { flag: "wx" });
+    hooks.afterBlob?.(++n);
+  }
   const h = JSON.stringify(header, null, 2);
-  writeFileSync(path.join(dir, "header.json"), h, { flag: "wx" });
+  writeFileSync(path.join(partial, "header.json"), h, { flag: "wx" });
+  renameSync(partial, dir);
   return sha256(h);
 }
 export function readBackupDir(dir: string): { header: Header; readBlob: (b: string) => Buffer; files: string[] } {
