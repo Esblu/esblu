@@ -69,6 +69,21 @@ Stav: **iba príprava**. Na staging sa nič nezapisovalo (iba read-only SQL), ž
 - **Testy:** storage-backup-tests 9/9, groupD-tests 20/20, nezávislé Python overenie OK, `tsc --strict` OK.
   **Neoverené:** beh .ps1 na Windows PowerShell 5.1 (iba statická kontrola).
 
+### 1b. Oprava: ParserError v run-p15-backup.ps1 (Windows PowerShell 5.1)
+
+- **Príčina:** chyba môjho generátora skriptu (Python skladal hlavičku + telo zo skriptu skupiny C). Telo sa bralo
+  od riadku 20 skriptu C, ktorého hlavička po verzii 3 končí až na riadku 21 → do súboru sa dostali 2 riadky starej
+  hlavičky (`Subor je iba ASCII.` a `#>`) a druhý `[CmdletBinding()]`. Za prvým `#>` teda stál atribút, text mimo
+  komentára a ďalší atribút pred `param(` → ParserError na riadkoch 16, 17, 19, 20. Kontrola počtu zátvoriek to
+  nemohla odhaliť (zátvorky boli vyvážené).
+- **Oprava:** odstránené 3 duplicitné riadky (16–18). Štruktúra: 1 blokový komentár (1–15), `[CmdletBinding()]`,
+  `param(` (5 parametrov). Telo bez zmeny; všetky kontroly (6 × SHA-256, lock, strom @supabase, URL stagingu,
+  čisté prostredie, Git/OneDrive/odkazy, ochrana hesla a kľúča v logoch) ostali. Ostatné .ps1 (C, D, diag) majú
+  správnu štruktúru (statická kontrola: 1 komentár, 1 atribút, 1 param, bez duplicitných funkcií).
+- **Nezávislá kontrola syntaxe na Windows:** `release-backups/p15/check-p15-ps-syntax.ps1` — oficiálny parser
+  PowerShellu (`Parser::ParseFile`) pre 4 skripty bez ich spustenia: chyby parsera, názvy parametrov, CmdletBinding,
+  duplicitné funkcie, ne-ASCII, SHA-256. Sandbox nemá PowerShell (stiahnutie blokované) → beh na Windows neoverený.
+
 ## 2. Allowlist výmazu
 
 | Kľúč | Firma | UUID | Vlastník | E-mail |
