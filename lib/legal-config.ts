@@ -65,7 +65,11 @@ export const legalConfig = {
   // J10.1 (2026-11-11, CLIA): EN/DE preklady 1.4 doplnené (1.4.en.md,
   // 1.4.de.md) — preklad tej istej verzie, bez nového legal_documents riadku
   // a bez re-accept; jazyk zobrazenia sa eviduje v metadata potvrdenia.)
-  privacyPolicyVersion: "1.4",
+  // → 1.5 (2026-11-26): jediná obsahová zmena oproti 1.4 (CLIA) — doplnený Resend (Plus Five Five, Inc.) ako
+  // príjemca a prenos v 3 častiach (registrácia, prihlasovanie, oznámenia); Supabase Auth odosiela autentifikačné
+  // e-maily cez SMTP Resend od 17. 11. 2026 (DNS mail.esblu.com: MX feedback-smtp.eu-west-1.amazonses.com).
+  // Zdroj: resend.com/legal/dpa (31. 12. 2025) — primárne spracúvanie USA, SCC + EU-US DPF. Na potvrdenie CLIA.
+  privacyPolicyVersion: "1.5",
   // Podmienky používania idú vo verzii 1.1 — história: 1.0 (21. júla 2026)
   // → 1.1 (9. septembra 2026, prechod identifikácie prevádzkovateľa z
   // fyzickej osoby Jaroslav Juriš na Esblu s. r. o. v úvodnej vete — jediná

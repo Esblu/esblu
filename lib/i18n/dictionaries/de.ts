@@ -2358,6 +2358,12 @@ const de = {
         "Technische Aufzeichnungen und Diagnoseausgaben; personenbezogene Daten in zugänglich gemachten Produktionsdaten nur bei einem notwendigen Serviceeingriff in begrenztem Umfang (vorrangig werden Test- oder anonymisierte Daten verwendet)",
       anthropicLocation:
         "Vertraglicher Anbieter: Anthropic PBC, USA; Übermittlungen auf Grundlage des Anthropic Data Processing Addendum einschließlich Standardvertragsklauseln",
+      resendPurpose:
+        "Versand der Authentifizierungs-E-Mails der Anwendung (Bestätigung der E-Mail-Adresse, Registrierungseinladungen, Passwortwiederherstellung) von der Domain mail.esblu.com über einen SMTP-Dienst",
+      resendDataCategories:
+        "E-Mail-Adresse des Empfängers, E-Mail-Inhalt einschließlich eines einmaligen Bestätigungslinks und technische Zustellungsmetadaten",
+      resendLocation:
+        "Versandinfrastruktur der Domain mail.esblu.com: EU-Region (Irland). Vertragspartner Plus Five Five, Inc., USA; wesentliche Verarbeitungsvorgänge laut AVV des Anbieters in den USA. Übermittlung: EU-US Data Privacy Framework (Art. 45 DSGVO, Zertifizierung des Anbieters) und Standardvertragsklauseln (Art. 46 Abs. 2 lit. c DSGVO) im AVV des Anbieters",
       namecheapPurpose:
         "Hosting der geschäftlichen E-Mail-Kommunikation (Postfächer info@esblu.com und privacy@esblu.com — privacy@esblu.com ist ein Alias, das auf dasselbe Postfach verweist) und Empfang von E-Mail-Nachrichten von Nutzern, einschließlich Anliegen zu personenbezogenen Daten",
       namecheapDataCategories:
@@ -2367,10 +2373,10 @@ const de = {
       sectionEmailHistoryTitle:
         "E-Mail-Kommunikation — Historie und aktueller Stand",
       emailHistoryPara1:
-        "Die vorherige Version der Datenschutzerklärung (Version 1.0) führte unter den Dienstleistern auch Resend und Namecheap Private Email mit der Beschreibung „Versand ausgewählter E-Mails“ auf. Eine detaillierte Prüfung der Anwendung hat dies mit der Realität abgeglichen:",
+        "Frühere Versionen dieser Liste und der Datenschutzerklärung (bis Version 1.4) gaben an, dass Resend nicht eingesetzt wird. Seit dem 17. November 2026 werden Authentifizierungs-E-Mails über Resend versendet; daher wurden diese Liste und die Datenschutzerklärung (Version 1.5) berichtigt:",
       emailHistoryResendLabel: "Resend",
       emailHistoryResendText:
-        "wird von der Anwendung nirgends eingesetzt — Esblu betreibt keine eigene E-Mail-Versandinfrastruktur; kontobezogene Transaktions-E-Mails (Registrierungsbestätigung, Passwort-Wiederherstellung) werden ausschließlich vom integrierten E-Mail-System von Supabase Auth versendet. Resend wird daher in der obigen Tabelle nicht aufgeführt.",
+        "wird seit dem 17. November 2026 als SMTP-Dienst für Authentifizierungs-E-Mails (Bestätigung der E-Mail-Adresse, Einladungen, Passwortwiederherstellung) genutzt, die Supabase Auth von der Domain mail.esblu.com versendet. Für diese E-Mails ist Esblu Verantwortlicher; Resend verarbeitet keine Inhalte, die Ihr Unternehmen in die Anwendung hochlädt. Resend ist daher in der obigen Tabelle aufgeführt.",
       emailHistoryNamecheapLabel: "Namecheap Private Email",
       emailHistoryNamecheapText:
         "wird tatsächlich genutzt, jedoch anders als im ursprünglichen Text beschrieben: Es handelt sich nicht um die Versandinfrastruktur der Anwendung, sondern um das Hosting der Postfächer info@esblu.com und privacy@esblu.com, über die Sie uns direkt kontaktieren können (z. B. mit einem Anliegen zu personenbezogenen Daten). Namecheap ist daher jetzt mit einer präzisen, verifizierten Beschreibung seiner Rolle in der obigen Tabelle aufgeführt.",

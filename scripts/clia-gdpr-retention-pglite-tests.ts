@@ -133,7 +133,7 @@ await check("legal_documents: privacy_policy 1.4 required, cookie_policy 1.1 nie
   assert.equal(privacy.content_hash, sha("legal/privacy/1.4.md"));
 });
 
-await check("legal gate: používateľ s privacy 1.3 + terms 1.1 má pending iba privacy_policy 1.4", async () => {
+await check("legal gate: používateľ s privacy 1.3 + terms 1.1 má pending iba najnovšiu privacy_policy (1.5)", async () => {
   await su(`insert into public.user_legal_acceptances (user_id, document_type, version, acceptance_method) values
     ('${U.employeeA}', 'terms', '1.1', 'registration'), ('${U.employeeA}', 'privacy_policy', '1.3', 'registration')`);
   const o = await run(employeeA, "select * from public.esblu_get_my_pending_required_acceptances()");
@@ -141,7 +141,8 @@ await check("legal gate: používateľ s privacy 1.3 + terms 1.1 má pending iba
   const pending = o.data.map((r) => `${r.document_type ?? r.type}:${r.version}`);
   // 20261112100000: VOP 1.2 je firemné (owner) prijatie s 30-dňovou lehotou,
   // nie osobný required dokument → terms 1.1 používateľa neblokuje.
-  assert.deepEqual(pending, ["privacy_policy:1.4"]);
+  // 20261129100000: najnovšia povinná verzia Zásad je 1.5 (Resend).
+  assert.deepEqual(pending, ["privacy_policy:1.5"]);
 });
 
 // ----------------------------------------------------------------------------- technická retencia

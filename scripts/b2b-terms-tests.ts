@@ -142,9 +142,9 @@ check("konzistencia s produktom: trial 14 dní, bez karty, downgrade bez mazania
   assert.match(SK, /nevykonávajú rozhodnutia s právnymi účinkami/);
 });
 
-check("konzistencia s DPA 1.3 / PP 1.4 / Cookies 1.1 (odkazy a prednosť DPA)", () => {
+check("konzistencia s DPA 1.3 / PP 1.5 / Cookies 1.1 (odkazy a prednosť DPA)", () => {
   assert.equal(legalConfig.dpaVersion, "1.3");
-  assert.equal(legalConfig.privacyPolicyVersion, "1.4");
+  assert.equal(legalConfig.privacyPolicyVersion, "1.5");
   for (const href of ["/dpa", "/ochrana-osobnych-udajov", "/cookies", "/subprocessors", "/cennik"]) assert.ok(SK.includes(`(${href})`), href);
   assert.match(SK, /V otázkach spracúvania osobných údajov má DPA prednosť pred týmito VOP/);
   assert.match(read("legal/dpa/1.3.md"), /trénovanie modelov umelej inteligencie/);

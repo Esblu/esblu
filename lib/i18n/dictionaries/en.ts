@@ -2338,6 +2338,12 @@ const en = {
         "Technical records and diagnostic output; personal data contained in disclosed production records only during a necessary service intervention, in a limited scope (test or anonymised data are used preferentially)",
       anthropicLocation:
         "Contracting provider: Anthropic PBC, USA; transfers under the Anthropic Data Processing Addendum including standard contractual clauses",
+      resendPurpose:
+        "Sending the Application's authentication e-mails (e-mail address verification, registration invitations, password recovery) from the domain mail.esblu.com via an SMTP service",
+      resendDataCategories:
+        "Recipient e-mail address, e-mail content including a one-time verification link, and technical delivery metadata",
+      resendLocation:
+        "Sending infrastructure for mail.esblu.com: EU region (Ireland). Contracting provider Plus Five Five, Inc., USA; primary processing operations in the USA according to the provider's DPA. Transfer: EU-US Data Privacy Framework (Art. 45 GDPR, provider certification) and standard contractual clauses (Art. 46(2)(c) GDPR) in the provider's DPA",
       namecheapPurpose:
         "Hosting of business email communication (the info@esblu.com and privacy@esblu.com mailboxes — privacy@esblu.com is an alias pointing to the same mailbox) and receipt of email messages from users, including requests concerning personal data",
       namecheapDataCategories:
@@ -2347,10 +2353,10 @@ const en = {
       sectionEmailHistoryTitle:
         "Email communication — history and current status",
       emailHistoryPara1:
-        "The previous version of the Privacy Policy (version 1.0) also listed Resend and Namecheap Private Email among the providers, described as \"sending selected emails.\" A detailed review of the application verified this against reality:",
+        "Previous versions of this list and of the Privacy Policy (up to version 1.4) stated that Resend was not used. Since 17 November 2026, authentication e-mails are sent through Resend, so this list and the Privacy Policy (version 1.5) have been corrected:",
       emailHistoryResendLabel: "Resend",
       emailHistoryResendText:
-        "is not used anywhere in the application — Esblu does not operate its own outbound email infrastructure; account-related transactional emails (registration confirmation, password recovery) are sent exclusively by Supabase Auth's built-in email system. Resend is therefore not listed in the table above.",
+        "has been used since 17 November 2026 as the SMTP service for authentication e-mails (e-mail address verification, invitations, password recovery) sent by Supabase Auth from the domain mail.esblu.com. For these e-mails, Esblu is the controller of the personal data; Resend does not process the content your company uploads to the Application. Resend is therefore listed in the table above.",
       emailHistoryNamecheapLabel: "Namecheap Private Email",
       emailHistoryNamecheapText:
         "is actually used, but differently than the original text described: it is not the application's outbound email infrastructure, but rather the hosting of the info@esblu.com and privacy@esblu.com mailboxes, which you can use to contact us directly (e.g., with a request concerning personal data). Namecheap is therefore now listed in the table above with an accurate, verified description of its role.",

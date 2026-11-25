@@ -5,8 +5,10 @@ import {
   LegalSection,
   PublicLegalLayout,
 } from "@/app/components/PublicLegalLayout";
-import { legalConfig } from "@/lib/legal-config";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
+
+// Dátum poslednej zmeny zoznamu (2026-11-26: doplnený Resend — SMTP pre autentifikačné e-maily od 17. 11. 2026).
+const SUBPROCESSORS_LIST_EFFECTIVE_DATE = "26. 11. 2026";
 
 const linkClass =
   "font-semibold text-accent-cyan underline decoration-accent-cyan/40 underline-offset-4 hover:decoration-accent-cyan";
@@ -18,7 +20,7 @@ export function SubprocessorsPageClient() {
   const { t } = useLocale();
 
   return (
-    <PublicLegalLayout titleKey="legal.titles.subprocessors" updatedAt="16. augusta 2026">
+    <PublicLegalLayout titleKey="legal.titles.subprocessors" updatedAt="26. novembra 2026">
       <p>
         {t("legal.subprocessors.introPart1")}{" "}
         <Link href="/dpa" className={linkClass}>
@@ -164,6 +166,30 @@ export function SubprocessorsPageClient() {
               </tr>
               <tr className="border-b border-subtle align-top">
                 <td className="py-2 pr-4 font-semibold">
+                  Resend (Plus Five Five, Inc.)
+                </td>
+                <td className="py-2 pr-4">
+                  {t("legal.subprocessors.resendPurpose")}
+                </td>
+                <td className="py-2 pr-4">
+                  {t("legal.subprocessors.resendDataCategories")}
+                </td>
+                <td className="py-2 pr-4">
+                  {t("legal.subprocessors.resendLocation")}
+                </td>
+                <td className="py-2">
+                  <a
+                    href="https://resend.com/legal/dpa"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className={linkClass}
+                  >
+                    resend.com/legal/dpa
+                  </a>
+                </td>
+              </tr>
+              <tr className="border-b border-subtle align-top">
+                <td className="py-2 pr-4 font-semibold">
                   Namecheap (Private Email)
                 </td>
                 <td className="py-2 pr-4">
@@ -208,7 +234,7 @@ export function SubprocessorsPageClient() {
       <LegalSection title={t("legal.subprocessors.sectionChangesTitle")}>
         <p>
           {t("legal.subprocessors.changesText", {
-            date: legalConfig.effectiveDate,
+            date: SUBPROCESSORS_LIST_EFFECTIVE_DATE,
           })}
         </p>
       </LegalSection>

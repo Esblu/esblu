@@ -131,7 +131,6 @@ check("legal verzie: každá aktuálna verzia má SK súbor a DB seed s rovnaký
   }
 });
 check("privacy 1.4: CLIA text, zástupný riadok nahradený odkazom na /cookies, bez EN/DE prekladu", () => {
-  assert.equal(legalConfig.privacyPolicyVersion, "1.4");
   const md = read("legal/privacy/1.4.md");
   assert.ok(md.startsWith("**ZÁSADY SPRACÚVANIA OSOBNÝCH ÚDAJOV**"));
   assert.ok(!/^[.…]{5,}$/m.test(md), "zástupný riadok z CLIA ostal v texte");
@@ -140,6 +139,30 @@ check("privacy 1.4: CLIA text, zástupný riadok nahradený odkazom na /cookies,
   assert.ok(!/Anthropic/.test(md), "Privacy Policy (prevádzkovateľ) neuvádza Anthropic");
   // J10.1 (CLIA 11.11.2026): EN/DE preklady sú povinné → existujú.
   assert.deepEqual(legalTranslationAvailability("privacy_policy", "1.4"), { sk: true, de: true, en: true });
+});
+
+check("privacy 1.5 (2026-11-26): oproti 1.4 iba Resend v 3 častiach + dátum; aktuálna verzia; EN/DE existujú", () => {
+  assert.equal(legalConfig.privacyPolicyVersion, "1.5");
+  for (const loc of ["", ".en", ".de"]) {
+    const a = read(`legal/privacy/1.4${loc}.md`).split("\n");
+    const b = read(`legal/privacy/1.5${loc}.md`).split("\n");
+    assert.equal(a.length, b.length, `1.5${loc}: počet riadkov`);
+    const changed = a.map((l, i) => (l === b[i] ? -1 : i)).filter((i) => i >= 0);
+    // 6 riadkov (príjemcovia + prenos v 3 častiach), dátum poslednej zmeny, pri EN/DE aj označenie verzie
+    assert.equal(changed.length, loc ? 8 : 7, `1.5${loc}: zmenené riadky ${changed.join(",")}`);
+    for (const i of changed) {
+      if (i === 0 || /^\d\d\.\d\d\.2026$/.test(b[i])) continue;
+      assert.ok(b[i].startsWith(a[i].trimEnd()), `1.5${loc}:${i + 1} iba doplnenie na konci riadku`);
+      assert.match(b[i], /Plus Five Five, Inc\./);
+    }
+  }
+  const sk = read("legal/privacy/1.5.md");
+  assert.match(sk, /Posledná aktualizácia:\n\n26\.11\.2026/);
+  assert.match(sk, /mail\.esblu\.com/);
+  assert.match(sk, /čl\. 45 Nariadenia GDPR/);
+  assert.ok(!/Anthropic/.test(sk));
+  assert.ok(!/Stripe/.test(sk), "Stripe sa doplní až so spustením platieb");
+  assert.deepEqual(legalTranslationAvailability("privacy_policy", "1.5"), { sk: true, de: true, en: true });
 });
 
 // ----------------------------------------------------------------------------- cookies inventár
@@ -177,7 +200,7 @@ check("cookies: kód nenastavuje cookies a nevkladá analytické / 3rd-party skr
 const LINE_MARKERS = (line: string) => [line.startsWith("## "), line.startsWith("### "), line.startsWith("- "), line === "", (line.match(/\*\*/g) ?? []).length, [...line.matchAll(/\]\(([^)]+)\)/g)].map((m) => m[1]).join("|")];
 const NUMS = (line: string) => (line.match(/\d+/g) ?? []).sort().join(",");
 check("J10.1 preklady PP 1.4 a DPA 1.3 (EN/DE): úplné, riadok po riadku, rovnaké značky, odkazy a čísla", () => {
-  for (const [base, label] of [["legal/privacy/1.4", "1.4"], ["legal/dpa/1.3", "1.3"]] as const) {
+  for (const [base, label] of [["legal/privacy/1.4", "1.4"], ["legal/privacy/1.5", "1.5"], ["legal/dpa/1.3", "1.3"]] as const) {
     const sk = read(`${base}.md`).split("\n");
     for (const loc of ["en", "de"]) {
       const lines = read(`${base}.${loc}.md`).split("\n");

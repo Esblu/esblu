@@ -2365,6 +2365,12 @@ const sk = {
         "Technické záznamy a výstupy diagnostiky; osobné údaje obsiahnuté v sprístupnených produkčných záznamoch iba pri nevyhnutnom servisnom zásahu v obmedzenom rozsahu (prednostne sa používajú testovacie alebo anonymizované údaje)",
       anthropicLocation:
         "Zmluvný poskytovateľ: Anthropic PBC, USA; prenosy na základe Anthropic Data Processing Addendum vrátane štandardných zmluvných doložiek",
+      resendPurpose:
+        "Odosielanie autentifikačných e-mailov Aplikácie (overenie e-mailovej adresy, registračné pozvánky, obnova hesla) z domény mail.esblu.com prostredníctvom SMTP služby",
+      resendDataCategories:
+        "E-mailová adresa príjemcu, obsah e-mailu vrátane jednorazového overovacieho odkazu a technické metadáta doručenia",
+      resendLocation:
+        "Odosielacia infraštruktúra domény mail.esblu.com: región EÚ (Írsko). Zmluvný poskytovateľ Plus Five Five, Inc., USA; hlavné spracovateľské operácie podľa DPA poskytovateľa v USA. Prenos: EU-US Data Privacy Framework (čl. 45 GDPR, certifikácia poskytovateľa) a štandardné zmluvné doložky (čl. 46 ods. 2 písm. c) GDPR) v DPA poskytovateľa",
       namecheapPurpose:
         "Hosting firemnej e-mailovej komunikácie (schránky info@esblu.com a privacy@esblu.com — privacy@esblu.com je alias smerujúci do tej istej schránky) a prijímanie e-mailových správ od používateľov, vrátane žiadostí týkajúcich sa osobných údajov",
       namecheapDataCategories:
@@ -2374,10 +2380,10 @@ const sk = {
       sectionEmailHistoryTitle:
         "E-mailová komunikácia — história a aktuálny stav",
       emailHistoryPara1:
-        "Predchádzajúca verzia Zásad ochrany osobných údajov (verzia 1.0) uvádzala medzi dodávateľmi aj Resend a Namecheap Private Email s opisom „odosielanie vybraných e-mailov“. Podrobná kontrola aplikácie toto overila voči realite:",
+        "Predchádzajúce verzie tohto zoznamu a Zásad ochrany osobných údajov (do verzie 1.4) uvádzali, že Resend sa nepoužíva. Od 17. novembra 2026 sa autentifikačné e-maily odosielajú cez Resend, preto bol zoznam aj Zásady (verzia 1.5) opravené:",
       emailHistoryResendLabel: "Resend",
       emailHistoryResendText:
-        "nie je aplikáciou nikde použitý — Esblu neprevádzkuje vlastnú odosielaciu e-mailovú infraštruktúru, transakčné e-maily súvisiace s účtom (potvrdenie registrácie, obnova hesla) odosiela výhradne vstavaný e-mailový systém Supabase Auth. Resend preto v tabuľke vyššie nie je uvedený.",
+        "sa od 17. novembra 2026 používa ako SMTP služba pre autentifikačné e-maily (overenie e-mailovej adresy, pozvánky, obnova hesla), ktoré odosiela Supabase Auth z domény mail.esblu.com. Pri týchto e-mailoch je Esblu prevádzkovateľom osobných údajov; Resend nespracúva obsah, ktorý do Aplikácie nahráva vaša firma. Resend je preto uvedený v tabuľke vyššie.",
       emailHistoryNamecheapLabel: "Namecheap Private Email",
       emailHistoryNamecheapText:
         "sa reálne používa, ale inak, než pôvodný text opisoval: nejde o odosielaciu infraštruktúru aplikácie, ale o hosting schránok info@esblu.com a privacy@esblu.com, na ktoré nás môžete priamo kontaktovať (napr. so žiadosťou týkajúcou sa osobných údajov). Namecheap preto teraz figuruje v tabuľke vyššie s presným, overeným popisom svojej úlohy.",
