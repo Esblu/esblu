@@ -107,6 +107,21 @@ Stav: **iba príprava**. Na staging sa nič nezapisovalo (iba read-only SQL), ž
   celý. Testy: storage-backup-tests 12/12 (vrátane skutočného procesu runnera a SIGKILL), Windows
   `test-p15-backup-guards.ps1` (neoverené tu — sandbox nemá PowerShell).
 
+### 1e. Výsledok D-B (2026-11-25, záloha 19:12–19:13 UTC, kontrola 19:16 UTC) — PASS
+
+- Archív `release-backups/p15/storage-backup-20261125-191058`: 69 súborov (67 blobov + manifest + header), 378 833 B,
+  formát v2, HMAC hlavičky, `inventory_sha256` = schválený inventár, hlavička bez ciest, žiadny `.partial`;
+  header.json SHA-256 `c7e204ed9f7152f4cc43fe65afd70388e247834cdd014f008f0312314bb55f51`. Výstup: BACKUP_OK 67
+  (134 GET, 0 zablokovaných, eTag↔MD5 67/67 match), VERIFY_OK 67; 4 logy: 0× `sb_secret_`, 0× JWT.
+- Inventár po zálohe = pred zálohou (`26f004c4…`, kanonický `83658206…`, 67 id, bajty po bucketoch rovnaké);
+  posledná zmena v Storage 2026-11-24 21:11 (P15). 16 firiem, účty, billing, ISO = východisko.
+- Logy API (iba prefix `sb_secret_Jm…` / hash): 19:12:29–19:13:00 iba GET Storage (service_role, 200); Storage
+  `get_authenticated_info` 134× = presne 2× každý z 67 objektov, množina ciest = inventár (md5 `5ff61efe…`);
+  0 zápisov/list/delete; REST iba 1× overenie odvolania 19:14:05 → 401; po ňom 0 požiadaviek. Edge logy obsahujú iba
+  120 z 134 stiahnutí (14 objektov zachytených raz) — neúplnosť logovania edge vrstvy, autoritatívne sú logy Storage.
+- Test obnovy (upload) **nebol vykonaný** — overená je iba čitateľnosť a integrita archívu (dešifrovanie, GCM, HMAC,
+  SHA-256 voči manifestu).
+
 ## 2. Allowlist výmazu
 
 | Kľúč | Firma | UUID | Vlastník | E-mail |
