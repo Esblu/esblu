@@ -167,9 +167,10 @@ export async function processVerifiedEvent(provider: BillingProvider, event: Ver
 
   // 3b) P4: účtovná kópia dokladu (faktúra / dobropis / refundácia) PRED zmenou stavu. Zlyhanie = udalosť
   //     `failed` (DOCUMENT_FAILED) → automatické opakovanie s backoffom (lib/billing/event-retry.ts).
+  let capture: BillingDocumentCapture | null = null;
   if (provider.captureDocuments) {
     try {
-      const capture = await provider.captureDocuments(event);
+      capture = await provider.captureDocuments(event);
       if (capture) await storeDocuments(db, provider.environment, event.eventId, capture);
     } catch {
       await db.rpc("esblu_billing_close_event", { p_event_id: recorded.event_id, p_status: "failed", p_error_code: "DOCUMENT_FAILED", p_summary: {} });
@@ -220,6 +221,21 @@ export async function processVerifiedEvent(provider: BillingProvider, event: Ver
 
   // 5+6) kanonický stav + nároky
   const applied = await applyState(db, recorded.event_id, normalized.state);
+
+  // 6b) S17-4 (2026-11-20): prvá faktúra nového predplatného (`invoice.paid`) sa uloží v kroku 3b ešte PRED
+  //     vznikom väzby predplatné/zákazník → firma (billing_provider_links zakladá až apply_event v kroku 5)
+  //     → doklad by ostal bez company_id a bez snapshotu odberateľa. Po úspešnom zápise stavu sa doklady
+  //     tej istej udalosti uložia znova: upsert je idempotentný a doplní IBA chýbajúcu firmu
+  //     (company_id = coalesce(existujúca, väzba)); snapshot doplní guard trigger. Firmu stále určuje DB
+  //     výhradne z vlastných väzieb — nikdy z dát udalosti. Udalosť je už uzavretá (retry by ju nespracoval),
+  //     preto zlyhanie nevracia retry, iba kód (poistka: ďalšia udalosť toho istého dokladu, napr. dobropis).
+  if (capture && capture.documents.length > 0 && applied.outcome === "applied") {
+    try {
+      await storeDocuments(db, provider.environment, event.eventId, { documents: capture.documents, refunds: [] });
+    } catch {
+      return { ...applied, code: "DOCUMENT_COMPANY_LINK_PENDING" };
+    }
+  }
 
   // 7) Terminálny stav v Esblu (plná refundácia aktuálneho obdobia, prehraný spor) → ukončiť
   //    predplatné U PROVIDERA, aby firma bez prístupu nebola ďalej účtovaná. Zlyhanie nevracia

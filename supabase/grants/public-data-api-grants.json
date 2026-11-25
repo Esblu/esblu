@@ -1186,6 +1186,7 @@
     "esblu_billing_ops_raise(text,text,text,integer,integer,jsonb)",
     "esblu_billing_ops_heartbeat(text,text,boolean,text)",
     "esblu_billing_ops_collect(text)",
+    "esblu_billing_ops_collect_documents(text)",
     "esblu_billing_ops_pending(text,integer)",
     "esblu_billing_ops_mark_notified(uuid,boolean,text,text)",
     "esblu_billing_ops_open_summary(text)"
