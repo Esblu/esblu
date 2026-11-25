@@ -1,5 +1,7 @@
 # Esblu — release gate RC 2026-11-25 (jeden súhrnný bod schválenia)
 
+> **Nahradené** dokumentom `release-gate-rc-2026-11-26.md` (2026-11-26): `20261121100000` sa do produkcie nenasadzuje.
+
 Stav: **PRIPRAVENÉ, NEVYKONANÉ.** Žiadny produkčný zápis, merge do `main`, push ani deploy. LIVE Stripe a LIVE eFaktúra
 sú mimo tohto gate (samostatné schválenie).
 
