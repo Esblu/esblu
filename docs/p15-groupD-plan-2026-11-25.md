@@ -30,6 +30,45 @@ Stav: **iba príprava**. Na staging sa nič nezapisovalo (iba read-only SQL), ž
 - Tajomstvá: heslo zálohy (2× SecureString, neukladá sa — bez neho je záloha neobnoviteľná, uschovať mimo PC),
   dočasný kľúč `p15_backup_67` (odvolanie + 401). Žiadne tajomstvo nie je v súboroch ani logoch.
 
+### 1a. Finálna kontrola D-B pred vytvorením zálohy (2026-11-25 18:41 UTC) — verzia 2 runnera
+
+- **Inventár (read-only):** 67 objektov, 67 unikátnych `id` (UUID) aj ciest; buckety einvoice-documents 63 (3 firmy),
+  ai-inbox-documents 1, billing-documents 3 (všetky privátne); cesty iba `[A-Za-z0-9._/-]`, bez `..`; metadáta
+  `size` = `contentLength`, `eTag`, `mimetype` (pdf/xml), `lastModified`, `version`; najnovší objekt 2026-11-23;
+  žiadny prepísaný; odtlačok inventára `26f004c4…` (nezmenený od prípravy).
+- **eTag sa nepokladá za MD5:** všetkých 67 má tvar 32 hex bez „-N“ a v tom istom projekte sa 322/322 syntetických
+  objektov zhodovalo s MD5 obsahu — to je však iba empirické pozorovanie (S3 eTag nie je MD5 napr. pri multipart
+  alebo SSE-KMS). Runner v2: autorita = SHA-256 vypočítaný runnerom; každý objekt stiahne **2×** a obe kópie musia
+  mať rovnaký SHA-256 a veľkosť = inventár; eTag je nepriehľadný identifikátor verzie (spolu s `id`, `updated_at`)
+  a MD5↔eTag sa zapisuje iba informatívne (`match` / `mismatch` / `not_md5`); zmenu objektu počas zálohy odhalí
+  opakovaný inventár SQL hneď po zálohe.
+- **Iba čítanie:** sieťová poistka pustí výhradne `GET /storage/v1/object/<bucket>/<cesta>` pre 67 ciest z
+  inventára (bez query, bez tela); test so skutočným supabase-js: upload, upsert, update, remove, list, move, copy,
+  signed URL, objekt ISO, billing mimo inventára, REST a RPC → zablokované pred odoslaním (aj opakované pokusy
+  storage-js). Inventár musí mať SHA-256 schválený parametrom `-InventorySha256`.
+- **Kryptografia:** AES-256-GCM, 96-bit náhodné IV na blob, 128-bit tag (`final()` zlyhá pri zmene), AAD = formát +
+  názov blobu (výmena blobov odhalená); scrypt N=2^17 r=8 p=1, 16 B soľ, heslo ≥ 20 znakov (NFC) → 64 B = šifrovací +
+  MAC kľúč; **nové:** hlavička chránená HMAC-SHA256 (zmena KDF, soli, počtu, hashov, času = STOP); SHA-256 a MD5
+  obsahu v šifrovanom manifeste.
+- **Žiadne nešifrované kópie:** obsah iba v pamäti procesu Node (supabase-js → `arrayBuffer`), na disk iba šifrované
+  bloby (`wx`, nič sa neprepisuje); test prehľadá všetky zapísané súbory na úryvky plaintextu = 0. Zostatkové riziko:
+  pamäť procesu môže skončiť v stránkovacom súbore Windows.
+- **Cieľ archívu:** `release-backups\p15\storage-backup-<čas>` — `release-backups/` je v `.git/info/exclude`
+  (.ps1 to overí), OneDrive je samostatný priečinok `C:\Users\roiaj\OneDrive` (.ps1 aj runner odmietnu cestu v
+  OneDrive / `%OneDrive*%`), odkaz (junction/symlink) v ceste = STOP, existujúci priečinok = STOP.
+- **Logy:** runner vypisuje iba počty, kódy a odtlačky; iné chyby (napr. ENOENT s cestou, JSON s úryvkom) iba ako
+  „neočakávaná chyba (typ:kód)“; .ps1 skontroluje všetky 4 logy na kľúč, `sb_secret_`, JWT **aj heslo zálohy**
+  (únik = prepis logu); heslo a kľúč sa odstránia z prostredia vo `finally`.
+- **Nezávislé overenie:** `scripts/p15-staging/verify-backup-independent.py` (Python `hashlib` + `cryptography`,
+  iná implementácia): syntetický archív 67 objektov dešifrovaný, HMAC, GCM, SHA-256/MD5/veľkosť = manifest a SHA-256
+  = pôvodné syntetické bajty 67/67; zlé heslo → HMAC STOP; zmenený bajt → `InvalidTag`.
+- **Preflight** (`-PreflightOnly`): syntax, 6 SHA-256, lock + strom @supabase, Node, čisté prostredie, cieľ (Git,
+  OneDrive, odkazy), potom Node v režime `preflight` bez kľúča, hesla a siete → `PREFLIGHT_OK`.
+- **Izolácia (read-only, 18:41 UTC):** 16 firiem `b3917b95…`, objekty mimo P15 67 `2b33662b…`, účty 24 `8aaff21a…`,
+  billing 8 `2aca79be…` / 3 objekty `777e3654…`, ISO `eb82cbeb…` = východisko; P15 4 firmy / 322 objektov.
+- **Testy:** storage-backup-tests 9/9, groupD-tests 20/20, nezávislé Python overenie OK, `tsc --strict` OK.
+  **Neoverené:** beh .ps1 na Windows PowerShell 5.1 (iba statická kontrola).
+
 ## 2. Allowlist výmazu
 
 | Kľúč | Firma | UUID | Vlastník | E-mail |
