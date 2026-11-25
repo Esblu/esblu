@@ -93,10 +93,12 @@ async function suite(label: string, withArchiveMigration: boolean) {
   const ownerB: Who = { role: "authenticated", uid: U.ownerB, session: S.ownerB };
 
   await db.exec(read("scripts/sql/pglite/supabase-platform-stub.sql"));
-  const files = replayOrder(readdirSync(path.join(ROOT, MIGRATIONS)).filter((f) => f.endsWith(".sql")))
-    .filter((f) => withArchiveMigration || f !== ARCHIVE_MIGRATION);
+  // 20261121100000 je od 2026-11-26 v supabase/superseded (produkcia ju nedostane); staging-like ju vloží na pôvodné miesto.
+  const files = replayOrder([...readdirSync(path.join(ROOT, MIGRATIONS)).filter((f) => f.endsWith(".sql")),
+    ...(withArchiveMigration ? [ARCHIVE_MIGRATION] : [])]);
   assert.ok(files.includes("20261128100000_termination_purge_export_integrity.sql"));
-  for (const f of files) await db.exec(read(`${MIGRATIONS}/${f}`));
+  assert.ok(!readdirSync(path.join(ROOT, MIGRATIONS)).includes(ARCHIVE_MIGRATION), "20261121100000 nesmie byť v supabase/migrations");
+  for (const f of files) await db.exec(read(f === ARCHIVE_MIGRATION ? `supabase/superseded/${f}` : `${MIGRATIONS}/${f}`));
 
   await db.exec(`
     insert into auth.users (id, email, email_confirmed_at, last_sign_in_at) values

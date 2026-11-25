@@ -827,10 +827,19 @@ await check("export po ukončení: riadok dokladu obsahuje identifikáciu odbera
   assert.doesNotMatch(csv, /fakturacia@xeno|SK1100000000000000000001/);
 });
 
-await check("výnimka syntetických dát (pôvodný výmaz) aj zrušenie účtu vlastníka (+ výmaz auth.users) → účtovné kópie ostávajú so snapshotom", async () => {
-  const y = await su<Json>(`select public.esblu_company_termination_synthetic_purge($1, $2, false, 'waived', true, 'OPS-2026-11-19-billing-test',
-    'Syntetické testovacie dáta — test, že účtovná kópia Esblu prežije výnimku.') r`, [SU.y, SC.y]);
-  assert.equal(y[0].r.termination_mode, "synthetic_test_data_purge");
+await check("výmaz firmy (synteticky / zrušenie účtu vlastníka + výmaz auth.users) → účtovné kópie ostávajú so snapshotom", async () => {
+  // 20261121100000 (esblu_company_termination_synthetic_purge) je od 2026-11-26 superseded — produkcia ju nemá.
+  // Ak ju replay obsahuje (staging-like), overí sa aj výnimka; inak sa firma Y vymaže tou istou cestou ako Z.
+  const hasSynthetic = (await su<Json>("select to_regprocedure('public.esblu_company_termination_synthetic_purge(uuid,uuid,boolean,text,boolean,text,text)') is not null ok"))[0].ok;
+  if (hasSynthetic) {
+    const y = await su<Json>(`select public.esblu_company_termination_synthetic_purge($1, $2, false, 'waived', true, 'OPS-2026-11-19-billing-test',
+      'Syntetické testovacie dáta — test, že účtovná kópia Esblu prežije výnimku.') r`, [SU.y, SC.y]);
+    assert.equal(y[0].r.termination_mode, "synthetic_test_data_purge");
+  } else {
+    const y = await commitAs(service, "select public.esblu_account_deletion_commit('owner', $1, $2, true) r", [SU.y, SC.y]);
+    assert.equal(y.layer, "ok", y.message);
+    assert.doesNotMatch(JSON.stringify(y.data[0].r), /billing-documents/);
+  }
   const ys = await snapOf("in_snap_y1");
   assert.deepEqual([ys.company_id, ys.customer_company_id, ys.customer_legal_name, ys.customer_ic_dph], [null, SC.y, "Ypsilon s.r.o.", "SK2120333444"]);
   const z = await commitAs(service, "select public.esblu_account_deletion_commit('owner', $1, $2, true) r", [SU.z, SC.z]);

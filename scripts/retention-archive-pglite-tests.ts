@@ -22,7 +22,7 @@ import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (p: string) => readFileSync(path.join(ROOT, p), "utf8");
 const MIGRATIONS = "supabase/migrations";
-const MIGRATION = `${MIGRATIONS}/20261121100000_retention_archive_company_termination.sql`;
+const MIGRATION = "supabase/superseded/20261121100000_retention_archive_company_termination.sql";
 const ROLLBACK = "supabase/rollback/20261121100000_retention_archive_company_termination_rollback.sql";
 const REPLAY_ORDER_OVERRIDES: Array<[string, string]> = [
   ["20260916120000_add_company_billing_profile_and_business_partners.sql", "20260916094000_add_invoicing_core_schema.sql"],
@@ -56,7 +56,7 @@ await db.exec(read("scripts/sql/pglite/supabase-platform-stub.sql"));
 // LEGACY: 20261127100000 (GDPR 2.0 / CLIA 23. 11. 2026) nahrádza zákaznícky retenčný archív výmazom bez archívu.
 // Tento test overuje iba historický stav 20261121100000 (staging) — replay končí pred 20261127100000.
 const LEGACY_REPLAY_UNTIL = "20261127100000";
-const files = replayOrder(readdirSync(path.join(ROOT, MIGRATIONS)).filter((f) => f.endsWith(".sql") && f < LEGACY_REPLAY_UNTIL));
+const files = replayOrder([...readdirSync(path.join(ROOT, MIGRATIONS)).filter((f) => f.endsWith(".sql") && f < LEGACY_REPLAY_UNTIL), path.basename(MIGRATION)]);
 assert.ok(files.includes(path.basename(MIGRATION)));
 // Storage politiky / buckety: snapshot tesne pred a po retenčnej migrácii (nesmie ich meniť).
 const storagePolicySnapshot = async () =>
@@ -71,7 +71,7 @@ let storageBefore = "";
 let storageAfter = "";
 for (const f of files) {
   if (f === path.basename(MIGRATION)) storageBefore = await storagePolicySnapshot();
-  await db.exec(read(`${MIGRATIONS}/${f}`));
+  await db.exec(read(f === path.basename(MIGRATION) ? MIGRATION : `${MIGRATIONS}/${f}`));
   if (f === path.basename(MIGRATION)) storageAfter = await storagePolicySnapshot();
 }
 

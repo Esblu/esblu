@@ -160,7 +160,7 @@ await check("DPA prijatie: iba owner, iba s vyhlásením o oprávnení, iba aktu
   // B2B VOP 1.2 (20261112100000): DPA sa potvrdzuje až po firemnom prijatí VOP.
   const noTerms = await run(owner, "select public.esblu_accept_company_dpa($1, true, 'de')", [currentDpa]);
   assert.match(noTerms.message, /ESBLU_COMPANY_TERMS_NOT_ACCEPTED/);
-  const terms = await run(owner, "select public.esblu_accept_company_terms('1.2', true, true, 'de')", [], true);
+  const terms = await run(owner, "select public.esblu_accept_company_terms('1.3', true, true, 'de')", [], true);
   assert.equal(terms.layer, "ok", terms.message);
   const old = await run(owner, "select public.esblu_accept_company_dpa('1.2', true, 'sk')");
   assert.match(old.message, /ESBLU_NOT_CURRENT_DPA_VERSION/);
