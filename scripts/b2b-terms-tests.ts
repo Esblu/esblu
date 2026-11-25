@@ -35,25 +35,25 @@ function check(label: string, fn: () => void) {
   }
 }
 
-const SK = read("legal/terms/1.2.md");
-const EN = read("legal/terms/1.2.en.md");
-const DE = read("legal/terms/1.2.de.md");
+const SK = read("legal/terms/1.3.md");
+const EN = read("legal/terms/1.3.en.md");
+const DE = read("legal/terms/1.3.de.md");
 const shape = (t: string) =>
   t.split("\n").map((l) => (l === "" ? "_" : l.startsWith("## ") ? `H${l.match(/^## (\d+)\./)?.[1]}` : l.match(/^\*\*(\d+\.\d+)\*\*/)?.[1] ?? (l.startsWith("- ") ? "-" : "t")));
 const numbers = (t: string) => (t.match(/\d+/g) ?? []).join(",");
 const links = (t: string) => (t.match(/\]\(([^)]+)\)/g) ?? []).join(",");
 
-check("termsVersion = 1.2, required dokument, registrácia potvrdzuje 1.2", () => {
-  assert.equal(legalConfig.termsVersion, "1.2");
-  assert.equal(REQUIRED_ACCEPTANCE_DOCUMENTS.find((d) => d.type === "terms")?.version, "1.2");
+check("termsVersion = 1.3, required dokument, registrácia potvrdzuje 1.3", () => {
+  assert.equal(legalConfig.termsVersion, "1.3");
+  assert.equal(REQUIRED_ACCEPTANCE_DOCUMENTS.find((d) => d.type === "terms")?.version, "1.3");
   assert.equal(REQUIRED_ACCEPTANCE_DOCUMENTS.find((d) => d.type === "terms")?.label, "Všeobecné obchodné podmienky");
-  assert.equal(registrationAckVersions(null).find((d) => d.type === "terms")?.version, "1.2");
+  assert.equal(registrationAckVersions(null).find((d) => d.type === "terms")?.version, "1.3");
 });
 
-check("SK originál: 44 článkov v poradí 1–44, verzia 1.2, B2B rozsah", () => {
+check("SK originál: 44 článkov v poradí 1–44, verzia 1.3, B2B rozsah", () => {
   const heads = SK.split("\n").filter((l) => l.startsWith("## ")).map((l) => Number(l.match(/^## (\d+)\./)?.[1]));
   assert.deepEqual(heads, Array.from({ length: 44 }, (_, i) => i + 1));
-  assert.match(SK.trimEnd(), /Verzia 1\.2$/);
+  assert.match(SK.trimEnd(), /Verzia 1\.3$/);
   assert.match(SK, /výlučne na podnikateľské alebo profesijné účely/);
   assert.match(SK, /zákon č\. 513\/1991 Zb\. Obchodný zákonník/);
 });
@@ -65,7 +65,7 @@ check("EN/DE = úplné preklady: rovnaká štruktúra riadkov, čísla a odkazy"
     assert.equal(links(tr), links(SK), `${name} odkazy`);
     assert.ok(tr.endsWith("\n") && !tr.endsWith("\n\n"), `${name} koniec súboru`);
   }
-  assert.deepEqual(legalTranslationAvailability("terms", "1.2"), { sk: true, en: true, de: true });
+  assert.deepEqual(legalTranslationAvailability("terms", "1.3"), { sk: true, en: true, de: true });
 });
 
 check("DB seed hash = sha256(legal/terms/1.2.md), canonical /podmienky-pouzivania, firemné prijatie + 30-dňová lehota", () => {
@@ -75,8 +75,22 @@ check("DB seed hash = sha256(legal/terms/1.2.md), canonical /podmienky-pouzivani
   assert.ok(existsSync(path.join(ROOT, "supabase/rollback/20261112100000_b2b_terms_1_2_company_acceptance_rollback.sql")));
 });
 
+check("VOP 1.3: oproti 1.2 iba doplnenia predplatného (10.4–10.5, 11.4, 12.2, 12.6–12.7, 16.4–16.6, 44.5, verzia)", () => {
+  const art = (t: string) => new Map(t.split("\n").filter((l) => /^\*\*\d+\.\d+\*\*/.test(l)).map((l) => [l.match(/^\*\*(\d+\.\d+)\*\*/)![1], l]));
+  const a = art(read("legal/terms/1.2.md"));
+  const b = art(SK);
+  const changed = [...b.keys()].filter((k) => a.get(k) !== b.get(k)).sort();
+  assert.deepEqual(changed, ["10.4", "10.5", "11.4", "12.2", "12.6", "12.7", "16.4", "16.5", "16.6", "44.5"].sort());
+  assert.ok([...a.keys()].every((k) => b.has(k)), "žiadny článok 1.2 nechýba");
+  assert.match(SK, /ochranná lehota/);
+  assert.match(SK, /48 hodín/);
+  assert.match(SK, /Počas 7 dní od prvej neúspešnej platby/);
+  assert.match(SK, /najneskôr do 30 dní od jej doručenia/);
+  assert.match(SK, /údaje Firmy sa z tohto dôvodu nemažú/);
+});
+
 check("predchádzajúce verzie sú nemenné a verejne zobrazené (VOP 8.3)", () => {
-  assert.deepEqual([...PREVIOUS_TERMS_VERSIONS], ["1.1", "1.0"]);
+  assert.deepEqual([...PREVIOUS_TERMS_VERSIONS], ["1.2", "1.1", "1.0"]);
   for (const v of PREVIOUS_TERMS_VERSIONS) assert.ok(existsSync(path.join(ROOT, `legal/terms/${v}.md`)), v);
   const page = read("app/podmienky-pouzivania/page.tsx");
   assert.match(page, /PreviousLegalVersions/);
@@ -181,7 +195,7 @@ check("ChatGPT audit: čl. 17.2, 20.2/20.6, 36, 39, 43, 44.5", () => {
   assert.match(SK, /Pokračovanie v používaní Aplikácie samo osebe nepredstavuje súhlas/);
   assert.match(SK, /Prípadné spory budú rozhodované príslušnými súdmi podľa uplatniteľných právnych predpisov/);
   assert.doesNotMatch(SK, /podľa sídla Esblu/);
-  assert.match(SK, /Do prijatia, najdlhšie do uplynutia tejto lehoty, sa vzťah spravuje Podmienkami používania vo verzii 1\.1/);
+  assert.match(SK, /Do prijatia, najdlhšie do uplynutia tejto lehoty, sa vzťah spravuje doterajšími podmienkami/);
 });
 
 check("produkčná brána existuje a nie je súčasťou test:* regresie", () => {

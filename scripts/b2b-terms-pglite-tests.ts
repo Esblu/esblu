@@ -107,13 +107,13 @@ await db.exec(`
 const { createHash } = await import("node:crypto");
 const sha = (p: string) => createHash("sha256").update(readFileSync(path.join(ROOT, p))).digest("hex");
 
-await check("terms 1.2: aktuálna verzia, hash = legal/terms/1.2.md, firemné prijatie (required=false), lehota 30 dní", async () => {
+await check("terms 1.3 (20261129110000): aktuálna verzia, hash = legal/terms/1.3.md, firemné prijatie (required=false), lehota 30 dní", async () => {
   const r = await su<{ version: string; required: boolean; content_hash: string; canonical_path: string; d: number }>(
     "select version, required, content_hash, canonical_path, reaccept_notice_days d from public.legal_documents where type = 'terms' order by effective_at desc, created_at desc, version desc limit 1");
-  assert.equal(r[0].version, "1.2");
+  assert.equal(r[0].version, "1.3");
   assert.equal(r[0].required, false);
   assert.equal(r[0].d, 30);
-  assert.equal(r[0].content_hash, sha("legal/terms/1.2.md"));
+  assert.equal(r[0].content_hash, sha("legal/terms/1.3.md"));
   assert.equal(r[0].canonical_path, "/podmienky-pouzivania");
 });
 
@@ -121,7 +121,7 @@ await check("status pred prijatím: každý člen vidí has_current_acceptance =
   for (const w of [owner, admin, employee]) {
     const o = await run(w, "select * from public.esblu_get_my_company_terms_status()");
     assert.equal(o.layer, "ok", o.message);
-    assert.equal(o.data[0].current_terms_version, "1.2");
+    assert.equal(o.data[0].current_terms_version, "1.3");
     assert.equal(o.data[0].has_current_acceptance, false);
     assert.equal(o.data[0].required_now, true, "nová firma (po zverejnení) → povinné hneď");
     assert.equal(o.data[0].grace_until, null);
@@ -134,15 +134,15 @@ await check("status pred prijatím: každý člen vidí has_current_acceptance =
 
 await check("prijatie: admin/employee odmietnutí (owner-only)", async () => {
   for (const w of [admin, employee]) {
-    const o = await run(w, "select public.esblu_accept_company_terms('1.2', true, true, 'sk')");
+    const o = await run(w, "select public.esblu_accept_company_terms('1.3', true, true, 'sk')");
     assert.match(o.message, /ESBLU_NOT_ACTIVE_OWNER/);
   }
 });
 
 await check("prijatie: bez B2B vyhlásenia / bez oprávnenia / stará verzia odmietnuté", async () => {
-  assert.match((await run(owner, "select public.esblu_accept_company_terms('1.2', false, true, 'sk')")).message, /ESBLU_TERMS_B2B_NOT_CONFIRMED/);
-  assert.match((await run(owner, "select public.esblu_accept_company_terms('1.2')")).message, /ESBLU_TERMS_B2B_NOT_CONFIRMED/);
-  assert.match((await run(owner, "select public.esblu_accept_company_terms('1.2', true, false, 'sk')")).message, /ESBLU_TERMS_AUTHORITY_NOT_CONFIRMED/);
+  assert.match((await run(owner, "select public.esblu_accept_company_terms('1.3', false, true, 'sk')")).message, /ESBLU_TERMS_B2B_NOT_CONFIRMED/);
+  assert.match((await run(owner, "select public.esblu_accept_company_terms('1.3')")).message, /ESBLU_TERMS_B2B_NOT_CONFIRMED/);
+  assert.match((await run(owner, "select public.esblu_accept_company_terms('1.3', true, false, 'sk')")).message, /ESBLU_TERMS_AUTHORITY_NOT_CONFIRMED/);
   assert.match((await run(owner, "select public.esblu_accept_company_terms('1.1', true, true, 'sk')")).message, /ESBLU_NOT_CURRENT_TERMS_VERSION/);
   assert.match((await run(owner, "select public.esblu_accept_company_terms(null, true, true, 'sk')")).message, /ESBLU_NOT_CURRENT_TERMS_VERSION/);
 });
@@ -153,25 +153,25 @@ await check("poradie VOP → DPA: DPA bez prijatých VOP odmietnutá", async () 
 });
 
 await check("prijatie owner: eviduje firmu, osobu, rolu, B2B, oprávnenie, verziu, hash, čas, jazyk, metódu", async () => {
-  const o = await run(owner, "select (public.esblu_accept_company_terms('1.2', true, true, 'en')).*", [], true);
+  const o = await run(owner, "select (public.esblu_accept_company_terms('1.3', true, true, 'en')).*", [], true);
   assert.equal(o.layer, "ok", o.message);
   const r = o.data[0];
   assert.equal(r.company_id, C.a);
   assert.equal(r.document_type, "terms");
-  assert.equal(r.version, "1.2");
+  assert.equal(r.version, "1.3");
   assert.equal(r.accepted_by, U.owner);
   assert.equal(r.accepted_role, "owner");
   assert.equal(r.acceptance_method, "company_terms_gate");
   assert.equal(r.b2b_confirmed, true);
   assert.equal(r.authority_confirmed, true);
-  assert.equal(r.document_content_hash, sha("legal/terms/1.2.md"));
+  assert.equal(r.document_content_hash, sha("legal/terms/1.3.md"));
   assert.equal(r.display_locale, "en");
   assert.equal(r.company_name_snapshot, "Firma A s.r.o.");
   assert.equal(r.company_registration_id_snapshot, "12345678");
   assert.equal(r.processor_acceptance, null);
   assert.ok(r.accepted_at);
   const u = await su<{ m: Record<string, unknown>; acceptance_method: string }>(
-    `select metadata m, acceptance_method from public.user_legal_acceptances where user_id = '${U.owner}' and document_type = 'terms' and version = '1.2'`);
+    `select metadata m, acceptance_method from public.user_legal_acceptances where user_id = '${U.owner}' and document_type = 'terms' and version = '1.3'`);
   assert.equal(u.length, 1, "osobné potvrdenie ownera");
   assert.equal(u[0].m.via, "company_terms_gate");
   assert.equal(u[0].m.display_locale, "en");
@@ -179,21 +179,21 @@ await check("prijatie owner: eviduje firmu, osobu, rolu, B2B, oprávnenie, verzi
 
 await check("idempotentné / append-only: opakované prijatie neprepíše čas ani jazyk", async () => {
   const before = await su<{ accepted_at: string }>(`select accepted_at::text from public.company_dpa_acceptances where company_id = '${C.a}' and document_type = 'terms'`);
-  const o = await run(owner, "select (public.esblu_accept_company_terms('1.2', true, true, 'de')).display_locale l", [], true);
+  const o = await run(owner, "select (public.esblu_accept_company_terms('1.3', true, true, 'de')).display_locale l", [], true);
   assert.equal(o.data[0].l, "en");
   const after = await su<{ accepted_at: string }>(`select accepted_at::text from public.company_dpa_acceptances where company_id = '${C.a}' and document_type = 'terms'`);
   assert.deepEqual(after, before);
   for (const w of [owner, admin]) {
     const up = await run(w, `update public.company_dpa_acceptances set b2b_confirmed = false where company_id = '${C.a}'`);
     assert.equal(up.layer, "privilege", w.role);
-    const ins = await run(w, `insert into public.company_dpa_acceptances (company_id, document_type, version, accepted_by, acceptance_method, b2b_confirmed, authority_confirmed) values ('${C.b}', 'terms', '1.2', '${U.owner}', 'company_terms_gate', true, true)`);
+    const ins = await run(w, `insert into public.company_dpa_acceptances (company_id, document_type, version, accepted_by, acceptance_method, b2b_confirmed, authority_confirmed) values ('${C.b}', 'terms', '1.3', '${U.owner}', 'company_terms_gate', true, true)`);
     assert.equal(ins.layer, "privilege", w.role);
   }
 });
 
 await check("CHECK: terms riadok bez B2B / s DPA metódou je odmietnutý aj pre service/superuser", async () => {
-  await assert.rejects(su(`insert into public.company_dpa_acceptances (company_id, document_type, version, accepted_by, acceptance_method, b2b_confirmed, authority_confirmed) values ('${C.b}', 'terms', '1.2', '${U.ownerB}', 'company_terms_gate', false, true)`), /terms_evidence_check/);
-  await assert.rejects(su(`insert into public.company_dpa_acceptances (company_id, document_type, version, accepted_by, acceptance_method, b2b_confirmed, authority_confirmed) values ('${C.b}', 'terms', '1.2', '${U.ownerB}', 'company_dpa_gate', true, true)`), /acceptance_method_check/);
+  await assert.rejects(su(`insert into public.company_dpa_acceptances (company_id, document_type, version, accepted_by, acceptance_method, b2b_confirmed, authority_confirmed) values ('${C.b}', 'terms', '1.3', '${U.ownerB}', 'company_terms_gate', false, true)`), /terms_evidence_check/);
+  await assert.rejects(su(`insert into public.company_dpa_acceptances (company_id, document_type, version, accepted_by, acceptance_method, b2b_confirmed, authority_confirmed) values ('${C.b}', 'terms', '1.3', '${U.ownerB}', 'company_dpa_gate', true, true)`), /acceptance_method_check/);
 });
 
 await check("oddelenie firiem: prijatie firmy A neplatí pre firmu B; členovia A vidia prijaté", async () => {
@@ -253,7 +253,7 @@ await check("grace period: existujúca firma → lehota beží OD OZNÁMENIA (co
   const n = await run(oldOwner, "select (public.esblu_record_company_terms_notice()).*", [], true);
   assert.equal(n.layer, "ok", n.message);
   assert.equal(n.data[0].company_id, C2);
-  assert.equal(n.data[0].terms_version, "1.2");
+  assert.equal(n.data[0].terms_version, "1.3");
   assert.equal(n.data[0].notified_user_id, U4);
   const days = Math.round((Date.parse(String(n.data[0].grace_until)) - Date.parse(String(n.data[0].notified_at))) / 86_400_000);
   assert.equal(days, 30);
@@ -307,6 +307,10 @@ await check("anon: žiadna nová funkcia nie je spustiteľná", async () => {
   }
 });
 
+await check("VOP 1.3: rollback 20261129110000 je fail closed pri prijatiach 1.3", async () => {
+  await assert.rejects(db.exec(read("supabase/rollback/20261129110000_terms_1_3_subscription_rollback.sql")), /ROLLBACK_BLOCKED/);
+});
+
 await check("rollback je fail closed pri existujúcich prijatiach VOP 1.2", async () => {
   await assert.rejects(db.exec(read("supabase/rollback/20261112100000_b2b_terms_1_2_company_acceptance_rollback.sql")), /ROLLBACK_BLOCKED/);
 });
@@ -328,7 +332,7 @@ await check("rollback + re-apply na čistej DB (bez prijatí) prejde a je idempo
   await su("alter table public.legal_acceptance_evidence enable trigger all");
   await su("delete from public.company_dpa_acceptances");
   await su("delete from public.company_terms_notices");
-  await su("delete from public.user_legal_acceptances where document_type = 'terms' and version = '1.2'");
+  await su("delete from public.user_legal_acceptances where document_type = 'terms' and version in ('1.2', '1.3')");
   await su("delete from public.legal_acceptance_evidence");
   await db.exec(read("supabase/rollback/20261112100000_b2b_terms_1_2_company_acceptance_rollback.sql"));
   assert.equal((await su("select 1 from pg_proc where proname = 'esblu_accept_company_terms'")).length, 0);

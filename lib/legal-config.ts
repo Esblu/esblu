@@ -80,8 +80,11 @@ export const legalConfig = {
   // charaktere a oprávnení (CompanyDpaGate → esblu_accept_company_terms).
   // STAV: návrh na finálny právny audit — NEdeployovať do produkcie pred
   // schválením (hard stop úlohy).
-  termsVersion: "1.2",
-  termsUpdatedAt: "12. novembra 2026",
+  // → 1.3 (2026-11-26): podmienky plateného predplatného (10.4–10.5, 11.4, 12.2, 12.6–12.7, 16.4–16.6) — objednanie,
+  // ceny a DPH, Stripe, neúspešná platba (7 dní), reklamácie, 48 h ochranná lehota, refundácie. Firemné prijatie
+  // s oznámením 30 dní (migrácia 20261129110000). Na potvrdenie CLIA.
+  termsVersion: "1.3",
+  termsUpdatedAt: "26. novembra 2026",
   // Cookie Policy ostáva na v1.0 (revidované 2026-08-19). Prvý pokus pri
   // implementácii viacjazyčnej podpory (SK/DE/EN) ukladal zvolený jazyk do
   // nového cookie `esblu_locale`, čo by bolo v rozpore s tvrdením v1.0
@@ -137,4 +140,4 @@ export type LegalDocumentType =
 
 // VOP 1.2 čl. 8.3: predchádzajúce verzie zverejnené na /podmienky-pouzivania
 // (nemenné súbory legal/terms/<verzia>.md), od najnovšej.
-export const PREVIOUS_TERMS_VERSIONS = ["1.1", "1.0"] as const;
+export const PREVIOUS_TERMS_VERSIONS = ["1.2", "1.1", "1.0"] as const;
