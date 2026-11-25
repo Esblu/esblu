@@ -5,14 +5,15 @@
 // proti falošnému serveru za deletionGuardedFetch — dokazuje, že kód appky v behu D nič mimo cieľa neodošle.
 // =============================================================================
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { orchestrateAccountDeletion, runCleanupJob } from "../../lib/account-deletion-orchestrator.ts";
 import { supabaseDeletionDeps, supabaseTerminationDeps } from "../../lib/account-deletion-deps.ts";
 import { parseStorageTargets } from "../../lib/account-deletion-storage.ts";
 import { buildTerminationAck } from "../../lib/company-termination-ack.ts";
 import { ALLOWED_ORIGIN, Stop } from "./runner-core.ts";
-import { DELETE_ALLOWLIST, PROTECTED_ISO, deletionGuardedFetch, newScope, resolveDeletionTarget, type Target } from "./groupD-core.ts";
-import { runCleanupOnly, runDeletionTarget, type DDeps } from "./groupD-runner.ts";
+import { DELETE_ALLOWLIST, PROTECTED_ISO, deletionGuardedFetch, newScope, realReauth, resolveDeletionTarget, type Target } from "./groupD-core.ts";
+import { runAuthTest, runCleanupOnly, runDeletionTarget, type DDeps } from "./groupD-runner.ts";
 import { assertCleanProcessD, D_EXEC_ARGV } from "./groupD-pins.ts";
 
 let passed = 0;
@@ -256,7 +257,9 @@ await test("C4 výpadok Storage + retry (ako cron): job pending → druhý pokus
 });
 
 // ----------------------------------------------------------------------------- D. priebeh runnera (falošné závislosti)
-type Model = { companies: Set<string>; rows: Record<string, Array<Record<string, unknown>>>; objects: Set<string>; exportStatus: string; lastSignIn: string | null; gate: string | null; terminate: string; retryOk: boolean; calls: string[]; mutateIso?: boolean };
+type AuthSim = { throw?: string; userId?: string; email?: string; tokenVerified?: boolean };
+type RunSim = Partial<Record<string, unknown>> & { fileShaNull?: boolean };
+type Model = { companies: Set<string>; rows: Record<string, Array<Record<string, unknown>>>; objects: Set<string>; exportStatus: string; lastSignIn: string | null; gate: string | null; terminate: string; retryOk: boolean; calls: string[]; mutateIso?: boolean; auth: AuthSim; run: RunSim };
 function model(): Model {
   const c = T1.companyId, iso = PROTECTED_ISO.companyId;
   return {
@@ -267,25 +270,36 @@ function model(): Model {
       einvoice_inbound: [{ id: "i1", company_id: c, xml_storage_path: `${c}/inbound/a.xml`, pdf_storage_path: null, last_error_code: null }, { id: "i2", company_id: c, xml_storage_path: `${c}/inbound/r3.xml`, last_error_code: "RECIPIENT_MISMATCH" }, { id: "i3", company_id: iso, xml_storage_path: `${iso}/inbound/b.xml` }],
       einvoice_outbound: [], documents: [{ id: "d1", company_id: c, storage_path: `${c}/p15/doc-1.pdf` }], document_attachments: [], einvoice_organizations: [], billing_invoice_documents: [],
       invoices: [{ id: "x1", company_id: c }, { id: "x2", company_id: iso }], einvoice_events: [], einvoice_mandates: [{ id: "m1", company_id: iso }], vehicles: [],
-      company_terminations: [], account_deletion_cleanup_jobs: [], einvoice_misdelivery_incidents: [],
+      company_terminations: [], account_deletion_cleanup_jobs: [], einvoice_misdelivery_incidents: [], company_export_runs: [], company_export_run_files: [],
     },
     objects: new Set([`einvoice-documents|${c}/inbound/a.xml`, `einvoice-documents|${c}/inbound/r3.xml`, `ai-inbox-documents|${c}/p15/doc-1.pdf`, `einvoice-documents|${iso}/inbound/b.xml`]),
-    exportStatus: "completed", lastSignIn: new Date().toISOString(), gate: null, terminate: "deleted", retryOk: true, calls: [],
+    exportStatus: "completed", lastSignIn: new Date().toISOString(), gate: null, terminate: "deleted", retryOk: true, calls: [], auth: {}, run: {},
   };
 }
 function fakeDeps(mo: Model): DDeps {
   const scope = newScope(null);
   const match = (row: Record<string, unknown>, filter: Record<string, string>) => Object.entries(filter).every(([k, v]) => String(row[k]) === v.slice(3));
   const purge = (cid: string) => {
-    for (const t of Object.keys(mo.rows)) if (!["company_terminations", "account_deletion_cleanup_jobs", "einvoice_misdelivery_incidents"].includes(t)) mo.rows[t] = mo.rows[t].filter((r) => r.company_id !== cid && r.id !== cid);
+    for (const t of Object.keys(mo.rows)) if (!["company_terminations", "account_deletion_cleanup_jobs", "einvoice_misdelivery_incidents", "company_export_runs", "company_export_run_files"].includes(t)) mo.rows[t] = mo.rows[t].filter((r) => r.company_id !== cid && r.id !== cid);
   };
   return {
     scope,
     async read(table, filter) { mo.calls.push(`read:${table}`); return (mo.rows[table] ?? []).filter((r) => match(r, filter)); },
     async rpc(fn) { mo.calls.push(`rpc:${fn}`); return fn === "esblu_cleanup_health" ? { data: { exhausted: 0, termination_unpurged_24h: 0 }, error: null } : { data: mo.gate, error: null }; },
     async list(bucket, prefix) { return [...mo.objects].filter((o) => o.startsWith(`${bucket}|${prefix}/`)).map((o) => o.split("|")[1]); },
-    async exportRefresh() { mo.calls.push("export"); return { status: mo.exportStatus, runId: "run-1" }; },
-    async reauth() { mo.calls.push("reauth"); return { lastSignInAt: mo.lastSignIn }; },
+    async exportRefresh(t) {
+      mo.calls.push("export");
+      const id = randomUUID();
+      mo.rows.company_export_runs.push({ id, company_id: t.companyId, requested_by: t.ownerId, status: "completed", missing_files: 0, files_bound: true, files_total: 2,
+        completed_at: new Date().toISOString(), data_fingerprint: "fp", storage_fingerprint: "sfp", ...mo.run });
+      for (const n of ["a.xml", "b.pdf"]) mo.rows.company_export_run_files.push({ run_id: id, path: `${t.companyId}/${n}`, sha256: mo.run.fileShaNull ? null : "e".repeat(64) });
+      return { status: mo.exportStatus, runId: id };
+    },
+    async reauth(t) {
+      mo.calls.push("reauth");
+      if (mo.auth.throw) throw new Stop(mo.auth.throw);
+      return { userId: mo.auth.userId ?? t.ownerId, email: mo.auth.email ?? t.email, tokenVerified: mo.auth.tokenVerified ?? true, lastSignInAt: mo.lastSignIn, identities: 0 };
+    },
     buildAck() { return { authority_confirmed: true, text_sha256: "a".repeat(64) }; },
     async terminate(t) {
       mo.calls.push("terminate");
@@ -316,12 +330,14 @@ function fakeDeps(mo: Model): DDeps {
 }
 const ids = (r: { results: Array<{ id: string; status: string }> }) => r.results.map((x) => `${x.id}:${x.status}`).join(" ");
 
-await test("D1 úplný beh T1: export → reauth → brána → výmaz → kontrola → ISO nezmenená", async () => {
+await test("D1 úplný beh T1: identita → prihlásenie → oprávnenie → export → validácia → brána → výmaz → kontrola", async () => {
   const mo = model();
   const r = await runDeletionTarget(fakeDeps(mo), "t1");
   assert.equal(r.exitCode, 0, ids(r));
   assert.ok(r.results.every((x) => x.status === "PASS"), ids(r));
-  assert.deepEqual(mo.calls.filter((c) => !c.startsWith("read") && !c.startsWith("rpc")), ["export", "reauth", "terminate"]);
+  assert.deepEqual(mo.calls.filter((c) => !c.startsWith("read") && !c.startsWith("rpc")), ["reauth", "export", "terminate"]);
+  const iAuth = mo.calls.indexOf("reauth"), iExp = mo.calls.indexOf("export"), iGate = mo.calls.indexOf("rpc:esblu_company_termination_preflight"), iTerm = mo.calls.indexOf("terminate");
+  assert.ok(iAuth < iExp && iExp < iGate && iGate < iTerm, "poradie: prihlásenie → export → brána → výmaz");
 });
 await test("D2 ISO / pôvodná firma ako cieľ → exit 2, žiadne volanie", async () => {
   for (const k of ["iso", ORIGINAL, PROTECTED_ISO.companyId]) {
@@ -372,7 +388,7 @@ await test("D6 T2 so simulovaným výpadkom: zaznamenané zlyhanie → health 0 
   const d = fakeDeps(mo);
   const r = await runDeletionTarget(d, "t2", { injectStorageFailureBucket: "einvoice-documents" });
   assert.equal(r.exitCode, 0, ids(r));
-  assert.ok(["D6.failure_recorded", "D6.not_marked_purged", "D6.health_before_retry", "D7.retry_cleanup"].every((id) => r.results.some((x) => x.id === id && x.status === "PASS")), ids(r));
+  assert.ok(["D8.failure_recorded", "D8.not_marked_purged", "D8.health_before_retry", "D9.retry_cleanup"].every((id) => r.results.some((x) => x.id === id && x.status === "PASS")), ids(r));
 });
 await test("D7 retry zlyhá → FAIL (súbory ostali), ISO zmenená počas behu → FAIL", async () => {
   const mo = model();
@@ -383,7 +399,7 @@ await test("D7 retry zlyhá → FAIL (súbory ostali), ISO zmenená počas behu 
   const mo2 = model();
   mo2.mutateIso = true;
   const r2 = await runDeletionTarget(fakeDeps(mo2), "t1");
-  assert.ok(r2.results.some((x) => x.id === "D9.iso_unchanged" && x.status === "FAIL"));
+  assert.ok(r2.results.some((x) => x.id === "D11.iso_unchanged" && x.status === "FAIL"));
 });
 
 await test("D8 cleanup-only: dočistí commitnuté ukončenie T2 po výpadku; bez ukončenia / pre ISO → STOP bez zmien", async () => {
@@ -405,6 +421,138 @@ await test("D8 cleanup-only: dočistí commitnuté ukončenie T2 po výpadku; be
   assert.ok(!mo2.calls.includes("retry"));
   const r3 = await runCleanupOnly(fakeDeps(model()), "iso");
   assert.equal(r3.exitCode, 2);
+});
+
+
+// ----------------------------------------------------------------------------- E. autentifikácia a poradie (2026-11-25)
+const noExportNoRpc = (mo: Model) => !mo.calls.includes("export") && !mo.calls.includes("terminate") && !mo.calls.some((c) => c.startsWith("rpc:"));
+await test("E1 zlyhanie prihlásenia: magic link / chýbajúca auth.identities / iný vlastník / neoverený token / iný e-mail / stará alebo žiadna session → žiadny export, žiadne RPC, žiadny výmaz", async () => {
+  const cases: Array<[string, (m: Model) => void]> = [
+    ["generate_link zlyhal", (m) => { m.auth.throw = "reauth: generate_link zlyhal (500:unexpected_failure)"; }],
+    ["verify bez auth.identities odmietnutý", (m) => { m.auth.throw = "reauth: overenie magic linku zlyhalo (422:identity_not_found)"; }],
+    ["prihlásený iný vlastník (ISO)", (m) => { m.auth.userId = PROTECTED_ISO.ownerId; }],
+    ["prihlásený admin T1", (m) => { m.auth.userId = "f1500000-0000-4000-8000-000000000105"; }],
+    ["token sa nepodarilo overiť cez /user", (m) => { m.auth.tokenVerified = false; }],
+    ["e-mail iného používateľa", (m) => { m.auth.email = "qa-p15-iso@esblu-qa.invalid"; }],
+    ["staré prihlásenie (31 min)", (m) => { m.lastSignIn = new Date(Date.now() - 31 * 60_000).toISOString(); }],
+    ["staré prihlásenie (6 min)", (m) => { m.lastSignIn = new Date(Date.now() - 6 * 60_000).toISOString(); }],
+    ["žiadne last_sign_in_at", (m) => { m.lastSignIn = null; }],
+    ["last_sign_in_at v budúcnosti", (m) => { m.lastSignIn = new Date(Date.now() + 10 * 60_000).toISOString(); }],
+  ];
+  for (const [label, mut] of cases) {
+    const mo = model();
+    mut(mo);
+    const r = await runDeletionTarget(fakeDeps(mo), "t1");
+    assert.equal(r.exitCode, 1, label);
+    assert.ok(noExportNoRpc(mo), `${label}: ${mo.calls.join(",")}`);
+    assert.equal(mo.rows.company_export_runs.length, 0, `${label}: export nesmie vzniknúť`);
+    assert.ok(mo.companies.has(T1.companyId) && mo.objects.size === 4, `${label}: nič sa nezmazalo`);
+  }
+});
+await test("E2 zlyhanie exportu po úspešnom prihlásení: nie completed / chýbajúce súbory / cudzí žiadateľ / starý / bez väzby súborov / SHA chýba → bez brány a výmazu", async () => {
+  const cases: Array<[string, (m: Model) => void]> = [
+    ["status failed", (m) => { m.exportStatus = "failed"; }],
+    ["missing_files 1", (m) => { m.run = { missing_files: 1 }; }],
+    ["requested_by admin", (m) => { m.run = { requested_by: "f1500000-0000-4000-8000-000000000105" }; }],
+    ["iná firma", (m) => { m.run = { company_id: PROTECTED_ISO.companyId }; }],
+    ["completed pred 20 min", (m) => { m.run = { completed_at: new Date(Date.now() - 20 * 60_000).toISOString() }; }],
+    ["files_bound false", (m) => { m.run = { files_bound: false }; }],
+    ["počet súborov nesedí", (m) => { m.run = { files_total: 3 }; }],
+    ["SHA-256 súboru chýba", (m) => { m.run = { fileShaNull: true }; }],
+  ];
+  for (const [label, mut] of cases) {
+    const mo = model();
+    mut(mo);
+    const r = await runDeletionTarget(fakeDeps(mo), "t1");
+    assert.equal(r.exitCode, 1, label);
+    assert.ok(mo.calls.includes("reauth") && mo.calls.includes("export"), label);
+    assert.ok(!mo.calls.includes("rpc:esblu_company_termination_preflight") && !mo.calls.includes("terminate"), `${label}: ${mo.calls.join(",")}`);
+  }
+});
+await test("E3 auth-test: iba čítanie + prihlásenie; žiadny export, RPC ani výmaz; zlyhanie = exit 1; ISO / pôvodná firma = exit 2", async () => {
+  const mo = model();
+  const d = fakeDeps(mo);
+  const r = await runAuthTest(d, "t1");
+  assert.equal(r.exitCode, 0, r.results.map((x) => x.id + ":" + x.status).join(" "));
+  assert.deepEqual(mo.calls.filter((c) => !c.startsWith("read")), ["reauth"]);
+  assert.equal(d.scope.authOnly, false, "authOnly sa po teste vypne");
+  const mo2 = model();
+  mo2.auth.throw = "reauth: overenie magic linku zlyhalo (422:identity_not_found)";
+  const r2 = await runAuthTest(fakeDeps(mo2), "t1");
+  assert.equal(r2.exitCode, 1);
+  assert.deepEqual(mo2.calls.filter((c) => !c.startsWith("read")), ["reauth"]);
+  for (const k of ["iso", PROTECTED_ISO.companyId, ORIGINAL]) {
+    const mo3 = model();
+    const r3 = await runAuthTest(fakeDeps(mo3), k);
+    assert.equal(r3.exitCode, 2);
+    assert.equal(mo3.calls.length, 0);
+  }
+});
+await test("E4 sieťová poistka v režime auth-test: RPC, Storage, REST mutácie a Auth DELETE zablokované; čítanie REST a prihlásenie povolené", async () => {
+  const g = guarded(T1);
+  g.scope.authOnly = true;
+  await denied(g.f, u("/rest/v1/rpc/esblu_company_export_begin"), { method: "POST", body: J({ p_user_id: T1.ownerId, p_company_id: T1.companyId }) });
+  await denied(g.f, u("/rest/v1/rpc/esblu_company_termination_execute"), { method: "POST", body: J({ p_user_id: T1.ownerId, p_company_id: T1.companyId }) });
+  await denied(g.f, u(`/storage/v1/object/einvoice-documents/${T1.companyId}/a.xml`), { method: "GET" });
+  await denied(g.f, u("/storage/v1/object/einvoice-documents"), { method: "DELETE", body: J({ prefixes: [`${T1.companyId}/a.xml`] }) });
+  await denied(g.f, u("/rest/v1/account_deletion_cleanup_jobs?id=eq.x"), { method: "PATCH", body: "{}" });
+  await denied(g.f, u(`/auth/v1/admin/users/${T1.ownerId}`), { method: "DELETE" });
+  assert.equal(g.calls.length, 0);
+  await g.f(u("/rest/v1/companies?id=eq.x"), { method: "GET" });
+  await g.f(u("/auth/v1/admin/generate_link"), { method: "POST", body: J({ type: "magiclink", email: T1.email }) });
+  await g.f(u("/auth/v1/verify"), { method: "POST", body: J({ type: "magiclink", token_hash: "x" }) });
+  await g.f(u("/auth/v1/user"), { method: "GET" });
+  await g.f(u(`/auth/v1/admin/users/${T1.ownerId}`), { method: "GET" });
+  assert.equal(g.calls.length, 5);
+});
+type AuthServer = { verifyStatus?: number; verifyUserId?: string; userId?: string; lastSignIn?: string | null; identities?: number; seen: string[] };
+function gotrue(a: AuthServer): typeof fetch {
+  return (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input));
+    const m = String(init?.method ?? "GET").toUpperCase();
+    a.seen.push(`${m} ${url.pathname}`);
+    const json = (b: unknown, s = 200) => new Response(JSON.stringify(b), { status: s, headers: { "content-type": "application/json" } });
+    const user = (id: string) => ({ id, aud: "authenticated", role: "authenticated", email: id === T1.ownerId ? T1.email : "other@esblu-qa.invalid", last_sign_in_at: a.lastSignIn ?? null, identities: Array.from({ length: a.identities ?? 0 }, () => ({})), app_metadata: {}, user_metadata: {}, created_at: "2026-11-24T19:54:34Z" });
+    if (url.pathname === "/auth/v1/admin/generate_link") {
+      const b = JSON.parse(String(init?.body));
+      return json({ action_link: "https://x.invalid/verify", email_otp: "000000", hashed_token: "h".repeat(56), redirect_to: "", verification_type: b.type, ...user(T1.ownerId) });
+    }
+    if (url.pathname === "/auth/v1/verify") {
+      if (a.verifyStatus && a.verifyStatus >= 400) return json({ code: "identity_not_found", msg: "simulated" }, a.verifyStatus);
+      return json({ access_token: "at.synthetic.token", token_type: "bearer", expires_in: 3600, expires_at: Math.floor(Date.now() / 1000) + 3600, refresh_token: "rt", user: user(a.verifyUserId ?? T1.ownerId) });
+    }
+    if (url.pathname === "/auth/v1/user") return json(user(a.userId ?? T1.ownerId));
+    if (url.pathname === "/auth/v1/logout") return new Response(null, { status: 204 });
+    if (url.pathname === `/auth/v1/admin/users/${T1.ownerId}`) return json(user(T1.ownerId));
+    return json({ msg: "unexpected" }, 500);
+  }) as typeof fetch;
+}
+function authClients(a: AuthServer, scope: ReturnType<typeof newScope>) {
+  const f = deletionGuardedFetch(scope, gotrue(a));
+  const o = { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false }, global: { fetch: f } };
+  return { admin: createClient(ALLOWED_ORIGIN, "sb_secret_offline_test_key_000000000000", o), anon: createClient(ALLOWED_ORIGIN, "sb_publishable_offline_test_key_0000", o) };
+}
+await test("E5 skutočný supabase-js (Auth) proti falošnému GoTrue: úspech overí token cez /user a odhlási; chyba verify / iný používateľ = Stop; iba Auth požiadavky", async () => {
+  const ok: AuthServer = { lastSignIn: new Date().toISOString(), identities: 1, seen: [] };
+  const scope = newScope(T1);
+  scope.authOnly = true;
+  const r = await realReauth(authClients(ok, scope) as never, T1);
+  assert.equal(r.userId, T1.ownerId);
+  assert.ok(r.tokenVerified);
+  assert.equal(r.email, T1.email);
+  assert.equal(r.identities, 1);
+  assert.ok(ok.seen.includes("POST /auth/v1/admin/generate_link") && ok.seen.includes("POST /auth/v1/verify") && ok.seen.includes("GET /auth/v1/user") && ok.seen.includes("POST /auth/v1/logout"), ok.seen.join(","));
+  assert.ok(ok.seen.every((x) => x.includes("/auth/v1/")));
+  assert.deepEqual(scope.log.filter((l) => l.startsWith("DENY")), []);
+  const bad: AuthServer = { verifyStatus: 422, seen: [] };
+  await assert.rejects(() => realReauth(authClients(bad, newScope(T1)) as never, T1), Stop);
+  assert.ok(!bad.seen.includes("GET /auth/v1/user"), "po zlyhaní verify sa nepokračuje");
+  const other: AuthServer = { verifyUserId: PROTECTED_ISO.ownerId, seen: [] };
+  await assert.rejects(() => realReauth(authClients(other, newScope(T1)) as never, T1), Stop);
+  assert.ok(other.seen.includes("POST /auth/v1/logout"), "cudzia relácia sa odhlási");
+  const mism: AuthServer = { userId: PROTECTED_ISO.ownerId, lastSignIn: new Date().toISOString(), seen: [] };
+  const r4 = await realReauth(authClients(mism, newScope(T1)) as never, T1);
+  assert.equal(r4.tokenVerified, false, "token patrí inému používateľovi");
 });
 
 console.log(`\np15-groupD-tests: ${passed} passed, ${failed} failed`);

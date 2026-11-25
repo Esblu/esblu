@@ -137,6 +137,31 @@ Stav: **iba príprava**. Na staging sa nič nezapisovalo (iba read-only SQL), ž
   v projekte niet dôkazu, že sa používateľ bez identity niekedy prihlásil → správanie GoTrue neoverené; zlyhanie =
   STOP pred precheckom aj výmazom (runner) + DB brána `REAUTH_REQUIRED` (posledné prihlásenie 2026-11-24 19:54).
 
+### 1g. D-T1: odstránenie rizík (2026-11-25, lokálne, bez stagingových zápisov)
+
+- **Nové poradie runnera:** allowlist → identita (čítanie) → **skutočné prihlásenie vlastníka** → oprávnenie (znova,
+  po prihlásení) → nový export → validácia exportu (presne tento beh, vlastník, completed, 0 chýbajúcich,
+  files_bound, súbory so SHA-256 pod prefixom, ≤ 15 min) → DB brána (preflight) → výmaz kódom appky → kontrola.
+  Zlyhanie prihlásenia = žiadny export, žiadne RPC, žiadny výmaz (testy E1).
+- **Prihlásenie (`realReauth`):** Auth Admin `generate_link` (magiclink, e-mail sa neposiela) → `verify(token_hash)`
+  s publishable key → overenie access tokenu cez `GET /auth/v1/user` (ako `verifyRequestUser`) → odhlásenie →
+  `last_sign_in_at` z Admin API; vyžaduje: to isté `user.id`, e-mail vlastníka, overený token, prihlásenie < 5 min.
+  Bez zápisu do `auth.users`, bez ručnej session, bez obchádzania RLS/brány (brána ďalej vyžaduje ≤ 30 min).
+- **Režim `auth-test`:** iba allowlist + identita (čítanie) + prihlásenie; sieťová poistka `authOnly` zakáže RPC,
+  Storage, REST mutácie a Auth DELETE.
+- **Mandát T1:** `effective_at` = null (poskytovateľ nepotvrdil), bez organizácie → `esblu_einvoice_mandate_effective`
+  = false; nič neoprávňuje. Nemá FK na firmu (append-only dôkaz, DELETE zakázaný triggerom) → po výmaze ostane
+  s `revoked_at` = null. Appka pri neregistrovanej firme mandát neodvoláva (deregistrácia iba pri registrácii).
+  Odporúčanie (samostatná zmena + migrácia): pri ukončení odvolať neodvolané mandáty firmy
+  (`revoked_by_kind = 'system'`, `revocation_reason_code = 'COMPANY_TERMINATED'`) — záznam ostáva, iba sa doplní koniec
+  oprávnenia; retenciu osobných údajov v mandáte (meno/e-mail udeľujúceho) rieši retenčný návrh.
+- **Admin `…0105` po ukončení:** členstvo a aktívna firma (`company_members`, `user_active_company`,
+  `session_active_company`) zaniknú kaskádou; `esblu_my_active_company_id()` = null → 90 firemných RLS politík
+  nič nevráti; API vracia `NO_ACTIVE_COMPANY` (403); účet bez členstva → onboarding novej firmy alebo zrušenie
+  účtu (orphan vetva). Žiadne iné jeho riadky (settings 0, legal 0). Dočistenie účtu = samostatný krok.
+- Testy: groupD-tests 25/25 (nové E1–E5 vrátane skutočného supabase-js proti falošnému GoTrue), storage-backup 12/12,
+  orchestration 23/23, company-termination 14/14, `tsc --strict` OK, preflight t1/t2/perf OK.
+
 ## 2. Allowlist výmazu
 
 | Kľúč | Firma | UUID | Vlastník | E-mail |

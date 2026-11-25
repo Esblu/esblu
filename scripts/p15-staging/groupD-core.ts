@@ -62,8 +62,8 @@ export function resolveDeletionTarget(input: string): Target {
 }
 
 // ----------------------------------------------------------------------------- D-2 sieťová vrstva
-export type DeleteScope = { target: Target | null; jobId: string | null; injectStorageFailure: string | null; log: string[] };
-export function newScope(target: Target | null): DeleteScope { return { target, jobId: null, injectStorageFailure: null, log: [] }; }
+export type DeleteScope = { target: Target | null; jobId: string | null; injectStorageFailure: string | null; log: string[]; authOnly?: boolean };
+export function newScope(target: Target | null): DeleteScope { return { target, jobId: null, injectStorageFailure: null, log: [], authOnly: false }; }
 
 function methodOf(input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]): string {
   return String(init?.method ?? (typeof input === "object" && "method" in (input as Request) ? (input as Request).method : "GET")).toUpperCase();
@@ -95,6 +95,12 @@ export function deletionGuardedFetch(scope: DeleteScope, inner: typeof fetch = f
     const m = methodOf(input, init);
     const p = decodeURIComponent(url.pathname);
     const deny = (why: string): never => { scope.log.push(`DENY ${m} ${p.slice(0, 60)} ${why}`); throw new Stop(`D-2: ${why}`); };
+    // Test autentifikácie (auth-test): iba čítanie REST a Auth vlastníka cieľa — žiadne RPC, Storage ani DELETE.
+    if (scope.authOnly) {
+      const okRest = p.startsWith("/rest/v1/") && !p.startsWith("/rest/v1/rpc/") && (m === "GET" || m === "HEAD");
+      const okAuth = p.startsWith("/auth/v1/") && !(m === "DELETE");
+      if (!okRest && !okAuth) deny("režim auth-test: povolené iba čítanie REST a prihlásenie vlastníka");
+    }
 
     if (p.startsWith("/rest/v1/rpc/")) {
       if (m !== "POST") deny("RPC iba POST");
@@ -171,7 +177,8 @@ export async function listAll(list: (bucket: string, prefix: string) => Promise<
   return out;
 }
 
-export async function precheck(t: Target, read: Read, rpc: Rpc, ack: unknown): Promise<{ r3: number; storagePaths: number }> {
+/** D-3a (iba čítanie, pred prihlásením aj po ňom): identita, oprávnenie vlastníka, rozsah firmy. Žiadne RPC. */
+export async function precheckIdentity(t: Target, read: Read): Promise<{ r3: number; storagePaths: number }> {
   const [company] = await read("companies", { id: `eq.${t.companyId}` }, "id,name,owner_id");
   if (!company || company.name !== t.name || company.owner_id !== t.ownerId) throw new Stop("D-3: firma v DB ≠ allowlist (názov/vlastník)");
   const memberships = await read("company_members", { user_id: `eq.${t.ownerId}` }, "company_id,role,status");
@@ -191,11 +198,73 @@ export async function precheck(t: Target, read: Read, rpc: Rpc, ack: unknown): P
       }
     }
   }
+  const [owner] = memberships;
+  if (owner.status !== "active") throw new Stop("D-3: členstvo vlastníka nie je aktívne");
   const r3 = (await read("einvoice_inbound", { company_id: `eq.${t.companyId}`, last_error_code: "eq.RECIPIENT_MISMATCH" }, "id")).length;
-  const gate = await rpc("esblu_company_termination_preflight", { p_user_id: t.ownerId, p_company_id: t.companyId, p_export_mode: "exported", p_ack: ack });
-  if (gate.error) throw new Stop(`D-3: preflight zlyhal (${gate.error.code ?? "?"})`);
-  if (typeof gate.data === "string" && gate.data) throw new Stop(`D-3: brána odmieta: ${gate.data}`);
   return { r3, storagePaths: paths };
+}
+
+/** D-6 databázová brána bez zmeny údajov (preflight) — až po overenom exporte. */
+export async function gateCheck(t: Target, rpc: Rpc, ack: unknown): Promise<void> {
+  const gate = await rpc("esblu_company_termination_preflight", { p_user_id: t.ownerId, p_company_id: t.companyId, p_export_mode: "exported", p_ack: ack });
+  if (gate.error) throw new Stop(`D-6: preflight zlyhal (${gate.error.code ?? "?"})`);
+  if (typeof gate.data === "string" && gate.data) throw new Stop(`D-6: brána odmieta: ${gate.data}`);
+}
+
+/** D-5 validácia nového exportu: presne tento beh, vlastník, completed, 0 chýbajúcich, súbory s SHA-256, čerstvý. */
+export async function validateExport(t: Target, read: Read, runId: string | null, now: Date): Promise<{ files: number }> {
+  if (!isUuid(runId)) throw new Stop("D-5: export nemá id behu");
+  const [run] = await read("company_export_runs", { id: `eq.${runId}` }, "id,company_id,requested_by,status,missing_files,files_bound,files_total,completed_at,data_fingerprint,storage_fingerprint");
+  if (!run || run.company_id !== t.companyId || run.requested_by !== t.ownerId) throw new Stop("D-5: export patrí inej firme/používateľovi");
+  if (run.status !== "completed" || run.missing_files !== 0 || run.files_bound !== true || !run.data_fingerprint || !run.storage_fingerprint) throw new Stop("D-5: export nie je úplný a overený");
+  const age = now.getTime() - Date.parse(String(run.completed_at));
+  if (!(age >= -60_000 && age < 15 * 60_000)) throw new Stop("D-5: export nie je čerstvý");
+  const files = await read("company_export_run_files", { run_id: `eq.${runId}` }, "path,sha256");
+  if (files.length !== run.files_total || files.some((f) => typeof f.sha256 !== "string" || !under(String(f.path), t.companyId))) throw new Stop("D-5: súbory exportu nesedia (počet / SHA-256 / prefix)");
+  return { files: files.length };
+}
+
+/** Výsledok skutočného prihlásenia (bez hodnôt tokenov). */
+export type ReauthResult = { userId: string | null; email: string | null; tokenVerified: boolean; lastSignInAt: string | null; identities: number | null };
+type AuthClients = {
+  admin: { auth: { admin: { generateLink(p: { type: "magiclink"; email: string }): Promise<{ data: { properties?: { hashed_token?: string } | null } | null; error: { status?: number; code?: string } | null }>;
+    getUserById(id: string): Promise<{ data: { user: { id: string; last_sign_in_at?: string | null; identities?: unknown[] | null } | null }; error: unknown }> } } };
+  anon: { auth: { verifyOtp(p: { type: "magiclink"; token_hash: string }): Promise<{ data: { user: { id: string; email?: string } | null; session: { access_token: string } | null }; error: { status?: number; code?: string } | null }>;
+    getUser(jwt: string): Promise<{ data: { user: { id: string; email?: string } | null }; error: unknown }>;
+    signOut(o: { scope: "local" }): Promise<unknown> } };
+};
+/**
+ * Skutočné prihlásenie vlastníka mechanizmom Supabase Auth (bez falšovania session a bez zápisu do auth.users):
+ * admin generate_link (magiclink, e-mail sa NEPOSIELA) → verify(token_hash) s publishable key (ako klient) →
+ * overenie access tokenu cez GET /auth/v1/user (rovnako ako verifyRequestUser v appke) → odhlásenie relácie →
+ * last_sign_in_at z Auth Admin API. Akákoľvek chyba = Stop (volajúci nepokračuje).
+ */
+export async function realReauth(c: AuthClients, t: Target): Promise<ReauthResult> {
+  const link = await c.admin.auth.admin.generateLink({ type: "magiclink", email: t.email });
+  const hashed = link.data?.properties?.hashed_token;
+  if (link.error || !hashed) throw new Stop(`reauth: generate_link zlyhal (${link.error?.status ?? "?"}:${link.error?.code ?? "-"})`);
+  const v = await c.anon.auth.verifyOtp({ type: "magiclink", token_hash: hashed });
+  if (v.error || !v.data.session || !v.data.user) throw new Stop(`reauth: overenie magic linku zlyhalo (${v.error?.status ?? "?"}:${v.error?.code ?? "-"})`);
+  if (v.data.user.id !== t.ownerId) { await c.anon.auth.signOut({ scope: "local" }).catch(() => undefined); throw new Stop("reauth: prihlásil sa iný používateľ"); }
+  let tokenVerified = false;
+  let email: string | null = null;
+  try {
+    const me = await c.anon.auth.getUser(v.data.session.access_token);
+    tokenVerified = me.data.user?.id === t.ownerId;
+    email = me.data.user?.email ?? null;
+  } finally {
+    await c.anon.auth.signOut({ scope: "local" }).catch(() => undefined);
+  }
+  const u = await c.admin.auth.admin.getUserById(t.ownerId);
+  return { userId: v.data.user.id, email, tokenVerified, lastSignInAt: u.data.user?.last_sign_in_at ?? null, identities: Array.isArray(u.data.user?.identities) ? u.data.user!.identities!.length : null };
+}
+/** Prihlásenie platí iba ak: ten istý vlastník, e-mail, token overený cez /user, last_sign_in_at < 5 min. */
+export function assertFreshOwnerAuth(t: Target, r: ReauthResult, now: Date): void {
+  if (r.userId !== t.ownerId) throw new Stop("D-3: prihlásený iný používateľ");
+  if (!r.tokenVerified) throw new Stop("D-3: access token sa nepodarilo overiť (GET /auth/v1/user)");
+  if ((r.email ?? "").toLowerCase() !== t.email) throw new Stop("D-3: e-mail prihláseného používateľa ≠ vlastník");
+  const age = r.lastSignInAt ? now.getTime() - Date.parse(r.lastSignInAt) : Infinity;
+  if (!(age >= -60_000 && age < 5 * 60_000)) throw new Stop("D-3: čerstvé prihlásenie vlastníka sa nepotvrdilo (last_sign_in_at)");
 }
 
 export type IsoSnapshot = { counts: Record<string, number>; objects: string[] };

@@ -5,10 +5,14 @@
 // =============================================================================
 import { Stop } from "./runner-core.ts";
 import {
+  assertFreshOwnerAuth,
+  gateCheck,
   isoSnapshot,
   postcheck,
-  precheck,
+  precheckIdentity,
   resolveDeletionTarget,
+  validateExport,
+  type ReauthResult,
   sameSnapshot,
   type DeleteScope,
   type ListObjects,
@@ -31,8 +35,8 @@ export type DDeps = {
   list: ListObjects;
   /** Nový export (runner-core Runner.runExport) — evidencia ≤ 24 h pre bránu. */
   exportRefresh(t: Target): Promise<{ status: string; runId: string | null }>;
-  /** Skutočné prihlásenie vlastníka (GoTrue magic link bez e-mailu) → last_sign_in_at; relácia sa hneď odhlási. */
-  reauth(t: Target): Promise<{ lastSignInAt: string | null }>;
+  /** Skutočné prihlásenie vlastníka (groupD-core realReauth: magic link bez e-mailu, overenie tokenu, odhlásenie). */
+  reauth(t: Target): Promise<ReauthResult>;
   /** lib/company-termination-ack buildTerminationAck (text + SHA-256 z i18n). */
   buildAck(t: Target): Record<string, unknown> | null;
   /** lib orchestrateAccountDeletion(supabaseTerminationDeps(...)) — commit zachytí jobId do scope. */
@@ -80,6 +84,38 @@ export async function runCleanupOnly(d: DDeps, key: string): Promise<{ exitCode:
   return { exitCode: failed ? 1 : 0, results };
 }
 
+/**
+ * Samostatný test autentifikácie (bez exportu, bez RPC, bez Storage, bez výmazu): allowlist → identita (čítanie) →
+ * skutočné prihlásenie vlastníka → overenie. Sieťová poistka v režime authOnly zablokuje všetko okrem čítania REST
+ * a Auth. Vedľajšie účinky iba v Auth (záznam prihlásenia, relácia hneď odhlásená, prípadne doplnená identita).
+ */
+export async function runAuthTest(d: DDeps, key: string): Promise<{ exitCode: number; results: StepResult[]; auth: ReauthResult | null }> {
+  const results: StepResult[] = [];
+  const rec = (id: string, ok: boolean, detail: string) => { results.push({ id, status: ok ? "PASS" : "FAIL", detail }); d.log(`${ok ? "PASS" : "FAIL"} ${id} ${detail}`); };
+  let t: Target;
+  try { t = resolveDeletionTarget(key); } catch (error) { rec("A1.allowlist", false, error instanceof Error ? error.message : "allowlist"); return { exitCode: 2, results, auth: null }; }
+  d.scope.target = t;
+  d.scope.authOnly = true;
+  let auth: ReauthResult | null = null;
+  try {
+    rec("A1.allowlist", true, `${t.name}`);
+    await precheckIdentity(t, d.read);
+    rec("A2.identity", true, "firma, vlastník, členstvo (iba čítanie)");
+    auth = await d.reauth(t);
+    assertFreshOwnerAuth(t, auth, d.now());
+    rec("A3.reauth", true, `prihlásenie vlastníka cez Supabase Auth overené; identity po teste: ${auth.identities ?? "?"}`);
+    const denied = d.scope.log.filter((l) => l.startsWith("DENY"));
+    rec("A4.network_guard", denied.length === 0, denied[0] ?? "iba čítanie REST + Auth");
+  } catch (error) {
+    rec("ABORT", false, error instanceof Error ? error.message.slice(0, 240) : String(error));
+  } finally {
+    d.scope.authOnly = false;
+  }
+  const failed = results.filter((r) => r.status === "FAIL").length;
+  d.log(`p15-groupD auth-test ${t.key}: ${failed ? "FAIL" : "PASS"} — žiadny export, žiadny výmaz`);
+  return { exitCode: failed ? 1 : 0, results, auth };
+}
+
 export async function runDeletionTarget(d: DDeps, key: string, opts: TargetOptions = {}): Promise<{ exitCode: number; results: StepResult[] }> {
   const results: StepResult[] = [];
   const rec = (id: string, ok: boolean | "SKIP", detail: string) => {
@@ -101,50 +137,58 @@ export async function runDeletionTarget(d: DDeps, key: string, opts: TargetOptio
     rec("D1.allowlist", true, `${t.name} (${t.companyId})`);
     const isoBefore = await isoSnapshot(d.read, d.list);
 
-    const exp = await d.exportRefresh(t);
-    if (exp.status !== "completed") throw new Stop(`D-4: export ${t.key} nie je completed (${exp.status}) — výmaz sa nespustí`);
-    rec("D2.export_refresh", true, `nový overený export ${exp.runId}`);
+    // Poradie (2026-11-25): identita → prihlásenie → oprávnenie → export → validácia exportu → brána → výmaz.
+    // Zlyhanie prihlásenia = žiadny export, žiadne RPC, žiadny výmaz.
+    await precheckIdentity(t, d.read);
+    rec("D2.identity", true, "firma, vlastník, jediné aktívne členstvo vlastníka, bez e-Faktúry/billing, cesty pod prefixom");
 
     const auth = await d.reauth(t);
-    const age = auth.lastSignInAt ? d.now().getTime() - Date.parse(auth.lastSignInAt) : Infinity;
-    if (!(age >= -60_000 && age < 5 * 60_000)) throw new Stop("D-4: čerstvé prihlásenie vlastníka sa nepotvrdilo");
-    rec("D3.reauth", true, "last_sign_in_at < 5 min (skutočné prihlásenie, relácia odhlásená)");
+    assertFreshOwnerAuth(t, auth, d.now());
+    rec("D3.reauth", true, `skutočné prihlásenie vlastníka overené (token cez /auth/v1/user, last_sign_in_at < 5 min, identity ${auth.identities ?? "?"}), relácia odhlásená`);
+
+    const pre = await precheckIdentity(t, d.read);
+    rec("D4.authorization", true, `oprávnenie po prihlásení: aktívny vlastník, ${pre.storagePaths} ciest pod prefixom, R3=${pre.r3}`);
+
+    const exp = await d.exportRefresh(t);
+    if (exp.status !== "completed") throw new Stop(`D-5: export ${t.key} nie je completed (${exp.status}) — výmaz sa nespustí`);
+    const ev = await validateExport(t, d.read, exp.runId, d.now());
+    rec("D5.export", true, `nový export ${exp.runId} completed, ${ev.files} súborov so SHA-256, čerstvý`);
 
     const ack = d.buildAck(t);
     if (!ack || ack.authority_confirmed !== true || typeof ack.text_sha256 !== "string") throw new Stop("D-4: vyhlásenie oprávnenej osoby chýba");
-    const pre = await precheck(t, d.read, d.rpc, ack);
-    rec("D4.precheck_gate", true, `identita, členstvá, bez registrácie/billing, ${pre.storagePaths} ciest pod prefixom, brána OK, R3=${pre.r3}`);
+    await gateCheck(t, d.rpc, ack);
+    rec("D6.gate", true, "databázová brána (preflight bez zmeny údajov) = OK");
 
     if (opts.injectStorageFailureBucket) d.scope.injectStorageFailure = opts.injectStorageFailureBucket;
     const res = await d.terminate(t, ack);
     if (res.status !== "deleted") {
-      rec("D5.termination", false, `${res.status} ${"code" in res ? res.code : ""} — DB transakcia vrátená, nič sa nezmazalo`);
+      rec("D7.termination", false, `${res.status} ${"code" in res ? res.code : ""} — DB transakcia vrátená, nič sa nezmazalo`);
       return { exitCode: 1, results };
     }
     deleted = true;
-    rec("D5.termination", true, `DB výmaz commitnutý, súbory zmazané ${res.storageRemoved}, účet zrušený=${res.accountDeleted}, cleanupPending=${res.cleanupPending}`);
+    rec("D7.termination", true, `DB výmaz commitnutý, súbory zmazané ${res.storageRemoved}, účet zrušený=${res.accountDeleted}, cleanupPending=${res.cleanupPending}`);
 
     if (opts.injectStorageFailureBucket) {
-      if (!res.cleanupPending) throw new Stop("D-6: simulovaný výpadok Storage sa neprejavil");
+      if (!res.cleanupPending) throw new Stop("D-8: simulovaný výpadok Storage sa neprejavil");
       const jobs = await d.read("account_deletion_cleanup_jobs", { id: `eq.${d.scope.jobId}` }, "id,user_id,company_id,termination_id,storage_targets,storage_status,auth_status,attempts,last_error_code");
       const job = jobs[0];
       const pendingOk = job && job.storage_status === "pending" && job.attempts === 1 && typeof job.last_error_code === "string";
-      rec("D6.failure_recorded", Boolean(pendingOk), `job ${job?.storage_status}/${job?.auth_status}, pokusy ${job?.attempts}, kód ${job?.last_error_code}`);
+      rec("D8.failure_recorded", Boolean(pendingOk), `job ${job?.storage_status}/${job?.auth_status}, pokusy ${job?.attempts}, kód ${job?.last_error_code}`);
       const terms = await d.read("company_terminations", { company_id: `eq.${t.companyId}`, status: "eq.completed" }, "storage_purged_at");
-      rec("D6.not_marked_purged", terms.length === 1 && !terms[0].storage_purged_at, "storage_purged_at = null kým DB neoverí výmaz");
+      rec("D8.not_marked_purged", terms.length === 1 && !terms[0].storage_purged_at, "storage_purged_at = null kým DB neoverí výmaz");
       const health = await d.rpc("esblu_cleanup_health", { p_max_attempts: 30 });
       const h = (health.data ?? {}) as { exhausted?: number; termination_unpurged_24h?: number };
-      rec("D6.health_before_retry", !health.error && Number(h.exhausted) === 0 && Number(h.termination_unpurged_24h) === 0, JSON.stringify(h));
+      rec("D8.health_before_retry", !health.error && Number(h.exhausted) === 0 && Number(h.termination_unpurged_24h) === 0, JSON.stringify(h));
       const retry = await d.retryJob(job as Record<string, unknown>, t);
-      rec("D7.retry_cleanup", retry.storageDone && retry.authDone, `storageDone=${retry.storageDone} authDone=${retry.authDone} ${retry.errorCode ?? ""}`);
+      rec("D9.retry_cleanup", retry.storageDone && retry.authDone, `storageDone=${retry.storageDone} authDone=${retry.authDone} ${retry.errorCode ?? ""}`);
     }
 
     const issues = await postcheck(t, d.read, d.list, { r3: pre.r3 });
-    rec("D8.postcheck", issues.length === 0, issues.length ? issues.join("; ") : "firma, doklady, e-faktúry, členstvá, súbory preč; completed + storage_purged_at; job done; incidenty R3");
+    rec("D10.postcheck", issues.length === 0, issues.length ? issues.join("; ") : "firma, doklady, e-faktúry, členstvá, súbory preč; completed + storage_purged_at; job done; incidenty R3");
     const isoAfter = await isoSnapshot(d.read, d.list);
-    rec("D9.iso_unchanged", sameSnapshot(isoBefore, isoAfter), JSON.stringify(isoAfter.counts));
+    rec("D11.iso_unchanged", sameSnapshot(isoBefore, isoAfter), JSON.stringify(isoAfter.counts));
     const denied = d.scope.log.filter((l) => l.startsWith("DENY"));
-    rec("D10.network_guard", denied.length === 0, denied.length ? `zablokované požiadavky: ${denied.length} (${denied[0]})` : "žiadna požiadavka mimo povoleného rozsahu");
+    rec("D12.network_guard", denied.length === 0, denied.length ? `zablokované požiadavky: ${denied.length} (${denied[0]})` : "žiadna požiadavka mimo povoleného rozsahu");
   } catch (error) {
     rec("ABORT", false, error instanceof Error ? error.message.slice(0, 240) : String(error));
     if (deleted) d.log("POZOR: výmaz bol commitnutý — nedokončený cleanup dočistí retry; nespúšťať ďalšiu firmu, kontaktovať Claude.");

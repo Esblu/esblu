@@ -12,8 +12,8 @@ import { orchestrateAccountDeletion, runCleanupJob } from "../../lib/account-del
 import { supabaseDeletionDeps, supabaseTerminationDeps } from "../../lib/account-deletion-deps.ts";
 import { parseStorageTargets } from "../../lib/account-deletion-storage.ts";
 import { loadManifest, Runner, Stop, validateStagingUrl, verifyDependencyLock, verifyLocalIntegrity, type Backend } from "./runner-core.ts";
-import { deletionGuardedFetch, listAll, newScope, resolveDeletionTarget, type Target } from "./groupD-core.ts";
-import { runCleanupOnly, runDeletionTarget, type DDeps } from "./groupD-runner.ts";
+import { deletionGuardedFetch, listAll, newScope, realReauth, resolveDeletionTarget, type Target } from "./groupD-core.ts";
+import { runAuthTest, runCleanupOnly, runDeletionTarget, type DDeps } from "./groupD-runner.ts";
 import { assertCleanProcessD, D_EXPECTED_LOCAL_SHA256 } from "./groupD-pins.ts";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -114,14 +114,8 @@ const deps: DDeps = {
     return { status: r.status === "completed" ? (await exportRunner.runState(r.runId)) === "completed:-" ? "completed" : "state_mismatch" : r.status, runId: r.runId };
   },
   async reauth(t) {
-    const link = await admin.auth.admin.generateLink({ type: "magiclink", email: t.email });
-    const hashed = link.data?.properties?.hashed_token;
-    if (link.error || !hashed) throw new Stop(`reauth: generate_link (${link.error?.status ?? "?"})`);
-    const v = await anon.auth.verifyOtp({ type: "magiclink", token_hash: hashed });
-    if (v.error || v.data.user?.id !== t.ownerId) throw new Stop(`reauth: verify (${v.error?.status ?? "iný používateľ"})`);
-    await anon.auth.signOut({ scope: "local" }).catch(() => undefined);
-    const u = await admin.auth.admin.getUserById(t.ownerId);
-    return { lastSignInAt: u.data.user?.last_sign_in_at ?? null };
+    // skutočný Supabase Auth: generate_link (bez e-mailu) → verify → GET /auth/v1/user → odhlásenie (groupD-core)
+    return realReauth({ admin: admin as never, anon: anon as never }, t);
   },
   buildAck(t) {
     return buildTerminationAck({ authorityConfirmed: true, locale: "sk", companyId: t.companyId, headers: new Headers({ "user-agent": "esblu-p15-groupD-runner/1" }) }) as unknown as Record<string, unknown> | null;
@@ -152,8 +146,11 @@ const deps: DDeps = {
 };
 
 const mode = process.env.ESBLU_P15D_MODE ?? "delete";
-if (mode !== "delete" && mode !== "cleanup") fail("ESBLU_P15D_MODE musí byť delete alebo cleanup");
-const { exitCode } = mode === "cleanup"
+if (mode !== "delete" && mode !== "cleanup" && mode !== "auth-test") fail("ESBLU_P15D_MODE musí byť delete, cleanup alebo auth-test");
+if (mode === "auth-test" && (process.env.ESBLU_P15D_INJECT ?? "")) fail("auth-test nepovoľuje simulovaný výpadok");
+const { exitCode } = mode === "auth-test"
+  ? await runAuthTest(deps, target.key)
+  : mode === "cleanup"
   ? await runCleanupOnly(deps, target.key)
   : await runDeletionTarget(deps, target.key, process.env.ESBLU_P15D_INJECT ? { injectStorageFailureBucket: "einvoice-documents" } : {});
 console.log(JSON.stringify({ network: scope.log.filter((l) => l.startsWith("DENY") || l.startsWith("INJECT")) }));

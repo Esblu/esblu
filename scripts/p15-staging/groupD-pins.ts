@@ -30,8 +30,8 @@ export const D_EXPECTED_LOCAL_SHA256: Readonly<Record<string, string>> = Object.
   "lib/i18n/translate.ts": "5bb5571f9f2c1cbb8858632e892f0498d82c51b51071734e1ce8b631deffdb4b",
   "scripts/alias-loader.mjs": "39456db8a03ce36f640ff43f98553cf3b2b902dcf1419df70d8435dcd8a3dccc",
   "scripts/p15-staging/dependency-lock.json": "51c7b7fccbad2c2f844ce2a873dafaa68bb9c2c9c31decf8b999a95b1df4d632",
-  "scripts/p15-staging/groupD-core.ts": "dd4ad9c74414e85b4657a6f74a9a95b73cbae3db78a52808f4fba71177ce382b",
-  "scripts/p15-staging/groupD-runner.ts": "b4e91042d4bbdfcba07b0132820aa812be82193b926683682d40111f62952e05",
+  "scripts/p15-staging/groupD-core.ts": "bcd24492b57b4e2bc4965de2a104b4aec3dbe046c4335ae6621d8fd1a2aaa69c",
+  "scripts/p15-staging/groupD-runner.ts": "4e1862bf2072510b023cff294dff263210782c016f6f59a25d83bd2d5a6916df",
   "scripts/p15-staging/manifest.json": "fd81a8f55f12c46a488f58441c7ef411a3620f50499f13b86f3804fba0b77d51",
   "scripts/p15-staging/runner-core.ts": "112729265069214a6714357d53d16a843c9ee39b32adb69aea3cb30d17dac54c",
 });
