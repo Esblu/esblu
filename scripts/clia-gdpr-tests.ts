@@ -141,27 +141,22 @@ check("privacy 1.4: CLIA text, zástupný riadok nahradený odkazom na /cookies,
   assert.deepEqual(legalTranslationAvailability("privacy_policy", "1.4"), { sk: true, de: true, en: true });
 });
 
-check("privacy 1.5 (2026-11-26): oproti 1.4 iba Resend v 3 častiach + dátum; aktuálna verzia; EN/DE existujú", () => {
+check("privacy 1.5 = CLIA GDPR_ESBLU 2.0 (23.11.2026): oproti 1.4 iba Google v Android appke, Resend v oznámeniach, dátum", () => {
   assert.equal(legalConfig.privacyPolicyVersion, "1.5");
   for (const loc of ["", ".en", ".de"]) {
     const a = read(`legal/privacy/1.4${loc}.md`).split("\n");
     const b = read(`legal/privacy/1.5${loc}.md`).split("\n");
     assert.equal(a.length, b.length, `1.5${loc}: počet riadkov`);
     const changed = a.map((l, i) => (l === b[i] ? -1 : i)).filter((i) => i >= 0);
-    // 6 riadkov (príjemcovia + prenos v 3 častiach), dátum poslednej zmeny, pri EN/DE aj označenie verzie
-    assert.equal(changed.length, loc ? 8 : 7, `1.5${loc}: zmenené riadky ${changed.join(",")}`);
-    for (const i of changed) {
-      if (i === 0 || /^\d\d\.\d\d\.2026$/.test(b[i])) continue;
-      assert.ok(b[i].startsWith(a[i].trimEnd()), `1.5${loc}:${i + 1} iba doplnenie na konci riadku`);
-      assert.match(b[i], /Plus Five Five, Inc\./);
-    }
+    assert.equal(changed.length, loc ? 5 : 4, `1.5${loc}: zmenené riadky ${changed.join(",")}`);
   }
   const sk = read("legal/privacy/1.5.md");
-  assert.match(sk, /Posledná aktualizácia:\n\n26\.11\.2026/);
-  assert.match(sk, /mail\.esblu\.com/);
-  assert.match(sk, /čl\. 45 Nariadenia GDPR/);
-  assert.ok(!/Anthropic/.test(sk));
-  assert.ok(!/Stripe/.test(sk), "Stripe sa doplní až so spustením platieb");
+  assert.match(sk, /dostupné vo webovom rozhraní Aplikácie aj v mobilnej aplikácii pre zariadenia s operačným systémom Android\./);
+  assert.match(sk, /najmä Supabase Pte\. Ltd\., Vercel Inc\. a Plus Five Five, Inc\. \(USA\), ktorá poskytuje službu Resend/);
+  assert.match(sk, /v rámci EU-US Data Privacy Framework\./);
+  assert.match(sk, /Posledná aktualizácia:\n\n23\.11\.2026/);
+  assert.ok(!/Hlavýnm/.test(sk), "typografická oprava J10.1 zachovaná");
+  assert.ok(!/Anthropic|Stripe/.test(sk));
   assert.deepEqual(legalTranslationAvailability("privacy_policy", "1.5"), { sk: true, de: true, en: true });
 });
 
