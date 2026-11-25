@@ -2363,7 +2363,7 @@ const de = {
       resendDataCategories:
         "E-Mail-Adresse des Empfängers, E-Mail-Inhalt einschließlich eines einmaligen Bestätigungslinks und technische Zustellungsmetadaten",
       resendLocation:
-        "Versandinfrastruktur der Domain mail.esblu.com: EU-Region (Irland). Vertragspartner Plus Five Five, Inc., USA; wesentliche Verarbeitungsvorgänge laut AVV des Anbieters in den USA. Übermittlung: EU-US Data Privacy Framework (Art. 45 DSGVO, Zertifizierung des Anbieters) und Standardvertragsklauseln (Art. 46 Abs. 2 lit. c DSGVO) im AVV des Anbieters",
+        "USA — Vertragspartner Plus Five Five, Inc.; Resend speichert alle Kontodaten einschließlich E-Mail-Metadaten und Zustellungsprotokollen unabhängig von der Versandregion in den USA. Die Domain mail.esblu.com versendet E-Mails aus der EU-Region (Irland), was nur den Versandweg bestimmt. Übermittlung: Standardvertragsklauseln (Art. 46 Abs. 2 lit. c DSGVO) im AVV des Anbieters und im Umfang der Zertifizierung das EU-US Data Privacy Framework (Art. 45 DSGVO)",
       namecheapPurpose:
         "Hosting der geschäftlichen E-Mail-Kommunikation (Postfächer info@esblu.com und privacy@esblu.com — privacy@esblu.com ist ein Alias, das auf dasselbe Postfach verweist) und Empfang von E-Mail-Nachrichten von Nutzern, einschließlich Anliegen zu personenbezogenen Daten",
       namecheapDataCategories:

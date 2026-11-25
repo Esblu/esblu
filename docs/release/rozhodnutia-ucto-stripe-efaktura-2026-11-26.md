@@ -46,9 +46,7 @@ Produkčné predpoklady — **iba vlastník (V)**, potom agent:
 (13 strán, dátum uzatvorenia vyplnený 22. 11. 2026), **nepodpísaná**. Prečítal som iba úvodné články (strany 1–3):
 predmet, sandbox, produkčný prístup **až po pripísaní platby vopred** (čl. III ods. 3, čl. IX), konzultácie nad rámec
 podpory **100 € bez DPH / hod.** (čl. IV ods. 5), garancia mesačnej dostupnosti produkčného API (čl. IV ods. 6),
-povinnosti partnera (čl. V). **Celý text vrátane prílohy DPA som neprečítal** — PDF sa v nástrojoch nedá extrahovať;
-uložte ho prosím do priečinka `assetpilot/legal-inbox/` a dokončím kontrolu (zodpovednosť, limit náhrady škody,
-GDPR roly, výpadky, ukončenie, prenositeľnosť, archivácia).
+povinnosti partnera (čl. V). Stav kontroly celej zmluvy: § 6.
 
 **Náklady** (verejný cenník overený 12. 11. 2026, bez DPH; **overiť voči prílohe zmluvy**):
 
@@ -70,6 +68,44 @@ eFaktura.sk ako ďalší sprostredkovateľ → oznámenie zákazníkom **≥ 15 
 čl. 9.3), doplnenie do Zásad a `/subprocessors`.
 
 **Návrh:** eFaktúru **nespúšťať spolu s platbami**. Najskôr Stripe (SK B2B). eFaktúru spustiť ako druhú vlnu:
-(1) celá kontrola PC-2026-0050 + DPA, (2) podpis a úhrada ročného programu 147,60 €, (3) D-15 oznámenie zákazníkom,
+(1) celá kontrola PC-2026-0050 + DPA, (2) podpis a úhrada ročného programu 147,60 €, (3) DPA 1.4 + oznámenie existujúcim firmám podľa § 4,
 (4) LIVE kľúč + WAF + G1–G12, (5) interný test na vlastnej firme. Povinnosť 1. 1. 2027 sa týka zákazníkov-platiteľov,
-preto je cieľový termín spustenia **do 15. 12. 2026** (oznámenie D-15 musí odísť najneskôr 30. 11. – 1. 12. 2026).
+preto je cieľový termín spustenia **do 15. 12. 2026**. Firmy, ktoré pri aktivácii eFaktúry prijmú DPA 1.4, nečakajú;
+lehota 15 dní (§ 4) beží iba voči ostatným existujúcim firmám a nemusí oddialiť spustenie.
+
+## 4. Lehoty 30 a 15 dní — odkiaľ vyplývajú (doplnené 2026-11-26)
+
+Nejde o zákonné lehoty. Obe sú **zmluvné** (VOP / DPA Esblu); predaj je výlučne B2B (Obchodný zákonník, VOP čl. 4.2),
+spotrebiteľské lehoty sa neuplatňujú. Právne posúdenie nie je stanovisko advokáta.
+
+| Lehota | Ustanovenie | Na koho | Na koho nie | Dopad na spustenie |
+| --- | --- | --- | --- | --- |
+| 30 dní pred účinnosťou zmeny VOP | **VOP 1.2 čl. 39.2** (podstatná nevýhodná zmena; Vlastník môže prijať skôr); priaznivé/technické zmeny čl. 39.3 = účinné zverejnením | existujúci zákazníci (v prod. 4 firmy vrátane interného účtu Esblu; **0 predplatných**) | **noví zákazníci** — prijímajú VOP 1.3 pri uzatvorení zmluvy (čl. 8.1, 44.5) | **Neblokuje Stripe.** Predplatné upravuje už VOP 1.2 (čl. 10–16), predaj podľa nich je pokrytý; 1.3 iba spresňuje. Odporúčanie pre vlnu Stripe: pred checkoutom vyžadovať prijatie aktuálnych VOP Vlastníkom (dnes sa nekontroluje — `purchase-intent` overuje iba rolu a stav), čím sa lehota pre kupujúcich prakticky skráti na okamih prijatia. |
+| 15 dní pred zapojením nového sprostredkovateľa + 10 dní na námietku | **DPA 1.3 čl. 9.3 a 9.4** (napĺňa čl. 28 ods. 2 GDPR — povinnosť informovať a umožniť námietku; GDPR konkrétnu lehotu neurčuje) | firmy, ktoré už prijali DPA 1.3 | firmy, ktoré prijmú novú verziu DPA (s eFaktura.sk v prílohe 3) — tie súhlasia vopred | **Blokuje eFaktúru iba pre existujúce firmy.** Najrýchlejšia cesta: DPA 1.4 (eFaktura.sk v prílohe 3 + Android v TOM podľa DPA 2.0 CLIA) a aktivácia eFaktúry podmienená prijatím DPA 1.4 Vlastníkom → bez čakania; súčasne oznámenie ostatným firmám (D-15). Potvrdí CLIA. |
+
+## 5. Resend — zmluvné podklady (overené 2026-11-26)
+
+| Bod | Zistenie | Zdroj |
+| --- | --- | --- |
+| Zmluvná strana | Plus Five Five, Inc., 2261 Market Street #5039, San Francisco (USA) | resend.com/legal/dpa (posledná zmena 31. 12. 2025) |
+| DPA | súčasť Terms of Service, záväzná prijatím Terms (žiadny samostatný podpis); Resend = sprostredkovateľ, pre údaje účtu samostatný prevádzkovateľ | DPA čl. 2, 9, preambula |
+| Prenos | EU SCC (rozh. 2021/914) moduly 2/3, írske právo; EU-US DPF certifikácia (podľa DPA čl. 11 — v zozname DPF nezávisle neoverené) | DPA čl. 6, 11 |
+| Lokalita | **Všetky údaje účtu vrátane metadát e-mailov a logov sú uložené v USA bez ohľadu na región.** Región `eu-west-1` určuje iba odkiaľ sa e-mail odosiela. Esblu doména `mail.esblu.com` má DNS záznamy Amazon SES `eu-west-1` (odosielanie z Írska) — región treba potvrdiť v Resend → Domains. | resend.com/docs/dashboard/domains/regions; DNS |
+| Ďalší sprostredkovatelia | 22, všetci USA (AWS, Supabase, Vercel, Datadog, Anthropic …) | resend.com/legal/subprocessors (5. 11. 2026) |
+| Uchovanie | výmaz údajov zákazníka do 90 dní po zrušení účtu Resend | DPA príloha A |
+| Texty Esblu | Zásady 1.5 (znenie CLIA 2.0: „spracúvanie … v USA“, SCC + DPF) a `/subprocessors` (oprava 26. 11.: dáta v USA, EÚ iba trasa odoslania) — v súlade | `legal/privacy/1.5.md`, `lib/i18n` |
+| Chýba | potvrdenie vlastníka: región domény v dashboarde Resend a že Terms/DPA prijala firma Esblu s. r. o. (nie súkromná osoba) | — |
+
+## 6. Zmluva eFaktura.sk PC-2026-0050 — stav kontroly
+
+- Aktuálna verzia v partnerskom portáli: „Zmluva o poskytovaní API a Peppol služieb“ č. **PC-2026-0050**, 13 strán,
+  vygenerovaná 22. 11. 2026, **nepodpísaná** (formulár podpisu s e-mailovým kódom). Prílohy: zmluva odkazuje na
+  Prílohu č. 1 (technické podmienky / endpointy, dohodnutý reakčný čas) a podľa e-mailov aj na DPA.
+- Prečítané: čl. I–V (str. 1–4): produkcia až po úhrade vopred (čl. III.3 → čl. IX ods. 6–7), konzultácie 100 € bez DPH/h
+  (čl. IV.5), mesačná garancia dostupnosti s výnimkami a bez zmluvných pokút (čl. IV.6), povinnosti Partnera (čl. V:
+  správnosť údajov, ochrana kľúča, zákaz podvodných dokladov, hlásenie incidentov).
+- **Neprečítané: čl. VI a ďalšie (str. 5–13) vrátane zodpovednosti, limitu náhrady škody, GDPR rolí, ukončenia,
+  prenositeľnosti a všetkých príloh.** PDF z portálu sa v nástrojoch agenta nedá extrahovať (prehliadač zobrazí iba
+  orezaný náhľad, priame stiahnutie zlyhá na dĺžke podpísaného odkazu).
+- Potrebné: uložiť PDF (tlačidlo „Zobraziť návrh zmluvy (PDF)“ v portáli) a prílohy do `assetpilot/legal-inbox/efaktura-PC-2026-0050/`.
+  Zmluva **nie je schválená**.

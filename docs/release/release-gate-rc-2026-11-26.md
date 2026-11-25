@@ -1,6 +1,20 @@
-# Esblu — release gate RC 2026-11-26 (nahrádza release-gate-rc-2026-11-25.md)
+# Esblu — finálny release gate RC 2026-11-26 (nahrádza release-gate-rc-2026-11-25.md)
 
 Stav: **PRIPRAVENÉ, NEVYKONANÉ v produkcii.** Vetva `release/rc-2026-11-26` iba v lokálnom repe (nie na GitHube).
+
+## 0. Overenia 2026-11-26 (druhé kolo)
+
+| Bod | Výsledok | Dôkaz |
+| --- | --- | --- |
+| Preview nepíše do produkcie | ✅ | Vercel env (target preview): `NEXT_PUBLIC_SUPABASE_URL` = `cjbdijbbcujvmrzezusd` (esblu-test), anon kľúč má `ref` esblu-test; produkčný ref je v kóde iba v ochrannom zozname staging E2E. Service role (Sensitive) sa nedá prečítať, ale s URL stagingu nemôže zapisovať do produkcie. |
+| Preview bez LIVE Stripe / eFaktúry | ✅ | Pre preview nie je nastavený žiadny `STRIPE_*`, `ESBLU_BILLING_*` ani `ESBLU_EFAKTURA_*` (vetvové premenné existujú iba pre `release/esblu8` a `android-release-payments-ios-2026-11-18`) → billing `off`, eFaktúra vypnutá; LIVE Stripe kód povolí iba pri `VERCEL_ENV=production` + `ESBLU_BILLING_LIVE_APPROVED=true`; Vercel nespúšťa crony na Preview. |
+| Prístup k Preview | ✅ | Vercel SSO ochrana `all_except_custom_domains` — Preview URL iba po prihlásení do tímu Vercel. |
+| Tajomstvá v diffe | ✅ | 0 kľúčov / JWT / whsec / súkromných kľúčov v `git diff main…release/rc-2026-11-26`. |
+| `OPENAI_API_KEY` (preview) | ⚠️ | typ „encrypted“ (čitateľný členom tímu) — rotácia a uloženie ako Sensitive = úkon vlastníka, Preview funguje aj bez toho. |
+| Staging pre Preview | ✅ | migrácie #6, #9, #10 aplikované na esblu-test (2026-11-26); `20261121` tam ostáva z 19. 11. (nepoužívaná schéma). Pozn.: počet migrácií stagingu je 82 — nová východisková snímka pred D-T1. |
+| Závislosti 10 migrácií | ✅ | Žiadna z 10 nepoužíva objekt definovaný iba v `20261121` (27 objektov porovnaných); `esblu_cleanup_jobs_protect_retained_storage` a `esblu_company_termination_commit` si #7/#8 definujú samé (pôvod `20261112110000`, v produkcii). Bez DROP TABLE; jediný hromadný UPDATE = backfill `company_id` v `billing_invoice_documents` (#4, v produkcii 0 riadkov). Replay „prod-like“ bez `21` PASS. |
+| Interný tarif | ✅ | 1 grant, neodvolaný: firma `39822d44…` (zobrazený názov „Moja firma“), právna identita overená v RPO **IČO 57815941 = Esblu s. r. o.**, fakturačný profil „Esblu s.r.o.“, 1 člen, vlastník účtu `e***@gmail.com` (od 19. 11.), schválenie `OPS-2026-11-19`. Nič sa neprideľovalo ani neodoberalo. |
+| Zálohy produkcie | ℹ️ | Supabase organizácia „Esblu s.r.o.“ plán **Pro** (denné zálohy platformy); PITR nie je potvrdený. Pred migráciou vlastná záloha + test obnovy (§ 5). |
 
 ## 1. Obsah kandidáta
 

@@ -2370,7 +2370,7 @@ const sk = {
       resendDataCategories:
         "E-mailová adresa príjemcu, obsah e-mailu vrátane jednorazového overovacieho odkazu a technické metadáta doručenia",
       resendLocation:
-        "Odosielacia infraštruktúra domény mail.esblu.com: región EÚ (Írsko). Zmluvný poskytovateľ Plus Five Five, Inc., USA; hlavné spracovateľské operácie podľa DPA poskytovateľa v USA. Prenos: EU-US Data Privacy Framework (čl. 45 GDPR, certifikácia poskytovateľa) a štandardné zmluvné doložky (čl. 46 ods. 2 písm. c) GDPR) v DPA poskytovateľa",
+        "USA — zmluvný poskytovateľ Plus Five Five, Inc.; všetky údaje účtu vrátane metadát e-mailov a záznamov o doručení uchováva Resend v USA bez ohľadu na región odosielania. Doména mail.esblu.com odosiela e-maily z regiónu EÚ (Írsko), čo určuje iba trasu odoslania. Prenos: štandardné zmluvné doložky (čl. 46 ods. 2 písm. c) GDPR) v DPA poskytovateľa a v rozsahu certifikácie EU-US Data Privacy Framework (čl. 45 GDPR)",
       namecheapPurpose:
         "Hosting firemnej e-mailovej komunikácie (schránky info@esblu.com a privacy@esblu.com — privacy@esblu.com je alias smerujúci do tej istej schránky) a prijímanie e-mailových správ od používateľov, vrátane žiadostí týkajúcich sa osobných údajov",
       namecheapDataCategories:
