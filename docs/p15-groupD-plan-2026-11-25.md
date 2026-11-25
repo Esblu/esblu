@@ -84,6 +84,16 @@ Stav: **iba príprava**. Na staging sa nič nezapisovalo (iba read-only SQL), ž
   PowerShellu (`Parser::ParseFile`) pre 4 skripty bez ich spustenia: chyby parsera, názvy parametrov, CmdletBinding,
   duplicitné funkcie, ne-ASCII, SHA-256. Sandbox nemá PowerShell (stiahnutie blokované) → beh na Windows neoverený.
 
+### 1c. Schválený inventár D-B (2026-11-25 18:50 UTC, read-only)
+
+- Windows preflight `run-p15-backup.ps1 -Mode backup -PreflightOnly`: PASS (Node v24.18.0).
+- Nový inventár = predchádzajúca snímka: 67 objektov, 67 id, odtlačok `26f004c4…` (rovnaký vzorec), bajty
+  einvoice 247 440 / ai-inbox 19 167 / billing 61 471 (spolu 328 078). Kanonický odtlačok (bucket|cesta|id|veľkosť|
+  eTag|updated_at|mimetype) `836582069d5516026f10fee884b06cbf` = DB aj súbor.
+- Súbor: `release-backups/p15/storage-inventory-20261125-1850.json` (mimo Git, LF, 24 677 B, prešiel
+  `validateInventory`), **SHA-256 `dbdfd3c0a9d6c3b229de0b4be4c83465761bd07833ee7dbec1a6dddb49492931`**. Súbor vznikol
+  priamo z výsledku SQL (bez ručného prepisu).
+
 ## 2. Allowlist výmazu
 
 | Kľúč | Firma | UUID | Vlastník | E-mail |
