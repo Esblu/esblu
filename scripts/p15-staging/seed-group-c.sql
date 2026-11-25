@@ -1,12 +1,13 @@
 -- P1-5 skupina C: syntetické dáta (generované scripts/p15-staging/gen.py). Iba staging esblu-test.
 begin;
 set local session_replication_role = replica;
-insert into auth.users (instance_id, id, aud, role, email, email_confirmed_at, last_sign_in_at, created_at, updated_at, raw_app_meta_data, raw_user_meta_data, is_anonymous) values
-  ('00000000-0000-0000-0000-000000000000', 'f1500000-0000-4000-8000-000000000101', 'authenticated', 'authenticated', 'qa-p15-t1@esblu-qa.invalid', now(), now(), now(), now(), '{"provider":"email","providers":["email"],"qa_p15":true}'::jsonb, '{"qa_p15":true}'::jsonb, false),
-  ('00000000-0000-0000-0000-000000000000', 'f1500000-0000-4000-8000-000000000102', 'authenticated', 'authenticated', 'qa-p15-t2@esblu-qa.invalid', now(), now(), now(), now(), '{"provider":"email","providers":["email"],"qa_p15":true}'::jsonb, '{"qa_p15":true}'::jsonb, false),
-  ('00000000-0000-0000-0000-000000000000', 'f1500000-0000-4000-8000-000000000103', 'authenticated', 'authenticated', 'qa-p15-iso@esblu-qa.invalid', now(), now(), now(), now(), '{"provider":"email","providers":["email"],"qa_p15":true}'::jsonb, '{"qa_p15":true}'::jsonb, false),
-  ('00000000-0000-0000-0000-000000000000', 'f1500000-0000-4000-8000-000000000104', 'authenticated', 'authenticated', 'qa-p15-perf@esblu-qa.invalid', now(), now(), now(), now(), '{"provider":"email","providers":["email"],"qa_p15":true}'::jsonb, '{"qa_p15":true}'::jsonb, false),
-  ('00000000-0000-0000-0000-000000000000', 'f1500000-0000-4000-8000-000000000105', 'authenticated', 'authenticated', 'qa-p15-t1admin@esblu-qa.invalid', now(), now(), now(), now(), '{"provider":"email","providers":["email"],"qa_p15":true}'::jsonb, '{"qa_p15":true}'::jsonb, false);
+-- 2026-11-25: tokenové stĺpce musia byť '' (nie NULL) — inak GoTrue vráti 500 "converting NULL to string" (D-T1).
+insert into auth.users (instance_id, id, aud, role, email, email_confirmed_at, last_sign_in_at, created_at, updated_at, raw_app_meta_data, raw_user_meta_data, is_anonymous, confirmation_token, recovery_token, email_change_token_new, email_change) values
+  ('00000000-0000-0000-0000-000000000000', 'f1500000-0000-4000-8000-000000000101', 'authenticated', 'authenticated', 'qa-p15-t1@esblu-qa.invalid', now(), now(), now(), now(), '{"provider":"email","providers":["email"],"qa_p15":true}'::jsonb, '{"qa_p15":true}'::jsonb, false, '', '', '', ''),
+  ('00000000-0000-0000-0000-000000000000', 'f1500000-0000-4000-8000-000000000102', 'authenticated', 'authenticated', 'qa-p15-t2@esblu-qa.invalid', now(), now(), now(), now(), '{"provider":"email","providers":["email"],"qa_p15":true}'::jsonb, '{"qa_p15":true}'::jsonb, false, '', '', '', ''),
+  ('00000000-0000-0000-0000-000000000000', 'f1500000-0000-4000-8000-000000000103', 'authenticated', 'authenticated', 'qa-p15-iso@esblu-qa.invalid', now(), now(), now(), now(), '{"provider":"email","providers":["email"],"qa_p15":true}'::jsonb, '{"qa_p15":true}'::jsonb, false, '', '', '', ''),
+  ('00000000-0000-0000-0000-000000000000', 'f1500000-0000-4000-8000-000000000104', 'authenticated', 'authenticated', 'qa-p15-perf@esblu-qa.invalid', now(), now(), now(), now(), '{"provider":"email","providers":["email"],"qa_p15":true}'::jsonb, '{"qa_p15":true}'::jsonb, false, '', '', '', ''),
+  ('00000000-0000-0000-0000-000000000000', 'f1500000-0000-4000-8000-000000000105', 'authenticated', 'authenticated', 'qa-p15-t1admin@esblu-qa.invalid', now(), now(), now(), now(), '{"provider":"email","providers":["email"],"qa_p15":true}'::jsonb, '{"qa_p15":true}'::jsonb, false, '', '', '', '');
 insert into public.companies (id, owner_id, name) values
   ('f1510000-0000-4000-8000-000000000001', 'f1500000-0000-4000-8000-000000000101', 'QA-P15-T1'),
   ('f1510000-0000-4000-8000-000000000002', 'f1500000-0000-4000-8000-000000000102', 'QA-P15-T2'),

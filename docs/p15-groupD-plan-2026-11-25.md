@@ -162,6 +162,24 @@ Stav: **iba príprava**. Na staging sa nič nezapisovalo (iba read-only SQL), ž
 - Testy: groupD-tests 25/25 (nové E1–E5 vrátane skutočného supabase-js proti falošnému GoTrue), storage-backup 12/12,
   orchestration 23/23, company-termination 14/14, `tsc --strict` OK, preflight t1/t2/perf OK.
 
+### 1h. D-T1 auth-test: HTTP 500 (2026-11-25 19:41:47 UTC) — diagnostika (read-only)
+
+- **Príčina (auth log GoTrue):** `POST /admin/generate_link` → `error finding user: sql: Scan error on column index 3,
+  name "confirmation_token": converting NULL to string is unsupported` (`unexpected_failure`). GoTrue číta tokenové
+  stĺpce `auth.users` ako string; seed skupiny C ich nevyplnil → `confirmation_token`, `recovery_token`,
+  `email_change_token_new`, `email_change` = NULL (bez DEFAULT). Rovnaký stav majú všetci 5 P15 používatelia a 4
+  pôvodní testovací používatelia vytvorení SQL. **Nesúvisí** s `auth.identities`, poskytovateľom e-mail ani formou
+  požiadavky (chyba nastala pri hľadaní používateľa ešte pred generovaním linku).
+- **Bez zápisov:** T1 vlastník nezmenený (`updated_at`/`last_sign_in_at` 2026-11-24 19:54, `recovery_sent_at` null),
+  0 identít, relácií, refresh tokenov, jednorazových tokenov, flow_state; od 19:00 UTC 0 nových relácií, identít,
+  tokenov, audit záznamov a 0 zmenených `auth.users`. Kľúč `sb_secret_I5…`: iba 8× GET REST (identita) + 1× 500,
+  potom 401 (odvolaný). Exporty 11 (posledný 24. 11.), ukončenia 1, joby 1, deregistrácie 0; 16 firiem, súbory mimo
+  P15, účty, billing, ISO = východisko; P15 4 firmy / 322 objektov / 25 010 faktúr.
+- **Návrh opravy (nespustená):** `scripts/sql/p15-groupD-t1-auth-normalize.sql` — iba vlastník T1, iba NULL → ''
+  v 4 tokenových stĺpcoch, kontrola, že sa nezmenil žiadny iný stĺpec ani riadok (inak rollback); na `auth.users`
+  je iba INSERT trigger. Seed opravený lokálne (nové syntetické účty dostanú ''). Po oprave ostáva neoverené
+  správanie GoTrue pri chýbajúcej identite (zistí až ďalší schválený auth-test).
+
 ## 2. Allowlist výmazu
 
 | Kľúč | Firma | UUID | Vlastník | E-mail |
