@@ -239,7 +239,7 @@ await check("úložisko: každý klientsky upload do firemného bucketu má pred
   assert.equal(uploads, 14);
 });
 
-await check("upload audit: v app/, lib/, hooks/, mobile/ existuje iba 14 klientskych uploadov (všetky s predkontrolou) + 2 serverové eFaktúra (service role, nie live); žiadne iné zápisy do Storage", () => {
+await check("upload audit: v app/, lib/, hooks/, mobile/ existuje iba 14 klientskych uploadov (všetky s predkontrolou) + 2 serverové eFaktúra (service role, nie live) + 2 serverové billing-documents (P4); žiadne iné zápisy do Storage", () => {
   const walk = (dir: string, out: string[] = []): string[] => {
     for (const n of readdirSync(dir)) {
       if (n === "node_modules" || n.startsWith(".") || n === "out") continue;
@@ -258,7 +258,12 @@ await check("upload audit: v app/, lib/, hooks/, mobile/ existuje iba 14 klients
   }
   const server = uploadSites.filter((x) => x.startsWith(path.join("lib", "einvoice")));
   assert.equal(server.length, 2, server.join(","));
-  assert.equal(uploadSites.length - server.length, 14, uploadSites.join("\n"));
+  // P4 (20261123110000): serverový archív PDF účtovných kópií Esblu — service role, bucket billing-documents, bez upsert.
+  const billing = uploadSites.filter((x) => x.startsWith(path.join("lib", "billing")));
+  assert.equal(billing.length, 2, billing.join(","));
+  assert.match(readFileSync("lib/billing/server.ts", "utf8"), /admin\.storage\.from\(BILLING_DOCUMENTS_BUCKET\)/);
+  assert.match(readFileSync("lib/billing/server.ts", "utf8"), /upsert: false/);
+  assert.equal(uploadSites.length - server.length - billing.length, 14, uploadSites.join("\n"));
   for (const f of ["lib/einvoice/outbound/supabase-store.ts", "lib/einvoice/inbound/supabase-store.ts"]) {
     assert.match(readFileSync(f, "utf8"), /admin\.storage\.from\(EINVOICE_BUCKET\)\.upload/);
   }

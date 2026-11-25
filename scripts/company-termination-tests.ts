@@ -307,7 +307,7 @@ check("O3: firma s dokladmi sa nedá ukončiť bez exportu — waived odmietnut�
   assert.ok(guard > 0, "guard existuje");
   assert.match(r.slice(guard, guard + 400), /ESBLU_TERMINATION_EXPORT_REQUIRED/);
   assert.match(r.slice(guard, guard + 400), /status: 409/);
-  for (const sideEffect of ["ensureCompanyDeregistered(", "const ownerResult = await orchestrateAccountDeletion(", "supabaseTerminationDeps(admin, terminationMode)"]) {
+  for (const sideEffect of ["ensureCompanyDeregistered(", "const ownerResult = await orchestrateAccountDeletion(", "supabaseTerminationDeps(admin, terminationMode"]) {
     const at = r.indexOf(sideEffect);
     assert.ok(at > guard, `${sideEffect} až po guarde`);
   }
