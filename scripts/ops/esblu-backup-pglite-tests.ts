@@ -16,6 +16,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 // @ts-expect-error - .mjs modul bez typov
 import * as B from "./esblu-daily-backup.mjs";
+import { freshDb as verifyFreshDb, verifyRestore, FP_SQL, type Inventory } from "./esblu-restore-verify.ts";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const read = (p: string) => fs.readFileSync(path.join(ROOT, p), "utf8");
@@ -280,6 +281,23 @@ await check("obnova zlyhá celá (rollback), ak počet obnovených riadkov nesed
   await C2.exec("rollback"); // psql -v ON_ERROR_STOP=1 / SQL Editor: zlyhaná transakcia sa celá zruší
   assert.equal((await C2.query<{ n: number }>("select count(*)::int n from public.companies")).rows[0].n, 0, "nič sa nesmie čiastočne zapísať");
   await C2.close();
+});
+await check("esblu-restore-verify: izolovaná obnova vs. inventúra zdroja (rovnaký odtlačok ako produkčná inventúra) → OK; zmenená inventúra → FAIL", async () => {
+  const inv: Inventory = { tables: {}, auth_users: 0, storage: {}, excluded_from_backup: [...Object.keys(B.EXCLUDED_TABLES), ...Object.keys(B.COUNT_ONLY_TABLES)] };
+  for (const t of tablesA) { const r = (await A.query<{ n: number; h: string }>(FP_SQL(t))).rows[0]; inv.tables[t] = { rows: r.n, fp: r.h }; }
+  inv.auth_users = JSON.parse(fs.readFileSync(path.join(restoreDir, "auth_users.json"), "utf8")).length;
+  for (const [k, buf] of Object.entries(files)) { const b = k.split("/")[0]; inv.storage[b] ??= { objects: 0, bytes: 0 }; inv.storage[b].objects++; inv.storage[b].bytes += buf.length; }
+  const v1 = await verifyFreshDb("99999999999999");
+  const ok = await verifyRestore(v1, restoreDir, inv);
+  await v1.close();
+  assert.deepEqual(ok.errors, []);
+  assert.ok(ok.fpMatch > 0, "aspoň časť tabuliek má zhodný odtlačok");
+  const bad: Inventory = JSON.parse(JSON.stringify(inv));
+  bad.tables.vehicles.rows += 1; bad.auth_users += 1; const b0 = Object.keys(bad.storage)[0]; bad.storage[b0].bytes += 1;
+  const v2 = await verifyFreshDb("99999999999999");
+  const ko = await verifyRestore(v2, restoreDir, bad);
+  await v2.close();
+  assert.equal(ko.errors.length, 3, ko.errors.join("; "));
 });
 await check("schéma: obnovená DB má rovnaké RLS politiky, funkcie a triggery ako zdroj (z migrácií)", async () => {
   const q = "select (select count(*)::int from pg_policies where schemaname='public') p, (select count(*)::int from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public') f, (select count(*)::int from pg_trigger t join pg_class c on c.oid=t.tgrelid join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and not t.tgisinternal) tr";

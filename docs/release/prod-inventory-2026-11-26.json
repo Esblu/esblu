@@ -1,0 +1,509 @@
+{
+ "project": "fkpgvgvsmbpieduoatrt",
+ "taken_at": "2026-11-26",
+ "method": "read-only SQL; odtlačok tabuľky = md5(zoradené md5(riadok::text)); 2 nezávislé behy zhodné",
+ "tables": {
+  "account_deletion_cleanup_jobs": {
+   "rows": 8,
+   "fp": "c984112fe3e78717b06f0ce626a5bcf5"
+  },
+  "accounting_handoff_export_items": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "accounting_handoff_exports": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "ai_evidence": {
+   "rows": 2,
+   "fp": "77073ea9e1544f4308e553b6a3ddd0a6"
+  },
+  "ai_evidence_review_log": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "ai_processing_usage": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "ai_scan_limits": {
+   "rows": 3,
+   "fp": "fcaa990c74c3d37e4d04503901ee1c3e"
+  },
+  "ai_scan_usage": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "ai_usage_monthly": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "assistant_action_confirmations": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "assistant_conversation_contexts": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "beta_allowlist": {
+   "rows": 2,
+   "fp": "de08cf59c4be5c5e3608966978253c14"
+  },
+  "billing_accounting_export_log": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "billing_balance_transactions": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "billing_channel_rules": {
+   "rows": 7,
+   "fp": "4e6357cc1705b43d52b6383ef39b5bea"
+  },
+  "billing_checkout_sessions": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "billing_event_cursors": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "billing_events": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "billing_invoice_documents": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "billing_live_purchase_allowlist": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "billing_ops_admins": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "billing_ops_alerts": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "billing_ops_heartbeats": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "billing_provider_links": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "billing_provider_prices": {
+   "rows": 12,
+   "fp": "9fb8894fa0ed34ed038e0dada4eee28a"
+  },
+  "billing_reconciliation": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "billing_refund_observations": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "billing_region_groups": {
+   "rows": 57,
+   "fp": "6ede571c46faa5939cc4474653fa1a76"
+  },
+  "billing_runtime_config": {
+   "rows": 1,
+   "fp": "7a219156add2e2cd4bc6be4880fcefd8"
+  },
+  "billing_store_reports": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "business_partners": {
+   "rows": 1,
+   "fp": "448f283bab9140a083cfc19c85bbd3e3"
+  },
+  "chat_attachments": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "chat_conversation_members": {
+   "rows": 3,
+   "fp": "d342190634b6c29d7b50cdc240286c3b"
+  },
+  "chat_conversations": {
+   "rows": 3,
+   "fp": "d02bc6451cc9b054eae48e6dd6d3836f"
+  },
+  "chat_message_references": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "chat_messages": {
+   "rows": 1,
+   "fp": "70094c791b134a77c00bc7e793ba3b8c"
+  },
+  "companies": {
+   "rows": 4,
+   "fp": "c5472d1a319555983977b111d34d7e73"
+  },
+  "company_billing_profile": {
+   "rows": 4,
+   "fp": "7c2e6908ec51c8b37c5f54cc64bc5656"
+  },
+  "company_dpa_acceptances": {
+   "rows": 8,
+   "fp": "ac9309e3b0cf0aef8ffe6778ee8277be"
+  },
+  "company_entitlements": {
+   "rows": 27,
+   "fp": "96f1a11cca913c301201dbfe7f531277"
+  },
+  "company_export_runs": {
+   "rows": 5,
+   "fp": "830aafdcd3cde80d24eef91a495db57a"
+  },
+  "company_invites": {
+   "rows": 1,
+   "fp": "c26e79333dda7f1833cb327e6b118977"
+  },
+  "company_legal_identities": {
+   "rows": 1,
+   "fp": "c8e24b8107a15838681f44969be472c0"
+  },
+  "company_member_permission_events": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "company_member_permissions": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "company_members": {
+   "rows": 5,
+   "fp": "7f1517e06e0cb4073714803857c3f7a9"
+  },
+  "company_plan_selection": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "company_terminations": {
+   "rows": 5,
+   "fp": "4926774cad3d66a0c29b3702752985af"
+  },
+  "company_terms_notices": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "company_usage_counters": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "custom_document_categories": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "document_attachments": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "document_download_events": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "document_export_package_items": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "document_export_packages": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "document_folder_items": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "document_folders": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "document_links": {
+   "rows": 3,
+   "fp": "975a4c3166b42cbaaeeb003ac89c56b8"
+  },
+  "document_review_log": {
+   "rows": 8,
+   "fp": "2fbe1f3215f4e87c8a180d61ac54794a"
+  },
+  "documents": {
+   "rows": 4,
+   "fp": "4f97e15f36f9c7e0f2340301eb7ffbe5"
+  },
+  "einvoice_enroll_attempts": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "einvoice_event_cursors": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "einvoice_events": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "einvoice_inbound": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "einvoice_ops_audit": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "einvoice_organizations": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "einvoice_outbound": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "einvoice_rollout": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "einvoice_webhook_events": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "einvoice_webhook_rejections": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "entitlement_catalog": {
+   "rows": 11,
+   "fp": "c749a350adde7206388898c7d805a267"
+  },
+  "esblu_intake_attestations_used": {
+   "rows": 1,
+   "fp": "c29e76b03549c39af9eae52dc367a6b4"
+  },
+  "fx_rate_import_batches": {
+   "rows": 12,
+   "fp": "ff00282a654243680b8987a6cceb7848"
+  },
+  "fx_reference_rates": {
+   "rows": 2175,
+   "fp": "fe10408a8e3685b0916a9303b49773d6"
+  },
+  "internal_operator_grants": {
+   "rows": 1,
+   "fp": "3cb05ac190e6ed55b5db11524a8e93e8"
+  },
+  "inventory_items": {
+   "rows": 4,
+   "fp": "5bd723f7d9621c595079858e1b76ec5a"
+  },
+  "inventory_photos": {
+   "rows": 1,
+   "fp": "9e854d0fe0e0ced37145d56c47ad7b6e"
+  },
+  "invoice_accounting_state": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "invoice_accounting_state_log": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "invoice_advance_deductions": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "invoice_events": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "invoice_items": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "invoice_number_sequences": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "invoice_parties": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "invoice_payments": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "invoice_tax_breakdowns": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "invoices": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "legal_acceptance_evidence": {
+   "rows": 25,
+   "fp": "7c3589fe35f8e871a651cf3f6abca683"
+  },
+  "legal_documents": {
+   "rows": 13,
+   "fp": "407c4888862f8ab4a43f57ef829576b1"
+  },
+  "machine_photos": {
+   "rows": 1,
+   "fp": "8bb4de7f65b1684c48569d732ab499d2"
+  },
+  "machine_services": {
+   "rows": 1,
+   "fp": "52544c427de0c8cdf2cbe3aa1821851b"
+  },
+  "machines": {
+   "rows": 2,
+   "fp": "b8cd8b39dff700d3d1df4675d80a7ec4"
+  },
+  "media_deletion_queue": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "notification_deliveries": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "notification_preferences": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "plan_limits": {
+   "rows": 3,
+   "fp": "b561e0399caca6dfc8d0856506327260"
+  },
+  "push_devices": {
+   "rows": 1,
+   "fp": "5ccd3b836fb75caa0643c2cc0465a097"
+  },
+  "push_subscriptions": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "received_advance_links": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "registration_policy": {
+   "rows": 1,
+   "fp": "13ab707eef3fcf19f84044bfd6f87759"
+  },
+  "session_active_company": {
+   "rows": 1,
+   "fp": "e5b950975e60e3492e45ef5214da66b2"
+  },
+  "settings": {
+   "rows": 5,
+   "fp": "21b1f891e23cb9eacafe6bc93023c6b6"
+  },
+  "subscription_accounts": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "subscription_plan_entitlements": {
+   "rows": 13,
+   "fp": "330574f4b2a9bd14d9094057f393c93f"
+  },
+  "subscription_plans": {
+   "rows": 5,
+   "fp": "808c99f6687a8c163a75103e2dd9ea76"
+  },
+  "trial_claims": {
+   "rows": 2,
+   "fp": "e9921c4446d6aeecc80646116f1122c1"
+  },
+  "user_active_company": {
+   "rows": 2,
+   "fp": "1bb091d0ab1488aa0e0cc29f469b6267"
+  },
+  "user_legal_acceptances": {
+   "rows": 15,
+   "fp": "63630006f564946ea4fe3a69d2348b90"
+  },
+  "vehicle_photos": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "vehicle_services": {
+   "rows": 0,
+   "fp": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "vehicle_vignettes": {
+   "rows": 1,
+   "fp": "a3d768d74f94f8eb073a640721bf418f"
+  },
+  "vehicles": {
+   "rows": 3,
+   "fp": "f0b575a7262e10217db948dc23d500d9"
+  }
+ },
+ "auth_users": 5,
+ "auth": {
+  "users": 5,
+  "users_fp": "02b10ff3fc4ea8945dd1cd175d66c176",
+  "identities": 6,
+  "identities_fp": "30b06acfbe840e2f7ca2242adce6f87c",
+  "sessions": 3,
+  "refresh_tokens": 6,
+  "mfa_factors": 0
+ },
+ "storage": {
+  "ai-evidence-documents": {
+   "objects": 2,
+   "bytes": 214956
+  },
+  "ai-inbox-documents": {
+   "objects": 4,
+   "bytes": 768202
+  },
+  "company-logos": {
+   "objects": 2,
+   "bytes": 37432
+  },
+  "machine-photos": {
+   "objects": 1,
+   "bytes": 94248
+  }
+ },
+ "storage_fp": {
+  "buckets": 9,
+  "buckets_fp": "347879ae2ba4e84e773208b697058781",
+  "ai-evidence-documents": "e40348acc4ba32fcd0f6820fa595e1f6",
+  "ai-inbox-documents": "cd418dc88deaf58269340baa85feffa0",
+  "company-logos": "7b1183ab2f289a4d81f499ed4e87649b",
+  "machine-photos": "da73237786c4907a4e1394494b537550"
+ },
+ "migrations": {
+  "count": 120,
+  "max_applied_version": "20261119220951",
+  "last_repo_migration": "20261123120000_billing_ops_alerts",
+  "fp": "b11a1d5045d7e69b86bdd1ba0bbd51a4"
+ },
+ "schemas": "auth,extensions,graphql,graphql_public,public,realtime,storage,supabase_migrations,vault",
+ "excluded_from_backup": [
+  "push_devices",
+  "push_subscriptions",
+  "session_active_company",
+  "assistant_action_confirmations",
+  "assistant_conversation_contexts",
+  "einvoice_enroll_attempts"
+ ],
+ "findings": [
+  "inventory_photos: 1 odkaz bez súboru v Storage (existujúci stav; záloha ho neobnoví, nie je to chyba releasu)"
+ ]
+}
