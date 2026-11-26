@@ -5,12 +5,13 @@
   -Setup   jednorazovo: skryte zadanie serveroveho kluca (ulozi sa iba sifrovane cez Windows DPAPI pre
            tohto pouzivatela), cesta k VEREJNEMU klucu + odtlacok, cielovy priecinok, uloha v Planovaci uloh.
   (bez)    denny beh (Planovac uloh): zaloha + kontrola integrity + retencia, log bez tajomstiev.
+  -Setup -NoSchedule  ako -Setup, ale BEZ ulohy v Planovaci uloh (jednorazova zaloha pred release).
   -Status  kontrola: posledna uspesna zaloha je mladsia ako 30 h a po nej nie je zlyhanie (exit 0/1);
            s -Notify zobrazi okno s upozornenim (uloha pri prihlaseni + po kazdom dennom behu).
 
   Sukromny kluc zalohy NEPATRI na tento PC (USB / trezor / spravca hesiel). Bez neho sa zaloha neda obnovit.
 #>
-param([switch]$Setup, [switch]$Status, [switch]$Notify, [string]$PublicKey = "", [string]$Fingerprint = "",
+param([switch]$Setup, [switch]$NoSchedule, [switch]$Status, [switch]$Notify, [string]$PublicKey = "", [string]$Fingerprint = "",
       [string]$BackupDir = "", [string]$Time = "02:30", [int]$MaxAgeHours = 30)
 
 $ErrorActionPreference = "Stop"
@@ -68,6 +69,10 @@ if ($Setup) {
   $sec | ConvertFrom-SecureString | Set-Content -Path $KeyFile -Encoding ASCII   # DPAPI, iba tento pouzivatel a PC
   [ordered]@{ publicKey = (Resolve-Path $PublicKey).Path; fingerprint = $Fingerprint; backupDir = $BackupDir } |
     ConvertTo-Json | Set-Content -Path $ConfFile -Encoding ASCII
+  if ($NoSchedule) {
+    Write-Host "OK: nastavenie ulozene (bez ulohy v Planovaci uloh). Zalohu spusti tymto skriptom bez -Setup." -ForegroundColor Green
+    exit 0
+  }
   $action = New-ScheduledTaskAction -Execute $ps -Argument ("-NoProfile -ExecutionPolicy Bypass -File `"{0}`"" -f $PSCommandPath)
   $trigger = New-ScheduledTaskTrigger -Daily -At $Time
   $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -RunOnlyIfNetworkAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 2)
