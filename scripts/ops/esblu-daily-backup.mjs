@@ -261,6 +261,12 @@ export function assertSafeOutDir(outDir) {
   const low = abs.toLowerCase();
   if (/[\\/]onedrive([\\/ -]|$)/i.test(abs) || /[\\/](dropbox|google ?drive|icloud ?drive)([\\/]|$)/i.test(abs)) die("cieľ zálohy nesmie byť v synchronizovanom cloudovom priečinku (OneDrive a pod.)");
   if (low === REPO_ROOT.toLowerCase() || low.startsWith(REPO_ROOT.toLowerCase() + path.sep)) die("cieľ zálohy nesmie byť v repozitári");
+  // Žiadny Git repozitár ani worktree (ani hlavný checkout, ak sa skript spúšťa z iného worktree): .git v cieli
+  // alebo v ktoromkoľvek nadradenom priečinku = odmietnuté.
+  for (let d = abs; ; d = path.dirname(d)) {
+    if (fs.existsSync(path.join(d, ".git"))) die(`cieľ zálohy nesmie byť v Git repozitári (${path.join(d, ".git")})`);
+    if (path.dirname(d) === d) break;
+  }
   return abs;
 }
 

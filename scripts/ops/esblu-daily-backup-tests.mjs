@@ -161,6 +161,14 @@ await check("ochrany: iba produkčný ref alebo 127.0.0.1, pripnutý odtlačok k
   assert.throws(() => B.assertSafeOutDir("C:\\Users\\roiaj\\OneDrive\\esblu"), /OneDrive/);
   assert.throws(() => B.assertSafeOutDir(path.join(os.homedir(), "OneDrive - Esblu", "x")), /OneDrive/);
   assert.throws(() => B.assertSafeOutDir(path.resolve(path.dirname(new URL(import.meta.url).pathname), "..", "..", "tmp")), /repozitári/);
+  // Iný Git repozitár / worktree (napr. hlavný checkout pri behu z worktree) = odmietnuté aj v podpriečinku.
+  const otherRepo = fs.mkdtempSync(path.join(os.tmpdir(), "esblu-other-repo-"));
+  fs.mkdirSync(path.join(otherRepo, ".git"));
+  assert.throws(() => B.assertSafeOutDir(path.join(otherRepo, "zalohy", "daily")), /Git repozitári/);
+  fs.rmSync(path.join(otherRepo, ".git"), { recursive: true }); fs.writeFileSync(path.join(otherRepo, ".git"), "gitdir: x"); // worktree má .git ako súbor
+  assert.throws(() => B.assertSafeOutDir(path.join(otherRepo, "a")), /Git repozitári/);
+  fs.rmSync(otherRepo, { recursive: true, force: true });
+  assert.doesNotThrow(() => B.assertSafeOutDir(path.join(os.tmpdir(), "esblu-ok-target")));
 });
 await check("neúplná záloha: zmiznutá tabuľka alebo bucket oproti predchádzajúcemu behu = FAIL, súbor sa nezachová", async () => {
   const d = mockData(); delete d.tables.companies; d.buckets = d.buckets.filter((b) => b !== "company-logos");

@@ -6,9 +6,9 @@ Automatická fyzická záloha Supabase z 26. 11. 2026 ~00:33 UTC overená vlastn
 ## Krok 0 — pracovná kópia s nástrojmi (iba lokálne, bez zmeny hlavného checkoutu)
 
 ```powershell
-git -C C:\Users\roiaj\assetpilot worktree add C:\Users\roiaj\esblu-release-tools release/rc-2026-11-26
+git -C C:\Users\roiaj\assetpilot worktree add --detach C:\Users\roiaj\esblu-release-tools release/rc-2026-11-26
 cd C:\Users\roiaj\esblu-release-tools
-git log -1 --oneline            # očakávané: commit s runbookom zálohy (nad 198f61f)
+git log -1 --oneline            # očakávané: najnovší commit vetvy release/rc-2026-11-26 (runbook zálohy)
 npm ci                          # iba pre krok 5 (PGlite); záloha samotná používa len vstavané moduly Node
 ```
 
@@ -40,7 +40,7 @@ Get-Content C:\Users\roiaj\esblu-backups\daily\last-success.json
 ```
 Očakávané v `last-success.json` (bez osobných údajov): `"status": "OK"`, `project_ref` `fkpgvgvsmbpieduoatrt`,
 `auth_users` 5, `tables` 106 (+ 6 zámerne vylúčených dočasných tabuliek), `storage_buckets` 9, **`storage_objects` 9**,
-`storage_bytes` 1114838, `file_sha256`. (Počty sa zmenia, ak medzitým pribudne registrácia — vtedy zopakujem inventúru.)
+`storage_bytes` 1114838 (= 1 114 838 B ≈ 1,1 MB; overené 26. 11. read-only), `file_sha256`. (Počty sa zmenia, ak medzitým pribudne registrácia — vtedy zopakujem inventúru.)
 Skript sám pred aj po zápise dešifruje súbor dátovým kľúčom a overí počty, SHA-256 tabuliek a súborov.
 
 ## Krok 4 — kontrola integrity súkromným kľúčom
@@ -57,8 +57,8 @@ node scripts\ops\esblu-daily-backup.mjs --extract C:\Users\roiaj\esblu-backups\d
 node --experimental-strip-types --no-warnings scripts\ops\esblu-restore-verify.ts C:\Users\roiaj\esblu-restore-test docs\release\prod-inventory-2026-11-26.json --max-version 20261123120000
 ```
 Očakávané: `RESTORE_VERIFY_OK` (počty všetkých tabuliek, 5 Auth používateľov, 9 súborov po bucketoch a bajtoch zhodné
-s inventúrou; vylúčené tabuľky iba ako `info`). Potom **zmaž** `C:\Users\roiaj\esblu-restore-test` (nešifrované údaje):
-`Remove-Item -Recurse -Force C:\Users\roiaj\esblu-restore-test`. Ak je výsledok FAIL kvôli počtom, pošli mi iba výpis
+s inventúrou; vylúčené tabuľky iba ako `info`). Potom **zmaž** iba tento dočasný priečinok (nešifrované údaje), s poistkou, že ide o rozbalenú zálohu:
+`if (Test-Path -LiteralPath C:\Users\roiaj\esblu-restore-test\restore-public-data.sql) { Remove-Item -LiteralPath C:\Users\roiaj\esblu-restore-test -Recurse -Force }`. Ak je výsledok FAIL kvôli počtom, pošli mi iba výpis
 riadkov `FAIL` (bez údajov) — zopakujem inventúru.
 
 ## Krok 6 — upratanie
@@ -75,7 +75,7 @@ riadkov `FAIL` (bez údajov) — zopakujem inventúru.
 | Zápis do produkcie | iba GET (PostgREST, Auth Admin `/admin/users`, Storage objekt) a POST `/storage/v1/object/list` (výpis); žiadny iný HTTP príkaz v skripte |
 | Kľúč v súbore / logu | kľúč iba v DPAPI a v premennej procesu (po behu zmazaná); log `backup.log` obsahuje iba výstup skriptu (počty), navyše maskuje `sb_secret_…`/JWT |
 | Nešifrované údaje na disku | záloha sa zapisuje iba zašifrovaná (`.tmp` → premenovanie); `last-success.json`, `last-manifest.json` iba počty; rozbalenie iba v kroku 5 a hneď zmazať |
-| Git | cieľ zálohy aj rozbalenia v repozitári = skript odmietne (`assertSafeOutDir`) |
+| Git | cieľ zálohy aj rozbalenia v repozitári skriptu alebo v **akomkoľvek** priečinku s `.git` v ceste (aj iný worktree / hlavný checkout) = skript odmietne (`assertSafeOutDir`, test 13/13) |
 | OneDrive / Dropbox / Google Drive / iCloud | skript aj `-Setup` odmietnu taký cieľ |
 | Práva k priečinku | `icacls` — iba aktuálny používateľ |
 | Heslá Auth | logická záloha ich neobsahuje (Admin API ich nevracia); obsahuje ich fyzická záloha Supabase (26. 11. 00:33 UTC) |
