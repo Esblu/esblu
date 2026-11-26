@@ -79,3 +79,12 @@ riadkov `FAIL` (bez údajov) — zopakujem inventúru.
 | OneDrive / Dropbox / Google Drive / iCloud | skript aj `-Setup` odmietnu taký cieľ |
 | Práva k priečinku | `icacls` — iba aktuálny používateľ |
 | Heslá Auth | logická záloha ich neobsahuje (Admin API ich nevracia); obsahuje ich fyzická záloha Supabase (26. 11. 00:33 UTC) |
+
+## Variant bez USB (2026-11-26)
+
+Súkromný kľúč je vždy zašifrovaný heslom (PKCS#8, AES-256-CBC). Bez USB sa dočasne uloží do
+`C:\Users\roiaj\esblu-keys-private` — mimo Gitu, OneDrive a `C:\Users\roiaj\esblu-backups`; `--init-keys` iný cieľ
+odmietne (repo / `.git` v ceste / OneDrive / priečinok záloh) a nastaví ACL iba pre aktuálneho používateľa.
+Oddelená kópia: zašifrovaný `esblu-backup-private.pem` ako príloha v správcovi hesiel (heslo kľúča v inej položke).
+Presun na offline médium: po získaní USB skopírovať, overiť `--verify` z USB, lokálnu kópiu zmazať a prepísať voľné miesto.
+Heslo sa zadáva iba skrytou výzvou Node (nie je v histórii PowerShellu ani v logu); schránku vyčistiť.

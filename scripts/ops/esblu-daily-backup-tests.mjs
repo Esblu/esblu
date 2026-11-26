@@ -90,6 +90,13 @@ await check("init-keys: RSA-4096, súkromný kľúč šifrovaný heslom, neprep�
   assert.equal(crypto.createPublicKey(fs.readFileSync(keys.pub)).asymmetricKeyDetails.modulusLength, 4096);
   assert.throws(() => B.initKeys(path.join(tmp, "keys"), PASS), /neprepisujem/);
   assert.throws(() => B.initKeys(path.join(tmp, "k2"), "short"), /16 znakov/);
+  assert.throws(() => B.initKeys(path.join(tmp, "k3"), "sb_secret_abcdefghijklmnop"), /API kľúč/);
+  assert.throws(() => B.initKeys(path.join(os.homedir(), "OneDrive", "esblu-keys"), PASS), /OneDrive/);
+  assert.throws(() => B.initKeys(path.join(os.homedir(), "esblu-backups", "daily", "keys"), PASS), /priečinku so zálohami/);
+  const gitDir = fs.mkdtempSync(path.join(os.tmpdir(), "esblu-keys-git-")); fs.mkdirSync(path.join(gitDir, ".git"));
+  assert.throws(() => B.initKeys(path.join(gitDir, "keys"), PASS), /Git repozitári/);
+  fs.rmSync(gitDir, { recursive: true, force: true });
+  assert.ok(!fs.existsSync(path.join(os.homedir(), "OneDrive", "esblu-keys")), "odmietnutý cieľ sa nevytvorí");
 });
 
 const data = mockData();

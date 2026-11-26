@@ -428,7 +428,17 @@ export function buildRestoreSql(bundle) {
 
 export function initKeys(dir, passphrase) {
   if (!passphrase || passphrase.length < 16) die("heslo súkromného kľúča musí mať aspoň 16 znakov");
+  // Zámena s API kľúčom Supabase (vložený zo schránky) — heslo kľúča nesmie byť serverový ani verejný kľúč.
+  if (/^(sb_secret_|sb_publishable_|sbp_|eyJ)/.test(passphrase.trim())) die("heslo vyzerá ako API kľúč Supabase - použi samostatné heslo zo správcu hesiel");
+  // Kľúče nie v Git repozitári, OneDrive a pod. (rovnaké pravidlá ako cieľ zálohy) a nie v priečinku so zálohami.
+  const abs = assertSafeOutDir(dir);
+  const backups = path.join(os.homedir(), "esblu-backups").toLowerCase();
+  const custom = (process.env.ESBLU_BACKUP_DIR || "").trim() ? path.resolve(process.env.ESBLU_BACKUP_DIR).toLowerCase() : null;
+  for (const b of [backups, custom].filter(Boolean)) {
+    if (abs.toLowerCase() === b || abs.toLowerCase().startsWith(b + path.sep)) die("kľúče nesmú byť v priečinku so zálohami");
+  }
   fs.mkdirSync(dir, { recursive: true });
+  restrictDir(dir);
   const priv = path.join(dir, "esblu-backup-private.pem");
   const pub = path.join(dir, "esblu-backup-public.pem");
   if (fs.existsSync(priv) || fs.existsSync(pub)) die("kľúče v cieľovom priečinku už existujú - neprepisujem");
