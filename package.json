@@ -109,6 +109,7 @@
     "test:native-billing-contract": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/native-billing-contract-tests.ts",
     "test:provider-gate": "npm run test:subscriptions-lifecycle -- provider-gate",
     "test:billing-ui": "npm run test:subscriptions-lifecycle -- billing-ui",
+    "test:fake-checkout-guard": "node --experimental-strip-types --no-warnings scripts/fake-checkout-guard-tests.ts",
     "test:account-deletion-subscription": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/account-deletion-subscription-tests.ts && npm run test:subscriptions-lifecycle-db -- account-deletion",
     "test:multi-company": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/multi-company-tests.ts",
     "test:multi-company-db": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/multi-company-pglite-tests.ts",
