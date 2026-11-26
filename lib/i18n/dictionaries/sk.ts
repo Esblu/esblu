@@ -1404,6 +1404,8 @@ const sk = {
       terminationReauthRequired: "Z bezpečnostných dôvodov sa odhláste a znova prihláste (posledné prihlásenie je staršie ako 30 minút), potom ukončenie zopakujte. Nič sa nezmazalo.",
       companyHasAccountingRecords:
         "Firma má vystavené alebo prijaté účtovné doklady (faktúry, e-faktúry). Pred zrušením si ich exportuj (Odovzdanie účtovníkovi) a kontaktuj podporu — doklady sa nemažú automaticky.",
+      companyDeletionSupportOnly:
+        "Ukončenie firmy je dočasne dostupné iba cez podporu. Napíšte na info@esblu.com z e-mailu vlastníka firmy — žiadosť vybavíme bez zbytočného odkladu, najneskôr do 30 dní. Export všetkých údajov firmy si môžete kedykoľvek stiahnuť v nastaveniach. Nič sa nezmazalo.",
       companyDeletionFailedRetry:
         "Zrušenie firemného účtu zlyhalo pred dokončením. Skús to prosím znova alebo kontaktuj podporu.",
       companyDataDeletedButLoginRemained:

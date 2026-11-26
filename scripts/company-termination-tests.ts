@@ -321,5 +321,27 @@ check("O3: firma s dokladmi sa nedá ukončiť bez exportu — waived odmietnut�
   }
 });
 
+check("release 2026-11-26: samoobslužné ukončenie firmy predvolene vypnuté (503 ESBLU_COMPANY_DELETION_SUPPORT_ONLY) PRED akýmkoľvek zásahom; zapína iba ESBLU_COMPANY_SELF_TERMINATION=on; člen/globálny/export bez zmeny", () => {
+  const r = read("app/api/account/delete/route.ts");
+  const owner = r.indexOf('if (membership.role === "owner") {');
+  const gate = r.indexOf("if (!companySelfTerminationEnabled()) {");
+  assert.ok(owner > 0 && gate > owner, "brána je v owner vetve");
+  for (const later of ['body.confirmPhrase !== "ZRUŠIŤ FIRMU"', "findOwnerDeletionBlocker(admin", "ensureCompanyDeregistered(", "const ownerResult = await orchestrateAccountDeletion("]) {
+    assert.ok(r.indexOf(later) > gate, `${later} až po bráne`);
+  }
+  assert.match(r.slice(gate, gate + 400), /ESBLU_COMPANY_DELETION_SUPPORT_ONLY/);
+  assert.match(r.slice(gate, gate + 400), /status: 503/);
+  assert.match(r, /\(env\.ESBLU_COMPANY_SELF_TERMINATION \?\? ""\)\.trim\(\)\.toLowerCase\(\) === "on"/);
+  assert.doesNotMatch(r, /^export function companySelfTerminationEnabled/m, "route súbor exportuje iba HTTP handlery");
+  assert.ok(r.indexOf('body.scope === "global"') < owner, "globálne zrušenie (bez vlastnených firiem) nie je ovplyvnené");
+  assert.ok(r.indexOf('kind: "member"') > owner, "odchod člena z firmy nie je ovplyvnený");
+  assert.ok(!read("app/api/company/export/route.ts").includes("ESBLU_COMPANY_SELF_TERMINATION"), "export nie je ovplyvnený");
+  for (const d of [sk, en, de]) {
+    const e = (d as unknown as { settings: { errors: Record<string, string> } }).settings.errors;
+    assert.match(e.companyDeletionSupportOnly, /info@esblu\.com/);
+    assert.match(e.companyDeletionSupportOnly, /30/);
+  }
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

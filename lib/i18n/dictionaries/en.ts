@@ -1390,6 +1390,8 @@ const en = {
       terminationReauthRequired: "For security reasons, sign out and sign in again (your last sign-in is older than 30 minutes), then repeat the termination. Nothing was deleted.",
       companyHasAccountingRecords:
         "The company has issued or received accounting documents (invoices, e-invoices). Export them first (Accountant handoff) and contact support — documents are not deleted automatically.",
+      companyDeletionSupportOnly:
+        "Terminating a company is temporarily available only through support. Write to info@esblu.com from the company owner's e-mail — we will handle the request without undue delay, within 30 days at the latest. You can download an export of all company data in the settings at any time. Nothing was deleted.",
       companyDeletionFailedRetry:
         "The company account deletion failed before completing. Please try again or contact support.",
       companyDataDeletedButLoginRemained:

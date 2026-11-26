@@ -1391,6 +1391,8 @@ const de = {
       terminationReauthRequired: "Melden Sie sich aus Sicherheitsgründen ab und erneut an (die letzte Anmeldung liegt mehr als 30 Minuten zurück) und wiederholen Sie dann die Beendigung. Es wurde nichts gelöscht.",
       companyHasAccountingRecords:
         "Das Unternehmen hat ausgestellte oder empfangene Buchhaltungsbelege (Rechnungen, E-Rechnungen). Exportieren Sie diese zuerst (Übergabe an die Buchhaltung) und kontaktieren Sie den Support — Belege werden nicht automatisch gelöscht.",
+      companyDeletionSupportOnly:
+        "Die Beendigung eines Unternehmens ist vorübergehend nur über den Support möglich. Schreiben Sie an info@esblu.com von der E-Mail-Adresse des Inhabers — wir bearbeiten die Anfrage unverzüglich, spätestens innerhalb von 30 Tagen. Den Export aller Unternehmensdaten können Sie jederzeit in den Einstellungen herunterladen. Es wurde nichts gelöscht.",
       companyDeletionFailedRetry:
         "Die Löschung des Firmenkontos ist vor Abschluss fehlgeschlagen. Bitte versuchen Sie es erneut oder kontaktieren Sie den Support.",
       companyDataDeletedButLoginRemained:

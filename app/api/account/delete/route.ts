@@ -288,6 +288,11 @@ async function handleOrphanDelete(
   });
 }
 
+// Samoobslužné ukončenie firmy (owner) — predvolene VYPNUTÉ, zapína sa iba hodnotou "on".
+function companySelfTerminationEnabled(env: Record<string, string | undefined> = process.env): boolean {
+  return (env.ESBLU_COMPANY_SELF_TERMINATION ?? "").trim().toLowerCase() === "on";
+}
+
 export async function POST(req: Request) {
   const locale = getRequestLocale(req);
 
@@ -363,6 +368,16 @@ export async function POST(req: Request) {
     const deleteAccount = membershipCount === 1;
 
     if (membership.role === "owner") {
+      // Release 2026-11-26: samoobslužné ukončenie / výmaz firmy je vypnuté, kým neprebehne stagingový test
+      // skutočného výmazu (P15 D-T1/T2/PERF). Zapína sa iba výslovne: ESBLU_COMPANY_SELF_TERMINATION=on.
+      // Export údajov firmy ostáva dostupný; žiadosť o ukončenie vybaví podpora (VOP 20.6, čl. 12 ods. 3 GDPR).
+      // Kontrola je PRED akýmkoľvek čítaním dokladov, deregistráciou alebo výmazom.
+      if (!companySelfTerminationEnabled()) {
+        return Response.json(
+          { error: translate(locale, "settings.errors.companyDeletionSupportOnly"), code: "ESBLU_COMPANY_DELETION_SUPPORT_ONLY" },
+          { status: 503 }
+        );
+      }
       if (body.confirmPhrase !== "ZRUŠIŤ FIRMU") {
         return Response.json(
           { error: translate(locale, "settings.errors.confirmPhraseMismatch") },
