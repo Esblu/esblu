@@ -6,15 +6,17 @@
            tohto pouzivatela), cesta k VEREJNEMU klucu + odtlacok, cielovy priecinok, uloha v Planovaci uloh.
   (bez)    denny beh (Planovac uloh): zaloha + kontrola integrity + retencia, log bez tajomstiev.
   -Setup -NoSchedule  ako -Setup, ale BEZ ulohy v Planovaci uloh (jednorazova zaloha pred release).
+  -CheckSecret  iba overi, ze ulozeny kluc sa da nacitat (vypise typ a dlzku, nikdy hodnotu); nic nespusta.
   -Status  kontrola: posledna uspesna zaloha je mladsia ako 30 h a po nej nie je zlyhanie (exit 0/1);
            s -Notify zobrazi okno s upozornenim (uloha pri prihlaseni + po kazdom dennom behu).
 
   Sukromny kluc zalohy NEPATRI na tento PC (USB / trezor / spravca hesiel). Bez neho sa zaloha neda obnovit.
 #>
-param([switch]$Setup, [switch]$NoSchedule, [switch]$Status, [switch]$Notify, [string]$PublicKey = "", [string]$Fingerprint = "",
+param([switch]$Setup, [switch]$NoSchedule, [switch]$CheckSecret, [switch]$Status, [switch]$Notify, [string]$PublicKey = "", [string]$Fingerprint = "",
       [string]$BackupDir = "", [string]$Time = "02:30", [int]$MaxAgeHours = 30)
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "esblu-backup-secret.ps1")
 $ConfDir = Join-Path $env:LOCALAPPDATA "Esblu\backup"
 $KeyFile = Join-Path $ConfDir "server-key.dpapi"
 $ConfFile = Join-Path $ConfDir "config.json"
@@ -66,7 +68,11 @@ if ($Setup) {
   Write-Host "Supabase Dashboard -> projekt assetpilot -> Project Settings -> API Keys -> Secret keys ->"
   Write-Host "vytvor NOVY secret kluc s nazvom 'backup' (da sa samostatne zrusit). Vloz ho sem (nezobrazi sa)."
   $sec = Read-Host -AsSecureString "Serverovy kluc pre zalohu"
-  $sec | ConvertFrom-SecureString | Set-Content -Path $KeyFile -Encoding ASCII   # DPAPI, iba tento pouzivatel a PC
+  try { Save-EsbluSecret -Secure $sec -Path $KeyFile }   # DPAPI, iba tento pouzivatel a PC; ASCII bez BOM a CRLF
+  catch { Fail $_.Exception.Message }
+  $kindInfo = Get-EsbluSecretKind (ConvertFrom-EsbluSecure $sec)
+  if ($kindInfo.kind -eq "neznamy") { Remove-Item -LiteralPath $KeyFile -Force; Fail "vlozena hodnota nema tvar serveroveho kluca (sb_secret_... alebo JWT) - nic sa neulozilo" }
+  Write-Host ("Kluc ulozeny (typ {0}, dlzka {1})." -f $kindInfo.kind, $kindInfo.length)
   [ordered]@{ publicKey = (Resolve-Path $PublicKey).Path; fingerprint = $Fingerprint; backupDir = $BackupDir } |
     ConvertTo-Json | Set-Content -Path $ConfFile -Encoding ASCII
   if ($NoSchedule) {
@@ -84,14 +90,19 @@ if ($Setup) {
   exit 0
 }
 
+if ($CheckSecret) {
+  try { $chk = Get-EsbluSecretKind (ConvertFrom-EsbluSecure (Read-EsbluSecret -Path $KeyFile)) } catch { Fail $_.Exception.Message }
+  if ($chk.kind -eq "neznamy") { Fail "ulozena hodnota nema tvar serveroveho kluca - spusti -Setup -NoSchedule" }
+  Write-Host ("OK: ulozeny kluc sa da nacitat (typ {0}, dlzka {1})." -f $chk.kind, $chk.length) -ForegroundColor Green
+  exit 0
+}
+
 if (-not (Test-Path $KeyFile) -or -not (Test-Path $ConfFile)) { Fail "najprv -Setup" }
 $conf = Get-Content $ConfFile -Raw | ConvertFrom-Json
 New-Item -ItemType Directory -Force -Path $conf.backupDir | Out-Null
 $LogFile = Join-Path $conf.backupDir "backup.log"
-$sec = Get-Content $KeyFile -Raw | ConvertTo-SecureString
-$b = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec)
-try { $env:ESBLU_BACKUP_SUPABASE_KEY = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($b) }
-finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($b) }
+try { $sec = Read-EsbluSecret -Path $KeyFile } catch { Fail $_.Exception.Message }
+$env:ESBLU_BACKUP_SUPABASE_KEY = ConvertFrom-EsbluSecure $sec
 $env:ESBLU_BACKUP_PUBLIC_KEY = $conf.publicKey
 $env:ESBLU_BACKUP_PUBKEY_SHA256 = $conf.fingerprint
 $env:ESBLU_BACKUP_DIR = $conf.backupDir

@@ -177,6 +177,22 @@ await check("ochrany: iba produkčný ref alebo 127.0.0.1, pripnutý odtlačok k
   fs.rmSync(otherRepo, { recursive: true, force: true });
   assert.doesNotThrow(() => B.assertSafeOutDir(path.join(os.tmpdir(), "esblu-ok-target")));
 });
+await check("PowerShell: DPAPI kľúč sa ukladá/číta cez esblu-backup-secret.ps1 (bez CRLF/BOM, tolerantné čítanie, kódy chýb), regresný test existuje", async () => {
+  const ops = path.dirname(new URL(import.meta.url).pathname);
+  const ps = fs.readFileSync(path.join(ops, "esblu-daily-backup.ps1"), "utf8");
+  const lib = fs.readFileSync(path.join(ops, "esblu-backup-secret.ps1"), "utf8");
+  const t = fs.readFileSync(path.join(ops, "tests", "esblu-backup-secret.tests.ps1"), "utf8");
+  assert.doesNotMatch(ps, /Get-Content \$KeyFile -Raw \| ConvertTo-SecureString/, "pôvodné čítanie (koncový CRLF) odstránené");
+  assert.doesNotMatch(ps, /ConvertFrom-SecureString \| Set-Content/, "pôvodný zápis odstránený");
+  assert.match(ps, /\. \(Join-Path \$PSScriptRoot "esblu-backup-secret\.ps1"\)/);
+  assert.match(ps, /Save-EsbluSecret -Secure \$sec -Path \$KeyFile/);
+  assert.match(ps, /try \{ \$sec = Read-EsbluSecret -Path \$KeyFile \} catch \{ Fail/);
+  assert.match(lib, /WriteAllText\(\$Path, \$enc, \(New-Object Text\.ASCIIEncoding\)\)/);
+  for (const c of ["SECRET_MISSING", "SECRET_EMPTY", "SECRET_FORMAT", "SECRET_DPAPI"]) assert.ok(lib.includes(c), c);
+  assert.match(lib, /\.Trim\(\)/);
+  for (const name of ["stary format zo -Setup", "SECRET_DPAPI", "SECRET_FORMAT", "SECRET_MISSING", "neobsahuju hodnotu"]) assert.ok(t.includes(name), name);
+  for (const f of [ps, lib, t]) assert.ok(/^[\x00-\x7F]*$/.test(f), "iba ASCII (PowerShell 5.1)");
+});
 await check("neúplná záloha: zmiznutá tabuľka alebo bucket oproti predchádzajúcemu behu = FAIL, súbor sa nezachová", async () => {
   const d = mockData(); delete d.tables.companies; d.buckets = d.buckets.filter((b) => b !== "company-logos");
   for (const k of Object.keys(d.files)) if (k.startsWith("company-logos/")) delete d.files[k];

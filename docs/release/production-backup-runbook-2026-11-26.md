@@ -88,3 +88,11 @@ odmietne (repo / `.git` v ceste / OneDrive / priečinok záloh) a nastaví ACL i
 Oddelená kópia: zašifrovaný `esblu-backup-private.pem` ako príloha v správcovi hesiel (heslo kľúča v inej položke).
 Presun na offline médium: po získaní USB skopírovať, overiť `--verify` z USB, lokálnu kópiu zmazať a prepísať voľné miesto.
 Heslo sa zadáva iba skrytou výzvou Node (nie je v histórii PowerShellu ani v logu); schránku vyčistiť.
+
+## Oprava 2026-11-26: `ConvertTo-SecureString : Input string was not in a correct format`
+
+Príčina: `-Setup` ukladal DPAPI hex cez `Set-Content` (koncový CRLF) a beh ho čítal `Get-Content -Raw` vrátane CRLF.
+Oprava: `scripts/ops/esblu-backup-secret.ps1` — zápis ASCII bez BOM a bez CRLF, tolerantné čítanie (CRLF, BOM, UTF-16,
+medzery), kontrola formátu a kódy chýb `SECRET_MISSING/EMPTY/FORMAT/DPAPI` bez hodnoty kľúča; `-CheckSecret` overí
+uložený kľúč (iba typ a dĺžka). Existujúci uložený kľúč ostáva platný — nový Supabase kľúč ani nový `-Setup` netreba.
+Regresný test (Windows): `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\ops\tests\esblu-backup-secret.tests.ps1`.
