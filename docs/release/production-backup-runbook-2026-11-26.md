@@ -96,3 +96,12 @@ Oprava: `scripts/ops/esblu-backup-secret.ps1` — zápis ASCII bez BOM a bez CRL
 medzery), kontrola formátu a kódy chýb `SECRET_MISSING/EMPTY/FORMAT/DPAPI` bez hodnoty kľúča; `-CheckSecret` overí
 uložený kľúč (iba typ a dĺžka). Existujúci uložený kľúč ostáva platný — nový Supabase kľúč ani nový `-Setup` netreba.
 Regresný test (Windows): `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\ops\tests\esblu-backup-secret.tests.ps1`.
+
+## Oprava 2026-11-26: `CHYBA: fetch failed` pri kroku 1/5
+
+`fetch failed` je sieťová chyba Node (požiadavka neodišla / spojenie zlyhalo), nie odpoveď Supabase. Skript teraz vypíše
+triedu a kód z `error.cause` (DNS / TLS / TIMEOUT / SPOJENIE) bez kľúča a údajov a odkáže na diagnostiku:
+`powershell -NoProfile -ExecutionPolicy Bypass -File scripts\ops\esblu-daily-backup.ps1 -Diagnose` (bez kľúča: DNS, TLS
+s vydavateľom certifikátu, verejný GET `/auth/v1/health`). Pri TLS kóde (napr. `UNABLE_TO_GET_ISSUER_CERT_LOCALLY`,
+`SELF_SIGNED_CERT_IN_CHAIN` — HTTPS kontrola antivírusu/proxy) spustiť zálohu s `-UseSystemCa` (Node prijme aj
+certifikáty z úložiska Windows; overovanie TLS ostáva zapnuté). `NODE_TLS_REJECT_UNAUTHORIZED=0` sa nikdy nepoužíva.

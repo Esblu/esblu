@@ -6,13 +6,15 @@
            tohto pouzivatela), cesta k VEREJNEMU klucu + odtlacok, cielovy priecinok, uloha v Planovaci uloh.
   (bez)    denny beh (Planovac uloh): zaloha + kontrola integrity + retencia, log bez tajomstiev.
   -Setup -NoSchedule  ako -Setup, ale BEZ ulohy v Planovaci uloh (jednorazova zaloha pred release).
+  -Diagnose  sietova diagnostika Node (DNS, TLS, verejny GET) bez kluca; nic nespusta.
+  -UseSystemCa  Node pouzije aj certifikaty z Windows (antivirus/proxy s vlastnym korenovym certifikatom).
   -CheckSecret  iba overi, ze ulozeny kluc sa da nacitat (vypise typ a dlzku, nikdy hodnotu); nic nespusta.
   -Status  kontrola: posledna uspesna zaloha je mladsia ako 30 h a po nej nie je zlyhanie (exit 0/1);
            s -Notify zobrazi okno s upozornenim (uloha pri prihlaseni + po kazdom dennom behu).
 
   Sukromny kluc zalohy NEPATRI na tento PC (USB / trezor / spravca hesiel). Bez neho sa zaloha neda obnovit.
 #>
-param([switch]$Setup, [switch]$NoSchedule, [switch]$CheckSecret, [switch]$Status, [switch]$Notify, [string]$PublicKey = "", [string]$Fingerprint = "",
+param([switch]$Setup, [switch]$NoSchedule, [switch]$CheckSecret, [switch]$Diagnose, [switch]$UseSystemCa, [switch]$Status, [switch]$Notify, [string]$PublicKey = "", [string]$Fingerprint = "",
       [string]$BackupDir = "", [string]$Time = "02:30", [int]$MaxAgeHours = 30)
 
 $ErrorActionPreference = "Stop"
@@ -90,6 +92,16 @@ if ($Setup) {
   exit 0
 }
 
+$NodeArgs = @()
+if ($UseSystemCa) { $NodeArgs += "--use-system-ca" }   # iba doplni doveryhodne certifikaty z Windows; overovanie TLS ostava zapnute
+
+if ($Diagnose) {
+  $node = (Get-Command node -ErrorAction SilentlyContinue).Source
+  if (-not $node) { Fail "Node.js nie je nainstalovany" }
+  & $node @NodeArgs $Script --diagnose
+  exit $LASTEXITCODE
+}
+
 if ($CheckSecret) {
   try { $chk = Get-EsbluSecretKind (ConvertFrom-EsbluSecure (Read-EsbluSecret -Path $KeyFile)) } catch { Fail $_.Exception.Message }
   if ($chk.kind -eq "neznamy") { Fail "ulozena hodnota nema tvar serveroveho kluca - spusti -Setup -NoSchedule" }
@@ -110,7 +122,7 @@ $node = (Get-Command node -ErrorAction SilentlyContinue).Source
 if (-not $node) { Fail "Node.js nie je nainstalovany" }
 $started = (Get-Date).ToUniversalTime().ToString("s") + "Z"
 $ErrorActionPreference = "Continue"
-$out = & $node $Script --run 2>&1 | ForEach-Object { "$_" }
+$out = & $node @NodeArgs $Script --run 2>&1 | ForEach-Object { "$_" }
 $code = $LASTEXITCODE
 Remove-Item Env:ESBLU_BACKUP_SUPABASE_KEY -ErrorAction SilentlyContinue
 # Log iba vystup skriptu (neobsahuje kluc ani osobne udaje), maskovanie pre istotu.

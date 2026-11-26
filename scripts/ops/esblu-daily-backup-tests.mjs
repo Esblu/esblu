@@ -193,6 +193,29 @@ await check("PowerShell: DPAPI kľúč sa ukladá/číta cez esblu-backup-secret
   for (const name of ["stary format zo -Setup", "SECRET_DPAPI", "SECRET_FORMAT", "SECRET_MISSING", "neobsahuju hodnotu"]) assert.ok(t.includes(name), name);
   for (const f of [ps, lib, t]) assert.ok(/^[\x00-\x7F]*$/.test(f), "iba ASCII (PowerShell 5.1)");
 });
+await check("sieťová chyba (fetch failed): príčina z error.cause, trieda a kód, bez kľúča; záloha nevznikne, nič nešifrované sa nezapíše", async () => {
+  const net = await import("node:net");
+  const srv = net.createServer(); await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+  const port = srv.address().port; await new Promise((r) => srv.close(r));               // zatvorený port
+  const outDir = path.join(tmp, "net-fail-out");
+  const err = await B.runBackup({ ...envFor(`http://127.0.0.1:${port}`), ESBLU_BACKUP_DIR: outDir }, quiet).then(() => null, (e) => e);
+  assert.ok(err, "záloha musí zlyhať");
+  assert.match(err.message, /sieťová chyba pre 127\.0\.0\.1:\d+\/auth\/v1\/admin\/users: SPOJENIE .*\[ECONNREFUSED\]/);
+  assert.match(err.message, /--diagnose/);
+  assert.ok(!err.message.includes(KEY), "kľúč sa nesmie objaviť v chybe");
+  assert.ok(!fs.existsSync(outDir), "pri zlyhaní pred šifrovaním sa nevytvorí ani priečinok");
+  const mk = (code, msg) => Object.assign(new Error(msg), { code });
+  const tlsErr = Object.assign(new TypeError("fetch failed"), { cause: mk("UNABLE_TO_GET_ISSUER_CERT_LOCALLY", "unable to get local issuer certificate") });
+  const d1 = B.describeFetchError(tlsErr);
+  assert.deepEqual(d1.codes, ["UNABLE_TO_GET_ISSUER_CERT_LOCALLY"]); assert.match(d1.cls, /--use-system-ca/);
+  const agg = Object.assign(new TypeError("fetch failed"), { cause: new AggregateError([mk("ENOTFOUND", "getaddrinfo ENOTFOUND x sb_secret_abcdefghijkl eyJa.eyJb.c")]) });
+  const d2 = B.describeFetchError(agg);
+  assert.deepEqual(d2.codes, ["ENOTFOUND"]); assert.match(d2.cls, /^DNS/);
+  assert.ok(!/sb_secret_abc|eyJa\.eyJb/.test(d2.detail), "redakcia kľúčov v detaile");
+  const ps = fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname), "esblu-daily-backup.ps1"), "utf8");
+  assert.match(ps, /& \$node @NodeArgs \$Script --run/); assert.match(ps, /"--use-system-ca"/); assert.match(ps, /--diagnose/);
+  assert.doesNotMatch(ps, /NODE_TLS_REJECT_UNAUTHORIZED/, "overovanie TLS sa nikdy nevypína");
+});
 await check("neúplná záloha: zmiznutá tabuľka alebo bucket oproti predchádzajúcemu behu = FAIL, súbor sa nezachová", async () => {
   const d = mockData(); delete d.tables.companies; d.buckets = d.buckets.filter((b) => b !== "company-logos");
   for (const k of Object.keys(d.files)) if (k.startsWith("company-logos/")) delete d.files[k];

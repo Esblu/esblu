@@ -117,10 +117,72 @@ function headersFor(key, extra = {}) {
   const auth = key.startsWith("sb_secret_") ? {} : { Authorization: `Bearer ${key}` };
   return { apikey: key, ...auth, ...extra };
 }
+// Sieťové chyby Node fetch (undici) majú skutočnú príčinu v error.cause (pri viacerých adresách AggregateError).
+// Diagnostika vypíše iba hostiteľa, cestu, kód a triedu chyby — nikdy kľúč, hlavičky, query ani telo odpovede.
+const NET_CLASSES = [
+  [/^(ENOTFOUND|EAI_AGAIN|EAI_FAIL|EAI_NODATA|EAI_NONAME)$/, "DNS – názov servera sa nepodarilo preložiť (internet, DNS, VPN)"],
+  [/^(UNABLE_TO_GET_ISSUER_CERT_LOCALLY|UNABLE_TO_GET_ISSUER_CERT|SELF_SIGNED_CERT_IN_CHAIN|DEPTH_ZERO_SELF_SIGNED_CERT|UNABLE_TO_VERIFY_LEAF_SIGNATURE|CERT_UNTRUSTED)$/,
+    "TLS – certifikát servera nie je dôveryhodný pre Node (typicky HTTPS kontrola antivírusu/proxy s vlastným koreňovým certifikátom vo Windows); riešenie: node --use-system-ca"],
+  [/^(CERT_HAS_EXPIRED|CERT_NOT_YET_VALID|ERR_TLS_CERT_ALTNAME_INVALID|ERR_SSL_.*|ERR_TLS_.*)$/, "TLS – chyba certifikátu alebo TLS spojenia (systémový čas, prerušenie HTTPS)"],
+  [/^(UND_ERR_CONNECT_TIMEOUT|ETIMEDOUT|UND_ERR_HEADERS_TIMEOUT|UND_ERR_BODY_TIMEOUT)$/, "TIMEOUT – server neodpovedal včas (sieť, firewall, VPN)"],
+  [/^(ECONNREFUSED|ECONNRESET|EHOSTUNREACH|ENETUNREACH|EPIPE|UND_ERR_SOCKET|ECONNABORTED)$/, "SPOJENIE – spojenie odmietnuté alebo prerušené (firewall, proxy, antivírus, sieť)"],
+];
+function redact(s) {
+  return String(s ?? "").replace(/sb_(secret|publishable)_[A-Za-z0-9_-]+/g, "sb_***").replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, "eyJ***").slice(0, 200);
+}
+export function describeFetchError(e) {
+  const causes = [];
+  const walk = (x, depth = 0) => {
+    if (!x || depth > 4) return;
+    if (Array.isArray(x.errors)) for (const y of x.errors) walk(y, depth + 1);
+    if (x.code || x.name) causes.push({ code: String(x.code || x.name), message: redact(x.message) });
+    if (x.cause) walk(x.cause, depth + 1);
+  };
+  walk(e?.cause);
+  const codes = [...new Set(causes.map((c) => c.code))].filter((c) => !/Error$/.test(c));
+  const cls = codes.map((c) => NET_CLASSES.find(([re]) => re.test(c))?.[1]).find(Boolean) || "neznáma sieťová chyba";
+  return { codes, cls, detail: causes.map((c) => c.message).filter(Boolean).slice(0, 3).join(" | ") };
+}
 async function http(url, key, init = {}) {
-  const res = await fetch(url, { ...init, headers: headersFor(key, init.headers || {}) });
+  let res;
+  try {
+    res = await fetch(url, { ...init, headers: headersFor(key, init.headers || {}) });
+  } catch (e) {
+    const u = new URL(url);
+    const d = describeFetchError(e);
+    die(`sieťová chyba pre ${u.host}${u.pathname}: ${d.cls} [${d.codes.join(",") || "bez kódu"}]${d.detail ? ` – ${d.detail}` : ""}. Diagnostika: node scripts/ops/esblu-daily-backup.mjs --diagnose`);
+  }
   if (!res.ok) die(`HTTP ${res.status} pre ${new URL(url).pathname}`);
   return res;
+}
+
+// Diagnostika siete bez kľúča a bez osobných údajov: DNS, TCP+TLS (vydavateľ certifikátu, overenie), verejný GET.
+export async function diagnose(host = `${EXPECTED_REF}.supabase.co`, log = console.log) {
+  const dns = await import("node:dns");
+  const tls = await import("node:tls");
+  log(`Node ${process.version}; --use-system-ca: ${process.execArgv.includes("--use-system-ca") || /--use-system-ca/.test(process.env.NODE_OPTIONS || "") ? "áno" : "nie"}`);
+  for (const v of ["HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "NODE_EXTRA_CA_CERTS", "NODE_OPTIONS", "NODE_USE_ENV_PROXY", "NODE_TLS_REJECT_UNAUTHORIZED"])
+    log(`  ${v}: ${process.env[v] || process.env[v.toLowerCase()] ? "nastavené" : "-"}`);
+  try {
+    const addrs = await dns.promises.lookup(host, { all: true });
+    log(`DNS ${host}: OK (${addrs.map((a) => `IPv${a.family}`).join(", ")})`);
+  } catch (e) { log(`DNS ${host}: CHYBA [${e.code}]`); return; }
+  await new Promise((resolve) => {
+    const sock = tls.connect({ host, port: 443, servername: host, timeout: 15000 }, () => {
+      const c = sock.getPeerCertificate();
+      log(`TLS: overenie ${sock.authorized ? "OK" : `ZLYHALO [${sock.authorizationError}]`}; vydavateľ: ${redact(c?.issuer?.O || "")} / ${redact(c?.issuer?.CN || "")}`);
+      sock.end(); resolve();
+    });
+    sock.on("timeout", () => { log("TLS: TIMEOUT (15 s)"); sock.destroy(); resolve(); });
+    sock.on("error", (e) => { log(`TLS: CHYBA [${e.code || e.name}] ${redact(e.message)}`); resolve(); });
+  });
+  try {
+    const r = await fetch(`https://${host}/auth/v1/health`);
+    log(`HTTPS GET /auth/v1/health (bez kľúča): HTTP ${r.status} – sieť a TLS pre Node fungujú`);
+  } catch (e) {
+    const d = describeFetchError(e);
+    log(`HTTPS GET /auth/v1/health: ${d.cls} [${d.codes.join(",") || "bez kódu"}]`);
+  }
 }
 
 export async function listTables(base, key) {
@@ -463,6 +525,7 @@ async function askHidden(prompt) {
 async function main() {
   const [mode, a, b, c] = process.argv.slice(2);
   if (mode === "--run") { await runBackup(); return; }
+  if (mode === "--diagnose") { await diagnose(); return; }
   if (mode === "--init-keys") {
     const pass = await askHidden("Heslo súkromného kľúča (min. 16 znakov, uložte do správcu hesiel): ");
     const r = initKeys(a, pass);
@@ -481,7 +544,7 @@ async function main() {
     }
     return;
   }
-  console.log("Použitie: --init-keys <priečinok> | --run | --verify <súbor> <private.pem> | --extract <súbor> <private.pem> <cieľ>");
+  console.log("Použitie: --init-keys <priečinok> | --run | --diagnose | --verify <súbor> <private.pem> | --extract <súbor> <private.pem> <cieľ>");
   process.exitCode = 2;
 }
 
