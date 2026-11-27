@@ -885,7 +885,9 @@ await check("S15b secrets: live/test Stripe premenné iba v serverových moduloc
   const bad: string[] = [];
   for (const f of files) {
     const src = readFileSync(f, "utf8");
-    const client = f.endsWith(".tsx") || /^["']use client["']/m.test(src);
+    // App Router page/layout bez "use client" je serverový komponent (napr. fake-checkout/page.tsx → notFound mimo fake režimu).
+    const serverComponent = /\/(page|layout)\.tsx$/.test(f) && !/^["']use client["']/m.test(src);
+    const client = (f.endsWith(".tsx") && !serverComponent) || /^["']use client["']/m.test(src);
     if (/NEXT_PUBLIC_[A-Z_]*(STRIPE|LIVE)/.test(src)) bad.push(`${f}: NEXT_PUBLIC stripe/live`);
     if (client && /STRIPE_(LIVE_)?(SECRET_KEY|WEBHOOK_SECRET)|ESBLU_BILLING_LIVE_APPROVED/.test(src)) bad.push(`${f}: secret v klientskom module`);
     if (client && /@\/lib\/billing\/(server|provider-modes|config|providers\/stripe)"/.test(src)) bad.push(`${f}: klient importuje serverový billing`);
