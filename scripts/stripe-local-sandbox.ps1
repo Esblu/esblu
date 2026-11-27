@@ -40,6 +40,9 @@
                      mesacny export (scripts/s17-accounting-export.ts, CSV do %USERPROFILE%\esblu-backups\s17); poplatok/
                      cista suma vs. Stripe; izolacia a duplicity; obnova stagingu (billing OFF). [-Month YYYY-MM] [-Force]
                      Dokazy bez tajomstiev: <hlavny checkout>\release-backups\s17\s17-evidence.json
+      s18          - S18 (2026-11-27): nakup Esblu Komplet cez aplikaciu (QA-STRIPE E, bez interneho tarifu a trialu):
+                     VOP 1.3 + potvrdenie objednavky + Stripe Checkout (operator v prehliadaci), potom automaticky
+                     company_plan_selection, naroky, doklad, archiv PDF, uplna refundacia; upratanie vzdy. Okno 1: -Step start -NoListen
       s17-cleanup  - S17: idempotentne upratanie (aj po padnuti) - ukoncenie QA predplatneho, staging billing spat,
                      zmazanie Test Clocks S17
     Kazdy krok vypise OK AZ ked je vysledok overeny v Stripe AJ v testovacej DB Esblu.
@@ -60,7 +63,7 @@ param(
   [ValidateSet("start", "status", "mark-exposed", "new-sandbox", "map-price", "s17-auto", "clock-setup", "renew", "fail-renew", "fix-payment", "refund-partial", "refund-full",
                "refund-old", "refund-current", "reconcile", "advance-check", "verify-terminal", "qa-login", "qa-check",
                "s12-account", "s12-events", "s12-catchup", "s12-cancel-at", "s12-refund-missing", "s13-existing",
-               "s17", "s17-cleanup", "s17-preflight")]
+               "s17", "s17-cleanup", "s17-preflight", "s18")]
   [string]$Step = "start",
   # Okno 1 BEZ stripe listen: ziadny webhook sa nedoruci, synchronizacia iba cez dotahovanie (S12).
   [switch]$NoListen,
@@ -115,15 +118,17 @@ $S17StateFile = Join-Path $StateDir "s17-$Project.json"          # povodny stav 
 # origin/main = produkcny kod, ktory S17 overuje. Explicitny pin (plne SHA), NIKDY "aktualny origin/main" automaticky:
 # po kazdom schvalenom nasadeni sa pin meni iba commitom v ops/s17-sandbox spolu s mergom origin/main (docs par. 8.14).
 # 6506e11 = merge PR #2 (bezpecnostne aktualizacie Next.js 16.4.6 / Capacitor), nasadene 20. 11. 2026.
-$S17ExpectedMain = "6506e11af70725f89f7cda3253fa4e4e60b883c5"
+# 2026-11-27 (S18, vetva ops/s18-komplet): pin main = c11ea7e (produkcia), testovany aplikacny kod = 44c3b6f
+# (fix/billing-komplet-provider-selection: oprava B1 + brana objednavky + Cennik); allowlist = git diff c11ea7e..44c3b6f.
+$S17ExpectedMain = "c11ea7e4c13e98b41af074175eff26f43ef67047"
 # 2026-11-22 (schvalene: staging S17 opravy S17-4 BEZ merge do main): testovany aplikacny kod = opravna vetva
 # fix/billing-document-company-link-db. Pin kandidata je plne SHA; kandidat musi byt potomkom $S17ExpectedMain
 # (= origin/main) a jeho rozdiel voci nemu smie obsahovat IBA subory $S17CandidateFiles (uzavrety zoznam).
 # Tieto dve kontroly a kontrola schemy stagingu (migracia 20261124100000) sa NEDAJU obist cez -Force.
 # 2026-11-23: kandidat = fix/billing-pdf-archive-s3 d785483 (S17-5: archiv PDF cez presny S3 hostitel Stripe + SSRF
 # kontrola skutocnej IP), priamy potomok 8d736db (S17-4) -> 8 suborov oproti main 6506e11.
-$S17ExpectedApp = "d78548355e7c27b548d2fa6c2725db615dc1a830"
-$S17CandidateFiles = @("lib/billing/document-archive.ts", "lib/billing/ops-alerts.ts", "lib/billing/pipeline.ts", "scripts/billing-ops-pglite-tests.ts", "scripts/subscriptions-lifecycle-tests.ts", "supabase/grants/public-data-api-grants.json", "supabase/migrations/20261124100000_billing_document_company_link.sql", "supabase/rollback/20261124100000_billing_document_company_link_rollback.sql")
+$S17ExpectedApp = "44c3b6f5bada10f4ff020a3d48eb810a289495d7"
+$S17CandidateFiles = @("app/api/billing/checkout/route.ts", "app/api/billing/purchase-intent/route.ts", "app/cennik/PricingPageClient.tsx", "app/components/billing/PlanOverviewPanel.tsx", "app/nastavenia/predplatne/page.tsx", "docs/release/stripe-live-readiness-2026-11-27.md", "lib/billing/order-gate.ts", "lib/billing/providers/stripe.ts", "lib/billing/types.ts", "lib/billing/web-checkout.ts", "lib/i18n/dictionaries/de.ts", "lib/i18n/dictionaries/en.ts", "lib/i18n/dictionaries/sk.ts", "package.json", "scripts/billing-komplet-provider-selection-pglite-tests.ts", "scripts/billing-order-gate-tests.ts", "scripts/subscriptions-lifecycle-tests.ts", "supabase/migrations/20261130100000_billing_komplet_provider_selection.sql", "supabase/rollback/20261130100000_billing_komplet_provider_selection_rollback.sql")
 # Zavislosti, ktore S17 skutocne spusta (next dev v okne 1): nainstalovana verzia musi sediet s package-lock.json pinu.
 $S17DepPackages = @("next", "react", "react-dom")
 $RepoRoot = Split-Path -Parent $PSScriptRoot
@@ -160,7 +165,7 @@ $KnownAccounts = @{ "esblu-qa2" = "acct_1UdCxsRKE4QKs2UL" }   # z dokazov S12 (s
 $NoListenOnly = $WhsecOnlyCompromised -contains $Project
 if (-not $SandboxAccount -and $KnownAccounts.ContainsKey($Project)) { $SandboxAccount = $KnownAccounts[$Project] }
 if ($CompromisedProjects -contains $Project) {
-  $okQa2 = $NoListenOnly -and ((@("mark-exposed", "status", "s17-preflight", "s17-auto", "s17", "s17-cleanup") -contains $Step) -or ($Step -eq "start" -and $NoListen))
+  $okQa2 = $NoListenOnly -and ((@("mark-exposed", "status", "s17-preflight", "s17-auto", "s17", "s17-cleanup", "s18") -contains $Step) -or ($Step -eq "start" -and $NoListen))
   if (-not $okQa2) {
     if ($NoListenOnly) { Write-Host "CHYBA: profil '$Project' ma zverejnene whsec_ - povolene iba s17-preflight, s17-auto, s17, s17-cleanup, status a start -NoListen." -ForegroundColor Red }
     else { Write-Host "CHYBA: profil '$Project' je kompromitovany (API kluc) - nepouziva sa." -ForegroundColor Red }
@@ -673,6 +678,8 @@ function Show-Logs {
 # Aplikacny kod checkoutu musi byt zhodny s tymto commitom - lisit sa smu IBA harness subory nizsie a docs/.
 $S17HarnessFiles = @("scripts/stripe-local-sandbox.ps1", "scripts/s17-accounting-export.ts", "scripts/stripe-local-sandbox-static-tests.mjs")
 $S17Ctx = @{ events = [ordered]@{} }
+# Firma, ktorej predplatne/zamery upratuje Restore-S17Staging (S17 = D, S18 = E).
+$S17Company = $CompanyD
 $S17Evidence = [ordered]@{}
 $S17Steps = New-Object System.Collections.ArrayList
 $S17DocSelect = "kind,status,company_id,provider_subscription_id,provider_customer_id,related_invoice_id,payment_intent_id,currency,total_minor,amount_paid_minor,service_period_start,service_period_end,issued_at,paid_at,pdf_url,pdf_sha256,pdf_storage_path,pdf_archived_at,pdf_archive_attempts,pdf_archive_error,customer_company_id,customer_legal_name,customer_ico,customer_dic,customer_ic_dph,customer_registration_id,customer_address,customer_billing_country,customer_snapshot_at,customer_snapshot_source,first_event_id,last_event_id,updated_at"
@@ -1097,11 +1104,11 @@ function Restore-S17Staging($st) {
       if ($acc -and $acc.status -notin @("canceled", "expired", "refunded", "revoked")) {
         if ($canCatchup) { throw "Esblu ucet ostal $($acc.status) po ukonceni v Stripe." }
         # Billing uz vypnuty / okno 1 nebezi: Stripe je ukonceny, Esblu (iba QA-STRIPE D na stagingu) sa nedotiahne -> upozornenie.
-        $d["warning"] = "QA-STRIPE D: Esblu ucet $($acc.status) - dotahovanie nedostupne (billing vypnuty alebo okno 1 nebezi); Stripe predplatne ukoncene."
+        $d["warning"] = "QA firma: Esblu ucet $($acc.status) - dotahovanie nedostupne (billing vypnuty alebo okno 1 nebezi); Stripe predplatne ukoncene."
       }
-      $ents = Get-ActiveSubEnts $CompanyD
+      $ents = Get-ActiveSubEnts $S17Company
       $d["company_d_active_entitlements"] = $ents
-      if ($ents -ne 0 -and -not $d.Contains("warning")) { throw "Firma QA-STRIPE D ma po ukonceni $ents ucinnych narokov." }
+      if ($ents -ne 0 -and -not $d.Contains("warning")) { throw "QA firma ma po ukonceni $ents ucinnych narokov." }
     } catch { $errors += "predplatne: $($_.Exception.Message)" }
   }
   if ($st.enabled -and -not $st.restored) {
@@ -1128,7 +1135,7 @@ function Restore-S17Staging($st) {
     # Zamer checkoutu QA-STRIPE D z tohto behu, ktory po zlyhani ostal 'created'/'open' -> expired (iba od zaciatku S17).
     if ($st.started_at) {
       $since = [Uri]::EscapeDataString([string]$st.started_at)
-      $ex = @(Invoke-Staging "PATCH" "billing_checkout_sessions?company_id=eq.$CompanyD&status=in.(created,open)&created_at=gte.$since" @{ status = "expired" } | ForEach-Object { $_ })
+      $ex = @(Invoke-Staging "PATCH" "billing_checkout_sessions?company_id=eq.$S17Company&status=in.(created,open)&created_at=gte.$since" @{ status = "expired" } | ForEach-Object { $_ })
       $d["checkout_intents_expired"] = $ex.Count
     }
   } catch { $errors += "zamer checkoutu: $($_.Exception.Message)" }
@@ -1273,7 +1280,7 @@ function Invoke-S17 {
     Invoke-S17Step "3" "Nakup bez zadavania karty (Test Clock, pm_card_visa, zamer Esblu) -> invoice.paid spracovane" {
       param($d)
       $st = $S17Ctx.state
-      Invoke-Staging "PATCH" "billing_checkout_sessions?company_id=eq.$CompanyD&status=in.(created,open)" @{ status = "expired" } | Out-Null
+      Invoke-Staging "PATCH" "billing_checkout_sessions?company_id=eq.$S17Company&status=in.(created,open)" @{ status = "expired" } | Out-Null
       $row = Invoke-Staging "POST" "billing_checkout_sessions" @{ company_id = $CompanyD; created_by = $OwnerD; provider = "stripe"; environment = "test";
         plan_code = "esblu_complete"; billing_interval = "month"; provider_price_id = $PriceId; expires_at = (Get-Date).ToUniversalTime().AddHours(1).ToString("o") }
       $checkoutId = [string](@($row)[0].id)
@@ -1463,7 +1470,7 @@ function Invoke-S17 {
       $acc = Get-EsbluAccount $S17Ctx.sub
       if ($s.status -ne "active") { $bad += "Stripe predplatne $($s.status)" }
       if (-not $acc -or $acc.status -ne "active") { $bad += "Esblu ucet $($acc.status)" }
-      $ents = Get-ActiveSubEnts $CompanyD
+      $ents = Get-ActiveSubEnts $S17Company
       if ($ents -lt 1) { $bad += "firma bez ucinnych narokov po ciastocnej refundacii" }
       $d["credit_note"] = Get-ShortId $S17Ctx.cn1
       $d["credit_note_total_minor"] = [long]$doc.total_minor
@@ -1742,7 +1749,7 @@ function Invoke-S17 {
       $acc = Wait-Esblu $S17Ctx.sub { param($a) $a.status -in @("refunded", "canceled") } "ukoncenie po uplnej refundacii"
       $s = $null
       for ($i = 0; $i -lt 20; $i++) { $s = Invoke-StripeApi "GET" "/subscriptions/$($S17Ctx.sub)"; if ($s.status -eq "canceled") { break }; if (Test-Path $NoListenFile) { Invoke-S17Catchup | Out-Null }; Start-Sleep -Seconds 3 }
-      $ents = Get-ActiveSubEnts $CompanyD
+      $ents = Get-ActiveSubEnts $S17Company
       $problems = @()
       if (-not $doc) { $problems += "doklad dobropisu chyba" }
       elseif ([string]$doc.kind -ne "credit_note" -or [long]$doc.total_minor -ne $amount -or [string]$doc.related_invoice_id -ne $S17Ctx.inv3) { $problems += "doklad dobropisu nesedi (druh/suma/vazba)" }
@@ -1837,6 +1844,328 @@ function Invoke-S17 {
   if ($failed -or $S17Evidence["overall"] -ne "PASS") { exit 1 }
 }
 
+# ----------------------------------------------------------------------------- S18 (Esblu Komplet, 2026-11-27)
+# Jeden polo-automaticky krok: skutocny nakup cez aplikaciu (okno 1, kod 44c3b6f) firmou QA-STRIPE E
+# BEZ interneho tarifu a BEZ trialu (ekvivalent stavu po skonceni trialu - trial sa na stagingu neda posunut,
+# ESBLU_TRIAL_IMMUTABLE). Operator v prehliadaci: prijatie VOP 1.3, potvrdenie objednavky, Stripe Checkout
+# (testovacia karta 4242). Vsetko ostatne overuje skript: Stripe relacia (15,90 EUR/mes., metadata VOP),
+# spracovanie udalosti (dotahovanie /v1/events), company_plan_selection (provider), naroky Kompletu, uctovna
+# kopia + snapshot, archiv PDF, uplna refundacia dobropisom -> refunded, Stripe canceled, 0 narokov.
+# Upratanie (Restore-S17Staging) prebehne vzdy: staging billing spat na 'none', kurzor udalosti spat.
+$S18ExpectedTerms = "1.3"
+$S18EntitlementKeys = @("vehicles", "machines", "inventory", "invoicing", "ai_documents", "voice", "voice_minutes", "team_members", "storage_mb")
+
+function Test-S18StagingMigration {
+  # Migracia 20261130100000 na stagingu: poistka odmietne LIVE cenu esblu_modular (nic sa nezapise).
+  $k = Get-ServiceRole
+  $h = @{ apikey = $k; Authorization = "Bearer $k"; Prefer = "return=minimal" }
+  $body = @{ provider = "stripe"; environment = "live"; plan_code = "esblu_modular"; billing_interval = "month"; provider_price_id = "price_s18_probe_must_fail"; active = $true } | ConvertTo-Json -Compress
+  try {
+    $null = Invoke-RestMethod -Uri "$StagingUrl/rest/v1/billing_provider_prices" -Headers $h -Method POST -ContentType "application/json" -Body $body -DisableKeepAlive -TimeoutSec 30
+  } catch {
+    $t = Get-HttpErrorText $_
+    if ($t -match "ESBLU_BILLING_PLAN_NOT_LIVE_SELLABLE") { return [ordered]@{ ok = $true; detail = "migracia 20261130100000 pritomna (poistka LIVE ceny odmietla esblu_modular)" } }
+    return [ordered]@{ ok = $false; detail = "neocakavana odpoved sondy: $t" }
+  }
+  # Zapis prebehol = poistka chyba -> zmazat sondu a STOP.
+  Invoke-Staging "DELETE" "billing_provider_prices?provider_price_id=eq.price_s18_probe_must_fail" | Out-Null
+  return [ordered]@{ ok = $false; detail = "migracia 20261130100000 na stagingu CHYBA (LIVE cena esblu_modular bola prijata a zmazana)" }
+}
+
+function Invoke-S18 {
+  $S17Ctx.t0 = Get-UtcIso
+  $S17Ctx.evidenceFile = (Get-S17EvidenceFile) -replace "s17-evidence\.json$", "s18-evidence.json"
+  $script:S17Company = $CompanyE
+  $S17Evidence["test"] = "S18 - Esblu Komplet: VOP 1.3 + potvrdenie objednavky v aplikacii, Stripe Checkout 15,90 EUR/mes., platba, udalost, company_plan_selection (provider), naroky bez trialu a interneho grantu, doklad + archiv PDF, uplna refundacia"
+  $S17Evidence["started_at"] = $S17Ctx.t0
+  $S17Evidence["project"] = $Project
+  $S17Evidence["staging_ref"] = $StagingRef
+  $S17Evidence["stripe_price"] = Get-ShortId $PriceId
+  $S17Evidence["qa_company"] = "QA-STRIPE E ($($CompanyE.Substring(0, 8))...)"
+  $S17Evidence["expected_app"] = $S17ExpectedApp
+  $S17Evidence["overall"] = "RUNNING"
+  Say17 "Dokazy (bez tajomstiev): $($S17Ctx.evidenceFile)"
+  if (Test-Path $S17StateFile) {
+    $old = Get-Content $S17StateFile -Raw | ConvertFrom-Json
+    if (($old.enabled -and -not $old.restored) -or ($old.cursor_reset -and -not $old.cursor_restored) -or $old.subscription) {
+      Fail "Predchadzajuci beh S17/S18 neupratal staging - spusti najprv -Step s17-cleanup."
+    }
+  }
+  $st = [ordered]@{ started_at = $S17Ctx.t0; enabled = $false; restored = $false; prev_web_provider = $null; prev_prices = @(); clocks = @(); clock = $null; customer = $null; subscription = $null; invoice = $null; cursor_account = $null; prev_cursor = $null; cursor_reset = $false; cursor_restored = $false; company = "E" }
+  $S17Ctx.state = $st
+  Save-S17State $st
+  $failed = $false
+  try {
+    Invoke-S17Step "18.1" "Preflight: test mode, staging, kod = 44c3b6f, migracia 20261130100000, firma E bez interneho tarifu a bez narokov; zapnutie billingu stagingu" {
+      param($d)
+      $kind = "?"
+      if ($env:STRIPE_API_KEY -match "^rk_test_") { $kind = "rk_test" } elseif ($env:STRIPE_API_KEY -match "^sk_test_") { $kind = "sk_test" } elseif ($env:STRIPE_API_KEY -match "^rkcs_test_") { $kind = "rkcs_test" }
+      if ($kind -eq "?") { Fail "Stripe kluc nie je testovaci." }
+      $d["stripe_key_kind"] = $kind
+      if ($StagingUrl -notmatch $StagingRef -or $StagingUrl -match $ProdRef) { Fail "Supabase URL nie je staging $StagingRef." }
+      $S17Ctx.pinned = Get-S17PinnedVersion
+      $hi = Get-S17HeadInfo
+      $S17Evidence["git"] = $hi
+      $d["head"] = $hi.head
+      $d["origin_main"] = $hi.origin_main
+      $d["app_matches_44c3b6f"] = $hi.app_matches
+      Say17 "    HEAD $($hi.head) | origin/main $($hi.origin_main) | ocakavany main $S17ExpectedMain | aplikacny kod $S17ExpectedApp"
+      if (-not $hi.expected_app_present) { Fail "Commit $S17ExpectedApp lokalne chyba (git fetch origin)." }
+      if (-not $hi.candidate_ok) { Fail "Kandidat $($S17ExpectedApp.Substring(0, 7)) nie je potomkom main alebo meni subory mimo rozsahu: $($hi.candidate_foreign_files -join ', ')." }
+      $problems = @()
+      if (-not $hi.app_matches) { $problems += "aplikacny kod HEAD != $($S17ExpectedApp.Substring(0, 7)) ($(($hi.app_changed_sample + $hi.app_uncommitted_sample) -join ', '))" }
+      if ($hi.origin_main -ne $S17ExpectedMain) { $problems += "origin/main = $($hi.origin_main) (ocakavany $S17ExpectedMain - ziadny merge do main)" }
+      if (-not $hi.deps_match) { $problems += "node_modules != package-lock ($($hi.deps_mismatch -join ', ')) - npm ci" }
+      if (-not (Test-Path $HeadFile)) { $problems += "okno 1 nebezi (chyba $HeadFile)" }
+      else {
+        $w1 = Get-Content $HeadFile -Raw | ConvertFrom-Json
+        if ([string]$w1.head -ne $hi.head -or [string]$w1.repo -ne $RepoRoot) { $problems += "okno 1 bezi z ineho checkoutu/commitu" }
+      }
+      if ($problems.Count -gt 0) { Fail ("S18 odmieta bezat: " + ($problems -join "; ")) }
+      if (-not (Test-Path $CronFile)) { Fail "Okno 1 nebezi (chyba lokalny CRON_SECRET) - spusti okno 1: -Step start -NoListen." }
+      $d["delivery"] = $(if (Test-Path $NoListenFile) { "dotahovanie /v1/events (okno 1 -NoListen; ta ista pipeline ako webhook)" } else { "stripe listen" })
+      $mig = Test-S18StagingMigration
+      $d["staging_migration"] = $mig.detail
+      if (-not $mig.ok) { Fail "Staging: $($mig.detail)" }
+      $grants = @(Get-Rows "internal_operator_grants?company_id=eq.$CompanyE&select=id")
+      $sel = @(Get-Rows "company_plan_selection?company_id=eq.$CompanyE&select=source,plan_kind")
+      $co = @(Get-Rows "companies?id=eq.$CompanyE&select=trial_started_at,trial_ends_at")[0]
+      $acc0 = @(Get-Rows "subscription_accounts?company_id=eq.$CompanyE&select=status")
+      $ents0 = Get-ActiveSubEnts $CompanyE
+      $trialActive = $false
+      if ($co.trial_ends_at) { $trialActive = ((ConvertTo-UtcDate $co.trial_ends_at) -gt [DateTime]::UtcNow) }
+      $d["internal_operator_grants"] = $grants.Count
+      $d["plan_selection_before"] = $sel.Count
+      $d["trial_active"] = $trialActive
+      $d["active_entitlements_before"] = $ents0
+      $d["account_before"] = $(if ($acc0.Count) { [string]$acc0[0].status } else { "none" })
+      if ($grants.Count -ne 0) { Fail "Firma E ma interny tarif - test by bol skresleny." }
+      if ($sel.Count -ne 0) { Fail "Firma E uz ma company_plan_selection ($($sel[0].source)) - test by nedokazal opravu B1." }
+      if ($trialActive) { Fail "Firma E ma aktivny trial - test by nebol 'po triale'." }
+      if ($ents0 -ne 0) { Fail "Firma E ma pred nakupom $ents0 aktivnych narokov." }
+      if ($acc0.Count -and [string]$acc0[0].status -in @("active", "trialing", "past_due")) { Fail "Firma E uz ma aktivne predplatne ($($acc0[0].status))." }
+      Invoke-Staging "PATCH" "billing_checkout_sessions?company_id=eq.$CompanyE&status=in.(created,open)" @{ status = "expired" } | Out-Null
+      $en = Enable-S17Billing $S17Ctx.state
+      $d["staging_billing"] = $en
+      Say17 "    firma E: interny tarif 0, kompozicia 0, trial neaktivny, naroky 0; staging web_provider -> stripe, cena $($en.now_active_price)"
+    }
+
+    Invoke-S17Step "18.2" "Operator: VOP 1.3 + potvrdenie objednavky v aplikacii, Stripe Checkout testovacou kartou -> predplatne active" {
+      param($d)
+      $bytes = New-Object byte[] 18
+      [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+      $pw = "Qa-" + ([Convert]::ToBase64String($bytes) -replace "[+/=]", "x")
+      $k = Get-ServiceRole
+      $h = @{ apikey = $k; Authorization = "Bearer $k" }
+      $body = @{ password = $pw; ban_duration = "none"; email_confirm = $true } | ConvertTo-Json -Compress
+      $u = Invoke-RestMethod -Uri "$StagingUrl/auth/v1/admin/users/$OwnerE" -Headers $h -Method Put -ContentType "application/json" -Body $body
+      if ($u.email -ne $OwnerEEmail) { Fail "Admin API vratilo ineho pouzivatela." }
+      Set-Clipboard -Value $pw
+      $pw = $null
+      Say17 ""
+      Say17 "  >>> TERAZ V PREHLIADACI (okno 1 bezi na http://localhost:$Port):" "Yellow"
+      Say17 "   1. http://localhost:$Port/login  - e-mail $OwnerEEmail, heslo = Ctrl+V (je v schranke, nevypisuje sa)" "Yellow"
+      Say17 "   2. Ak sa zobrazi vyber firmy, zvol 'QA-STRIPE E'. Potom http://localhost:$Port/nastavenia/predplatne" "Yellow"
+      Say17 "   3. Prijmi VOP 1.3 (dve zaskrtavacie policka + tlacidlo), potom zaskrtni potvrdenie objednavky" "Yellow"
+      Say17 "   4. Esblu Komplet -> tlacidlo platby kartou. V Stripe skontroluj 15,90 EUR mesacne a zaplat:" "Yellow"
+      Say17 "      karta 4242 4242 4242 4242, platnost 12/34, CVC 123, meno a adresa lubovolne (Slovensko)" "Yellow"
+      Say17 "   5. Po navrate do Esblu nic dalsie nerob - skript caka max. 20 min a pokracuje sam." "Yellow"
+      Say17 ""
+      $since = [Uri]::EscapeDataString($S17Ctx.t0)
+      $deadline = (Get-Date).AddMinutes(20)
+      $intent = $null; $acc = $null; $lastNote = ""
+      do {
+        Start-Sleep -Seconds 10
+        Invoke-S17Catchup | Out-Null
+        $intents = @(Get-Rows "billing_checkout_sessions?company_id=eq.$CompanyE&created_at=gte.$since&order=created_at.desc&select=id,status,plan_code,billing_interval,provider_session_id,provider_price_id,created_by")
+        $intent = $(if ($intents.Count) { $intents[0] } else { $null })
+        $acc = @(Get-Rows "subscription_accounts?company_id=eq.$CompanyE&select=status,plan_code,billing_interval,provider_environment,provider_subscription_id,provider_customer_id,current_period_start,current_period_end")[0]
+        $terms = @(Get-Rows "company_dpa_acceptances?company_id=eq.$CompanyE&document_type=eq.terms&version=eq.$S18ExpectedTerms&select=id")
+        $note = "VOP $S18ExpectedTerms prijate: $($terms.Count -gt 0) | zamer: $(if ($intent) { $intent.status } else { '-' }) | ucet: $(if ($acc) { $acc.status } else { '-' })"
+        if ($note -ne $lastNote) { Say17 "    $(Get-Date -Format HH:mm:ss) $note"; $lastNote = $note }
+        if ($intent -and $intent.status -eq "completed" -and $acc -and $acc.status -eq "active" -and $acc.provider_environment -eq "test") { break }
+      } while ((Get-Date) -lt $deadline)
+      if (-not $intent) { Fail "Do 20 min nevznikol ziadny zamer checkoutu firmy E (nakup v aplikacii sa nespustil)." }
+      if ($intent.status -ne "completed" -or -not $acc -or $acc.status -ne "active") { Fail "Nakup sa do 20 min nedokoncil: zamer $($intent.status), ucet $(if ($acc) { $acc.status } else { '-' })." }
+      $terms = @(Get-Rows "company_dpa_acceptances?company_id=eq.$CompanyE&document_type=eq.terms&version=eq.$S18ExpectedTerms&order=accepted_at.desc&select=accepted_at,accepted_role,authority_confirmed,b2b_confirmed,document_content_hash,acceptance_method")
+      $bad = @()
+      if ($terms.Count -lt 1) { $bad += "chyba firemne prijatie VOP $S18ExpectedTerms" }
+      else {
+        $t = $terms[0]
+        if ([string]$t.accepted_role -ne "owner") { $bad += "VOP prijal $($t.accepted_role)" }
+        if (-not $t.authority_confirmed) { $bad += "authority_confirmed=false" }
+        if (-not $t.b2b_confirmed) { $bad += "b2b_confirmed=false" }
+        if ([string]$t.document_content_hash -ne "691d4455b831540c9ac5cb63cff155cab7ac38265f4f549fd7505eceae4a5111") { $bad += "hash VOP != 1.3" }
+        $d["terms_acceptance"] = [ordered]@{ version = $S18ExpectedTerms; at = [string]$t.accepted_at; role = [string]$t.accepted_role; authority = [bool]$t.authority_confirmed; b2b = [bool]$t.b2b_confirmed; method = [string]$t.acceptance_method }
+      }
+      if ([string]$intent.plan_code -ne "esblu_complete" -or [string]$intent.billing_interval -ne "month") { $bad += "zamer $($intent.plan_code)/$($intent.billing_interval)" }
+      if ([string]$intent.created_by -ne $OwnerE) { $bad += "zamer nevytvoril vlastnik E" }
+      if (-not $intent.provider_session_id) { $bad += "zamer bez Stripe relacie" }
+      if ([string]$acc.plan_code -ne "esblu_complete") { $bad += "ucet plan=$($acc.plan_code)" }
+      $st.subscription = [string]$acc.provider_subscription_id
+      $st.customer = [string]$acc.provider_customer_id
+      Save-S17State $st
+      $S17Ctx.sub = [string]$acc.provider_subscription_id
+      $S17Ctx.customer = [string]$acc.provider_customer_id
+      $S17Ctx.sessionId = [string]$intent.provider_session_id
+      $d["checkout_intent"] = [ordered]@{ id = Get-ShortId ([string]$intent.id); status = [string]$intent.status; plan = "$($intent.plan_code)/$($intent.billing_interval)" }
+      $d["esblu_account"] = [ordered]@{ status = [string]$acc.status; plan = [string]$acc.plan_code; environment = [string]$acc.provider_environment; subscription = Get-ShortId $S17Ctx.sub }
+      if ($bad.Count) { Fail ($bad -join "; ") }
+    }
+
+    Invoke-S17Step "18.3" "Stripe: Checkout relacia 15,90 EUR mesacne, metadata VOP 1.3, faktura zaplatena; udalosti spracovane" {
+      param($d)
+      $cs = Invoke-StripeApi "GET" "/checkout/sessions/$($S17Ctx.sessionId)" ([ordered]@{ "expand[]" = "line_items" })
+      $li = @($cs.line_items.data | ForEach-Object { $_ })[0]
+      $sub = Invoke-StripeApi "GET" "/subscriptions/$($S17Ctx.sub)" ([ordered]@{ "expand[]" = "latest_invoice" })
+      $inv = $sub.latest_invoice
+      $S17Ctx.inv = [string]$inv.id
+      $st.invoice = $S17Ctx.inv
+      Save-S17State $st
+      $line = @($inv.lines.data | ForEach-Object { $_ }) | Where-Object { $_.period } | Select-Object -First 1
+      $S17Ctx.period = @{ start = [long]$line.period.start; end = [long]$line.period.end }
+      $bad = @()
+      if ($cs.mode -ne "subscription") { $bad += "mode=$($cs.mode)" }
+      if ($cs.status -ne "complete" -or $cs.payment_status -ne "paid") { $bad += "relacia $($cs.status)/$($cs.payment_status)" }
+      if ([long]$cs.amount_total -ne 1590 -or [string]$cs.currency -ne "eur") { $bad += "suma relacie $($cs.amount_total) $($cs.currency)" }
+      if ([string]$cs.metadata.esblu_terms_version -ne $S18ExpectedTerms) { $bad += "relacia metadata esblu_terms_version=$($cs.metadata.esblu_terms_version)" }
+      if (-not $li -or [long]$li.price.unit_amount -ne 1590 -or [string]$li.price.recurring.interval -ne "month" -or [long]$li.quantity -ne 1) { $bad += "polozka nie je 15,90 EUR/mesiac x1" }
+      if ([string]$sub.metadata.esblu_terms_version -ne $S18ExpectedTerms) { $bad += "predplatne metadata esblu_terms_version=$($sub.metadata.esblu_terms_version)" }
+      if ($sub.status -ne "active") { $bad += "Stripe predplatne $($sub.status)" }
+      if (-not $inv -or $inv.status -ne "paid" -or [long]$inv.amount_paid -ne 1590) { $bad += "faktura $($inv.status) $($inv.amount_paid)" }
+      $ePaid = Find-StripeEvent "invoice.paid" $S17Ctx.inv
+      $rPaid = Wait-BillingEvent $ePaid.id 120
+      $eCs = Find-StripeEvent "checkout.session.completed" $S17Ctx.sessionId
+      $rCs = Wait-BillingEvent $eCs.id 120
+      if (-not $rPaid -or $rPaid.status -ne "processed") { $bad += "invoice.paid v Esblu: $(if ($rPaid) { $rPaid.status } else { 'chyba' })" }
+      if (-not $rCs -or $rCs.status -notin @("processed", "ignored")) { $bad += "checkout.session.completed v Esblu: $(if ($rCs) { $rCs.status } else { 'chyba' })" }
+      $d["checkout_session"] = [ordered]@{ id = Get-ShortId $S17Ctx.sessionId; status = [string]$cs.status; payment_status = [string]$cs.payment_status; amount_total = [long]$cs.amount_total; currency = [string]$cs.currency; terms_version = [string]$cs.metadata.esblu_terms_version }
+      $d["line_item"] = $(if ($li) { "$([long]$li.price.unit_amount) $($li.price.currency) / $($li.price.recurring.interval) x$($li.quantity)" } else { "-" })
+      $d["subscription"] = [ordered]@{ id = Get-ShortId $S17Ctx.sub; status = [string]$sub.status; terms_version = [string]$sub.metadata.esblu_terms_version }
+      $d["invoice"] = [ordered]@{ id = Get-ShortId $S17Ctx.inv; status = [string]$inv.status; amount_paid = [long]$inv.amount_paid; number = [string]$inv.number }
+      $d["events"] = [ordered]@{ invoice_paid = $(if ($rPaid) { $rPaid.status } else { "-" }); checkout_session_completed = $(if ($rCs) { $rCs.status } else { "-" }) }
+      Say17 "    Stripe: relacia $(Get-ShortId $S17Ctx.sessionId) $($cs.payment_status) $(Format-Eur ([long]$cs.amount_total) $cs.currency), VOP $($cs.metadata.esblu_terms_version); faktura $($inv.number) zaplatena; udalosti $($d.events.invoice_paid)/$($d.events.checkout_session_completed)"
+      if ($bad.Count) { Fail ($bad -join "; ") }
+    }
+
+    Invoke-S17Step "18.4" "company_plan_selection (complete/primary/provider) + platene naroky Kompletu bez trialu a bez interneho tarifu" {
+      param($d)
+      $sel = @(Get-Rows "company_plan_selection?company_id=eq.$CompanyE&select=plan_kind,price_tier,source,modules")
+      $now = [DateTime]::UtcNow.ToString("o")
+      $ents = @(Get-Rows "company_entitlements?company_id=eq.$CompanyE&status=eq.active&or=(valid_until.is.null,valid_until.gt.$now)&select=entitlement_key,source,limit_value,valid_until")
+      $grants = @(Get-Rows "internal_operator_grants?company_id=eq.$CompanyE&select=id")
+      $keys = @($ents | Where-Object { $_.source -eq "subscription" } | ForEach-Object { [string]$_.entitlement_key })
+      $otherSources = @($ents | Where-Object { $_.source -ne "subscription" } | ForEach-Object { "$($_.entitlement_key):$($_.source)" })
+      $missing = @($S18EntitlementKeys | Where-Object { $keys -notcontains $_ })
+      $bad = @()
+      if ($sel.Count -ne 1) { $bad += "company_plan_selection riadkov: $($sel.Count)" }
+      elseif ([string]$sel[0].plan_kind -ne "complete" -or [string]$sel[0].price_tier -ne "primary" -or [string]$sel[0].source -ne "provider") { $bad += "kompozicia $($sel[0].plan_kind)/$($sel[0].price_tier)/$($sel[0].source)" }
+      if ($missing.Count) { $bad += "chybajuce naroky: $($missing -join ', ')" }
+      if ($keys -contains "einvoice") { $bad += "eFaktura nesmie byt sucastou predaja" }
+      if ($otherSources.Count) { $bad += "naroky z ineho zdroja: $($otherSources -join ', ')" }
+      if ($grants.Count) { $bad += "interny tarif" }
+      $docs = @($ents | Where-Object { $_.entitlement_key -eq "ai_documents" })[0]
+      if (-not $docs -or [long]$docs.limit_value -ne 40) { $bad += "ai_documents limit $($docs.limit_value) (ocakavane 40)" }
+      $d["plan_selection"] = $(if ($sel.Count) { "$($sel[0].plan_kind)/$($sel[0].price_tier)/$($sel[0].source)" } else { "-" })
+      $d["subscription_entitlements"] = @($keys | Sort-Object)
+      $d["other_sources"] = $otherSources
+      $d["internal_operator_grants"] = $grants.Count
+      Say17 "    kompozicia $($d.plan_selection); naroky ($($keys.Count)): $(($keys | Sort-Object) -join ', ')"
+      if ($bad.Count) { Fail ($bad -join "; ") }
+    }
+
+    Invoke-S17Step "18.5" "Uctovna kopia faktury + snapshot odberatela (firma E)" {
+      param($d)
+      $doc = Wait-Doc $S17Ctx.inv { param($r) $r.status -eq "paid" -and $r.company_id } 90
+      if (-not $doc) { Fail "Doklad $(Get-ShortId $S17Ctx.inv) v billing_invoice_documents chyba alebo nie je paid s firmou." }
+      $bad = @()
+      if ($doc.kind -ne "invoice") { $bad += "kind=$($doc.kind)" }
+      if ([string]$doc.company_id -ne $CompanyE) { $bad += "company_id iny ako QA-STRIPE E" }
+      if ([string]$doc.provider_subscription_id -ne $S17Ctx.sub) { $bad += "provider_subscription_id" }
+      if ([string]$doc.currency -ne "EUR") { $bad += "currency=$($doc.currency)" }
+      if ([long]$doc.total_minor -ne 1590 -or [long]$doc.amount_paid_minor -ne 1590) { $bad += "suma $($doc.total_minor)/$($doc.amount_paid_minor)" }
+      $ps = ConvertTo-UtcDate $doc.service_period_start; $pe = ConvertTo-UtcDate $doc.service_period_end
+      if ($ps -ne [DateTimeOffset]::FromUnixTimeSeconds($S17Ctx.period.start).UtcDateTime -or $pe -ne [DateTimeOffset]::FromUnixTimeSeconds($S17Ctx.period.end).UtcDateTime) { $bad += "obdobie sluzby" }
+      if (-not $doc.pdf_url) { $bad += "pdf_url chyba" }
+      if ([string]$doc.customer_company_id -ne $CompanyE) { $bad += "snapshot customer_company_id" }
+      if (-not ([string]$doc.customer_legal_name).Trim()) { $bad += "snapshot customer_legal_name" }
+      if (-not $doc.customer_snapshot_at) { $bad += "snapshot customer_snapshot_at" }
+      $d["document"] = Get-ShortId $S17Ctx.inv
+      $d["status"] = [string]$doc.status
+      $d["total_minor"] = [long]$doc.total_minor
+      $d["service_period"] = "$(Utc $S17Ctx.period.start) -> $(Utc $S17Ctx.period.end)"
+      $d["snapshot_source"] = [string]$doc.customer_snapshot_source
+      Say17 "    doklad $(Get-ShortId $S17Ctx.inv): $($doc.kind)/$($doc.status), firma E, $(Format-Eur ([long]$doc.total_minor) 'EUR'), snapshot $($doc.customer_snapshot_source)"
+      if ($bad.Count) { Fail ("Uctovna kopia nesedi: " + ($bad -join "; ")) }
+    }
+
+    Invoke-S17Step "18.6" "Archiv PDF faktury (lokalny cron billing-documents) + SHA-256 v staging storage" {
+      param($d)
+      $doc = $null
+      for ($i = 0; $i -lt 4; $i++) {
+        $r = Invoke-LocalCron "billing-documents"
+        if (-not $r.configured) { Fail "Cron billing-documents nie je nakonfigurovany (okno 1)." }
+        $doc = @(Get-DocRows $S17Ctx.inv)[0]
+        if ($doc.pdf_sha256 -or $doc.pdf_archive_error) { break }
+        Start-Sleep -Seconds 5
+      }
+      if (-not $doc.pdf_sha256) { Fail "PDF faktury nebolo archivovane (chyba=$($doc.pdf_archive_error))." }
+      $dl = Get-S17StorageSha ([string]$doc.pdf_storage_path)
+      $d["pdf_storage_path"] = [string]$doc.pdf_storage_path
+      $d["pdf_bytes"] = $dl.bytes
+      $d["pdf_sha256_match"] = ($dl.sha256 -eq [string]$doc.pdf_sha256)
+      Say17 "    $($doc.pdf_storage_path): $($dl.bytes) B, PDF=$($dl.is_pdf), SHA-256 zhoda=$($d.pdf_sha256_match)"
+      if (-not $dl.is_pdf) { Fail "Objekt v storage nie je PDF." }
+      if ($dl.sha256 -ne [string]$doc.pdf_sha256) { Fail "SHA-256 objektu v storage != pdf_sha256 v DB." }
+    }
+
+    Invoke-S17Step "18.7" "Uplna refundacia dobropisom -> doklad dobropisu, Esblu refunded, Stripe canceled, 0 narokov, kompozicia ostava" {
+      param($d)
+      $amount = 1590
+      $cn = Invoke-StripeApi "POST" "/credit_notes" ([ordered]@{ invoice = $S17Ctx.inv; amount = $amount; refund_amount = $amount; reason = "order_change"; memo = "Esblu S18 QA uplna refundacia" }) "s18-cn-$($S17Ctx.sub)"
+      if ($cn.status -ne "issued" -or [long]$cn.total -ne $amount) { Fail "Stripe dobropis: status=$($cn.status) total=$($cn.total)." }
+      $ecn = Find-StripeEvent "credit_note.created" $cn.id
+      $rcn = Wait-BillingEvent $ecn.id 120
+      if (-not $rcn -or $rcn.status -notin @("processed", "ignored")) { Fail "credit_note.created status=$($rcn.status)." }
+      $doc = Wait-Doc ([string]$cn.id) { param($r) $r.related_invoice_id -and $r.company_id } 90
+      $acc = Wait-Esblu $S17Ctx.sub { param($a) $a.status -in @("refunded", "canceled") } "ukoncenie po uplnej refundacii"
+      $s = $null
+      for ($i = 0; $i -lt 20; $i++) { $s = Invoke-StripeApi "GET" "/subscriptions/$($S17Ctx.sub)"; if ($s.status -eq "canceled") { break }; Invoke-S17Catchup | Out-Null; Start-Sleep -Seconds 3 }
+      $ents = Get-ActiveSubEnts $CompanyE
+      $sel = @(Get-Rows "company_plan_selection?company_id=eq.$CompanyE&select=source")
+      $problems = @()
+      if (-not $doc) { $problems += "doklad dobropisu chyba" }
+      elseif ([string]$doc.kind -ne "credit_note" -or [long]$doc.total_minor -ne $amount -or [string]$doc.related_invoice_id -ne $S17Ctx.inv) { $problems += "doklad dobropisu nesedi (druh/suma/vazba)" }
+      if ($acc.status -ne "refunded") { $problems += "Esblu stav $($acc.status) (ocakavane refunded)" }
+      if ($s.status -ne "canceled") { $problems += "Stripe predplatne $($s.status) (ocakavane canceled)" }
+      if ($ents -ne 0) { $problems += "firma E ma $ents ucinnych narokov po refundacii" }
+      if ($sel.Count -ne 1) { $problems += "kompozicia zmizla (ocakavane: ostava, nic sa nemaze)" }
+      $d["credit_note"] = Get-ShortId ([string]$cn.id)
+      $d["refunded_minor"] = $amount
+      $d["esblu_status"] = [string]$acc.status
+      $d["stripe_subscription_status"] = [string]$s.status
+      $d["active_entitlements"] = $ents
+      Say17 "    dobropis $(Get-ShortId ([string]$cn.id)) $(Format-Eur $amount), Esblu $($acc.status), Stripe $($s.status), naroky $ents"
+      if ($problems.Count) { Fail ($problems -join "; ") }
+    }
+  } catch {
+    $failed = $true
+    Say17 "S18 ZASTAVENY: $($_.Exception.Message)" "Red"
+  } finally {
+    Say17 ""
+    Say17 "=== S18 upratanie (staging billing spat, predplatne ukoncene, kurzor spat) ==="
+    $cl = Restore-S17Staging $st
+    $S17Evidence["cleanup"] = $cl
+    $S17Evidence["finished_at"] = Get-UtcIso
+    $S17Evidence["overall"] = $(if ($failed -or $cl.Contains("errors")) { "FAIL" } else { "PASS" })
+    Save-S17Evidence
+    if (-not $cl.Contains("errors")) { Remove-Item $S17StateFile -Force -ErrorAction SilentlyContinue }
+    $color = $(if ($S17Evidence["overall"] -eq "PASS") { "Green" } else { "Red" })
+    Say17 "S18 VYSLEDOK: $($S17Evidence['overall'])  (dokazy: $($S17Ctx.evidenceFile))" $color
+  }
+  if ($S17Evidence["overall"] -ne "PASS") { exit 1 }
+}
+
 function Invoke-S17Cleanup {
   if (-not (Test-Path $S17StateFile)) { Say17 "Ziadny stav S17 ($S17StateFile) - nie je co upratat."; return }
   $st = Get-Content $S17StateFile -Raw | ConvertFrom-Json
@@ -1877,18 +2206,18 @@ function Assert-HarnessCheckout {
   $r = Invoke-Git @("rev-parse", "--is-inside-work-tree")
   if ($r.code -ne 0 -or $r.out -ne "true") { Fail "Priecinok $RepoRoot nie je funkcny git checkout (git: $($r.out)). Oprava worktree: docs par. 8.14i." }
   $h = Invoke-Git @("rev-parse", "HEAD")
-  $t = Invoke-Git @("rev-parse", "--verify", "--quiet", "refs/heads/ops/s17-sandbox")
+  $t = Invoke-Git @("rev-parse", "--verify", "--quiet", "refs/heads/ops/s18-komplet")
   if ($h.code -ne 0) { Fail "git rev-parse HEAD zlyhal ($($h.out))." }
-  if ($t.code -ne 0) { Fail "Vetva ops/s17-sandbox v repozitari chyba." }
+  if ($t.code -ne 0) { Fail "Vetva ops/s18-komplet v repozitari chyba." }
   if ($h.out -ne $t.out) {
-    if (-not $Force) { Fail "Skript bezi z commitu $($h.out.Substring(0, 7)), vetva ops/s17-sandbox je $($t.out.Substring(0, 7)) - najprv: git checkout --detach ops/s17-sandbox (a over vysledok)." }
+    if (-not $Force) { Fail "Skript bezi z commitu $($h.out.Substring(0, 7)), vetva ops/s18-komplet je $($t.out.Substring(0, 7)) - najprv: git checkout --detach ops/s18-komplet (a over vysledok)." }
     Say "POZOR -Force: skript bezi z $($h.out.Substring(0, 7)) namiesto ops/s17-sandbox $($t.out.Substring(0, 7))."
   }
   return $h.out
 }
-if (@("start", "s17-preflight", "s17-auto", "s17", "s17-cleanup") -contains $Step) {
+if (@("start", "s17-preflight", "s17-auto", "s17", "s17-cleanup", "s18") -contains $Step) {
   $HarnessHead = Assert-HarnessCheckout
-  Say "Harness: commit $($HarnessHead.Substring(0, 7)) = ops/s17-sandbox (git OK)"
+  Say "Harness: commit $($HarnessHead.Substring(0, 7)) = ops/s18-komplet (git OK)"
 }
 
 if ($Step -eq "mark-exposed") {
@@ -2583,6 +2912,7 @@ if ($Step -ne "start") {
       Say "OK: S13 na skutocnom Stripe - predcasny koniec bez 48 h, zmeny dorucene iba dotahovanim."
     }
     "s17" { Invoke-S17 }
+    "s18" { Invoke-S18 }
     "s17-cleanup" { Invoke-S17Cleanup }
     "status" {
       $subId = if ($Subscription) { $Subscription } elseif (Test-Path $ClockFile) { (Get-ClockState).subscription } else { "" }

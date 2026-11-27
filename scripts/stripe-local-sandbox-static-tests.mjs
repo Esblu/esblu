@@ -136,7 +136,7 @@ for (const [re, name] of ps7) {
   check("brana: new-sandbox je vypnuty pred akymkolvek zapisom", /if \(\$Step -eq "new-sandbox"\) \{\s*\n\s*Write-Host "CHYBA: zakladanie dalsich Stripe sandboxov je vypnute/.test(code) && gateStart > 0);
   const allow = code.match(/\$okQa2 = \$NoListenOnly -and \(\(@\(([^)]*)\) -contains \$Step\) -or \(\$Step -eq "start" -and \$NoListen\)\)/);
   const allowed = allow ? allow[1].split(",").map((s) => s.trim().replace(/"/g, "")).sort().join(",") : "";
-  check("brana: qa2 povolene presne s17-preflight/s17-auto/s17/s17-cleanup/status/mark-exposed + start -NoListen", allowed === "mark-exposed,s17,s17-auto,s17-cleanup,s17-preflight,status", allowed);
+  check("brana: qa2 povolene presne s17-preflight/s17-auto/s17/s17-cleanup/s18/status/mark-exposed + start -NoListen", allowed === "mark-exposed,s17,s17-auto,s17-cleanup,s17-preflight,s18,status", allowed);
   check("s17-auto: qa2 spusta okno 1 s -NoListen", /if \(\$NoListen -or \$NoListenOnly\) \{ \$w1Args \+= "-NoListen"/.test(code));
   check("s17-auto: bez automatickeho noveho sandboxu", /if \(-not \$PriceId\) \{\s*\n\s*Fail "Profil '\$Project' nema cenu/.test(code));
   check("start -NoListen: whsec_ uctu sa necita (nahodne lokalne tajomstvo)", /if \(\$NoListen\) \{[\s\S]{0,600}\$WhSec = "whsec_" \+/.test(code));
@@ -147,7 +147,7 @@ for (const [re, name] of ps7) {
   check("git: Assert-HarnessCheckout existuje", /function Assert-HarnessCheckout/.test(code));
   const call = code.match(/if \(@\(([^)]*)\) -contains \$Step\) \{\s*\n\s*\$HarnessHead = Assert-HarnessCheckout/);
   const steps = call ? call[1].replace(/"/g, "").split(",").map((s) => s.trim()).sort().join(",") : "";
-  check("git: kontrola pre start/s17-preflight/s17-auto/s17/s17-cleanup", steps === "s17,s17-auto,s17-cleanup,s17-preflight,start", steps);
+  check("git: kontrola pre start/s17-preflight/s17-auto/s17/s17-cleanup/s18", steps === "s17,s17-auto,s17-cleanup,s17-preflight,s18,start", steps);
   const callLine = lineOf(/\$HarnessHead = Assert-HarnessCheckout/);
   const firstDispatch = lineOf(/^if \(\$Step -eq "(mark-exposed|s17-auto|map-price)"/);
   check("git: kontrola pred prvym dispatchom krokov", callLine > 0 && callLine < firstDispatch, `L${callLine + 1} vs L${firstDispatch + 1}`);
@@ -239,7 +239,7 @@ for (const [re, name] of ps7) {
 {
   const m = code.match(/^\$S17ExpectedMain = "([^"]*)"\s*$/m);
   check("pin S17ExpectedMain = plne 40-znakove SHA (ziadny rev-parse/origin/main/vetva)", !!m && /^[0-9a-f]{40}$/.test(m[1]), m ? m[1] : "chyba");
-  check("pin = 6506e11 (merge PR #2, bezpecnostne aktualizacie)", !!m && m[1] === "6506e11af70725f89f7cda3253fa4e4e60b883c5");
+  check("pin = c11ea7e (produkcia 2026-11-27)", !!m && m[1] === "c11ea7e4c13e98b41af074175eff26f43ef67047");
   check("pin sa neprebera dynamicky z origin/main", !/\$S17ExpectedMain\s*=\s*(?=[^\s"])/.test(code) && (code.match(/\$S17ExpectedMain\s*=/g) || []).length === 1);
   check("krok 1: origin/main == pin, aplikacny kod == pin, commit lokalne, okno 1 z rovnakeho HEAD, zavislosti", /if \(\$hi\.origin_main -ne \$S17ExpectedMain\) \{ \$headProblems \+= "origin\/main/.test(code) && /if \(-not \$hi\.app_matches\) \{ \$headProblems/.test(code) && /if \(-not \$hi\.expected_main_present\)/.test(code) && /\[string\]\$w1\.head -ne \$hi\.head/.test(code) && /if \(-not \$hi\.deps_match\) \{ \$headProblems/.test(code));
   check("app_matches zahrna necommitnute zmeny aplikacnych suborov", /app_matches = \(\$expectedOk -and \$appOk -and \$appChanged\.Count -eq 0 -and \$appDirty\.Count -eq 0\)/.test(code) && /"status", "--porcelain"/.test(code));
@@ -254,12 +254,12 @@ for (const [re, name] of ps7) {
 // --- 16) Kandidat opravy S17-4 (2026-11-22): S17 testuje opravnu vetvu BEZ merge do main; neobiditelne kontroly
 {
   const m = code.match(/^\$S17ExpectedApp = "([^"]*)"\s*$/m);
-  check("kandidat S17ExpectedApp = plne SHA d785483 (fix/billing-pdf-archive-s3, potomok 8d736db)", !!m && m[1] === "d78548355e7c27b548d2fa6c2725db615dc1a830");
+  check("kandidat S17ExpectedApp = plne SHA 44c3b6f (fix/billing-komplet-provider-selection)", !!m && m[1] === "44c3b6f5bada10f4ff020a3d48eb810a289495d7");
   check("kandidat sa neprebera dynamicky (jedno priradenie, literal)", (code.match(/\$S17ExpectedApp\s*=/g) || []).length === 1);
-  check("uzavrety zoznam suborov kandidata = presne 8 suborov opravy S17-4 + S17-5", /\$S17CandidateFiles = @\("lib\/billing\/document-archive\.ts", "lib\/billing\/ops-alerts\.ts", "lib\/billing\/pipeline\.ts", "scripts\/billing-ops-pglite-tests\.ts", "scripts\/subscriptions-lifecycle-tests\.ts", "supabase\/grants\/public-data-api-grants\.json", "supabase\/migrations\/20261124100000_billing_document_company_link\.sql", "supabase\/rollback\/20261124100000_billing_document_company_link_rollback\.sql"\)/.test(code));
+  check("uzavrety zoznam suborov kandidata = literal (19 suborov S18), presna zhoda s git diff overena v bode 18", /^\$S17CandidateFiles = @\("app\/api\/billing\/checkout\/route\.ts",/m.test(code));
   check("aplikacny kod HEAD porovnany s kandidatom (nie s main)", /"diff", "--name-only", \$S17ExpectedApp, "HEAD"/.test(code));
   check("kandidat musi byt potomkom pinu main", /"merge-base", "--is-ancestor", \$S17ExpectedMain, \$S17ExpectedApp/.test(code));
-  check("origin/main musi stale byt pin 6506e11 (ziadny merge do main)", /if \(\$hi\.origin_main -ne \$S17ExpectedMain\) \{ \$headProblems/.test(code));
+  check("origin/main musi stale byt pin c11ea7e (ziadny merge do main)", /if \(\$hi\.origin_main -ne \$S17ExpectedMain\) \{ \$headProblems/.test(code));
   const s1 = code.indexOf('Invoke-S17Step "1"');
   const seg = code.slice(s1, code.indexOf('Invoke-S17Step "2"'));
   const forceAt = seg.indexOf("if (-not $Force)");
@@ -288,9 +288,21 @@ for (const [re, name] of ps7) {
   const list = m ? [...m[1].matchAll(/"([^"]+)"/g)].map((x) => x[1]).sort() : [];
   const { execFileSync } = await import("node:child_process");
   let actual = [];
-  try { actual = execFileSync("git", ["diff", "--name-only", "6506e11af70725f89f7cda3253fa4e4e60b883c5", "d78548355e7c27b548d2fa6c2725db615dc1a830"], { encoding: "utf8" }).split("\n").filter(Boolean).sort(); } catch { actual = ["git-nedostupny"]; }
-  check("allowlist kandidata = git diff 6506e11..d785483 (8 suborov, bez navyse)", JSON.stringify(list) === JSON.stringify(actual) && list.length === 8, JSON.stringify(actual));
-  check("pin main ostava 6506e11 (bez merge do main)", /^\$S17ExpectedMain = "6506e11af70725f89f7cda3253fa4e4e60b883c5"\s*$/m.test(code));
+  try { actual = execFileSync("git", ["diff", "--name-only", "c11ea7e4c13e98b41af074175eff26f43ef67047", "44c3b6f5bada10f4ff020a3d48eb810a289495d7"], { encoding: "utf8" }).split("\n").filter(Boolean).sort(); } catch { actual = ["git-nedostupny"]; }
+  check("allowlist kandidata = git diff c11ea7e..44c3b6f (19 suborov, bez navyse)", JSON.stringify(list) === JSON.stringify(actual) && list.length === 19, JSON.stringify(actual));
+  check("pin main ostava c11ea7e (bez merge do main)", /^\$S17ExpectedMain = "c11ea7e4c13e98b41af074175eff26f43ef67047"\s*$/m.test(code));
+}
+
+// --- 19) S18 (2026-11-27): nakup Kompletu cez aplikaciu, firma E, upratanie vzdy, ziadny LIVE
+{
+  check("S18: krok s18 v ValidateSet a v prepinaci krokov", /"s17-preflight", "s18"\)\]/.test(code) && /"s18" \{ Invoke-S18 \}/.test(code));
+  check("S18: firma E bez interneho tarifu, bez kompozicie, bez trialu a bez narokov (inak STOP)", /Firma E ma interny tarif/.test(code) && /Firma E uz ma company_plan_selection/.test(code) && /Firma E ma aktivny trial/.test(code) && /Firma E ma pred nakupom/.test(code));
+  check("S18: sonda migracie 20261130100000 (LIVE cena esblu_modular odmietnuta)", /ESBLU_BILLING_PLAN_NOT_LIVE_SELLABLE/.test(code) && /environment = "live"; plan_code = "esblu_modular"/.test(code));
+  check("S18: overi VOP 1.3 (hash), zamer vlastnika, 1590 EUR mesacne, metadata esblu_terms_version", /691d4455b831540c9ac5cb63cff155cab7ac38265f4f549fd7505eceae4a5111/.test(code) && /metadata\.esblu_terms_version -ne \$S18ExpectedTerms/.test(code) && /unit_amount -ne 1590/.test(code));
+  check("S18: company_plan_selection complete/primary/provider a naroky iba zo subscription", /plan_kind -ne "complete" -or \[string\]\$sel\[0\]\.price_tier -ne "primary" -or \[string\]\$sel\[0\]\.source -ne "provider"/.test(code) && /naroky z ineho zdroja/.test(code));
+  check("S18: upratanie Restore-S17Staging vo finally (pre firmu E)", /\} finally \{[\s\S]{0,200}\$cl = Restore-S17Staging \$st/.test(code) && /\$script:S17Company = \$CompanyE/.test(code) && /Get-ActiveSubEnts \$S17Company/.test(code));
+  check("S18: ziadny LIVE kluc ani produkcia", !/sk_live_[A-Za-z0-9]{6}/.test(code) && /if \(\$StagingUrl -notmatch \$StagingRef -or \$StagingUrl -match \$ProdRef\)/.test(code));
+  check("S18: heslo QA iba do schranky (nevypisuje sa)", /Set-Clipboard -Value \$pw\s*\n\s*\$pw = \$null/.test(code));
 }
 
 console.log(`\n${passed} PASS, ${failed} FAIL`);
