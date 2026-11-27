@@ -174,6 +174,8 @@ export type CheckoutRequest = {
    * zanikne spolu so zámerom a opakovanie s tým istým Idempotency-Key má zhodné parametre.
    */
   expiresAt?: string | null;
+  /** Verzia VOP prijatá firmou pri objednávke (metadáta relácie a predplatného). */
+  termsVersion?: string | null;
 };
 
 /** Výsledok expirácie hosted checkout relácie u providera. */

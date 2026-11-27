@@ -1,7 +1,7 @@
 "use client";
 
 // =============================================================================
-// Nastavenia → Predplatné (STAGING). JEDNA obrazovka pre web, Android aj iOS:
+// Nastavenia → Predplatné. JEDNA obrazovka pre web, Android aj iOS:
 //   Predplatné → plán → mesačne/ročne → Kúpiť / Zmeniť plán → platobný flow
 //   → serverové potvrdenie → aktívne všade.
 //
@@ -25,6 +25,8 @@ import { formatDate } from "@/lib/i18n/format";
 import { confirmAction } from "@/app/components/ui/AppDialog";
 import { invalidateCompanyEntitlements } from "@/hooks/use-company-entitlements";
 import type { NativeBillingBridge } from "@/lib/billing/native-bridge";
+import { acceptCompanyTerms, getAcceptCompanyTermsErrorMessage, getMyCompanyTermsStatus, type CompanyTermsStatus } from "@/lib/company-dpa";
+import { COMPLETE_PRICE_CENTS, formatEurCents } from "@/lib/pricing";
 import {
   CHECKOUT_POLL_INTERVAL_MS,
   CHECKOUT_POLL_MAX_ATTEMPTS,
@@ -54,6 +56,9 @@ const ERROR_KEYS: Record<string, string> = {
   ESBLU_BILLING_ACTIVE_ON_OTHER_PROVIDER: "subscription.errors.otherProvider",
   ESBLU_BILLING_RATE_LIMITED: "subscription.errors.rateLimited",
   ESBLU_BILLING_CHECKOUT_IN_PROGRESS: "subscription.errors.checkoutInProgress",
+  ESBLU_BILLING_PLAN_NOT_PURCHASABLE: "subscription.errors.planNotPurchasable",
+  ESBLU_BILLING_ORDER_CONSENT_REQUIRED: "subscription.errors.orderConsentRequired",
+  ESBLU_BILLING_TERMS_REQUIRED: "subscription.errors.termsRequired",
 };
 
 const BANNER_KEYS: Record<Exclude<Banner, null>, string> = {
@@ -109,6 +114,12 @@ export default function SubscriptionPage() {
   const [view, setView] = useState<SubscriptionView | null>(null);
   const [options, setOptions] = useState<PurchaseOptions | null>(null);
   const [interval, setInterval_] = useState<"month" | "year">("month");
+  // VOP 1.3 čl. 10.4: objednávka s povinnosťou platby — prijaté aktuálne VOP firmy + výslovné potvrdenie.
+  const [termsStatus, setTermsStatus] = useState<CompanyTermsStatus | null>(null);
+  const [orderConsent, setOrderConsent] = useState(false);
+  const [termsB2b, setTermsB2b] = useState(false);
+  const [termsAuthority, setTermsAuthority] = useState(false);
+  const [termsError, setTermsError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [banner, setBanner] = useState<Banner>(null);
@@ -247,6 +258,36 @@ export default function SubscriptionPage() {
     };
   }, [platform, loadSubscription, loadOptions, waitForCheckout]);
 
+  const canManage = view?.canManage === true;
+  useEffect(() => {
+    if (!canManage) return;
+    let alive = true;
+    void getMyCompanyTermsStatus().then((status) => {
+      if (alive) setTermsStatus(status);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [canManage]);
+
+  async function acceptCurrentTerms() {
+    if (!termsStatus || !termsB2b || !termsAuthority || inFlightRef.current) return;
+    inFlightRef.current = true;
+    setBusy(true);
+    setTermsError(null);
+    try {
+      const result = await acceptCompanyTerms(termsStatus.current_terms_version, termsB2b, termsAuthority);
+      if (!result.ok) {
+        setTermsError(getAcceptCompanyTermsErrorMessage(result.error, t));
+        return;
+      }
+      setTermsStatus({ ...termsStatus, has_current_acceptance: true, required_now: false });
+    } finally {
+      inFlightRef.current = false;
+      setBusy(false);
+    }
+  }
+
   async function post<T = Record<string, unknown>>(path: string, body: Record<string, unknown>): Promise<(T & { success?: boolean; code?: string }) | null> {
     const headers = await authHeaders();
     if (!headers) {
@@ -265,7 +306,10 @@ export default function SubscriptionPage() {
   type Intent = { kind: "redirect" | "store"; checkoutId: string; url?: string; productId?: string; basePlanId?: string | null; accountToken?: string; replacesSubscriptionId?: string | null };
 
   const intentFor = (planCode: string, method: string, mode: "new" | "change", storeToken?: string | null) =>
-    post<Intent>("/api/billing/purchase-intent", { planCode, interval, platform, method, storefront: storefrontRef.current, mode, storeToken: storeToken ?? null });
+    post<Intent>("/api/billing/purchase-intent", {
+      planCode, interval, platform, method, storefront: storefrontRef.current, mode, storeToken: storeToken ?? null,
+      orderConsent, termsVersion: termsStatus?.current_terms_version ?? null,
+    });
 
   /** Store nákup potvrdí server u obchodu; potom čakáme na kanonický stav. */
   async function confirmStorePurchase(provider: "apple" | "google", checkoutId: string | null, payload: Record<string, string>, planCode: string) {
@@ -473,6 +517,10 @@ export default function SubscriptionPage() {
   const paid = screen?.paid ?? false;
   // Plány: z prvého kanálu (všetky kanály predávajú ten istý katalóg plánov).
   const planList = options && actions[0] ? plansFor(options, actions[0].method, interval) : [];
+  // Ročná platba sa pri spustení nepredáva → prepínač iba ak server ponúka ročné ceny.
+  const yearOffered = options && actions[0] ? plansFor(options, actions[0].method, "year").length > 0 : false;
+  const termsAccepted = termsStatus?.has_current_acceptance === true;
+  const orderReady = termsAccepted && orderConsent;
   const actionLabel = (a: PurchaseAction) =>
     a.kind === "web_checkout" ? t("subscription.buy.web")
       : a.kind === "apple_iap" ? t("subscription.buy.appStore")
@@ -492,7 +540,6 @@ export default function SubscriptionPage() {
       <h1 className="text-2xl sm:text-4xl font-bold text-primary">{t("subscription.title")}</h1>
 
       <div className="mt-8 max-w-2xl space-y-6">
-        <p className="rounded-2xl border border-amber-400/40 bg-amber-400/10 p-4 text-sm text-primary">{t("subscription.stagingNotice")}</p>
 
         {/* Pricing + entitlements (2026-10-26): čerpanie aktívnej firmy + simulácia plánu (owner). */}
         <PlanOverviewPanel />
@@ -592,14 +639,27 @@ export default function SubscriptionPage() {
             {view.canManage && planList.length > 0 && (
               <section className="rounded-3xl border border-subtle bg-surface-1 p-5 sm:p-8 shadow-lg">
                 <h2 className="text-xl font-bold text-primary">{t("subscription.choosePlan")}</h2>
-                <div className="mt-3 flex gap-2">
+                {yearOffered && <div className="mt-3 flex gap-2">
                   {(["month", "year"] as const).map((value) => (
                     <button key={value} type="button" onClick={() => setInterval_(value)} aria-pressed={interval === value}
                       className={`min-h-11 rounded-xl px-3 py-1 text-sm ${interval === value ? "bg-accent-esblu text-white" : "border border-subtle text-primary"}`}>
                       {t(`subscription.interval.${value}`)}
                     </button>
                   ))}
-                </div>
+                </div>}
+                <OrderTerms
+                  t={t}
+                  termsStatus={termsStatus}
+                  busy={busy}
+                  orderConsent={orderConsent}
+                  setOrderConsent={setOrderConsent}
+                  termsB2b={termsB2b}
+                  setTermsB2b={setTermsB2b}
+                  termsAuthority={termsAuthority}
+                  setTermsAuthority={setTermsAuthority}
+                  termsError={termsError}
+                  onAcceptTerms={() => void acceptCurrentTerms()}
+                />
                 {actions.some((a) => a.kind === "apple_external" && a.notice) && <p className="mt-3 text-xs text-muted-esblu">{t("subscription.buy.appleExternalHint")}</p>}
                 {actions.some((a) => a.kind === "google" && a.billingChoice) && <p className="mt-3 text-xs text-muted-esblu">{t("subscription.buy.googleChoiceHint")}</p>}
                 <div className="mt-4 space-y-4">
@@ -609,6 +669,14 @@ export default function SubscriptionPage() {
                     return (
                       <div key={plan.planCode} className="rounded-2xl border border-subtle p-4">
                         <p className="font-semibold text-primary">{planName(plan.planCode)}</p>
+                        {plan.planCode === "esblu_complete" && (
+                          <div className="mt-1 space-y-1 text-sm">
+                            <p className="font-bold text-primary">{t("subscription.order.price", { price: formatEurCents(COMPLETE_PRICE_CENTS, locale) })}</p>
+                            <p className="text-secondary">{t("subscription.order.renewal")}</p>
+                            <p className="text-secondary">{t("subscription.order.firstCharge")}</p>
+                            <p className="text-secondary">{t("subscription.order.cancel")}</p>
+                          </div>
+                        )}
                         <ul className="mt-2 space-y-1 text-sm text-muted-esblu">
                           {plan.entitlements.map((e) => (
                             <li key={e.key}>{moduleName(e.key)} — {limitText(e.limit, e.limit_period)}</li>
@@ -616,7 +684,7 @@ export default function SubscriptionPage() {
                         </ul>
                         <div className="mt-3 flex flex-wrap gap-3">
                           {!isCurrent && (screen?.buyActions ?? []).map((a) => (
-                            <button key={a.method} type="button" disabled={busy} onClick={() => runAction(a, plan.planCode, "new")} className={primary}>
+                            <button key={a.method} type="button" disabled={busy || !orderReady} onClick={() => runAction(a, plan.planCode, "new")} className={primary}>
                               {actionLabel(a)}
                             </button>
                           ))}
@@ -637,5 +705,54 @@ export default function SubscriptionPage() {
         )}
       </div>
     </main>
+  );
+}
+
+/** VOP 1.3 čl. 10.4 / 10.5: prijatie aktuálnych VOP firmou a výslovné potvrdenie objednávky s povinnosťou platby. */
+function OrderTerms(props: {
+  t: (key: string, vars?: Record<string, string | number>) => string;
+  termsStatus: CompanyTermsStatus | null;
+  busy: boolean;
+  orderConsent: boolean;
+  setOrderConsent: (v: boolean) => void;
+  termsB2b: boolean;
+  setTermsB2b: (v: boolean) => void;
+  termsAuthority: boolean;
+  setTermsAuthority: (v: boolean) => void;
+  termsError: string | null;
+  onAcceptTerms: () => void;
+}) {
+  const { t, termsStatus } = props;
+  const termsLink = (
+    <a href="/podmienky-pouzivania" target="_blank" rel="noopener noreferrer" className="underline">
+      {t("subscription.order.termsLink", { version: termsStatus?.current_terms_version ?? "" })}
+    </a>
+  );
+  if (!termsStatus) return <p className="mt-4 text-sm text-muted-esblu">{t("subscription.loading")}</p>;
+  if (!termsStatus.has_current_acceptance) {
+    return (
+      <div className="mt-4 space-y-2 rounded-2xl border border-amber-400/40 bg-amber-400/10 p-4 text-sm text-primary" data-testid="order-terms-accept">
+        <p>{t("subscription.order.termsRequired", { version: termsStatus.current_terms_version })} {termsLink}</p>
+        <label className="flex items-start gap-2">
+          <input type="checkbox" className="mt-0.5" checked={props.termsB2b} onChange={(e) => props.setTermsB2b(e.target.checked)} disabled={props.busy} />
+          <span>{t("companyTermsGate.confirmB2bLabel")}</span>
+        </label>
+        <label className="flex items-start gap-2">
+          <input type="checkbox" className="mt-0.5" checked={props.termsAuthority} onChange={(e) => props.setTermsAuthority(e.target.checked)} disabled={props.busy} />
+          <span>{t("companyTermsGate.confirmAuthorityLabel", { version: termsStatus.current_terms_version })}</span>
+        </label>
+        {props.termsError && <p role="alert" className="text-red-500">{props.termsError}</p>}
+        <button type="button" disabled={props.busy || !props.termsB2b || !props.termsAuthority} onClick={props.onAcceptTerms}
+          className="min-h-11 rounded-xl bg-accent-esblu px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">
+          {t("companyTermsGate.confirmButton")}
+        </button>
+      </div>
+    );
+  }
+  return (
+    <label className="mt-4 flex items-start gap-2 text-sm text-primary" data-testid="order-consent">
+      <input type="checkbox" className="mt-0.5" checked={props.orderConsent} onChange={(e) => props.setOrderConsent(e.target.checked)} disabled={props.busy} />
+      <span>{t("subscription.order.consent", { version: termsStatus.current_terms_version })} {termsLink}</span>
+    </label>
   );
 }

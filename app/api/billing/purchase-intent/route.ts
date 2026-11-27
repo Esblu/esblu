@@ -2,6 +2,7 @@ import { billingReturnOrigin } from "@/lib/billing/config";
 import { authorizeBillingCaller, billingErrorResponse, getWebBillingProvider } from "@/lib/billing/server";
 import { methodAllowedByServer, providerGateFromEnv } from "@/lib/billing/server-gates";
 import { startWebCheckout } from "@/lib/billing/web-checkout";
+import { checkOrderGate } from "@/lib/billing/order-gate";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 
 // -----------------------------------------------------------------------------
@@ -43,6 +44,9 @@ export async function POST(req: Request) {
   if (!methodAllowedByServer(method, providerGateFromEnv())) {
     return Response.json({ success: false, code: "ESBLU_BILLING_PROVIDER_NOT_CONFIGURED" }, { status: 409 });
   }
+  // Predajný plán + potvrdenie objednávky + prijaté aktuálne VOP (VOP 1.3 čl. 10.4) — pred zápisom do DB.
+  const gate = await checkOrderGate(who.db, { planCode, interval, orderConsent: body?.orderConsent, termsVersion: body?.termsVersion });
+  if (!gate.ok) return Response.json({ success: false, code: gate.code }, { status: gate.status });
 
   const intent = await who.db.rpc("esblu_billing_create_purchase_intent", {
     p_plan_code: planCode,
@@ -91,6 +95,7 @@ export async function POST(req: Request) {
     intent: data,
     origin,
     mobileApp: platform !== "web",
+    termsVersion: gate.termsVersion,
     attach: async (checkoutId, sessionId) =>
       getSupabaseAdmin().rpc("esblu_billing_attach_checkout_session", { p_checkout_id: checkoutId, p_provider_session_id: sessionId }),
   });

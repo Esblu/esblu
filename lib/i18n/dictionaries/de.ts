@@ -4077,6 +4077,15 @@ const de = {
     },
   },
   subscription: {
+    order: {
+      price: "{{price}} monatlich pro Unternehmen",
+      renewal: "Das Abonnement verlängert sich automatisch jeden Monat um einen weiteren Monatszeitraum, bis Sie es kündigen (AGB Art. 10.3).",
+      firstCharge: "Die Zahlung für den ersten Monat wird sofort nach Bestätigung der Bestellung in Stripe abgebucht — auch wenn der Testzeitraum noch läuft. Das Abonnement beginnt am Tag der Zahlung; weitere Zahlungen werden jeweils zu Beginn eines neuen Monatszeitraums abgebucht.",
+      cancel: "Sie können jederzeit unter Abonnement kündigen; die Kündigung wird zum Ende des bezahlten Zeitraums wirksam, für den nicht genutzten Teil erfolgt keine Erstattung (AGB Art. 16).",
+      consent: "Ich bestelle Esblu Komplett zahlungspflichtig, stimme den Allgemeinen Geschäftsbedingungen Version {{version}} (insbesondere Art. 10–16) zu und nehme die automatische Verlängerung zur Kenntnis.",
+      termsLink: "AGB {{version}} lesen",
+      termsRequired: "Vor der Bestellung eines Abonnements muss das Unternehmen die aktuellen Allgemeinen Geschäftsbedingungen (Version {{version}}) annehmen, die bezahlte Abonnements regeln.",
+    },
     title: "Abonnement",
     stagingNotice: "Testumgebung — keine echten Zahlungen. Die Pläne sind Testdaten, keine freigegebene Preisliste.",
     loading: "Abonnementstatus wird geladen…",
@@ -4134,6 +4143,9 @@ const de = {
       otherProvider: "Die Firma hat bereits ein aktives Abonnement über einen anderen Kanal. Beenden Sie es zuerst dort.",
       rateLimited: "Zu viele Versuche. Bitte versuchen Sie es gleich noch einmal.",
       checkoutInProgress: "Für diese Firma läuft bereits eine andere Zahlung. Schließen Sie sie ab oder brechen Sie sie ab und versuchen Sie es erneut.",
+      planNotPurchasable: "Dieser Plan kann noch nicht bestellt werden. Derzeit ist nur Esblu Komplett mit monatlicher Zahlung verfügbar.",
+      orderConsentRequired: "Bestätigen Sie vor der Bestellung die zahlungspflichtige Bestellung und Ihre Zustimmung zu den AGB.",
+      termsRequired: "Das Unternehmen hat die aktuellen AGB noch nicht angenommen oder sie haben sich geändert. Laden Sie die Seite neu und nehmen Sie die aktuelle Version an.",
     },
     buy: {
       web: "Weiter zur Zahlung",
@@ -4187,10 +4199,11 @@ const de = {
   },
   pricing: {
     metaTitle: "Preise | Esblu",
-    metaDescription: "Esblu Komplett 15,90 € pro Firma und Monat — alle Module, bis zu 25 Benutzer, Firmenchat, KI-Dokumentenverarbeitung und Sprachsteuerung. Einzelne Module ab 3,90 €. 14 Tage kostenlos.",
+    metaDescription: "Esblu Komplett 15,90 € pro Firma und Monat — alle Module, bis zu 25 Benutzer, Firmenchat, KI-Dokumentenverarbeitung und Sprachsteuerung. 14 Tage kostenlos. Einzelne Module in Vorbereitung.",
     kicker: "Preise",
     headline: "Ein Preis für die ganze Firma.",
-    intro: "Sie zahlen pro Firma, nicht pro Mitarbeiter. Wählen Sie Esblu Komplett mit allen Modulen oder nur die Module, die Sie nutzen.",
+    intro: "Sie zahlen pro Firma, nicht pro Mitarbeiter. Esblu Komplett enthält alle Module zu einem Monatspreis. Einzelne Module und Erweiterungen sind in Vorbereitung.",
+    liveNotice: "Das Abonnement bestellen Sie online in der App (Einstellungen → Abonnement). Derzeit ist Esblu Komplett mit monatlicher Kartenzahlung verfügbar.",
     betaNotice: "Online-Zahlung ist noch nicht verfügbar — nach der Testversion aktivieren wir Ihr Abonnement über info@esblu.com.",
     trial: {
       badge: "Testversion",
@@ -4205,7 +4218,7 @@ const de = {
       storage: "{{gb}} GB Speicher",
       chat: "Firmenchat",
       einvoiceNotLive: "E-Rechnung: keine Live-Transaktionen (in Vorbereitung)",
-      after: "Nach 14 Tagen endet die Testversion von selbst — es wird nichts berechnet. Danach wählen Sie Esblu Komplett oder einzelne Module.",
+      after: "Nach 14 Tagen endet die Testversion von selbst — es wird nichts berechnet. Danach können Sie Esblu Komplett bestellen.",
       keepData: "Wenn die Testversion endet, werden Ihre Daten nie gelöscht.",
       afterStorage: "Nach dem Ende der Testversion ohne Abo können keine neuen Dateien hochgeladen werden; bestehende Dateien bleiben erhalten.",
       cta: "Kostenloses Konto erstellen",
@@ -4225,8 +4238,9 @@ const de = {
       einvoice: "{{count}} E-Rechnung-Transaktionen pro Monat — nach dem Start der E-Rechnung",
     },
     modules: {
-      title: "Oder nur die Module, die Sie brauchen",
-      intro: "Jedes Modul {{price}} pro Monat. Würde die Summe den Preis von Komplett übersteigen, bieten wir Ihnen das günstigere Esblu Komplett an.",
+      notYet: "Einzelne Module sind in Vorbereitung. Derzeit können Sie Esblu Komplett mit allen Modulen bestellen.",
+      title: "Einzelne Module",
+      intro: "Der geplante Preis je Modul beträgt {{price}} pro Monat; würde die Summe den Preis von Komplett übersteigen, bieten wir das günstigere Esblu Komplett an. Einzelne Module können noch nicht bestellt werden.",
       perMonth: "pro Monat",
       perCompany: "pro Firma",
       paidBase: "Jeder bezahlte Plan (auch ein einzelnes Modul): bis zu {{users}} Benutzer und {{gb}} GB Speicher.",
@@ -4254,7 +4268,7 @@ const de = {
     },
     addons: {
       title: "Erweiterungen nach Nutzung",
-      intro: "Erweiterungen werden zusätzlich zu Komplett oder den Modulen bezahlt und zählen nicht zur Preisobergrenze der Module.",
+      intro: "Erweiterungen werden zu Komplett und zu den Modulen verfügbar sein. Sie können noch nicht bestellt werden.",
       ai_40: "+{{units}} KI-Dokumentenverarbeitungen",
       voice_60: "+{{units}} Min. Sprachsteuerung",
       users_25: "+{{units}} Benutzer",
@@ -4265,7 +4279,7 @@ const de = {
     },
     secondary: {
       title: "Weitere Firma",
-      text: "Sie verwalten mehrere Firmen? Jede weitere Firma erhält Esblu Komplett für {{price}} pro Monat. Jede Firma hat eigene Limits — Benutzer, KI-Verarbeitungen, Sprache und Speicher werden nie zwischen Firmen geteilt. Einzelne Module für eine weitere Firma sind auf {{price}} gedeckelt.",
+      text: "Ein vergünstigter Preis von {{price}} pro Monat für eine weitere Firma desselben Inhabers ist in Vorbereitung. Derzeit bestellt jede Firma Esblu Komplett zum regulären Preis. Jede Firma hat eigene Limits — Benutzer, KI-Verarbeitungen, Sprache und Speicher werden nie zwischen Firmen geteilt.",
     },
     usersNote: "Das Abo gilt pro Firma, nicht pro Anmeldung. Kollegen und Steuerberater treten Ihrer Firma bei und nur der Firmeninhaber verwaltet das Abo.",
     dataSafety: {
@@ -4275,15 +4289,15 @@ const de = {
     faq: {
       title: "Häufige Fragen",
       q1: "Was passiert nach 14 Tagen?",
-      a1: "Die Testversion endet von selbst — es wird nichts berechnet und nichts gelöscht. Danach wählen Sie Esblu Komplett oder einzelne Module.",
+      a1: "Die Testversion endet von selbst — es wird nichts berechnet und nichts gelöscht. Danach können Sie Esblu Komplett bestellen.",
       q2: "Verliere ich meine Daten?",
       a2: "Nein. Das Ende der Testversion, eine Moduländerung oder das Ende eines Abos löscht, verschiebt oder versteckt nichts.",
       q3: "Kann ich nur einige Module nutzen?",
-      a3: "Ja. Jedes Modul kostet 3,90 € pro Monat. Für Module zahlen Sie nie mehr als für Esblu Komplett — würde die Summe es übersteigen, bieten wir Ihnen Komplett an.",
+      a3: "Noch nicht. Einzelne Module (geplanter Preis 3,90 € pro Modul und Monat) sind in Vorbereitung; derzeit ist Esblu Komplett mit allen Modulen verfügbar.",
       q4: "Zahle ich pro Mitarbeiter?",
-      a4: "Nein. Sie zahlen pro Firma. Komplett enthält bis zu 25 Benutzer; weitere 25 fügen Sie per Erweiterung hinzu.",
+      a4: "Nein. Sie zahlen pro Firma. Komplett enthält bis zu 25 Benutzer; eine Erweiterung für weitere Benutzer ist in Vorbereitung.",
       q5: "Was, wenn KI-Verarbeitungen oder Sprachminuten aufgebraucht sind?",
-      a5: "Sie sehen einen klaren Hinweis mit genutzten und enthaltenen Einheiten und der Erweiterungsoption. Alles andere funktioniert weiter und nichts wird gelöscht.",
+      a5: "Sie sehen einen klaren Hinweis mit genutzten und enthaltenen Einheiten. Alles andere funktioniert weiter und nichts wird gelöscht. Erweiterungen der Limits sind in Vorbereitung.",
     },
     nav: {
       backHome: "Zur Startseite",

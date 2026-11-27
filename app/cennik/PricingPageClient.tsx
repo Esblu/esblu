@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
 import { useLocale } from "@/lib/i18n/LocaleProvider";
 import { TrialOfferList } from "@/app/components/pricing/TrialOfferList";
 import { PublicSiteFooter, PublicSiteHeader } from "@/app/components/public/PublicSite";
@@ -17,10 +16,6 @@ import {
   TRIAL_OFFER,
   BASE_MODULE_IDS,
   formatEurCents,
-  previewAddModule,
-  quote,
-  sellableModules,
-  type BaseModuleId,
 } from "@/lib/pricing";
 
 // =============================================================================
@@ -28,31 +23,17 @@ import {
 // Všetky čísla a výpočty výhradne z lib/pricing.ts (kanonický engine).
 // Bez textu o DPH (Esblu s.r.o. nie je platiteľ DPH).
 //
-// Kalkulačka je IBA informatívna: výber kariet nič neaktivuje, neukladá ani
-// neúčtuje (billing nie je live). Žiadne platobné tlačidlo. Zverejnenie v
-// produkcii = až schválený produkčný deploy.
+// Rozhodnutie vlastníka 2026-11-27: pri spustení sa predáva IBA Esblu Komplet
+// (mesačne, objednávka v Nastavenia → Predplatné). Samostatné moduly, rozšírenia
+// a zvýhodnená ďalšia firma sú „Pripravujeme“ — bez výberu a bez kalkulačky; nákup
+// ich odmietne aj server (lib/billing/order-gate.ts, poistka LIVE cien v DB).
 // =============================================================================
 
 const FAQ = ["1", "2", "3", "4", "5"] as const;
 
 export function PricingPageClient() {
   const { t, locale } = useLocale();
-  const [selected, setSelected] = useState<BaseModuleId[]>([]);
-  const [capNotice, setCapNotice] = useState<{ sum: number; complete: number } | null>(null);
-  const current = useMemo(() => quote({ modules: selected, tier: "primary" }), [selected]);
-  const sellable = sellableModules(false);
-
-  const toggle = (id: BaseModuleId) => {
-    if (selected.includes(id)) {
-      setCapNotice(null);
-      setSelected(selected.filter((x) => x !== id));
-      return;
-    }
-    // Bod 4: pred pridaním ukáž, ak by súčet modulov presiahol cenu Kompletu.
-    const preview = previewAddModule({ modules: selected, tier: "primary" }, id);
-    setCapNotice(preview.exceedsCap ? { sum: preview.modulesSumAfterCents, complete: preview.completeCents } : null);
-    setSelected([...selected, id]);
-  };
+  const billingUi = process.env.NEXT_PUBLIC_ESBLU_BILLING_UI === "1";
 
   return (
     <div className="min-h-screen overflow-x-hidden bg-page-bg text-primary">
@@ -66,7 +47,7 @@ export function PricingPageClient() {
             <h1 className="mt-2 text-[1.875rem] font-black leading-[1.15] tracking-tight text-primary sm:mt-3 sm:text-5xl sm:leading-tight">{t("pricing.headline")}</h1>
             <p className="mt-3 text-base leading-7 text-secondary sm:mt-5 sm:text-lg sm:leading-8">{t("pricing.intro")}</p>
             <p className="mx-auto mt-4 max-w-2xl rounded-2xl border border-subtle bg-slate-950/60 px-3.5 py-2.5 text-xs leading-5 text-muted-esblu sm:mt-6 sm:px-4 sm:py-3 sm:text-sm sm:leading-6">
-              {t("pricing.betaNotice")}
+              {billingUi ? t("pricing.liveNotice") : t("pricing.betaNotice")}
             </p>
           </div>
         </section>
@@ -132,7 +113,8 @@ export function PricingPageClient() {
         <section aria-labelledby="modules-title" className="border-t border-subtle py-10 sm:py-20">
           <div className="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8">
             <div className="mx-auto max-w-2xl text-center">
-              <h2 id="modules-title" className="text-2xl font-black leading-tight tracking-tight text-primary sm:text-4xl">{t("pricing.modules.title")}</h2>
+              <span className="inline-block rounded-full bg-accent-orange/15 px-3 py-1 text-xs font-bold text-accent-orange">{t("pricing.modules.comingSoon")}</span>
+              <h2 id="modules-title" className="mt-2 text-2xl font-black leading-tight tracking-tight text-primary sm:text-4xl">{t("pricing.modules.title")}</h2>
               <p className="mt-2 text-[0.95rem] leading-6 text-secondary sm:mt-4 sm:text-base sm:leading-7">
                 {t("pricing.modules.intro", { price: formatEurCents(MODULE_PRICE_CENTS, locale) })}
               </p>
@@ -145,76 +127,41 @@ export function PricingPageClient() {
             </div>
 
             <div className="mt-6 grid gap-3 sm:mt-10 sm:grid-cols-2 sm:gap-4 lg:grid-cols-3">
-              {BASE_MODULE_IDS.map((module) => {
-                const isSelected = selected.includes(module);
-                const available = sellable.includes(module);
-                return (
-                  <article key={module} className={`surface-card flex flex-col p-4 transition sm:p-6 ${isSelected ? "ring-2 ring-accent-cyan" : ""}`}>
-                    <div className="flex items-start justify-between gap-3">
-                      <h3 className="text-lg font-black leading-snug text-primary sm:text-xl">{t(`pricing.modules.items.${module}.name`)}</h3>
-                      {!available && (
-                        <span className="rounded-full bg-accent-orange/15 px-2.5 py-1 text-xs font-bold text-accent-orange">{t("pricing.modules.comingSoon")}</span>
-                      )}
-                    </div>
-                    <p className="mt-1 flex-1 text-sm leading-[1.35rem] text-secondary sm:mt-2 sm:leading-6">{t(`pricing.modules.items.${module}.description`)}</p>
-                    {module === "documents" && (
-                      <p className="mt-2 text-sm font-semibold text-accent-teal sm:mt-3">{t("pricing.modules.includedAi", { count: MODULAR_ALLOWANCES.aiProcessingsPerMonthWithDocuments })}</p>
-                    )}
-                    <div className="mt-3 flex items-center justify-between gap-3 sm:mt-4 sm:block">
-                      <p className="min-w-0">
-                        <span className="text-2xl font-black text-primary sm:text-3xl">{formatEurCents(MODULE_PRICE_CENTS, locale)}</span>{" "}
-                        <span className="block text-xs leading-5 text-muted-esblu sm:inline sm:text-sm">
-                          {t("pricing.modules.perMonth")} · {t("pricing.modules.perCompany")}
-                        </span>
-                      </p>
-                      <button
-                        type="button"
-                        onClick={() => toggle(module)}
-                        aria-pressed={isSelected}
-                        disabled={!available}
-                        className={`inline-flex min-h-10 shrink-0 items-center justify-center whitespace-nowrap px-3.5 py-2 text-sm sm:mt-4 sm:min-h-11 sm:w-full sm:px-4 ${isSelected ? "btn-primary" : "btn-secondary"} disabled:cursor-not-allowed disabled:opacity-50`}
-                      >
-                        {isSelected ? t("pricing.modules.selected") : t("pricing.modules.select")}
-                      </button>
-                    </div>
-                  </article>
-                );
-              })}
+              {BASE_MODULE_IDS.map((module) => (
+                <article key={module} className="surface-card flex flex-col p-4 sm:p-6">
+                  <div className="flex items-start justify-between gap-3">
+                    <h3 className="text-lg font-black leading-snug text-primary sm:text-xl">{t(`pricing.modules.items.${module}.name`)}</h3>
+                    <span className="rounded-full bg-accent-orange/15 px-2.5 py-1 text-xs font-bold text-accent-orange">{t("pricing.modules.comingSoon")}</span>
+                  </div>
+                  <p className="mt-1 flex-1 text-sm leading-[1.35rem] text-secondary sm:mt-2 sm:leading-6">{t(`pricing.modules.items.${module}.description`)}</p>
+                  {module === "documents" && (
+                    <p className="mt-2 text-sm font-semibold text-accent-teal sm:mt-3">{t("pricing.modules.includedAi", { count: MODULAR_ALLOWANCES.aiProcessingsPerMonthWithDocuments })}</p>
+                  )}
+                  <p className="mt-3 min-w-0 sm:mt-4">
+                    <span className="text-2xl font-black text-primary sm:text-3xl">{formatEurCents(MODULE_PRICE_CENTS, locale)}</span>{" "}
+                    <span className="block text-xs leading-5 text-muted-esblu sm:inline sm:text-sm">
+                      {t("pricing.modules.perMonth")} · {t("pricing.modules.perCompany")}
+                    </span>
+                  </p>
+                </article>
+              ))}
             </div>
 
-            <div className="surface-card mx-auto mt-6 max-w-2xl p-4 sm:mt-8 sm:p-6" aria-live="polite">
-              <p className="text-xs font-bold uppercase tracking-[0.14em] text-muted-esblu sm:text-sm">{t("pricing.summary.title")}</p>
-              {selected.length === 0 ? (
-                <p className="mt-2 text-secondary">{t("pricing.summary.empty")}</p>
-              ) : (
-                <>
-                  <p className="mt-2 text-sm text-secondary">{selected.map((m) => t(`pricing.modules.items.${m}.name`)).join(" + ")}</p>
-                  {capNotice && (
-                    <p className="mt-2 rounded-xl border border-accent-cyan/40 bg-accent-cyan/10 p-3 text-sm text-primary">
-                      {t("pricing.summary.capNotice", { sum: formatEurCents(capNotice.sum, locale), complete: formatEurCents(capNotice.complete, locale) })}
-                    </p>
-                  )}
-                  {current.plan === "complete" && (
-                    <p className="mt-2 text-sm font-semibold text-accent-cyan">{t("pricing.summary.completeApplied", { complete: formatEurCents(current.capCents, locale) })}</p>
-                  )}
-                  <p className="mt-1 text-xl font-black text-primary sm:text-2xl">{t("pricing.summary.total", { amount: formatEurCents(current.totalCents, locale) })}</p>
-                </>
-              )}
-              <p className="mt-3 text-xs text-muted-esblu">{t("pricing.summary.disclaimer")}</p>
-            </div>
+            <p className="mx-auto mt-6 max-w-2xl text-center text-sm text-muted-esblu sm:mt-8">{t("pricing.modules.notYet")}</p>
           </div>
         </section>
 
         <section aria-labelledby="addons-title" className="border-t border-subtle py-10 sm:py-16">
           <div className="mx-auto max-w-3xl px-4 sm:px-6 lg:px-8">
-            <h2 id="addons-title" className="text-center text-2xl font-black tracking-tight text-primary sm:text-3xl">{t("pricing.addons.title")}</h2>
+            <p className="text-center"><span className="inline-block rounded-full bg-accent-orange/15 px-3 py-1 text-xs font-bold text-accent-orange">{t("pricing.modules.comingSoon")}</span></p>
+            <h2 id="addons-title" className="mt-2 text-center text-2xl font-black tracking-tight text-primary sm:text-3xl">{t("pricing.addons.title")}</h2>
             <p className="mt-2 text-center text-secondary">{t("pricing.addons.intro")}</p>
             <ul className="mt-5 divide-y divide-white/10 surface-card">
               {ADDON_IDS.map((id) => (
                 <li key={id} className="flex items-center justify-between gap-3 p-4">
                   <span className="text-primary">
                     {t(`pricing.addons.${id}`, { units: ADDONS[id].units })}
-                    {ADDONS[id].requiresModule === "einvoice" && <span className="ml-2 text-xs text-accent-orange">{t("pricing.modules.comingSoon")}</span>}
+                    <span className="ml-2 text-xs text-accent-orange">{t("pricing.modules.comingSoon")}</span>
                   </span>
                   <span className="whitespace-nowrap font-bold text-primary">{t("pricing.addons.perMonth", { price: formatEurCents(ADDONS[id].priceCents, locale) })}</span>
                 </li>
@@ -226,7 +173,8 @@ export function PricingPageClient() {
 
         <section aria-labelledby="secondary-title" className="border-t border-subtle py-10 sm:py-16">
           <div className="mx-auto max-w-3xl px-4 text-center sm:px-6 lg:px-8">
-            <h2 id="secondary-title" className="text-xl font-black text-primary sm:text-3xl">{t("pricing.secondary.title")}</h2>
+            <span className="inline-block rounded-full bg-accent-orange/15 px-3 py-1 text-xs font-bold text-accent-orange">{t("pricing.modules.comingSoon")}</span>
+            <h2 id="secondary-title" className="mt-2 text-xl font-black text-primary sm:text-3xl">{t("pricing.secondary.title")}</h2>
             <p className="mt-2 text-secondary">{t("pricing.secondary.text", { price: formatEurCents(SECONDARY_COMPLETE_PRICE_CENTS, locale) })}</p>
             <p className="mx-auto mt-4 max-w-2xl text-sm text-muted-esblu">{t("pricing.usersNote")}</p>
           </div>

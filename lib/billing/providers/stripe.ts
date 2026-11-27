@@ -432,6 +432,9 @@ export class StripeProvider implements BillingProvider {
         client_reference_id: request.checkoutId,
         "metadata[esblu_checkout_id]": request.checkoutId,
         "subscription_data[metadata][esblu_checkout_id]": request.checkoutId,
+        // VOP 1.3 čl. 10.4: verzia VOP, s ktorou Vlastník objednávku potvrdil (dôkaz pri spore).
+        "metadata[esblu_terms_version]": request.termsVersion ?? null,
+        "subscription_data[metadata][esblu_terms_version]": request.termsVersion ?? null,
         customer: request.providerCustomerId,
         "customer_update[name]": request.providerCustomerId ? "auto" : null,
         "customer_update[address]": request.providerCustomerId ? "auto" : null,

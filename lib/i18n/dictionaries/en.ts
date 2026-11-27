@@ -4057,6 +4057,15 @@ const en = {
     },
   },
   subscription: {
+    order: {
+      price: "{{price}} per month per company",
+      renewal: "The subscription renews automatically every month for another monthly period until you cancel it (Terms Art. 10.3).",
+      firstCharge: "The payment for the first month is charged immediately after you confirm the order in Stripe — even if the trial period is still running. The subscription starts on the day of payment; further payments are charged at the start of each new monthly period.",
+      cancel: "You can cancel at any time under Subscription; cancellation takes effect at the end of the paid period and no refund is given for the unused part (Terms Art. 16).",
+      consent: "I order Esblu Complete with an obligation to pay, agree to the Terms and Conditions version {{version}} (in particular Art. 10–16) and acknowledge the automatic renewal.",
+      termsLink: "Read the Terms {{version}}",
+      termsRequired: "Before ordering a subscription, the company must accept the current Terms and Conditions (version {{version}}), which govern paid subscriptions.",
+    },
     title: "Subscription",
     stagingNotice: "Test environment — no real payments. Plans are test fixtures, not approved pricing.",
     loading: "Loading subscription status…",
@@ -4114,6 +4123,9 @@ const en = {
       otherProvider: "The company already has an active subscription through another channel. End it there first.",
       rateLimited: "Too many attempts. Please try again shortly.",
       checkoutInProgress: "Another payment for this company is already in progress. Complete or cancel it, then try again.",
+      planNotPurchasable: "This plan cannot be ordered yet. Currently only Esblu Complete with monthly payment is available.",
+      orderConsentRequired: "Before ordering, confirm the order with an obligation to pay and your consent to the Terms.",
+      termsRequired: "The company has not accepted the current Terms yet or they have changed. Reload the page and accept the current version.",
     },
     buy: {
       web: "Continue to payment",
@@ -4167,10 +4179,11 @@ const en = {
   },
   pricing: {
     metaTitle: "Pricing | Esblu",
-    metaDescription: "Esblu Complete €15.90 per company per month — all modules, up to 25 users, team chat, AI document processing and voice control. Single modules from €3.90. 14 days free.",
+    metaDescription: "Esblu Complete €15.90 per company per month — all modules, up to 25 users, team chat, AI document processing and voice control. 14 days free. Single modules coming soon.",
     kicker: "Pricing",
     headline: "One price for the whole company.",
-    intro: "You pay per company, not per employee. Choose Esblu Complete with all modules or only the modules you use.",
+    intro: "You pay per company, not per employee. Esblu Complete includes all modules for one monthly price. Single modules and add-ons are coming soon.",
+    liveNotice: "Order your subscription online in the app (Settings → Subscription). Esblu Complete with monthly card payment is currently available.",
     betaNotice: "Online payment is not available yet — after the trial we activate your subscription via info@esblu.com.",
     trial: {
       badge: "Trial",
@@ -4185,7 +4198,7 @@ const en = {
       storage: "{{gb}} GB of storage",
       chat: "Team chat",
       einvoiceNotLive: "eInvoice: no live transactions (coming soon)",
-      after: "After 14 days the trial ends on its own — nothing is charged. Then you choose Esblu Complete or single modules.",
+      after: "After 14 days the trial ends on its own — nothing is charged. Then you can order Esblu Complete.",
       keepData: "When the trial ends, your data is never deleted.",
       afterStorage: "After the trial ends without a subscription you cannot upload new files; existing files stay intact.",
       cta: "Create a free account",
@@ -4205,8 +4218,9 @@ const en = {
       einvoice: "{{count}} eInvoice transactions per month — once eInvoice launches",
     },
     modules: {
-      title: "Or only the modules you need",
-      intro: "Each module {{price}} per month. If the modules would cost more than Complete, we offer you the better-value Esblu Complete.",
+      notYet: "Single modules are coming soon. For now you can order Esblu Complete with all modules.",
+      title: "Single modules",
+      intro: "The planned price of each module is {{price}} per month; if the modules would cost more than Complete, we will offer the better-value Esblu Complete. Single modules cannot be ordered yet.",
       perMonth: "per month",
       perCompany: "per company",
       paidBase: "Every paid plan (even a single module): up to {{users}} users and {{gb}} GB of storage.",
@@ -4234,7 +4248,7 @@ const en = {
     },
     addons: {
       title: "Usage add-ons",
-      intro: "Add-ons are paid on top of Complete or modules and do not count towards the module price cap.",
+      intro: "Add-ons will be available for Complete and for modules. They cannot be ordered yet.",
       ai_40: "+{{units}} AI document processings",
       voice_60: "+{{units}} min of voice control",
       users_25: "+{{units}} users",
@@ -4245,7 +4259,7 @@ const en = {
     },
     secondary: {
       title: "Another company",
-      text: "Managing several companies? Each additional company gets Esblu Complete for {{price}} per month. Every company has its own limits — users, AI processings, voice and storage are never shared between companies. Single modules for an additional company are capped at {{price}}.",
+      text: "A discounted price of {{price}} per month for an additional company of the same owner is coming soon. For now each company orders Esblu Complete at the regular price. Every company has its own limits — users, AI processings, voice and storage are never shared between companies.",
     },
     usersNote: "The subscription is per company, not per login. Colleagues and your accountant join your company and only the company owner manages the subscription.",
     dataSafety: {
@@ -4255,15 +4269,15 @@ const en = {
     faq: {
       title: "FAQ",
       q1: "What happens after 14 days?",
-      a1: "The trial ends on its own — nothing is charged and nothing is deleted. Then you choose Esblu Complete or single modules.",
+      a1: "The trial ends on its own — nothing is charged and nothing is deleted. Then you can order Esblu Complete.",
       q2: "Will I lose my data?",
       a2: "No. The end of the trial, a module change or the end of a subscription never deletes, moves or hides anything.",
       q3: "Can I use only some modules?",
-      a3: "Yes. Each module costs €3.90 per month. You never pay more for modules than for Esblu Complete — if the total would exceed it, we offer you Complete.",
+      a3: "Not yet. Single modules (planned price €3.90 per module per month) are coming soon; today Esblu Complete with all modules is available.",
       q4: "Do I pay per employee?",
-      a4: "No. You pay per company. Complete includes up to 25 users; another 25 can be added with an add-on.",
+      a4: "No. You pay per company. Complete includes up to 25 users; an add-on for more users is coming soon.",
       q5: "What if I use up AI processings or voice minutes?",
-      a5: "You see a clear notice with used and included units and the add-on option. Everything else keeps working and nothing is deleted.",
+      a5: "You see a clear notice with used and included units. Everything else keeps working and nothing is deleted. Limit add-ons are coming soon.",
     },
     nav: {
       backHome: "Back to home",

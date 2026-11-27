@@ -74,7 +74,7 @@ const U = { a: "d6000000-0000-4000-8000-0000000000a1", b: "d6000000-0000-4000-80
 const C = {
   live: "d7000000-0000-4000-8000-00000000000a", second: "d7000000-0000-4000-8000-00000000000b",
   mock: "d7000000-0000-4000-8000-00000000000c", modular: "d7000000-0000-4000-8000-00000000000d",
-  unpaid: "d7000000-0000-4000-8000-00000000000e",
+  unpaid: "d7000000-0000-4000-8000-00000000000e", expired: "d7000000-0000-4000-8000-00000000000f",
 };
 await db.exec(`
   insert into auth.users (id, email) values ('${U.a}', 'a@example.invalid'), ('${U.b}', 'b@example.invalid'), ('${U.m}', 'm@example.invalid');
@@ -82,10 +82,13 @@ await db.exec(`
   insert into public.companies (id, owner_id, name) values
     ('${C.live}', '${U.a}', 'Komplet s.r.o.'), ('${C.second}', '${U.a}', 'Druha s.r.o.'),
     ('${C.mock}', '${U.m}', 'Mock s.r.o.'), ('${C.modular}', '${U.b}', 'Modular s.r.o.'), ('${C.unpaid}', '${U.b}', 'Unpaid s.r.o.');
+  -- Syntetická firma po skončení 14-dňového trialu, BEZ interného grantu Esblu (internal_operator_grants).
+  insert into public.companies (id, owner_id, name, trial_started_at, trial_ends_at) values
+    ('${C.expired}', '${U.b}', 'Po triale s.r.o.', now() - interval '20 days', now() - interval '6 days');
   insert into public.company_members (company_id, user_id, role, status, permissions) values
     ('${C.live}', '${U.a}', 'owner', 'active', '{}'), ('${C.second}', '${U.a}', 'owner', 'active', '{}'),
     ('${C.mock}', '${U.m}', 'owner', 'active', '{}'), ('${C.modular}', '${U.b}', 'owner', 'active', '{}'),
-    ('${C.unpaid}', '${U.b}', 'owner', 'active', '{}');
+    ('${C.unpaid}', '${U.b}', 'owner', 'active', '{}'), ('${C.expired}', '${U.b}', 'owner', 'active', '{}');
   set session_replication_role = origin;
 `);
 async function account(company: string, plan: string, status = "active", env = "test") {
@@ -172,6 +175,29 @@ await check("refundácia / ukončenie → nároky odvolané, kompozícia ostáva
   await sync(C.live);
   assert.equal((await ents(C.live)).filter((e) => e.status === "active").length, 0);
   assert.equal((await selection(C.live)).length, 1);
+});
+
+await check("syntetická firma PO skončení trialu, bez interného grantu: pred platbou funkcie zamknuté, po zaplatení Kompletu dostupné (zdroj subscription)", async () => {
+  const keys = ["vehicles", "machines", "inventory", "invoicing", "ai_documents", "voice", "team_members", "storage_mb"];
+  const grants = await su<{ n: number }>("select count(*)::int n from public.internal_operator_grants where company_id = $1", [C.expired]);
+  assert.equal(grants[0].n, 0, "bez interného tarifu");
+  const resolve = async () =>
+    su<{ k: string; active: boolean; source: string | null }>(
+      "select k, (public.esblu_resolve_entitlement($1, k) ->> 'active')::boolean active, public.esblu_resolve_entitlement($1, k) ->> 'source' source from unnest($2::text[]) k",
+      [C.expired, keys],
+    );
+  const before = await resolve();
+  assert.ok(before.every((r) => !r.active), `pred platbou zamknuté: ${JSON.stringify(before.filter((r) => r.active))}`);
+  await account(C.expired, "esblu_complete");
+  await sync(C.expired);
+  const after = await resolve();
+  for (const r of after) {
+    assert.equal(r.active, true, `${r.k} po zaplatení Kompletu`);
+    assert.equal(r.source, "subscription", `${r.k} zo zaplateného predplatného, nie z trialu ani grantu`);
+  }
+  assert.equal((await selection(C.expired))[0].source, "provider");
+  const einv = await su<{ a: boolean }>("select (public.esblu_resolve_entitlement($1, 'einvoice') ->> 'active')::boolean a", [C.expired]);
+  assert.equal(einv[0].a, false, "eFaktúra sa nepredáva");
 });
 
 await check("LIVE cena: esblu_modular a esblu_complete_secondary odmietnuté, esblu_complete povolený, TEST ceny bez zmeny", async () => {

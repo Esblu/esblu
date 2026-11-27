@@ -2,6 +2,7 @@ import { billingReturnOrigin } from "@/lib/billing/config";
 import { authorizeBillingCaller, billingErrorResponse, getWebBillingProvider } from "@/lib/billing/server";
 import { startWebCheckout, type WebIntentData } from "@/lib/billing/web-checkout";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
+import { checkOrderGate } from "@/lib/billing/order-gate";
 
 // -----------------------------------------------------------------------------
 // POST /api/billing/checkout   { planCode, interval }
@@ -33,6 +34,10 @@ export async function POST(req: Request) {
   const origin = billingReturnOrigin();
   if (!origin) return Response.json({ success: false, code: "ESBLU_BILLING_DISABLED" }, { status: 503 });
 
+  // Rovnaká brána ako /api/billing/purchase-intent (predajný plán, potvrdenie objednávky, aktuálne VOP).
+  const gate = await checkOrderGate(who.db, { planCode, interval, orderConsent: body?.orderConsent, termsVersion: body?.termsVersion });
+  if (!gate.ok) return Response.json({ success: false, code: gate.code }, { status: gate.status });
+
   const intent = await who.db.rpc("esblu_billing_create_checkout_intent", { p_plan_code: planCode, p_interval: interval });
   if (intent.error || !intent.data) return billingErrorResponse(intent.error);
   const data = intent.data as WebIntentData;
@@ -45,6 +50,7 @@ export async function POST(req: Request) {
     provider,
     intent: data,
     origin,
+    termsVersion: gate.termsVersion,
     attach: async (checkoutId, sessionId) =>
       getSupabaseAdmin().rpc("esblu_billing_attach_checkout_session", { p_checkout_id: checkoutId, p_provider_session_id: sessionId }),
   });

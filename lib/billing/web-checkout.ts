@@ -41,6 +41,8 @@ export async function startWebCheckout(input: {
   intent: WebIntentData;
   origin: string;
   mobileApp?: boolean;
+  /** Verzia VOP prijatá pri objednávke (lib/billing/order-gate.ts). */
+  termsVersion?: string | null;
   attach: AttachFn;
   maxAttempts?: number;
 }): Promise<WebCheckoutResult> {
@@ -56,6 +58,7 @@ export async function startWebCheckout(input: {
     successUrl: `${returnBase}&checkout=returned`,
     cancelUrl: `${returnBase}&checkout=canceled`,
     expiresAt: intent.expires_at ?? null,
+    termsVersion: input.termsVersion ?? null,
   };
   const attempts = Math.max(1, input.maxAttempts ?? 2);
   let session: CheckoutSession | null = null;

@@ -4087,6 +4087,15 @@ const sk = {
     },
   },
   subscription: {
+    order: {
+      price: "{{price}} mesačne za firmu",
+      renewal: "Predplatné sa automaticky predlžuje každý mesiac o ďalšie mesačné obdobie, kým ho nezrušíte (VOP čl. 10.3).",
+      firstCharge: "Platba za prvý mesiac sa strhne ihneď po potvrdení objednávky v Stripe — aj keď ešte beží skúšobné obdobie. Predplatné začína dňom úhrady; ďalšie platby sa strhávajú vždy na začiatku nového mesačného obdobia.",
+      cancel: "Zrušiť môžete kedykoľvek v Predplatnom; zrušenie je účinné ku koncu zaplateného obdobia a za nevyčerpanú časť sa odplata nevracia (VOP čl. 16).",
+      consent: "Objednávam Esblu Komplet s povinnosťou platby, súhlasím s Všeobecnými obchodnými podmienkami verzia {{version}} (najmä čl. 10–16) a beriem na vedomie automatické predĺženie.",
+      termsLink: "Prečítať VOP {{version}}",
+      termsRequired: "Pred objednaním predplatného musí firma prijať aktuálne Všeobecné obchodné podmienky (verzia {{version}}), ktoré upravujú platené predplatné.",
+    },
     title: "Predplatné",
     stagingNotice: "Testovacie prostredie — žiadne skutočné platby. Plány sú testovacie a nie sú schváleným cenníkom.",
     loading: "Načítavam stav predplatného…",
@@ -4144,6 +4153,9 @@ const sk = {
       otherProvider: "Firma už má aktívne predplatné cez iný kanál. Najprv ho ukončite tam.",
       rateLimited: "Príliš veľa pokusov. Skúste to o chvíľu.",
       checkoutInProgress: "Pre firmu už prebieha iná rozpracovaná platba. Dokončite ju alebo ju zrušte a skúste znova.",
+      planNotPurchasable: "Tento plán zatiaľ nie je možné objednať. Aktuálne je dostupný iba Esblu Komplet s mesačnou platbou.",
+      orderConsentRequired: "Pred objednaním potvrďte objednávku s povinnosťou platby a súhlas s VOP.",
+      termsRequired: "Firma ešte neprijala aktuálne VOP alebo sa medzitým zmenili. Obnovte stránku a prijmite aktuálnu verziu.",
     },
     buy: {
       web: "Pokračovať na platbu",
@@ -4197,10 +4209,11 @@ const sk = {
   },
   pricing: {
     metaTitle: "Cenník | Esblu",
-    metaDescription: "Esblu Komplet 15,90 € mesačne za firmu — všetky moduly, do 25 používateľov, firemný chat, AI spracovanie dokumentov a hlasové ovládanie. Samostatné moduly od 3,90 €. 14 dní zadarmo.",
+    metaDescription: "Esblu Komplet 15,90 € mesačne za firmu — všetky moduly, do 25 používateľov, firemný chat, AI spracovanie dokumentov a hlasové ovládanie. 14 dní zadarmo. Samostatné moduly pripravujeme.",
     kicker: "Cenník",
     headline: "Jedna cena za celú firmu.",
-    intro: "Platíte za firmu, nie za každého zamestnanca. Vyberte si Esblu Komplet so všetkými modulmi alebo iba moduly, ktoré používate.",
+    intro: "Platíte za firmu, nie za každého zamestnanca. Esblu Komplet obsahuje všetky moduly za jednu mesačnú cenu. Samostatné moduly a rozšírenia pripravujeme.",
+    liveNotice: "Predplatné objednáte online v aplikácii (Nastavenia → Predplatné). Aktuálne je dostupný Esblu Komplet s mesačnou platbou kartou.",
     betaNotice: "Online platba zatiaľ nie je dostupná — predplatné po skončení skúšobnej verzie aktivujeme cez info@esblu.com.",
     trial: {
       badge: "Skúšobná verzia",
@@ -4215,7 +4228,7 @@ const sk = {
       storage: "{{gb}} GB úložiska",
       chat: "Firemný chat",
       einvoiceNotLive: "eFaktúra: bez živých transakcií (pripravujeme)",
-      after: "Po 14 dňoch sa skúšobná verzia sama skončí — nič sa neúčtuje. Potom si vyberiete Esblu Komplet alebo jednotlivé moduly.",
+      after: "Po 14 dňoch sa skúšobná verzia sama skončí — nič sa neúčtuje. Potom si môžete objednať Esblu Komplet.",
       keepData: "Keď skúšobná verzia skončí, vaše údaje sa nikdy nemažú.",
       afterStorage: "Po skončení skúšobnej verzie bez predplatného nové súbory nenahráte; existujúce súbory ostávajú zachované.",
       cta: "Vytvoriť účet zdarma",
@@ -4235,8 +4248,9 @@ const sk = {
       einvoice: "{{count}} eFaktúra transakcií mesačne — po spustení eFaktúry",
     },
     modules: {
-      title: "Alebo iba moduly, ktoré potrebujete",
-      intro: "Každý modul {{price}} mesačne. Keby súčet modulov presiahol cenu Kompletu, ponúkneme vám výhodnejší Esblu Komplet.",
+      notYet: "Samostatné moduly pripravujeme. Zatiaľ si môžete objednať Esblu Komplet so všetkými modulmi.",
+      title: "Samostatné moduly",
+      intro: "Plánovaná cena každého modulu je {{price}} mesačne; ak by súčet modulov presiahol cenu Kompletu, ponúkneme výhodnejší Esblu Komplet. Samostatné moduly zatiaľ nie je možné objednať.",
       perMonth: "mesačne",
       perCompany: "za firmu",
       paidBase: "Každý platený plán (aj jediný modul): do {{users}} používateľov a {{gb}} GB úložiska.",
@@ -4264,7 +4278,7 @@ const sk = {
     },
     addons: {
       title: "Rozšírenia podľa využitia",
-      intro: "Rozšírenia sa platia navyše ku Kompletu alebo modulom a do cenového stropu modulov sa nepočítajú.",
+      intro: "Rozšírenia budú dostupné ku Kompletu aj k modulom. Zatiaľ ich nie je možné objednať.",
       ai_40: "+{{units}} AI spracovaní dokumentov",
       voice_60: "+{{units}} min hlasového ovládania",
       users_25: "+{{units}} používateľov",
@@ -4275,7 +4289,7 @@ const sk = {
     },
     secondary: {
       title: "Ďalšia firma",
-      text: "Spravujete viac firiem? Každá ďalšia firma má Esblu Komplet za {{price}} mesačne. Každá firma má vlastné limity — používatelia, AI spracovania, hlas a úložisko sa medzi firmami nezdieľajú. Samostatné moduly pre ďalšiu firmu sú zastropované na {{price}}.",
+      text: "Zvýhodnenú cenu {{price}} mesačne pre ďalšiu firmu toho istého vlastníka pripravujeme. Zatiaľ si každá firma objednáva Esblu Komplet za bežnú cenu. Každá firma má vlastné limity — používatelia, AI spracovania, hlas a úložisko sa medzi firmami nezdieľajú.",
     },
     usersNote: "Predplatné je za firmu, nie za prihlásenie. Kolegovia a účtovník sa pripájajú do vašej firmy a predplatné spravuje iba vlastník firmy.",
     dataSafety: {
@@ -4285,15 +4299,15 @@ const sk = {
     faq: {
       title: "Časté otázky",
       q1: "Čo sa stane po 14 dňoch?",
-      a1: "Skúšobná verzia sa sama skončí — nič sa neúčtuje a nič sa nemaže. Potom si vyberiete Esblu Komplet alebo jednotlivé moduly.",
+      a1: "Skúšobná verzia sa sama skončí — nič sa neúčtuje a nič sa nemaže. Potom si môžete objednať Esblu Komplet.",
       q2: "Prídem o svoje dáta?",
       a2: "Nie. Koniec skúšobnej verzie, zmena modulov ani koniec predplatného nič nemaže, nepresúva ani neskrýva.",
       q3: "Môžem používať iba niektoré moduly?",
-      a3: "Áno. Každý modul stojí 3,90 € mesačne. Za moduly nikdy nezaplatíte viac než za Esblu Komplet — ak by súčet presiahol cenu Kompletu, ponúkneme vám Komplet.",
+      a3: "Zatiaľ nie. Samostatné moduly (plánovaná cena 3,90 € mesačne za modul) pripravujeme; dnes je dostupný Esblu Komplet so všetkými modulmi.",
       q4: "Platím za každého zamestnanca?",
-      a4: "Nie. Platíte za firmu. Komplet obsahuje do 25 používateľov; ďalších 25 pridáte rozšírením.",
+      a4: "Nie. Platíte za firmu. Komplet obsahuje do 25 používateľov; rozšírenie o ďalších používateľov pripravujeme.",
       q5: "Čo ak vyčerpám AI spracovania alebo minúty hlasu?",
-      a5: "Uvidíte jasné upozornenie s počtom využitých a zahrnutých jednotiek a možnosť rozšírenia. Ostatné funkcie fungujú ďalej a nič sa nemaže.",
+      a5: "Uvidíte jasné upozornenie s počtom využitých a zahrnutých jednotiek. Ostatné funkcie fungujú ďalej a nič sa nemaže. Rozšírenia limitov pripravujeme.",
     },
     nav: {
       backHome: "Späť na úvod",

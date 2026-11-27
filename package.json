@@ -63,6 +63,7 @@
     "test:billing-post-period-db": "node --experimental-strip-types --no-warnings scripts/billing-post-period-pglite-tests.ts",
     "test:billing-live-mode-db": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/billing-live-mode-pglite-tests.ts",
     "test:billing-komplet-selection-db": "node --experimental-strip-types --no-warnings scripts/billing-komplet-provider-selection-pglite-tests.ts",
+    "test:billing-order-gate": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/billing-order-gate-tests.ts",
     "test:billing-ops-db": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/billing-ops-pglite-tests.ts",
     "test:cost-control-db": "node --experimental-strip-types --no-warnings scripts/cost-control-pglite-tests.ts",
     "test:clia-gdpr": "node --experimental-strip-types --no-warnings --import ./scripts/alias-loader.mjs scripts/clia-gdpr-tests.ts",
