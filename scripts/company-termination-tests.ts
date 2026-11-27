@@ -396,14 +396,21 @@ check("dialóg (web aj Android vc3/vc4/vc5): COMPANY_DELETION_SUPPORT_ONLY → i
 
 check("texty SK/EN/DE: informácia o vypnutom výmaze firmy, kontakt na podporu, verejná stránka /zrusenie-uctu", () => {
   for (const d of [sk, en, de]) {
-    const x = d as unknown as { settings: { deleteModal: Record<string, string> }; legal: { accountDeletionPage: Record<string, string> } };
+    const x = d as unknown as { settings: { deleteModal: Record<string, string>; deleteAccount: Record<string, string> }; legal: { accountDeletionPage: Record<string, string> } };
     assert.match(x.settings.deleteModal.ownerDeletionSupportOnly, /info@esblu\.com/);
     assert.match(x.settings.deleteModal.ownerDeletionSupportOnly, /30/);
     assert.ok(x.settings.deleteModal.contactSupport.length > 3);
     assert.ok(x.settings.deleteModal.supportRequestSubject.length > 3);
-    assert.match(x.legal.accountDeletionPage.ownerSupportOnly, /info@esblu\.com/);
+    // Texty neposielajú vlastníka na nedostupnú funkciu: kontakt info@esblu.com, overenie totožnosti, lehota 30 dní.
+    for (const txt of [x.settings.deleteAccount.ownerDescription, x.settings.deleteModal.globalBlockedOwns, x.legal.accountDeletionPage.intro, x.settings.deleteModal.ownerDeletionSupportOnly]) {
+      assert.match(txt, /info@esblu\.com/);
+    }
+    for (const txt of [x.settings.deleteAccount.ownerDescription, x.settings.deleteModal.ownerDeletionSupportOnly]) assert.match(txt, /30/);
+    assert.doesNotMatch(x.settings.deleteModal.globalBlockedOwns, /^(Najprv zrušte|First delete|Löschen Sie zuerst)/);
   }
-  assert.match(read("app/zrusenie-uctu/AccountDeletionPageClient.tsx"), /legal\.accountDeletionPage\.ownerSupportOnly/);
+  const page = read("app/zrusenie-uctu/AccountDeletionPageClient.tsx");
+  assert.match(page, /settings\.deleteAccount\.ownerDescription/);
+  assert.doesNotMatch(page, /ownerBlockedRetention/, "verejná stránka neuvádza podmienený dôvod blokovania ako všeobecné pravidlo");
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

@@ -1285,8 +1285,7 @@ const sk = {
     },
     deleteAccount: {
       title: "Zrušiť účet",
-      ownerDescription:
-        "Ako majiteľ firmy môžete natrvalo zrušiť celý firemný účet. Ide o nezvratnú akciu — vymaže sa firma aj všetky jej dáta a ostatní členovia stratia prístup.",
+      ownerDescription: "Ako majiteľ firmy: samoobslužné ukončenie firmy v aplikácii je momentálne vypnuté. O ukončenie firmy a výmaz jej údajov požiadajte na info@esblu.com z e-mailovej adresy, ktorou sa prihlasujete — pred výmazom overíme vašu totožnosť a žiadosť vybavíme bez zbytočného odkladu, najneskôr do 30 dní. Export údajov firmy si môžete kedykoľvek stiahnuť v nastaveniach.",
       memberDescription:
         "Môžete natrvalo zrušiť svoj osobný účet. Firemné dáta (vozidlá, stroje, sklad, dokumenty) zostávajú firme — vymaže sa iba vaša identita a členstvo.",
       orphanDescription:
@@ -1294,7 +1293,7 @@ const sk = {
       button: "Zrušiť účet",
     },
     deleteModal: {
-      ownerDeletionSupportOnly: "Natrvalé zrušenie firmy v aplikácii je dočasne vypnuté. Firmu ukončíme na základe žiadosti vlastníka zaslanej na info@esblu.com — vybavíme ju bez zbytočného odkladu, najneskôr do 30 dní. Export všetkých údajov firmy si môžete kedykoľvek stiahnuť v nastaveniach. Nič sa nezmazalo.",
+      ownerDeletionSupportOnly: "Natrvalé zrušenie firmy v aplikácii je dočasne vypnuté. O ukončenie firmy požiadajte na info@esblu.com z e-mailovej adresy, ktorou sa prihlasujete — pred výmazom overíme vašu totožnosť a žiadosť vybavíme bez zbytočného odkladu, najneskôr do 30 dní. Export všetkých údajov firmy si môžete kedykoľvek stiahnuť v nastaveniach. Nič sa nezmazalo.",
       contactSupport: "Napísať podpore",
       supportRequestSubject: "Esblu - žiadosť o ukončenie firmy",
       ownerBlockedRetention: "Firmu nie je možné zrušiť samoobslužne, pretože obsahuje finalizované účtovné doklady (faktúry). Esblu nie je zákonným archívom — za uchovávanie účtovných dokladov zodpovedá vaša firma, preto si ich pred ukončením exportujte. Nič sa nezmazalo. Kontaktujte nás na info@esblu.com — pomôžeme s exportom údajov a ukončením používania.",
@@ -1337,7 +1336,7 @@ const sk = {
       leaveConfirm: "Opustiť firmu",
       globalTitle: "Zrušiť celý Esblu účet",
       globalBody: "Zruší sa vaše prihlásenie a opustíte všetky firmy, v ktorých ste členom. Firemné dáta ostávajú firmám.",
-      globalBlockedOwns: "Najprv zrušte firmy, ktoré vlastníte ({{count}}). Prevod vlastníctva zatiaľ nie je podporovaný.",
+      globalBlockedOwns: "Celý Esblu účet môžete zrušiť až po ukončení firiem, ktoré vlastníte ({{count}}). O ukončenie firmy požiadajte na info@esblu.com z e-mailovej adresy, ktorou sa prihlasujete. Prevod vlastníctva zatiaľ nie je podporovaný.",
       globalConfirm: "Zrušiť Esblu účet",
       subscription: {
         title: "Predplatné firmy",
@@ -2397,12 +2396,11 @@ const sk = {
         "Aktuálna verzia tohto zoznamu platí od {{date}}. Zoznam môžeme aktualizovať pri zmene technickej infraštruktúry Esblu.",
     },
     accountDeletionPage: {
-      intro: "Účet Esblu môžete kedykoľvek natrvalo zrušiť priamo v aplikácii (web aj Android appka). Ak k aplikácii nemáte prístup, môžete o zrušenie účtu požiadať e-mailom.",
+      intro: "Osobný účet Esblu môžete zrušiť priamo v aplikácii (web aj Android appka). Ak vlastníte firmu, o jej ukončenie a výmaz údajov požiadate na info@esblu.com — samoobslužné ukončenie firmy v aplikácii je momentálne vypnuté. Ak k aplikácii nemáte prístup, môžete o zrušenie účtu požiadať e-mailom.",
       inAppTitle: "Zrušenie účtu v aplikácii",
       inAppStep1: "Prihláste sa do Esblu (www.esblu.com alebo Android appka Esblu).",
       inAppStep2: "Otvorte Nastavenia a prejdite do sekcie „Zrušiť účet“.",
       inAppStep3: "Kliknite na „Zrušiť účet“ a potvrďte zrušenie podľa pokynov na obrazovke.",
-      ownerSupportOnly: "Vlastník firmy: natrvalé zrušenie firmy je dočasne dostupné iba na žiadosť zaslanú na info@esblu.com z e-mailu vlastníka.",
       scopeTitle: "Čo sa zmaže",
       emailTitle: "Žiadosť bez aplikácie",
       emailText: "Ak sa do aplikácie nemôžete prihlásiť, pošlite žiadosť o zrušenie účtu z e-mailovej adresy, ktorou sa prihlasujete, na",

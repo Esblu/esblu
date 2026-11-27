@@ -1272,8 +1272,7 @@ const de = {
     },
     deleteAccount: {
       title: "Konto löschen",
-      ownerDescription:
-        "Als Firmeninhaber können Sie das gesamte Firmenkonto dauerhaft löschen. Dies ist eine unwiderrufliche Aktion — die Firma und alle ihre Daten werden gelöscht, und die übrigen Mitglieder verlieren den Zugriff.",
+      ownerDescription: "Als Inhaber des Unternehmens: Die Selbstbeendigung des Unternehmens in der App ist derzeit deaktiviert. Beantragen Sie die Beendigung des Unternehmens und die Löschung seiner Daten unter info@esblu.com von der E-Mail-Adresse, mit der Sie sich anmelden — vor der Löschung überprüfen wir Ihre Identität und bearbeiten die Anfrage unverzüglich, spätestens innerhalb von 30 Tagen. Den Export der Unternehmensdaten können Sie jederzeit in den Einstellungen herunterladen.",
       memberDescription:
         "Sie können Ihr persönliches Konto dauerhaft löschen. Die Firmendaten (Fahrzeuge, Maschinen, Lager, Dokumente) verbleiben bei der Firma — es wird nur Ihre Identität und Mitgliedschaft gelöscht.",
       orphanDescription:
@@ -1281,7 +1280,7 @@ const de = {
       button: "Konto löschen",
     },
     deleteModal: {
-      ownerDeletionSupportOnly: "Das endgültige Löschen eines Unternehmens in der App ist vorübergehend deaktiviert. Wir beenden das Unternehmen auf Anfrage des Inhabers an info@esblu.com — unverzüglich, spätestens innerhalb von 30 Tagen. Den Export aller Unternehmensdaten können Sie jederzeit in den Einstellungen herunterladen. Es wurde nichts gelöscht.",
+      ownerDeletionSupportOnly: "Das endgültige Löschen eines Unternehmens in der App ist vorübergehend deaktiviert. Beantragen Sie die Beendigung des Unternehmens unter info@esblu.com von der E-Mail-Adresse, mit der Sie sich anmelden — vor der Löschung überprüfen wir Ihre Identität und bearbeiten die Anfrage unverzüglich, spätestens innerhalb von 30 Tagen. Den Export aller Unternehmensdaten können Sie jederzeit in den Einstellungen herunterladen. Es wurde nichts gelöscht.",
       contactSupport: "Support kontaktieren",
       supportRequestSubject: "Esblu - Anfrage zur Beendigung des Unternehmens",
       ownerBlockedRetention: "Die Firma kann nicht selbst gelöscht werden, da sie abgeschlossene Buchhaltungsbelege (Rechnungen) enthält. Esblu ist kein gesetzliches Archiv — für die Aufbewahrung der Buchhaltungsbelege ist Ihre Firma verantwortlich; exportieren Sie diese bitte vor der Beendigung. Es wurde nichts gelöscht. Kontaktieren Sie info@esblu.com — wir helfen beim Datenexport und bei der Kontoschließung.",
@@ -1324,7 +1323,7 @@ const de = {
       leaveConfirm: "Unternehmen verlassen",
       globalTitle: "Gesamtes Esblu-Konto löschen",
       globalBody: "Ihre Anmeldung wird gelöscht und Sie verlassen alle Unternehmen, deren Mitglied Sie sind. Unternehmensdaten bleiben bei den Unternehmen.",
-      globalBlockedOwns: "Löschen Sie zuerst die Unternehmen, die Sie besitzen ({{count}}). Eine Eigentumsübertragung wird noch nicht unterstützt.",
+      globalBlockedOwns: "Ihr gesamtes Esblu-Konto können Sie erst aufheben, nachdem die Unternehmen, deren Inhaber Sie sind ({{count}}), beendet wurden. Die Beendigung eines Unternehmens beantragen Sie unter info@esblu.com von der E-Mail-Adresse, mit der Sie sich anmelden. Eine Übertragung des Eigentums wird noch nicht unterstützt.",
       globalConfirm: "Esblu-Konto löschen",
       subscription: {
         title: "Abonnement des Unternehmens",
@@ -2390,12 +2389,11 @@ const de = {
         "Die aktuelle Version dieser Liste gilt seit dem {{date}}. Wir können die Liste bei Änderungen der technischen Infrastruktur von Esblu aktualisieren.",
     },
     accountDeletionPage: {
-      intro: "Sie können Ihr Esblu-Konto jederzeit direkt in der App (Web und Android-App) dauerhaft löschen. Wenn Sie keinen Zugriff auf die App haben, können Sie die Löschung per E-Mail beantragen.",
+      intro: "Ihr persönliches Esblu-Konto können Sie direkt in der App aufheben (Web und Android-App). Wenn Sie Inhaber eines Unternehmens sind, beantragen Sie dessen Beendigung und die Löschung seiner Daten unter info@esblu.com — die Selbstbeendigung eines Unternehmens in der App ist derzeit deaktiviert. Wenn Sie keinen Zugang zur App haben, können Sie die Aufhebung des Kontos per E-Mail beantragen.",
       inAppTitle: "Konto in der App löschen",
       inAppStep1: "Melden Sie sich bei Esblu an (www.esblu.com oder die Esblu-Android-App).",
       inAppStep2: "Öffnen Sie die Einstellungen und gehen Sie zum Abschnitt „Konto löschen“.",
       inAppStep3: "Klicken Sie auf „Konto löschen“ und bestätigen Sie gemäß den Anweisungen auf dem Bildschirm.",
-      ownerSupportOnly: "Unternehmensinhaber: Das endgültige Löschen eines Unternehmens ist vorübergehend nur auf Anfrage an info@esblu.com von der E-Mail-Adresse des Inhabers möglich.",
       scopeTitle: "Was gelöscht wird",
       emailTitle: "Antrag ohne App",
       emailText: "Wenn Sie sich nicht anmelden können, senden Sie einen Löschantrag von der E-Mail-Adresse, mit der Sie sich anmelden, an",
