@@ -1294,6 +1294,9 @@ const sk = {
       button: "Zrušiť účet",
     },
     deleteModal: {
+      ownerDeletionSupportOnly: "Natrvalé zrušenie firmy v aplikácii je dočasne vypnuté. Firmu ukončíme na základe žiadosti vlastníka zaslanej na info@esblu.com — vybavíme ju bez zbytočného odkladu, najneskôr do 30 dní. Export všetkých údajov firmy si môžete kedykoľvek stiahnuť v nastaveniach. Nič sa nezmazalo.",
+      contactSupport: "Napísať podpore",
+      supportRequestSubject: "Esblu - žiadosť o ukončenie firmy",
       ownerBlockedRetention: "Firmu nie je možné zrušiť samoobslužne, pretože obsahuje finalizované účtovné doklady (faktúry). Esblu nie je zákonným archívom — za uchovávanie účtovných dokladov zodpovedá vaša firma, preto si ich pred ukončením exportujte. Nič sa nezmazalo. Kontaktujte nás na info@esblu.com — pomôžeme s exportom údajov a ukončením používania.",
       // LEGAL/CLIA REVIEW REQUIRED (eInvoice ↔ zrušenie firmy, audit 2026-10-13 §5).
       ownerBlockedEinvoiceEnrolled: "Firmu nie je možné zrušiť samoobslužne, pretože je zaregistrovaná na príjem a odosielanie e-faktúr u poskytovateľa e-Faktúry. Nič sa nezmazalo. Kontaktujte nás na info@esblu.com — registráciu u poskytovateľa ukončíme spolu s vami.",
@@ -2399,6 +2402,7 @@ const sk = {
       inAppStep1: "Prihláste sa do Esblu (www.esblu.com alebo Android appka Esblu).",
       inAppStep2: "Otvorte Nastavenia a prejdite do sekcie „Zrušiť účet“.",
       inAppStep3: "Kliknite na „Zrušiť účet“ a potvrďte zrušenie podľa pokynov na obrazovke.",
+      ownerSupportOnly: "Vlastník firmy: natrvalé zrušenie firmy je dočasne dostupné iba na žiadosť zaslanú na info@esblu.com z e-mailu vlastníka.",
       scopeTitle: "Čo sa zmaže",
       emailTitle: "Žiadosť bez aplikácie",
       emailText: "Ak sa do aplikácie nemôžete prihlásiť, pošlite žiadosť o zrušenie účtu z e-mailovej adresy, ktorou sa prihlasujete, na",

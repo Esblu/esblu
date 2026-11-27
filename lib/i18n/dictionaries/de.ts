@@ -1281,6 +1281,9 @@ const de = {
       button: "Konto löschen",
     },
     deleteModal: {
+      ownerDeletionSupportOnly: "Das endgültige Löschen eines Unternehmens in der App ist vorübergehend deaktiviert. Wir beenden das Unternehmen auf Anfrage des Inhabers an info@esblu.com — unverzüglich, spätestens innerhalb von 30 Tagen. Den Export aller Unternehmensdaten können Sie jederzeit in den Einstellungen herunterladen. Es wurde nichts gelöscht.",
+      contactSupport: "Support kontaktieren",
+      supportRequestSubject: "Esblu - Anfrage zur Beendigung des Unternehmens",
       ownerBlockedRetention: "Die Firma kann nicht selbst gelöscht werden, da sie abgeschlossene Buchhaltungsbelege (Rechnungen) enthält. Esblu ist kein gesetzliches Archiv — für die Aufbewahrung der Buchhaltungsbelege ist Ihre Firma verantwortlich; exportieren Sie diese bitte vor der Beendigung. Es wurde nichts gelöscht. Kontaktieren Sie info@esblu.com — wir helfen beim Datenexport und bei der Kontoschließung.",
       // LEGAL/CLIA REVIEW REQUIRED (eInvoice ↔ zrušenie firmy, audit 2026-10-13 §5).
       ownerBlockedEinvoiceEnrolled: "Die Firma kann nicht selbst gelöscht werden, da sie beim E-Rechnungs-Anbieter registriert ist. Es wurde nichts gelöscht. Kontaktieren Sie info@esblu.com — wir beenden die Registrierung beim Anbieter gemeinsam mit Ihnen.",
@@ -2392,6 +2395,7 @@ const de = {
       inAppStep1: "Melden Sie sich bei Esblu an (www.esblu.com oder die Esblu-Android-App).",
       inAppStep2: "Öffnen Sie die Einstellungen und gehen Sie zum Abschnitt „Konto löschen“.",
       inAppStep3: "Klicken Sie auf „Konto löschen“ und bestätigen Sie gemäß den Anweisungen auf dem Bildschirm.",
+      ownerSupportOnly: "Unternehmensinhaber: Das endgültige Löschen eines Unternehmens ist vorübergehend nur auf Anfrage an info@esblu.com von der E-Mail-Adresse des Inhabers möglich.",
       scopeTitle: "Was gelöscht wird",
       emailTitle: "Antrag ohne App",
       emailText: "Wenn Sie sich nicht anmelden können, senden Sie einen Löschantrag von der E-Mail-Adresse, mit der Sie sich anmelden, an",

@@ -29,6 +29,7 @@ export function AccountDeletionPageClient() {
 
       <LegalSection title={t("legal.accountDeletionPage.scopeTitle")}>
         <p>{t("settings.deleteAccount.ownerDescription")}</p>
+        <p>{t("legal.accountDeletionPage.ownerSupportOnly")}</p>
         <p>{t("settings.deleteAccount.memberDescription")}</p>
         <p>{t("settings.deleteModal.ownerBlockedRetention")}</p>
       </LegalSection>

@@ -1280,6 +1280,9 @@ const en = {
       button: "Delete account",
     },
     deleteModal: {
+      ownerDeletionSupportOnly: "Permanently deleting a company in the app is temporarily disabled. We will close the company at the owner's request sent to info@esblu.com — without undue delay, within 30 days at the latest. You can download an export of all company data in the settings at any time. Nothing was deleted.",
+      contactSupport: "Contact support",
+      supportRequestSubject: "Esblu - company termination request",
       ownerBlockedRetention: "The company cannot be deleted self-service because it contains finalized accounting documents (invoices). Esblu is not a statutory archive — your company is responsible for retaining accounting documents, so please export them before closing. Nothing was deleted. Contact info@esblu.com — we will help you export your data and close the account.",
       // LEGAL/CLIA REVIEW REQUIRED (eInvoice ↔ zrušenie firmy, audit 2026-10-13 §5).
       ownerBlockedEinvoiceEnrolled: "The company cannot be deleted self-service because it is registered with the e-invoicing provider. Nothing was deleted. Contact info@esblu.com — we will close the provider registration together with you.",
@@ -2372,6 +2375,7 @@ const en = {
       inAppStep1: "Sign in to Esblu (www.esblu.com or the Esblu Android app).",
       inAppStep2: "Open Settings and go to the “Delete account” section.",
       inAppStep3: "Click “Delete account” and confirm by following the on-screen instructions.",
+      ownerSupportOnly: "Company owners: permanent deletion of a company is temporarily available only on request sent to info@esblu.com from the owner's e-mail.",
       scopeTitle: "What gets deleted",
       emailTitle: "Request without the app",
       emailText: "If you cannot sign in, send an account deletion request from the email address you sign in with to",

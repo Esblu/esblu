@@ -1547,11 +1547,21 @@ export default function NastaveniaPage() {
               ) : deletePreflight?.role === "owner" && deletePreflight.ownerDeletionBlocked ? (
                 <div className="space-y-3">
                   {/* Archivácia účtovných dokladov / e-faktúry / registrácia u providera: zrušenie sa NEPONÚKNE (nič sa nemaže). */}
-                  <p className="ui-body">{t(ownerDeletionBlockerMessageKey(deletePreflight.ownerDeletionBlocked))}</p>
-                  <div className="flex justify-end">
+                  <p className="ui-body" data-testid="owner-deletion-blocked">{t(ownerDeletionBlockerMessageKey(deletePreflight.ownerDeletionBlocked))}</p>
+                  <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
                     <button type="button" onClick={closeDeleteAccountModal} className="ui-btn ui-btn-secondary">
                       {t("settings.deleteModal.cancel")}
                     </button>
+                    {deletePreflight.ownerDeletionBlocked === "COMPANY_DELETION_SUPPORT_ONLY" && (
+                      // Release 2026-11-26: výmaz firmy iba cez podporu — žiadne nevratné tlačidlo, iba kontakt.
+                      <a
+                        href={`mailto:info@esblu.com?subject=${encodeURIComponent(t("settings.deleteModal.supportRequestSubject"))}`}
+                        className="ui-btn ui-btn-primary"
+                        data-testid="owner-deletion-contact-support"
+                      >
+                        {t("settings.deleteModal.contactSupport")}
+                      </a>
+                    )}
                   </div>
                 </div>
               ) : deletePreflight?.subscription && !deletePreflight.subscription.can_delete ? (

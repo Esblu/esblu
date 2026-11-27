@@ -4,6 +4,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { getRequestLocale } from "@/lib/i18n/request-locale";
 import { translate } from "@/lib/i18n/translate";
 import { findOwnerDeletionBlocker } from "@/lib/account-deletion-retention";
+import { companySelfTerminationEnabled } from "@/lib/company-self-termination";
 import { ownerDeletionBlockerMessageKey } from "@/lib/account-deletion-blockers";
 import { checkSubscriptionForDeletion } from "@/lib/account-deletion-subscription";
 import type { SubscriptionDeletionCheck } from "@/lib/billing/deletion-guard";
@@ -288,10 +289,6 @@ async function handleOrphanDelete(
   });
 }
 
-// Samoobslužné ukončenie firmy (owner) — predvolene VYPNUTÉ, zapína sa iba hodnotou "on".
-function companySelfTerminationEnabled(env: Record<string, string | undefined> = process.env): boolean {
-  return (env.ESBLU_COMPANY_SELF_TERMINATION ?? "").trim().toLowerCase() === "on";
-}
 
 export async function POST(req: Request) {
   const locale = getRequestLocale(req);

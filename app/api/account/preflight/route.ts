@@ -3,6 +3,7 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { getRequestLocale } from "@/lib/i18n/request-locale";
 import { translate } from "@/lib/i18n/translate";
 import { findOwnerDeletionBlocker, type OwnerDeletionBlocker } from "@/lib/account-deletion-retention";
+import { COMPANY_DELETION_SUPPORT_ONLY, companySelfTerminationEnabled } from "@/lib/company-self-termination";
 import { checkSubscriptionForDeletion } from "@/lib/account-deletion-subscription";
 import type { SubscriptionDeletionCheck } from "@/lib/billing/deletion-guard";
 import { resolveActiveMembershipForUser } from "@/lib/active-membership-server";
@@ -153,7 +154,7 @@ export async function GET(req: Request) {
     }
 
     let otherActiveMembersCount = 0;
-    let ownerDeletionBlocked: OwnerDeletionBlocker | null = null;
+    let ownerDeletionBlocked: OwnerDeletionBlocker | typeof COMPANY_DELETION_SUPPORT_ONLY | null = null;
 
     if (membership.role === "owner") {
       const { count, error: countError } = await admin
@@ -185,6 +186,13 @@ export async function GET(req: Request) {
       // Firma s finalizovanými účtovnými dokladmi sa nedá zrušiť samoobslužne
       // (archivácia) — UI to vysvetlí a zrušenie vôbec neponúkne.
       ownerDeletionBlocked = await findOwnerDeletionBlocker(admin, membership.company_id);
+
+      // Release 2026-11-26: samoobslužný výmaz firmy je vypnutý → preflight ho neponúkne. Má prednosť pred
+      // ostatnými dôvodmi: kódy FINALIZED_ACCOUNTING_DOCUMENTS / EINVOICE_RECORDS by v UI (aj v starších
+      // Android verziách) otvorili postup ukončenia s nevratným tlačidlom. Server výmaz aj tak odmietne (503).
+      if (!companySelfTerminationEnabled()) {
+        ownerDeletionBlocked = COMPANY_DELETION_SUPPORT_ONLY;
+      }
     }
 
     // Predplatné (2026-10-12): firma s obnovujúcim sa / nedokončeným externým

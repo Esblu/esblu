@@ -20,6 +20,8 @@ import {
   zipSafePath,
 } from "@/lib/company-export";
 import { legalConfig } from "@/lib/legal-config";
+import { companySelfTerminationEnabled } from "@/lib/company-self-termination";
+import { ownerDeletionBlockerMessageKey } from "@/lib/account-deletion-blockers";
 import { filterCompanyVisibleEinvoice, visibleToCompany } from "@/lib/einvoice/visibility";
 import { buildTerminationAck, terminationAuthorityStatement } from "@/lib/company-termination-ack";
 import sk from "@/lib/i18n/dictionaries/sk";
@@ -331,7 +333,8 @@ check("release 2026-11-26: samoobslužné ukončenie firmy predvolene vypnuté (
   }
   assert.match(r.slice(gate, gate + 400), /ESBLU_COMPANY_DELETION_SUPPORT_ONLY/);
   assert.match(r.slice(gate, gate + 400), /status: 503/);
-  assert.match(r, /\(env\.ESBLU_COMPANY_SELF_TERMINATION \?\? ""\)\.trim\(\)\.toLowerCase\(\) === "on"/);
+  assert.match(r, /import \{ companySelfTerminationEnabled \} from "@\/lib\/company-self-termination";/);
+  assert.match(read("lib/company-self-termination.ts"), /\(env\.ESBLU_COMPANY_SELF_TERMINATION \?\? ""\)\.trim\(\)\.toLowerCase\(\) === "on"/);
   assert.doesNotMatch(r, /^export function companySelfTerminationEnabled/m, "route súbor exportuje iba HTTP handlery");
   assert.ok(r.indexOf('body.scope === "global"') < owner, "globálne zrušenie (bez vlastnených firiem) nie je ovplyvnené");
   assert.ok(r.indexOf('kind: "member"') > owner, "odchod člena z firmy nie je ovplyvnený");
@@ -341,6 +344,66 @@ check("release 2026-11-26: samoobslužné ukončenie firmy predvolene vypnuté (
     assert.match(e.companyDeletionSupportOnly, /info@esblu\.com/);
     assert.match(e.companyDeletionSupportOnly, /30/);
   }
+});
+
+check("prepínač ESBLU_COMPANY_SELF_TERMINATION: zapína iba presne „on“ (bez ohľadu na veľkosť písmen a medzery)", () => {
+  assert.equal(companySelfTerminationEnabled({}), false);
+  for (const v of ["", "off", "false", "0", "1", "true", "yes", "enabled", "on1", "o n"]) {
+    assert.equal(companySelfTerminationEnabled({ ESBLU_COMPANY_SELF_TERMINATION: v }), false, v);
+  }
+  for (const v of ["on", "ON", " On "]) assert.equal(companySelfTerminationEnabled({ ESBLU_COMPANY_SELF_TERMINATION: v }), true, v);
+});
+
+check("preflight: pri vypnutom výmaze vráti vlastníkovi ownerDeletionBlocked=COMPANY_DELETION_SUPPORT_ONLY s prednosťou pred ostatnými dôvodmi", () => {
+  const r = read("app/api/account/preflight/route.ts");
+  const ownerBranch = r.indexOf('if (membership.role === "owner") {');
+  const find = r.indexOf("ownerDeletionBlocked = await findOwnerDeletionBlocker(admin, membership.company_id);");
+  const gate = r.indexOf("if (!companySelfTerminationEnabled()) {");
+  const resp = r.indexOf("ownerDeletionBlocked,", gate);
+  assert.ok(ownerBranch > 0 && find > ownerBranch && gate > find && resp > gate, "poradie: owner → zistenie dôvodu → prepínač (prepíše) → odpoveď");
+  assert.match(r.slice(gate, gate + 120), /ownerDeletionBlocked = COMPANY_DELETION_SUPPORT_ONLY;/);
+  assert.match(r, /can_delete: !ownerDeletionBlocked && subscription\.can_delete/);
+});
+
+// Výber obsahu dialógu „Zrušiť účet“ — presne podmienky z app/nastavenia/page.tsx, ktoré sú rovnaké aj v
+// zabalenej Android appke vc3 (bc31e63) a vc4 (0a44a60). Starší klient tak pri COMPANY_DELETION_SUPPORT_ONLY
+// zobrazí iba informáciu a „Zrušiť“ — bez potvrdzovacej frázy a bez nevratného tlačidla.
+function dialogBranch(p: { role: string; ownerDeletionBlocked: string | null; subscriptionCanDelete: boolean }): string {
+  if (p.role === "owner" && (p.ownerDeletionBlocked === "FINALIZED_ACCOUNTING_DOCUMENTS" || p.ownerDeletionBlocked === "EINVOICE_RECORDS") && p.subscriptionCanDelete) return "termination-with-delete-button";
+  if (p.role === "owner" && p.ownerDeletionBlocked) return "blocked-info-only";
+  if (!p.subscriptionCanDelete) return "subscription-blocked";
+  if (p.role === "owner") return "owner-delete-button";
+  return "member";
+}
+check("dialóg (web aj Android vc3/vc4/vc5): COMPANY_DELETION_SUPPORT_ONLY → iba informácia, žiadne nevratné tlačidlo; podmienky v kóde sa nezmenili", () => {
+  for (const sub of [true, false]) {
+    assert.equal(dialogBranch({ role: "owner", ownerDeletionBlocked: "COMPANY_DELETION_SUPPORT_ONLY", subscriptionCanDelete: sub }), "blocked-info-only");
+  }
+  assert.equal(dialogBranch({ role: "owner", ownerDeletionBlocked: null, subscriptionCanDelete: true }), "owner-delete-button", "bez prepínača by sa tlačidlo zobrazilo — preto ho preflight nastavuje vždy");
+  const page = read("app/nastavenia/page.tsx");
+  assert.ok(page.includes(`deletePreflight.ownerDeletionBlocked === "FINALIZED_ACCOUNTING_DOCUMENTS" ||
+                  deletePreflight.ownerDeletionBlocked === "EINVOICE_RECORDS") &&
+                !(deletePreflight.subscription && !deletePreflight.subscription.can_delete) ? (`), "termination vetva");
+  const blocked = page.indexOf(') : deletePreflight?.role === "owner" && deletePreflight.ownerDeletionBlocked ? (');
+  const next = page.indexOf(") : deletePreflight?.subscription && !deletePreflight.subscription.can_delete ? (", blocked);
+  assert.ok(blocked > 0 && next > blocked, "informačná vetva je pred vetvou predplatného a vetvou s tlačidlom");
+  const branch = page.slice(blocked, next);
+  assert.doesNotMatch(branch, /confirmDeleteAccount|bg-red-600|ACCOUNT_DELETION_CONFIRM_PHRASE/, "informačná vetva neobsahuje nevratnú akciu");
+  assert.match(branch, /COMPANY_DELETION_SUPPORT_ONLY[\s\S]*mailto:info@esblu\.com/);
+  assert.equal(ownerDeletionBlockerMessageKey("COMPANY_DELETION_SUPPORT_ONLY"), "settings.deleteModal.ownerDeletionSupportOnly");
+  assert.equal(ownerDeletionBlockerMessageKey("FINALIZED_ACCOUNTING_DOCUMENTS"), "settings.deleteModal.ownerBlockedRetention");
+});
+
+check("texty SK/EN/DE: informácia o vypnutom výmaze firmy, kontakt na podporu, verejná stránka /zrusenie-uctu", () => {
+  for (const d of [sk, en, de]) {
+    const x = d as unknown as { settings: { deleteModal: Record<string, string> }; legal: { accountDeletionPage: Record<string, string> } };
+    assert.match(x.settings.deleteModal.ownerDeletionSupportOnly, /info@esblu\.com/);
+    assert.match(x.settings.deleteModal.ownerDeletionSupportOnly, /30/);
+    assert.ok(x.settings.deleteModal.contactSupport.length > 3);
+    assert.ok(x.settings.deleteModal.supportRequestSubject.length > 3);
+    assert.match(x.legal.accountDeletionPage.ownerSupportOnly, /info@esblu\.com/);
+  }
+  assert.match(read("app/zrusenie-uctu/AccountDeletionPageClient.tsx"), /legal\.accountDeletionPage\.ownerSupportOnly/);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
